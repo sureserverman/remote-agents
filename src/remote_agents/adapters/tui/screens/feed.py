@@ -1,7 +1,7 @@
 """The notifications feed: what an agent was last observed doing, newest first, inert.
 
 The feed has lived as a region inside the combined dashboard since the durable table
-landed. Under the three-pane console it is also a surface of its own, in a process of its
+landed. Under the console it is also a surface of its own, in a process of its
 own — so what it renders is *shared* between the two rather than written twice: `FeedRegion`
 holds the render and the news detector, and both screens mix it in.
 
@@ -29,6 +29,7 @@ from remote_agents.adapters.tui.screens.base import (
     held_option_id,
     restore_highlight_by_id,
 )
+from remote_agents.adapters.tui.screens.sessions import ChordHintRow
 from remote_agents.application.relative_time import age_short
 from remote_agents.application.session_views import session_identity
 from remote_agents.domain.models import SessionRecord
@@ -502,7 +503,7 @@ class FeedRegion:
                 _LOG.exception("the status flash failed; the feed row is the record")
 
 
-class FeedScreen(FeedRegion, ChoiceScreen):
+class FeedScreen(ChordHintRow, FeedRegion, ChoiceScreen):
     """The console's right-bottom pane: the feed and nothing else.
 
     A `ChoiceScreen` because that is what carries this surface's chrome — the status region,
@@ -595,6 +596,17 @@ class FeedScreen(FeedRegion, ChoiceScreen):
         self.query_one("#feed-pane", OptionList).focus()
         if self._timer is None:
             self._timer = self.set_interval(self._FEED_AUTO_REFRESH, self._auto_reload)
+        # Read-only, so the hint row is the Alt layer alone -- and this is the layer's least
+        # obvious home, because the pane shows notifications *about* sessions while owning none
+        # of them.
+        #
+        # **What the row says is "these keys work here", not "they act on the notification you
+        # are reading".** They act on whatever the *sessions pane* has selected, which need not
+        # be the session this row is about, and two of them end it without asking (DEC-018). An
+        # earlier version of this comment said the opposite, which is the one misreading of this
+        # pane with an irreversible consequence.
+        self.set_hint(self.hint_content(self.chord_hint_base))
+        self.start_chord_hint()
 
     async def on_reveal(self) -> None:
         await self._reload_feed()

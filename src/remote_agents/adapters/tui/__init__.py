@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from remote_agents.ports.frontend_descriptor import FrontendDescriptor
 
-#: The console's three panes, by the name `remote-agents pane <name>` takes.
+#: The console's panes, by the name `remote-agents pane <name>` takes.
 #:
 #: Declared here, in a module that imports no adapter code, because the composition root
 #: needs the *names* to build its argument parser while every module that knows what a pane

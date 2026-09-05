@@ -128,7 +128,7 @@ async def advance_to_resume_profiles(screen: ChoiceScreen, project: CatalogProje
                 severity="error",
             )
             screen.announce(f"Resume is unavailable: {error}")
-            screen.show_choices(((_BACK, "Back"),))
+            screen.draw_failure_rows(((_BACK, "Back"),))
             return
         capable = resume_capable_profiles(capabilities)
         # Inside the guard, not after it. `push_screen` yields while the new screen
@@ -513,5 +513,5 @@ async def fetch_page(
             "The conversations could not be listed. Press escape to go back.", severity="error"
         )
         screen.announce(f"The conversations could not be listed: {error}")
-        screen.show_choices(((_BACK, "Back"),))
+        screen.draw_failure_rows(((_BACK, "Back"),))
         return None

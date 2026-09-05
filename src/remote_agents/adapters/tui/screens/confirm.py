@@ -210,14 +210,17 @@ class ConfirmScreen(ModalScreen[bool]):
         where DEC-007's third mitigation ("every screen resets the cursor to a non-mutating
         entry") actually lives. That machinery exists for a screen that is *refilled*: it
         carries a generation counter so a deferred placement computed against one fill stands
-        down when a later fill supersedes it, and it re-asserts the highlight after a refresh
-        so a resting row below the fold is scrolled into view.
+        down when a later fill supersedes it, a row key so one stands down when the owner has
+        moved the cursor since, and it re-asserts the highlight after a refresh so a resting
+        row below the fold is scrolled into view.
 
-        Neither applies here, and both would be dead weight. A confirmation is built fresh per
-        question, its rows are static, it is never refilled, and it is two rows — there is no
-        second fill to supersede this one and nothing to scroll. **A subclass that starts
-        refilling its rows has to adopt `_rest_cursor`'s generation guard**, because that is
-        the moment the invariant this relies on stops holding.
+        None of it applies here, and all of it would be dead weight. A confirmation is built
+        fresh per question, its rows are static, it is never refilled, and it is two rows —
+        there is no second fill to supersede this one and nothing to scroll. **A subclass that
+        starts refilling its rows has to adopt both halves of `_rest_cursor`'s guard**, because
+        that is the moment the invariant this relies on stops holding. Both, not the generation
+        alone: a refill is not the only thing that invalidates a placement, and the arrow press
+        that does is the half with no fill to notice it.
         """
         choices = self.query_one("#choices", OptionList)
         choices.highlighted = self.resting_index

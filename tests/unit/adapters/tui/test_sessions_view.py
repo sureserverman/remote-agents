@@ -15,6 +15,7 @@ from tui_positions import position
 from remote_agents.adapters.tui.app import RemoteAgentsTui
 from remote_agents.adapters.tui.context import TuiContext
 from remote_agents.adapters.tui.screens.launch import ProjectsScreen
+from remote_agents.adapters.tui.screens.sessions import SessionsScreen
 from remote_agents.application.profiles import ProfileAvailability
 from remote_agents.application.project_catalog import CatalogProject
 from remote_agents.domain.models import (
@@ -86,6 +87,31 @@ def _context(launcher: _Listing) -> TuiContext:
             "-t",
             f"={session_id}",
         ),
+    )
+
+
+def _context_with_usage(launcher: _Listing) -> TuiContext:
+    """Like `_context`, but with a usage port, which the gauge seed returns early without.
+
+    `_seed_context_gauges` opens with `if self.tui.services.backend.usage is None: return`, so
+    against this module's usage-less default context every assertion about it passes by never
+    running. Both seed tests below were written that way first and both were green for that
+    reason; the reader is the difference between testing the seed and testing the early exit.
+    """
+
+    async def _reading(session_id):
+        return None
+
+    return TuiContext(
+        backend=backend_for(
+            sessions=launcher,  # type: ignore[arg-type]
+            projects=object(),  # type: ignore[arg-type]
+            refresh_catalogue=lambda: (_EXISTING,),
+            catalogue=(_EXISTING,),
+            usage=_reading,
+        ),
+        profiles=(ProfileAvailability("claude", True),),
+        attach_argv=lambda session_id: ("tmux", "attach-session", "-t", f"={session_id}"),
     )
 
 
@@ -738,3 +764,303 @@ def test_the_configured_interval_is_a_sane_number_of_seconds() -> None:
     from remote_agents.adapters.tui.screens.sessions import _SESSIONS_AUTO_REFRESH
 
     assert 2.0 <= _SESSIONS_AUTO_REFRESH <= 60.0, _SESSIONS_AUTO_REFRESH
+
+
+async def test_a_keyed_refresh_keeps_the_cursor_on_the_row_the_owner_chose() -> None:
+    """Ctrl+R re-reads the list; it does not re-choose the row.
+
+    The fifth exit in the class `on_reveal`'s docstring enumerates. `refresh_contents` reloaded
+    with `reload()`'s default `keep_cursor=False`, so `_draw_listing` took the
+    `show_choices(rows)` branch and rested the cursor on row 0 — and `Ctrl+R` then `s` issued a
+    graceful stop against a session the owner never selected. The four exits named there were
+    each found this way, one at a time; this is the same defect at the one mouth that was not
+    reached by moving the fix to the `on_reveal` funnel, because Refresh does not come through
+    `on_reveal`.
+
+    Driven through the real key rather than by calling `refresh_contents`, because the binding
+    is the app's (`app.py`, `ctrl+r` -> `action_refresh`) and the claim under test is about what
+    the owner's keypress does, not about what one method does when called by hand.
+    """
+    first, second, third = _record(), _record(), _record()
+    launcher = _Listing((first, second, third))
+    app = RemoteAgentsTui(_context(launcher))
+
+    async with app.run_test() as pilot:
+        await app.action_sessions()
+        await pilot.pause()
+        choices = app.screen.query_one("#choices", OptionList)
+        choices.highlighted = 2
+        chosen = choices.get_option_at_index(2).id
+
+        await pilot.press("ctrl+r")
+        await pilot.pause()
+
+        after = app.screen.query_one("#choices", OptionList)
+        assert after.highlighted is not None, "the refresh left the list with no cursor at all"
+        resting_id = after.get_option_at_index(after.highlighted).id
+
+    assert resting_id == chosen, "Ctrl+R re-chose the row instead of re-reading the list"
+
+
+async def test_a_resize_re_lays_the_columns_without_clearing_the_list() -> None:
+    """A width change re-columns the rows it already has; it does not refill the list.
+
+    `on_resize` reran the whole clear/refill through `_draw_listing`, and in the console that
+    is every DEC-040 exchange and every drag. Each one bumped `_resting_generation` and
+    scheduled a fresh `_rest_cursor`, so every resize re-armed the window mechanism A lives in
+    — the arrow that lands between a fill and its deferred placement. Narrowing this is what
+    stops a resize being a cursor event at all.
+
+    The identity assertion is the one that matters, and it is not decoration. `show_choices`
+    clears and refills, so a row that survives a re-render is a *different* `Option` object
+    with the same id — which is the predicate DEC-069 drops a queued selection on. Re-laying in
+    place keeps the object, so a selection queued across a resize is now honoured rather than
+    dropped. That is the intended reading (a resize changes no rows, so nothing the owner
+    aimed at has moved), and it is asserted here so the narrowing is deliberate and visible
+    rather than a side effect noticed later.
+    """
+    first, second, third = _record(), _record(), _record()
+    launcher = _Listing((first, second, third))
+    app = RemoteAgentsTui(_context(launcher))
+
+    async with app.run_test(size=(100, 30)) as pilot:
+        await app.action_sessions()
+        await pilot.pause()
+        choices = app.screen.query_one("#choices", OptionList)
+        choices.highlighted = 2
+        chosen = choices.get_option_at_index(2).id
+        generation_before = app.screen._resting_generation
+        objects_before = list(choices.options)
+        prompt_before = str(choices.get_option_at_index(0).prompt)
+
+        await pilot.resize_terminal(60, 30)
+        await pilot.pause()
+
+        assert app.screen._resting_generation == generation_before, (
+            "the resize cleared and refilled the list, re-arming the deferred placement"
+        )
+        assert [id(option) for option in choices.options] == [
+            id(option) for option in objects_before
+        ], "the resize replaced the Option objects instead of re-laying them"
+        assert choices.highlighted == 2
+        assert choices.get_option_at_index(2).id == chosen
+        assert str(choices.get_option_at_index(0).prompt) != prompt_before, (
+            "the columns were never re-laid for the new width"
+        )
+
+
+async def test_a_resize_that_does_not_change_the_width_redraws_nothing() -> None:
+    """Height alone is not a reason to touch the rows.
+
+    Counted through `replace_option_prompt` rather than through the drawn output, because the
+    re-lay at an unchanged width produces byte-identical prompts — so every assertion on what
+    is *on screen* passes whether or not the work was done, and the thing being narrowed here
+    is the work.
+
+    `_resting_generation` is asserted beside it, and review is why. The old implementation
+    reran `_draw_listing`, which never called `replace_option_prompt` either — so the counter
+    alone reads zero against the old code as happily as against the new, and the half of this
+    test that fails under mutation was only ever the width-change half. The generation counter
+    is the instrument that can see the old body: a clear-and-refill takes a new generation, a
+    skipped resize takes none.
+    """
+    first, second, third = _record(), _record(), _record()
+    launcher = _Listing((first, second, third))
+    app = RemoteAgentsTui(_context(launcher))
+
+    async with app.run_test(size=(100, 30)) as pilot:
+        await app.action_sessions()
+        await pilot.pause()
+        choices = app.screen.query_one("#choices", OptionList)
+
+        relays = 0
+        original = choices.replace_option_prompt
+
+        def counting_replace(*args: object, **kwargs: object) -> object:
+            nonlocal relays
+            relays += 1
+            return original(*args, **kwargs)  # type: ignore[arg-type]
+
+        choices.replace_option_prompt = counting_replace  # type: ignore[method-assign]
+
+        generation_before = app.screen._resting_generation
+
+        await pilot.resize_terminal(100, 20)
+        await pilot.pause()
+        assert relays == 0, "a height-only resize re-laid the columns for no reason"
+        assert app.screen._resting_generation == generation_before, (
+            "a height-only resize refilled the list, which is the shape this narrowed away"
+        )
+
+        await pilot.resize_terminal(70, 20)
+        await pilot.pause()
+        assert relays, "a width change did not re-lay the columns"
+
+
+async def test_the_sessions_key_pressed_on_the_sessions_screen_keeps_the_cursor() -> None:
+    """The sixth exit, and the one that proves the fifth was not the last.
+
+    `Ctrl+S` is an app-level binding offered *on the sessions screen itself*, where it means
+    "re-read this list" rather than "navigate to it" — `show_sessions` sees it is already the
+    current screen and reloads in place. It reloaded with the default, so the cursor went to
+    row 0, and `ctrl+s` then `s` issued a graceful stop against a session the owner never
+    selected: the identical shape measured for `Ctrl+R`, one binding along.
+
+    It survived Task 1.2's sweep because that sweep was `grep -nE 'self\\.reload\\(' on two
+    screen modules, and this call is `screen.reload()` in `app.py` — the wrong spelling in the
+    wrong file. The class was named correctly and enumerated too narrowly, which is the
+    failure mode a sweep is supposed to prevent. The architecture test now parses every module
+    under `adapters/tui`, so a seventh cannot hide in a third file either.
+    """
+    first, second, third = _record(), _record(), _record()
+    launcher = _Listing((first, second, third))
+    app = RemoteAgentsTui(_context(launcher))
+
+    async with app.run_test() as pilot:
+        await app.action_sessions()
+        await pilot.pause()
+        choices = app.screen.query_one("#choices", OptionList)
+        choices.highlighted = 2
+        chosen = choices.get_option_at_index(2).id
+
+        await pilot.press("ctrl+s")
+        await pilot.pause()
+
+        after = app.screen.query_one("#choices", OptionList)
+        assert after.highlighted is not None, "the re-read left the list with no cursor at all"
+        resting_id = after.get_option_at_index(after.highlighted).id
+
+    assert resting_id == chosen, "Ctrl+S re-chose the row instead of re-reading the list"
+
+
+async def test_the_gauge_seed_stands_down_when_the_owner_has_left_and_returned() -> None:
+    """The fourth unserialised fill, which carried neither of the two guards written for it.
+
+    `_seed_context_gauges` reads records, awaits a per-session provider sweep, and then draws
+    the records it read *before* that await. `_auto_reload` does the same shape and guards it
+    twice — it sets `_reading` so a tick cannot run underneath, and it captures `_visit` across
+    the await so a listing belonging to a visit the owner has left is dropped. The seed set
+    neither, on the one path that runs at mount, where the provider sweep is slowest.
+
+    The failure that leaves is the one `on_screen_resume` already documents in the other
+    direction: "a session that ended during the detour is put back on screen by the stale
+    listing". On a host where the sweep outruns the ten-second interval, the tick reads a list
+    without the session that just ended, draws it, and correctly clears the cursor — and then
+    the seed resumes and redraws its stale list with `keep_cursor=True`, putting the ended
+    session back under the cursor that `s` acts on.
+
+    Driven through `_visit` because that is the guard with a clean observable: bumping it is
+    what "the owner left and came back" does, and a seed that ignores it draws onto a visit
+    that is not its own.
+    """
+    first, second = _record(), _record()
+    launcher = _Listing((first, second))
+    app = RemoteAgentsTui(_context_with_usage(launcher))
+
+    async with app.run_test() as pilot:
+        await app.action_sessions()
+        await pilot.pause()
+        screen = app.screen
+        assert isinstance(screen, SessionsScreen)
+
+        drawn: list[int] = []
+        original = screen._draw_listing
+
+        def counting_draw(records, **kwargs):
+            drawn.append(len(records))
+            return original(records, **kwargs)
+
+        screen._draw_listing = counting_draw  # type: ignore[method-assign]
+
+        async def slow_refresh(records):
+            # The owner leaves and comes back while the provider sweep is still running.
+            screen._visit += 1
+
+        app.refresh_context_windows = slow_refresh  # type: ignore[method-assign]
+        await screen._seed_context_gauges()
+
+        assert drawn == [], (
+            "the gauge seed drew a listing belonging to a visit the owner had already left"
+        )
+
+
+async def test_the_gauge_seed_holds_the_reading_flag_across_its_await() -> None:
+    """So a tick cannot run underneath it and be overwritten by its stale draw.
+
+    The other half of `_auto_reload`'s pair. Without it the two fills interleave freely, and
+    the one that lands last is whichever the scheduler happens to resume — which is the exact
+    dependency the `_visit` counter was introduced to remove elsewhere in this file.
+    """
+    launcher = _Listing((_record(),))
+    app = RemoteAgentsTui(_context_with_usage(launcher))
+
+    async with app.run_test() as pilot:
+        await app.action_sessions()
+        await pilot.pause()
+        screen = app.screen
+        assert isinstance(screen, SessionsScreen)
+
+        seen: list[bool] = []
+
+        async def watching_refresh(records):
+            seen.append(screen._reading)
+
+        app.refresh_context_windows = watching_refresh  # type: ignore[method-assign]
+        await screen._seed_context_gauges()
+
+        assert seen == [True], f"the seed did not hold `_reading` across its await: {seen}"
+        assert screen._reading is False, "the seed left `_reading` set"
+
+
+async def test_the_gauge_seed_stands_down_when_any_fill_landed_during_its_await() -> None:
+    """`_visit` is not enough, and the docstring that said it was is the reason this exists.
+
+    The seed's first guard compared `_visit`, which is bumped only by `on_screen_resume` and
+    `on_reveal` — navigation. `refresh_contents` (Ctrl+R) and `after_command` bump nothing, and
+    `reload` deliberately does not stand down for `_reading`, because a keyed re-read is the
+    owner asking again. So: the seed's provider sweep runs long, the owner presses Ctrl+R,
+    `reload` reads fresh records and draws them, the seed resumes with `_visit` unchanged and
+    redraws its stale list over the top. That is exactly the thing the seed's docstring claimed
+    it could no longer do.
+
+    The cursor survives it — both draws restore by key — but `_drawn` is rebound to the stale
+    records, so `check_action` re-offers `s` and `c` on a row that has already gone until the
+    next tick.
+
+    Guarded on the fill counter instead, which every redraw takes whatever route it arrived by:
+    `show_choices` bumps `_resting_generation` on every exit, so a seed that finds it moved
+    knows a listing newer than its own is on screen and has nothing to add.
+    """
+    first, second = _record(), _record()
+    launcher = _Listing((first, second))
+    app = RemoteAgentsTui(_context_with_usage(launcher))
+
+    async with app.run_test() as pilot:
+        await app.action_sessions()
+        await pilot.pause()
+        screen = app.screen
+        assert isinstance(screen, SessionsScreen)
+
+        drawn: list[int] = []
+        original = screen._draw_listing
+
+        def counting_draw(records, **kwargs):
+            drawn.append(len(records))
+            return original(records, **kwargs)
+
+        async def keyed_refresh_lands(records):
+            # The owner presses Ctrl+R while the provider sweep is still running. No
+            # navigation, so `_visit` does not move.
+            screen._draw_listing = original  # type: ignore[method-assign]
+            await screen.refresh_contents()
+            screen._draw_listing = counting_draw  # type: ignore[method-assign]
+
+        app.refresh_context_windows = keyed_refresh_lands  # type: ignore[method-assign]
+        screen._draw_listing = counting_draw  # type: ignore[method-assign]
+        visiting = screen._visit
+        await screen._seed_context_gauges()
+
+        assert screen._visit == visiting, "this test is only meaningful without a navigation"
+        assert drawn == [], (
+            "the gauge seed redrew its stale listing over a fresher one the owner asked for"
+        )

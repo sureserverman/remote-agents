@@ -11,7 +11,7 @@ from __future__ import annotations
 import contextlib
 import logging
 from collections.abc import AsyncIterator, Sequence
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, ClassVar, Literal, cast
 
 from textual.app import ComposeResult, ScreenStackError
 from textual.containers import Vertical, VerticalScroll
@@ -23,10 +23,23 @@ from textual.widgets import Footer, Header, Input, OptionList, Static, TextArea
 from textual.widgets.option_list import Option
 
 from remote_agents.adapters.tui.model import _BACK, _EMPTY
+from remote_agents.adapters.tui.screens.confirm import ForceConfirmModal
+from remote_agents.application.session_actions import (
+    ACTION_LABELS,
+    FORCE,
+    available_actions,
+    explain_state,
+)
 
 if TYPE_CHECKING:
     from remote_agents.adapters.tui.app import RemoteAgentsTui
     from remote_agents.adapters.tui.context import TuiContext
+
+    # Imported for the annotation only. `RowStopAction` lives in `screens/sessions.py`, which
+    # imports this module, so a runtime import would be a cycle. Textual dispatches a message to
+    # `on_<snake_case_class_name>` off the message class itself, never off the annotation, so
+    # the handler below works with the name unresolved at runtime.
+    from remote_agents.adapters.tui.screens.sessions import RowStopAction
 
 _LOG = logging.getLogger(__name__)
 
@@ -65,16 +78,87 @@ def held_option_id(pane: OptionList) -> str | None:
     return pane.get_option_at_index(held).id
 
 
-def restore_highlight_by_id(pane: OptionList, held_id: str | None, keys: Sequence[str]) -> None:
-    """Put the cursor back on the row it was on, or on the first row.
+def restore_highlight_by_id(
+    pane: OptionList,
+    held_id: str | None,
+    keys: Sequence[str],
+    *,
+    when_gone: Literal["first", "none"] = "first",
+    was_populated: bool = True,
+) -> None:
+    """Put the cursor back on the row it was on, and answer for the row that has gone.
 
-    By key and never by index: these lists are newest-first and grow at the head, so the
-    index the owner was on names a different thing after any reload. Row 0 is the fallback
-    because the cursor must always rest somewhere non-mutating (DEC-007), never nowhere.
+    By key and never by index, because **rows are inserted and removed** and the index the
+    owner was on therefore names a different thing after any reload. That is the whole of the
+    justification. An earlier version of this said "these lists put the newest row first and
+    grow at the head", which is true of the feed and false of the sessions list — that one is
+    insertion-ordered and grows at the tail (`SessionStore.list`, `ORDER BY rowid`). A reason
+    that holds for one caller and not the other is worse than none: it invites the next reader
+    to conclude the helper does not apply to their list.
+
+    `when_gone` is what the two callers actually disagree about, and it is a parameter rather
+    than a policy because both answers are correct for their own position.
+
+    - `"first"` — the feed. A row ages out of a notification list on its own schedule and the
+      pane binds nothing destructive, so a cursor that must always rest somewhere
+      non-mutating (DEC-007) is satisfied by row 0.
+    - `"none"` — both sessions positions. Row 0 of a list that just lost a row is a *different
+      session*, silently, on a ten-second timer nobody pressed. DEC-052 named that as its
+      central hazard and DEC-062 closed it for the pane, where `s` and `c` end a session with
+      no confirmation. The dashboard binds no stop keys — its blast radius is `d` opening the
+      wrong detail — and takes the same answer anyway, so that the one code path publishing
+      the console-wide selection cannot disagree with itself about where the cursor is.
+
+      That last clause is the actual justification, and it is stated because an earlier version
+      of this docstring borrowed DEC-062's rejected alternative 3 ("both positions, never one")
+      instead. That alternative reasons from `SessionsScreen` and `SessionsPaneScreen` carrying
+      *the same keys from the same list*; the dashboard's pane is a third position carrying
+      neither, so the argument does not transfer and citing it made the extension look already
+      decided when it is a new decision.
+
+    DEC-007 is honoured by `"none"` rather than traded away. Its rule is that a *resting*
+    cursor is never on something that mutates, and no cursor at all satisfies that strictly:
+    every row key returns early on a `None` highlight, and one arrow press brings the cursor
+    back — the owner choosing a row again being exactly the deliberate act the vanished one
+    can no longer stand in for.
+
+    `was_populated` is the question `held_id` alone cannot answer, and getting it wrong is a
+    measured defect rather than a hypothetical: a pane being filled for the **first** time has
+    no held row either, and reading that as "the row has gone" left the dashboard's sessions
+    pane with no cursor at all from mount — caught by five committed snapshots. Nothing was
+    lost there, because nothing had been chosen yet, and a pane advertising "enter opens" with
+    no highlighted row makes its keys silent no-ops until an arrow press.
+
+    It is also what makes `"none"` survive the next tick. Once a vanished row has cleared the
+    cursor, the following reload reads `held_id` as `None` again — so without this flag the
+    mitigation would undo itself ten seconds later, on the very timer it exists to defend
+    against. A populated pane with no held row is a cursor deliberately resting on nothing;
+    an unpopulated one is a screen that has not drawn yet.
+
+    **What "populated" must not be measured as, and why the caller decides it.** An empty
+    listing draws a *disabled placeholder* row, so `option_count > 0` calls an empty pane
+    populated — and the owner's first real session then arrives with the placeholder's
+    departure read as their own row vanishing, leaving no cursor at all. The caller therefore
+    counts **enabled** rows (`dashboard.py`), because only the caller knows which of its rows
+    are real.
+
+    **The two sessions positions genuinely differ here, and this is the place to say so.** The
+    dashboard pane rests the owner's first session on row 0; `SessionsScreen` reaches
+    `show_choices`'s own empty-state substitution and comes out resting on nothing. Measured,
+    on this tree. That divergence is pre-existing on the `SessionsScreen` side and is not this
+    helper's to reconcile — it errs safe there, since that position is the one where `s` and
+    `c` end a session with no confirmation. Pinned from the dashboard side by
+    `test_the_first_real_session_on_an_empty_pane_gets_a_cursor`.
     """
     if not keys:
         return
-    target = keys.index(held_id) if held_id in keys else 0
+    if held_id in keys:
+        target = keys.index(held_id)
+    elif when_gone == "none" and was_populated:
+        pane.highlighted = None
+        return
+    else:
+        target = 0
     # Never onto a disabled row. Textual's own guards do not cover this path: `validate_
     # highlighted` only clamps to bounds, and `watch_highlighted` merely skips the scroll and
     # the `OptionHighlighted` post for a disabled index -- neither refuses to *set* it. So a
@@ -772,21 +856,55 @@ class ChoiceScreen(Screen[None]):
         if hint is not None:
             self.set_hint(hint)
 
-    def set_hint(self, text: str) -> None:
+    def set_hint(self, text: str | Content) -> None:
         """Put the keymap -- or nothing -- on the muted row beneath the status.
 
         One line, like the status, and for the same reason: the row is fixed-height so the list
         beneath never moves. An empty hint hides the row rather than leaving a blank one, so a
         screen with nothing to hint gives the rows the line back.
+
+        `Content` as well as `str`, because a hint can now carry **two** emphases on one line:
+        the pane's own keys, and the console-wide Alt layer greyed further when there is no
+        selection for it to act on. The region is composed `markup=False`, so a marked-up
+        *string* would be drawn literally -- a `Content` object carries its spans instead of
+        asking this row to start parsing text it is given.
         """
         if not self.showing:
             return
-        if "\n" in text:
+        if isinstance(text, str) and "\n" in text:
             _LOG.warning("a multi-line hint was truncated to its first line: %r", text)
             text = text.split("\n", 1)[0]
         region = self.query_one("#hint", Static)
         region.set_class(not text, "-empty")
         region.update(text)
+
+    #: Set on the position the owner is being taken *away from* by an excursion — a chord that
+    #: opens a session screen about a row in another pane — and cleared by the first
+    #: `consume_excursion` after it. One-shot, because it describes one departure.
+    _left_by_excursion: bool = False
+
+    def mark_excursion(self) -> None:
+        """Record that what is leaving this position is not the owner choosing to leave it."""
+        self._left_by_excursion = True
+
+    def consume_excursion(self) -> bool:
+        """Whether the return being drawn is from an excursion, clearing the mark either way.
+
+        Read-and-clear rather than read, so a mark set by a chord that then went nowhere cannot
+        outlive the redraw it was meant for and change the *next* return's answer.
+        """
+        was, self._left_by_excursion = self._left_by_excursion, False
+        return was
+
+    def hint_content(self, base: str) -> str | Content:
+        """What this position's hint row actually says, given the keys it wants to advertise.
+
+        A seam, and the base answer is "exactly what you asked for". It exists so a console pane
+        can add the Alt layer to its own keys without every call site knowing about chords, and
+        without this module -- which `screens/sessions.py` imports -- having to know the chord
+        vocabulary that lives there. The pane mixin overrides it; nothing else does.
+        """
+        return base
 
     async def refuse(
         self, message: str | None = None, *, severity: SeverityLevel = "warning"
@@ -948,11 +1066,20 @@ class ChoiceScreen(Screen[None]):
             # Resting on nothing, and **cleared whether or not this fill takes the keyboard**.
             # The `focus` flag says where the *keyboard* goes; the cursor is a different
             # question, and on a list carrying unconfirmed stop keys it is the safety-relevant
-            # one. `clear_options` does not reset `highlighted`, and `validate_highlighted`
-            # clamps rather than rejects — so a fill that skipped this because `focus` was
-            # False would leave the old index pointing at whatever row now sits there, which is
-            # precisely the silent move this branch exists to prevent. Guarding it on `focus`
-            # would make the mitigation depend on where the keyboard happened to be.
+            # one.
+            #
+            # **Belt-and-braces, not load-bearing — and this comment used to claim the
+            # opposite.** It said "`clear_options` does not reset `highlighted`". Measured on
+            # the pinned Textual 8.2.8, `clear_options` ends with `self.highlighted = None`,
+            # and neither `add_options` nor `_update_lines` puts a cursor back — so by the time
+            # this branch runs the highlight is already `None`. The sibling comment nineteen
+            # lines below says the reverse and is the correct one; one function asserting both
+            # left whoever read it next to guess, on a safety-relevant assignment.
+            #
+            # The assignment stays, unconditional and ungated on `focus`, because the property
+            # it states — this list rests on nothing — is what makes `s` and `c` legal at all
+            # (DEC-052, DEC-062), and that should not rest on a framework detail surviving an
+            # upgrade. What is no longer claimed is that it is the only thing holding it.
             #
             # The focus call keeps its guard, because that half really is about the keyboard:
             # taking it from a filter the owner is typing into is the defect `focus` exists for.
@@ -989,9 +1116,15 @@ class ChoiceScreen(Screen[None]):
             # and a fresh screen has not laid out), so `watch_highlighted`'s
             # `scroll_to_highlight` finds no line for the index and returns without scrolling.
             # A resting row below the fold would therefore be highlighted but off screen.
-            self.call_after_refresh(self._rest_cursor, choices, resting, self._resting_generation)
+            self.call_after_refresh(
+                self._rest_cursor,
+                choices,
+                resting,
+                self._resting_generation,
+                entries[resting][0],
+            )
 
-    def _rest_cursor(self, choices: OptionList, index: int, generation: int) -> None:
+    def _rest_cursor(self, choices: OptionList, index: int, generation: int, key: str) -> None:
         """Re-assert the cursor on `index` once the list has a laid-out region to scroll in.
 
         `generation` is what makes this safe to defer. The index was computed against the
@@ -1014,11 +1147,302 @@ class ChoiceScreen(Screen[None]):
 
         `watch_highlighted` returns immediately on `None`, so the clear posts nothing —
         subscribers see one `OptionHighlighted` per fill, not a None-then-real pair.
+
+        `key` is the second half of the guard, and it answers what `generation` structurally
+        cannot. The generation rejects a placement whose fill was *superseded by another fill*;
+        it says nothing about the owner, because moving the cursor is not a fill and takes no
+        new generation. So between this callback being scheduled and it running, an arrow press
+        delivered on the OptionList's own pump moves the cursor, the generation still matches,
+        and the placement writes the fill's index back over it — mechanism A of the
+        wrong-highlight defect. Passing the *row* the placement was resting on, rather than
+        trusting its index, lets it ask whether the cursor is still there: if the cursor now
+        names a different row, or no row at all, the owner (or a rest-on-nothing branch) put it
+        there deliberately and this callback has nothing left to do.
+
+        Standing down loses nothing this method exists for. Its job is the second
+        `scroll_to_highlight`, and a cursor that moved has already had one from
+        `watch_highlighted` — the arrow's own — against a widget that by then has a laid-out
+        region. There is no case where the deferred pass is the only thing that would scroll.
+
+        The row rather than the index, because `validate_highlighted` clamps: after a fill that
+        shortened the list, index `n` still resolves, to whatever row now sits there. Comparing
+        indices would call that a match and write over it. This is the same reasoning DEC-069
+        applies to a queued selection — identity, not position.
+
+        DEC-052/DEC-062 are why this is worth the parameter: on the sessions positions `s` and
+        `c` end a session with no confirmation, against the row under the cursor. A placement
+        that silently returns the cursor to the fill's choice is a stop against the wrong agent,
+        with nothing on screen to say so.
         """
         if generation != self._resting_generation or not choices.options:
             return
+        resting_on = choices.highlighted
+        if resting_on is None or not 0 <= resting_on < len(choices.options):
+            return
+        if choices.options[resting_on].id != key:
+            return
         choices.highlighted = None
         choices.highlighted = index
+
+    def draw_failure_rows(self, entries: tuple[tuple[str, str | Content], ...]) -> None:
+        """Fill this position after a read it asked for failed.
+
+        A hook rather than `report_store_failure` calling `show_choices` on the screen directly,
+        and the difference is not tidiness. Filling a position from another module means every
+        rule that position enforces about its own fills — chiefly, on the sessions positions,
+        that a fill publishes the cursor it produced — is bypassed by construction. That is
+        exactly how the fifth cursor-changing path came to exist: the funnel was built, and this
+        call was outside it.
+
+        The base answer is the ordinary one, `highlight=0`: the only row this ever draws is Back
+        or nothing, and where there is a Back it is the one action left.
+        """
+        self.show_choices(entries, highlight=0)
+
+    @property
+    def shows_the_acted_session(self) -> bool:
+        """Whether a stop issued from here changes something this position is displaying.
+
+        **The question every callback below turns on, and it did not exist before the Alt
+        layer.** `tui.stop`'s callers used to be the two sessions positions and the detail, so
+        "re-read yourself afterwards" was unconditionally right and the seams said exactly that.
+        A chord makes the receiving screen the projects, limits or feed pane, or a wizard step
+        pushed on top of one — positions whose rows have nothing to do with the session that
+        just stopped, and for which re-reading is not a refresh but destruction: the projects
+        pane's `on_reveal` calls `render_projects()`, which clears the filter `Input` and moves
+        focus off it. The owner's originating ask was that the left pane keep typed text; a stop
+        chord that wiped the filter would defeat it on the success path.
+
+        Derived from the two flags rather than listed, so a position added later gets the right
+        answer by declaring what it is instead of by being remembered here. Both flags are
+        pinned against real behaviour by architecture tests.
+        """
+        return self.owns_session_cursor or self.about_one_session
+
+    async def after_stop(self) -> None:
+        """Re-read this position after a stop it can see the result of, and nothing otherwise."""
+        if self.shows_the_acted_session:
+            await self.after_command()
+
+    async def redraw_after_stop_failure(self) -> None:
+        """Redraw after a stop that raised — only where there are rows describing that session.
+
+        `redraw_after_failure`'s base implementation collapses the list to a lone `Back`, which
+        is right for a screen describing one record and destructive anywhere else: on the
+        projects pane it would replace the whole catalogue with one row reading "Go back and
+        open the session again to see its current state", from a position that has no session
+        and nothing to go back to. `stop` announces the failure as a toast regardless, so a
+        position that shows nothing about the session still says what happened.
+        """
+        if self.shows_the_acted_session:
+            await self.redraw_after_failure()
+
+    def report_stop_result(self, text: str) -> None:
+        """Write a stop's outcome into the status line, where the status line is about it.
+
+        The fourth callback on this seam, and the one whose absence is *permanent*: `after_stop`
+        is a no-op on a position that shows no sessions, so nothing re-renders afterwards to put
+        the line back. A projects pane would keep "Graceful stop did not take effect. ..." where
+        "Choose a project -- 6 available" belongs, and a wizard step would lose the instruction
+        telling the owner what to type.
+
+        `stop` announces the same failure as a toast regardless, and that toast carries the
+        summary *and* the remedy -- so a position with no business showing this still reports it,
+        in the sink that is not the position's own description of itself.
+        """
+        if self.shows_the_acted_session:
+            self.set_status(text)
+
+    async def refuse_stop(self, message: str | None = None) -> None:
+        """Report a stop the policy will not allow, onto whichever position asked for it.
+
+        A position showing the session redraws and lets the redraw speak — that is `refuse`, and
+        for the vanished case it is why `message` is optional there: the re-read writes "That
+        session is no longer available." itself, and announcing it too would show one event
+        twice. A position showing nothing about the session has no such redraw, so it must say
+        it in words or the chord would do nothing and say nothing.
+        """
+        if self.shows_the_acted_session:
+            await self.refuse(message)
+            return
+        self.announce(message or "That session is no longer available.", severity="warning")
+
+    async def on_row_stop_action(self, message: RowStopAction) -> None:
+        """The screen handler `RowStopAction` is delivered to. DEC-025's required shape.
+
+        **On `ChoiceScreen` rather than on the sessions positions, since the Alt layer.** The
+        chord posts this message to whichever screen the owner is looking at — the projects,
+        limits or feed pane, or a wizard step pushed on top of one — so the handler has to exist
+        wherever a chord can be pressed. Defined here, every position that can receive one can
+        answer it, and the answer is the same code the row key has always run.
+
+        Before that it lived on `SessionsScreen`, and a stop chord pressed anywhere else
+        resolved a session, posted, and had the message bubble to the App, find no handler, and
+        be dropped in silence. `tests/unit/adapters/tui/test_tui_bindings.py` pinned exactly
+        that intermediate so it could not be mistaken for the working state.
+
+        Guarded again here rather than trusting the check the key already made: a posted
+        message is delivered later, and `dispatch_opening` on the detail states the same rule
+        for the same reason — the two entry paths agree instead of relying on the pump staying
+        serialized forever.
+
+        `FORCE` is separated by name rather than by branch order, exactly as
+        `SessionDetailScreen.choose` does and for the same reason: FORCE is a member of
+        `ACTION_LABELS`, so without this the next branch would reach `tui.stop` with no modal
+        in between and one keypress would force-stop a session. DEC-018 permits an unconfirmed
+        `s` and `c` and says nothing of the kind about force.
+        """
+        if not self.showing or self.tui.busy:
+            return
+        if message.action == FORCE:
+            await self.confirm_force(message.session_value)
+            return
+        await self.tui.stop(message.action, message.session_value, self)
+
+    async def confirm_force(self, session_value: str) -> None:
+        """Re-read the record, ask the modal over this list, and issue only on a `True`.
+
+        **The same chain `SessionDetailScreen.confirm_force` runs, entered from the list**, and
+        the shape is copied deliberately rather than shared: read under the guard, re-check the
+        policy before asking, ask, refresh on an abort without letting go, and take the guard
+        off only for the call that takes it itself. What differs is *whether* the refusals and
+        the refresh land anywhere at all — `refuse_stop` and `after_stop` both turn on
+        `shows_the_acted_session`, so a session that moved under a rendered row is reported onto
+        the list the owner is looking at, and the same event on a pane that shows no sessions is
+        said in a toast and changes nothing on screen.
+
+        **Defined on `ChoiceScreen`, and emphatically not on a plain mixin**, which is a
+        requirement rather than a preference. `tests/architecture/
+        test_confirmations_are_asked_from_screen_handlers.py` asserts that every direct caller
+        of `ask_to_confirm` is a method on a class whose name ends in `Screen` — because
+        DEC-025's whole protection is that the caller runs on the *screen's* message pump, so a
+        suspension there holds back the events that would pop the modal out from under it. The
+        plan for this task said "a mixin every `ChoiceScreen` carries"; a mixin is not a screen
+        and would fail that sweep, so the base screen class *is* the mixin. Every position
+        inherits it, and the sessions positions keep the exact behaviour they had.
+
+        **What differs per position is `shows_the_acted_session`, and that is the point of
+        putting this here rather than parameterising it.** A position that shows the session
+        re-reads itself and reports refusals onto its own rows; a position that does not — the
+        projects, limits and feed panes, and every wizard step — neither refreshes nor redraws,
+        because re-reading a list that has nothing to do with the stopped session is not a
+        refresh but destruction (the projects pane's `on_reveal` clears the filter the owner
+        typed). So an abort on the sessions pane re-reads the listing and an abort on the feed
+        pane does nothing at all, with no branch here asking which screen it is on.
+
+        The guard is held across the read *and* the whole modal for the reasons the detail's
+        twin gives at length: `action_back` runs on the app's pump while this runs on the
+        screen's, so without it an escape landing inside the read pops this screen and the
+        modal is pushed onto whatever the pop revealed. It is released before the stop, because
+        `tui.stop` takes it itself and refuses outright when it is already held.
+        """
+        async with self.holding_the_guard():
+            try:
+                record = await self.tui.current_record(session_value)
+            except Exception as error:
+                # The detail's twin lets this raise, because `render_detail` has already
+                # reported a failed read by the time it runs. Nothing has reported one here:
+                # this is the first read on this path, and an exception escaping a binding
+                # action exits the app.
+                self.tui.report_store_failure(error, self)
+                return
+            if record is None:
+                await self.refuse_stop()
+                return
+            if FORCE not in available_actions(record.state, record.orphan_provenance):
+                # Asked before the question rather than only after the answer. `stop`
+                # re-checks regardless — that is DEC-007's fourth mitigation and it is what
+                # makes this safe rather than necessary — but a surface that opens a kill
+                # confirmation it already knows it will refuse is asking the owner to
+                # authorise nothing.
+                await self.refuse_stop(
+                    f"{ACTION_LABELS[FORCE]} is no longer available for this session. "
+                    f"{explain_state(record.state, record.orphan_provenance)}"
+                )
+                return
+            if not self.showing:
+                return
+            try:
+                confirmed = await self.tui.ask_to_confirm(ForceConfirmModal.for_record(record))
+            except Exception as error:
+                _LOG.exception("the force confirmation could not be shown")
+                self.announce(f"The confirmation could not be shown: {error} Nothing was stopped.")
+                return
+            if not confirmed:
+                # Abort re-reads, for the reason the detail's twin gives: the owner may have
+                # opened it only to look, and the session can have moved on while it was open.
+                # Through `after_stop`, so an abort on a pane that shows no sessions leaves that
+                # pane exactly as the owner left it — Escape must cost them nothing.
+                await self.after_stop()
+                return
+        await self.tui.stop(FORCE, session_value, self)
+
+    #: Whether this screen draws a sessions list with a cursor of its own.
+    #:
+    #: What it decides is where `RemoteAgentsTui.selected_session` looks: a position that owns
+    #: a cursor answers from it, and every other position answers from the console's published
+    #: selection. Getting that backwards is a chord acting on a row the owner is not looking
+    #: at, so a screen that draws sessions must say so rather than be recognised by its type --
+    #: `tests/architecture/test_sessions_redraws_keep_the_cursor.py` pins the two together, so
+    #: a position cannot gain `highlighted_session` and forget this.
+    owns_session_cursor: ClassVar[bool] = False
+
+    #: Whether this screen binds the bare row keys `a i r s c f m` on that cursor.
+    #:
+    #: **Not the same question as the flag above, and the difference is DEC-062's whole
+    #: position.** That entry makes an unconfirmed `s`/`c` legal on `SessionsScreen` and
+    #: `SessionsPaneScreen`, tied to `_draw_listing` resting a vanished row on nothing. It names
+    #: no third position, and `DashboardScreen` is one: it owns a sessions cursor and
+    #: deliberately binds none of those letters.
+    #:
+    #: So the Alt layer is offered by *this* flag rather than by `owns_session_cursor`. Where
+    #: the bare letter is already legal, `alt+<letter>` adds no hazard — it is the same act on
+    #: the same cursor. Where it is not, the chord may not smuggle an unconfirmed stop onto a
+    #: cursor whose position was never argued for, and which on the dashboard is not even the
+    #: focused widget.
+    #:
+    #: Pinned against the real bindings by `tests/architecture/
+    #: test_the_chord_layer_is_the_row_keys.py`, so a screen cannot gain the row keys and forget
+    #: this, or declare it and bind nothing.
+    carries_row_keys: ClassVar[bool] = False
+
+    def highlighted_session(self) -> str | None:
+        """The session under this screen's cursor, or `None` where it has no sessions list.
+
+        Declared here so the pairing above is a statement every screen makes rather than one
+        two screens happen to make. It is **not** reached by `selected_session`, which calls
+        the resolver only where `owns_session_cursor` is true — an earlier version of this
+        docstring said it was, and justified itself with an `AttributeError` that cannot
+        happen. Left in place because a base that declares the flag and not the method invites
+        the next reader to conclude the two are independent, which is the drift the paired
+        architecture check exists to stop.
+        """
+        return None
+
+    #: Whether this screen is about **one particular session** rather than about a list.
+    #:
+    #: The third answer `owns_session_cursor` cannot give, and the one that keeps `alt+c` on
+    #: session A's detail from acting on session B. A detail, a rename and an inspect each own
+    #: no cursor, so without this they resolve to whatever the sessions pane in another pane
+    #: happens to highlight -- a chord acting on a session the owner is not looking at, which is
+    #: the same defect the flag above exists to prevent, one position along.
+    #:
+    #: Declared as "what this screen is about", not as "what it holds", and the difference is
+    #: load-bearing: `InspectScreen` is about one session and carries only its captured output,
+    #: so it declares this and answers `subject_session` with `None`. That combination is a
+    #: **refusal** -- the resolver stops there rather than falling through to the published
+    #: selection, which is exactly what a screen that cannot name its subject must do.
+    about_one_session: ClassVar[bool] = False
+
+    def subject_session(self) -> str | None:
+        """The one session this screen is about, or `None` where it cannot name it.
+
+        Only consulted where `about_one_session` is set; the pairing is the same shape as
+        `owns_session_cursor` / `highlighted_session` above, and declared here for the same
+        reason -- so it is a statement every screen makes rather than one three screens happen
+        to make.
+        """
+        return None
 
     def text_entry(
         self,

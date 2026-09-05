@@ -15,19 +15,26 @@ whole approach exists to prevent.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 
 import pytest
 from backends import SessionUseCaseDouble, backend_for
+from console_selection import SelectionConsole
 from textual.screen import Screen
-from textual.widgets import Input, OptionList
+from textual.widgets import Input, OptionList, Static
 from tui_feedback import announcements
 from tui_filter import settle_filter
 
 from remote_agents.adapters.tui.app import RemoteAgentsTui
 from remote_agents.adapters.tui.context import TuiContext
+from remote_agents.adapters.tui.panes import FeedPane, LimitsPane, ProjectsPane, SessionsPane
 from remote_agents.adapters.tui.screens import ALL_SCREENS
+from remote_agents.adapters.tui.screens.sessions import (
+    _SESSIONS_AUTO_REFRESH,
+    CHORD_HINT,
+    CHORD_KEYS,
+)
 from remote_agents.application.profiles import ProfileAvailability
 from remote_agents.application.project_catalog import CatalogProject
 from remote_agents.domain.conversations import (
@@ -819,3 +826,162 @@ async def test_only_the_console_panes_that_navigate_draw_the_app_chrome(
         )
 
     assert drawn == (chrome, chrome)
+
+
+@pytest.mark.parametrize("width", [60, 80])
+async def test_the_chord_hint_is_drawn_whole_at_the_committed_widths(width: int) -> None:
+    """Measured, not assumed — the plan's own instruction, and the row that can silently lose it.
+
+    `#hint` is one row with `text-overflow: ellipsis`, so a hint too long for the pane is not
+    wrapped or scrolled: the tail is replaced by `…`. The tail is exactly where the chord
+    letters are, so an over-long line would advertise `⌥ a i r s` and quietly drop `c f m d` —
+    four keys, two of which end a session.
+
+    60 and 80 because those are the widths this suite already commits to elsewhere (the attach
+    command is measured at 80, the status region at 60), and because the projects pane's own
+    keys plus the layer is the longest of the three hints by some margin.
+    """
+    console = SelectionConsole(selected=SessionId.new())
+    app = ProjectsPane(
+        replace(
+            _context(),
+            console_read_selection=console.read,
+            console_holds_slot=console.holds_console_slot,
+        )
+    )
+
+    async with app.run_test(size=(width, 30)) as pilot:
+        await pilot.pause()
+        hint = app.screen.query_one("#hint", Static)
+        drawn = "".join(hint.render_line(row).text for row in range(hint.size.height))
+
+    assert "…" not in drawn, f"the hint was elided at {width} columns: {drawn!r}"
+    for key in CHORD_KEYS:
+        assert f" {key}" in drawn, (
+            f"chord key {key!r} is not on screen at {width} columns: {drawn!r}"
+        )
+
+
+async def test_the_chord_hint_is_dim_while_nothing_is_selected_and_lit_once_something_is() -> None:
+    """The two states, read off the rendered styles rather than off the text.
+
+    Both states draw the identical letters, so a test asserting on text alone cannot tell them
+    apart — which is the whole point of the distinction. `$text-disabled` against the row's own
+    `$text-muted` is what says "these keys are here and there is nothing for them to act on";
+    every one of them warns and does nothing in that state (DEC-027).
+    """
+    console = SelectionConsole(selected=None)
+    app = ProjectsPane(
+        replace(
+            _context(),
+            console_read_selection=console.read,
+            console_holds_slot=console.holds_console_slot,
+        )
+    )
+
+    def chord_styles(screen) -> set[str]:
+        content = screen.query_one("#hint", Static).content
+        return {
+            str(span.style)
+            for span in content.spans
+            if CHORD_HINT[2:] in content.plain[span.start : span.end]
+        }
+
+    async with app.run_test(size=(120, 30)) as pilot:
+        await pilot.pause()
+        await pilot.pause(_SESSIONS_AUTO_REFRESH * 1.2)
+        dim = chord_styles(app.screen)
+
+        console.selected = SessionId.new()
+        await pilot.pause(_SESSIONS_AUTO_REFRESH * 1.2)
+        lit = chord_styles(app.screen)
+
+    assert dim == {"$text-disabled"}, f"the layer was not dimmed with nothing selected: {dim}"
+    assert lit != dim, "the hint looks the same whether or not a chord would do anything"
+
+
+async def test_no_chord_hint_appears_off_a_console() -> None:
+    """The layer is not offered there, so advertising it would be a lie in the quietest place."""
+    app = ProjectsPane(_context())
+
+    async with app.run_test(size=(120, 30)) as pilot:
+        await pilot.pause()
+        drawn = str(app.screen.query_one("#hint", Static).content)
+
+    assert "⌥" not in drawn, f"an off-console pane advertised the Alt layer: {drawn!r}"
+
+
+async def test_the_sessions_pane_does_not_repeat_the_letters_its_title_already_carries() -> None:
+    """One key set, described once. The pane's border title is `Sessions 6 · a i r s c f m`.
+
+    Adding `⌥ a i r s c f m d` beneath it would put the same letters on the same small pane
+    twice, once with a modifier and once without, and read as two key sets rather than as one
+    set reachable two ways.
+    """
+    app = SessionsPane(_context())
+
+    async with app.run_test(size=(120, 30)) as pilot:
+        await pilot.pause()
+        drawn = str(app.screen.query_one("#hint", Static).content)
+
+    assert "⌥" not in drawn, f"the sessions pane repeated its own letters as chords: {drawn!r}"
+
+
+@pytest.mark.parametrize(
+    ("surface", "advertises"),
+    [
+        (ProjectsPane, True),
+        (FeedPane, True),
+        (LimitsPane, False),
+        (SessionsPane, False),
+        (RemoteAgentsTui, False),
+    ],
+)
+async def test_which_surfaces_draw_the_chord_hint(
+    surface: type[RemoteAgentsTui], advertises: bool
+) -> None:
+    """Which positions *say* the layer exists, as one table — and it is not "every console pane".
+
+    Three exclusions, each for its own reason, and each previously untested:
+
+    * **the sessions pane** already advertises the same letters bare in its border title, so a
+      second row would describe two key sets where there is one;
+    * **the limits pane** hides `#hint` in its own CSS — the pane's whole design is two lines
+      with no status and no border, and a third row for a keymap is the same argument again.
+      It still *offers* the chords; it does not name them (Task 4.3's docs do);
+    * **`RemoteAgentsTui`** rests on `DashboardScreen`, which inherits the hint mixin by
+      subclassing `ProjectsPaneScreen` while being refused every chord. Drawing a lit
+      `⌥ a i r s c f m d` there would advertise eight keys the app answers `False` for, two of
+      them unconfirmed stops — the dead-end key in its worst form.
+
+    Wired as a console throughout, so a `False` row means the position declined rather than
+    that there was nothing to declare.
+    """
+    console = SelectionConsole(selected=SessionId.new())
+    app = surface(
+        replace(
+            _context(),
+            console_read_selection=console.read,
+            console_holds_slot=console.holds_console_slot,
+        )
+    )
+
+    async with app.run_test(size=(120, 30)) as pilot:
+        await pilot.pause()
+        # Driven rather than waited for. Sleeping through the poll costs twelve seconds per row
+        # and — on the dashboard — measures the wrong thing: its own `_draw_session_rows` rewrites
+        # the hint on the next tick, so a settled reading is identical whether or not the layer
+        # was ever drawn there. The transient is the defect, so the refresh is called directly.
+        refresh = getattr(app.screen, "refresh_chord_hint", None)
+        if refresh is not None:
+            await refresh()
+        await pilot.pause()
+        drawn = str(app.screen.query_one("#hint", Static).content)
+        declared = getattr(app.screen, "advertises_chords", lambda: False)()
+
+    assert (CHORD_HINT in drawn) is advertises, (
+        f"{surface.__name__} hint row is {drawn!r}, which does not match advertises={advertises}"
+    )
+    assert declared is advertises, (
+        f"{surface.__name__} declares advertises_chords()={declared}, not {advertises}"
+    )

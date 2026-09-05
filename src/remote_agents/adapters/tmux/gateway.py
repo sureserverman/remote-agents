@@ -17,6 +17,7 @@ from remote_agents.adapters.tmux.codec import (
     console_slot_mark_args,
     console_target,
     console_zoom_args,
+    decode_selection,
     display_message_args,
     exact_pane_target,
     exact_session_target,
@@ -26,6 +27,8 @@ from remote_agents.adapters.tmux.codec import (
     pane_title_args,
     parse_arrangement,
     parse_pane,
+    publish_selection_args,
+    read_selection_args,
     rejoin_console_pane_args,
     split_console_pane_args,
     swap_pane_args,
@@ -33,6 +36,7 @@ from remote_agents.adapters.tmux.codec import (
 from remote_agents.domain.models import ProfileId, ProjectId, SessionId
 from remote_agents.ports.console import (
     ConsoleBindingAction,
+    ConsoleKeyTable,
     ConsolePaneSlot,
     HostedPane,
 )
@@ -552,6 +556,57 @@ class TmuxGateway:
         except RuntimeError as error:
             raise _target_missing_or(error, pane_id) from error
 
+    async def publish_selection(self, session_id: SessionId | None) -> None:
+        """Record which session the console has selected, for every pane process to read.
+
+        Not wrapped in `_target_missing_or`, and the difference from its neighbours is the
+        point: those address a *pane* that an exchange may have moved or an owner may have
+        killed, so "the target is gone" is a real answer they must translate. This addresses
+        the console session itself, which is the thing the caller is running inside — if it is
+        gone, the caller is too.
+
+        A failure here is not fatal to the caller, but it is **not** harmless either, and an
+        earlier version of this paragraph said it was. It claimed a console that cannot write
+        the option is one "whose chords fall back to no session selected". That is true only
+        before the first successful write: `set-option` failing does not clear the option, so
+        after one success every later failure leaves the *previous* value standing while the
+        cursor moves on. The chords then act on a stale row rather than on nothing.
+
+        It is still not raised, because the caller is a cursor move and there is nothing useful
+        for it to do about a tmux that will not answer. What contains the consequence is
+        DEC-007's re-read at issue time — the named session must still exist and still permit
+        the action — plus the fact that the next successful publication corrects it.
+        """
+        await self._runner.run(*self._base_argv(), *publish_selection_args(session_id))
+
+    async def read_selection(self) -> SessionId | None:
+        """Read the published selection back, refusing anything that is not a session id.
+
+        `show-options -qv` returns the empty string for an option never set, so an unpublished
+        console and a console resting on nothing give the same answer without either caller
+        having to know which it is.
+        """
+        return decode_selection(await self._runner.run(*self._base_argv(), *read_selection_args()))
+
+    async def holds_console_slot(self, pane_id: str) -> bool:
+        """Answer the read-side gate from the arrangement, not from a second pane read.
+
+        `pane_arrangement` already reports, per pane, both halves the gate needs — the slot mark
+        the pane carries in its own right, and whether the console is the window hosting it. So
+        the gate is a filter over a listing this adapter already builds and already tests,
+        rather than a new option read whose decoder would be a second place the two facts could
+        be spelled. One `list-panes -a` per chord press, against a local socket.
+
+        `on_console` is what closes the exchange case: the mark travels with the pane (DEC-038),
+        so an exiled projects pane still has one and is no longer shown by the console. A pane
+        this listing does not mention at all — an absent server answers with an empty
+        arrangement — is not one of ours either, which is the answer `any` gives for free.
+        """
+        return any(
+            pane.pane_id == pane_id and pane.on_console and pane.console_slot is not None
+            for pane in await self.pane_arrangement()
+        )
+
     async def swap_panes(self, source_pane: str, target_pane: str) -> None:
         """Exchange two panes between their windows, taking neither session with it.
 
@@ -783,10 +838,16 @@ class TmuxGateway:
         await self._runner.run(*self._base_argv(), *display_message_args(text))
 
     async def install_console_binding(
-        self, key: str, action: ConsoleBindingAction, command: tuple[str, ...] = ()
+        self,
+        key: str,
+        action: ConsoleBindingAction,
+        command: tuple[str, ...] = (),
+        table: ConsoleKeyTable = ConsoleKeyTable.ROOT,
     ) -> None:
-        """Install one console root binding, on this socket only; the codec validates the key."""
-        await self._runner.run(*self._base_argv(), *console_binding_args(key, action, command))
+        """Install one console binding, on this socket only; the codec validates key and table."""
+        await self._runner.run(
+            *self._base_argv(), *console_binding_args(key, action, command, table)
+        )
 
     def _base_argv(self) -> tuple[str, str, str]:
         """Return the only valid tmux server selector for this adapter."""

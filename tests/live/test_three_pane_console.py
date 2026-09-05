@@ -1,4 +1,9 @@
-"""Opt-in proof, on real tmux, that the console comes up as three panes and its keys work.
+"""Opt-in proof, on real tmux, that the console comes up whole and its keys work.
+
+The count lives in `ConsolePaneSlot` and nowhere else here. This file said "three panes" in
+its title and in an assertion, and both went stale on 2026-08-31 when the console gained a
+fourth — red on `main` for four days, unnoticed because live tests are opt-in and no gate
+ran the whole file.
 
 Everything the composer does was proven headless in `tests/unit/application`; what cannot be
 proven there is the arrangement a real tmux server actually produces, and whether a real
@@ -18,6 +23,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import re
 from pathlib import Path
 
 import pytest
@@ -26,7 +32,19 @@ from remote_agents.adapters.tmux.gateway import TmuxGateway
 from remote_agents.adapters.tmux.runtime import AsyncTmuxRunner
 from remote_agents.application.console import CONSOLE_BINDINGS, ConsoleComposer
 from remote_agents.domain.models import SessionId
-from remote_agents.ports.console import ConsoleBindingAction, ConsolePaneSlot
+from remote_agents.ports.console import (
+    ConsoleBindingAction,
+    ConsoleKeyTable,
+    ConsolePaneSlot,
+)
+
+#: Strips the SGR escapes a `capture-pane -e` carries, so two captures compare as text.
+_ANSI = re.compile(r"\x1b\[[0-9;]*m")
+#: A background-colour SGR, in either the 256-colour or the truecolor spelling.
+_BACKGROUND = re.compile(r"\x1b\[[0-9;]*?48;[52];")
+#: The display identity's sequence marker, which is the part of a row that survives a
+#: re-lay at a different width.
+_SEQUENCE = re.compile(r"#\d+")
 
 _REGISTRY = """version: 1
 projects:
@@ -105,7 +123,7 @@ async def _type(host_socket: str, key: str) -> None:
     await asyncio.sleep(1.0)
 
 
-async def test_the_console_comes_up_as_three_panes_and_its_keys_reach_them(
+async def test_the_console_comes_up_whole_and_its_keys_reach_every_pane(
     tmp_path: Path,
 ) -> None:
     _live_or_skip()
@@ -141,7 +159,13 @@ async def test_the_console_comes_up_as_three_panes_and_its_keys_reach_them(
         assert windows == ["0"], f"the console is one window, not {windows}"
 
         panes = await _panes(console_socket)
-        assert len(panes) == 3, panes
+        # Derived from the slot vocabulary rather than written out. This assertion said `3` and
+        # had been red on `main` since 2026-08-31, when `ConsolePaneSlot` gained `LIMITS` and
+        # the console became four panes ("Give the console its own agent-limits pane"). Nothing
+        # noticed for four days because live tests are opt-in and no gate ran this file. A
+        # literal count is a second declaration of how many panes there are, and the enum is the
+        # first; this now reads the one that cannot go stale.
+        assert len(panes) == len(ConsolePaneSlot), panes
 
         arrangement = await gateway.pane_arrangement()
         by_slot = {pane.console_slot: pane for pane in arrangement if pane.console_slot}
@@ -149,14 +173,17 @@ async def test_the_console_comes_up_as_three_panes_and_its_keys_reach_them(
 
         # Proportions, read off the server rather than asserted from the argv that asked
         # for them: the left pane takes ~60% of the width, and the feed ~a third of the
-        # right-hand column's height.
-        left = next(row for row in panes if row[1] == by_slot["surface"].pane_id)
-        sessions = next(row for row in panes if row[1] == by_slot["sessions"].pane_id)
-        feed = next(row for row in panes if row[1] == by_slot["feed"].pane_id)
-        total_width = left[2] + sessions[2] + 1
-        assert 0.55 <= left[2] / total_width <= 0.65, (left, sessions)
-        column = sessions[3] + feed[3] + 1
-        assert 0.28 <= feed[3] / column <= 0.40, (sessions, feed)
+        # right-hand column's height. The column is every right-hand slot, not two of them —
+        # written as `sessions + feed` it silently omitted the limits pane's rows and measured
+        # the feed against a column shorter than the one it is in.
+        by_id = {row[1]: row for row in panes}
+        left = by_id[by_slot["surface"].pane_id]
+        feed = by_id[by_slot["feed"].pane_id]
+        right = [by_id[pane.pane_id] for slot, pane in by_slot.items() if slot != "surface"]
+        total_width = left[2] + right[0][2] + 1
+        assert 0.55 <= left[2] / total_width <= 0.65, (left, right)
+        column = sum(row[3] for row in right) + len(right) - 1
+        assert 0.28 <= feed[3] / column <= 0.40, (right, feed)
 
         # The key budget — one key — installed on this socket and nowhere else.
         keys = await _run("tmux", "-L", console_socket, "list-keys", "-T", "root")
@@ -193,13 +220,16 @@ async def test_the_console_comes_up_as_three_panes_and_its_keys_reach_them(
         # it. The claim that a displayed agent swallows the prefix is false — tmux intercepts
         # it in the *client*, before any key reaches the pane — and this is where that is
         # proved rather than asserted, because it is the whole argument for a one-key budget.
+        slots = len(ConsolePaneSlot)
         seen = [by_slot["surface"].pane_id]
-        for _ in range(3):
+        for _ in range(slots):
             await _type(host_socket, "C-b")
             await _type(host_socket, "o")
             seen.append(await _active_pane(console_socket))
-        assert len(set(seen[:3])) == 3, f"prefix+o did not reach all three panes: {seen}"
-        assert seen[3] == seen[0], f"three presses over three panes must cycle back: {seen}"
+        assert len(set(seen[:slots])) == slots, f"prefix+o did not reach every pane: {seen}"
+        assert seen[slots] == seen[0], (
+            f"one press per pane must cycle back to where it started: {seen}"
+        )
     finally:
         for socket in (host_socket, console_socket):
             try:
@@ -757,3 +787,534 @@ async def test_a_pane_surface_in_a_test_console_never_reaches_the_production_ser
             await _run("tmux", "-L", console_socket, "kill-server")
         except RuntimeError:
             pass
+
+
+async def _record_numbered(home: Path, session_id: SessionId, sequence: int) -> None:
+    """Like `_record_session`, but numbered, so three rows can be told apart on screen."""
+    from datetime import UTC, datetime
+
+    from remote_agents.domain.models import (
+        ProfileId,
+        ProjectId,
+        SessionDisplayIdentity,
+        SessionRecord,
+        SessionState,
+    )
+
+    connection, store = _store(home)
+    try:
+        await store.save(
+            SessionRecord(
+                session_id,
+                ProjectId("qualification"),
+                ProfileId("claude"),
+                SessionDisplayIdentity("qualification", "claude", "regular", sequence),
+                SessionState.RUNNING,
+                datetime.now(UTC),
+            )
+        )
+    finally:
+        connection.close()
+
+
+def _highlighted_session(capture: str) -> str | None:
+    """Which *session* is drawn with the cursor's background, from an `-e` capture.
+
+    Read off the escapes rather than by index, because the whole question is whether the row
+    under the cursor is still the row the owner chose — an index would answer a different
+    question and answer it wrongly on exactly the tick a row leaves. A session row is
+    recognised by its project name; the pane's border and title carry backgrounds too.
+
+    The `#N` display sequence and not the row's rendered text, and the difference is not
+    pedantry: re-laying the columns for a narrower pane is exactly what a resize is now
+    supposed to do, so the drawn row legitimately changes while the session under the cursor
+    does not. Comparing whole rows made this test fail on the fix working — measured, with
+    `#3` lit in both captures and only the column widths between them.
+    """
+    for line in capture.splitlines():
+        if "qualification" not in line:
+            continue
+        # `48;` is the *background* half of an SGR, which is what `render_line` paints under
+        # the highlighted row and under no other row of this list. Measured rather than
+        # assumed: the theme resolves to a 256-colour background (`48;5;23`), and every
+        # unhighlighted row carries `38;5;23` — the same number as a *foreground*. A detector
+        # written for `48;2;` truecolor found nothing at all and reported "no cursor".
+        if _BACKGROUND.search(line):
+            marker = _SEQUENCE.search(_ANSI.sub("", line))
+            return marker.group(0) if marker else None
+    return None
+
+
+async def test_the_sessions_cursor_survives_resize_and_tick(tmp_path: Path) -> None:
+    """cursor_survives_resize_and_tick — the whole of Stage 1, on the console the owner gets.
+
+    Three RUNNING sessions, the cursor moved off row 0 by real arrow keys, then the two things
+    that used to move it back: the sessions pane resized (every DEC-040 exchange and every drag
+    emits these) and one full ten-second refresh tick. Both were separate mechanisms — the
+    resize reran the whole clear/refill and re-armed the deferred placement, and the tick
+    re-read a store whose order was the planner's choice — and neither is visible in a unit
+    test of a single screen, which is why this runs against real tmux and real pane processes.
+    """
+    _live_or_skip()
+
+    home = _fabricated_home(tmp_path)
+    for sequence in (1, 2, 3):
+        await _record_numbered(home, SessionId.new(), sequence)
+
+    console_socket = f"remote-agents-test-{SessionId.new().value.hex}"
+    gateway = TmuxGateway(console_socket, AsyncTmuxRunner())
+    composer = ConsoleComposer(
+        gateway,
+        ("sleep", "600"),
+        home,
+        projects_command=("true",),
+        pane_commands={
+            slot: (
+                "env",
+                f"HOME={home}",
+                str(Path(__file__).resolve().parents[2] / ".venv" / "bin" / "python3"),
+                "-m",
+                "remote_agents",
+                "pane",
+                slot.name.lower(),
+            )
+            for slot in ConsolePaneSlot
+        },
+    )
+    try:
+        assert await composer.ensure() is True
+        await asyncio.sleep(25.0)
+
+        arrangement = await gateway.pane_arrangement()
+        sessions_pane = next(
+            pane.pane_id for pane in arrangement if pane.console_slot == "sessions"
+        )
+
+        async def capture() -> str:
+            return await _run(
+                "tmux", "-L", console_socket, "capture-pane", "-pe", "-t", sessions_pane
+            )
+
+        # One key at a time: a batched send-keys drops keys during a TUI redraw.
+        for _ in range(2):
+            await _run("tmux", "-L", console_socket, "send-keys", "-t", sessions_pane, "Down")
+            await asyncio.sleep(1.0)
+
+        chosen = _highlighted_session(await capture())
+        assert chosen, "no row is drawn with the cursor after two Downs"
+
+        for width in (48, 64):
+            await _run(
+                "tmux", "-L", console_socket, "resize-pane", "-t", sessions_pane, "-x", str(width)
+            )
+            await asyncio.sleep(2.0)
+
+        assert _highlighted_session(await capture()) == chosen, "a resize moved the cursor"
+
+        # One full refresh tick, plus room for the read to land and redraw.
+        await asyncio.sleep(13.0)
+
+        assert _highlighted_session(await capture()) == chosen, (
+            "the ten-second tick moved the cursor"
+        )
+    finally:
+        try:
+            await _run("tmux", "-L", console_socket, "kill-server")
+        except RuntimeError:
+            pass
+
+
+async def test_the_published_selection_follows_the_cursor_over_real_tmux(tmp_path: Path) -> None:
+    """The selection round-trips through a real tmux 3.4 server, written and read by two processes.
+
+    **What this proves, and what it deliberately cannot.** The cursor -> publish half is driven
+    in `tests/unit/adapters/tui/test_sessions_pane.py`; what no unit test can answer is whether
+    a session-scoped user option survives a real server and is visible to a *different process*
+    reading it back. That is what runs here: the gateway publishes exactly as the pane's
+    capability does, and a separate `tmux show-options` process reads it.
+
+    The half that is missing is missing for a reason already recorded in
+    `adapters/tui/attach.py::hosting_mode`, not for want of trying. A pane surface inside a
+    disposable console classifies as FOREIGN, so `console_publish_selection` is never wired and
+    a keypress there publishes nothing. That strictness is deliberate and was paid for: when
+    the predicate was widened to accept a test socket, a surface inside a throwaway console
+    drove the owner's **real** one — panes split into their live console window, a root binding
+    installed on their server — because the composition root hardcodes the composer's server to
+    `remote-agents`. Driving the cursor here would mean either reintroducing that, or pointing
+    this test at the owner's production console. Neither is a test worth having.
+
+    So the gap stays named rather than papered over: until the composer's server stops being
+    hardcoded, no live test can drive a pane surface's own keypress into a console.
+    """
+    _live_or_skip()
+
+    home = _fabricated_home(tmp_path)
+    for sequence in (1, 2):
+        await _record_numbered(home, SessionId.new(), sequence)
+
+    console_socket = f"remote-agents-test-{SessionId.new().value.hex}"
+    gateway = TmuxGateway(console_socket, AsyncTmuxRunner())
+    composer = ConsoleComposer(
+        gateway,
+        ("sleep", "600"),
+        home,
+        projects_command=("true",),
+        pane_commands={slot: ("sleep", "600") for slot in ConsolePaneSlot},
+    )
+
+    async def read_option_from_another_process() -> str:
+        return (
+            await _run(
+                "tmux",
+                "-L",
+                console_socket,
+                "show-options",
+                "-qv",
+                "-t",
+                "ra-console:",
+                "@remote_agents_selected_session",
+            )
+        ).strip()
+
+    try:
+        assert await composer.ensure() is True
+
+        # Never published: an option that was never set reads back as the empty string, which
+        # is the same thing "nothing is selected" writes. That equivalence is the reason the
+        # decoder needs no branch for it, and it is a claim about tmux, so it is checked here.
+        assert await read_option_from_another_process() == ""
+        assert await gateway.read_selection() is None
+
+        chosen = SessionId.new()
+        await gateway.publish_selection(chosen)
+        assert await read_option_from_another_process() == str(chosen)
+        assert await gateway.read_selection() == chosen
+
+        # The cursor resting on nothing, which is the publication DEC-062's mitigation is
+        # worthless without.
+        await gateway.publish_selection(None)
+        assert await read_option_from_another_process() == ""
+        assert await gateway.read_selection() is None
+    finally:
+        try:
+            await _run("tmux", "-L", console_socket, "kill-server")
+        except RuntimeError:
+            pass
+
+
+async def test_the_selection_dies_with_the_console_that_published_it(tmp_path: Path) -> None:
+    """Session scope is what makes a stale selection impossible to inherit.
+
+    The option is deliberately on the console *session* rather than on a pane (DEC-038 governs
+    identity, not this — see `SELECTED_SESSION_OPTION`). The cost of that choice would be a
+    selection outliving its console; this is the check that it does not. A fresh console on the
+    same socket name starts with nothing selected, so no chord can ever act on a session a
+    previous console had highlighted.
+    """
+    _live_or_skip()
+
+    home = _fabricated_home(tmp_path)
+    console_socket = f"remote-agents-test-{SessionId.new().value.hex}"
+    gateway = TmuxGateway(console_socket, AsyncTmuxRunner())
+
+    def _composer() -> ConsoleComposer:
+        return ConsoleComposer(
+            gateway,
+            ("sleep", "600"),
+            home,
+            projects_command=("true",),
+            pane_commands={slot: ("sleep", "600") for slot in ConsolePaneSlot},
+        )
+
+    try:
+        assert await _composer().ensure() is True
+        await gateway.publish_selection(SessionId.new())
+        assert await gateway.read_selection() is not None
+
+        await _run("tmux", "-L", console_socket, "kill-session", "-t", "ra-console:")
+        assert await _composer().ensure() is True
+
+        assert await gateway.read_selection() is None, (
+            "a new console inherited the previous one's selection"
+        )
+    finally:
+        try:
+            await _run("tmux", "-L", console_socket, "kill-server")
+        except RuntimeError:
+            pass
+
+
+async def test_the_read_side_gate_answers_a_real_console_and_a_real_exchange(
+    tmp_path: Path,
+) -> None:
+    """Who may read the console's selection, decided against a real tmux arrangement.
+
+    **This is the half of Stage 3 that real tmux can answer, and the unit tests cannot.** The
+    chord itself is a Textual binding inside a pane process, and BL-041 records why no live test
+    can drive one: `hosting_mode` classifies a pane surface inside a *disposable* console as
+    FOREIGN, deliberately, because the composition root hardcodes the composer's server — the
+    one time that strictness was relaxed, a surface in a throwaway console drove the owner's
+    real one. So the keypress is covered by `tests/unit/adapters/tui/test_tui_bindings.py`, and
+    what runs here is the decision that keypress depends on.
+
+    `holds_console_slot` filters a real `list-panes -a` for two facts at once: the pane carries
+    one of the console's slot marks, **and** the console is still the window showing it. The
+    unit cases assert that filter against hand-written listing lines; only a real server can say
+    whether the marks this composer actually writes decode back through
+    `ARRANGEMENT_FORMAT` — and, more to the point, what a real `swap-pane -d` does to the answer.
+
+    That exchange is the case the gate exists for. The mark travels **with the pane** by design
+    (DEC-038), so a projects pane parked in an agent's own window keeps the slot it was given
+    and would go on reading the console's selection from a window that is not one of its panes —
+    while two of the keys behind that selection end a session with no confirmation (DEC-018).
+    Nothing about that is visible in a fabricated listing line: it is a fact about tmux moving
+    panes between sessions, so it is asserted where tmux is real.
+    """
+    _live_or_skip()
+
+    home = _fabricated_home(tmp_path)
+    console_socket = f"remote-agents-test-{SessionId.new().value.hex}"
+    gateway = TmuxGateway(console_socket, AsyncTmuxRunner())
+    composer = ConsoleComposer(
+        gateway,
+        ("sleep", "600"),
+        home,
+        projects_command=("true",),
+        pane_commands={slot: ("sleep", "600") for slot in ConsolePaneSlot},
+    )
+
+    try:
+        assert await composer.ensure() is True
+
+        arrangement = await gateway.pane_arrangement()
+        marked = {pane.console_slot: pane.pane_id for pane in arrangement if pane.console_slot}
+        assert len(marked) == len(ConsolePaneSlot), (
+            f"the console did not come up with one marked pane per slot: {marked}"
+        )
+
+        # Every one of the console's own panes may read the selection.
+        for slot, pane_id in marked.items():
+            assert await gateway.holds_console_slot(pane_id) is True, (
+                f"the console's own {slot} pane was refused the selection it is entitled to read"
+            )
+
+        # A pane on the same server that is not one of the console's is not entitled to it —
+        # hazard case 1, a plain `remote-agents tui` started from any shell on this socket.
+        outsider_session = f"ra-outsider-{SessionId.new().value.hex[:8]}"
+        await _run(
+            "tmux",
+            "-L",
+            console_socket,
+            "new-session",
+            "-d",
+            "-s",
+            outsider_session,
+            "sleep",
+            "600",
+        )
+        outsider = (
+            await _run(
+                "tmux",
+                "-L",
+                console_socket,
+                "list-panes",
+                "-t",
+                f"{outsider_session}:",
+                "-F",
+                "#{pane_id}",
+            )
+        ).strip()
+        assert outsider, "the outsider session produced no pane"
+        assert await gateway.holds_console_slot(outsider) is False, (
+            "a pane that is merely on the console's server was allowed to read its selection"
+        )
+
+        # Hazard case 2, driven rather than described: exchange the console's left pane out into
+        # that session, exactly as DEC-040's `show_detail` does with an agent.
+        # `console_slot` is decoded as the *wire* string, not the enum -- `HostedPane` keeps it
+        # that way on purpose, so a console left running by an older version decodes as "not a
+        # slot I know" instead of raising mid-listing. The projects pane is the one an exchange
+        # moves (DEC-040), and its value is `surface` for the same compatibility reason.
+        exiled = marked[ConsolePaneSlot.PROJECTS.value]
+        await gateway.swap_panes(exiled, outsider)
+
+        after = {pane.pane_id: pane for pane in await gateway.pane_arrangement()}
+        assert after[exiled].console_slot, (
+            "the slot mark did not travel with the pane, so this test is no longer about DEC-038"
+        )
+        assert after[exiled].on_console is False, (
+            "the exchange did not move the pane off the console"
+        )
+        assert await gateway.holds_console_slot(exiled) is False, (
+            "an exchanged-out console pane kept its right to read the console's selection"
+        )
+
+        # And the pane swapped *in* — on the console, carrying no mark of ours — is refused too.
+        assert await gateway.holds_console_slot(outsider) is False
+    finally:
+        try:
+            await _run("tmux", "-L", console_socket, "kill-server")
+        except RuntimeError:
+            pass
+
+
+async def test_a_prefix_chord_reaches_the_sessions_pane_from_inside_a_displayed_agent(
+    tmp_path: Path,
+) -> None:
+    """The route out of a displayed agent, driven from a real attached client.
+
+    Under DEC-040 an agent exchanged into the left pane owns that pane's keyboard, so `alt+s`
+    typed there goes to the agent. `prefix` + the same chord does not, and **that interception
+    is the claim** — tmux takes the prefix in the *client*, before any key reaches a pane, which
+    is DEC-041's whole argument for a one-key root budget.
+
+    So this attaches a client, exactly as `test_the_console_comes_up_whole_and_its_keys_reach_
+    every_pane` does and for the reason this module's docstring gives: a headless `run-shell`
+    proves the *argv*, and only a client proves the *binding*. An earlier version of this test
+    fired the binding's payload directly and called itself end-to-end; it could not have caught
+    a prefix that failed to be intercepted, because it never pressed one.
+
+    Three assertions, and the second is the one that needed a client:
+
+    * the chord reaches the pane carrying the sessions slot mark — `^[s` is what `M-s` *is*,
+      ESC then `s`, the sequence Textual parses back into `alt+s`;
+    * the pane standing in for the displayed agent never receives it, though it is the focused
+      pane and every ordinary keystroke goes there;
+    * a client attached to an **agent** session on the same socket does not fire it at all.
+
+    That third one is DEC-073(3) on this route, and it is not hypothetical: a tmux key table
+    belongs to the server, managed agents attach on this same socket, and before the guard in
+    `_forward_to_sessions_command` this chord fired from any client on it — delivering an
+    unconfirmed stop (DEC-018) to a row the owner could not see. Reproduced, then closed.
+    """
+    _live_or_skip()
+
+    console_socket = f"remote-agents-test-{SessionId.new().value.hex}"
+    host_socket = f"remote-agents-test-host-{SessionId.new().value.hex}"
+    gateway = TmuxGateway(console_socket, AsyncTmuxRunner())
+
+    async def pane_text(pane: str) -> str:
+        return await _run("tmux", "-L", console_socket, "capture-pane", "-p", "-t", pane)
+
+    async def attach_host(target: str) -> None:
+        await _run(
+            "tmux",
+            "-L",
+            host_socket,
+            "new-session",
+            "-d",
+            "-s",
+            "host",
+            "-x",
+            "200",
+            "-y",
+            "50",
+            "tmux",
+            "-L",
+            console_socket,
+            "attach-session",
+            "-t",
+            target,
+        )
+        await asyncio.sleep(2.0)
+
+    async def press_the_chord() -> None:
+        await _type(host_socket, "C-b")
+        await _type(host_socket, "M-s")
+
+    async def wait_for_chord(pane: str, *, seconds: float = 6.0) -> str:
+        """Poll the pane until the chord lands, rather than sleeping a guessed interval.
+
+        The forward is three processes deep — tmux runs `sh`, which runs two more `tmux` — so
+        how long it takes is a property of the host's load, not of the code. A fixed wait was
+        measured failing roughly one run in eight while the same test passed six times in a
+        row afterwards; a poll turns that into "slower on a busy machine" instead of "red".
+        """
+        deadline = asyncio.get_running_loop().time() + seconds
+        text = ""
+        while asyncio.get_running_loop().time() < deadline:
+            text = await pane_text(pane)
+            if "^[s" in text:
+                return text
+            await asyncio.sleep(0.2)
+        return text
+
+    idle = 'sh -c "while :; do read line; done"'
+    try:
+        await _run("tmux", "-L", console_socket, "new-session", "-d", "-s", "ra-console", idle)
+        await _run("tmux", "-L", console_socket, "split-window", "-t", "ra-console:", idle)
+        panes = (
+            await _run(
+                "tmux",
+                "-L",
+                console_socket,
+                "list-panes",
+                "-t",
+                "ra-console:",
+                "-F",
+                "#{pane_id}",
+            )
+        ).split()
+        displayed_agent, sessions_pane = panes[0], panes[1]
+        await gateway.mark_console_slot(sessions_pane, ConsolePaneSlot.SESSIONS)
+        # An agent session on the same socket, which is where managed agents actually live.
+        await _run("tmux", "-L", console_socket, "new-session", "-d", "-s", "ra-agent", idle)
+
+        await gateway.install_console_binding(
+            "M-s", ConsoleBindingAction.FORWARD_TO_SESSIONS, (), ConsoleKeyTable.PREFIX
+        )
+        assert "M-s" in await _run("tmux", "-L", console_socket, "list-keys", "-T", "prefix"), (
+            "the forwarding chord was not installed in the prefix table"
+        )
+
+        # The keyboard rests on the left pane — the one standing in for a displayed agent.
+        await _run("tmux", "-L", console_socket, "select-pane", "-t", displayed_agent)
+        await attach_host("ra-console:")
+        await press_the_chord()
+
+        arrived = await wait_for_chord(sessions_pane)
+        assert "^[s" in arrived, (
+            f"the chord did not reach the pane carrying the sessions slot mark: {arrived!r}"
+        )
+        left_alone = await pane_text(displayed_agent)
+        assert "^[s" not in left_alone, (
+            "the focused pane received the forwarded key, so tmux did not intercept the "
+            f"prefix — which is the cost DEC-041 says a prefix binding does not have: "
+            f"{left_alone!r}"
+        )
+
+        # Now the same key from a client attached to an *agent*, which must do nothing.
+        await _run("tmux", "-L", host_socket, "kill-server")
+        await _run("tmux", "-L", console_socket, "send-keys", "-t", sessions_pane, "C-l")
+        await asyncio.sleep(0.5)
+        before = await pane_text(sessions_pane)
+        await attach_host("ra-agent:")
+        # **The precondition, asserted rather than assumed.** `attach_host` returns as soon as
+        # the outer *host* session exists, which says nothing about whether the inner
+        # `attach-session -t ra-agent:` succeeded. If it did not, the chord below is pressed at
+        # a pane with no tmux client behind it, nothing happens, and this case passes green
+        # while proving nothing about the guard — the exact shape of vacuity this stage has
+        # already shipped twice.
+        clients = await _run(
+            "tmux", "-L", console_socket, "list-clients", "-F", "#{client_session}"
+        )
+        assert "ra-agent" in clients, (
+            f"no client attached to the agent session, so the refusal proves nothing: {clients!r}"
+        )
+
+        await press_the_chord()
+
+        # A settle rather than a poll: this asserts an *absence*, so the only honest wait is
+        # one at least as long as the arrival above was given to happen in.
+        await asyncio.sleep(6.0)
+        assert await pane_text(sessions_pane) == before, (
+            "a chord pressed from a plain agent attach reached the console's sessions pane; "
+            "a tmux key table is server-wide and DEC-073(3) says only the console's own "
+            "surfaces may act on the selection"
+        )
+    finally:
+        for socket in (host_socket, console_socket):
+            try:
+                await _run("tmux", "-L", socket, "kill-server")
+            except RuntimeError:
+                pass

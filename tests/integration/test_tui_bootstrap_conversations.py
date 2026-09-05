@@ -164,6 +164,34 @@ def test_no_further_capability_leaked_into_the_context() -> None:
         # and an *exchange* that writes no record and touches no lifecycle (DEC-040). It is not
         # a new kind of capability, it is the return trip of one already here.
         "console_show_projects",
+        # The console-wide selection: which session the sessions pane has highlighted, so that
+        # the panes without a cursor can act on it. Two fields rather than one, and the split is
+        # the decision this test exists to make visible — **publishing is the sessions pane's
+        # alone and reading is every other position's**, so a pane holding only the reader
+        # cannot become a second writer of a fact that must have exactly one. Same family as
+        # `console_flash` otherwise: console hosting's alone, `None` in a bare terminal, wired
+        # rather than probed for (DEC-046/DEC-061).
+        #
+        # These are the first console capabilities that carry a *session id*, and that is what
+        # makes them worth arguing over rather than nodding through: the chord layer above them
+        # ends sessions without confirmation (DEC-018), so what the surface is being handed is
+        # the ability to act on a row it is not showing.
+        "console_publish_selection",
+        "console_read_selection",
+        # Added by Stage 3's Task 3.1: the *read side's gate*, and the reason it is a third
+        # field rather than folded into the reader above. `hosting_mode` classifies by tmux
+        # socket name, so two processes that are not console panes are wired the reader -- a
+        # plain `remote-agents tui` on the console's server, and the projects pane after a
+        # DEC-040 exchange parks it in an agent's own window -- and both would otherwise answer
+        # from the real console's selection. This asks, at press time, whether the pane this
+        # process runs in is one of the console's own.
+        #
+        # Separate because it must be askable *before* the read: a process that is not one of
+        # the console's panes makes no claim on the console's selection at all. A capability
+        # rather than a pane id (DEC-046) -- the surface asks a question and never handles a
+        # target. Given what the paragraph above says about these carrying a session id, this
+        # is the field that decides who may be handed one.
+        "console_holds_slot",
         # Added by Stage 5's Task 5.2, and listed here because that is what this test is for.
         # It is *not* the console family above: it is wired on every host, not only a hosted
         # one, and it is a **path** rather than a callable -- the declared writable boundary's

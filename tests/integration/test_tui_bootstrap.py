@@ -422,7 +422,8 @@ def test_a_pane_runs_over_a_lease_and_leaves_no_handle_behind(
 ) -> None:
     """DEC-035, driven rather than read: the handle exists inside a store operation only.
 
-    Three pane processes over one SQLite file is the whole premise of the three-pane console,
+    One pane process per `ConsolePaneSlot` over one SQLite file is the whole premise of the
+    console,
     and it is sound because none of them holds a standing connection. This runs a real pane
     entry point with the surface replaced by a probe, and asks the composed context what kind
     of connection it got.

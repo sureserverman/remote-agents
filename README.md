@@ -58,7 +58,7 @@ find `uv`, verify it, and sequence what follows, not to install anything differe
 
 ```bash
 uv tool install --managed-python \
-  "remote-agents @ git+https://github.com/sureserverman/remote-agents@v0.34.0"
+  "remote-agents @ git+https://github.com/sureserverman/remote-agents@v0.35.0"
 remote-agents onboard --install-daemon
 ```
 
@@ -333,9 +333,9 @@ uv run --locked remote-agents
 ```
 
 With no arguments, `remote-agents` enters the **console**: a tmux session named
-`ra-console` on the project's own server, whose single window is **three panes** — the
-projects surface on the left at about 60% of the width, the running sessions top-right, and
-the notifications feed under them. Each pane is its own process (`remote-agents pane
+`ra-console` on the project's own server, whose single window is **four panes** — the projects
+surface on the left at about 60% of the width, and on the right the running sessions, the agent
+limits under them, and the notifications feed under those. Each pane is its own process (`remote-agents pane
 projects|sessions|feed`), because a terminal app owns a whole terminal and cannot span panes.
 Run from inside the console it says so instead of nesting; run from inside somebody else's
 tmux it prints the attach command instead.
@@ -374,7 +374,7 @@ agent can ever receive. It earns that because the route back is the one thing th
 require remembering configuration: an agent fills the pane you were working in, and that is
 exactly when a console looks stuck.
 
-Everything else uses tmux's own keys. **Moving between the three panes is `Ctrl-b o`** (or
+Everything else uses tmux's own keys. **Moving between the four panes is `Ctrl-b o`** (or
 the same `o` under whatever prefix this host's `~/.tmux.conf` sets) — the prefix reaches the
 client before any key reaches a pane, so it works even while an agent is displayed. An
 earlier design took a second root key for this; it was removed once that turned out to be
@@ -382,6 +382,68 @@ true.
 
 Each pane offers only the flows it owns: the projects pane keeps *Add project* and *Resume*,
 which both begin by choosing a project. The sessions and feed panes offer neither.
+
+The session actions have keys of their own on every pane, but they are Alt chords rather than
+root keys and none of them is tmux's — see *The Alt layer* immediately below.
+
+### The Alt layer
+
+Every session action on the sessions list, and `d` with them, is also a chord on the whole
+console. Hold Alt and those row keys work from any pane: `⌥a` Copy attach, `⌥i` Inspect
+output, `⌥r` Rename, `⌥s` Stop and close, `⌥c` Clean up, `⌥f` Force stop, `⌥m` Claude Remote
+Control, and `⌥d` opens the detail. Each does exactly what its bare letter does on a row —
+same policy, same confirmations, `f` and both Remote Control directions still asking and `s`
+and `c` still not — to **the session the sessions pane has highlighted**, which is a row in a
+pane you are not focused on. A stop issued from the projects pane therefore reports as a toast
+rather than in the status line: the status line there describes the project list, and that is
+what you are looking at.
+
+Alt, and not the bare letter, because the projects pane's filter holds the keyboard by
+construction. Bare letters still type into the filter; only the Alt layer acts. The projects
+pane and the feed pane name the layer on their muted hint row as `⌥ a i r s c f m d`, drawn dim
+whenever nothing is selected. Two surfaces carry the chords without naming them, and both
+omissions are deliberate: the sessions pane, because its own border title already lists the
+same letters bare and saying them twice on one small pane reads as two key sets, and the limits
+pane, because it draws no hint row at all — it hides its status and its border too, on the
+argument that two rows to restate a heading is too much on a pane whose content is two lines.
+The session detail and the rename screen carry them silently for the same reason as the
+sessions pane: the detail names each action in full already.
+
+**From inside a displayed agent the route is the prefix.** An agent in the left pane receives
+every key you type, so the same eight chords are also bound in tmux's *prefix* table: press
+`Ctrl-b` (or your own prefix) and then the chord — `Ctrl-b M-d` — and it is forwarded to the
+sessions pane. The agent is never sent the key. This costs no root binding, so the console's
+root-key budget is still the single `F12` above.
+
+**Three cases where a chord deliberately does nothing**, each worth knowing before you conclude
+a key is broken:
+
+- **While what you are typing is a commitment.** On the rename box and on the new-project name
+  step, `⌥s`, `⌥c` and `⌥f` are refused. The chords take priority over the focused text box, so
+  a slipped Alt would otherwise turn the next `s` into an unconfirmed, irreversible stop — of
+  the very session being renamed, or of whatever another pane happens to highlight. The
+  navigating chords still work there, and Escape comes back to the text you had typed. The cost
+  is accepted rather than overlooked: on an empty rename box `⌥s` was the best-targeted stop in
+  the app, its subject named and on screen, and it is refused too.
+- **When the sessions cursor rests on nothing.** There is then no selection to act on, and
+  every chord says `No session is selected.` and does nothing rather than guessing at a row.
+  This is the ordinary state from the moment the row you were on leaves the list until you
+  move the cursor onto another one — not a window that closes by itself — see *Keys on the
+  sessions list* below.
+- **From a client that is not the console.** A tmux key table belongs to the *server*, and
+  managed agents are attached to that same server — so the prefix route above would otherwise
+  fire from a plain `remote-agents attach`, stopping a row you cannot see. It does not: the
+  binding asks which session your client is attached to and does nothing unless it is the
+  console. `Ctrl-b M-d` from an agent attach is deliberately inert.
+- **From a process that is not one of the console's own panes.** Only a pane the console is
+  currently showing may read the selection, and that is asked at the moment you press the key
+  rather than once at start-up. A plain `remote-agents tui` started from a shell on the
+  console's own tmux server is refused, and so is the projects surface after an exchange has
+  parked it in an agent's window — it keeps its slot mark, but it is no longer on the console.
+  Both are told `Session chords act on the console's own panes.` rather than being answered
+  from a console whose sessions list is not on their screen. Two of these keys end a session
+  with no confirmation, so the guard on who may read the selection is doing the job the
+  confirmation prompt is not.
 
 ### Width
 
@@ -548,7 +610,13 @@ row you were on leaves the cursor on nothing at all** rather than falling back t
 row. This list re-reads itself every ten seconds and restores your place by session rather
 than by position; when the session you were on has gone there is no honest place to put the
 cursor, and moving it silently onto a neighbour would put a live agent one keypress from an
-unasked stop. One arrow press picks a row again.
+unasked stop. One arrow press picks a row again. Both positions answer this way — the full
+sessions screen and the console's sessions pane — and so does the dashboard's own sessions
+region, which binds no stop keys and takes the same answer anyway so that the one code path
+publishing the console-wide selection cannot disagree with itself about where the cursor is.
+
+A vanished row therefore leaves **no selection** as well as no cursor. Until you pick a row
+again the Alt chords described above have nothing to act on, from any pane, and say so.
 
 Copy attach is always offered and answers when it is chosen: a pane that is not live, or one whose
 project or agent does not match, is explained rather than left out, so a dead pane cannot be

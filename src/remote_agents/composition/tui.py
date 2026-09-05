@@ -9,6 +9,7 @@ import shutil
 import sys
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
+from functools import partial
 from pathlib import Path
 
 from remote_agents.adapters.sqlite.activity_store import SQLiteActivityStore
@@ -21,7 +22,11 @@ from remote_agents.adapters.tmux.profiles import (
 )
 from remote_agents.adapters.tmux.runtime import AsyncTmuxRunner, TmuxTerminal
 from remote_agents.adapters.tui import FRONTEND
-from remote_agents.application.console import RecoveryReport
+from remote_agents.application.console import (
+    CONSOLE_BINDINGS,
+    RecoveryReport,
+    console_prefix_bindings,
+)
 from remote_agents.composition.backend import (
     ProjectCatalogueProvider,
     compose_backend,
@@ -169,6 +174,13 @@ def _console_composer(gateway=None, home: Path | None = None):
     same file or the lock excludes nothing. One factory, one path, and a caller cannot forget
     it. Derived from the owner's home the way every other production path is.
     """
+    # **Imported here rather than at module scope**, and it is an invariant rather than a
+    # style: `remote_agents.bootstrap` imports this module, and `serve` must never load Textual
+    # — a failure in the terminal library must not be able to reach the bot
+    # (`test_the_composition_root_does_not_load_the_terminal_library`). This function only runs
+    # under console hosting, where Textual is loaded anyway. Same shape as `local_context`'s own
+    # deferred `hosting_mode` import, for the same reason.
+    from remote_agents.adapters.tui.screens.sessions import CHORD_KEYS
     from remote_agents.application.console import ConsoleComposer
     from remote_agents.ports.console import ConsolePaneSlot
 
@@ -177,6 +189,12 @@ def _console_composer(gateway=None, home: Path | None = None):
         (sys.executable, "-m", "remote_agents", "tui"),
         home if home is not None else Path.home(),
         projects_command=_projects_command(),
+        # Root keys plus the prefix layer. **Joined here and nowhere else**, because the two
+        # halves live on opposite sides of a layer boundary: the argument for what a prefix
+        # binding is belongs to `application/console.py`, and the chord vocabulary is derived
+        # from the TUI's own row-key table. The composition root is the one place allowed to
+        # know both (the same split `attach_to`'s injected `switch_argv` makes).
+        bindings=CONSOLE_BINDINGS + console_prefix_bindings(CHORD_KEYS),
         arrangement_lock=ProductionPaths.for_home(
             home if home is not None else Path.home()
         ).console_lock_path,
@@ -254,6 +272,9 @@ def local_context(config, connection, paths: ProductionPaths):
     console_sync = None
     console_flash = None
     console_show_projects = None
+    console_publish_selection = None
+    console_read_selection = None
+    console_holds_slot = None
     hide_in_console = None
     console_recovery = None
     if hosting_mode(os.environ) is HostingMode.CONSOLE:
@@ -292,6 +313,26 @@ def local_context(config, connection, paths: ProductionPaths):
         console_sync = composer.sync
         console_flash = composer.flash
         console_show_projects = composer.show_projects
+        # Straight onto the gateway rather than through the composer: publishing a selection is
+        # one `set-option` on the console session and needs none of the arrangement reasoning
+        # the composer exists for. Both wired on every console pane, because which of them a
+        # pane *uses* is a question about the screen it is showing, not about the process --
+        # `SessionsPaneScreen` publishes and every other position reads, and `selected_session`
+        # decides that by position. Wiring them per-pane here would put that decision in two
+        # places and let them disagree.
+        console_publish_selection = runtime.gateway.publish_selection
+        console_read_selection = runtime.gateway.read_selection
+        # The read side's gate, bound here to the one pane id this process will ever be in.
+        # `$TMUX_PANE` is fixed for the life of a pane -- an exchange moves the pane, it does
+        # not renumber it -- so the *identity* is start-time knowledge and only its *position*
+        # has to be asked for per press, which is what `holds_console_slot` reads.
+        #
+        # Left `None` when tmux set no `TMUX_PANE`, which under CONSOLE hosting should not
+        # happen: an absent gate refuses every chord, so the failure mode of a surprise is a
+        # layer that does not work rather than one that acts on the wrong console's selection.
+        pane_id = os.environ.get("TMUX_PANE")
+        if pane_id:
+            console_holds_slot = partial(runtime.gateway.holds_console_slot, pane_id)
         # The stop paths ask the console to step out of the way before a pane is destroyed.
         # Wired only where a composer exists: elsewhere `SessionService` keeps the destruction
         # contract it has always had. The bot builds a composer of its own for this one
@@ -342,6 +383,9 @@ def local_context(config, connection, paths: ProductionPaths):
         console_sync=console_sync,
         console_flash=console_flash,
         console_show_projects=console_show_projects,
+        console_publish_selection=console_publish_selection,
+        console_read_selection=console_read_selection,
+        console_holds_slot=console_holds_slot,
         console_recovery=console_recovery,
         # The declared boundary's answer to where a surface preference lives, not this
         # surface's own (DEC-046): the path is wired here and read through a total reader.

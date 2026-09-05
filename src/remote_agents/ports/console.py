@@ -21,7 +21,12 @@ from remote_agents.domain.models import SessionId
 
 
 class ConsolePaneSlot(Enum):
-    """Which of the console's three panes a pane is — by what it *is*, not where it sits.
+    """Which of the console's panes a pane is — by what it *is*, not where it sits.
+
+    **The count lives in this enum and is not written out anywhere.** It said "three" here
+    while carrying four members, having gained `LIMITS` on 2026-08-31, and a live test that had
+    spelled `3` out was red on `main` for four days behind the opt-in flag. Prose restating the
+    size of the thing it is describing is a second declaration that nothing keeps true.
 
     Position answers "which pane is the left slot", which is the question an exchange asks.
     It cannot answer "which pane is missing", because a console down to two panes has two
@@ -43,8 +48,32 @@ class ConsolePaneSlot(Enum):
     FEED = "feed"
 
 
+class ConsoleKeyTable(Enum):
+    """Which tmux key table a console binding goes in — and it decides what the key costs.
+
+    An enum rather than the two strings, beside `ConsolePaneSlot` and `ConsoleBindingAction`
+    for the same reason they are enums: the value reaches tmux argv, so it is chosen from a
+    closed set rather than passed as text (DEC-001's typed ports). The failure it forecloses is
+    quiet — `"Prefix"` type-checks, passes every test that does not construct it, raises at
+    install time, and is then swallowed by `ConsoleComposer`'s "the console stands without it",
+    leaving a console that looks fine with a chord that does nothing but a log line.
+    """
+
+    ROOT = "root"
+    """`bind-key -n`: no prefix. A key every agent on this server can never receive, for as
+    long as it is bound — the budget DEC-041 fixes at one."""
+
+    PREFIX = "prefix"
+    """`bind-key -T prefix`: costs an agent nothing, because tmux intercepts the prefix in the
+    *client* before any key reaches a pane. Paid for in the owner's memory instead."""
+
+
 class ConsoleBindingAction(Enum):
-    """What one console root binding does — a closed set, not a description.
+    """What one console binding does — a closed set, not a description.
+
+    Root *and* prefix since the Alt layer: `SHOW_PROJECTS` is the root key DEC-041's budget is
+    spent on, and `FORWARD_TO_SESSIONS` is prefix-only and refused anywhere else. Which table a
+    binding goes in is `ConsoleKeyTable`, not this.
 
     A binding's action decides tmux argv, so it is chosen from here rather than passed as
     free text (DEC-001).
@@ -53,9 +82,34 @@ class ConsoleBindingAction(Enum):
     to `select-pane -t :.+`, on the premise that a displayed agent consumes the prefix key
     along with everything else the owner types. That premise is false — tmux intercepts the
     prefix in the *client*, before any key reaches the pane, so `prefix + o` already cycles
-    the console's three panes and costs no agent anything. The action is removed rather than
+    the console's panes and costs no agent anything. The action is removed rather than
     left unbound: an unbindable member invites the next author to spend a key on the argument
     that was just disproved.
+    """
+
+    FORWARD_TO_SESSIONS = "forward_to_sessions"
+    """Resend this key to the console's sessions pane, wherever it currently is.
+
+    The prefix table's action, and the answer to the one place the Alt layer cannot reach: a
+    displayed agent owns the left pane's keyboard, so `alt+s` typed there goes to the agent.
+    `prefix` + the chord costs the agent nothing — DEC-041's own finding is that tmux
+    intercepts the prefix in the *client*, before any key reaches the pane — and lands on the
+    pane that already handles the bare row keys.
+
+    Resolved at press time by the pane's slot mark rather than by a pane id captured at install:
+    the sessions pane can be rebuilt while the binding stands, and a stale id would forward the
+    key into whatever now holds that number. tmux does the lookup itself, filtering
+    `list-panes -a` on that mark, so no *pane id* of ours has to be right when the key lands.
+
+    **One name does have to be right, and it is the price of failing closed.** A tmux key table
+    belongs to the server, and managed agents attach to that same server — so the binding also
+    asks the pressing client which session it is attached to, and does nothing unless that is
+    the console (DEC-073(3)). Renaming the console session therefore makes every chord on this
+    route inert rather than making it fire from the wrong place.
+
+    The mark's own name is spelled once, in the codec that writes it — see
+    `test_the_mark_vocabulary_has_one_home.py`, which caught this docstring spelling it a second
+    time, which is exactly the drift it exists for.
     """
 
     SHOW_PROJECTS = "show_projects"
@@ -122,7 +176,7 @@ class HostedPane:
     """
 
     console_slot: str | None = None
-    """Which of the console's three panes this is, by its own mark, or None for anything else.
+    """Which of the console's panes this is, by its own mark, or None for anything else.
 
     Declared last because the adapter builds this dataclass positionally from one listing
     line, so field order here *is* the wire order there.
@@ -154,7 +208,11 @@ class ConsolePort(Protocol):
     ) -> str: ...
 
     async def install_console_binding(
-        self, key: str, action: ConsoleBindingAction, command: tuple[str, ...] = ()
+        self,
+        key: str,
+        action: ConsoleBindingAction,
+        command: tuple[str, ...] = (),
+        table: ConsoleKeyTable = ConsoleKeyTable.ROOT,
     ) -> None: ...
 
     async def console_zoomed_pane(self) -> str | None: ...
@@ -193,6 +251,47 @@ class ConsolePort(Protocol):
         """
 
     async def mark_console_slot(self, pane_id: str, slot: ConsolePaneSlot) -> None: ...
+
+    async def publish_selection(self, session_id: SessionId | None) -> None:
+        """Record which session the console's sessions pane has highlighted.
+
+        Console state rather than pane identity, and session-scoped for that reason — the
+        codec's `SELECTED_SESSION_OPTION` carries the argument against DEC-038. `None` means
+        the cursor rests on nothing and must be published as such: an unpublished clear leaves
+        the last selection standing, which is the one thing a chord in another pane must never
+        act on (DEC-052, DEC-062).
+        """
+        ...
+
+    async def read_selection(self) -> SessionId | None:
+        """The session the console has selected, or `None` when nothing is.
+
+        Never cached. One read per chord press is the price of never acting on a stale
+        selection, and it is a `show-options` against a local socket.
+        """
+        ...
+
+    async def holds_console_slot(self, pane_id: str) -> bool:
+        """Whether this pane is, *right now*, one of the console's own.
+
+        The read side's gate, and it is deliberately two facts rather than one. A pane holds a
+        slot mark **and** is shown by the console session: the mark alone is not enough, because
+        under DEC-040 the mark travels with the pane — an exchange parks the projects pane in the
+        agent's own window and it keeps the mark it was given. Nor is the session alone enough:
+        the console window hosts a displaced agent's pane, which is on `ra-console` and is not
+        one of ours.
+
+        Asked per press rather than once per process, because an exchange moves a pane while the
+        process that owns it keeps running: an answer taken at start-up is wrong for exactly the
+        case this exists to refuse.
+
+        Why the read side needs a gate the write side did not: `hosting_mode` classifies by tmux
+        socket name, so a plain `remote-agents tui` on the console's server is CONSOLE too, and
+        would otherwise answer from the real console's selection from a window that is not one of
+        its panes. Two of the keys that resolve through it end a session without asking
+        (DEC-018), so who may read the selection is doing the job the confirmation is not.
+        """
+        ...
 
     async def normalize_console_layout(
         self, main_percent: int, column: Sequence[tuple[str, int]]

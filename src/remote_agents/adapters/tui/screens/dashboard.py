@@ -57,9 +57,9 @@ from remote_agents.adapters.tui.screens.feed import (
     NO_NOTIFICATIONS,
     FeedRegion,
 )
-from remote_agents.adapters.tui.screens.launch import ProfilesScreen, ProjectsScreen
+from remote_agents.adapters.tui.screens.launch import PROJECTS_HINT, ProfilesScreen, ProjectsScreen
 from remote_agents.adapters.tui.screens.resume import advance_to_resume_profiles
-from remote_agents.adapters.tui.screens.sessions import sessions_title
+from remote_agents.adapters.tui.screens.sessions import ChordHintRow, sessions_title
 from remote_agents.application.host_remote_control import (
     HOST_REMOTE_CONTROL_TITLE,
     host_remote_control_directions,
@@ -121,6 +121,16 @@ Free on both screens that carry the line, which is not the same as being free ev
 letters (`a i r s c f m`) the dashboard's sessions pane nonetheless *advertises* in its border
 title -- so those letters are avoided here even though nothing would collide today, because a
 key the frame names for one subject must not quietly mean another.
+
+**Nor the Alt layer built from those same letters**, and that follows from the sentence above
+rather than being a separate decision: the chord layer is offered where `carries_row_keys` is
+set, which is where the bare letter is already legal. `DashboardScreen` sets
+`owns_session_cursor` and not that flag, so `alt+s` and `alt+c` -- two stops DEC-018 forbids
+confirming -- are refused here exactly as `s` and `c` are. Gating the layer on the *cursor*
+instead would have handed them to this pane, whose sessions region is not even the focused
+widget; that was a Critical at Task 3.1's review, and
+`tests/architecture/test_the_chord_layer_is_the_row_keys.py` now fails if the flag and the
+bindings ever disagree.
 
 **Not a root binding, so `CONSOLE_BINDINGS` is untouched.** This is a screen binding inside
 our own process, exactly as `p` on the sessions pane is, and DEC-041's one-root-key budget
@@ -269,7 +279,7 @@ class LimitsRegion:
 
     Written when the console gained a limits pane of its own. Before that the render lived as a
     private method on `DashboardScreen`, which is exactly why the console had none: the pane is
-    composed by a screen only `remote-agents tui` mounts, and the console's three panes are
+    composed by a screen only `remote-agents tui` mounts, and the console's panes are
     three separate processes that never mount it. Copying the method into a fourth would have
     been the second renderer DEC-043 exists to prevent.
     """
@@ -393,7 +403,7 @@ class LimitsRegion:
         pane.add_option(Option(line, id=_HOST_REMOTE_CONTROL_ROW, disabled=True))
 
 
-class ProjectsPaneScreen(ProjectsScreen):
+class ProjectsPaneScreen(ChordHintRow, ProjectsScreen):
     """The projects position with the chooser in front of the wizard — the console's left pane.
 
     The projects picker on its own sends a chosen project straight into the agent list. This
@@ -407,6 +417,9 @@ class ProjectsPaneScreen(ProjectsScreen):
     copies would only have to disagree once.
     """
 
+    #: This pane's own keys, which `hint_content` appends the Alt layer to on a console.
+    chord_hint_base = PROJECTS_HINT
+
     def __init__(self) -> None:
         super().__init__()
         #: What the console's start-only repair could not put right, held so it can be
@@ -416,6 +429,7 @@ class ProjectsPaneScreen(ProjectsScreen):
     async def populate(self) -> None:
         await super().populate()
         self._report_console_recovery()
+        self.start_chord_hint()
 
     def render_projects(self, query: str = "", *, keep_focus: bool = False) -> None:
         super().render_projects(query, keep_focus=keep_focus)
@@ -486,7 +500,7 @@ class LimitsPaneScreen(LimitsRegion, ChoiceScreen):
 
     **This is the surface the owner's second ask actually named.** "Put them in the TUI too, on
     the right, between the sessions and notifications panes, in their own pane" describes the
-    three-pane console — its right column *is* sessions over notifications — and the console is
+    console — whose right column *is* sessions over limits over notifications — and it is
     what `remote-agents` runs with no arguments. The pane was first built on `DashboardScreen`,
     which only `remote-agents tui` mounts, so the one arrangement the words map onto was the one
     arrangement without it.
@@ -549,6 +563,12 @@ class LimitsPaneScreen(LimitsRegion, ChoiceScreen):
     LimitsPaneScreen #limits-pane {
         height: 1fr; border: none; text-wrap: nowrap; text-overflow: ellipsis;
     }
+    /* And no hint row, which is also why this pane does not advertise the Alt chord layer even
+       though it offers it. Task 3.3 named all three read-only panes; this one hides `#status`
+       and its border already, on the argument that two rows to restate a heading is too much on
+       a pane whose content is two lines -- and a third row for a keymap is the same argument
+       again. The layer still works here; the feed pane next door names it, and Task 4.3's docs
+       carry it. Stated rather than left as a `set_hint` call whose output nothing draws. */
     LimitsPaneScreen #hint { display: none; }
     """
 
@@ -772,6 +792,47 @@ class DashboardScreen(LimitsRegion, FeedRegion, ProjectsPaneScreen):
             return
         await super().choose(key)
 
+    #: This position draws a sessions list of its own, in its top-right pane, so its cursor is
+    #: the answer to "which session" for the one key that reads it: `d`, opening the detail.
+    #:
+    #: **It is emphatically not what makes the Alt chord layer legal here — that is
+    #: `carries_row_keys`, and this screen does not set it.** The two flags are separate on
+    #: purpose and must not be collapsed: gating the chords on *this* one handed `alt+s` and
+    #: `alt+c` to this pane, two stops DEC-018 forbids confirming, on a cursor that is not the
+    #: focused widget and at a position DEC-062's stated scope does not reach. That was a
+    #: Critical at Task 3.1's review. The argument in full is at the top of this module, beside
+    #: the key-collision note; it is restated here because this is the line a maintainer edits.
+    owns_session_cursor = True
+
+    def highlighted_session(self) -> str | None:
+        """The session under the sessions pane's cursor, or `None`.
+
+        Extracted from `action_session_detail` so this position answers the question exactly
+        once. `d` asks it for the detail, and `selected_session` asks it for any other resolver
+        that reaches this screen; two readers of the same pane would be two chances to disagree
+        about which row a key lands on.
+
+        **No chord reaches it.** `_offers_chords` refuses this screen before resolution — see
+        `owns_session_cursor` above — so nothing that could stop a session is answered from
+        here.
+
+        Guarded rather than raising, for the reason `SessionsScreen`'s copy gives: this runs
+        from `check_action`, which the footer calls for every binding in the chain, and an
+        exception out of a footer redraw takes the app down. The prefix check is what keeps the
+        disabled "No sessions running" placeholder from ever being answered as a session.
+        """
+        found = self.query("#sessions-pane")
+        pane = found.first(OptionList) if found else None
+        if pane is None:
+            return None
+        index = pane.highlighted
+        if index is None or pane.option_count <= index:
+            return None
+        key = pane.get_option_at_index(index).id
+        if key is None or not key.startswith(_SESSION_KEY_PREFIX):
+            return None
+        return key.removeprefix(_SESSION_KEY_PREFIX)
+
     async def action_session_detail(self) -> None:
         """`d` on the highlighted session row opens today's detail screen unchanged.
 
@@ -779,14 +840,10 @@ class DashboardScreen(LimitsRegion, FeedRegion, ProjectsPaneScreen):
         dashboard narrows nothing DEC-007's full control plane promised — opening is the
         fast path, the detail is one key away.
         """
-        pane = self.query_one("#sessions-pane", OptionList)
-        index = pane.highlighted
-        if index is None or pane.option_count <= index:
+        session_value = self.highlighted_session()
+        if session_value is None:
             return
-        key = pane.get_option_at_index(index).id
-        if key is None or not key.startswith(_SESSION_KEY_PREFIX):
-            return
-        await self.tui.show_detail(key.removeprefix(_SESSION_KEY_PREFIX))
+        await self.tui.show_detail(session_value)
 
     def action_host_remote_control(self) -> None:
         """Hand the key to this screen's own pump and return immediately.
@@ -1040,6 +1097,16 @@ class DashboardScreen(LimitsRegion, FeedRegion, ProjectsPaneScreen):
         self._session_records = records
         pane = self.query_one("#sessions-pane", OptionList)
         held_id = held_option_id(pane)
+        # Measured before the clear, and it is the difference between "the row the owner was
+        # on has gone" and "this pane has not drawn yet" -- `held_id` is `None` for both.
+        #
+        # **Enabled rows only, and the placeholder is why.** An empty listing draws a disabled
+        # "No sessions running" row, so `option_count > 0` called an empty pane populated: the
+        # owner's *first* session then arrived with no cursor, because no key of the old fill
+        # was in the new one. That is a row nobody ever chose leaving, which is not what this
+        # flag is asking about. Caught in review; the first version of this line shipped the
+        # regression and a test pinning it as though it were intended.
+        was_populated = any(not option.disabled for option in pane.options)
         pane.clear_options()
         pane.border_title = sessions_title(len(records))
         if not records:
@@ -1065,12 +1132,34 @@ class DashboardScreen(LimitsRegion, FeedRegion, ProjectsPaneScreen):
                     id=f"{_SESSION_KEY_PREFIX}{record.session_id}",
                 )
             )
-        # The cursor always rests somewhere (DEC-007's discipline, as show_choices keeps
-        # it for every #choices list): on the row it held if that row survived the
-        # rebuild, else on the first row — a pane advertising "enter opens" with no
-        # highlighted row makes both keys silent no-ops until an arrow press.
+        # On the row it held if that row survived the rebuild, and on **nothing** if it did
+        # not. Row 0 of a list that just lost a row is a different session, silently, on a
+        # timer nobody pressed — DEC-052's central hazard, closed for `SessionsScreen` by
+        # DEC-062 and extended here.
+        #
+        # **Extended, not covered — and an earlier version of this comment got that wrong.** It
+        # cited DEC-062's rejected alternative 3 as "both positions, never one". That
+        # alternative is about `SessionsScreen` and `SessionsPaneScreen`, which it justifies
+        # with "both carry the same keys from the same list": scoping the mitigation to one
+        # would leave the other holding live stop keys. This pane is a *third* position and it
+        # binds neither `s` nor `c`, so that argument does not reach it and cannot be quoted as
+        # though it did.
+        #
+        # The reason that does reach it is its own: the selection every console pane acts on is
+        # published from one code path, and a position that quietly answers "row 0" would
+        # publish a session the owner is not looking at. Extending DEC-062's property to a
+        # position it did not name is a new decision, recorded rather than assumed.
+        #
+        # An earlier version of this comment said "the cursor always rests somewhere (DEC-007's
+        # discipline)". DEC-007's rule is that a *resting* cursor is never on something that
+        # mutates, which no cursor at all satisfies strictly — every row key returns early on a
+        # `None` highlight, and one arrow press brings it back.
         restore_highlight_by_id(
-            pane, held_id, [f"{_SESSION_KEY_PREFIX}{record.session_id}" for record in records]
+            pane,
+            held_id,
+            [f"{_SESSION_KEY_PREFIX}{record.session_id}" for record in records],
+            when_gone="none",
+            was_populated=was_populated,
         )
 
 

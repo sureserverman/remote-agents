@@ -363,7 +363,13 @@ async def test_a_superseded_cursor_placement_stands_down() -> None:
     app = RemoteAgentsTui(_context())
     async with app.run_test(size=(100, 30)) as pilot:
         await pilot.pause()
-        app.screen.show_choices((("a", "alpha"), ("b", "beta"), ("c", "gamma")), highlight=2)
+        # The resting row's key is deliberately one that **survives** into the next fill, at a
+        # different index. That is what leaves the generation guard as the only thing standing:
+        # a key the new list does not hold would be refused by the row guard on its own, and
+        # this test would then pass with the generation check deleted. Measured — it did, 90 of
+        # 90, until this line named "x" instead of "c". The shape is realistic rather than
+        # contrived: the same session surviving two fills is the ordinary case.
+        app.screen.show_choices((("a", "alpha"), ("b", "beta"), ("x", "gamma")), highlight=2)
         superseded = app.screen._resting_generation
         await pilot.pause()
 
@@ -376,20 +382,40 @@ async def test_a_superseded_cursor_placement_stands_down() -> None:
         marked_before, rows = _highlighted(app)
         assert rows == ["one", "two"]
 
-        # The superseded fill's index (2) clamps onto the two-row list at row 1 -- "two",
-        # the row it must not reach.
-        app.screen._rest_cursor(choices, 2, superseded)
+        # The superseded fill's index (2) clamps onto the two-row list at row 1 -- "two", the
+        # row it must not reach. Its key "x" *is* on this list, and is the row the cursor is
+        # already on, so the row guard is satisfied and waves it through: the generation guard
+        # is the only thing that refuses it. That separation is the point of this test, and it
+        # is why the row guard cannot replace the generation guard -- the row guard compares
+        # the *key* and the write uses the *index*, so a placement whose key survives into a
+        # shorter fill would land the cursor on a row the owner never chose.
+        app.screen._rest_cursor(choices, 2, superseded, "x")
         await pilot.pause()
         marked_after, _ = _highlighted(app)
         assert marked_after == marked_before == "one", (
             f"a superseded placement moved the cursor to {marked_after!r}"
         )
 
-        # The current generation is still honoured, so the guard blocks staleness only.
-        app.screen._rest_cursor(choices, 1, current)
+        # The current generation is still honoured, so the generation guard blocks staleness
+        # only. Asserting that through `scroll_to_highlight` rather than through the drawn
+        # cursor, because the honoured placement re-asserts the row the cursor is *already* on
+        # (that is the only shape production ever schedules, and since the row guard landed it
+        # is the only shape honoured): a cursor assertion here would hold just as well if this
+        # method did nothing at all, which is precisely the failure it must be able to see.
+        scrolls = 0
+        original = choices.scroll_to_highlight
+
+        def counting_scroll(*args: object, **kwargs: object) -> None:
+            nonlocal scrolls
+            scrolls += 1
+            original(*args, **kwargs)  # type: ignore[arg-type]
+
+        choices.scroll_to_highlight = counting_scroll  # type: ignore[method-assign]
+        app.screen._rest_cursor(choices, 0, current, "x")
         await pilot.pause()
         marked_current, _ = _highlighted(app)
-        assert marked_current == "two", "the guard must not block the newest fill"
+        assert marked_current == "one", "the guard must not block the newest fill"
+        assert scrolls, "the honoured placement never ran the scroll it exists for"
 
 
 async def test_one_key_from_the_resting_row_reaches_the_first_conversation() -> None:
@@ -447,3 +473,91 @@ async def test_the_dashboard_sessions_pane_rests_its_cursor_and_answers_bare_key
         assert isinstance(app.screen, SessionDetailScreen), (
             "d with no prior arrow press must open the detail"
         )
+
+
+async def test_an_arrow_press_between_fill_and_rest_keeps_the_owners_row() -> None:
+    """The owner's arrow, landing after a fill, is not undone by that fill's deferred placement.
+
+    Mechanism A of the highlight defect. `show_choices` sets the cursor synchronously and then
+    schedules `_rest_cursor` through `call_after_refresh` to redo the scroll once the widget has
+    a laid-out region. Between those two moments the owner can move: fills come from the 10 s
+    timer, `on_reveal`, `on_resize` and the mount-time gauge seed, and the keypress is delivered
+    on the OptionList's own pump, so the two are unserialized. The generation guard does not
+    catch this — no *later fill* happened, so the generation is still current — and the deferred
+    write puts the cursor back on the row the fill chose, silently discarding the arrow.
+
+    Why the arrow is delivered as the widget's own cursor action rather than through
+    `pilot.press`: the contract under test is "a placement stands down once the owner has
+    moved", and racing a keypress against a `call_after_refresh` callback through the message
+    pump tests the scheduler's ordering instead — the sibling test above records a version that
+    did so failing 2 runs in 8. `action_cursor_down` is what `down` is bound to, so invoking it
+    between the fill and the drain reproduces the interleaving exactly, and does it every run.
+
+    The safety this protects is DEC-052/DEC-062's: on the sessions positions `s` and `c` stop a
+    session without asking, against whatever row the cursor is on. A cursor that silently
+    returns to the fill's choice is a stop against the wrong agent.
+    """
+    app = RemoteAgentsTui(_context())
+    async with app.run_test(size=(100, 30)) as pilot:
+        await pilot.pause()
+
+        app.screen.show_choices((("a", "alpha"), ("b", "beta"), ("c", "gamma")), highlight=0)
+        choices = app.screen.query_one("#choices", OptionList)
+        # The owner moves, after the fill has scheduled its placement and before it runs.
+        choices.action_cursor_down()
+        assert choices.highlighted == 1
+
+        await pilot.pause()
+
+        marked, rows = _highlighted(app)
+        assert rows == ["alpha", "beta", "gamma"]
+        assert marked == "beta", (
+            f"the deferred placement overrode the owner's arrow: cursor is on {marked!r}"
+        )
+
+
+async def test_a_placement_stands_down_once_the_cursor_has_left_its_row() -> None:
+    """The guard is expressed against the row, not the index — a moved cursor is left alone.
+
+    The direct invocation is the same choice the superseded-placement test makes, and for the
+    same reason: this asserts what the guard decides, not when the pump happens to run it. The
+    generation passed is the *current* one, which is the whole point — mechanism A is a stale
+    placement from a fill that was never superseded, so a guard that only compares generations
+    cannot see it.
+    """
+    app = RemoteAgentsTui(_context())
+    async with app.run_test(size=(100, 30)) as pilot:
+        await pilot.pause()
+
+        app.screen.show_choices((("a", "alpha"), ("b", "beta"), ("c", "gamma")), highlight=0)
+        await pilot.pause()
+        current = app.screen._resting_generation
+        choices = app.screen.query_one("#choices", OptionList)
+
+        choices.highlighted = 2
+        await pilot.pause()
+        assert _highlighted(app)[0] == "gamma"
+
+        # The placement that the `highlight=0` fill scheduled, arriving late. Its generation is
+        # current -- no later fill happened -- so only the row guard can refuse it.
+        app.screen._rest_cursor(choices, 0, current, "a")
+        await pilot.pause()
+        assert _highlighted(app)[0] == "gamma", "a placement wrote over a cursor the owner moved"
+
+        # And it still does its job when the cursor is where it left it. Counted through
+        # `scroll_to_highlight`, which is what the deferred pass exists to run a second time:
+        # the row it re-asserts is the row already drawn, so a cursor assertion cannot tell an
+        # honoured placement from a guard that stands down on everything.
+        scrolls = 0
+        original = choices.scroll_to_highlight
+
+        def counting_scroll(*args: object, **kwargs: object) -> None:
+            nonlocal scrolls
+            scrolls += 1
+            original(*args, **kwargs)  # type: ignore[arg-type]
+
+        choices.scroll_to_highlight = counting_scroll  # type: ignore[method-assign]
+        app.screen._rest_cursor(choices, 2, current, "c")
+        await pilot.pause()
+        assert _highlighted(app)[0] == "gamma", "the guard blocked a placement on its own row"
+        assert scrolls, "the honoured placement never ran the scroll it exists for"

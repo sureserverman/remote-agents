@@ -123,15 +123,33 @@ class ProjectsScreen(ChoiceScreen):
         self.render_projects()
 
     async def on_reveal(self) -> None:
-        """Come back to a clean list with the keyboard in the filter.
+        """Come back to a clean list after a flow, and to the list you left after an excursion.
 
-        The chain this replaces reached the project list by calling a method that cleared the
-        filter and refocused it, so backing out of any flow always landed on a fresh list. A
-        bare pop would instead return the owner to a filtered list with the keyboard on the
-        rows — where typing is swallowed rather than filtering — which is a worse position to
-        be dropped into than the one they left.
+        **Two ways of arriving here, and they were the same code until the Alt layer made the
+        difference visible.** Backing out of a *flow* — the owner chose a project, walked into
+        the agent list, and came back — lands on a clean, unfiltered list with the keyboard on
+        the rows. That is deliberate and pinned: the query was one they had finished with, and a
+        bare pop would return them to a narrowed list with no sign of why. `test_returning_to_
+        the_project_list_clears_the_filter_and_rests_on_the_rows` is its argument in full.
+
+        An **excursion** is not that. A chord opens a session detail about a row in *another*
+        pane and Escape comes straight back; the owner never left this list, never finished with
+        their query, and did not choose anything here. Clearing the filter there is the same
+        defect as clearing it on Ctrl+R, which `refresh_contents` already refuses on the grounds
+        that a key which does not leave the position has no business discarding what the list is
+        narrowed by. The Stage 3 gate requires exactly this state to survive.
+
+        So the two are told apart by a mark the chord sets and this consumes, rather than by
+        this method guessing from what happens to be on the stack.
         """
-        self.render_projects()
+        from textual.widgets import Input
+
+        if not self.consume_excursion():
+            self.render_projects()
+            return
+        entry = self.query_one("#filter", Input)
+        self.render_projects(entry.value, keep_focus=True)
+        entry.focus()
 
     async def refresh_contents(self) -> None:
         """Re-read the catalogue, so a project another process created becomes selectable.
@@ -209,7 +227,13 @@ class ProjectsScreen(ChoiceScreen):
         this to say nothing -- its status carries the sessions' counts.
         """
         order = _ORDER_SENTENCE[self.tui.project_order]
-        self.set_status(f"Choose a project — {count} available, {order}", hint=PROJECTS_HINT)
+        self.set_status(
+            f"Choose a project — {count} available, {order}",
+            # Through the seam rather than the constant: on the console's projects pane this
+            # line also carries the Alt layer, and `_describe_projects` runs on every redraw --
+            # so a pane that appended the chords once would lose them at the next render.
+            hint=self.hint_content(PROJECTS_HINT),
+        )
 
     def action_focus_filter(self) -> None:
         """`/`: hand the keyboard to the filter. Enter, down or escape hand it back."""

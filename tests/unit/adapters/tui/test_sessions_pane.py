@@ -14,12 +14,14 @@ already opened the detail; this is that pair, on a screen of its own.
 
 from __future__ import annotations
 
+import asyncio
 import pathlib
 from dataclasses import replace
 from datetime import UTC, datetime
 
 import pytest
 from backends import SessionUseCaseDouble, tui_context_for
+from console_selection import SelectionConsole
 from textual.geometry import Region
 from textual.widgets import OptionList
 from tui_positions import position
@@ -27,7 +29,11 @@ from tui_positions import position
 from remote_agents.adapters.tui.app import RemoteAgentsTui
 from remote_agents.adapters.tui.context import TuiContext
 from remote_agents.adapters.tui.panes import SessionsPane
-from remote_agents.adapters.tui.screens.sessions import SessionDetailScreen, SessionsPaneScreen
+from remote_agents.adapters.tui.screens.sessions import (
+    SessionDetailScreen,
+    SessionsPaneScreen,
+    SessionsScreen,
+)
 from remote_agents.application.profiles import ProfileAvailability
 from remote_agents.application.project_catalog import CatalogProject
 from remote_agents.domain.models import (
@@ -1185,3 +1191,454 @@ async def test_the_panes_own_tick_keeps_its_gauges_moving(monkeypatch) -> None:
             "the console pane's gauges never refresh after mount, so they are frozen at their "
             "launch-time values for the life of the process"
         )
+
+
+def _three() -> tuple[SessionRecord, ...]:
+    return tuple(
+        _record(SessionId.parse(f"{d * 8}-{d * 4}-4{d * 3}-8{d * 3}-{d * 12}"), f"p{d}")
+        for d in ("1", "2", "3")
+    )
+
+
+async def test_the_pane_publishes_the_row_the_owner_moves_to() -> None:
+    """One writer for a fact three other processes read.
+
+    The console's other panes have no cursor of their own; a chord pressed in any of them acts
+    on whatever this pane has highlighted. That only works if moving the cursor is what
+    publishes — not opening a detail, not a timer, not the chord asking at press time — because
+    the owner's arrow is the only event that means "this one".
+    """
+    console = SelectionConsole()
+    records = _three()
+    app = SessionsPane(
+        _context(
+            records,
+            console_publish_selection=console.publish,
+            console_read_selection=console.read,
+        )
+    )
+
+    async with app.run_test(size=(120, 30)) as pilot:
+        await pilot.pause()
+        assert isinstance(app.screen, SessionsPaneScreen)
+        choices = app.screen.query_one("#choices", OptionList)
+        choices.focus()
+        await pilot.press("down")
+        await pilot.pause()
+
+        assert console.published, "moving the cursor published nothing at all"
+        assert console.published[-1] is not None
+        assert str(console.published[-1]) == choices.get_option_at_index(1).id
+
+
+async def test_a_vanished_row_publishes_no_selection_at_all() -> None:
+    """The publication DEC-062's mitigation is worthless without.
+
+    `_draw_listing` rests the cursor on nothing when the row it held has left the list, and
+    that is what makes a bare `s` safe on this pane. Off the pane it is worth nothing unless
+    the *publication* is cleared too: an option still naming the departed session would let a
+    chord pressed in the projects pane stop it — with no confirmation, and with nothing on
+    screen under a cursor to say what it was about to act on.
+
+    Textual posts no highlight message for a cleared cursor (`watch_highlighted` returns on
+    `None`), so this cannot ride the move handler and is published from the branch itself.
+    """
+    console = SelectionConsole()
+    first, second, third = _three()
+    launcher = _Launcher((first, second, third))
+    app = SessionsPane(
+        _context(
+            (),
+            sessions=launcher,
+            console_publish_selection=console.publish,
+            console_read_selection=console.read,
+        )
+    )
+
+    async with app.run_test(size=(120, 30)) as pilot:
+        await pilot.pause()
+        screen = app.screen
+        assert isinstance(screen, SessionsPaneScreen)
+        choices = screen.query_one("#choices", OptionList)
+        choices.highlighted = 2
+        await pilot.pause()
+
+        launcher.records = (first, second)
+        await screen._auto_reload()
+        await pilot.pause()
+
+        assert choices.highlighted is None, "this test needs the cursor cleared to mean anything"
+        assert console.published[-1] is None, (
+            "the pane kept publishing a session that had left the list"
+        )
+
+
+async def test_leaving_the_pane_publishes_no_selection() -> None:
+    """A pane that is gone has no cursor, so it must not leave one behind.
+
+    The option lives on the console session and outlives this process; a pane that exits
+    without clearing it leaves the last row it held selected for whatever reads next.
+    """
+    console = SelectionConsole()
+    records = _three()
+    app = SessionsPane(
+        _context(
+            records,
+            console_publish_selection=console.publish,
+            console_read_selection=console.read,
+        )
+    )
+
+    async with app.run_test(size=(120, 30)) as pilot:
+        await pilot.pause()
+        screen = app.screen
+        assert isinstance(screen, SessionsPaneScreen)
+        screen.query_one("#choices", OptionList).highlighted = 1
+        await pilot.pause()
+        assert console.published[-1] is not None, "the cursor move published nothing to clear"
+        console.published.clear()
+
+    # Driven through Textual's real teardown rather than by calling `on_unmount` by hand: the
+    # claim is that a pane exiting clears its selection, and the handler being called is the
+    # half a hand-written call assumes.
+    assert console.published[-1] is None, f"leaving published {console.published}"
+
+
+async def test_the_full_sessions_position_publishes_nothing() -> None:
+    """`remote-agents tui` is not one of the console's panes, and must not write its selection.
+
+    Hosting is decided by the tmux socket name, so a plain `remote-agents tui` started from any
+    shell on the console's server is classified CONSOLE and gets the capability wired — the
+    same trap `p` is gated against at `SessionsPaneScreen.BINDINGS`. A cursor moving in that
+    unrelated process would otherwise redirect the chords of the owner's real console.
+    """
+    console = SelectionConsole()
+    first, second, third = _three()
+    launcher = _Launcher((first, second, third))
+    app = RemoteAgentsTui(
+        _context(
+            (),
+            sessions=launcher,
+            console_publish_selection=console.publish,
+            console_read_selection=console.read,
+        )
+    )
+
+    async with app.run_test(size=(120, 30)) as pilot:
+        await pilot.pause()
+        await app.action_sessions()
+        await pilot.pause()
+        screen = app.screen
+        assert isinstance(screen, SessionsScreen)
+        assert not isinstance(screen, SessionsPaneScreen)
+        console.published.clear()
+
+        # Both routes the pane publishes on, driven here where neither may.
+        choices = screen.query_one("#choices", OptionList)
+        choices.focus()
+        await pilot.press("down")
+        await pilot.pause()
+
+        # ...and the vanished-row branch, which is the one that calls the shared hook. Without
+        # this the test passes against a `SessionsScreen` that publishes: the base hook is
+        # reached from `_draw_listing` alone, so a cursor move on this position exercises
+        # nothing. Measured — the first version of this test did not fail when the hook was
+        # given a body.
+        choices.highlighted = 2
+        await pilot.pause()
+        launcher.records = (first, second)
+        await screen._auto_reload()
+        await pilot.pause()
+        assert choices.highlighted is None, "the vanished-row branch did not run"
+
+    assert console.published == [], f"the full sessions position published {console.published}"
+
+
+async def test_a_slow_publication_never_overwrites_a_newer_one() -> None:
+    """The last row the owner moved to is the one that stays published.
+
+    Each publication is a `set-option` shelled out to tmux — a real fork/exec with variable
+    latency — and the cursor can move again long before one returns. Issued as independent
+    workers, an earlier highlight's write can land *after* a later one's, and the option is then
+    stuck naming a row the owner has left. Nothing corrects it: it is simply the answer every
+    other pane's read gives until the cursor moves again.
+
+    That matters here more than it would anywhere else in this surface, because the next stage
+    points `alt+s` and `alt+c` at this value and neither asks for confirmation. DEC-007's
+    re-read at issue time does not cover it — that re-checks whether the *named* session may be
+    stopped, not whether it is the session the owner is looking at. A stale-but-live id passes
+    every check and stops the wrong agent.
+
+    Driven with the first publication made deliberately slower than the second, which is the
+    inversion a loaded host produces on its own.
+    """
+    console = SelectionConsole()
+    records = _three()
+    app = SessionsPane(
+        _context(
+            records,
+            console_publish_selection=console.publish,
+            console_read_selection=console.read,
+        )
+    )
+
+    async with app.run_test(size=(120, 30)) as pilot:
+        await pilot.pause()
+        screen = app.screen
+        assert isinstance(screen, SessionsPaneScreen)
+        choices = screen.query_one("#choices", OptionList)
+        choices.focus()
+        # Let the opening fill's own publication finish before the delays are armed, so this
+        # measures two deliberate moves rather than the mount racing them.
+        await asyncio.sleep(0.05)
+        console.published.clear()
+        console.delays = [0.20, 0.0]
+
+        # Two moves, each handled on its own pass — which is what an arrow pressed twice does.
+        # Handling them together would hide the defect: the handler reads the cursor at
+        # *handling* time, so two messages drained in one pass both publish the current row and
+        # agree by accident.
+        choices.highlighted = 1
+        await pilot.pause()
+        choices.highlighted = 2
+        await pilot.pause()
+        landed = choices.get_option_at_index(2).id
+        await asyncio.sleep(0.4)
+
+        # Asserted inside the app's lifetime: `on_unmount` publishes `None` on the way out, so
+        # a check after the block would be reading teardown rather than the race.
+        assert console.published, "the moves published nothing"
+        assert str(console.published[-1]) == landed, (
+            f"a slower earlier publication landed last: {console.published}"
+        )
+
+
+async def test_an_empty_listing_publishes_no_selection() -> None:
+    """The last session ending leaves no cursor, so it must leave no selection.
+
+    `show_choices` substitutes a *disabled* placeholder row for an empty listing and highlights
+    it — and Textual posts no `OptionHighlighted` for a disabled option, so the move handler
+    never fires. The option went on naming the session that had just ended.
+    """
+    console = SelectionConsole()
+    only, _second, _third = _three()
+    launcher = _Launcher((only,))
+    app = SessionsPane(
+        _context(
+            (),
+            sessions=launcher,
+            console_publish_selection=console.publish,
+            console_read_selection=console.read,
+        )
+    )
+
+    async with app.run_test(size=(120, 30)) as pilot:
+        await pilot.pause()
+        screen = app.screen
+        assert isinstance(screen, SessionsPaneScreen)
+        await asyncio.sleep(0.05)
+        assert console.published[-1] is not None, "the opening fill published nothing to clear"
+
+        launcher.records = ()
+        await screen._auto_reload()
+        await asyncio.sleep(0.05)
+        await pilot.pause()
+
+        assert screen.highlighted_session() is None, "this test needs an empty listing"
+        assert console.published[-1] is None, "the last session ended and the option still named it"
+
+
+async def test_a_redraw_after_a_failed_stop_publishes_no_selection() -> None:
+    """The most dangerous of the four exits, and the one DEC-062 names by name.
+
+    `redraw_after_failure` rests the cursor on nothing *because* the row a stop raised on is
+    still there and `s`/`c` carry no confirmation — a repeated keypress would re-issue a stop
+    nobody chose. That mitigation is local to this pane. Off it, the option went on naming the
+    same row, so the same repeated keypress pressed in the *projects* pane would do exactly
+    what resting on nothing exists to prevent — against a session that is demonstrably still
+    live, because the stop that failed is why it is still there.
+    """
+    console = SelectionConsole()
+    records = _three()
+    app = SessionsPane(
+        _context(
+            records,
+            console_publish_selection=console.publish,
+            console_read_selection=console.read,
+        )
+    )
+
+    async with app.run_test(size=(120, 30)) as pilot:
+        await pilot.pause()
+        screen = app.screen
+        assert isinstance(screen, SessionsPaneScreen)
+        screen.query_one("#choices", OptionList).highlighted = 2
+        await asyncio.sleep(0.05)
+        assert console.published[-1] is not None
+
+        await screen.redraw_after_failure()
+        await asyncio.sleep(0.05)
+        await pilot.pause()
+
+        assert screen.query_one("#choices", OptionList).highlighted is None
+        assert console.published[-1] is None, (
+            "a failed stop left its row published for every other pane to act on"
+        )
+
+
+async def test_a_failed_store_read_publishes_no_selection() -> None:
+    """The fifth cursor-changing path, and the third one this branch enumerated by hand and missed.
+
+    `report_store_failure` fills the position that asked directly, from `app.py`, so it never
+    reaches `_draw_listing`'s funnel. On a console pane there is no screen to go back to, so it
+    draws nothing — and `show_choices` substitutes the *disabled* empty-state row, for which
+    Textual posts no highlight. The cursor ends on nothing and the option went on naming the
+    session it named before.
+
+    Scenario: cursor on X, every other pane's chord resolving to X. The store blips — a locked
+    database, a tmux hiccup — and the owner presses Ctrl+R. The pane says "No managed sessions
+    on this host" with an error status and no cursor anywhere on screen, and `alt+s` in the feed
+    pane still stops X, unconfirmed. That is the sentence this stage was written around: the
+    mitigation is local to the pane, and leaving the option set exports the hazard to three
+    panes that cannot see it.
+    """
+    console = SelectionConsole()
+    records = _three()
+    app = SessionsPane(
+        _context(
+            records,
+            console_publish_selection=console.publish,
+            console_read_selection=console.read,
+        )
+    )
+
+    async with app.run_test(size=(120, 30)) as pilot:
+        await pilot.pause()
+        screen = app.screen
+        assert isinstance(screen, SessionsPaneScreen)
+        screen.query_one("#choices", OptionList).highlighted = 2
+        await asyncio.sleep(0.05)
+        assert console.published[-1] is not None
+
+        app.report_store_failure(RuntimeError("the store could not be read"), screen)
+        await asyncio.sleep(0.05)
+        await pilot.pause()
+
+        assert screen.highlighted_session() is None, "this test needs a cursor on nothing"
+        assert console.published[-1] is None, (
+            "a failed read left the last row published for every other pane to act on"
+        )
+
+
+async def test_the_published_selection_equals_the_cursor_after_every_operation() -> None:
+    """The invariant itself, asserted after everything that can move the cursor.
+
+    **This is the check that ends the class the five scenario tests above only sample.** Each
+    of those names one situation — a vanished row, an empty listing, a failed stop, a failed
+    read, a move — and each was written after a review found the situation nobody had listed.
+    Five were found that way, in three rounds, every one just outside the boundary the previous
+    fix drew: three hand-picked publish sites, then a funnel over `_draw_listing`, then a fill
+    reaching the pane from `app.py` entirely outside it.
+
+    An enumeration cannot close that, because the members share nothing — what makes one a
+    member is a publication that is *missing*, and no search finds an absent call. So this
+    asserts the property instead of listing the paths: after each operation, whatever the pane
+    last published is exactly what its cursor now names. It has no boundary to get wrong, and it
+    fails on the path nobody thought of, which is the only kind left.
+
+    The operations are driven through the real app, so anything Textual does on its own — a
+    highlight moved on mount, a clear on `clear_options`, a disabled row that posts no message —
+    is inside the test rather than assumed about it.
+
+    **What it does not cover, so it does not read as covering everything:** teardown. The
+    invariant is asserted while the pane is alive, and `on_unmount`'s clear happens after the
+    last assertion, so reverting it leaves this green —
+    `test_leaving_the_pane_publishes_no_selection` is what holds that. Reverting the draw funnel
+    or the failure-fill hook does fail this test; both were checked.
+    """
+    console = SelectionConsole()
+    first, second, third = _three()
+    launcher = _Launcher((first, second, third))
+    app = SessionsPane(
+        _context(
+            (),
+            sessions=launcher,
+            console_publish_selection=console.publish,
+            console_read_selection=console.read,
+        )
+    )
+
+    async with app.run_test(size=(120, 30)) as pilot:
+        await pilot.pause()
+        screen = app.screen
+        assert isinstance(screen, SessionsPaneScreen)
+        choices = screen.query_one("#choices", OptionList)
+        choices.focus()
+
+        async def holds(what: str) -> None:
+            await asyncio.sleep(0.03)
+            await pilot.pause()
+            published = console.published[-1] if console.published else None
+            expected = screen.highlighted_session()
+            assert (str(published) if published is not None else None) == expected, (
+                f"after {what}: published {published!r}, cursor on {expected!r}"
+            )
+
+        await holds("the opening fill")
+
+        for key in ("down", "down", "up", "end", "home"):
+            await pilot.press(key)
+            await holds(f"pressing {key}")
+
+        choices.highlighted = 2
+        await holds("assigning the cursor directly")
+
+        await screen._auto_reload()
+        await holds("a tick with the list unchanged")
+
+        launcher.records = (first, third)
+        await screen._auto_reload()
+        await holds("a tick that removed the row above the cursor")
+
+        choices.highlighted = 1
+        launcher.records = (first,)
+        await screen._auto_reload()
+        await holds("a tick that removed the highlighted row")
+
+        launcher.records = (first, second, third)
+        await screen._auto_reload()
+        await holds("a tick that brought rows back")
+
+        await screen.refresh_contents()
+        await holds("Ctrl+R")
+
+        await screen.on_reveal()
+        await holds("returning to the screen")
+
+        await screen.redraw_after_failure()
+        await holds("a redraw after a stop that raised")
+
+        await screen._seed_context_gauges()
+        await holds("the gauge seed")
+
+        await pilot.resize_terminal(80, 24)
+        await holds("a resize")
+
+        # The failed read is driven *here*, with the cursor on a real session, and the order
+        # matters: run after the empty-list steps below it is vacuous, because the pane comes
+        # back from empty resting on nothing, so both sides of the assertion are `None` and a
+        # regression in this path is invisible. Measured — the first version of this test had
+        # it last and did not fail when the failure fill was reverted to a direct
+        # `show_choices` from `app.py`, which is the exact defect that motivated the hook.
+        choices.highlighted = 1
+        await holds("moving to a row before the read fails")
+        app.report_store_failure(RuntimeError("unreadable"), screen)
+        await holds("a failed store read")
+
+        launcher.records = ()
+        await screen._auto_reload()
+        await holds("the last session ending")
+
+        launcher.records = (second,)
+        await screen._auto_reload()
+        await holds("the first session arriving on an empty pane")

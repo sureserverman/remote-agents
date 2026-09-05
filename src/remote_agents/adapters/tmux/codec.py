@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from remote_agents.domain.models import ProfileId, ProjectId, SessionId
-from remote_agents.ports.console import ConsoleBindingAction, ConsolePaneSlot
+from remote_agents.ports.console import ConsoleBindingAction, ConsoleKeyTable, ConsolePaneSlot
 
 _DELIMITER = "|"
 
@@ -32,6 +32,35 @@ CONSOLE_SESSION_NAME = "ra-console"
 # so nothing inherits it, since neither the console session nor a managed one sets it.
 CONSOLE_SLOT_OPTION = "@remote_agents_console_slot"
 SURFACE_SLOT = "surface"
+# Which session the console's sessions pane has highlighted, readable by every pane process on
+# this console. **Session-scoped, and that is the deliberate part.**
+#
+# DEC-038 puts identity on the *pane*, because a session-scoped mark stays behind while the
+# pane travels and then describes whatever swapped in. That argument is about identity and it
+# does not reach this: a selection is one fact about the console as a whole, written by the one
+# pane that owns a cursor and read by the three that do not. Pane scope here would give each
+# reader a private copy of a shared fact — which is DEC-038's own failure mode, running in the
+# other direction. It is not identity, it says nothing about which pane is which, and no reader
+# may treat it as either.
+#
+# DEC-038's *other* mechanism does still apply and is named here so a reader does not have to
+# rediscover it: a session-scoped option is reported by every pane in that session through
+# tmux's pane -> session fallback. Under DEC-040 the console window hosts a displaced agent's
+# pane, so that pane answers this option too. Harmless, because neither `PANE_FORMAT` nor
+# `ARRANGEMENT_FORMAT` expands it and no reader asks a pane for it — but it is the reason this
+# option must never be read *per pane* to mean anything about that pane.
+#
+# Measured on tmux 3.4: user options do **not** inherit session <- global, so a `set -g` of
+# this name left over from someone debugging is invisible to a session-scoped
+# `show-options -qv`. The sibling `CONSOLE_SLOT_OPTION` asserts its own non-inheritance and this
+# one now does too, because "where could a value we did not write come from" is the question a
+# reader of a chord's input actually has. Written without respelling the option: the vocabulary
+# test counts occurrences, and it caught this comment doing so -- which is the check working.
+#
+# It dies with `ra-console`, so a stale selection cannot outlive the console that published it
+# -- though it *can* outlive the sessions **pane** that published it, which is a different and
+# narrower residual, recorded on `SessionsPaneScreen._publish_selection`.
+SELECTED_SESSION_OPTION = "@remote_agents_selected_session"
 
 # The four identity option names, spelled **once each** and referenced everywhere else in this
 # module. They are written by `pane_mark_args` and read back by two format strings, and those
@@ -325,15 +354,67 @@ _BINDABLE_KEY_CHARACTERS = frozenset(
 )
 
 
-def console_binding_args(
-    key: str, action: ConsoleBindingAction, command: tuple[str, ...] = ()
-) -> tuple[str, ...]:
-    """Return the argv suffix that installs one console root binding, on our socket only.
+#: How a forwarding binding finds the sessions pane, in tmux's own language.
+#:
+#: **Resolved at press time, by the slot mark, by tmux itself.** A pane id captured when the
+#: binding was installed would forward the key into whatever holds that number after the pane is
+#: rebuilt; the mark travels with the pane and survives it (DEC-038), so no *pane id* of ours
+#: has to still be right when the key is pressed.
+#:
+#: One name does: the guard compares the pressing client's session against
+#: `CONSOLE_SESSION_NAME`, so renaming `ra-console` makes every chord on this route inert. That
+#: is the deliberate trade for failing closed — see `_forward_to_sessions_command`.
+#:
+#: `$TMUX` is inherited by `run-shell`'s child, so the bare `tmux` here reaches the same server
+#: without the socket being spelled again. Measured on tmux 3.4 rather than read off the manual,
+#: together with the delivery itself: the emitted argv resolves the marked pane and the key
+#: arrives in it.
+def _forward_to_sessions_command(key: str) -> tuple[str, ...]:
+    """The `sh -c` argv that forwards one key to the console's sessions pane.
 
-    `-n` is the root table: no prefix, which is the whole reason these keys cost something —
-    a root binding is a key every agent on this server can never receive, for as long as it
-    is bound. That is why the key is validated here rather than trusted, and why the *set* of
-    them is declared in one place in the application layer rather than accumulated.
+    **The first clause is a guard, not a nicety, and it is what makes this binding obey
+    DEC-073(3).** A tmux key table belongs to the *server*, not to a session, and managed agents
+    are attached on this same socket (`attach_argv`) — so without it `prefix` + the chord fires
+    from **any** client on the server, including a plain `remote-agents attach ra-<uuid>` with no
+    console pane on screen at all. That was reproduced before this line existed: the chord
+    delivered an unconfirmed graceful stop (DEC-018) to the sessions pane's cursor, on a row the
+    owner could not see, from a terminal that is not part of the console.
+
+    The read-side gate cannot cover this route. That gate runs inside the *pressing* process,
+    and on the prefix route the presser is tmux. So the same question — is this one of the
+    console's own surfaces? — is asked here instead, of the client that pressed the key.
+
+    `key` is interpolated into a shell string, which is safe **only** because
+    `console_binding_args` validates it as `[C-|M-]?[A-Za-z0-9]+` *before* calling this. That
+    ordering is load-bearing: weakening or moving that check is a shell-injection change, not a
+    refactor.
+    """
+    script = (
+        f'test "$(tmux display-message -p "#{{client_session}}")" = "{CONSOLE_SESSION_NAME}" '
+        f"|| exit 0; "
+        f'pane=$(tmux list-panes -a -F "#{{pane_id}}" '
+        f'-f "#{{==:#{{{CONSOLE_SLOT_OPTION}}},{ConsolePaneSlot.SESSIONS.value}}}" '
+        f"| head -n 1); "
+        f'test -n "$pane" && tmux send-keys -t "$pane" {key}'
+    )
+    return ("sh", "-c", script)
+
+
+def console_binding_args(
+    key: str,
+    action: ConsoleBindingAction,
+    command: tuple[str, ...] = (),
+    table: ConsoleKeyTable = ConsoleKeyTable.ROOT,
+) -> tuple[str, ...]:
+    """Return the argv suffix that installs one console binding, root or prefix, on our socket.
+
+    **The two tables cost different things.** `-n` is the root table: no prefix, so the key is
+    one every agent on this server can never receive, for as long as it is bound — which is why
+    the key is validated here rather than trusted, and why the *set* is declared in one place in
+    the application layer rather than accumulated. `-T prefix` costs an agent nothing, because
+    tmux takes the prefix in the client; it costs something else instead, which
+    `_forward_to_sessions_command` carries: a key table is the *server's*, so a prefix binding
+    fires from every client on it unless the script asks who pressed it.
 
     A `SHOW_PROJECTS` binding with nothing to run is refused rather than installed as a key
     that quietly does nothing — which is not hypothetical: the composer's projects command
@@ -353,10 +434,18 @@ def console_binding_args(
     closes the gap. The same probe confirms the escape: `##{pane_id}` came back as the literal
     `#{pane_id}`.
 
-    Today's only caller passes a fixed tuple built from `sys.executable`, so nothing
-    owner-controlled reaches this — which is why it is escaped now, while it is cheap, rather
-    than when a future binding is built from a project path or a profile name and reintroduces
-    the class silently.
+    **A value *is* interpolated now, and the paragraph this replaces said the opposite.**
+    `SHOW_PROJECTS` still takes a fixed tuple built from `sys.executable`, so nothing
+    owner-controlled reaches it. `FORWARD_TO_SESSIONS` builds its own command by interpolating
+    `key` into a shell string (`_forward_to_sessions_command`), which is the "future binding
+    built from a value" the old paragraph warned about — it arrived in the same change that
+    left the warning standing.
+
+    It is safe, and it is safe for one reason worth naming precisely: the alphanumeric
+    validation immediately below runs **before** the action branch, so by the time the script is
+    built `key` has been proved to be `[C-|M-]?[A-Za-z0-9]+` — no quote, no `$`, no backtick, no
+    space, no `#` can survive it. **Moving or weakening that check is a shell-injection change,
+    not a refactor.**
     """
     body = key
     for modifier in ("C-", "M-"):
@@ -367,13 +456,26 @@ def console_binding_args(
         raise ValueError(
             "console binding key must be alphanumeric, optionally behind one C- or M- modifier"
         )
-    if action is not ConsoleBindingAction.SHOW_PROJECTS:  # pragma: no cover - one member
+    if action is ConsoleBindingAction.FORWARD_TO_SESSIONS:
+        if table is not ConsoleKeyTable.PREFIX:
+            # The forwarding keys are affordable *because* they are prefix keys — eight of them
+            # in the root table would take eight keys from every agent on this server, against a
+            # budget DEC-041 fixed at one. Refused here rather than left to a caller's care.
+            raise ValueError("a forwarding chord may only be bound in the prefix table")
+        if command:
+            raise ValueError("the forwarding binding builds its own command")
+        command = _forward_to_sessions_command(key)
+    elif action is ConsoleBindingAction.SHOW_PROJECTS:
+        if not command:
+            raise ValueError("the projects binding needs the command that returns the surface")
+    else:  # pragma: no cover - the enum has no third member
         raise ValueError(f"no argv is built for {action.value}")
-    if not command:
-        raise ValueError("the projects binding needs the command that returns the surface")
     # shlex.join for /bin/sh, then `#` -> `##` for tmux's own format pass, in that order:
-    # doubling first would let shlex quote the escape we just added.
-    return ("bind-key", "-n", key, "run-shell", shlex.join(command).replace("#", "##"))
+    # doubling first would let shlex quote the escape we just added. The doubling is also what
+    # carries the forwarding script's own `#{...}` formats through to the *inner* tmux: the outer
+    # pass turns `##{pane_id}` back into `#{pane_id}`, which is what the lookup needs to see.
+    placement = ("-n",) if table is ConsoleKeyTable.ROOT else ("-T", table.value)
+    return ("bind-key", *placement, key, "run-shell", shlex.join(command).replace("#", "##"))
 
 
 def switch_client_argv(session_id: SessionId) -> tuple[str, ...]:
@@ -477,6 +579,59 @@ def console_slot_mark_args(
         CONSOLE_SLOT_OPTION,
         slot.value,
     )
+
+
+def publish_selection_args(session_id: SessionId | None) -> tuple[str, ...]:
+    """Return the argv suffix publishing which session the console has selected.
+
+    `-t` and the console session, not `-p` and a pane: see `SELECTED_SESSION_OPTION` for why a
+    selection is console state rather than pane identity, and why DEC-038 does not reach it.
+
+    `None` writes the **empty string** rather than unsetting the option. The sessions pane
+    clears its cursor whenever the highlighted row leaves the list (DEC-052, DEC-062), and that
+    has to be published: an option left naming a row that has gone is exactly the stale
+    selection a chord in another pane would then act on. Empty is also what `show-options -qv`
+    returns for an option never set, so "cleared" and "never written" decode identically by
+    construction rather than by two readers agreeing to.
+    """
+    return (
+        "set-option",
+        "-t",
+        console_target(),
+        SELECTED_SESSION_OPTION,
+        "" if session_id is None else str(session_id),
+    )
+
+
+def read_selection_args() -> tuple[str, ...]:
+    """Return the argv suffix reading the published selection back.
+
+    `-q` so an unset option is the empty string rather than an error, and `-v` so the value
+    arrives alone rather than as `name value` — the two together make "nothing is selected" a
+    value this can decode instead of a failure it would have to interpret.
+    """
+    return ("show-options", "-qv", "-t", console_target(), SELECTED_SESSION_OPTION)
+
+
+def decode_selection(raw: str) -> SessionId | None:
+    """Decode a published selection, refusing anything that is not a session id.
+
+    Refusing is the only safe answer. What this returns is what an Alt chord acts on, and two
+    of those chords end a session with no confirmation (DEC-018), so a value this process did
+    not write — a hand-set option, a truncated read, a leftover from a tmux the owner drives
+    themselves — must decode to "nothing selected" rather than to something addressable.
+
+    DEC-007 is the second half of that and is unchanged: the acting surface re-reads the record
+    and re-checks `available_actions` at issue time, so even a well-formed id that names a
+    session the policy now forbids cannot be acted on.
+    """
+    value = raw.strip()
+    if not value:
+        return None
+    try:
+        return SessionId.parse(value)
+    except ValueError:
+        return None
 
 
 def console_layout_args(main_percent: int, column: Sequence[tuple[str, int]]):

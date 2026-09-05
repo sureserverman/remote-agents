@@ -25,7 +25,7 @@ agent it is displaying with it (DEC-040's first accepted cost).
 from __future__ import annotations
 
 import logging
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -33,6 +33,7 @@ from remote_agents.application.console_lock import ConsoleArrangementLock, Conso
 from remote_agents.domain.models import SessionId, SessionRecord, SessionState
 from remote_agents.ports.console import (
     ConsoleBindingAction,
+    ConsoleKeyTable,
     ConsolePaneSlot,
     ConsolePort,
     HostedPane,
@@ -48,7 +49,10 @@ JUMP_HOME_KEY = "F12"
 
 @dataclass(frozen=True, slots=True)
 class ConsolePane:
-    """One of the console's three panes: what it is, what runs in it, and where it goes."""
+    """One of the console's panes: what it is, what runs in it, and where it goes.
+
+    The count is `ConsolePaneSlot`'s and is not restated here; it was "three" in this file
+    while the enum carried four."""
 
     slot: ConsolePaneSlot
     #: Which console pane this one splits off when it has to be built.
@@ -126,7 +130,7 @@ CONSOLE_COLUMN: tuple[tuple[ConsolePaneSlot, int], ...] = (
 
 @dataclass(frozen=True, slots=True)
 class ConsoleBinding:
-    """One root-table key the console takes, and the argument for spending it."""
+    """One key the console takes, and the argument for spending it."""
 
     key: str
     action: ConsoleBindingAction
@@ -138,16 +142,34 @@ class ConsoleBinding:
     an argument is a key taken from the owner's agents by accident. This field is what the
     plan's gate reads when it asks whether the budget is worth its price.
     """
+    table: ConsoleKeyTable = ConsoleKeyTable.ROOT
+    """Which tmux key table this goes in, and it decides what the key *costs*.
+
+    `root` is `bind-key -n`: no prefix, so the key is one every agent on this server can never
+    receive, for as long as it is bound. That budget is fixed at one (DEC-041) and the argument
+    for spending it is the `why` above.
+
+    `prefix` costs an agent **nothing**. tmux intercepts the prefix key in the client, before
+    any key reaches a pane, so a prefix binding takes nothing from anybody — which is why the
+    eight forwarding chords are affordable and the one root key had to be argued for. A `why`
+    is still required here: the cost is not zero, it is paid in the owner's memory rather than
+    in their agents' keyboards.
+    """
 
 
-#: The console's whole key budget: **one** root-table key.
+#: The console's whole **root** key budget: one key.
+#:
+#: Not its whole key budget any more — the console also takes eight prefix keys
+#: (`console_prefix_bindings`), which cost a different currency and are argued for separately.
+#: The two are kept apart deliberately: this number is the one DEC-041 fixed, and it is the one
+#: a reader must not see grow.
 #:
 #: The size is the decision, and this set got smaller at the Stage 2 gate rather than larger.
 #: It held a second key, F11, for cycling pane focus, argued on the premise that "the
 #: displayed agent consumes the prefix key along with everything else the owner types". That
 #: premise is false, and the gate evaluator proved it before this code did: tmux intercepts
 #: the prefix **in the client**, before any key reaches the pane, so `prefix + o` already
-#: cycles the console's three panes at no cost to any agent. The repo already contained the
+#: cycles the console's panes at no cost to any agent. The repo already contained the
 #: contradiction — the README tells the owner to detach with `Ctrl-b d` from inside this very
 #: console. A key that buys one keystroke over an existing chord is not worth taking from
 #: every agent on the server forever, so it is not taken.
@@ -168,6 +190,43 @@ CONSOLE_BINDINGS: tuple[ConsoleBinding, ...] = (
         "on, so the key survives and its action does not.",
     ),
 )
+
+
+def console_prefix_bindings(keys: Sequence[str]) -> tuple[ConsoleBinding, ...]:
+    """The Alt layer, made reachable from inside a displayed agent — one prefix key per chord.
+
+    **Eight keys, and they cost no agent anything**, which is why there can be eight of them
+    beside a root budget of one. DEC-041 fixed that budget after establishing the fact this
+    relies on: tmux intercepts the prefix in the *client*, so a `-T prefix` binding is invisible
+    to every pane. The root set is untouched and its test still pins it at length 1.
+
+    The gap they close is DEC-040's. When an agent is exchanged into the left pane it owns that
+    pane's keyboard, so a chord typed there reaches the agent rather than the console — the one
+    position from which the layer is unreachable. `prefix` then the same chord goes to the
+    sessions pane, which handles the bare row key it forwards.
+
+    **A function taking the keys, rather than a tuple built from them, and the reason is a layer
+    boundary.** The chord vocabulary is the TUI's — it is derived from the row-key table in
+    `adapters/tui/screens/sessions.py` — and this module is application policy, which may not
+    import an adapter. Importing it here is both an architecture violation and a genuine import
+    cycle (`adapters/tui/context.py` imports this module). So the *policy* of what a prefix
+    binding is, and the argument for it, lives here; the *vocabulary* stays where it is derived;
+    and the composition root, which is the one place allowed to know both, joins them. That is
+    the same split `attach_to`'s injected `switch_argv` already makes for the same reason.
+    """
+    return tuple(
+        ConsoleBinding(
+            f"M-{key}",
+            ConsoleBindingAction.FORWARD_TO_SESSIONS,
+            "One of the session chords, reachable from inside a displayed agent. Costs no agent "
+            "a keystroke — tmux takes the prefix in the client — and costs the owner only the "
+            "prefix they already press to detach. Without it the layer has exactly one blind "
+            "spot, and it is the position DEC-040 puts the owner in most often.",
+            table=ConsoleKeyTable.PREFIX,
+        )
+        for key in keys
+    )
+
 
 #: How many exchanges `recover` will make before reporting that the console did not settle.
 #: Each pass puts one pane where it belongs, so a console with a handful of agents settles in
@@ -319,7 +378,9 @@ class ConsoleComposer:
                 else ()
             )
             try:
-                await self._console.install_console_binding(binding.key, binding.action, command)
+                await self._console.install_console_binding(
+                    binding.key, binding.action, command, binding.table
+                )
             except Exception:
                 _LOG.exception(
                     "the console key %s could not be installed; the console stands without it",
