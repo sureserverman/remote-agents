@@ -303,6 +303,129 @@ del _bindable
 _SHOW_PROJECTS_BINDING = Binding("p", "show_projects_pane", "Projects", show=False)
 
 
+#: The key `d` carries on the sessions pane: open this row's detail, with no action attached.
+#:
+#: Not in `SESSION_ACTION_KEYS` because it performs nothing on the session — that table's
+#: fourth field is the word a *lifecycle* action is called by, and "look at it" is not one.
+#: Named here because the chord layer carries it, and a literal spelled in two places is the
+#: drift `test_the_chord_layer_is_the_row_keys.py` exists to catch.
+_DETAIL_KEY = "d"
+
+#: Every key the Alt layer offers, built from the tables rather than written beside them.
+#:
+#: **This is the whole of the chord vocabulary**, and it is derived so that a seventh row key
+#: becomes a seventh chord with no second edit. `RemoteAgentsTui.BINDINGS` builds one
+#: `alt+<letter>` binding per entry; the DEC-052 import guard above therefore covers the chords
+#: by construction, because a chord cannot exist for a key this table does not carry and this
+#: table cannot carry an unconfirmed mutating key while `_CLEARS_VANISHED_CURSOR` is false.
+CHORD_KEYS: tuple[str, ...] = (
+    *(key for key, _action, _label, _word in SESSION_ACTION_KEYS),
+    _REMOTE_CONTROL_KEY,
+    _DETAIL_KEY,
+)
+
+#: Which action each row key names. The chord layer arrives holding a *key*; the row bindings
+#: arrive holding an *action*, because that is what `Binding` was given. One mapping, so the
+#: two entry points cannot disagree about what `s` means.
+_KEY_ACTIONS = {key: action for key, action, _label, _word in SESSION_ACTION_KEYS}
+
+
+async def perform_row_action(action: str, session_value: str, *, screen: ChoiceScreen) -> None:
+    """Do what a row key names, to one named session, from whichever screen pressed it.
+
+    **Module-level and taking its session explicitly, because two entry points reach it.** The
+    row key on the sessions pane resolves the session from its own cursor; the Alt chord
+    resolves it from the console's published selection, from a pane with no sessions list at
+    all. What happens next has to be the same code, or "the chord does what the key does" is a
+    claim maintained by hand in two bodies that drift.
+
+    Nothing here checks the policy, and deliberately: an action the policy no longer allows is
+    refused by the policy itself, in its own words, rather than by a check kept here that could
+    drift from it (DEC-007's re-read at issue time, which lives in `RemoteAgentsTui.stop`).
+    """
+    if action in ACTION_LABELS:
+        # **Posted, not performed**, and for all three keys rather than only for force.
+        # A binding action runs on the *App's* pump (see `RowStopAction`), so anything
+        # that suspends here suspends the whole surface: force deadlocked it outright on
+        # the modal, and `s`/`c` blocked it for the duration of the stop, queueing the
+        # owner's keystrokes and replaying them afterwards onto whatever screen had by
+        # then arrived. Handing the work to `on_row_stop_action` puts every one of them on
+        # this screen's own pump, which is where the detail has always run them.
+        #
+        # `screen` is the receiving screen rather than always the sessions pane, which is what
+        # makes the chord obey DEC-025/DEC-068 from every pane: the message lands on the pump
+        # of the screen the owner is looking at, and the handler there is what asks for FORCE.
+        screen.post_message(RowStopAction(action, session_value))
+        return
+    await screen.tui.show_detail(session_value, action)
+
+
+async def perform_row_remote_control(session_value: str, *, screen: ChoiceScreen) -> None:
+    """Remote Control, which is the one key that cannot name its action in advance.
+
+    Shared by the row key and the chord for the reason `perform_row_action` states. The busy
+    and cursor guards stay with the callers, because each resolves its session differently and
+    the refusal belongs beside the resolution.
+    """
+    try:
+        record = await screen.tui.current_record(session_value)
+    except Exception as error:
+        screen.tui.report_store_failure(error, screen)
+        return
+    if not screen.showing:
+        # The owner left while the store was answering. Every other post-await continuation
+        # on this screen family re-checks this before acting -- `dispatch_opening`,
+        # `confirm_force`, `confirm_remote_control`, `show_attach` -- because `action_back`
+        # only consults the app-level busy flag, and this method sets none. Without it a
+        # read landing late pushes a detail onto whatever the owner navigated to instead.
+        return
+    if record is None:
+        await screen.tui.show_detail(session_value)
+        return
+    if not remote_control_available(record):
+        # The re-read at issue time, which is DEC-007's third mitigation, applied to the
+        # one key whose availability `check_action` can only answer from the drawn row.
+        # A session that stopped -- or a row the cursor moved onto between the redraw and
+        # the keypress -- is refused here in words rather than by being navigated
+        # somewhere. `show_detail` was what this did, and a detail the owner did not ask
+        # for is not a refusal, it is a refusal-shaped move.
+        screen.announce("Remote Control is only for a running Claude session.", severity="warning")
+        return
+    # The direction is picked from this read and re-checked by `confirm_remote_control`'s
+    # own read -- which asks whether Remote Control is *available*, not whether the
+    # direction is still the right one. So a foreign writer toggling between the two reads
+    # can leave the owner asked to enable something already enabled. That window is the
+    # row path's too (a rendered row fixes its direction and is never re-diffed either);
+    # this key narrows it from human-paced to machine-paced rather than opening it. Noted
+    # so the omission is not read as an oversight.
+    directions = remote_control_directions(record, record.remote_control_state)
+    opening = _REMOTE_CONTROL_KEYS[directions[0]] if len(directions) == 1 else None
+    await screen.tui.show_detail(session_value, opening)
+
+
+async def perform_chord(key: str, session_value: str, *, screen: ChoiceScreen) -> None:
+    """Route one Alt chord to the same work its bare letter does on a row.
+
+    The three destinations are the three the sessions pane has: `d` opens the detail with no
+    action, `m` asks the Remote Control policy what its key means today, and everything else
+    is a row action. Written as a router over the shared performers rather than as a fourth
+    implementation, which is the whole point of the two functions above.
+    """
+    if key == _DETAIL_KEY:
+        await screen.tui.show_detail(session_value)
+        return
+    if key == _REMOTE_CONTROL_KEY:
+        await perform_row_remote_control(session_value, screen=screen)
+        return
+    action = _KEY_ACTIONS.get(key)
+    if action is None:
+        # Unreachable through the derived bindings, which is why this returns rather than
+        # raises: `chord` is a public action name and `run_action("chord('x')")` reaches here
+        # from the command palette or a test, and a `KeyError` out of an action exits the app.
+        return
+    await perform_row_action(action, session_value, screen=screen)
+
+
 class _SessionActionKeys:
     """The per-action key *behaviour* both sessions positions share.
 
@@ -475,17 +598,7 @@ class _SessionActionKeys:
             # the detail exists; this is the same refusal one step earlier, so the two entry
             # paths agree rather than relying on the pump staying serialized forever.
             return
-        if action in ACTION_LABELS:
-            # **Posted, not performed**, and for all three keys rather than only for force.
-            # A binding action runs on the *App's* pump (see `RowStopAction`), so anything
-            # that suspends here suspends the whole surface: force deadlocked it outright on
-            # the modal, and `s`/`c` blocked it for the duration of the stop, queueing the
-            # owner's keystrokes and replaying them afterwards onto whatever screen had by
-            # then arrived. Handing the work to `on_row_stop_action` puts every one of them on
-            # this screen's own pump, which is where the detail has always run them.
-            self.post_message(RowStopAction(action, session_value))
-            return
-        await self.tui.show_detail(session_value, action)
+        await perform_row_action(action, session_value, screen=self)
 
     async def action_show_projects_pane(self) -> None:
         """Put the projects surface back in the console's left slot.
@@ -520,42 +633,7 @@ class _SessionActionKeys:
         session_value = self.highlighted_session()
         if session_value is None or self.tui.busy:
             return
-        try:
-            record = await self.tui.current_record(session_value)
-        except Exception as error:
-            self.tui.report_store_failure(error, self)
-            return
-        if not self.showing:
-            # The owner left while the store was answering. Every other post-await continuation
-            # on this screen family re-checks this before acting -- `dispatch_opening`,
-            # `confirm_force`, `confirm_remote_control`, `show_attach` -- because `action_back`
-            # only consults the app-level busy flag, and this method sets none. Without it a
-            # read landing late pushes a detail onto whatever the owner navigated to instead.
-            return
-        if record is None:
-            await self.tui.show_detail(session_value)
-            return
-        if not remote_control_available(record):
-            # The re-read at issue time, which is DEC-007's third mitigation, applied to the
-            # one key whose availability `check_action` can only answer from the drawn row.
-            # A session that stopped -- or a row the cursor moved onto between the redraw and
-            # the keypress -- is refused here in words rather than by being navigated
-            # somewhere. `show_detail` was what this did, and a detail the owner did not ask
-            # for is not a refusal, it is a refusal-shaped move.
-            self.announce(
-                "Remote Control is only for a running Claude session.", severity="warning"
-            )
-            return
-        # The direction is picked from this read and re-checked by `confirm_remote_control`'s
-        # own read -- which asks whether Remote Control is *available*, not whether the
-        # direction is still the right one. So a foreign writer toggling between the two reads
-        # can leave the owner asked to enable something already enabled. That window is the
-        # row path's too (a rendered row fixes its direction and is never re-diffed either);
-        # this key narrows it from human-paced to machine-paced rather than opening it. Noted
-        # so the omission is not read as an oversight.
-        directions = remote_control_directions(record, record.remote_control_state)
-        opening = _REMOTE_CONTROL_KEYS[directions[0]] if len(directions) == 1 else None
-        await self.tui.show_detail(session_value, opening)
+        await perform_row_remote_control(session_value, screen=self)
 
 
 class SessionsScreen(_SessionActionKeys, ChoiceScreen):
@@ -572,6 +650,13 @@ class SessionsScreen(_SessionActionKeys, ChoiceScreen):
     """This screen renders session rows, so the app's gauge cache is worth refreshing while it
     is the one showing. Read by `RemoteAgentsTui._refresh_context_windows_tick`; screens without
     it cost no provider read at all."""
+
+    #: This position binds the bare row keys, so the Alt layer is legal here (see the flag's
+    #: declaration on `ChoiceScreen`). Declared on the screen rather than on `_SessionActionKeys`
+    #: for the reason `SESSION_ACTION_BINDINGS` is attached to screens: the mixin is where the
+    #: *actions* live and the screen is where the *bindings* do, and this flag is about the
+    #: bindings. `SessionsPaneScreen` subclasses this one and inherits both.
+    carries_row_keys = True
 
     BINDINGS = list(SESSION_ACTION_BINDINGS)
 
@@ -1546,6 +1631,12 @@ class SessionDetailScreen(ChoiceScreen):
 
     position = "SESSION_DETAIL"
 
+    about_one_session = True
+
+    def subject_session(self) -> str | None:
+        """This screen is about one session and holds its id, so a chord acts on that one."""
+        return self.session_value
+
     @property
     def crumb(self) -> str:
         """The session this detail is about, once it has been read; its id until then."""
@@ -1960,6 +2051,12 @@ class RenameScreen(ChoiceScreen):
         super().__init__()
         self.session_value = session_value
 
+    about_one_session = True
+
+    def subject_session(self) -> str | None:
+        """This screen is about one session and holds its id, so a chord acts on that one."""
+        return self.session_value
+
     async def populate(self) -> None:
         self.set_status("Enter a name for this session, then press enter. Leave empty to keep it.")
         # `valid_empty` left at its default: an empty entry is the documented way to leave the
@@ -2083,6 +2180,15 @@ class InspectScreen(ChoiceScreen):
     empty_state = NEVER_EMPTY
 
     position = "INSPECT"
+
+    #: About one session, and unable to say which — the constructor takes the captured output
+    #: alone, because the detail one level down the stack names the session in its own crumb.
+    #:
+    #: Declared anyway, and `subject_session` left answering `None`, which is a **refusal**: a
+    #: chord pressed while reading session A's output must not act on whatever the sessions
+    #: pane highlights. That is the same defect as on the detail, and the fact that this screen
+    #: cannot name its subject makes it worse to guess, not safer.
+    about_one_session = True
     status = (
         "Output. / to find, n and N to step, ctrl+home and ctrl+end to jump, escape to go back."
     )

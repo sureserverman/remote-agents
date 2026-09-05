@@ -122,6 +122,16 @@ letters (`a i r s c f m`) the dashboard's sessions pane nonetheless *advertises*
 title -- so those letters are avoided here even though nothing would collide today, because a
 key the frame names for one subject must not quietly mean another.
 
+**Nor the Alt layer built from those same letters**, and that follows from the sentence above
+rather than being a separate decision: the chord layer is offered where `carries_row_keys` is
+set, which is where the bare letter is already legal. `DashboardScreen` sets
+`owns_session_cursor` and not that flag, so `alt+s` and `alt+c` -- two stops DEC-018 forbids
+confirming -- are refused here exactly as `s` and `c` are. Gating the layer on the *cursor*
+instead would have handed them to this pane, whose sessions region is not even the focused
+widget; that was a Critical at Task 3.1's review, and
+`tests/architecture/test_the_chord_layer_is_the_row_keys.py` now fails if the flag and the
+bindings ever disagree.
+
 **Not a root binding, so `CONSOLE_BINDINGS` is untouched.** This is a screen binding inside
 our own process, exactly as `p` on the sessions pane is, and DEC-041's one-root-key budget
 still stands at one -- see `action_show_projects_pane`, which records the same distinction.
@@ -772,17 +782,29 @@ class DashboardScreen(LimitsRegion, FeedRegion, ProjectsPaneScreen):
             return
         await super().choose(key)
 
-    #: This position draws a sessions list of its own, in its top-right pane, so a chord
-    #: pressed here acts on that cursor rather than on the console's published selection.
+    #: This position draws a sessions list of its own, in its top-right pane, so its cursor is
+    #: the answer to "which session" for the one key that reads it: `d`, opening the detail.
+    #:
+    #: **It is emphatically not what makes the Alt chord layer legal here — that is
+    #: `carries_row_keys`, and this screen does not set it.** The two flags are separate on
+    #: purpose and must not be collapsed: gating the chords on *this* one handed `alt+s` and
+    #: `alt+c` to this pane, two stops DEC-018 forbids confirming, on a cursor that is not the
+    #: focused widget and at a position DEC-062's stated scope does not reach. That was a
+    #: Critical at Task 3.1's review. The argument in full is at the top of this module, beside
+    #: the key-collision note; it is restated here because this is the line a maintainer edits.
     owns_session_cursor = True
 
     def highlighted_session(self) -> str | None:
         """The session under the sessions pane's cursor, or `None`.
 
         Extracted from `action_session_detail` so this position answers the question exactly
-        once. `selected_session` asks it for the chord layer and `d` asks it for the detail;
-        two resolvers reading the same pane would be two chances to disagree about which row
-        an unconfirmed stop lands on.
+        once. `d` asks it for the detail, and `selected_session` asks it for any other resolver
+        that reaches this screen; two readers of the same pane would be two chances to disagree
+        about which row a key lands on.
+
+        **No chord reaches it.** `_offers_chords` refuses this screen before resolution — see
+        `owns_session_cursor` above — so nothing that could stop a session is answered from
+        here.
 
         Guarded rather than raising, for the reason `SessionsScreen`'s copy gives: this runs
         from `check_action`, which the footer calls for every binding in the chain, and an

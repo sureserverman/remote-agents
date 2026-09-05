@@ -587,6 +587,25 @@ class TmuxGateway:
         """
         return decode_selection(await self._runner.run(*self._base_argv(), *read_selection_args()))
 
+    async def holds_console_slot(self, pane_id: str) -> bool:
+        """Answer the read-side gate from the arrangement, not from a second pane read.
+
+        `pane_arrangement` already reports, per pane, both halves the gate needs — the slot mark
+        the pane carries in its own right, and whether the console is the window hosting it. So
+        the gate is a filter over a listing this adapter already builds and already tests,
+        rather than a new option read whose decoder would be a second place the two facts could
+        be spelled. One `list-panes -a` per chord press, against a local socket.
+
+        `on_console` is what closes the exchange case: the mark travels with the pane (DEC-038),
+        so an exiled projects pane still has one and is no longer shown by the console. A pane
+        this listing does not mention at all — an absent server answers with an empty
+        arrangement — is not one of ours either, which is the answer `any` gives for free.
+        """
+        return any(
+            pane.pane_id == pane_id and pane.on_console and pane.console_slot is not None
+            for pane in await self.pane_arrangement()
+        )
+
     async def swap_panes(self, source_pane: str, target_pane: str) -> None:
         """Exchange two panes between their windows, taking neither session with it.
 

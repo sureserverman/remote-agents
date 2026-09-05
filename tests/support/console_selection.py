@@ -23,7 +23,7 @@ from remote_agents.domain.models import SessionId
 class SelectionConsole:
     """Records what a surface publishes, and serves whatever the test says is selected."""
 
-    def __init__(self, selected: SessionId | None = None) -> None:
+    def __init__(self, selected: SessionId | None = None, *, holds_slot: bool = True) -> None:
         #: Every publication in order, including the `None`s. See the module docstring.
         self.published: list[SessionId | None] = []
         #: What `read` answers. Settable mid-test, because the interesting cases are the ones
@@ -35,6 +35,16 @@ class SelectionConsole:
         #: rather than caching: one read per press is the price of never being stale, and a
         #: cache would be invisible in any assertion about the *value*.
         self.reads = 0
+        #: Whether the pane this surface runs in is one of the console's own, by its slot mark
+        #: and by where the mark currently is. `True` is the ordinary console pane; `False` is
+        #: both cases the Stage 3 read-gate exists for -- a plain `remote-agents tui` on the
+        #: console's socket, and the projects pane after a DEC-040 exchange parks it in an
+        #: agent's window. Settable mid-test, because the second of those changes underneath a
+        #: process that is already running.
+        self.holds_slot = holds_slot
+        #: How many times the gate was asked. Pinned for the same reason as `reads`: the answer
+        #: has to be taken per press, since an exchange moves the pane while the process lives.
+        self.slot_reads = 0
 
     async def publish(self, session_id: SessionId | None) -> None:
         """Record a publication, after whatever delay `delays` prescribes for it.
@@ -57,3 +67,7 @@ class SelectionConsole:
     async def read(self) -> SessionId | None:
         self.reads += 1
         return self.selected
+
+    async def holds_console_slot(self) -> bool:
+        self.slot_reads += 1
+        return self.holds_slot

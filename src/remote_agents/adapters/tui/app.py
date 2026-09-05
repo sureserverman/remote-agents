@@ -14,7 +14,7 @@ from textual.app import App, ScreenStackError
 from textual.binding import Binding
 from textual.content import Content
 from textual.notifications import SeverityLevel
-from textual.screen import Screen
+from textual.screen import ModalScreen, Screen
 from textual.theme import Theme
 from textual.timer import Timer
 from textual.worker import WorkerCancelled, WorkerFailed
@@ -56,6 +56,7 @@ from remote_agents.adapters.tui.screens.confirm import (
 )
 from remote_agents.adapters.tui.screens.launch import ProjectsScreen
 from remote_agents.adapters.tui.screens.palette import NavigationCommands
+from remote_agents.adapters.tui.screens.sessions import CHORD_KEYS, perform_chord
 from remote_agents.adapters.tui.theme import THEMES, VARIABLE_DEFAULTS
 from remote_agents.application.commands import (
     LaunchCommand,
@@ -141,6 +142,11 @@ __all__ = [
 #: enough to read the remedy at an unhurried pace rather than a skim, which is what the
 #: default gave it — a gate evaluator measured the message at 55 words.
 _FAILURE_TIMEOUT = 20.0
+
+#: What the Alt layer says when the console has nothing selected — one string, because the
+#: sessions cursor resting on nothing is one condition however the position reached it
+#: (DEC-052, DEC-062: a vanished row rests on nothing rather than falling back to row 0).
+_NOTHING_SELECTED = "No session is selected."
 
 
 class RemoteAgentsTui(App[AttachRequest | None]):
@@ -249,6 +255,29 @@ class RemoteAgentsTui(App[AttachRequest | None]):
             "ctrl+o", "resume", "resume", tooltip="Reopen a saved conversation as a new session"
         ),
         Binding("ctrl+q", "quit", "quit", tooltip="Leave the terminal surface"),
+        # The Alt layer: every row key the sessions pane offers, available from any console
+        # pane, acting on the session that pane has highlighted.
+        #
+        # **The first `priority=True` bindings this app declares**, and that is the mechanism
+        # rather than a preference. Textual checks priority bindings from the App down before
+        # the focused widget sees the key (`App._check_bindings`), which is exactly the owner's
+        # ask: in the left pane a bare letter is text the projects filter takes, and the same
+        # letter under Alt is a session action the filter never sees. Measured on the pinned
+        # Textual 8.2.8 through tmux `send-keys M-s` with an `Input` focused and holding text.
+        #
+        # DEC-025's correction notes that its position "holds today only because this app
+        # declares no priority bindings of its own". These are the first, and they do not
+        # disturb it: `action_chord` awaits no modal on the App's pump — the stop chords *post*
+        # to the current screen and its handler is what asks (DEC-068).
+        #
+        # Built from `CHORD_KEYS` rather than written out, so the layer cannot drift from the
+        # row keys it mirrors; `tests/architecture/test_the_chord_layer_is_the_row_keys.py`
+        # asserts the two sets are equal, and the Stage 3 gate greps for a hand-spelled
+        # `"alt+<letter>"` anywhere in this tree.
+        *(
+            Binding(f"alt+{key}", f"chord('{key}')", "session action", priority=True, show=False)
+            for key in CHORD_KEYS
+        ),
     ]
 
     #: Which app-level flows this surface offers, by action name.
@@ -377,7 +406,65 @@ class RemoteAgentsTui(App[AttachRequest | None]):
             # the identical dereference; the first version of this guard checked two conditions
             # that could never be false and left this one open.
             return True
+        if action == "chord":
+            return self._offers_chords(screen)
         return screen.check_action(action, parameters)
+
+    def _offers_chords(self, screen: Screen[object]) -> bool:
+        """Whether the Alt layer applies to the position on screen — the synchronous half.
+
+        Two refusals, and neither can be deferred to the action: `check_action` is what
+        `App.run_action` consults before dispatching a priority binding, and a key that is
+        offered and inert is the complaint a dead-end key already is (the reason `p` is gated
+        to the sessions pane rather than bound everywhere and ignored).
+
+        **No chord while a modal is asking.** A modal is one question awaiting an answer, and
+        the confirm modals carry a question string and no session id — deliberately, so the
+        gate's registry sweep can construct each with no arguments. So they cannot answer
+        `subject_session` the way a detail can, and the rule is about the modal rather than
+        about its subject: nothing fires behind one, whichever it is.
+
+        **Off a console, nothing to act on.** `console_holds_slot` is wired only under console
+        hosting, so its absence is the declared absence of the whole layer (DEC-046) — except
+        on a position that owns a sessions cursor, which needs no console at all: `alt+s` there
+        acts on the same row `s` does, and `remote-agents tui` in a bare shell is a real
+        position with a real list.
+
+        **A cursor is not what makes the layer legal — the bare keys are.** `carries_row_keys`
+        rather than `owns_session_cursor`, and the two differ on exactly one position:
+        `DashboardScreen` owns a sessions cursor and deliberately binds none of
+        `a i r s c f m`. DEC-062's position names `SessionsScreen` and `SessionsPaneScreen`
+        only, and makes an unconfirmed `s`/`c` legal there against `_draw_listing`'s
+        rest-on-nothing; the dashboard is a third position that argument does not reach, its
+        sessions region is not the focused widget, and the import-time invariant in
+        `screens/sessions.py` guards the *keys* rather than the positions they are offered on.
+        So a cursor-owning screen that does not carry the keys is refused outright rather than
+        falling through to the console test below — the chord must not smuggle in a stop the
+        bare letter is not allowed to make there.
+
+        **A screen about a session it cannot name is refused here too**, rather than offered and
+        left to warn: `InspectScreen` declares `about_one_session` and answers `subject_session`
+        with `None` unconditionally, so its chord could only ever say "this screen names no
+        session". That is knowable synchronously, and an absent key beats a dead one.
+
+        What this cannot answer is the strict gate itself. Whether *this* pane is one of the
+        console's own is a tmux read, and `check_action` is synchronous — so that half lives in
+        `_resolve_session`, and a refused process gets a word rather than a hidden key.
+        """
+        if isinstance(screen, ModalScreen) or not isinstance(screen, ChoiceScreen):
+            # `perform_chord` reaches `screen.tui`, `screen.announce` and `screen.showing`, all
+            # of which are `ChoiceScreen`'s. Every screen this app pushes is one today, so the
+            # second half refuses nothing — it is here so that a future plain `Screen` is an
+            # absent key rather than an `AttributeError` out of a key handler, which this file
+            # records elsewhere as the class that has already killed the app once.
+            return False
+        if getattr(screen, "carries_row_keys", False):
+            return True
+        if getattr(screen, "owns_session_cursor", False):
+            return False
+        if getattr(screen, "about_one_session", False):
+            return getattr(screen, "subject_session", lambda: None)() is not None
+        return self.services.console_holds_slot is not None
 
     async def on_mount(self) -> None:
         """Start the gauge cache's own schedule, once per process.
@@ -947,38 +1034,31 @@ class RemoteAgentsTui(App[AttachRequest | None]):
     async def selected_session(self) -> str | None:
         """Which session a key pressed *now*, on *this* screen, should act on.
 
-        Two answers, and which one applies is a question about the position rather than about
-        the process. A position that draws its own sessions list answers from its cursor; every
-        other position answers from the console's published selection, because it has no cursor
-        of its own and the owner's choice was made in a different pane.
+        **Three answers, and which applies is a question about the position rather than about
+        the process.** A screen that is about one session answers from that session, or refuses;
+        a position that draws its own sessions list answers from its cursor; every other
+        position answers from the console's published selection, because it has no cursor of its
+        own and the owner's choice was made in a different pane.
 
-        **That sentence describes a console pane, and this line is reached by two processes
-        that are not one.** Measured: `hosting_mode` classifies by tmux socket name, so a plain
-        `remote-agents tui` started from any shell on the console's server has
-        `console_read_selection` wired and answers from the *real* console's selection on every
-        position that owns no cursor — as does the projects pane after a DEC-040 exchange parks
-        it in an agent's own window. A third case needs no console at all: a screen that already
-        knows its session (`SessionDetailScreen`, Rename, Inspect, the confirm modals) owns no
-        cursor either, so it answers from whatever the sessions pane highlights rather than from
-        the session it is displaying.
+        **The argument for each, and both gates, live in `_resolve_session`.** This is a thin
+        reader over it that drops the refusal wording — read that method rather than this one.
 
-        The **write** side is gated against exactly this trap, twice —
-        `SessionsScreen._publish_selection` is a no-op and `p` is bound only on the pane. The
-        read side is not, and Stage 3's Task 3.1 is where it gets its gate: only a process
-        holding one of the console's own slot marks may answer from the published selection, and
-        a screen that knows its own session answers from that instead. Until then this returns
-        an answer no caller acts on — nothing in production calls it yet — and the residual is
-        named here rather than left for a reader of `app.py` to reconstruct.
+        **Its callers are `action_chord` and this project's tests, and nothing else.** That was
+        true when the resolver was written and it is still true: `action_chord` calls
+        `_resolve_session` directly, because it needs the refusal too. Kept public because it is
+        the honest name for the question and Task 3.3's hint row will ask it; recorded here so a
+        reader does not go looking for the production caller that would explain it.
 
-        `owns_session_cursor` decides that. It is read with `getattr(..., False)` because not
-        every screen is a `ChoiceScreen` — the modals in `confirm.py` are `ModalScreen`s outside
-        that hierarchy — so the attribute genuinely may be absent, and the default is the safe
-        answer for a screen with no sessions list. An earlier version of this paragraph called
-        that "a declared flag rather than a type check", which is the shape it disclaims: a
-        probe with a silent default. It is a probe. What makes it safe is not the read but
-        `tests/architecture/test_sessions_redraws_keep_the_cursor.py`, which fails when a screen
-        defines a real `highlighted_session` without declaring the flag — the Stage 1 gate's
-        lesson, that a predicate recognising today's positions is silent about tomorrow's.
+        Each flag is read with `getattr(..., False)` because not every screen is a
+        `ChoiceScreen` — the modals in `confirm.py` are `ModalScreen`s outside that hierarchy —
+        so the attribute genuinely may be absent, and the default is the safe answer for a
+        screen with no sessions list. An earlier version of this paragraph called that "a
+        declared flag rather than a type check", which is the shape it disclaims: a probe with a
+        silent default. It is a probe. What makes it safe is not the read but the paired
+        architecture checks — `test_sessions_redraws_keep_the_cursor.py` for the cursor flag and
+        `test_the_chord_layer_is_the_row_keys.py` for the other two — which fail when a screen
+        grows the behaviour and forgets the declaration. That is the Stage 1 gate's lesson: a
+        predicate recognising today's positions is silent about tomorrow's.
 
         **Never cached.** One tmux read per keypress is the price of never acting on a stale
         selection, and it is a `show-options` against a local socket. A cache would be correct
@@ -995,27 +1075,124 @@ class RemoteAgentsTui(App[AttachRequest | None]):
         the write side is a single serialized slot derived from the drawn cursor rather than
         three hand-placed calls.
 
-        The read is guarded because it is the only resolver here that can raise at all. Its
-        siblings — `highlighted_session` on both positions, `_live_entry` — do not catch;
-        they *guard*, querying instead of asserting, because the only thing that could go
-        wrong for them is a widget not being there yet. This one shells out to tmux, and a
-        server that has gone away exits non-zero, which `AsyncTmuxRunner` raises. The shared
-        reason is the one each of them records: this runs from a keypress, and an exception out
-        of one exits the app. Nothing selected is the right answer to a console that cannot be
-        asked.
+        **The two resolvers that shell out to tmux are both guarded** — the selection read and,
+        since the read-side gate landed, `_holds_console_slot` as well. Their in-process
+        siblings — `highlighted_session` on both positions, `subject_session`, `_live_entry` —
+        do not catch; they *guard*, querying instead of asserting, because the only thing that
+        could go wrong for them is a widget not being there yet. The two that shell out can fail
+        outright: a server that has gone away exits non-zero, which `AsyncTmuxRunner` raises.
+        The shared reason is the one each of them records: this runs from a keypress, and an
+        exception out of one exits the app. Nothing selected, and no permission to read, are the
+        right answers to a console that cannot be asked.
+        """
+        session_value, _refusal = await self._resolve_session()
+        return session_value
+
+    async def _resolve_session(self) -> tuple[str | None, str]:
+        """`selected_session`, plus the words for why there is nothing — one pass, one gate read.
+
+        Two callers want different halves of the same work. `selected_session` wants the value.
+        `action_chord` wants the value *and*, when there is none, which of three different
+        nothings it is — because "no session is selected" sent to a process that is not one of
+        the console's panes would send the owner to move a cursor that was never the problem.
+        Resolving twice would take the gate's tmux read twice and could answer differently
+        across the two, which is the kind of disagreement this returns a pair to avoid.
+
+        The refusal is only meaningful where the value is `None`; callers that want the value
+        ignore it.
+
+        **The read-side gate lives here**, in the third branch. `hosting_mode` classifies by
+        tmux socket name, so two processes that are not console panes reach it: a plain
+        `remote-agents tui` started from any shell on the console's server, and the projects
+        pane after a DEC-040 exchange parks it in an agent's own window. Both would otherwise
+        answer from the *real* console's selection — the exact hazard
+        `SessionsScreen._publish_selection` is written to prevent on the write side — and two of
+        the keys resolving through here end a session with no confirmation (DEC-018). So the
+        guard on who may read the note is doing the job the confirmation prompt is not.
+
+        The gate is asked **before** the selection, so a refused process makes no claim on the
+        console at all.
         """
         screen = self.screen
+        if getattr(screen, "about_one_session", False):
+            # A screen that is about one session acts on that one, and a screen that is about
+            # one it cannot name acts on nothing. Never a fall-through to the published
+            # selection: `alt+c` on session A's detail acting on session B is the same defect
+            # the gate below exists for, arriving from inside the console rather than outside.
+            # `getattr` on both, consistently: the flag is read defensively because not every
+            # screen is a `ChoiceScreen` (the modals in `confirm.py` are `ModalScreen`s outside
+            # that hierarchy), and a screen that sets the flag without the method would
+            # otherwise raise `AttributeError` straight out of a key handler — the class this
+            # file records as having already killed the app once.
+            subject = getattr(screen, "subject_session", lambda: None)()
+            return subject, "This screen names no session."
         if getattr(screen, "owns_session_cursor", False):
-            return screen.highlighted_session()
+            return screen.highlighted_session(), _NOTHING_SELECTED
+        if not await self._holds_console_slot():
+            return None, "Session chords act on the console's own panes."
         read = self.services.console_read_selection
         if read is None:
-            return None
+            return None, _NOTHING_SELECTED
         try:
             selected = await read()
         except Exception:
             _LOG.debug("the console selection could not be read", exc_info=True)
-            return None
-        return None if selected is None else str(selected)
+            return None, _NOTHING_SELECTED
+        return (None if selected is None else str(selected)), _NOTHING_SELECTED
+
+    async def _holds_console_slot(self) -> bool:
+        """Whether this process is one of the console's own panes, asked now rather than once.
+
+        `$TMUX_PANE` is fixed for the life of a pane, but *where* that pane is shown is not: an
+        exchange moves it into an agent's window while this process keeps running, so an answer
+        taken at start-up is wrong for exactly the case the gate exists to refuse.
+
+        Guarded for the reason `_resolve_session`'s read is: this shells out to tmux from a
+        keypress, and an exception out of a key handler exits the app. Refused is the right
+        answer for a console that cannot be asked — the safe side of a question whose wrong
+        answer is a stop against a session in somebody else's console.
+        """
+        gate = self.services.console_holds_slot
+        if gate is None:
+            return False
+        try:
+            return await gate()
+        except Exception:
+            _LOG.debug("the console arrangement could not be read", exc_info=True)
+            return False
+
+    async def action_chord(self, key: str) -> None:
+        """One Alt chord: do what its bare letter does on a row, to the selected session.
+
+        **Posts rather than performs, and never awaits a modal here.** This runs on the App's
+        pump, so `perform_chord` hands every stop to the receiving screen's own handler
+        (DEC-025, DEC-068) — which is what lets these be the first `priority=True` bindings this
+        app declares without disturbing DEC-025's position.
+
+        DEC-027: where there is nothing to act on, the key warns on itself. It never asks, and
+        it never navigates somewhere as a way of refusing.
+        """
+        if self.busy:
+            # The same refusal the row keys take one step earlier, for the same reason: a
+            # command in flight owns the surface, and a chord queued behind it would land on
+            # whatever screen had arrived by the time it ran.
+            return
+        screen = self.screen
+        session_value, refusal = await self._resolve_session()
+        if session_value is None:
+            self.announce(refusal, severity="warning")
+            return
+        if self.busy or self.screen is not screen:
+            # The gate's tmux read is an await — up to two subprocess round trips — and both
+            # facts the guard above checked can change inside it. The screen matters because
+            # `perform_chord` posts to `screen`, and a stale one would deliver a stop to a
+            # screen the owner has left. `busy` matters because the row keys check it with *no*
+            # await between the check and the use, so without re-checking here the chord would
+            # be the one path that can navigate while a command is in flight — and
+            # `perform_row_remote_control` reaches `show_detail`, which `tui.stop`'s own refusal
+            # does not cover.
+            return
+        await perform_chord(key, session_value, screen=screen)
 
     async def show_sessions(self) -> None:
         screen = self.screen

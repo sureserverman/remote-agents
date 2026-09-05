@@ -95,6 +95,15 @@ class TuiContext:
     # become a second writer of a fact that must have exactly one.
     console_publish_selection: Callable[[SessionId | None], Awaitable[None]] | None = None
     console_read_selection: Callable[[], Awaitable[SessionId | None]] | None = None
+    # The read side's gate: whether the pane this process runs in is one of the console's own,
+    # asked at press time rather than once at start-up. Bound to this process's `$TMUX_PANE` by
+    # the composition root, so the surface asks a question and never handles a pane id -- the
+    # same shape as every other capability here (DEC-046).
+    #
+    # Wired beside `console_read_selection` and not folded into it, because the two answer
+    # different questions and the gate must be askable *before* the read: a process that is not
+    # one of the console's panes makes no claim on the console's selection at all.
+    console_holds_slot: Callable[[], Awaitable[bool]] | None = None
     console_recovery: RecoveryReport | None = None
     # Where this surface remembers the one thing it remembers -- which order the projects
     # pane opens in. A *path*, wired by the composition root (DEC-046), rather than a

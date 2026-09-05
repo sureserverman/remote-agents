@@ -1162,6 +1162,25 @@ class ChoiceScreen(Screen[None]):
     #: a position cannot gain `highlighted_session` and forget this.
     owns_session_cursor: ClassVar[bool] = False
 
+    #: Whether this screen binds the bare row keys `a i r s c f m` on that cursor.
+    #:
+    #: **Not the same question as the flag above, and the difference is DEC-062's whole
+    #: position.** That entry makes an unconfirmed `s`/`c` legal on `SessionsScreen` and
+    #: `SessionsPaneScreen`, tied to `_draw_listing` resting a vanished row on nothing. It names
+    #: no third position, and `DashboardScreen` is one: it owns a sessions cursor and
+    #: deliberately binds none of those letters.
+    #:
+    #: So the Alt layer is offered by *this* flag rather than by `owns_session_cursor`. Where
+    #: the bare letter is already legal, `alt+<letter>` adds no hazard — it is the same act on
+    #: the same cursor. Where it is not, the chord may not smuggle an unconfirmed stop onto a
+    #: cursor whose position was never argued for, and which on the dashboard is not even the
+    #: focused widget.
+    #:
+    #: Pinned against the real bindings by `tests/architecture/
+    #: test_the_chord_layer_is_the_row_keys.py`, so a screen cannot gain the row keys and forget
+    #: this, or declare it and bind nothing.
+    carries_row_keys: ClassVar[bool] = False
+
     def highlighted_session(self) -> str | None:
         """The session under this screen's cursor, or `None` where it has no sessions list.
 
@@ -1172,6 +1191,31 @@ class ChoiceScreen(Screen[None]):
         happen. Left in place because a base that declares the flag and not the method invites
         the next reader to conclude the two are independent, which is the drift the paired
         architecture check exists to stop.
+        """
+        return None
+
+    #: Whether this screen is about **one particular session** rather than about a list.
+    #:
+    #: The third answer `owns_session_cursor` cannot give, and the one that keeps `alt+c` on
+    #: session A's detail from acting on session B. A detail, a rename and an inspect each own
+    #: no cursor, so without this they resolve to whatever the sessions pane in another pane
+    #: happens to highlight -- a chord acting on a session the owner is not looking at, which is
+    #: the same defect the flag above exists to prevent, one position along.
+    #:
+    #: Declared as "what this screen is about", not as "what it holds", and the difference is
+    #: load-bearing: `InspectScreen` is about one session and carries only its captured output,
+    #: so it declares this and answers `subject_session` with `None`. That combination is a
+    #: **refusal** -- the resolver stops there rather than falling through to the published
+    #: selection, which is exactly what a screen that cannot name its subject must do.
+    about_one_session: ClassVar[bool] = False
+
+    def subject_session(self) -> str | None:
+        """The one session this screen is about, or `None` where it cannot name it.
+
+        Only consulted where `about_one_session` is set; the pairing is the same shape as
+        `owns_session_cursor` / `highlighted_session` above, and declared here for the same
+        reason -- so it is a statement every screen makes rather than one three screens happen
+        to make.
         """
         return None
 

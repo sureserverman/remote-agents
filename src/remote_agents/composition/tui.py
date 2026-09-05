@@ -9,6 +9,7 @@ import shutil
 import sys
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
+from functools import partial
 from pathlib import Path
 
 from remote_agents.adapters.sqlite.activity_store import SQLiteActivityStore
@@ -256,6 +257,7 @@ def local_context(config, connection, paths: ProductionPaths):
     console_show_projects = None
     console_publish_selection = None
     console_read_selection = None
+    console_holds_slot = None
     hide_in_console = None
     console_recovery = None
     if hosting_mode(os.environ) is HostingMode.CONSOLE:
@@ -303,6 +305,17 @@ def local_context(config, connection, paths: ProductionPaths):
         # places and let them disagree.
         console_publish_selection = runtime.gateway.publish_selection
         console_read_selection = runtime.gateway.read_selection
+        # The read side's gate, bound here to the one pane id this process will ever be in.
+        # `$TMUX_PANE` is fixed for the life of a pane -- an exchange moves the pane, it does
+        # not renumber it -- so the *identity* is start-time knowledge and only its *position*
+        # has to be asked for per press, which is what `holds_console_slot` reads.
+        #
+        # Left `None` when tmux set no `TMUX_PANE`, which under CONSOLE hosting should not
+        # happen: an absent gate refuses every chord, so the failure mode of a surprise is a
+        # layer that does not work rather than one that acts on the wrong console's selection.
+        pane_id = os.environ.get("TMUX_PANE")
+        if pane_id:
+            console_holds_slot = partial(runtime.gateway.holds_console_slot, pane_id)
         # The stop paths ask the console to step out of the way before a pane is destroyed.
         # Wired only where a composer exists: elsewhere `SessionService` keeps the destruction
         # contract it has always had. The bot builds a composer of its own for this one
@@ -355,6 +368,7 @@ def local_context(config, connection, paths: ProductionPaths):
         console_show_projects=console_show_projects,
         console_publish_selection=console_publish_selection,
         console_read_selection=console_read_selection,
+        console_holds_slot=console_holds_slot,
         console_recovery=console_recovery,
         # The declared boundary's answer to where a surface preference lives, not this
         # surface's own (DEC-046): the path is wired here and read through a total reader.

@@ -353,3 +353,77 @@ async def test_an_unset_or_malformed_option_reads_as_no_selection() -> None:
     assert await gateway(RecordingRunner(output="")).read_selection() is None
     assert await gateway(RecordingRunner(output="\n")).read_selection() is None
     assert await gateway(RecordingRunner(output="ra-console")).read_selection() is None
+
+
+#: One `list-panes -a` line: session, window, pane index, pane id, schema, identity, slot.
+def _arrangement_line(
+    session_name: str, pane_id: str, *, schema: str = "", identity: str = "", slot: str = ""
+) -> str:
+    return "|".join((session_name, "0", "0", pane_id, schema, identity, slot))
+
+
+_AGENT_SESSION = "ra-01234567-89ab-cdef-0123-456789abcdef"
+
+
+@pytest.mark.parametrize(
+    ("name", "line", "holds"),
+    [
+        (
+            "a console pane, on the console and carrying its slot mark",
+            _arrangement_line("ra-console", "%1", slot="sessions"),
+            True,
+        ),
+        (
+            "the projects pane exiled by a DEC-040 exchange: keeps its mark, is not on the console",
+            _arrangement_line(_AGENT_SESSION, "%1", slot="main"),
+            False,
+        ),
+        (
+            "a displaced agent's pane hosted by the console: on the console, no mark of ours",
+            _arrangement_line("ra-console", "%1", schema="2", identity=_AGENT_SESSION[3:]),
+            False,
+        ),
+        (
+            "some other pane on our server, neither on the console nor marked",
+            _arrangement_line("ra-scratch", "%1"),
+            False,
+        ),
+    ],
+)
+async def test_the_read_side_gate_needs_both_the_mark_and_the_console(
+    name: str, line: str, holds: bool
+) -> None:
+    """`holds_console_slot` is the authorization behind two unconfirmed stops, so it is pinned.
+
+    Two facts, and each is load-bearing on its own. The **mark** alone is not enough because it
+    travels with the pane (DEC-038): `swap-pane -d` parks the projects pane in an agent's own
+    window and it keeps the slot it was given, which is hazard case (b) — a surface reading the
+    real console's selection from a window that is not one of its panes. The **console** alone
+    is not enough because the console window hosts a displaced agent's pane, which is on
+    `ra-console` and is emphatically not ours.
+
+    Driven through the real codec's wire format rather than a fake, because what is being
+    asserted is a decoding as much as a filter: `on_console` and `console_slot` are the first
+    and last fields of `ARRANGEMENT_FORMAT`, and a test built on a hand-made `HostedPane` would
+    keep passing if that decoding drifted.
+    """
+    runner = RecordingRunner(output=line)
+
+    assert await gateway(runner).holds_console_slot("%1") is holds, name
+
+
+async def test_the_gate_refuses_a_pane_the_arrangement_does_not_mention() -> None:
+    """A pane id nobody lists is not one of the console's, and an absent server lists nothing.
+
+    `pane_arrangement` answers an absent server with an empty arrangement rather than raising,
+    so this is the same branch as "the console is gone" — and refusal is the right answer to
+    both. The safe side of a question whose wrong answer is a stop against a session in
+    somebody else's console.
+    """
+    listed = RecordingRunner(output=_arrangement_line("ra-console", "%1", slot="sessions"))
+    absent = RecordingRunner(
+        error=RuntimeError("no server running on /tmp/tmux-1000/remote-agents")
+    )
+
+    assert await gateway(listed).holds_console_slot("%9") is False
+    assert await gateway(absent).holds_console_slot("%1") is False

@@ -218,6 +218,28 @@ class ConsolePort(Protocol):
         """
         ...
 
+    async def holds_console_slot(self, pane_id: str) -> bool:
+        """Whether this pane is, *right now*, one of the console's own.
+
+        The read side's gate, and it is deliberately two facts rather than one. A pane holds a
+        slot mark **and** is shown by the console session: the mark alone is not enough, because
+        under DEC-040 the mark travels with the pane — an exchange parks the projects pane in the
+        agent's own window and it keeps the mark it was given. Nor is the session alone enough:
+        the console window hosts a displaced agent's pane, which is on `ra-console` and is not
+        one of ours.
+
+        Asked per press rather than once per process, because an exchange moves a pane while the
+        process that owns it keeps running: an answer taken at start-up is wrong for exactly the
+        case this exists to refuse.
+
+        Why the read side needs a gate the write side did not: `hosting_mode` classifies by tmux
+        socket name, so a plain `remote-agents tui` on the console's server is CONSOLE too, and
+        would otherwise answer from the real console's selection from a window that is not one of
+        its panes. Two of the keys that resolve through it end a session without asking
+        (DEC-018), so who may read the selection is doing the job the confirmation is not.
+        """
+        ...
+
     async def normalize_console_layout(
         self, main_percent: int, column: Sequence[tuple[str, int]]
     ) -> None: ...
