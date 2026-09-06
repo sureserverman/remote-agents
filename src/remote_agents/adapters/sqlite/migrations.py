@@ -176,6 +176,12 @@ MIGRATIONS: tuple[tuple[int, str], ...] = (
         );
         """,
     ),
+    (
+        11,
+        """
+        ALTER TABLE agent_activity ADD COLUMN ask TEXT;
+        """,
+    ),
 )
 
 

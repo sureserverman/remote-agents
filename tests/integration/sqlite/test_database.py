@@ -71,21 +71,20 @@ def test_upgrade_creates_backup_before_new_migration(tmp_path: Path) -> None:
 def test_failed_migration_rolls_back_schema_version(tmp_path: Path) -> None:
     connection = open_database(tmp_path / "sessions.sqlite3")
 
+    # Derived from `MIGRATIONS`, not hand-numbered. This listed 1..11 with 11 as the broken
+    # one until 2026-09-06, when a real migration 11 landed and silently disarmed it: the
+    # database was already at 11, so `apply_migrations` skipped the broken entry
+    # (`target <= version`), nothing raised, and the test failed on the raise it expected
+    # rather than on what it is about. It would have gone on failing for every migration
+    # after that, each time looking like a new problem. The next migration is one past
+    # whatever exists.
+    broken = len(MIGRATIONS) + 1
     with pytest.raises(sqlite3.OperationalError):
         open_database(
             tmp_path / "sessions.sqlite3",
             migrations=(
-                (1, ""),
-                (2, ""),
-                (3, ""),
-                (4, ""),
-                (5, ""),
-                (6, ""),
-                (7, ""),
-                (8, ""),
-                (9, ""),
-                (10, ""),
-                (11, "CREATE TABLE broken ("),
+                *((version, "") for version in range(1, broken)),
+                (broken, "CREATE TABLE broken ("),
             ),
         )
 

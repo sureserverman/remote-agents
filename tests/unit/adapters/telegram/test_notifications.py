@@ -36,6 +36,7 @@ def _activity(
     detail: str | None = None,
     confidence: ActivityConfidence = ActivityConfidence.REPORTED,
     observed_at: datetime = OBSERVED,
+    ask: str | None = None,
 ) -> AgentActivity:
     return AgentActivity(
         session_id="0191f2c2-0000-7000-8000-00000000abcd",
@@ -43,6 +44,7 @@ def _activity(
         detail=detail,
         observed_at=observed_at,
         confidence=confidence,
+        ask=ask,
     )
 
 
@@ -1562,3 +1564,62 @@ def test_the_operator_runbook_quotes_the_headlines_the_code_actually_sends() -> 
         assert notifications._KIND_EMOJI[kind] in line, (
             f"{kind.value}: the runbook's mark is not {notifications._KIND_EMOJI[kind]!r}"
         )
+
+
+# --- the ask class, worded by this surface, 2026-09-06 --------------------------------------
+
+
+def test_a_needs_answer_headline_says_what_class_of_thing_is_being_waited_on() -> None:
+    """Codex sends a token; the owner reads a sentence.
+
+    DEC-074's whole mechanism: `ask_class` decides what `Bash` means and this adapter decides
+    what to call it, so the two surfaces can word it differently and neither renders the token.
+    """
+    message = render_activity(
+        _group(_activity(ActivityKind.NEEDS_ANSWER, ask="Bash")),
+        display=DISPLAY,
+        open_session=OPEN,
+    )
+    assert message.text.startswith("❓ <b>Waiting for an answer about a shell command</b> · ")
+
+
+def test_an_unrecognised_ask_class_adds_no_words_at_all() -> None:
+    """`tool_name`'s value space is unverified beyond `Bash`, so most tokens are unknown.
+
+    The headline then reads exactly as it did before the ask existed. "About something" would
+    be a word and no information on the most interrupting message this service sends, and the
+    token itself would be the conflation DEC-067 refused.
+    """
+    message = render_activity(
+        _group(_activity(ActivityKind.NEEDS_ANSWER, ask="MysteryTool")),
+        display=DISPLAY,
+        open_session=OPEN,
+    )
+    headline = message.text.split("\n")[0]
+    assert headline.startswith("❓ <b>Waiting for an answer</b> · ")
+    assert "MysteryTool" not in message.text, "a token is never the words"
+    assert "something" not in message.text
+
+
+def test_every_ask_token_is_worded_or_dropped_but_never_rendered_raw() -> None:
+    """Swept over tokens rather than sampled, because the value space is the unknown here."""
+    for token in ("Bash", "Read", "bash", "BASH", "Edit", "Some_Tool-42", "x" * 64):
+        message = render_activity(
+            _group(_activity(ActivityKind.NEEDS_ANSWER, ask=token)),
+            display=DISPLAY,
+            open_session=OPEN,
+        )
+        if token != "Bash":
+            assert token not in message.text, f"{token!r} reached the owner as itself"
+
+
+def test_a_grouped_needs_answer_bullet_carries_the_ask_too() -> None:
+    """The bullet and the headline are one function, so they cannot drift apart."""
+    older = _activity(ActivityKind.NEEDS_ANSWER, ask="Bash", observed_at=OBSERVED)
+    newer = _activity(
+        ActivityKind.COMPLETED, detail="done", observed_at=OBSERVED + timedelta(minutes=1)
+    )
+    message = render_activity(
+        SessionGroup(older.session_id, (older, newer)), display=DISPLAY, open_session=OPEN
+    )
+    assert "❓ Waiting for an answer about a shell command" in message.text

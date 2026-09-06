@@ -69,6 +69,8 @@ from remote_agents.ports.agent_activity import (
     ActivityConfidence,
     ActivityKind,
     AgentActivity,
+    AskClass,
+    ask_class,
 )
 from remote_agents.ports.callback_state import CallbackStatePort
 from remote_agents.ports.standing_notification import (
@@ -124,13 +126,33 @@ _KIND_EMOJI: dict[ActivityKind, str] = {
 }
 
 
-def kind_headline(kind: ActivityKind) -> str:
-    """`❓ Waiting for an answer` -- the mark and the headline, before the age is appended.
+_ASK_WORDS: dict[AskClass, str] = {AskClass.SHELL_COMMAND: "about a shell command"}
+"""**The bot's** words for an ask class -- not the application's, and not the feed's (DEC-043).
 
-    The one place the two are joined, so the grouped shape and the lone shape cannot start
+The class is the shared decision; the sentence is each surface's, because a chat message and a
+73-column table row are not sized the same and a shared renderer is how one surface's wording
+quietly becomes the other's.
+
+`AskClass.UNKNOWN` is deliberately absent, and absence is the answer rather than an oversight:
+an ask this project does not recognise gets **no clause at all**, so the headline reads
+"Waiting for an answer" exactly as it did before. Inventing "about something" for it would add
+a word and no information, on the most interrupting message this service sends.
+"""
+
+
+def kind_headline(kind: ActivityKind, ask: str | None = None) -> str:
+    """`❓ Waiting for an answer about a shell command` -- the mark, the headline, the ask.
+
+    The one place the three are joined, so the grouped shape and the lone shape cannot start
     marking a kind differently. Plain text; the bolding is `activity_text`'s.
+
+    The ask clause is **the class's, never the token's**: `ask_class` decides what a provider's
+    `Bash` means and `_ASK_WORDS` decides what this surface calls it, so a token nobody has
+    measured cannot reach the owner as itself (DEC-067's whole argument, DEC-074's mechanism).
     """
-    return f"{_KIND_EMOJI[kind]} {_HEADLINES[kind]}"
+    words = _ASK_WORDS.get(ask_class(ask)) if ask else None
+    clause = f" {words}" if words else ""
+    return f"{_KIND_EMOJI[kind]} {_HEADLINES[kind]}{clause}"
 
 
 # The UTF-16 budget, the escape-then-fit routine and the callback shape are imported from
@@ -252,8 +274,10 @@ def activity_text(group: SessionGroup, *, display: str) -> str:
     # sort makes first-appearance and newest the same element, so nothing failed.
     newest = shown[-1]
 
+    words = _ASK_WORDS.get(ask_class(newest.ask)) if newest.ask else None
     headline = (
-        f"{_KIND_EMOJI[newest.kind]} <b>{_HEADLINES[newest.kind]}</b>"
+        f"{_KIND_EMOJI[newest.kind]} <b>{_HEADLINES[newest.kind]}"
+        f"{f' {words}' if words else ''}</b>"
         f" · {age_short(newest.observed_at)}"
     )
     details = [_detail_of(activity) for activity in shown]
@@ -321,7 +345,7 @@ def _lines(
         return [_quote(detail)] if detail else []
     lines: list[str] = []
     for activity, detail in zip(shown, details, strict=True):
-        lines.append(f"{_BULLET}{kind_headline(activity.kind)}")
+        lines.append(f"{_BULLET}{kind_headline(activity.kind, activity.ask)}")
         if detail:
             lines.append(_quote(detail))
     return lines

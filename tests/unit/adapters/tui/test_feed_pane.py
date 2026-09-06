@@ -1270,3 +1270,66 @@ def test_no_kind_expands_onto_nothing(kind: ActivityKind) -> None:
     observation = _activity(kind, minutes_ago=1, detail=None)
     opened = feed_rows((observation,), width=80, opened=feed_key(observation))
     assert len(opened) == 1, f"{kind}: nothing to expand, so no continuation rows"
+
+
+# --- the ask class, in this surface's words, 2026-09-06 --------------------------------------
+
+
+def test_a_needs_answer_row_says_what_class_of_thing_is_being_waited_on() -> None:
+    """A Codex approval wait now names the kind of ask, in the feed's own words.
+
+    Its own words, and its own map, deliberately: the bot has one of the same shape in its own
+    adapter and the two agreeing today is not a reason to share one (DEC-043). A row that must
+    fit beside an identity in a 73-column pane is not sized like a chat message.
+    """
+    from remote_agents.adapters.tui.screens.feed import feed_rows
+
+    observation = _activity(ActivityKind.NEEDS_ANSWER, minutes_ago=1)
+    observation = AgentActivity(
+        observation.session_id,
+        observation.kind,
+        None,
+        observation.observed_at,
+        observation.confidence,
+        "Bash",
+    )
+    row = feed_rows((observation,), width=80)[0][1].plain
+    assert "about a shell command" in row
+    assert "Bash" not in row, "the row says the class, never the provider's token"
+
+
+def test_the_agents_own_words_win_over_the_ask_class_when_both_are_present() -> None:
+    """A detail is what the agent said; an ask class is what this service inferred it is about.
+
+    Claude's `needs_answer` carries a real message, so it never needs the fallback — and
+    showing both would put two descriptions of one event on a row that has space for neither.
+    """
+    from remote_agents.adapters.tui.screens.feed import feed_rows
+
+    base = _activity(ActivityKind.NEEDS_ANSWER, minutes_ago=1)
+    observation = AgentActivity(
+        base.session_id,
+        base.kind,
+        "Overwrite config.toml?",
+        base.observed_at,
+        base.confidence,
+        "Bash",
+    )
+    row = feed_rows((observation,), width=80)[0][1].plain
+    assert "Overwrite config.toml?" in row
+    assert "about a shell command" not in row
+
+
+def test_an_unrecognised_ask_leaves_the_needs_answer_row_exactly_as_it_was() -> None:
+    """Most tokens are unrecognised — the measurement observed only `Bash` — so this is the
+    ordinary case, and it must cost the identity no room at all."""
+    from remote_agents.adapters.tui.screens.feed import feed_rows
+
+    base = _activity(ActivityKind.NEEDS_ANSWER, minutes_ago=1)
+    for token in ("MysteryTool", "bash", "Read", "Some_Tool-42"):
+        observation = AgentActivity(
+            base.session_id, base.kind, None, base.observed_at, base.confidence, token
+        )
+        row = feed_rows((observation,), width=80)[0][1].plain
+        assert token not in row, f"{token!r} reached the pane as itself"
+        assert "—" not in row, "an unrecognised ask contributes no detail cell"

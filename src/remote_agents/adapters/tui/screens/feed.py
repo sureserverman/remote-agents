@@ -37,6 +37,8 @@ from remote_agents.ports.agent_activity import (
     MAXIMUM_DETAIL_CHARACTERS,
     ActivityKind,
     AgentActivity,
+    AskClass,
+    ask_class,
 )
 
 _LOG = logging.getLogger(__name__)
@@ -50,6 +52,25 @@ _FEED_LIMIT = FEED_LIMIT
 #: One line of owner-facing words per observation kind. Local to this surface on purpose:
 #: the bot's sentences live in its own adapter and carry chat conventions (grouping,
 #: standing messages) a glanceable feed line has no use for.
+ASK_WORDS = {AskClass.SHELL_COMMAND: "about a shell command"}
+"""**This surface's** words for an ask class, and deliberately its own copy (DEC-043).
+
+The bot has a map of the same shape in its own adapter, and the two agreeing today is not a
+reason to share one: the class is the shared decision, the sentence is not, and a row that must
+fit beside an identity in a 73-column pane is not sized like a chat message. A shared renderer
+is how one surface's wording quietly becomes the other's.
+
+`AskClass.UNKNOWN` is absent on purpose. An unrecognised ask contributes no words, so the row
+reads exactly as it did before rather than gaining "about something" -- which would cost the
+identity room and tell the owner nothing.
+"""
+
+
+def _ask_words(ask: str | None) -> str | None:
+    """What this row says about the class of thing being waited on, if anything."""
+    return ASK_WORDS.get(ask_class(ask)) if ask else None
+
+
 KIND_WORDS = {
     ActivityKind.COMPLETED: "finished",
     ActivityKind.LIMIT_REACHED: "usage limit",
@@ -209,7 +230,11 @@ def feed_rows(
         # at the measured width and, when there is none yet, by `text-wrap: nowrap;
         # text-overflow: ellipsis` in both surfaces' DEFAULT_CSS -- which is what survives a
         # resize between two draws.
-        detail = _elide(activity.detail) if activity.detail else None
+        # The agent's own words if it said any; otherwise the class of thing it is waiting on,
+        # in this surface's words. Never both, and never the raw provider token: `ASK_WORDS`
+        # is keyed on `AskClass`, so an ask nobody has measured contributes nothing rather
+        # than putting `MysteryTool` under the owner's session name (DEC-074).
+        detail = _elide(activity.detail) if activity.detail else _ask_words(activity.ask)
         key = feed_key(activity)
         occurrence = seen.get(key, 0)
         seen[key] = occurrence + 1

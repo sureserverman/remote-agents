@@ -113,6 +113,15 @@ _NOTIFICATIONS = {
     "agent_needs_input": (ActivityKind.NEEDS_ANSWER, ActivityConfidence.REPORTED),
 }
 
+_ASK_TOKEN = re.compile(r"[A-Za-z0-9_-]{1,64}")
+"""The same shape `activity_spool._plain_token` writes, asserted again on the way back in.
+
+A deliberate second copy of one regex, not a lockstep site to be deduplicated: the two ends of
+the spool are different processes, and a file written by an older build -- or by anything else
+that can reach the directory -- is untrusted input here however careful the writer was. It is
+the argument `MAXIMUM_DETAIL_CHARACTERS` is written down for, applied to the field beside it.
+"""
+
 
 def drain_activity(activity_directory: Path) -> tuple[AgentActivity, ...]:
     """Take up to `MAXIMUM_DRAIN` of the oldest spooled records and return what they mean.
@@ -304,7 +313,16 @@ def _activity(record: dict) -> AgentActivity | None:
         detail=bounded_detail_line(record.get("detail")),
         observed_at=observed_at,
         confidence=confidence,
+        # Re-narrowed on this side of the spool, as `detail` is: a different process wrote the
+        # file, so the far end bounds again rather than trusting what it finds (the argument
+        # `MAXIMUM_DETAIL_CHARACTERS` is written down for).
+        ask=_ask_token(record.get("ask")),
     )
+
+
+def _ask_token(value: object) -> str | None:
+    """Accept an ask token only in the shape the spool is allowed to have written."""
+    return value if isinstance(value, str) and _ASK_TOKEN.fullmatch(value) else None
 
 
 def _kind(event: object, reason: object) -> tuple[ActivityKind, ActivityConfidence] | None:

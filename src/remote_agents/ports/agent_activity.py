@@ -102,6 +102,56 @@ class ActivityKind(Enum):
     NEEDS_ANSWER = "needs_answer"
 
 
+class AskClass(Enum):
+    """What CLASS of thing an agent is waiting on, as this project names it.
+
+    A provider sends its own token for a tool -- `Bash`. That token is not the words a
+    notification says: DEC-067 declined to render one where a sentence belongs, and DEC-074
+    settles that the token is classified here and **worded by each surface** (DEC-043), so the
+    bot and the local surface can size the sentence for a chat message and a table row
+    independently.
+
+    **`UNKNOWN` is a member rather than a `None` return, and that is the load-bearing part.**
+    `docs/acceptance-2026-08-29-codex-activity-detail.md` records `tool_name` as observed only
+    as `Bash` across all four measured payloads and says its value space is unverified beyond
+    that instance. So an unrecognised token is the ordinary case, not the error case, and every
+    renderer has to have an answer for it. A member forces each of them to choose that answer;
+    a `None` would let one fall through a null check into rendering the token itself, which is
+    the exact conflation DEC-067 is about.
+
+    Deliberately one recognised class. Adding `Read`, `Edit` or any other Claude tool name here
+    would be inventing a vocabulary from a provider this field does not come from -- Codex's
+    `PermissionRequest` is the only source -- and a class nothing has ever sent is a class no
+    test can be honest about.
+    """
+
+    SHELL_COMMAND = "shell_command"
+    UNKNOWN = "unknown"
+
+
+_ASK_CLASSES: dict[str, AskClass] = {"Bash": AskClass.SHELL_COMMAND}
+"""The measured token, and only the measured token.
+
+Exact-match, case included: `bash` and `BASH` are not `Bash`. Matching them would be guessing
+at a provider's conventions on a value space the measurement says is unverified, and the honest
+answer to an unmeasured token is `UNKNOWN` -- which the surfaces can say.
+"""
+
+
+def ask_class(token: str | None) -> AskClass | None:
+    """Classify a provider's ask token; `None` in, `None` out.
+
+    The null passthrough is not a convenience. `None` means the observation names no ask at
+    all -- a `completed`, or a Claude `needs_answer` whose provider sent prose instead -- and
+    that is a different fact from an ask whose class is unrecognised. Collapsing the two would
+    have a surface say "waiting for an answer about something" on an observation that is not
+    waiting for anything.
+    """
+    if token is None:
+        return None
+    return _ASK_CLASSES.get(token, AskClass.UNKNOWN)
+
+
 class ActivityConfidence(Enum):
     """Whether the agent said this, or something guessed it from the outside.
 
@@ -201,6 +251,14 @@ class AgentActivity:
     detail: str | None
     observed_at: datetime
     confidence: ActivityConfidence = ActivityConfidence.REPORTED
+    ask: str | None = None
+    """The provider's own token for the class of thing being waited on, or `None`.
+
+    Kept as the raw token rather than as an `AskClass` so the boundary stays one-directional:
+    the spool records what a provider said, `ask_class` decides what this project calls it, and
+    each surface decides what to write. A stored enum would freeze today's classification into
+    every historical row, so a token later recognised would still read as unknown in the feed.
+    """
 
 
 HOOK_SOURCED_PROFILES = _HOOK_EXCLUSIVE_PROFILES

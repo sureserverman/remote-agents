@@ -38,8 +38,10 @@ class SQLiteActivityStore:
         with self._connection:
             self._connection.execute(
                 """
-                INSERT INTO agent_activity(session_id, kind, detail, confidence, observed_at)
-                VALUES (?, ?, ?, ?, ?)
+                INSERT INTO agent_activity(
+                    session_id, kind, detail, confidence, observed_at, ask
+                )
+                VALUES (?, ?, ?, ?, ?, ?)
                 """,
                 (
                     activity.session_id,
@@ -53,6 +55,10 @@ class SQLiteActivityStore:
                     activity.detail,
                     activity.confidence.value,
                     activity.observed_at.astimezone(UTC).isoformat(),
+                    # The provider's ask token, not a class. Storing the classification would
+                    # freeze today's vocabulary into every historical row, so a token later
+                    # recognised would still read as unknown in the feed (DEC-074).
+                    activity.ask,
                 ),
             )
 
@@ -84,7 +90,7 @@ class SQLiteActivityStore:
             if before is None:
                 rows = self._connection.execute(
                     """
-                    SELECT activity_id, session_id, kind, detail, confidence, observed_at
+                    SELECT activity_id, session_id, kind, detail, confidence, observed_at, ask
                     FROM agent_activity ORDER BY activity_id DESC LIMIT ?
                     """,
                     (batch,),
@@ -92,7 +98,7 @@ class SQLiteActivityStore:
             else:
                 rows = self._connection.execute(
                     """
-                    SELECT activity_id, session_id, kind, detail, confidence, observed_at
+                    SELECT activity_id, session_id, kind, detail, confidence, observed_at, ask
                     FROM agent_activity WHERE activity_id < ?
                     ORDER BY activity_id DESC LIMIT ?
                     """,
@@ -113,6 +119,11 @@ class SQLiteActivityStore:
                             row[3],
                             _instant(row[5]),
                             ActivityConfidence(row[4]),
+                            # NULL on every row written before migration 11, which is most of
+                            # them and stays that way -- the column is additive and nothing
+                            # backfills it, because nothing knows what those rows were asking
+                            # about.
+                            row[6],
                         )
                     )
                 except ValueError:
