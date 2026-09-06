@@ -209,9 +209,7 @@ def test_rows_with_different_window_counts_still_agree_on_window_zero() -> None:
     per_row = [_gauge_spans(line) for line in lines]
     assert [len(spans) for spans in per_row] == [1, 3], lines
 
-    assert len({spans[0][0] for spans in per_row}) == 1, f"window 0 misaligned:\n" + "\n".join(
-        lines
-    )
+    assert len({spans[0][0] for spans in per_row}) == 1, "window 0 misaligned:\n" + "\n".join(lines)
     assert len({_percent_ends(line)[0] for line in lines}) == 1, "\n".join(lines)
 
 
