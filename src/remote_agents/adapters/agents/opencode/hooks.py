@@ -5,7 +5,11 @@ machinery writes one command group per event. OpenCode has no such mechanism: a 
 party runs code inside OpenCode's process by naming an ES module in the config's top-level
 `plugin` array, and that module subscribes to the event stream itself. So this provider's
 declaration carries a `_PluginEntry` as well, and the machinery in
-`adapters.agents.hook_settings` asks it which shape to write (DEC-067).
+`adapters.agents.hook_settings` asks it which shape to write -- shared machinery asked rather
+than copied, and the whole vertical behind one descriptor (DEC-070); what an installer owes a
+retired event is DEC-051. The first draft of this line cited DEC-067, which is about whether a
+provider *field* may be admitted and has nothing to say about settings-file shapes; a gate
+evaluator caught it. The decision this file's existence rests on is DEC-076.
 
 `INSTALLED_EVENTS` is therefore documentation of what the generated plugin subscribes to rather
 than a set of keys anything writes. It is still the honest place for the list, and

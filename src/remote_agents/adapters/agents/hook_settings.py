@@ -25,10 +25,7 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 from urllib.parse import unquote, urlsplit
 
-from remote_agents.ports.private_directory import (
-    ancestors_writable_by_others,
-    open_private_directory,
-)
+from remote_agents.ports.private_directory import ancestors_writable_by_others
 
 
 class HookInstallError(Exception):
@@ -347,7 +344,9 @@ def _with_our_groups(
     return {**document, "hooks": hooks}
 
 
-def _without_our_groups(document: dict[str, Any], provider: _HookProvider) -> dict[str, Any]:
+def _without_our_groups(
+    document: dict[str, Any], provider: _HookProvider, ours: Path | None = None
+) -> dict[str, Any]:
     """Drop our groups, and the containers left holding nothing once they are gone.
 
     Every other event, and every other group under the events we do install into, is copied
@@ -362,7 +361,7 @@ def _without_our_groups(document: dict[str, Any], provider: _HookProvider) -> di
         entries = document.get(provider.plugin.key)
         if not isinstance(entries, list):
             return document
-        kept = [entry for entry in entries if not _is_our_plugin_entry(entry, provider)]
+        kept = [entry for entry in entries if not _is_our_plugin_entry(entry, provider, ours)]
         if kept:
             return {**document, provider.plugin.key: kept}
         return {key: value for key, value in document.items() if key != provider.plugin.key}
@@ -428,7 +427,9 @@ def _refuse_a_spool_others_can_reach(activity_directory: Path | None) -> None:
     )
 
 
-def _foreign_variant_note(base: dict[str, Any], provider: _HookProvider) -> str:
+def _foreign_variant_note(
+    base: dict[str, Any], provider: _HookProvider, ours: Path | None = None
+) -> str:
     """Name the events already running our subcommand in a form this installer will not manage.
 
     Leaving such an entry alone is the right call and stays the right call -- it is a wrapper,
@@ -441,7 +442,7 @@ def _foreign_variant_note(base: dict[str, Any], provider: _HookProvider) -> str:
     where they came from. So it is reported, and the choice of what to do stays theirs.
     """
     if provider.plugin is not None:
-        return _foreign_plugin_note(base, provider)
+        return _foreign_plugin_note(base, provider, ours)
     hooks = base.get("hooks")
     if not isinstance(hooks, dict):
         return ""
@@ -540,6 +541,7 @@ def _refuse_when_removal_would_not_restore(
     base: dict[str, Any],
     installed: dict[str, Any],
     provider: _HookProvider,
+    ours: Path | None = None,
 ) -> None:
     """Run the removal now and refuse the install unless it lands back on the original bytes.
 
@@ -550,12 +552,12 @@ def _refuse_when_removal_would_not_restore(
     leave it or delete it. Rather than pick and be wrong half the time, the install is
     refused; deleting the empty block by hand makes it succeed and changes nothing else.
     """
-    restored = settings.style.render(_without_our_groups(installed, provider))
+    restored = settings.style.render(_without_our_groups(installed, provider, ours))
     # On a reinstall the bytes on disk already hold our previous groups, so they are not what
     # removal must land on; the check that they were is the one the first install passed.
     faithful = (
         settings.content is None
-        or _holds_our_groups(settings.document, provider)
+        or _holds_our_groups(settings.document, provider, ours)
         or settings.style.render(base) == settings.content
     )
     if restored != settings.style.render(base) or not faithful:
@@ -579,12 +581,14 @@ def _refuse_when_removal_would_not_restore(
         )
 
 
-def _holds_our_groups(document: dict[str, Any], provider: _HookProvider) -> bool:
+def _holds_our_groups(
+    document: dict[str, Any], provider: _HookProvider, ours: Path | None = None
+) -> bool:
     """Report whether a previous install is present, which is what makes this a reinstall."""
     if provider.plugin is not None:
         entries = document.get(provider.plugin.key)
         return isinstance(entries, list) and any(
-            _is_our_plugin_entry(entry, provider) for entry in entries
+            _is_our_plugin_entry(entry, provider, ours) for entry in entries
         )
     hooks = document.get("hooks")
     if not isinstance(hooks, dict):
@@ -596,16 +600,23 @@ def _holds_our_groups(document: dict[str, Any], provider: _HookProvider) -> bool
     )
 
 
-def _foreign_plugin_note(base: dict[str, Any], provider: _HookProvider) -> str:
+def _foreign_plugin_note(
+    base: dict[str, Any], provider: _HookProvider, ours: Path | None = None
+) -> str:
     """Name a plugin entry pointing at our file in a form this installer will not manage.
 
-    The same call the hook shape makes, with one consequence worth spelling out that the hook
-    shape does not have. There, leaving a foreign entry means the hook fires twice. Here it also
-    means removal deletes the *file* both entries name -- ours by the marker it carries -- and
-    leaves the operator's entry pointing at nothing, which OpenCode reports as a load failure in
-    their own session. Refusing outright would strand anyone who cannot install until they
-    hand-edit a file; saying nothing would hand them that failure with no clue where it came
-    from. So it is reported at install, and the choice stays theirs.
+    The same call the hook shape makes, and it now carries a second population the hook shape has
+    no equivalent of. One is the original: an entry naming this plugin in a spelling this
+    installer would never write -- a bare path, another scheme -- which means OpenCode loads it
+    twice. The other arrived when entry recognition narrowed from "ends with our tail" to "is
+    exactly the file we would write": an entry naming a *different* file with our name, at
+    another directory, is now correctly left alone rather than claimed, and the honest treatment
+    of one is to say it was seen.
+
+    Both are reported rather than refused, and neither is touched. Refusing outright would
+    strand an operator who cannot install until they hand-edit a file; saying nothing would leave
+    them with duplicate notifications, or a stale entry surviving an uninstall, and no clue where
+    either came from. The choice stays theirs.
     """
     assert provider.plugin is not None
     entries = base.get(provider.plugin.key)
@@ -616,45 +627,57 @@ def _foreign_plugin_note(base: dict[str, Any], provider: _HookProvider) -> str:
         for entry in entries
         if isinstance(entry, str)
         and provider.plugin.relative_path.name in entry
-        and not _is_our_plugin_entry(entry, provider)
+        and not _is_our_plugin_entry(entry, provider, ours)
     ]
     if not foreign:
         return ""
     return (
-        f". Note: {', '.join(foreign)} already names this plugin in a form this installer "
-        "does not recognise and will not touch, so it is loaded twice; removing this plugin "
-        "later deletes the file that entry names and leaves the entry behind"
+        f". Note: {', '.join(foreign)} already names a file called "
+        f"{provider.plugin.relative_path.name} in a form this installer does not recognise as "
+        "its own, so it is left exactly as it is -- by install, and by --remove later. If it is "
+        "a second copy of this plugin, you are now notified twice and removing this one will not "
+        "stop that; if it is yours, nothing here will touch it"
     )
 
 
-def _is_our_plugin_entry(entry: Any, provider: _HookProvider) -> bool:
-    """Recognise an entry this installer wrote, and never one that merely resembles one.
+def _is_our_plugin_entry(entry: Any, provider: _HookProvider, ours: Path | None) -> bool:
+    """Recognise the entry this installer would write, and never one that merely resembles it.
 
-    A `file://` URL whose path ends with the provider's whole relative path -- the directory
-    named for this project *and* the file's own name. The head is ignored so a moved home still
-    matches, exactly as `_runs_our_command` ignores the interpreter in front of its tail; the
-    two-segment tail is what keeps a file that merely shares a basename from being claimed and
-    then deleted out of somebody's configuration.
+    A `file://` URL naming **exactly** the file this install computes, `ours` -- not a file whose
+    path merely ends the same way. The tail-matching version this replaces claimed any entry
+    ending `remote-agents/activity-plugin.mjs` at any directory, and an adversarial review showed
+    what that costs with a case this project's own developer hits: a working-tree checkout is
+    itself called `remote-agents`, so an operator's entry naming a copy under `~/dev/` was
+    claimed, taken out of the base document on install, and never put back. Silently, and
+    against a runbook promising the file returns byte for byte.
 
-    Any other spelling is somebody else's: a bare path, a different scheme, a relative entry, an
-    npm specifier. Removing one would be guessing about an entry we did not write.
+    The head was ignored so that a *moved home* would still match. That case is not lost, only
+    demoted from a silent claim to a spoken one: an entry ending our tail that is not `ours` is
+    now reported by `_foreign_plugin_note`, which is the honest treatment of an entry we are
+    fairly sure was ours and are not willing to delete on that.
+
+    Every other spelling is somebody else's -- a bare path, another scheme, a relative entry, an
+    npm specifier, an authority component, a query or a fragment. Removing one would be guessing.
     """
+    return _plugin_entry_path(entry, provider) == ours if ours is not None else False
+
+
+def _plugin_entry_path(entry: Any, provider: _HookProvider) -> Path | None:
+    """The absolute path a plugin entry names, or `None` if it is not a plain local file URL."""
     if provider.plugin is None or not isinstance(entry, str):
-        return False
+        return None
     split = urlsplit(entry)
-    # An authority is what `Path.as_uri()` never writes and what this recognizer must therefore
-    # never claim. `file://otherhost/…/remote-agents/activity-plugin.mjs` is somebody's entry for
-    # a file on another machine, and matching it is worse than a wrong deletion: install computes
-    # its base document by taking our entries *out*, so a foreign entry claimed here vanishes on
-    # the next install and is never put back. A Tier-1 review found it.
-    if split.scheme != "file" or split.netloc or not split.path.startswith("/"):
-        return False
-    tail = provider.plugin.relative_path.parts
+    # An authority is what `Path.as_uri()` never writes, and neither is a query or a fragment.
+    # `file://otherhost/…` names a file on another machine.
+    if split.scheme != "file" or split.netloc or split.query or split.fragment:
+        return None
+    if not split.path.startswith("/"):
+        return None
     # Each segment is unquoted *after* the split, never before it. `%2F` inside a segment is a
     # literal slash in that segment's name, not a separator, so decoding first would let
-    # `remote-agents%2Factivity-plugin.mjs` -- one segment -- read as two and be claimed.
-    parts = tuple(unquote(segment) for segment in PurePosixPath(split.path).parts)
-    return parts[-len(tail) :] == tail
+    # `remote-agents%2Factivity-plugin.mjs` -- one segment -- read as two.
+    parts = [unquote(segment) for segment in PurePosixPath(split.path).parts]
+    return Path(*parts)
 
 
 def _refuse_a_planted_plugin_path(path: Path) -> None:
@@ -690,7 +713,8 @@ def _write_plugin(path: Path, source: str, marker: str) -> bool:
     Reported rather than assumed because a reinstall after an upgrade changes this file while
     leaving the config entry -- which names a path, not a version -- byte-identical. An install
     that answered "already current" on the strength of the config alone would leave the old
-    plugin running and say nothing.
+    plugin running and say nothing. A repaired *mode* counts as changed for the same reason: it
+    is something an operator re-running the installer would want to hear about.
 
     Refuses to overwrite a file that does not carry the marker, which is the same asymmetry
     `_remove_plugin` is built on, applied to the other irreversible act. A Tier-1 review pointed
@@ -698,31 +722,104 @@ def _write_plugin(path: Path, source: str, marker: str) -> bool:
     check before overwriting -- and overwriting somebody's file destroys its content exactly as
     permanently as deleting it. The marker is a stable prefix and must stay one; changing its
     text would make every already-installed host refuse its next install.
+
+    **What that guard does and does not close, stated exactly.** It is a check followed by a
+    write, so it is a check-then-act like every other one here. The *symlink* race is genuinely
+    closed rather than narrowed, because the write does not follow a link
+    (`_write_atomically(follow_symlink=False)`) and so loses harmlessly. The marker check is not:
+    a same-user process that swaps a different unmarked regular file in between this check and
+    the rename has that file replaced anyway, since `os.replace` does not re-read the marker. A
+    Tier-2 review found this paragraph claiming more than that. It is left as a bounded, stated
+    exposure rather than closed, on the ground `open_private_directory`'s docstring already
+    gives: a same-user process can always win such a race, and the reachable case -- a file left
+    lying at that path -- is the one a check can answer.
     """
     content = source.encode("utf-8")
-    if path.is_file() and path.read_bytes() == content:
-        return False
     _refuse_a_planted_plugin_path(path)
     _refuse_a_plugin_file_we_did_not_write(path, marker)
-    if open_private_directory(path.parent) is None:
-        raise HookInstallError(
-            f"cannot create {path.parent} as an owner-only directory; it has been left alone "
-            "and nothing was written"
-        )
+    # Before the content check, not after it, and unconditionally. A gate evaluator measured the
+    # other order: an operator (or anything running as them) who chmods this file 0666 kept it,
+    # because a reinstall found the bytes equal, answered "already current" and returned before
+    # reaching the mode. A world-writable file the agent loads and executes surviving every
+    # subsequent install is the exact risk this stage declared, repaired on no run at all.
+    _open_our_directory(path.parent)
+    # Whole bytes, never a prefix. Comparing only the first `len(content)` bytes -- which this
+    # briefly did, as a fix for reading a whole file to inspect one line -- reads a file holding
+    # our exact content *plus appended code* as unchanged, so an install would decline to repair
+    # the one shape most worth repairing. The same evaluator caught that in the working tree
+    # before it was committed. `_head` is for the marker checks, where a prefix is the question.
+    if path.is_file() and path.read_bytes() == content:
+        repaired = stat.S_IMODE(path.stat().st_mode) != 0o600
+        os.chmod(path, 0o600)
+        return repaired
     _write_atomically(path, content, 0o600, follow_symlink=False)
     return True
 
 
-def _refuse_a_plugin_file_we_did_not_write(path: Path, marker: str) -> None:
-    """Refuse to overwrite a file standing at our name that this project did not generate."""
-    if not path.is_file():
-        return
-    expected = marker.encode("utf-8")
+def _open_our_directory(directory: Path) -> None:
+    """Create the one directory this installer owns, owner-only, refusing a link at *its* name.
+
+    `open_private_directory` refuses a symlink at **any** component of the path, which is right
+    for a spool living under a state directory this project made. It is wrong here, and an
+    adversarial review measured why: an operator whose dotfiles are managed by `stow` has
+    `~/.config/opencode` symlinked into a repository, and the provider became uninstallable for
+    them with a message naming the leaf and never the link -- no path forward from the output.
+
+    A symlinked *ancestor* is the operator's own arrangement, which is exactly the argument
+    `_write_atomically` makes for writing through a symlinked settings file. A symlink standing
+    at the directory this installer creates is not: nothing put one there but somebody else.
+    So the ancestors are followed and only the leaf is refused, and the refusal names the link
+    and its target rather than the directory the operator can see is fine.
+    """
+    if directory.is_symlink():
+        raise HookInstallError(
+            f"refusing to create the plugin directory through the symlink at {directory}: it "
+            f"points at {os.readlink(directory)}, which is not where this installer put "
+            "anything. Remove the link and run this again."
+        )
+    if not directory.parent.is_dir():
+        raise HookInstallError(
+            f"{directory.parent} does not exist, so there is nowhere to put the plugin; "
+            "nothing was written"
+        )
     try:
-        head = path.read_bytes()[: len(expected)]
+        directory.mkdir(mode=0o700, exist_ok=True)
+        os.chmod(directory, 0o700)
+    except OSError as error:
+        raise HookInstallError(
+            f"cannot create {directory} as an owner-only directory ({error}); it has been left "
+            "alone and nothing was written"
+        ) from error
+
+
+def _head(path: Path, size: int) -> bytes:
+    """Read only what a comparison needs, rather than the whole file to inspect its first line."""
+    try:
+        with path.open("rb") as handle:
+            return handle.read(size)
     except OSError as error:
         raise HookInstallError(f"cannot read {path}: {error}") from error
-    if head == expected:
+
+
+def _refuse_a_plugin_file_we_did_not_write(path: Path, marker: str) -> None:
+    """Refuse to overwrite anything standing at our name that this project did not generate.
+
+    *Anything*, not just a regular file. The first version returned early on `not path.is_file()`,
+    which meant a FIFO, a socket or a device node at that name fell straight past the guard and
+    was replaced -- found by an adversarial review, which stood a FIFO there and watched the
+    install report success. The guard's stated intent was always "we did not write this", and a
+    named pipe somebody is reading from is as much theirs as a file is.
+    """
+    if not path.exists():
+        return
+    if not path.is_file():
+        raise HookInstallError(
+            f"refusing to replace {path}: something is already there and it is not a regular "
+            "file, so it was not written by this project. Move it aside and run this again; "
+            "nothing else has been touched."
+        )
+    expected = marker.encode("utf-8")
+    if _head(path, len(expected)) == expected:
         return
     raise HookInstallError(
         f"refusing to overwrite {path}, because it does not begin with "
@@ -736,11 +833,8 @@ def _remove_plugin(path: Path, provider: _HookProvider) -> bool:
     assert provider.plugin is not None
     if path.is_symlink() or not path.is_file():
         return False
-    try:
-        head = path.read_bytes()[: len(provider.plugin.marker.encode("utf-8"))]
-    except OSError as error:
-        raise HookInstallError(f"cannot read {path}: {error}") from error
-    if head != provider.plugin.marker.encode("utf-8"):
+    expected = provider.plugin.marker.encode("utf-8")
+    if _head(path, len(expected)) != expected:
         return False
     path.unlink()
     return True

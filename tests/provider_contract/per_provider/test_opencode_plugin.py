@@ -211,3 +211,66 @@ def test_a_spool_command_that_never_finishes_is_killed_and_the_session_moves_on(
     )
 
     assert elapsed < 10, "node did not exit, so the hung spool command was left holding it open"
+
+
+def test_a_child_that_ignores_sigterm_does_not_hold_the_host_open(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`kill()` sends SIGTERM, and SIGTERM is a request. A wedged child must not outrank it.
+
+    The sibling case above proves the kill works on a child that respects it, and an adversarial
+    review measured what that test could not see: a child ignoring SIGTERM left node alive past
+    20 seconds, because a referenced child holds the event loop open whether it is dying or not.
+    The child is now released as well as signalled, which is safe only at this point -- the wait
+    has expired and the record is already given up on.
+    """
+    monkeypatch.setattr("remote_agents.adapters.agents.opencode.plugin._WAIT_MILLISECONDS", 300)
+
+    elapsed = _run(
+        tmp_path,
+        _event("session_idle"),
+        [
+            "python3",
+            "-c",
+            "import signal,time\n"
+            "signal.signal(signal.SIGTERM, signal.SIG_IGN)\n"
+            "time.sleep(30)\n",
+        ],
+        session_id="sess-opencode",
+        timeout=12,
+    )
+
+    assert elapsed < 10, "node was held open by a child that would not take SIGTERM"
+
+
+def test_the_handler_called_with_no_argument_does_not_throw(tmp_path: Path) -> None:
+    """"Every path is inside a try" has to include reading the argument.
+
+    Destructuring in the parameter list runs before the try is entered, so a host calling this
+    against its own documented `({ event })` signature would reject with a TypeError nothing
+    here could catch -- which is the "nothing can fail the session it runs in" claim failing on
+    its own doorstep. Found by an adversarial review.
+    """
+    node = _node()
+    plugin = tmp_path / PLUGIN_RELATIVE_PATH.name
+    plugin.write_text(plugin_source(["/nonexistent/interpreter"]), encoding="utf-8")
+    harness = tmp_path / "bare.mjs"
+    harness.write_text(
+        f'import * as plugin from "./{plugin.name}";\n'
+        "for (const exported of Object.values(plugin)) {\n"
+        '  if (typeof exported !== "function") continue;\n'
+        "  const hooks = await exported({});\n"
+        '  if (hooks && typeof hooks.event === "function") await hooks.event();\n'
+        "}\n",
+        encoding="utf-8",
+    )
+
+    finished = subprocess.run(
+        [node, str(harness)],
+        capture_output=True,
+        env={"PATH": "/usr/bin:/bin", "HOME": str(tmp_path), "REMOTE_AGENTS_SESSION_ID": "s"},
+        timeout=60,
+    )
+
+    assert finished.returncode == 0, finished.stderr.decode()
+    assert b"TypeError" not in finished.stderr

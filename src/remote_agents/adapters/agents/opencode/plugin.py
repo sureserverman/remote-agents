@@ -140,7 +140,17 @@ function deliver(document) {
     // because a pending timer after a delivered record holds the loop open for nothing.
     const timer = setTimeout(() => {
       try {
-        if (child !== null) child.kill();
+        if (child !== null) {
+          child.kill();
+          // Released as well as signalled. `kill()` sends SIGTERM, which a process wedged in
+          // uninterruptible I/O -- a hung mount under the spool directory -- need not act on,
+          // and a referenced child holds the host's event loop open whether it is dying or not.
+          // An adversarial review measured it: a child ignoring SIGTERM left node alive past 20
+          // seconds. Unref'ing is safe HERE and only here, because the wait has already expired
+          // and the record is already given up on; doing it at spawn time would be the bug the
+          // comment above warns about.
+          child.unref();
+        }
       } catch (error) {}
       finish();
     }, WAIT_MILLISECONDS);
@@ -166,10 +176,14 @@ function deliver(document) {
 }
 
 export const RemoteAgentsActivity = async () => ({
-  event: async ({ event }) => {
+  // The argument is read INSIDE the try, not destructured in the parameter list. Destructuring
+  // there runs before the try is entered, so a host calling this against its own documented
+  // `({ event })` signature would reject with a TypeError the catch below never sees -- which
+  // is precisely the "nothing here can fail the session it runs in" claim, failing.
+  event: async (input) => {
     try {
       if (!process.env[SESSION_VARIABLE]) return;
-      const document = licensed(event);
+      const document = licensed(input && input.event);
       if (document === null) return;
       await deliver(document);
     } catch (error) {

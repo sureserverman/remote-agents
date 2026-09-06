@@ -218,7 +218,7 @@ def test_an_unrecognised_variant_of_our_entry_is_reported_rather_than_silently_d
 
     outcome = install_agent_hooks(settings, provider="opencode")
 
-    assert "does not recognise" in outcome.summary
+    assert "does not recognise as its own" in outcome.summary
     assert variant in _entries(settings)
 
 
@@ -298,8 +298,7 @@ def test_a_plugin_directory_left_open_by_something_else_is_tightened(tmp_path: P
     Refusing on a writable *ancestor* was tried and removed: `~/.config` and `~/.config/opencode`
     are group-writable on an ordinary umask-0002 machine, so the refusal fired for a group whose
     only member is the owner and made the provider uninstallable. What is enforceable is the
-    directory this installer creates, and it is enforced on every run rather than only on the
-    first.
+    directory this installer creates.
     """
     settings = _config(tmp_path)
     directory = _plugin_path(settings).parent
@@ -309,6 +308,89 @@ def test_a_plugin_directory_left_open_by_something_else_is_tightened(tmp_path: P
     install_agent_hooks(settings, provider="opencode")
 
     assert stat.S_IMODE(directory.stat().st_mode) == 0o700
+
+
+def test_a_reinstall_repairs_modes_loosened_since_the_last_one(tmp_path: Path) -> None:
+    """Enforced on every run, not only the first — which the docstring above used to claim
+    while the code returned before reaching it.
+
+    A gate evaluator measured the gap: chmod the plugin 0666, re-run the installer, and it
+    answered "already current" because the bytes matched and never looked at the mode. A
+    world-writable file that OpenCode loads and executes surviving every subsequent install is
+    the exact risk this stage declared.
+    """
+    settings = _config(tmp_path)
+    install_agent_hooks(settings, provider="opencode")
+    plugin = _plugin_path(settings)
+    plugin.chmod(0o666)
+    plugin.parent.chmod(0o777)
+
+    outcome = install_agent_hooks(settings, provider="opencode")
+
+    assert stat.S_IMODE(plugin.stat().st_mode) == 0o600
+    assert stat.S_IMODE(plugin.parent.stat().st_mode) == 0o700
+    assert outcome.changed, "a repaired mode is something the operator should be told about"
+
+
+def test_a_plugin_file_with_our_content_and_something_appended_is_rewritten(
+    tmp_path: Path,
+) -> None:
+    """Whole bytes, never a prefix — the one shape most worth repairing.
+
+    Caught in the working tree by a gate evaluator before it was committed: shortening the
+    comparison to the first `len(content)` bytes, as a fix for reading a whole file to inspect
+    one line, made a file holding our exact content *plus appended code* compare equal. The
+    installer would then decline to repair a plugin somebody had extended.
+    """
+    settings = _config(tmp_path)
+    install_agent_hooks(settings, provider="opencode")
+    plugin = _plugin_path(settings)
+    with plugin.open("a", encoding="utf-8") as handle:
+        handle.write("\nglobalThis.SOMETHING_ELSE = 1;\n")
+
+    outcome = install_agent_hooks(settings, provider="opencode")
+
+    assert outcome.changed
+    assert "SOMETHING_ELSE" not in plugin.read_text(encoding="utf-8")
+
+
+def test_an_xdg_config_home_moves_both_artifacts(tmp_path: Path) -> None:
+    """OpenCode honours it, and this stage's own measurement used it to relocate the config.
+
+    Assuming `~/.config` on a host that sets the variable would create a config file and a
+    plugin OpenCode never reads, and report `installed the opencode activity plugin in ...`
+    over the top. A gate evaluator found the assumption undisclosed.
+    """
+    relocated = tmp_path / "xdg"
+    relocated.mkdir()
+
+    resolved = default_settings_path(
+        tmp_path, provider="opencode", environment={"XDG_CONFIG_HOME": str(relocated)}
+    )
+
+    assert resolved == relocated / "opencode" / "opencode.json"
+
+
+def test_a_relative_xdg_config_home_is_ignored_rather_than_resolved(tmp_path: Path) -> None:
+    """The XDG specification says to ignore it, and resolving it would answer about the
+    directory this command was run from rather than the one OpenCode reads."""
+    assert default_settings_path(
+        tmp_path, provider="opencode", environment={"XDG_CONFIG_HOME": "relative/path"}
+    ) == tmp_path / ".config" / "opencode" / "opencode.json"
+
+
+def test_the_other_providers_are_untouched_by_the_xdg_branch(tmp_path: Path) -> None:
+    """claude and codex keep their own dotdirectories; only a `.config` provider takes it."""
+    environment = {"XDG_CONFIG_HOME": str(tmp_path / "xdg")}
+
+    assert (
+        default_settings_path(tmp_path, provider="claude", environment=environment)
+        == tmp_path / ".claude" / "settings.json"
+    )
+    assert (
+        default_settings_path(tmp_path, provider="codex", environment=environment)
+        == tmp_path / ".codex" / "hooks.json"
+    )
 
 
 def test_the_config_keeps_its_mode_and_no_temporary_file_survives(tmp_path: Path) -> None:
@@ -490,3 +572,128 @@ def test_the_plugin_write_replaces_a_link_rather_than_writing_through_it(tmp_pat
 
     assert settings_link.is_symlink()
     assert elsewhere.read_text(encoding="utf-8") == "through\n"
+
+
+def test_a_removal_that_cannot_write_the_config_has_not_yet_deleted_the_plugin(
+    tmp_path: Path,
+) -> None:
+    """The entry goes first, so a failure leaves an orphan file rather than a dangling entry.
+
+    Found by an adversarial review, which ran exactly this and watched the old order delete the
+    file, fail to write the config, and print "Nothing was lost" over an entry now naming a file
+    that is gone -- a load error in the operator's next OpenCode session. Reversed, the worst
+    case is a file nothing points at, which is inert and which a re-run collects.
+    """
+    settings = _config(tmp_path)
+    install_agent_hooks(settings, provider="opencode")
+    plugin = _plugin_path(settings)
+    settings.parent.chmod(0o500)
+    try:
+        with pytest.raises(HookInstallError):
+            remove_agent_hooks(settings, provider="opencode")
+    finally:
+        settings.parent.chmod(0o755)
+
+    assert plugin.is_file(), "the plugin was deleted before the entry naming it was taken out"
+    assert _entries(settings) == [_FOREIGN_PLUGIN, plugin.as_uri()]
+
+    remove_agent_hooks(settings, provider="opencode")
+    assert not plugin.exists()
+
+
+def test_an_orphaned_plugin_file_is_collected_by_a_later_removal(tmp_path: Path) -> None:
+    """The invariant that makes both orderings safe: deletion needs no entry to exist."""
+    settings = _config(tmp_path)
+    install_agent_hooks(settings, provider="opencode")
+    plugin = _plugin_path(settings)
+    settings.write_bytes(_config(tmp_path / "fresh").read_bytes())
+
+    outcome = remove_agent_hooks(settings, provider="opencode")
+
+    assert outcome.changed
+    assert not plugin.exists()
+
+
+def test_a_symlinked_config_directory_is_the_operators_arrangement_and_installs(
+    tmp_path: Path,
+) -> None:
+    """`stow`-managed dotfiles symlink exactly that directory; refusing made this uninstallable.
+
+    An adversarial review found the provider refusing on a plausible layout, with a message
+    naming the leaf and never the link -- no path forward from the output. A symlinked *ancestor*
+    is the operator's own arrangement, which is the argument `_write_atomically` already makes
+    for writing through a symlinked settings file.
+    """
+    real = tmp_path / "dotfiles" / "opencode"
+    real.mkdir(parents=True)
+    (tmp_path / ".config").mkdir()
+    link = tmp_path / ".config" / "opencode"
+    os.symlink(real, link)
+    settings = link / "opencode.json"
+    settings.write_text(json.dumps({"plugin": [_FOREIGN_PLUGIN]}, indent=2) + "\n", "utf-8")
+    before = settings.read_bytes()
+
+    install_agent_hooks(settings, provider="opencode")
+
+    plugin = real / PLUGIN_RELATIVE_PATH
+    assert plugin.is_file()
+    assert stat.S_IMODE(plugin.parent.stat().st_mode) == 0o700
+    remove_agent_hooks(settings, provider="opencode")
+    assert settings.read_bytes() == before
+    assert not plugin.exists()
+
+
+def test_a_symlink_standing_where_this_installer_creates_its_directory_is_refused(
+    tmp_path: Path,
+) -> None:
+    """An ancestor is theirs; the one directory this installer makes is not, and names the link."""
+    settings = _config(tmp_path)
+    victim = tmp_path / "victim"
+    victim.mkdir()
+    os.symlink(victim, settings.parent / "remote-agents")
+
+    with pytest.raises(HookInstallError, match="symlink"):
+        install_agent_hooks(settings, provider="opencode")
+
+    assert list(victim.iterdir()) == []
+    assert _entries(settings) == [_FOREIGN_PLUGIN]
+
+
+def test_an_entry_naming_the_same_file_name_in_another_directory_is_left_alone(
+    tmp_path: Path,
+) -> None:
+    """Tail matching claimed it; exact-path matching does not, and the note says it saw it.
+
+    The case an adversarial review used is the one this project's own developer hits: a checkout
+    of this repository is itself called `remote-agents`, so a working-tree copy at
+    `~/dev/remote-agents/activity-plugin.mjs` ended a plugin entry with exactly our tail. It was
+    claimed, taken out of the base document on install, and never put back -- against a runbook
+    promising the file comes back byte for byte.
+    """
+    theirs = "file:///home/owner/dev/remote-agents/activity-plugin.mjs"
+    settings = _config(tmp_path, {"plugin": [theirs]})
+    before = settings.read_bytes()
+
+    outcome = install_agent_hooks(settings, provider="opencode")
+
+    assert theirs in _entries(settings)
+    assert "does not recognise as its own" in outcome.summary, (
+        "an entry we are fairly sure was once ours must be spoken about, not silently kept"
+    )
+
+    remove_agent_hooks(settings, provider="opencode")
+    assert settings.read_bytes() == before
+
+
+def test_a_named_pipe_standing_at_our_name_is_refused_rather_than_replaced(tmp_path: Path) -> None:
+    """The guard's intent was always "we did not write this"; only its check said "a file"."""
+    settings = _config(tmp_path)
+    plugin = _plugin_path(settings)
+    plugin.parent.mkdir(parents=True, exist_ok=True)
+    os.mkfifo(plugin)
+
+    with pytest.raises(HookInstallError, match="not a regular file"):
+        install_agent_hooks(settings, provider="opencode")
+
+    assert stat.S_ISFIFO(plugin.lstat().st_mode)
+    assert _entries(settings) == [_FOREIGN_PLUGIN]

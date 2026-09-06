@@ -675,12 +675,24 @@ class to read — open the session to find out what.
 has no hook-command mechanism at all; what it does publish is a plugin API, so
 `install-agent-hooks --provider opencode` writes a generated `.mjs` file under
 `~/.config/opencode/remote-agents/` and one entry naming it in `opencode.json`'s `plugin`
-array. It reports two of the four kinds — `completed` and `needs_answer` — and **its
+array — or under `$XDG_CONFIG_HOME/opencode/` when that variable is set to an absolute path,
+which is where OpenCode itself looks. It reports two of the four kinds — `completed` and `needs_answer` — and **its
 `completed` carries no closing sentence, permanently**: the `session.idle` event it comes from
 has a payload of one field, and that field is OpenCode's own session id
 (`docs/acceptance-2026-09-06-opencode-activity.md`). That is a property of the event, not a
 parser waiting to be widened. Neither limit kind is reported either, for the reason Codex's are
 not: there is no `StopFailure` equivalent to read one from.
+
+**Like Claude's hook, the plugin loads in every OpenCode session on the host, managed or not** —
+it is a global config entry, not a per-session one, so a plain `opencode` you start from a shell
+loads it too. The accepted cost is not identical to Claude's and is worth reading as its own
+thing: Claude's hook starts a short-lived Python process per event, while this is JavaScript
+loaded into OpenCode's own process for the life of every session. What it does there is bounded
+the same way the hook is — it returns immediately unless the environment carries the session
+identifier this service injects into the panes it launches, it reads two event types and one
+field, and every path is inside a `try` so nothing it does can fail the session it runs in. An
+unmanaged session therefore costs one module load and a comparison per event, and spools
+nothing. `--remove` takes it back out.
 
 `cursor-agent` reports nothing at all: it publishes neither a hook system nor a plugin one and
 sets no title marker, and the pane-digest fallback that was its only signal was retired on
