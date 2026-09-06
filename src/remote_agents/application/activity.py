@@ -330,6 +330,22 @@ def _kind(event: object, reason: object) -> tuple[ActivityKind, ActivityConfiden
         return ActivityKind.COMPLETED, ActivityConfidence.REPORTED
     if event == "PermissionRequest":
         return ActivityKind.NEEDS_ANSWER, ActivityConfidence.REPORTED
+    # OpenCode's own names for the same two facts, kept as the provider spells them rather than
+    # translated to Claude's in the plugin. A translation would have made the spool file lie
+    # about which agent wrote it, and this mapping is where the vocabularies are meant to meet.
+    # `REPORTED` on both: the plugin runs inside OpenCode and forwards an event OpenCode emitted,
+    # which is the same standing Claude's hooks have and not the pane-title inference's.
+    #
+    # A Tier-1 review asked whether a *plugin* deserves that standing, since it is code loaded
+    # into the agent's event loop rather than a fixed lifecycle-hook contract. Considered and
+    # judged immaterial: `ActivityConfidence` records whether *anything actually said this*, and
+    # OpenCode's own runtime emitted the event -- the plugin only carried it. The distinction the
+    # enum is drawing is against the pane-title watcher, which reads a marker nobody sent it and
+    # infers an agent behind it. Nothing here is inferred.
+    if event == "session.idle":
+        return ActivityKind.COMPLETED, ActivityConfidence.REPORTED
+    if event == "permission.asked":
+        return ActivityKind.NEEDS_ANSWER, ActivityConfidence.REPORTED
     if event == "StopFailure":
         kind = _STOP_FAILURES.get(reason) if isinstance(reason, str) else None
         return None if kind is None else (kind, ActivityConfidence.REPORTED)

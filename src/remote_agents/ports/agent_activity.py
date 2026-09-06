@@ -148,12 +148,21 @@ class AskClass(Enum):
     UNKNOWN = "unknown"
 
 
-_ASK_CLASSES: dict[str, AskClass] = {"Bash": AskClass.SHELL}
-"""The measured token, and only the measured token.
+_ASK_CLASSES: dict[str, AskClass] = {"Bash": AskClass.SHELL, "bash": AskClass.SHELL}
+"""The measured tokens, and only the measured tokens.
 
-Exact-match, case included: `bash` and `BASH` are not `Bash`. Matching them would be guessing
-at a provider's conventions on a value space the measurement says is unverified, and the honest
+Exact-match, case included: `BASH` is not `Bash`. Matching an unseen casing would be guessing at
+a provider's conventions on a value space both measurements say is unverified, and the honest
 answer to an unmeasured token is `UNKNOWN` -- which the surfaces can say.
+
+Two entries, one per provider, each earned by its own capture: Codex spells it `Bash`
+(`docs/acceptance-2026-08-29-codex-activity-detail.md`, 4 of 4 payloads) and OpenCode spells it
+`bash` (`docs/acceptance-2026-09-06-opencode-activity.md`, 1 of 1). The lowercase entry was
+deliberately absent until 2026-09-06 and the reason for its absence has not been overturned --
+it was "nobody has measured a provider sending it", and somebody has. This table stays
+provider-blind, so admitting it also means a hypothetical Codex `bash` now classifies as a shell
+command; that is the correct class for the string either way, which is why the flat table is
+still the right shape.
 """
 
 
@@ -205,10 +214,16 @@ class ActivitySource(Enum):
 
     `UNOBSERVED` replaced `QUIET_ONLY` on 2026-08-30, when the pane-digest watch was retired
     with the `quiet` kind. The old member described profiles this service watched by hashing
-    their pane; there is no such watch now, so the honest name for `opencode`, `cursor-agent`
-    and anything else uncurated is that nothing observes them. It is a member rather than an
-    absence because the watcher has to be able to *skip* them by name: a profile that reaches
-    the polling loop costs a tmux capture per pass for an observation that can never be made.
+    their pane; there is no such watch now, so the honest name for `cursor-agent` and anything
+    else uncurated is that nothing observes them. It is a member rather than an absence because
+    the watcher has to be able to *skip* them by name: a profile that reaches the polling loop
+    costs a tmux capture per pass for an observation that can never be made.
+
+    **`opencode` left this member on 2026-09-06** and is hook-exclusive now. It was named here
+    as an example for six weeks, and the reason was always "nobody has measured its surface"
+    rather than "it has none" -- so the example moved as soon as somebody did
+    (`docs/acceptance-2026-09-06-opencode-activity.md`). `cursor-agent` stays, and stays for the
+    stronger reason: it publishes nothing to measure.
     """
 
     HOOK_EXCLUSIVE = "hook_exclusive"
@@ -216,7 +231,7 @@ class ActivitySource(Enum):
     UNOBSERVED = "unobserved"
 
 
-_HOOK_EXCLUSIVE_PROFILES = frozenset({"claude", "claude-remote"})
+_HOOK_EXCLUSIVE_PROFILES = frozenset({"claude", "claude-remote", "opencode"})
 _HYBRID_PROFILES = frozenset({"codex"})
 _REPORTED_KINDS_BY_PROFILE: dict[str, frozenset[ActivityKind]] = {
     "claude": frozenset(
@@ -238,6 +253,14 @@ _REPORTED_KINDS_BY_PROFILE: dict[str, frozenset[ActivityKind]] = {
     # Codex exposes Stop and PermissionRequest hooks. It does not expose a StopFailure
     # equivalent, so limit/output kinds stay absent rather than being guessed from pane text.
     "codex": frozenset({ActivityKind.COMPLETED, ActivityKind.NEEDS_ANSWER}),
+    # OpenCode's plugin acts on two measured `event` types -- `session.idle` and
+    # `permission.asked` -- and the same limit reasoning applies for the same reason: nothing
+    # in that stream distinguishes a rate limit from an ordinary finish, so neither limit kind
+    # is claimed. Its `completed` also carries no detail and never will from this source:
+    # `session.idle`'s payload is one field, and that field is OpenCode's own session id
+    # (`docs/acceptance-2026-09-06-opencode-activity.md`). That is a property of the event, not
+    # a parser this project can widen later.
+    "opencode": frozenset({ActivityKind.COMPLETED, ActivityKind.NEEDS_ANSWER}),
 }
 
 
@@ -287,4 +310,9 @@ Codex is intentionally not in this compatibility constant yet: it is a hybrid so
 hook may be absent, disabled, or awaiting the owner's trust review. `activity_source_for` is the
 complete provider contract; the application layer uses its hybrid branch to watch Codex panes
 for the native approval marker its own hook never sends.
+
+`opencode` joined on 2026-09-06 by joining `_HOOK_EXCLUSIVE_PROFILES`, which is what this alias
+tracks. Its "hook" is a generated plugin rather than a hook command, and the distinction does
+not reach here: what this constant is asked is whether the provider reports its own activity
+and is watched no other way, and the answer is yes on both counts.
 """

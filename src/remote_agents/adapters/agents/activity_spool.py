@@ -106,6 +106,36 @@ _CODEX_DETAIL_FIELDS: dict[str, tuple[str, ...]] = {"Stop": ("last_assistant_mes
 #: section reads "`PermissionRequest` -> `tool_name` at most, and nothing else". `Stop` admits
 #: none: an agent that has finished is not waiting on anything.
 _CODEX_ASK_FIELDS: dict[str, tuple[str, ...]] = {"PermissionRequest": ("tool_name",)}
+
+#: The two `event` types OpenCode's generated plugin acts on, and the only ones this branch
+#: admits. Read as an exact set rather than through `_plain_token`, because these names carry a
+#: dot and `_plain_token` -- correctly, for the values it guards -- does not allow one. Widening
+#: that reader to admit a dotted event name would have loosened the guard on `reason` and on
+#: every provider's `ask` at the same time, to make one branch's event names fit.
+_OPENCODE_EVENTS = frozenset({"session.idle", "permission.asked"})
+
+#: What an OpenCode payload may contribute as DETAIL: **nothing, permanently**.
+#:
+#: Empty rather than absent, and empty for a reason that will not change with a wider parser.
+#: `session.idle` -- the only event that could carry a finished agent's words -- has a payload of
+#: exactly one field, and that field is OpenCode's own session id
+#: (`docs/acceptance-2026-09-06-opencode-activity.md`, 2 of 2 samples). There is no
+#: `last_assistant_message` waiting to be admitted the way Codex's `Stop` had one; getting the
+#: agent's last words would mean asking the SDK for the session's messages, which is a different
+#: mechanism reading conversation content and therefore a DEC-013 retention decision rather than
+#: a parser widening. Not proposed, and this dict is where a future reader is told so.
+_OPENCODE_DETAIL_FIELDS: dict[str, tuple[str, ...]] = {}
+
+#: What an OpenCode payload may contribute as an ASK CLASS. `permission.asked` only, and
+#: `properties.permission` only -- the one field the measurement licenses, whose licensing
+#: section reads "`permission.asked` -> `properties.permission` at most, as an ask class". Never
+#: `patterns` or `metadata.command`, which are the literal command, nor `always`, which is a glob
+#: over commands. `session.idle` admits none: an agent that has finished is not waiting.
+#:
+#: Read through `_plain_token` exactly as Codex's `tool_name` is, and for the same measured
+#: reason: one sample, one value (`bash`), so the value space is unverified and a token carrying
+#: a space, a slash or a quote is not a tool class this project recognises.
+_OPENCODE_ASK_FIELDS: dict[str, tuple[str, ...]] = {"permission.asked": ("permission",)}
 #: How many times a colliding name is stepped over before the record is dropped in silence.
 #:
 #: A collision needs two events in the same *microsecond* for one session, so the hooks
@@ -199,6 +229,8 @@ def _observed_event(
         return None
     if not isinstance(document, dict):
         return None
+    if provider == "opencode":
+        return _observed_opencode_event(document, session_id, moment)
     event = _plain_token(document.get("hook_event_name"))
     if event is None:
         return None
@@ -242,6 +274,36 @@ def _observed_event(
         reason=_first(document, _DISCRIMINATING_FIELDS, _plain_token),
         detail=_first(document, _DETAIL_FIELDS, bounded_detail_line),
         observed_at=moment.astimezone(UTC),
+    )
+
+
+def _observed_opencode_event(
+    document: Mapping[str, object], session_id: str, moment: datetime
+) -> ObservedAgentEvent | None:
+    """Read an OpenCode plugin record, admitting the two events and the one licensed field.
+
+    Branched ahead of the shared `_plain_token` read rather than after it, which is the whole
+    reason this is a function and not three more lines in `_observed_event`. OpenCode's event
+    names are dotted; `_plain_token` allows no dot, and it is the same reader that guards
+    `reason` and every provider's `ask`. Making the dotted names fit by widening it would have
+    loosened two guards to admit one branch's vocabulary -- so the branch takes its event names
+    from a fixed set instead, which is narrower than `_plain_token` rather than wider.
+
+    The narrowing here duplicates the plugin's own, deliberately. That code lives in the
+    operator's configuration directory where a hand-edit is possible, and this end of the spool
+    reads a file a different process wrote; a boundary that trusts what it is handed because
+    something upstream was careful is not a boundary.
+    """
+    event = document.get("hook_event_name")
+    if not isinstance(event, str) or event not in _OPENCODE_EVENTS:
+        return None
+    return ObservedAgentEvent(
+        session_id=session_id,
+        event=event,
+        reason=None,
+        detail=_first(document, _OPENCODE_DETAIL_FIELDS.get(event, ()), bounded_detail_line),
+        observed_at=moment.astimezone(UTC),
+        ask=_first(document, _OPENCODE_ASK_FIELDS.get(event, ()), _plain_token),
     )
 
 
