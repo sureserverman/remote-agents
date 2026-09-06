@@ -32,7 +32,7 @@ def test_the_registry_covers_the_curated_provider_set_exactly() -> None:
 
 
 def test_capability_absence_is_declared_not_invented() -> None:
-    """Cursor takes no hooks and OpenCode takes no hooks — declared None (DEC-061).
+    """Cursor publishes no hook mechanism at all — a declared None (DEC-061).
 
     Cursor's `usage` is deliberately NOT None: its reader answers "I publish nothing",
     which renders as "not reported by this agent" — the permanent, honest sentence.
@@ -44,12 +44,17 @@ def test_capability_absence_is_declared_not_invented() -> None:
 
     assert by_id["cursor-agent"].usage is not None
     assert by_id["cursor-agent"].hooks is None
-    assert by_id["opencode"].hooks is None
+    assert by_id["cursor-agent"].remote_control is None
     assert by_id["claude"].usage is not None
     assert by_id["codex"].usage is not None
     assert by_id["opencode"].usage is not None
     assert by_id["claude"].hooks is not None
     assert by_id["codex"].hooks is not None
+    # OpenCode's `hooks` was a declared None until 2026-09-06, on the same grounds cursor's
+    # still is. It stopped being one when a measurement found a plugin API to install into
+    # (`docs/acceptance-2026-09-06-opencode-activity.md`) -- which is what DEC-061 is for: an
+    # absence is declared so that filling it is an edit somebody makes on purpose.
+    assert by_id["opencode"].hooks is not None
 
 
 def test_the_fold_keeps_cursor_answering_rather_than_absent(tmp_path) -> None:

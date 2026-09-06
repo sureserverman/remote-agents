@@ -56,7 +56,7 @@ DECLARATIONS: dict[str, dict[str, tuple[Requirement, str]]] = {
     "opencode": {
         "sessions": (SUPPORTED, "opencode.db catalogue via the CLI runner"),
         "usage": (SUPPORTED, "opencode.db message-token accounting"),
-        "hooks": (UNSUPPORTED, "opencode takes no hooks; the registry declares None"),
+        "hooks": (SUPPORTED, "opencode.json plugin entry plus a generated plugin (flagged)"),
         "remote_control": (
             UNSUPPORTED,
             "opencode has no remote control; the registry declares None",

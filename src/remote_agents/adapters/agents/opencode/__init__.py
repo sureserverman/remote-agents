@@ -1,4 +1,4 @@
-"""OpenCode's provider vertical: sessions, usage, and its descriptor."""
+"""OpenCode's provider vertical: sessions, usage, its activity plugin, and its descriptor."""
 
 from __future__ import annotations
 
@@ -21,11 +21,18 @@ def _sessions(project_paths: Mapping[ProjectId, Path]) -> OpenCodeSessionCatalog
 def descriptor() -> ProviderDescriptor:
     """This provider's declared capability set (ARCH-04).
 
-    Hooks and `remote_control` both stay a declared None: opencode takes no hooks and
-    publishes no host-level Remote Control (DEC-061).
+    `hooks` names the plugin install this provider accepts, added 2026-09-06. OpenCode publishes
+    no hook-command mechanism, which is why this capability was a declared `None` for as long as
+    it was; what it does publish is a plugin API, and `install-agent-hooks --provider opencode`
+    writes one entry naming a file this project generates. The capability answers "can this
+    provider be wired to report activity", and it can.
+
+    `remote_control` stays a declared `None`: OpenCode has no host-level toggle (DEC-061 --
+    absence is declared, never invented).
     """
     return ProviderDescriptor(
         ProfileId("opencode"),
         sessions=_sessions,
         usage=OpenCodeUsageReader(),
+        hooks="opencode",
     )
