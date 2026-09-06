@@ -75,6 +75,26 @@ lost message: `deliver` holds a refused group at the head of the queue and stops
 in the chat notified again — until three refusals abandon that one group. The failure would
 have been silent to everyone except the owner wondering why their phone went quiet.
 
+## Second measurement, same day — do adjacent quotations merge?
+
+Asked because the owner decided on 2026-09-06 that a **grouped** notification quotes each
+observation's detail under its own bullet, which puts two quotations in one message separated
+only by a bullet line. Two adjacent block-level elements merging into one would have silently
+reattributed one agent's words to another observation's headline — the exact failure the
+bullets-not-quotes argument was originally about.
+
+Sent: a real grouped render, three observations, two of them carrying details. Read back:
+
+```
+entity types                : ['bold', 'expandable_blockquote', 'expandable_blockquote']
+expandable_blockquote count : 2
+  offset 140 len 39: 'Ran the suite: 1201 passed, 17 skipped.'
+  offset 206 len 42: 'Overwrite config.toml? It has local edits.'
+```
+
+**They do not merge.** Two distinct entities, each spanning exactly its own detail and nothing
+else. The bullet line between them is outside both.
+
 ## Not established here
 
 - **The Bot API version the server runs.** There is no API method that reports it, and

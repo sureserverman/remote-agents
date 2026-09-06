@@ -628,14 +628,21 @@ def test_a_session_with_several_things_to_say_gets_one_message_saying_all_of_the
 
     body = message.text.split("\n")
     # The headline is the newest observation's; the identity follows it on its own line; then
-    # one bulleted line per observation, oldest first, its own headline words with the detail
-    # folded on -- so the bullets read as a timeline while the headline is the latest news.
+    # one bullet per observation, oldest first, each followed by its own collapsed quotation
+    # when it has something to quote -- so the bullets read as a timeline while the headline
+    # is the latest news, and each quote sits directly beneath the bullet it belongs to.
+    # (The details were folded onto the bullets until the owner's decision of 2026-09-06;
+    # three observations then rendered 858 characters of uncollapsed text.)
     assert body[0].startswith("⛽ <b>Hit a usage limit</b> · ")
     assert body[1] == DISPLAY
-    assert len(body) == 5, "a headline, the identity, and one line per observation"
-    assert "Finished its work" in body[2] and "Ran the suite." in body[2]
-    assert "Waiting for an answer" in body[3] and "Overwrite config.toml?" in body[3]
-    assert "Hit a usage limit" in body[4]
+    assert len(body) == 7, (
+        "a headline, the identity, three bullets, and a quote under each of the two details"
+    )
+    assert "Finished its work" in body[2]
+    assert body[3] == "<blockquote expandable>Ran the suite.</blockquote>"
+    assert "Waiting for an answer" in body[4]
+    assert body[5] == "<blockquote expandable>Overwrite config.toml?</blockquote>"
+    assert "Hit a usage limit" in body[6], "no detail, so no quotation under it"
     assert len(message.keyboard[0]) == 1
 
 
@@ -672,8 +679,9 @@ def test_a_session_that_said_more_than_a_message_can_hold_says_how_much_more() -
     )
 
     body = message.text.split("\n")
-    assert len(body) == 8, (
-        "a headline, the identity, five observations, and the count of what is missing"
+    assert len(body) == 13, (
+        "a headline, the identity, five bullets each with its quotation, and the count of "
+        "what is missing"
     )
     assert "2 earlier" in body[-1]
     assert "Step 6." in message.text, "the newest observation is spelled out, not counted"
@@ -1419,12 +1427,20 @@ def test_a_message_with_no_detail_carries_no_blockquote_at_all() -> None:
     assert "blockquote" not in message.text
 
 
-def test_a_grouped_message_keeps_its_bullets_rather_than_a_blockquote_each() -> None:
-    """Two or more observations fold their details onto their headline lines.
+def test_a_grouped_message_gives_every_detail_its_own_blockquote() -> None:
+    """Two or more observations keep their bullets AND get a quotation each.
 
-    Unchanged by the expandable work and asserted here so it stays that way: quoting each
-    member would put three observations on six lines with nothing saying which text belongs to
-    which headline, which is the render `activity_text`'s docstring rejects.
+    Reversed by the owner on 2026-09-06, and the reversal is recorded rather than quietly
+    applied. This asserted the opposite hours earlier, on the renderer's own long-standing
+    argument: a detail on its own line gives three observations six lines with nothing saying
+    which text belongs to which headline.
+
+    What overturned it was a measurement, not a preference. Three observations rendered 858
+    characters with every detail inline, against 310 for one collapsed observation — so the
+    message that was harder to take in at a glance was the one that had *not* been collapsed,
+    which inverts the argument collapsing was adopted under. Collapsing answers the original
+    objection rather than ignoring it: a collapsed quote is about a line tall and sits
+    directly under its own bullet.
     """
     message = render_activity(
         _group(
@@ -1434,9 +1450,14 @@ def test_a_grouped_message_keeps_its_bullets_rather_than_a_blockquote_each() -> 
         display=DISPLAY,
         open_session=OPEN,
     )
-    assert "blockquote" not in message.text
-    assert "first thing" in message.text
-    assert "second thing" in message.text
+    assert message.text.count("<blockquote expandable>") == 2
+    assert "<blockquote expandable>first thing</blockquote>" in message.text
+    assert "<blockquote expandable>second thing</blockquote>" in message.text
+    # Each quote follows its own bullet rather than being pooled at the end.
+    lines = message.text.split("\n")
+    for index, line in enumerate(lines):
+        if line.startswith("<blockquote"):
+            assert lines[index - 1].startswith(notifications._BULLET), lines
 
 
 def test_activity_text_headlines_the_newest_observation_not_the_oldest() -> None:

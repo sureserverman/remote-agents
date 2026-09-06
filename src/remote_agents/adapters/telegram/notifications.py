@@ -289,20 +289,41 @@ def activity_text(group: SessionGroup, *, display: str) -> str:
 def _lines(
     shown: tuple[AgentActivity, ...], details: list[str | None], bulleted: bool
 ) -> list[str]:
-    """The quoted detail when there is one observation; one bulleted line per observation when
-    they must be told apart. A detail is already escaped by the time it reaches here."""
+    """Every observation's detail as a collapsed quotation: alone, or under its own bullet.
+
+    A detail is already escaped by the time it reaches here.
+
+    **`<blockquote expandable>`, and never `<expandable_blockquote>`.** The second is what the
+    API documentation's own HTML section was read as naming, and it is refused outright --
+    `can't parse entities: Unsupported start tag` -- which takes down every notification
+    carrying a detail, not merely its formatting, and under DEC-049 a permanently-refused
+    group stops the whole delivery pass. Measured against the live API on 2026-09-06:
+    `docs/acceptance-2026-09-06-telegram-expandable.md`.
+
+    **A group's details are quoted too, by the owner's decision of 2026-09-06.** This folded
+    each detail onto its bullet until then, on the argument -- recorded in `activity_text`'s
+    docstring and still worth reading -- that a detail on its own line gives three
+    observations six lines with nothing saying which text belongs to which headline. The
+    measurement that overturned it: three observations rendered 858 characters, all of it
+    inline, against 310 for one collapsed observation, so the message that was *harder* to
+    take in at a glance was the one that had not been collapsed. Collapsing answers the
+    original objection rather than ignoring it -- a collapsed quote occupies about a line, and
+    it sits directly beneath the bullet it belongs to.
+    """
     if not bulleted:
         detail = details[0] if details else None
-        # `<blockquote expandable>`, and never `<expandable_blockquote>`. The second is what
-        # the API documentation's own HTML section was read as naming, and it is refused
-        # outright -- `can't parse entities: Unsupported start tag` -- which would take down
-        # every notification carrying a detail, not just its formatting. Measured against the
-        # live API on 2026-09-06: `docs/acceptance-2026-09-06-telegram-expandable.md`.
-        return [f"<blockquote expandable>{detail}</blockquote>"] if detail else []
-    return [
-        f"{_BULLET}{kind_headline(activity.kind)}" + (f" — {detail}" if detail else "")
-        for activity, detail in zip(shown, details, strict=True)
-    ]
+        return [_quote(detail)] if detail else []
+    lines: list[str] = []
+    for activity, detail in zip(shown, details, strict=True):
+        lines.append(f"{_BULLET}{kind_headline(activity.kind)}")
+        if detail:
+            lines.append(_quote(detail))
+    return lines
+
+
+def _quote(detail: str) -> str:
+    """One collapsed quotation. The single place the tag is spelled."""
+    return f"<blockquote expandable>{detail}</blockquote>"
 
 
 def render_activity(group: SessionGroup, *, display: str, open_session: str) -> RenderedMessage:
