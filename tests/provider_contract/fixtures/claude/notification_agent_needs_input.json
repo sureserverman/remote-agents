@@ -1,0 +1,9 @@
+{
+  "_provenance": "SYNTHETIC AND UNMEASURED. Unlike its sibling `notification.json`, no real `agent_needs_input` payload has been captured — see BL-048. The shape here is `notification.json`'s with the type changed and `message` ABSENT, which is the hypothesis this fixture exists to make executable, not a record of an observed payload. Values are synthetic per GDEC-SEC-001, chosen so any leak is recognisable in an assertion.",
+  "_measured": false,
+  "session_id": "provider-session-not-ours",
+  "transcript_path": "/home/owner/.claude/projects/secret-project/rollout-secret.jsonl",
+  "cwd": "/home/owner/secret-project",
+  "hook_event_name": "Notification",
+  "notification_type": "agent_needs_input"
+}
