@@ -139,7 +139,13 @@ def kind_headline(kind: ActivityKind) -> str:
 
 
 _MAXIMUM_LINES_PER_MESSAGE = 5
-"""How many of a session's observations one message will spell out.
+"""How many of a session's OBSERVATIONS one message will spell out.
+
+**It has never counted rendered lines, and since 2026-09-06 the gap is wider.** A grouped
+observation now draws a bullet *and* its own collapsed quotation, so five observations occupy
+up to eleven physical lines. Every consumer reads this as an observation count -- it is spent
+as `group.activities[-limit:]` -- so the doubling invalidates nothing; the name is what is
+misleading, and it was already misleading before the quotations existed.
 
 A backstop, and since `grouped_for_delivery` collapses a session's news on the *kind* it is out
 of ordinary reach: there are fewer kinds than lines here, so a real group no longer overflows it
