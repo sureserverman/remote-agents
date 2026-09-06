@@ -369,6 +369,15 @@ def observe_codex_action_required(
     Its terminal title nevertheless changes to the fixed marker above, which tmux exposes
     separately from pane capture.  Retaining the title would be terminal-content retention;
     retaining one boolean answers the whole question this observation can safely support.
+
+    **It carries no `ask` either, and that is DEC-063 rather than an omission.** The hook path
+    gained one on 2026-09-06 because a `PermissionRequest` payload *names* the tool being asked
+    about. A title does not: the marker is a fixed string this watcher matched, and the tool
+    class is not in it. Inventing one -- guessing `Bash` because most escalations are commands,
+    or wording it "about something" -- would be the watcher making a claim about pane content
+    it deliberately never read. The observation stays exactly as content-free as the boolean
+    behind it, and the surfaces say the unqualified sentence they said before, under the hedge
+    `ActivityConfidence.INFERRED` already earns it.
     """
     action_required = title.startswith(_CODEX_ACTION_REQUIRED_TITLE)
     if not action_required or was_action_required:

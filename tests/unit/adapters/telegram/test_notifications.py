@@ -1623,3 +1623,53 @@ def test_a_grouped_needs_answer_bullet_carries_the_ask_too() -> None:
         SessionGroup(older.session_id, (older, newer)), display=DISPLAY, open_session=OPEN
     )
     assert "❓ Waiting for an answer about a shell command" in message.text
+
+
+def test_an_inferred_needs_answer_says_nothing_about_what_is_being_asked() -> None:
+    """A title-derived wait names no class, because the title does not name one.
+
+    `observe_codex_action_required` matched a fixed marker string and kept one boolean; the
+    tool class is not in a title, so there is nothing to classify. The hook path gained an ask
+    on 2026-09-06 because a `PermissionRequest` payload *names* the tool; the watcher's path
+    did not, and DEC-063 is why — it never read the pane.
+
+    Two failure directions are asserted, not one. The inferred observation must not gain a
+    clause, and it must not lose the hedge that says the whole thing is a guess.
+    """
+    message = render_activity(
+        _group(
+            _activity(
+                ActivityKind.NEEDS_ANSWER, confidence=ActivityConfidence.INFERRED, ask=None
+            )
+        ),
+        display=DISPLAY,
+        open_session=OPEN,
+    )
+    headline = message.text.split("\n")[0]
+    assert headline.startswith("❓ <b>Waiting for an answer</b> · ")
+    assert "about" not in headline
+    assert notifications._HEDGE in message.text, "an inference still says it is one"
+
+
+def test_an_inferred_observation_would_still_drop_words_if_one_ever_carried_them() -> None:
+    """`_detail_of`'s guard is keyed on confidence, and the ask does not route around it.
+
+    The guard exists because "an observation nothing reported must not arrive carrying words" —
+    the last line of an idle screen rendered under a session's name reads exactly like a parting
+    statement the agent chose to make. Adding a second string field is precisely the kind of
+    change that quietly opens a second door into the same room, so this asserts the door is
+    still shut: an INFERRED observation carrying a detail renders none of it.
+    """
+    message = render_activity(
+        _group(
+            _activity(
+                ActivityKind.NEEDS_ANSWER,
+                detail="a line the watcher never read",
+                confidence=ActivityConfidence.INFERRED,
+            )
+        ),
+        display=DISPLAY,
+        open_session=OPEN,
+    )
+    assert "a line the watcher never read" not in message.text
+    assert "blockquote" not in message.text

@@ -240,3 +240,30 @@ async def test_reported_permission_wins_over_the_same_title_edge() -> None:
 
     assert activity.kind is ActivityKind.NEEDS_ANSWER
     assert activity.confidence is ActivityConfidence.INFERRED
+
+
+def test_a_title_derived_wait_names_no_ask_class_because_a_title_names_none() -> None:
+    """The watcher's observation carries no `ask`, and this drives the watcher to prove it.
+
+    An earlier version of this check built an `AgentActivity` by hand with `ask=None` and
+    asserted the surfaces said nothing about it. That passed with the watcher inventing
+    `ask="Bash"` — it was testing the renderers, not the thing that could invent one. The
+    mutant survived, which is the whole reason this test exists in this file rather than in a
+    surface's.
+
+    DEC-063 is the substance: the marker is a fixed string this watcher matched, and a tool
+    class is not in a title. Guessing one — `Bash`, because most escalations are commands —
+    would be the watcher making a claim about pane content it deliberately never read.
+    """
+    _active, observation = observe_codex_action_required(
+        False,
+        session_id="codex-title-session",
+        title="[ ! ] Action Required | multitor",
+        now=datetime(2026, 9, 6, 15, 0, tzinfo=UTC),
+    )
+
+    assert observation is not None
+    assert observation.kind is ActivityKind.NEEDS_ANSWER
+    assert observation.confidence is ActivityConfidence.INFERRED
+    assert observation.detail is None, "the title is never retained"
+    assert observation.ask is None, "and the title never named a class to retain"
