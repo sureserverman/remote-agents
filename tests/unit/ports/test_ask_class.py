@@ -50,3 +50,25 @@ def test_no_ask_is_not_an_unknown_ask() -> None:
     whose class is unrecognised, and collapsing them would have a surface say "waiting for an
     answer about something" on an observation that is not waiting for anything."""
     assert ask_class(None) is None
+
+
+def test_no_generated_token_but_the_measured_one_is_ever_recognised() -> None:
+    """A generated sweep, because the value space is precisely what is unknown here.
+
+    The hand-written cases above name tokens someone thought of. This one covers the shape
+    `_plain_token` admits — `[A-Za-z0-9_-]{1,64}` — across a deterministic spread of it, so the
+    claim "only `Bash` is recognised" is made over the admissible set rather than over a list.
+    Deterministic rather than random: a check that fails one run in fifty is a check nobody
+    trusts, and this project already has a rule about tests that pass for reasons other than
+    the one they name.
+    """
+    alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_-"
+    generated = {
+        alphabet[index % len(alphabet)] * (1 + index % 8) + str(index) for index in range(600)
+    }
+    generated |= {"Bash".lower(), "Bash".upper(), "Bas", "Bashh", " Bash", "Bash "}
+    for token in generated:
+        if token == "Bash":
+            continue
+        assert ask_class(token) is AskClass.UNKNOWN, f"{token!r} was recognised"
+    assert ask_class("Bash") is AskClass.SHELL_COMMAND
