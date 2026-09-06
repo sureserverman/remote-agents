@@ -1,5 +1,5 @@
 {
-  "_provenance": "Captured 2026-09-06 from opencode 1.18.16 via a throwaway plugin under a disposable XDG_CONFIG_HOME; see docs/acceptance-2026-09-06-opencode-activity.md. 2 of 2 samples had this exact shape. Identifiers are replaced with synthetic values per GDEC-SEC-001; the SHAPE is what was measured.",
+  "_provenance": "Captured 2026-09-06 from opencode 1.18.16 via a throwaway plugin under a disposable XDG_CONFIG_HOME; see docs/acceptance-2026-09-06-opencode-activity.md. 2 of 2 samples had this exact shape. Identifiers are synthetic per GDEC-SEC-001; the SHAPE is what was measured. The event carries no agent text and no field that could.",
   "_measured": true,
   "id": "evt_synthetic0000000000000000",
   "type": "session.idle",

@@ -3,102 +3,155 @@
 **Measured 2026-09-06** against `opencode 1.18.16` on this host, before anything in this
 repository was written to parse them.
 
-This is a **measurement**. It exists because two other sources were consulted first and both
-were wrong in ways that would have produced a parser reading fields that do not exist.
+> **This document was substantially wrong when first written, and was corrected the same day
+> after a gate evaluator checked it.** The payload tables were right; the section explaining
+> *why a measurement was needed* was not — it asserted that OpenCode's documentation and its
+> typed SDK were both wrong about the shape, and neither claim survives. The correction is kept
+> visible rather than silently rewritten, because a document whose whole subject is *what a
+> confident claim from a symbol table costs* has no business hiding one of its own.
 
-## Why a measurement rather than the documentation or the types
+## Why a measurement — the honest version
 
-**The documentation** (`opencode.ai/docs/plugins/`) named three hooks: `"session.idle"`,
-`"permission.asked"` and `"permission.replied"`.
+Not because the published sources are wrong. Because **the sources were misread, and the only
+thing that settles a payload is the payload.**
 
-**The installed typed interface** (`@opencode-ai/plugin@1.0.85`,
-`node_modules/@opencode-ai/plugin/dist/index.d.ts`) names a different set entirely —
-`event`, `config`, `tool`, `auth`, `chat.message`, `chat.params`, `permission.ask`,
-`tool.execute.before`, `tool.execute.after`. There is **no `session.idle` hook**; session idle
-arrives through the generic `event` hook.
+- **The documentation is correct.** `opencode.ai/docs/plugins/` presents `session.idle`,
+  `permission.asked` and `permission.replied` as **event types delivered through the generic
+  `event` hook** — `event: async ({ event }) => { if (event.type === "session.idle") … }` — not
+  as hook keys. A summarised fetch of that page rendered them as hook keys, and this document's
+  first draft repeated that reading and blamed the page for it.
+- **The typed SDK is correct too, at the version that ran.**
+  `@opencode-ai/sdk@1.18.16`'s v2 surface (`dist/v2/gen/types.gen.d.ts:1128`) declares
+  `permission.asked` as `{id, sessionID, permission, patterns, metadata, always,
+  tool?{messageID, callID}}` — **an exact match for the capture below, including the optional
+  `tool`.**
+- **What the first draft actually read was a stale copy of a different thing.**
+  `@opencode-ai/plugin@1.0.85` and `@opencode-ai/sdk@1.0.85`, vendored into an unrelated
+  project's `node_modules` (`ai-tools/engineering-skills/…/skillful-plus/`), whose **v1** type
+  surface has no `permission.asked` at all. The `Permission` type it read is
+  `permission.updated`'s properties — a **different event**. The table headed "the SDK declares
+  / the live event sends" was therefore comparing one event's declared type against another
+  event's live payload, from a package the measured binary never loaded. Four `@opencode-ai/sdk`
+  copies exist on this host at 1.0.85, 1.14.39, 1.16.2 and 1.18.16; only the last one ran.
 
-And the SDK's `Permission` type (`@opencode-ai/sdk`, `dist/gen/types.gen.d.ts:356`) describes a
-shape the running binary does not send:
+So the argument for measuring is not that the vendor is unreliable. It is that **a type
+declaration read from the wrong package is indistinguishable, at a glance, from one read from
+the right one** — and that `activity_spool._DISCRIMINATING_FIELDS`' comment records this
+project losing months to exactly that class of mistake with Claude's `error_type`. The capture
+is what tells you which copy you are looking at.
 
-| the SDK type declares | the live event actually carries |
-|---|---|
-| `type` | `permission` |
-| `pattern?: string \| string[]` | `patterns: string[]` |
-| `title: string` | **absent** |
-| `time: { created }` | **absent** |
-| `messageID`, `callID` at top level | nested under `tool: { messageID, callID }` |
-| — | `metadata: { command }`, `always: string[]` |
+**The correction strengthens the result.** v2's declaration is independent corroboration of a
+one-sample observation, which is precisely what a single sample most needs.
 
-A parser written from the types would have read `title` and `type` and found neither. This is
-the same failure `activity_spool._DISCRIMINATING_FIELDS`' comment records for Claude —
-`error_type` and `end_reason` taken from a symbol table, both wrong, `limit_reached`
-unreachable in silence for months — reached through a different door.
+## Method, and what it wrote
 
-## Method
+A throwaway plugin registered on the `event` hook, `permission.ask` and `tool.execute.before`,
+loaded through a **disposable `XDG_CONFIG_HOME`**, appending every payload to a capture file.
 
-A throwaway plugin registered on the `event` hook, `permission.ask` and
-`tool.execute.before`, loaded through a **disposable `XDG_CONFIG_HOME`** so the owner's own
-`~/.config/opencode/` was neither read as configuration nor modified. Authentication lives
-under `XDG_DATA_HOME` and was left alone, which is what let a real model run happen at all.
-Each callback appended its whole payload to a capture file.
+**Isolation was config-only, and the first draft of this section overstated it.** It said the
+owner's OpenCode data was "left alone". Checked afterwards, that is false:
 
-Five runs; three completed and two hung. The hangs are recorded below rather than omitted.
+- `~/.local/share/opencode/auth.json` — mtime moved to the first run's second (credentials read,
+  not modified in content, but the file was touched).
+- `~/.local/share/opencode/opencode.db` (+ `-wal`), and the log directory — written.
+- **Both completing runs are live session rows in the owner's real OpenCode database**, titled
+  *"Read note.txt for contained word"* and *"Run echo measured command"*.
+
+`XDG_DATA_HOME` was deliberately left at its default so the owner's credentials would work,
+which is what made a real model run possible at all — and the consequence, which was not
+thought through, is that OpenCode also persisted its session state there. A future drill that
+wants true isolation must relocate `XDG_DATA_HOME` too and re-authenticate inside it.
+
+## Runs
+
+**Five runs: two completed, three hung.** (The first draft said three completed and two hung,
+which also contradicted its own sample counts — three completing runs would have produced three
+`session.idle` samples, not the two recorded.)
+
+| run | outcome | records |
+|---|---|---|
+| 1 | completed | 92 |
+| 2 | hung — `plugin.loaded` only | 1 |
+| 3 | completed | 80 |
+| 4 | hung — `plugin.loaded` only | 1 |
+| 5 | hung — `plugin.loaded` only | 1 |
+
+The three hangs each asked for something needing an *edit* permission or produced large output,
+and were killed at the timeout. Recorded because it bears on how a live drill should be driven;
+not understood, and not claimed to be.
 
 ## What fired
 
 | callback | fired? | samples |
 |---|---|---|
-| `event` → `session.idle` | yes, exactly once per run, at the end | **2** |
+| `event` → `session.idle` | yes, once per completing run, at the end | **2** |
 | `event` → `permission.asked` | yes, when a tool needed approval | **1** |
-| `event` → `permission.replied` | yes, immediately after | 1 |
-| `permission.ask` (the typed hook) | **never** | 0 |
+| `event` → `permission.replied` | yes, immediately after | **1** |
 | `tool.execute.before` | yes | 2 |
+| `permission.ask` (the typed hook) | **never** | 0 |
 
-`permission.ask` not firing is recorded as an observation, not a conclusion: `opencode run` is
+`permission.ask` not firing is an observation, not a conclusion: `opencode run` is
 non-interactive and auto-rejects (`permission requested: bash (echo measured);
-auto-rejecting`), so it is possible the hook is bypassed on that path rather than absent. **The
-`event` stream carried the permission either way**, which is the route this project can rely on
-without settling the question.
+auto-rejecting`), so the hook may be bypassed on that path rather than absent. **The `event`
+stream carried the permission either way**, which is the route this project relies on without
+having to settle the question.
+
+### The `event` stream is noisy, and a parser must filter it
+
+**14 distinct event types arrived across two runs**, and this is load-bearing for the plugin
+about to be written — a handler on `event` receives all of it:
+
+```
+ 90  plugin.added            9  session.status         3  message.part.delta
+ 20  message.part.updated    6  catalog.updated        2  session.created
+ 14  message.updated         4  reference.updated      2  session.idle
+  9  session.updated         4  integration.updated    1  permission.asked
+                             3  session.diff           1  permission.replied
+```
+
+Four of those appear in no version of the SDK's v1 `Event` union. The first draft of this
+document said the other event types were "not pursued", which stated as unobserved a set that
+was substantially observed.
 
 ## `session.idle` — 2 samples
 
 ```json
 {
-  "id": "evt_077e88f9d001Y9FCDDGF4Rcjg0",
+  "id": "evt_synthetic0000000000000000",
   "type": "session.idle",
-  "properties": { "sessionID": "ses_f88178fefffepRTQfx1rPZaakQ" }
+  "properties": { "sessionID": "ses_synthetic000000000000000" }
 }
 ```
 
 | field | type | present | notes |
 |---|---|---|---|
-| `id` | `str` | 2 of 2 | the event's own id, not a session's |
+| `id` | `str` | 2 of 2 | the event's own id |
 | `type` | `str` | 2 of 2 | `"session.idle"` |
 | `properties.sessionID` | `str` | 2 of 2 | **OpenCode's** session id, not this project's |
 
-**There is no agent text on this event, and no field that could carry any.** Not a truncated
-message, not a summary, nothing. This is the load-bearing finding for the provider vertical:
-an OpenCode `completed` notification cannot carry a detail from this source, ever — unlike
-Codex's `Stop`, which had `last_assistant_message` waiting to be admitted once it was measured.
+**There is no agent text on this event, and no field that could carry any.** This is the
+load-bearing finding for the provider vertical: an OpenCode `completed` notification cannot
+carry a detail from this source, ever — unlike Codex's `Stop`, which had
+`last_assistant_message` waiting to be admitted once it was measured.
 
-Getting the agent's last words would mean asking the SDK client for the session's messages —
-a **different mechanism** that reads conversation content, and therefore a retention decision
-under DEC-013 rather than a parser widening. It is not proposed here.
+Getting the agent's last words would mean asking the SDK client for the session's messages — a
+**different mechanism** that reads conversation content, and therefore a retention decision
+under DEC-013 rather than a parser widening. Not proposed here.
 
 ## `permission.asked` — 1 sample
 
 ```json
 {
-  "id": "evt_077ec8868002drRikTqG0ZVBDa",
+  "id": "evt_synthetic0000000000000001",
   "type": "permission.asked",
   "properties": {
-    "id": "per_077ec8868001kKHImdAyFhgwUG",
-    "sessionID": "ses_f88138530ffed6WJgzlefG9Ahs",
+    "id": "per_synthetic000000000000000",
+    "sessionID": "ses_synthetic000000000000000",
     "permission": "bash",
-    "patterns": ["echo measured"],
-    "metadata": { "command": "echo measured" },
-    "always": ["echo *"],
-    "tool": { "messageID": "msg_...", "callID": "call_..." }
+    "patterns": ["<the literal command>"],
+    "metadata": { "command": "<the literal command>" },
+    "always": ["<a glob over commands>"],
+    "tool": { "messageID": "msg_…", "callID": "call_…" }
   }
 }
 ```
@@ -106,28 +159,37 @@ under DEC-013 rather than a parser widening. It is not proposed here.
 | field | type | present | what it holds |
 |---|---|---|---|
 | `properties.permission` | `str` | 1 of 1 | **the tool class** — `"bash"`. Names the ask without carrying it. |
-| `properties.patterns` | `str[]` | 1 of 1 | **the literal command** — `["echo measured"]` |
+| `properties.patterns` | `str[]` | 1 of 1 | **the literal command** |
 | `properties.metadata.command` | `str` | 1 of 1 | **the literal command**, again |
-| `properties.always` | `str[]` | 1 of 1 | a command glob the owner could approve standing — `["echo *"]` |
+| `properties.always` | `str[]` | 1 of 1 | a glob the owner could approve standing |
 | `properties.id` | `str` | 1 of 1 | the permission's id |
 | `properties.sessionID` | `str` | 1 of 1 | OpenCode's session id |
-| `properties.tool.messageID` / `.callID` | `str` | 1 of 1 | conversation identifiers |
+| `properties.tool.messageID` / `.callID` | `str` | 1 of 1 | conversation identifiers; **`tool` is optional per the v2 type** |
 
-**One sample, and one value.** `permission` was observed only as `"bash"`, exactly as Codex's
-`tool_name` was observed only as `"Bash"`. Its value space is **unverified beyond that
-instance**, and any consumer must be total over unrecognised values rather than assume the set.
+**One sample, one value.** `permission` was observed only as `"bash"`, exactly as Codex's
+`tool_name` was observed only as `"Bash"`. Corroborated in kind by the v2 type (`permission:
+string`), which confirms the *shape* but says nothing about the value space — any consumer must
+be total over unrecognised values.
+
+## `permission.replied` — 1 sample
+
+Recorded because it fired and was captured; **not licensed for anything**, since nothing in
+this project needs to know how the owner answered.
+
+```json
+{ "sessionID": "ses_…", "requestID": "per_…", "reply": "reject" }
+```
 
 ## The session id problem, and why it is not one
 
 `properties.sessionID` is **OpenCode's** identifier (`ses_…`), which this project has never
-heard of. Every spooled record is keyed on `REMOTE_AGENTS_SESSION_ID`, and
-`spool_agent_event` returns 0 without it.
+heard of. Every spooled record is keyed on `REMOTE_AGENTS_SESSION_ID`, and `spool_agent_event`
+returns 0 without it.
 
 **Measured: the environment variable is visible to plugin code.** A plugin reading
-`process.env.REMOTE_AGENTS_SESSION_ID` inside the OpenCode process saw
-`0191f2c2-0000-7000-8000-0000measure01`, the value the launcher had exported, and saw no other
-`REMOTE_AGENTS*` variable. So the plugin keys its records the same way every other provider's
-hook does, and OpenCode's own session id is never needed or stored.
+`process.env.REMOTE_AGENTS_SESSION_ID` inside the OpenCode process saw the value the launcher
+had exported, and saw no other `REMOTE_AGENTS*` variable. So the plugin keys its records the way
+every other provider's hook does, and OpenCode's own session id is never needed or stored.
 
 This was the one finding that could have blocked the vertical outright. It does not.
 
@@ -135,23 +197,27 @@ This was the one finding that could have blocked the vertical outright. It does 
 
 Per event, and nothing else:
 
-- **`session.idle` → `properties.sessionID` is not even needed** (the env var supplies identity).
-  The event's *occurrence* is the whole signal. **No detail. No ask.**
+- **`session.idle` → nothing.** Not even `sessionID`; identity comes from the environment
+  variable. The event's *occurrence* is the whole signal. No detail, no ask.
 - **`permission.asked` → `properties.permission` at most**, as an **ask class**, never as
-  `detail` — the same boundary DEC-074 drew for Codex's `tool_name`, and for the same reason.
-- **Never** `patterns`, `metadata` (any key), `always`, `tool`, or any field not listed above.
+  `detail` — the boundary DEC-074 drew for Codex's `tool_name`, for the same reason.
+- **`permission.replied` → nothing.**
+- **Never** `patterns`, `metadata` (any key), `always`, `tool`, `id`, or any field not listed.
   `patterns` and `metadata.command` are the literal command; `always` is a glob over commands.
-  All three would put a shell command into an unprompted phone notification.
+- **Every other event type → dropped at the handler**, by name, rather than parsed and
+  discarded later.
 
 ## Not established here
 
-- **`permission`'s value space.** One sample, one value (`"bash"`). Whether `edit`, `read`,
-  `webfetch` or others appear, and how they are spelled, is unknown.
+- **`permission`'s value space.** One sample, one value (`"bash"`). OpenCode's config schema
+  suggests a small closed set (`edit`, `bash`, `webfetch`, …) but that was not measured.
+- **Field *presence*, as distinct from field names.** From one sample, "present in 1 of 1" is
+  weak evidence that a field is always present; the v2 type marks `tool` optional, and others
+  may be in practice.
 - **Whether the `permission.ask` hook is usable.** It did not fire on the non-interactive path
-  that also auto-rejects; it was not tested on an interactive one.
-- **Why two runs hung.** Runs asking for an *edit* permission (`"edit": "ask"` configured)
-  produced only `plugin.loaded` and were killed at the timeout, where bash-permission runs
-  completed with an auto-reject. Recorded because it bears on how a live drill should be
-  driven, not because it is understood.
-- **Anything about `session.error`, `session.compacted` or the other ~30 event types** the SDK
-  declares. Only the two this project would map were pursued.
+  that also auto-rejects; it was not tested interactively.
+- **Why three runs hung.** Recorded above, not understood.
+- **`tool.execute.before`'s payload**, though it was captured twice and carries a literal
+  command and an absolute path. Not pursued because this project maps no activity to it — and
+  named here so a future reader knows it was seen and set aside, not missed.
+- **The other ~20 event types the v2 SDK declares** and which did not arrive in two short runs.
