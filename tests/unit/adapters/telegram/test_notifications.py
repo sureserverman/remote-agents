@@ -646,7 +646,7 @@ def test_a_lone_observation_still_reads_exactly_as_it_always_has() -> None:
     headline, identity, quoted = message.text.split("\n")
     assert headline.startswith("✅ <b>Finished its work</b> · ")
     assert identity == DISPLAY
-    assert quoted == "<blockquote>Ran the suite.</blockquote>"
+    assert quoted == "<blockquote expandable>Ran the suite.</blockquote>"
 
 
 def test_a_session_that_said_more_than_a_message_can_hold_says_how_much_more() -> None:
@@ -1358,3 +1358,73 @@ def test_a_reported_observation_still_carries_the_agent_s_words() -> None:
     )
 
     assert "Ran the suite; 12 green." in message.text
+
+
+# --- the expandable quotation, 2026-09-06 ---------------------------------------------------
+#
+# `<blockquote expandable>` is the spelling the LIVE API accepts, measured on 2026-09-06 and
+# recorded in `docs/acceptance-2026-09-06-telegram-expandable.md`. The documentation's other
+# candidate, `<expandable_blockquote>`, is refused outright with
+#
+#   Bad Request: can't parse entities: Unsupported start tag "expandable_blockquote"
+#
+# which is why the wrong spelling is asserted against by name below rather than merely left
+# untested: emitting it would have the API refuse every notification carrying a detail, and
+# under DEC-049 a permanently-refused group stops the whole delivery pass — a chat-wide
+# outage rather than one lost message.
+
+
+def test_activity_text_quotes_a_lone_detail_expandably() -> None:
+    """One observation's detail is a collapsed quotation the owner can open."""
+    message = render_activity(
+        _group(_activity(ActivityKind.COMPLETED, detail="Refactored the parser.")),
+        display=DISPLAY,
+        open_session=OPEN,
+    )
+    assert "<blockquote expandable>Refactored the parser.</blockquote>" in message.text
+
+
+def test_the_blockquote_spelling_is_the_one_the_live_api_accepts() -> None:
+    """The refused spelling never appears, on any kind, with or without a detail.
+
+    Swept over the whole kind set rather than checked on the one case above: the tag is
+    written in one place today, and this is the assertion that survives it being written in a
+    second.
+    """
+    for kind in EVERY_KIND:
+        for detail in ("something the agent said", None):
+            message = render_activity(
+                _group(_activity(kind, detail=detail)), display=DISPLAY, open_session=OPEN
+            )
+            assert "<expandable_blockquote" not in message.text, kind
+            assert "</expandable_blockquote>" not in message.text, kind
+
+
+def test_a_message_with_no_detail_carries_no_blockquote_at_all() -> None:
+    """An empty collapsed quotation is a control that opens onto nothing."""
+    message = render_activity(
+        _group(_activity(ActivityKind.COMPLETED, detail=None)),
+        display=DISPLAY,
+        open_session=OPEN,
+    )
+    assert "blockquote" not in message.text
+
+
+def test_a_grouped_message_keeps_its_bullets_rather_than_a_blockquote_each() -> None:
+    """Two or more observations fold their details onto their headline lines.
+
+    Unchanged by the expandable work and asserted here so it stays that way: quoting each
+    member would put three observations on six lines with nothing saying which text belongs to
+    which headline, which is the render `activity_text`'s docstring rejects.
+    """
+    message = render_activity(
+        _group(
+            _activity(ActivityKind.COMPLETED, detail="first thing"),
+            _activity(ActivityKind.NEEDS_ANSWER, detail="second thing"),
+        ),
+        display=DISPLAY,
+        open_session=OPEN,
+    )
+    assert "blockquote" not in message.text
+    assert "first thing" in message.text
+    assert "second thing" in message.text

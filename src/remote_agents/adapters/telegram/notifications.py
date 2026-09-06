@@ -187,9 +187,18 @@ def activity_text(group: SessionGroup, *, display: str) -> str:
 
     **The shape, since the redesign:** a bold headline for the newest observation with its mark
     in front and its age behind (`❓ <b>Waiting for an answer</b> · 2m`), then the session's
-    compact identity on a plain line, then what the agent said in a `<blockquote>`. Bot API 7.0
-    introduced the block quote; the pinned `python-telegram-bot` speaks it, and a client too old
-    to draw one shows the text unquoted rather than refusing the message.
+    compact identity on a plain line, then what the agent said in a collapsed
+    `<blockquote expandable>` the owner opens with a tap.
+
+    **That attribute spelling is measured, not read.** The API documentation's own HTML section
+    was read as naming the tag `<expandable_blockquote>`; sent, that is refused outright --
+    `can't parse entities: Unsupported start tag "expandable_blockquote"` -- which would cost
+    every notification carrying a detail, not merely its formatting, and under DEC-049 a
+    permanently-refused group stops the whole delivery pass. `<blockquote expandable>` is what
+    the live API accepts, and it answers with an `expandable_blockquote` entity.
+    `docs/acceptance-2026-09-06-telegram-expandable.md` is the measurement. A client too old to
+    draw one shows the text unquoted rather than refusing the message, which is the same
+    argument the plain block quote was adopted under.
 
     **A group of two or more keeps that shape and lists its members underneath.** The headline
     is the newest observation's; each member gets a bullet with its own headline words and its
@@ -250,7 +259,12 @@ def _lines(
     they must be told apart. A detail is already escaped by the time it reaches here."""
     if not bulleted:
         detail = details[0] if details else None
-        return [f"<blockquote>{detail}</blockquote>"] if detail else []
+        # `<blockquote expandable>`, and never `<expandable_blockquote>`. The second is what
+        # the API documentation's own HTML section was read as naming, and it is refused
+        # outright -- `can't parse entities: Unsupported start tag` -- which would take down
+        # every notification carrying a detail, not just its formatting. Measured against the
+        # live API on 2026-09-06: `docs/acceptance-2026-09-06-telegram-expandable.md`.
+        return [f"<blockquote expandable>{detail}</blockquote>"] if detail else []
     return [
         f"{_BULLET}{kind_headline(activity.kind)}" + (f" — {detail}" if detail else "")
         for activity, detail in zip(shown, details, strict=True)
