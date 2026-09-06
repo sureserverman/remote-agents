@@ -660,22 +660,43 @@ asymmetry is deliberate and is the half worth reading twice: an approval notific
 hook or from the pane title. The payload does carry fields that could describe it, and this
 service reads none of them: `tool_input.command` is the literal command and
 `tool_input.description` reads like a safe summary while restating the path, so both are
-refused outright. One field — `tool_name`, the tool class, e.g. `Bash` — would be safe, and is
-declined for a different reason: it would land in the field that means *the agent's own words*,
-where a bare token reads as a sentence the agent wrote. Saying "waiting for an answer about a
-shell command" instead would be an improvement, and it is a wording decision shared with
-Claude's identical notification (DEC-067). So a Codex approval
-still tells you *that* an agent is waiting and never *what for*; open the session to find out.
+refused outright.
 
-`opencode` and `cursor-agent` report nothing at all: they publish no hooks and set
-no title marker, and the pane-digest fallback that was their only signal was retired on 2026-08-30
-for telling the owner nothing they could act on. The hooks are not installed by the unit, by
-`serve`, or by `doctor`. Install them once per host:
+**One field is now read, and it is not a description.** `tool_name` — the tool class, e.g.
+`Bash` — was declined until 2026-09-06 because the only field it could have landed in was the
+one that means *the agent's own words*, where a bare token reads as a sentence the agent wrote.
+That was a wording decision nobody had taken (DEC-067), and DEC-074 took it: the token goes in a
+field of its own, and each surface words it itself. So a Codex approval from the **hook** now
+tells you it is waiting *about a shell command*, and still names no command. An approval read
+from the **pane title** says only that something is waiting, because a title carries no tool
+class to read — open the session to find out what.
+
+`opencode` reports through a plugin rather than a hook command, since 2026-09-06. OpenCode
+has no hook-command mechanism at all; what it does publish is a plugin API, so
+`install-agent-hooks --provider opencode` writes a generated `.mjs` file under
+`~/.config/opencode/remote-agents/` and one entry naming it in `opencode.json`'s `plugin`
+array. It reports two of the four kinds — `completed` and `needs_answer` — and **its
+`completed` carries no closing sentence, permanently**: the `session.idle` event it comes from
+has a payload of one field, and that field is OpenCode's own session id
+(`docs/acceptance-2026-09-06-opencode-activity.md`). That is a property of the event, not a
+parser waiting to be widened. Neither limit kind is reported either, for the reason Codex's are
+not: there is no `StopFailure` equivalent to read one from.
+
+`cursor-agent` reports nothing at all: it publishes neither a hook system nor a plugin one and
+sets no title marker, and the pane-digest fallback that was its only signal was retired on
+2026-08-30 for telling the owner nothing they could act on.
+
+None of these are installed by the unit, by `serve`, or by `doctor`. Install them once per host:
 
 ```bash
 uv run --locked remote-agents install-agent-hooks
 uv run --locked remote-agents install-agent-hooks --provider codex
+uv run --locked remote-agents install-agent-hooks --provider opencode
 ```
+
+`--remove` takes any of them back out. For opencode that deletes the generated plugin file as
+well as its entry, and it deletes only a file carrying this project's own generated-file marker:
+anything else standing at that path is left alone.
 
 For Codex, then run `/hooks` in the local Codex session and review the exact `remote-agents`
 definition before trusting it. If the command, event names, or destination are not the definition
@@ -785,15 +806,20 @@ unrelated pane on the same server is silent, as is any `claude` started outside 
 ```bash
 uv run --locked remote-agents install-agent-hooks --remove
 uv run --locked remote-agents install-agent-hooks --provider codex --remove
+uv run --locked remote-agents install-agent-hooks --provider opencode --remove
 ```
 
-Use the first command for Claude (the default provider) and the second for Codex; removal must name
-the same provider that installed the hooks. Each deletes only the groups its installer wrote and
+Use the first command for Claude (the default provider), the second for Codex and the third for
+OpenCode; removal must name the same provider that installed the hooks. Each deletes only the
+groups — for OpenCode, the one `plugin` entry — its installer wrote, and
 restores that provider settings file to its pre-install content **byte for byte** — the file's own
 indentation, separators and trailing newline are recovered from its original bytes rather than
 re-picked by a JSON writer, and the install refuses outright when it cannot promise that. A group
 you have hand-edited to run this command beside one of your own is left alone, because failing to
-remove a hook is recoverable and deleting somebody else's is not. On a host that was never installed
+remove a hook is recoverable and deleting somebody else's is not. OpenCode's removal applies that
+same rule to a second artifact: it deletes the generated `.mjs` file only when the file begins with
+this project's own generated-file marker, so anything else standing at that path — a file you wrote,
+or one another tool put there — is left where it is. On a host that was never installed
 to, `--remove` reports `no agent hooks in <path>` or `no settings file at <path>` and exits 0.
 
 ### When notifications stop arriving and nothing complains

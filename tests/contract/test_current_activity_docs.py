@@ -45,6 +45,44 @@ def test_current_docs_describe_the_qualified_codex_activity_boundary() -> None:
     assert not re.search(obsolete_claim, current)
 
 
+def test_current_docs_say_what_opencode_reports_and_what_it_never_will() -> None:
+    """OpenCode joined the reporting providers on 2026-09-06, and the docs have to say so.
+
+    This file exists because a document that still describes a retired capability sends an
+    operator to wait for a notification that cannot arrive. The same failure has a mirror image,
+    and this is it: a document that still calls a provider unwatched sends them to *not* install
+    the thing that would notify them.
+
+    Both halves again, for the reason the Codex case needed both. OpenCode reports two kinds, and
+    its `completed` carries no closing sentence — not yet, but ever, because `session.idle`'s
+    payload is one field and that field is a session id. An operator told only the first half
+    will wait for words that are never coming, which is the exact complaint the sibling case
+    above was written from.
+    """
+    readme = (_ROOT / "README.md").read_text(encoding="utf-8").lower()
+    runbook = (_ROOT / "docs" / "operator-runbook.md").read_text(encoding="utf-8").lower()
+
+    assert "install-agent-hooks --provider opencode" in readme
+    assert "install-agent-hooks --provider opencode --remove" in runbook
+    assert "no closing sentence" in readme + runbook, (
+        "the negative half: an OpenCode completion is wordless permanently, not pending"
+    )
+    unwatched = re.compile(
+        r"opencode[^.]{0,120}(no hooks|takes no hooks|unobserved|publish(es)? no"
+        r"|nothing observes|reports? nothing|contributes? none)",
+        re.IGNORECASE,
+    )
+    offenders = [
+        f"{path.relative_to(_ROOT)}:{number}: {line.strip()}"
+        for path in _CURRENT_ACTIVITY_DOCS
+        for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1)
+        if unwatched.search(line)
+    ]
+    assert offenders == [], (
+        "a current document still calls opencode unwatched:\n" + "\n".join(offenders)
+    )
+
+
 def test_no_current_document_still_offers_the_retired_pane_quiet_fallback() -> None:
     """The fallback was retired on 2026-08-30; a document still promising it is a false claim.
 

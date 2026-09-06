@@ -289,9 +289,12 @@ qualified enable/disable interaction; it never carries a prompt, transcript, or 
 
 The service also speaks first when a managed agent stops working: it has
 finished, it hit a usage limit, one reply hit its output length limit, or it is waiting for an
-answer. Those four are the whole vocabulary. `opencode` and `cursor-agent` contribute none of
-them — neither publishes a hook system, so nothing observes them at all — while `claude`,
-`claude-remote` and `codex` each report for themselves. It speaks
+answer. Those four are the whole vocabulary. `cursor-agent` contributes none of them — it
+publishes nothing a hook or a plugin could subscribe to, so nothing observes it at all — while
+`claude`, `claude-remote`, `codex` and `opencode` each report for themselves. OpenCode joined
+on 2026-09-06 through a generated plugin rather than a hook command, and reports two of the
+four: it has finished, and it is waiting for an answer. Its completion carries no closing
+sentence, permanently — the event it comes from has no field that could hold one. It speaks
 only about a session that is still live, and only when
 there is something to do about it: an agent reporting after the owner has already stopped its
 session is telling them their own action back. **One session gets one message, not one per
@@ -316,7 +319,14 @@ not call `PermissionRequest`; for those, the managed tmux pane's content-free `A
 title produces one inferred `needs_answer` notification until it clears. Neither path exposes a
 remote approval action or retains the command, prompt, path, or transcript. A completed Codex
 turn does carry the agent's own last line, bounded as Claude's is; an approval carries no words at
-all. Codex does not claim rate- or output-limit notifications.
+all — it names the class of thing being waited on, "about a shell command", and never the command.
+Codex does not claim rate- or output-limit notifications.
+OpenCode installs a generated plugin instead of hook commands, with
+`remote-agents install-agent-hooks --provider opencode`; the same command with `--remove` deletes
+the plugin file as well as its `opencode.json` entry. It reports `completed` and `needs_answer`,
+claims neither limit kind for the same reason Codex does not, and its `completed` carries no
+closing sentence — the event has no field that could hold one, so that is permanent rather than
+pending.
 
 See [the operator runbook](docs/operator-runbook.md) for acceptance, recovery, and rollback, and
 [agent activity notifications](docs/operator-runbook.md#agent-activity-notifications) for
