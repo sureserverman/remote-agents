@@ -51,11 +51,16 @@ class _PluginEntry:
     relative_path: Path
     """Where the generated file goes, relative to the directory holding the settings file.
 
-    Relative, and matched as a *tail*, for the reason `_COMMAND_TAIL` is matched as one: the
-    head can legitimately move -- a different home, a redirected `--settings` for a drill -- and
-    an entry whose head moved is still our entry. The tail is distinctive enough to say so
-    (a directory named for this project plus the file's own name), and narrow enough that a
-    file merely sharing the basename somewhere else is not claimed.
+    Relative so that a redirected `--settings` -- a drill, a test, an `XDG_CONFIG_HOME` -- moves
+    both artifacts together; the absolute path is computed per install from the settings file's
+    own directory.
+
+    **It is not matched as a tail.** An earlier version of this docstring said it was, by analogy
+    with `_COMMAND_TAIL`, and that analogy was wrong for a path: `_is_our_plugin_entry` compares
+    the whole resolved path, because a checkout of this project is itself called `remote-agents`
+    and the two-segment tail therefore matched an operator's own working-tree copy. A round-2
+    verification pass found this paragraph still standing after the code beneath it had changed
+    -- on the field's own definition, which is the first place a maintainer looks.
     """
 
     marker: str
@@ -345,7 +350,7 @@ def _with_our_groups(
 
 
 def _without_our_groups(
-    document: dict[str, Any], provider: _HookProvider, ours: Path | None = None
+    document: dict[str, Any], provider: _HookProvider, ours: Path | None
 ) -> dict[str, Any]:
     """Drop our groups, and the containers left holding nothing once they are gone.
 
@@ -358,6 +363,11 @@ def _without_our_groups(
     our file in a form this installer did not write is theirs (`_is_our_plugin_entry`).
     """
     if provider.plugin is not None:
+        # No default on `ours`, and this is why. It defaulted to `None` for one commit, and a
+        # round-2 verification pass measured what a caller who forgot it got: `_is_our_plugin_entry`
+        # matches nothing, so removal silently KEEPS our own entry and reports "no agent hooks" --
+        # a guard whose whole purpose is not leaving executable code in an operator's config,
+        # failing open. Every argument here is now one a caller has to supply on purpose.
         entries = document.get(provider.plugin.key)
         if not isinstance(entries, list):
             return document
@@ -428,7 +438,7 @@ def _refuse_a_spool_others_can_reach(activity_directory: Path | None) -> None:
 
 
 def _foreign_variant_note(
-    base: dict[str, Any], provider: _HookProvider, ours: Path | None = None
+    base: dict[str, Any], provider: _HookProvider, ours: Path | None
 ) -> str:
     """Name the events already running our subcommand in a form this installer will not manage.
 
@@ -541,7 +551,7 @@ def _refuse_when_removal_would_not_restore(
     base: dict[str, Any],
     installed: dict[str, Any],
     provider: _HookProvider,
-    ours: Path | None = None,
+    ours: Path | None,
 ) -> None:
     """Run the removal now and refuse the install unless it lands back on the original bytes.
 
@@ -582,7 +592,7 @@ def _refuse_when_removal_would_not_restore(
 
 
 def _holds_our_groups(
-    document: dict[str, Any], provider: _HookProvider, ours: Path | None = None
+    document: dict[str, Any], provider: _HookProvider, ours: Path | None
 ) -> bool:
     """Report whether a previous install is present, which is what makes this a reinstall."""
     if provider.plugin is not None:
@@ -601,7 +611,7 @@ def _holds_our_groups(
 
 
 def _foreign_plugin_note(
-    base: dict[str, Any], provider: _HookProvider, ours: Path | None = None
+    base: dict[str, Any], provider: _HookProvider, ours: Path | None
 ) -> str:
     """Name a plugin entry pointing at our file in a form this installer will not manage.
 
@@ -742,21 +752,26 @@ def _write_plugin(path: Path, source: str, marker: str) -> bool:
     # because a reinstall found the bytes equal, answered "already current" and returned before
     # reaching the mode. A world-writable file the agent loads and executes surviving every
     # subsequent install is the exact risk this stage declared, repaired on no run at all.
-    _open_our_directory(path.parent)
+    tightened = _open_our_directory(path.parent)
     # Whole bytes, never a prefix. Comparing only the first `len(content)` bytes -- which this
     # briefly did, as a fix for reading a whole file to inspect one line -- reads a file holding
     # our exact content *plus appended code* as unchanged, so an install would decline to repair
     # the one shape most worth repairing. The same evaluator caught that in the working tree
     # before it was committed. `_head` is for the marker checks, where a prefix is the question.
     if path.is_file() and path.read_bytes() == content:
+        # BOTH modes, not just the file's. The first version of this counted only the file, which
+        # left the same defect one line up half-fixed -- and on the more dangerous half: 0777 on
+        # the directory lets anyone unlink the 0600 plugin and leave a file of their own, which
+        # is the planted-file case this whole chain exists for. The exposure was always closed
+        # (the directory is tightened unconditionally); it was the *reporting* that was silent.
         repaired = stat.S_IMODE(path.stat().st_mode) != 0o600
         os.chmod(path, 0o600)
-        return repaired
+        return repaired or tightened
     _write_atomically(path, content, 0o600, follow_symlink=False)
     return True
 
 
-def _open_our_directory(directory: Path) -> None:
+def _open_our_directory(directory: Path) -> bool:
     """Create the one directory this installer owns, owner-only, refusing a link at *its* name.
 
     `open_private_directory` refuses a symlink at **any** component of the path, which is right
@@ -770,6 +785,9 @@ def _open_our_directory(directory: Path) -> None:
     at the directory this installer creates is not: nothing put one there but somebody else.
     So the ancestors are followed and only the leaf is refused, and the refusal names the link
     and its target rather than the directory the operator can see is fine.
+
+    Returns whether an existing directory's mode had to be tightened, so an install that repaired
+    one can say so instead of answering "already current" over it.
     """
     if directory.is_symlink():
         raise HookInstallError(
@@ -783,6 +801,7 @@ def _open_our_directory(directory: Path) -> None:
             "nothing was written"
         )
     try:
+        loose = directory.is_dir() and stat.S_IMODE(directory.stat().st_mode) != 0o700
         directory.mkdir(mode=0o700, exist_ok=True)
         os.chmod(directory, 0o700)
     except OSError as error:
@@ -790,6 +809,7 @@ def _open_our_directory(directory: Path) -> None:
             f"cannot create {directory} as an owner-only directory ({error}); it has been left "
             "alone and nothing was written"
         ) from error
+    return loose
 
 
 def _head(path: Path, size: int) -> bytes:
@@ -836,5 +856,17 @@ def _remove_plugin(path: Path, provider: _HookProvider) -> bool:
     expected = provider.plugin.marker.encode("utf-8")
     if _head(path, len(expected)) != expected:
         return False
-    path.unlink()
+    try:
+        path.unlink()
+    except OSError as error:
+        # A sentence, not a traceback. `bootstrap` catches `HookInstallError` and prints it; a
+        # bare `PermissionError` reaching there shows the operator a stack trace instead -- and
+        # since the config entry is written before this runs, it would abort a run that has
+        # already half-succeeded. A round-2 verification pass found it by chmod-ing the
+        # directory read-only between the two.
+        raise HookInstallError(
+            f"the {provider.name} plugin entry has been removed from the configuration, but "
+            f"{path} itself could not be deleted ({error}). Nothing loads it now; delete it by "
+            "hand, or fix the permission and run this again."
+        ) from error
     return True

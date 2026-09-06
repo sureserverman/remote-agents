@@ -64,7 +64,7 @@ def _entries(settings: Path) -> list:
 def test_the_settings_path_and_the_plugin_path_are_both_under_the_named_home(tmp_path: Path):
     """`--settings` redirects the config; the plugin follows it rather than the real home."""
     assert (
-        default_settings_path(tmp_path, provider="opencode")
+        default_settings_path(tmp_path, provider="opencode", environment={})
         == tmp_path / ".config" / "opencode" / "opencode.json"
     )
 
@@ -332,6 +332,26 @@ def test_a_reinstall_repairs_modes_loosened_since_the_last_one(tmp_path: Path) -
     assert outcome.changed, "a repaired mode is something the operator should be told about"
 
 
+def test_a_reinstall_that_only_tightens_the_directory_still_reports_a_change(
+    tmp_path: Path,
+) -> None:
+    """The directory is the more dangerous half, and it was the silent one.
+
+    0777 on it lets anyone unlink the 0600 plugin and leave a file of their own -- the planted-file
+    case the guard chain exists for. The exposure was always closed, because the directory is
+    tightened on every run; what a round-2 verification pass found was that only the *file's*
+    repaired mode counted as a change, so an install that fixed this said "already current".
+    """
+    settings = _config(tmp_path)
+    install_agent_hooks(settings, provider="opencode")
+    _plugin_path(settings).parent.chmod(0o777)
+
+    outcome = install_agent_hooks(settings, provider="opencode")
+
+    assert stat.S_IMODE(_plugin_path(settings).parent.stat().st_mode) == 0o700
+    assert outcome.changed, "a repaired directory mode is as much news as a repaired file mode"
+
+
 def test_a_plugin_file_with_our_content_and_something_appended_is_rewritten(
     tmp_path: Path,
 ) -> None:
@@ -369,6 +389,22 @@ def test_an_xdg_config_home_moves_both_artifacts(tmp_path: Path) -> None:
     )
 
     assert resolved == relocated / "opencode" / "opencode.json"
+
+
+def test_the_ambient_environment_is_read_at_call_time_when_none_is_passed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The production callers pass nothing, so the default has to be the real environment.
+
+    Asserted separately from the explicit-mapping cases because those would pass just as well if
+    the parameter had quietly become the only source, which would make `install-agent-hooks`
+    stop honouring the variable on a real host while every test stayed green.
+    """
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "ambient"))
+
+    assert default_settings_path(tmp_path, provider="opencode") == (
+        tmp_path / "ambient" / "opencode" / "opencode.json"
+    )
 
 
 def test_a_relative_xdg_config_home_is_ignored_rather_than_resolved(tmp_path: Path) -> None:
@@ -697,3 +733,31 @@ def test_a_named_pipe_standing_at_our_name_is_refused_rather_than_replaced(tmp_p
 
     assert stat.S_ISFIFO(plugin.lstat().st_mode)
     assert _entries(settings) == [_FOREIGN_PLUGIN]
+
+
+def test_no_shape_aware_helper_lets_a_caller_forget_which_file_is_ours() -> None:
+    """A structural assertion, because the property is an absence and a case cannot pin it.
+
+    `ours` carried a `None` default for one commit. A round-2 verification pass measured the
+    cost: a caller who forgot it got a removal that silently KEPT our own entry and reported
+    "no agent hooks" — the guard whose whole purpose is not leaving executable code in an
+    operator's configuration, failing open. Every production call site passed it, so no
+    behavioural test could ever have caught the default; what is checkable is that the default
+    is gone, which is the decision rather than one of its consequences.
+    """
+    import inspect
+
+    from remote_agents.adapters.agents import hook_settings
+
+    for name in (
+        "_without_our_groups",
+        "_holds_our_groups",
+        "_foreign_variant_note",
+        "_foreign_plugin_note",
+        "_refuse_when_removal_would_not_restore",
+        "_is_our_plugin_entry",
+    ):
+        parameter = inspect.signature(getattr(hook_settings, name)).parameters["ours"]
+        assert parameter.default is inspect.Parameter.empty, (
+            f"{name}'s `ours` has a default again; a caller that forgets it disables the guard"
+        )

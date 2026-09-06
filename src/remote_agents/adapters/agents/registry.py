@@ -305,7 +305,7 @@ class HookInstallOutcome:
 
 
 def default_settings_path(
-    home: Path, *, provider: str = "claude", environment: Mapping[str, str] = os.environ
+    home: Path, *, provider: str = "claude", environment: Mapping[str, str] | None = None
 ) -> Path:
     """Locate the settings file the agent reads, given the home directory to look under.
 
@@ -324,7 +324,13 @@ def default_settings_path(
     selected = _provider(provider)
     relative = selected.configuration_relative_path
     if relative.parts and relative.parts[0] == ".config":
-        configured = environment.get("XDG_CONFIG_HOME")
+        # Resolved here rather than bound as a default at import: `os.environ` as a default
+        # argument is a live mapping and so reads correctly for `monkeypatch.setenv`, but it
+        # freezes the *object*, which a test replacing `os.environ` wholesale would not see.
+        # Passing `{}` is also how a caller says "answer about this home, not this shell" --
+        # which two tests needed and did not have.
+        resolved = os.environ if environment is None else environment
+        configured = resolved.get("XDG_CONFIG_HOME")
         if configured and Path(configured).is_absolute():
             return Path(configured).joinpath(*relative.parts[1:])
     return home / relative

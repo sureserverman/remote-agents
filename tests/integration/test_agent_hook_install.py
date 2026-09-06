@@ -176,7 +176,10 @@ def test_upgrading_removes_a_group_left_by_a_version_that_still_installed_it() -
 
     from remote_agents.adapters.agents.registry import _CLAUDE
 
-    kept = _without_our_groups(lived_in, _CLAUDE)
+    # `None`: claude declares no `_PluginEntry`, so there is no file of ours to name. The
+    # argument is required rather than defaulted because for a plugin provider forgetting
+    # it makes removal silently keep our own entry.
+    kept = _without_our_groups(lived_in, _CLAUDE, None)
 
     assert kept["hooks"]["SessionEnd"] == [
         {"hooks": [{"type": "command", "command": 'bash "/home/tester/session-end.sh"'}]}
