@@ -13,6 +13,7 @@ from typing import Any
 import pytest
 
 from remote_agents.adapters.agents.activity_spool import (
+    _PLAIN_TOKEN,
     MAXIMUM_PAYLOAD_BYTES,
     SESSION_ID_VARIABLE,
     spool_agent_event,
@@ -274,3 +275,47 @@ def test_two_events_in_the_same_tick_do_not_overwrite_each_other(tmp_path: Path)
         "probe",
         "second",
     }
+
+
+def test_the_drain_is_never_stricter_than_the_spool_about_an_ask_token() -> None:
+    """The two ends of the spool hold the same pattern, and nothing pinned them together.
+
+    `activity_spool._PLAIN_TOKEN` bounds what a hook may WRITE; `application.activity._ASK_TOKEN`
+    bounds what the drain will READ. They are deliberately two copies rather than one shared
+    constant, and that argument is sound: a different process wrote the file, so the far end
+    revalidates untrusted input rather than trusting the writer — the same reasoning
+    `MAXIMUM_DETAIL_CHARACTERS` is written down for.
+
+    **What the argument does not buy is silence when they diverge.** Widen the spool's pattern
+    alone — to admit a longer tool name, say — and the drain quietly rejects what the spool now
+    legitimately writes: a working ask degrades to `None`, no test fails anywhere, because each
+    side's tests only ever exercise its own pattern. That is the shape of the `error_type` /
+    `end_reason` incident this module's own comment records, and of the allow-list mutant that
+    survived earlier in this same stage.
+
+    The asserted direction is the one that matters: **everything the spool can write, the drain
+    must accept.** The reverse is harmless — a drain that accepts more than any writer produces
+    rejects nothing real.
+    """
+    from remote_agents.application.activity import _ASK_TOKEN
+
+    writable = [
+        "Bash",
+        "a",
+        "A" * 64,
+        "Some_Tool-42",
+        "-",
+        "_",
+        "0",
+        "web-fetch_2",
+    ]
+    for token in writable:
+        assert _PLAIN_TOKEN.fullmatch(token), f"fixture {token!r} is not spool-writable"
+        assert _ASK_TOKEN.fullmatch(token), (
+            f"the spool can write {token!r} and the drain refuses it — the two patterns have "
+            "drifted, and a real ask would silently become None"
+        )
+
+    # And the bound itself, since a length change is the likeliest divergence.
+    assert _PLAIN_TOKEN.fullmatch("A" * 64) and _ASK_TOKEN.fullmatch("A" * 64)
+    assert not _PLAIN_TOKEN.fullmatch("A" * 65) and not _ASK_TOKEN.fullmatch("A" * 65)
