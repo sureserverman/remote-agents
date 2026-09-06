@@ -916,15 +916,22 @@ move re-binds the
 screen's callback tokens to the new message, so no button on it dies; if the move fails, the
 notifications are still delivered and the menu simply stays where it was.
 
-| Kind | Sentence the owner sees | Source | Reported or inferred |
+| Kind | Headline the owner sees | Source | Reported or inferred |
 |---|---|---|---|
-| `completed` | "The agent has finished its work." | Claude's `Stop` hook | reported |
-| `limit_reached` | "The agent stopped after reaching a usage limit." | Claude's `StopFailure` hook, `error: rate_limit` | reported |
-| `output_limit` | "The agent stopped at its output length limit for one reply." | Claude's `StopFailure` hook, `error: max_output_tokens` | reported |
-| `needs_answer` | "❓ Waiting for an answer" | Claude's `Notification` hook, `notification_type: permission_prompt` or `agent_needs_input` | reported |
+| `completed` | ✅ **Finished its work** | Claude's `Stop` hook | reported |
+| `limit_reached` | ⛽ **Hit a usage limit** | Claude's `StopFailure` hook, `error: rate_limit` | reported |
+| `output_limit` | 📏 **Hit its output ceiling** | Claude's `StopFailure` hook, `error: max_output_tokens` | reported |
+| `needs_answer` | ❓ **Waiting for an answer** | Claude's `Notification` hook, `notification_type: permission_prompt` or `agent_needs_input` | reported |
 
-All four are the agent reporting on itself, and each carries at most one bounded, escaped
-line of what it last said. Everything else those hook fields can carry — every other value of
+The four sentences this table used to quote ("The agent has finished its work.") were replaced
+by these headlines on 2026-09-02; the table kept the old wording until 2026-09-06, which is
+the drift a runbook is least able to afford — it is read when something is wrong.
+
+All four are the agent reporting on itself, and each may carry at most one bounded, escaped
+line of what it last said. **Since 2026-09-06 that line is drawn collapsed**, inside a
+`<blockquote expandable>` the owner opens with a tap, so it is one gesture away rather than on
+screen — the headline and the session's identity are what a glance gives them. A notification
+with nothing to quote carries no quotation at all. Everything else those hook fields can carry — every other value of
 `error`, every other `notification_type` — is dropped rather than mapped to the nearest neighbour:
 reporting the wrong reason an agent stopped is worse than reporting nothing.
 

@@ -608,11 +608,19 @@ def test_a_session_with_several_things_to_say_gets_one_message_saying_all_of_the
     well as their content, because a renderer that concatenated the three into a paragraph
     would satisfy a substring check and be unreadable on a phone.
     """
+    # Distinct, ascending timestamps. They shared one until 2026-09-06, and that tie is why
+    # this test passed while `activity_text` headlined `shown[0]` -- the STALEST shown line --
+    # against its own comment below: with equal stamps the stable sort makes first-appearance
+    # and newest the same element, so the assertion could not tell the two apart.
     message = render_activity(
         _group(
-            _activity(ActivityKind.COMPLETED, detail="Ran the suite."),
-            _activity(ActivityKind.NEEDS_ANSWER, detail="Overwrite config.toml?"),
-            _activity(ActivityKind.LIMIT_REACHED),
+            _activity(ActivityKind.COMPLETED, detail="Ran the suite.", observed_at=OBSERVED),
+            _activity(
+                ActivityKind.NEEDS_ANSWER,
+                detail="Overwrite config.toml?",
+                observed_at=OBSERVED + timedelta(minutes=1),
+            ),
+            _activity(ActivityKind.LIMIT_REACHED, observed_at=OBSERVED + timedelta(minutes=2)),
         ),
         display=DISPLAY,
         open_session=OPEN,
@@ -620,8 +628,9 @@ def test_a_session_with_several_things_to_say_gets_one_message_saying_all_of_the
 
     body = message.text.split("\n")
     # The headline is the newest observation's; the identity follows it on its own line; then
-    # one bulleted line per observation, its own headline words with the detail folded on.
-    assert body[0].startswith("✅ <b>Finished its work</b> · ")
+    # one bulleted line per observation, oldest first, its own headline words with the detail
+    # folded on -- so the bullets read as a timeline while the headline is the latest news.
+    assert body[0].startswith("⛽ <b>Hit a usage limit</b> · ")
     assert body[1] == DISPLAY
     assert len(body) == 5, "a headline, the identity, and one line per observation"
     assert "Finished its work" in body[2] and "Ran the suite." in body[2]
@@ -1428,3 +1437,107 @@ def test_a_grouped_message_keeps_its_bullets_rather_than_a_blockquote_each() -> 
     assert "blockquote" not in message.text
     assert "first thing" in message.text
     assert "second thing" in message.text
+
+
+def test_activity_text_headlines_the_newest_observation_not_the_oldest() -> None:
+    """The headline names the freshest thing the session said, and dates it.
+
+    It did not. `grouped_for_delivery` orders a group **oldest-first** so the message reads as
+    a timeline, and `shown_in_message` returns the newest that fit as a tail slice — so within
+    `shown`, the newest is at `[-1]` and `shown[0]` is the *stalest* line being shown.
+    `activity_text` took `shown[0]`, while its own docstring said "a bold headline for the
+    newest observation" and the existing shape test's comment said the same.
+
+    Nothing caught it because every fixture that grouped observations gave them **one shared
+    timestamp**, where the stable sort makes first-appearance and newest the same element.
+    This one dates them a minute apart, which is the whole of what it takes.
+
+    Why it matters more than a wrong age: the headline is the sentence the owner reads on a
+    locked phone. A session that finished, was then asked something, and then hit a limit
+    announced itself as "Finished its work" — the one line of the three that needs nothing
+    from them — and buried the question in a bullet underneath.
+    """
+    older = _activity(ActivityKind.COMPLETED, detail="a", observed_at=OBSERVED)
+    newer = _activity(
+        ActivityKind.NEEDS_ANSWER, detail="b", observed_at=OBSERVED + timedelta(minutes=1)
+    )
+    message = render_activity(
+        SessionGroup(older.session_id, (older, newer)), display=DISPLAY, open_session=OPEN
+    )
+
+    headline = message.text.split("\n")[0]
+    assert "Waiting for an answer" in headline, headline
+    assert "Finished its work" not in headline, headline
+
+
+def test_activity_text_reserves_the_name_slot_even_when_the_detail_share_is_the_binding_bound(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The session can still be named when a detail is allowed to spend the whole budget.
+
+    `activity_text` measures a fixed skeleton, divides what is left among the details, and
+    fits the identity into whatever remains — so the skeleton has to include every character
+    the message will actually carry. It did not include the block quotation's own wrapper:
+    the skeleton was built with `[None] * len(shown)`, and `_lines` returns `[]` for a falsy
+    detail on the single-observation path, so `<blockquote expandable>…</blockquote>` was
+    absent from the sum entirely rather than merely stale by the eleven units `expandable`
+    added.
+
+    **Why the existing budget test could not see it.** `_MAXIMUM_DETAIL_UNITS` (240) is far
+    below the ~4,000-unit share that miscalculation produces, so the cap — not the share —
+    decided every real message, and the final `room` step is computed from the *rendered*
+    body, which does carry the true tag length. Both masks hold today and neither is a reason
+    for the arithmetic to be wrong; raising the detail cap would remove the first, and the
+    second only ever protected the 4,096 ceiling, never the name.
+
+    So this raises the cap, which makes `share` the binding bound, and asserts the thing the
+    under-count actually costs: **`_RESERVED_NAME_UNITS` worth of room for the identity**.
+    Measured, the wrapper's absence spends 37 of those 48 units on the detail instead —
+    the name renders in 11 — and a message the owner cannot attribute to a session is the
+    failure `_RESERVED_NAME_UNITS`' own docstring is about.
+    """
+    monkeypatch.setattr(notifications, "_MAXIMUM_DETAIL_UNITS", 100_000)
+    message = render_activity(
+        _group(_activity(ActivityKind.COMPLETED, detail="d" * 20_000)),
+        display="n" * 500,
+        open_session=OPEN,
+    )
+
+    headline, name, _quoted = message.text.split("\n")
+    assert _utf16_units(message.text) <= MAX_TELEGRAM_TEXT_UNITS
+    assert _utf16_units(name) >= notifications._RESERVED_NAME_UNITS, (
+        f"the identity got {_utf16_units(name)} units of the "
+        f"{notifications._RESERVED_NAME_UNITS} reserved for it"
+    )
+    assert headline.startswith("✅")
+
+
+def test_the_operator_runbook_quotes_the_headlines_the_code_actually_sends() -> None:
+    """The runbook's kind table is checked against the vocabulary, not trusted.
+
+    It drifted for four days without anyone noticing: the four sentences it quoted ("The agent
+    has finished its work.") were replaced by headlines on 2026-09-02 and the table still
+    carried the old wording on 2026-09-06, when a gate evaluator read it. A runbook is read
+    when something is already wrong, which is the worst moment to be reading a description of
+    a message that no longer exists.
+
+    Asserted over the whole `ActivityKind` enum rather than the rows that happened to be
+    stale, because the failure is a class: any kind added or reworded later drifts the same
+    way, silently, and this is the check that will not let it.
+    """
+    from pathlib import Path
+
+    runbook = Path(__file__).resolve().parents[4] / "docs" / "operator-runbook.md"
+    text = runbook.read_text(encoding="utf-8")
+
+    for kind in EVERY_KIND:
+        row = f"| `{kind.value}` |"
+        assert row in text, f"{kind.value} has no row in the runbook's kind table"
+        line = next(line for line in text.splitlines() if line.startswith(row))
+        assert notifications._HEADLINES[kind] in line, (
+            f"{kind.value}: the runbook says {line!r}, the code sends "
+            f"{notifications._HEADLINES[kind]!r}"
+        )
+        assert notifications._KIND_EMOJI[kind] in line, (
+            f"{kind.value}: the runbook's mark is not {notifications._KIND_EMOJI[kind]!r}"
+        )

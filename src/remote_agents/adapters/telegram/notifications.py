@@ -168,6 +168,10 @@ editing this module.
 _BULLET = "• "
 """Worn only when there is more than one line to tell apart. See `activity_text`."""
 
+_UNIT = "x"
+"""One UTF-16 unit of stand-in detail, so a wrapper that only renders around a non-empty detail
+is measured rather than skipped. Subtracted again by the caller; never rendered."""
+
 _RESERVED_NAME_UNITS = 48
 """The slice of the budget the observations may not spend, so the session can still be named.
 
@@ -220,11 +224,27 @@ def activity_text(group: SessionGroup, *, display: str) -> str:
     **One hedge covers the group.** Repeated per line it would read as emphasis -- as though
     the service were less sure this time -- when it is saying the same structural thing about
     the same kind.
+
+    **Neither trailer can currently sit under a collapsed quotation, and that is structural
+    rather than lucky.** The hedge fires only when a shown observation is `INFERRED`, and
+    `_detail_of` returns `None` for exactly that set, so a lone inferred observation renders
+    with no quotation to sit under. `and N earlier` needs `len(shown) == limit`, which is at
+    least two, which forces the bulleted path. It is worth writing down because
+    `_detail_of` deliberately contemplates an exception -- a future inferred kind carrying the
+    agent's own words -- and that exception would put the hedge directly beneath a collapsed
+    quote: the hedge read, and the words it hedges one tap away, unread.
     """
     shown = shown_in_message(group, limit=_MAXIMUM_LINES_PER_MESSAGE)
     hidden = len(group.activities) - len(shown)
     bulleted = len(shown) > 1
-    newest = shown[0]
+    # `[-1]`, not `[0]`. `grouped_for_delivery` orders a group oldest-first so the message
+    # reads as a timeline, and `shown_in_message` returns the newest that fit as a **tail**
+    # slice -- so the newest of what is shown is at the end. Taking `[0]` headlined the
+    # stalest line being displayed, which for a session that finished, was asked something and
+    # then hit a limit announced "Finished its work" and buried the question below it. Every
+    # fixture that grouped observations had given them one shared timestamp, where the stable
+    # sort makes first-appearance and newest the same element, so nothing failed.
+    newest = shown[-1]
 
     headline = (
         f"{_KIND_EMOJI[newest.kind]} <b>{_HEADLINES[newest.kind]}</b>"
@@ -234,10 +254,24 @@ def activity_text(group: SessionGroup, *, display: str) -> str:
     hedged = any(activity.confidence is ActivityConfidence.INFERRED for activity in shown)
 
     trailers = ([f"and {hidden} earlier."] if hidden else []) + ([_HEDGE] if hedged else [])
-    # Measured with the details empty, because they are the only part with a budget to
-    # negotiate; everything else in the message is ours and fixed.
-    fixed = "\n".join([headline, "", *_lines(shown, [None] * len(shown), bulleted), *trailers])
-    spent = _utf16_units(fixed)
+    # Measured with each detail reduced to ONE unit rather than to nothing, and that unit
+    # subtracted again below. Passing `None` -- which this did until 2026-09-06 -- makes
+    # `_lines` return `[]` on the single-observation path, so the quotation's own wrapper was
+    # never counted at all: not under-counted by the eleven units `expandable` added, but
+    # absent from the arithmetic entirely, and equally absent before that attribute existed.
+    #
+    # It reached the API safely on two accidents rather than on this sum: `_MAXIMUM_DETAIL_UNITS`
+    # caps each detail far below the inflated `share` this produced, and `room` below is
+    # computed from the *rendered* body, which does carry the true tag length. Neither is a
+    # reason for the mid-point measurement to be wrong, and both would stop covering it the
+    # moment the detail cap was raised.
+    #
+    # The placeholder is measured through `_lines` itself rather than by adding the tag's
+    # length here, so a change to the wrapper cannot leave this stale -- which is the failure
+    # being fixed, one layer up.
+    skeleton = _lines(shown, [_UNIT if detail else None for detail in details], bulleted)
+    fixed = "\n".join([headline, "", *skeleton, *trailers])
+    spent = _utf16_units(fixed) - sum(1 for detail in details if detail)
     share = (MAX_TELEGRAM_TEXT_UNITS - _RESERVED_NAME_UNITS - spent) // max(
         1, sum(1 for detail in details if detail)
     )
