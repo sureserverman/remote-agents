@@ -26,6 +26,7 @@ session_views.py`'s. This module only places and colours what it is handed (DEC-
 from __future__ import annotations
 
 from collections.abc import Sequence
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
 from textual.content import Content
@@ -265,22 +266,82 @@ _WINDOW_LABELS = {"week": "wk"}
 """The provider's `week` is this surface's `wk`: the pane is a third of a column wide."""
 
 
-def _window_content(row: LimitRow, window) -> Content:
-    """`5h ███░░░░░ 34% ↻ 2h` -- one window's cell, dated instead of counted down when stale.
-    The space after the arrow is deliberate: terminal fonts draw `↻` wider than one cell and it
-    overlapped the digit that followed."""
+@dataclass(frozen=True, slots=True)
+class _LimitColumns:
+    """The column widths of one limits render, measured across every row in it.
+
+    Measured across the **set**, never from the first row, for the reason `session_contents`
+    already takes its maxima across the whole listing: the widths are a property of the table,
+    and one derived from `rows[0]` is correct exactly until an agent drops out of the read and
+    the order changes. `test_the_columns_are_a_property_of_the_set_not_of_the_first_row` is
+    that failure written down.
+    """
+
+    profile: int
+    label: int
+    percent: int
+    reset: int
+
+
+def _limit_columns(rows: Sequence[LimitRow]) -> _LimitColumns:
+    windows = [(row, window) for row in rows for window in row.windows]
+    return _LimitColumns(
+        profile=max((len(row.profile) for row in rows), default=0),
+        label=max((len(_window_label(window)) for _row, window in windows), default=0),
+        percent=max((len(f"{window.percent}%") for _row, window in windows), default=0),
+        reset=max((len(_reset_text(row, window)) for row, window in windows), default=0),
+    )
+
+
+def _window_label(window) -> str:
+    return _WINDOW_LABELS.get(window.label, window.label)
+
+
+def _reset_text(row: LimitRow, window) -> str:
+    """`↻ 2h`, or nothing when the provider published no reset or the reading is stale.
+
+    A countdown on a stale number is a claim about the present made from the past, which is why
+    the trailer replaces every countdown with one dim `· as of 2h` instead.
+    """
+    if window.resets_in is None or row.stale_for is not None:
+        return ""
+    return f"↻ {window.resets_in}"
+
+
+def _window_content(row: LimitRow, window, columns: _LimitColumns, *, last: bool) -> Content:
+    """`5h ███░░░░░  34% ↻ 2h` -- one window's cell, laid out to the table's columns.
+
+    Dated instead of counted down when stale. The space after the arrow is deliberate:
+    terminal fonts draw `↻` wider than one cell and it overlapped the digit that followed.
+
+    **Three fields are padded and each is padded the way its content is read.** The label is
+    left-aligned, because `5h`, `wk` and `day` are names; the percent is **right**-aligned,
+    because `3%`, `34%` and `100%` are figures and a column of figures is compared down its
+    right edge; the reset keeps its own width so the window that follows starts where the one
+    above it did. Without the percent padding the gauges could align and the cell after them
+    still be pushed apart, which is the defect one column over rather than the defect fixed.
+
+    `last` suppresses the reset field's trailing pad on the final window of a row. Nothing
+    follows it, so the padding buys no alignment — and it would count toward the row's
+    `cell_length`, tipping a row that fits into the narrow branch on the strength of spaces
+    the owner cannot see.
+    """
     bar = percent_gauge(window.percent)
     filled = bar.rstrip("░")
     cell = Content.assemble(
-        (_WINDOW_LABELS.get(window.label, window.label), MUTED),
+        (_window_label(window).ljust(columns.label), MUTED),
         (" ", None),
         (filled, _percent_style(window.percent)),
         (bar[len(filled) :], "$secondary"),
-        (f" {window.percent}%", None),
+        (f" {f'{window.percent}%'.rjust(columns.percent)}", None),
     )
-    if window.resets_in is not None and row.stale_for is None:
-        cell = cell + Content.assemble((f" ↻ {window.resets_in}", MUTED))
-    return cell
+    if not columns.reset:
+        return cell
+    reset = _reset_text(row, window)
+    padded = reset if last else reset.ljust(columns.reset)
+    if not padded:
+        return cell
+    return cell + Content.assemble((f" {padded}", MUTED))
 
 
 def _trailers(row: LimitRow) -> Content:
@@ -293,8 +354,8 @@ def _trailers(row: LimitRow) -> Content:
     return trailer
 
 
-def limit_row_content(row: LimitRow, profile_width: int, width: int | None) -> list[Content]:
-    """`profile  5h ███░░░░░ 34% ↻ 2h  wk █████░░░ 61% ↻ 3d`, or one line per window when narrow.
+def limit_row_content(row: LimitRow, columns: _LimitColumns, width: int | None) -> list[Content]:
+    """`profile  5h ███░░░░░  34% ↻ 2h  wk █████░░░  61% ↻ 3d`, or one line per window when narrow.
 
     The gauge's fill takes the threshold colour -- under half `$success`, up to 85 `$warning`,
     past it `$error` -- and its empty track `$secondary`. The reset countdown is muted; a
@@ -307,9 +368,17 @@ def limit_row_content(row: LimitRow, profile_width: int, width: int | None) -> l
     takes a line of its own under the profile, and the trailers a line of their own after
     those, so a gauge is never broken across two rows and the borrowed-source stamp is never
     the part that falls off. The pane draws these `nowrap`, so what this returns *is* the rows.
+
+    **Every field is padded to a width measured across the whole render** (`columns`), so the
+    Nth window of every agent begins in the same column and the pane reads as one table rather
+    than as one sentence per agent. That is what the sessions pane has always done through
+    `session_contents`, and this list is the one in the surface that did not.
     """
-    name = text(row.profile.ljust(profile_width), None)
-    cells = [_window_content(row, window) for window in row.windows]
+    name = text(row.profile.ljust(columns.profile), None)
+    cells = [
+        _window_content(row, window, columns, last=index == len(row.windows) - 1)
+        for index, window in enumerate(row.windows)
+    ]
     trailer = _trailers(row)
     one_line = name
     for cell in cells:
@@ -317,7 +386,7 @@ def limit_row_content(row: LimitRow, profile_width: int, width: int | None) -> l
     one_line = one_line + trailer
     if width is None or width <= 0 or one_line.cell_length <= width:
         return [one_line]
-    indent = Content(" " * (profile_width + 2))
+    indent = Content(" " * (columns.profile + 2))
     lines = [name + Content("  ") + cells[0]] if cells else [name]
     lines.extend(indent + cell for cell in cells[1:])
     if trailer:
@@ -329,10 +398,12 @@ def limit_row_content(row: LimitRow, profile_width: int, width: int | None) -> l
 
 
 def limit_rows_content(rows: Sequence[LimitRow], width: int | None = None) -> list[Content]:
+    """Every agent's windows, with the label, gauge, percent and reset columns aligned across
+    them — the limits pane's answer to `session_contents`."""
     if not rows:
         return []
-    profile_width = max(len(row.profile) for row in rows)
-    return [line for row in rows for line in limit_row_content(row, profile_width, width)]
+    columns = _limit_columns(rows)
+    return [line for row in rows for line in limit_row_content(row, columns, width)]
 
 
 # --- feed ---------------------------------------------------------------------------------
