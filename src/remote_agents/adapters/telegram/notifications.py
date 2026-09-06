@@ -126,7 +126,7 @@ _KIND_EMOJI: dict[ActivityKind, str] = {
 }
 
 
-_ASK_WORDS: dict[AskClass, str] = {AskClass.SHELL_COMMAND: "about a shell command"}
+_ASK_WORDS: dict[AskClass, str] = {AskClass.SHELL: "about a shell command"}
 """**The bot's** words for an ask class -- not the application's, and not the feed's (DEC-043).
 
 The class is the shared decision; the sentence is each surface's, because a chat message and a

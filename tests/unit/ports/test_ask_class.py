@@ -25,7 +25,7 @@ from remote_agents.ports.agent_activity import AskClass, ask_class
 
 def test_ask_class_recognises_the_one_token_the_measurement_observed() -> None:
     """`Bash` is the only value four measured payloads ever carried."""
-    assert ask_class("Bash") is AskClass.SHELL_COMMAND
+    assert ask_class("Bash") is AskClass.SHELL
 
 
 @pytest.mark.parametrize(
@@ -71,4 +71,4 @@ def test_no_generated_token_but_the_measured_one_is_ever_recognised() -> None:
         if token == "Bash":
             continue
         assert ask_class(token) is AskClass.UNKNOWN, f"{token!r} was recognised"
-    assert ask_class("Bash") is AskClass.SHELL_COMMAND
+    assert ask_class("Bash") is AskClass.SHELL

@@ -88,6 +88,11 @@ def test_a_stop_payload_keeps_only_the_fields_the_notification_needs(tmp_path: P
         "reason": None,
         "detail": "probe",
         "observed_at": "2026-08-11T14:22:33.123456+00:00",
+        # `ask` joined the record on 2026-09-06 (DEC-074) — the class of thing an agent is
+        # waiting on, kept apart from `detail` because a provider token is not the agent's
+        # words. `None` here because a `Stop` is not waiting on anything, and because this
+        # payload is Claude's, whose branch never populates it.
+        "ask": None,
     }
 
 

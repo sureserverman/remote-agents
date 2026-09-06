@@ -52,7 +52,7 @@ _FEED_LIMIT = FEED_LIMIT
 #: One line of owner-facing words per observation kind. Local to this surface on purpose:
 #: the bot's sentences live in its own adapter and carry chat conventions (grouping,
 #: standing messages) a glanceable feed line has no use for.
-ASK_WORDS = {AskClass.SHELL_COMMAND: "about a shell command"}
+ASK_WORDS = {AskClass.SHELL: "about a shell command"}
 """**This surface's** words for an ask class, and deliberately its own copy (DEC-043).
 
 The bot has a map of the same shape in its own adapter, and the two agreeing today is not a
