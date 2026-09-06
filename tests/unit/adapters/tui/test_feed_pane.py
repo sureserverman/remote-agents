@@ -1223,3 +1223,50 @@ def test_the_feed_has_a_phrase_for_every_kind_and_no_others() -> None:
 
     assert set(KIND_WORDS) == set(ActivityKind)
     assert all(phrase and not phrase.endswith(".") for phrase in KIND_WORDS.values())
+
+
+# --- expansion covers the vocabulary, not one kind, 2026-09-06 -------------------------------
+
+
+@pytest.mark.parametrize("kind", tuple(ActivityKind), ids=lambda k: k.value)
+def test_every_kind_expands_when_it_carries_a_detail(kind: ActivityKind) -> None:
+    """Expansion is keyed on there BEING a detail, never on which kind carries it.
+
+    Written to confirm rather than to build. The owner's 2026-09-06 ask included "make the
+    finished notification for codex expandable the way claude's is", and the measurement
+    behind that ask says the feed half was already done: Codex's `Stop` gained a detail on
+    2026-08-30 (`_CODEX_DETAIL_FIELDS = {"Stop": ("last_assistant_message",)}`), and three real
+    rows in the live database carry one, all dated after that change. What was missing was the
+    *Telegram* half, which is a different task.
+
+    Three rows is thin evidence, so this is the check that the general property holds rather
+    than the one provider's case. It quantifies over the whole `ActivityKind` enum — derived,
+    not hand-listed, so a kind added later is covered without anyone remembering to add it.
+    """
+    from remote_agents.adapters.tui.screens.feed import feed_key, feed_rows
+
+    observation = _activity(kind, minutes_ago=1, detail=_LONG_DETAIL)
+    key = feed_key(observation)
+
+    collapsed = feed_rows((observation,), width=80)
+    opened = feed_rows((observation,), width=80, opened=key)
+
+    assert len(collapsed) == 1, f"{kind}: a collapsed observation is one row"
+    assert len(opened) > 1, f"{kind}: carries a detail, so it must expand"
+    assert all(disabled for _key, _row, disabled in opened[1:]), (
+        f"{kind}: continuation rows must be disabled so the cursor cannot rest on a fragment"
+    )
+
+
+@pytest.mark.parametrize("kind", tuple(ActivityKind), ids=lambda k: k.value)
+def test_no_kind_expands_onto_nothing(kind: ActivityKind) -> None:
+    """An observation with no detail has nothing to show, so Enter must not open an empty box.
+
+    The other half of the property above, and the one that fails if expansion is ever keyed on
+    the kind instead of on the detail.
+    """
+    from remote_agents.adapters.tui.screens.feed import feed_key, feed_rows
+
+    observation = _activity(kind, minutes_ago=1, detail=None)
+    opened = feed_rows((observation,), width=80, opened=feed_key(observation))
+    assert len(opened) == 1, f"{kind}: nothing to expand, so no continuation rows"
