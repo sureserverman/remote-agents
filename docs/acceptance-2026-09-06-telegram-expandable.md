@@ -100,9 +100,13 @@ else. The bullet line between them is outside both.
 - **The Bot API version the server runs.** There is no API method that reports it, and
   `getMe` does not carry it. What is established is behaviour on 2026-09-06, which is the fact
   the parser needs; a version number would only be a proxy for it.
-- **Nesting, length limits, or interaction with other entities.** Not probed, because nothing
-  in this project nests a quotation: `activity_text` emits at most one, around a single
-  observation's detail, on the non-bulleted path.
+- **Nesting and length limits.** Not probed. Nothing here *nests* a quotation — a message
+  carries several siblings, never one inside another — and the second measurement above covers
+  the sibling case, which is the only one this project produces.
+  <!-- This bullet said "`activity_text` emits at most one, around a single observation's
+       detail, on the non-bulleted path" until later the same day, when the owner's decision to
+       quote a group's details made it false. Corrected rather than deleted: a document that
+       records what it did not establish has to be right about what it did. -->
 - **How old clients render it.** A client too old to draw an expandable quotation shows the
   text unquoted rather than refusing the message — that is the same argument the plain
   `<blockquote>` was adopted under and it is unchanged, but it was not re-measured here.
