@@ -78,7 +78,23 @@ which also contradicted its own sample counts — three completing runs would ha
 
 The three hangs each asked for something needing an *edit* permission or produced large output,
 and were killed at the timeout. Recorded because it bears on how a live drill should be driven;
-not understood, and not claimed to be.
+not understood at the time, and not claimed to be.
+
+**Understood on 2026-09-06, at the Stage 5 gate, and it was not about the prompts.** The live
+drill (`tests/live/test_opencode_activity_plugin.py`) reproduced the same silence and asked the
+log instead of the terminal:
+
+```
+level=ERROR message="stream error" providerID=openai modelID=gpt-5.6-terra
+  error.error="AI_APICallError: The usage limit has been reached"
+```
+
+`opencode run` prints **nothing** when a provider refuses — it retries the stream with backoff
+and never exits — so a driver watching stdout sees a silent process and calls it a hang. The
+correlation with edit permissions and large output was a coincidence of which runs happened to
+land after the quota was spent. The drill now classifies this from
+`$XDG_DATA_HOME/opencode/log/opencode.log` and skips with a named reason (DEC-059) rather than
+waiting it out.
 
 ## What fired
 
@@ -216,7 +232,8 @@ Per event, and nothing else:
   may be in practice.
 - **Whether the `permission.ask` hook is usable.** It did not fire on the non-interactive path
   that also auto-rejects; it was not tested interactively.
-- **Why three runs hung.** Recorded above, not understood.
+- ~~**Why three runs hung.**~~ **Established 2026-09-06** — a provider at its usage limit, which
+  `opencode run` reports only to its log file while retrying silently. See "Runs" above.
 - **`tool.execute.before`'s payload**, though it was captured twice and carries a literal
   command and an absolute path. Not pursued because this project maps no activity to it — and
   named here so a future reader knows it was seen and set aside, not missed.
