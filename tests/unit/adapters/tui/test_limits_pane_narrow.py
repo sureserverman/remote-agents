@@ -88,9 +88,7 @@ def test_no_narrow_line_ever_carries_part_of_a_gauge() -> None:
     overflow: a bar cut to six cells reads as a different figure, and which line it lands on
     is a function of the profile id's length.
     """
-    lines = [
-        content.plain for content in limit_rows_content((_stale_row(), _fresh_row()), NARROW)
-    ]
+    lines = [content.plain for content in limit_rows_content((_stale_row(), _fresh_row()), NARROW)]
     for line in lines:
         for run in _GAUGE_RUN.finditer(line):
             assert len(run.group()) == GAUGE_CELLS, (
@@ -117,9 +115,7 @@ def test_no_narrow_line_ends_in_the_padding_that_aligns_the_wide_one() -> None:
     fits beside the last window. Left in, the trailer is pushed onto a line of its own by
     invisible spaces.
     """
-    lines = [
-        content.plain for content in limit_rows_content((_stale_row(), _fresh_row()), NARROW)
-    ]
+    lines = [content.plain for content in limit_rows_content((_stale_row(), _fresh_row()), NARROW)]
     trailing = [line for line in lines if line != line.rstrip()]
     assert not trailing, f"lines ending in padding: {trailing!r}"
 
@@ -132,3 +128,28 @@ def test_the_wide_layout_is_still_one_line_per_agent() -> None:
     """
     lines = limit_rows_content((_stale_row(), _fresh_row()), 120)
     assert len(lines) == 2, [content.plain for content in lines]
+
+
+def test_one_render_never_mixes_the_two_layouts() -> None:
+    """Either every agent is a row, or every agent is a stack — never some of each.
+
+    A gate-evaluator Material finding. The fit decision used to be taken per row against that
+    row's own length, which left a band of widths — seven columns wide — where a short row
+    stayed on one line while a longer one stacked. Inside a single render one agent's second
+    window then sat at column 30 and another's at column 8, which is this stage's own goal
+    failing on screen.
+
+    The routine data hits it: Claude's borrowed reading goes stale behind a thirty-minute
+    fence while Codex's does not, so one row carries countdowns and the other carries a date,
+    and the two rows differ in length by more than the band is wide. The layout is a property
+    of the table, so it is decided once from the widest row.
+    """
+    rows = (_stale_row(), _fresh_row())
+    for width in range(40, 80):
+        lines = [content.plain for content in limit_rows_content(rows, width)]
+        carrying = [line for line in lines if _GAUGE_RUN.search(line)]
+        gauges = [len(_GAUGE_RUN.findall(line)) for line in carrying]
+        assert len(set(gauges)) == 1, (
+            f"at width {width} the render mixes layouts — rows carry {gauges} windows each:\n"
+            + "\n".join(lines)
+        )

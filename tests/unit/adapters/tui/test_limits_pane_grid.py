@@ -175,3 +175,63 @@ def test_the_columns_are_a_property_of_the_set_not_of_the_first_row(
         assert len(starts) == 1, (
             f"window {index} starts at {sorted(starts)} for {profiles}.\n" + "\n".join(lines)
         )
+
+
+# --- gate remediation, 2026-09-06 -----------------------------------------------------------
+#
+# Three cases the first round did not cover, two of them Material findings from the stage
+# gate's evaluator and one a Tier-2 suggestion. Each is a shape real data takes and the
+# original fixture did not.
+
+
+def test_rows_with_different_window_counts_still_agree_on_window_zero() -> None:
+    """One agent publishing one window beside another publishing three.
+
+    The shape where an off-by-one in `_window_content`'s `last=` would first show: the
+    single-window row's only window IS its last and so goes unpadded, while the three-window
+    row's first is padded. Nothing follows the short row's window, so the suppression cannot
+    propagate — but that is an argument, and this is the test that makes it checkable.
+    """
+    rows = (
+        LimitRow("solo", (LimitWindow("5h", 7, "1h"),), None, None),
+        LimitRow(
+            "trio",
+            (
+                LimitWindow("5h", 100, "2h"),
+                LimitWindow("week", 3, None),
+                LimitWindow("day", 44, "9h"),
+            ),
+            None,
+            None,
+        ),
+    )
+    lines = [content.plain for content in limit_rows_content(rows, WIDE)]
+    per_row = [_gauge_spans(line) for line in lines]
+    assert [len(spans) for spans in per_row] == [1, 3], lines
+
+    assert len({spans[0][0] for spans in per_row}) == 1, f"window 0 misaligned:\n" + "\n".join(
+        lines
+    )
+    assert len({_percent_ends(line)[0] for line in lines}) == 1, "\n".join(lines)
+
+
+def test_one_long_profile_id_does_not_cost_every_row_its_gauge() -> None:
+    """The profile column is a max across rows, so an outlier name degrades the whole table.
+
+    Uncapped, a 23-character profile at a 34-cell pane produced lines longer than the pane and
+    the widget's `text-overflow: ellipsis` then ate the gauge — leaving a column of names with
+    no figure beside any of them. The name is the row's handle and the window is its payload,
+    so it is the name that gives way.
+    """
+    rows = (
+        LimitRow("claude-personal-max-20x", (LimitWindow("5h", 4, None),), None, None),
+        LimitRow("codex", (LimitWindow("5h", 9, None),), None, None),
+    )
+    for width in (34, 28, 22):
+        lines = [content.plain for content in limit_rows_content(rows, width)]
+        for line in lines:
+            assert _GAUGE.search(line), f"at width {width} a row lost its gauge: {line!r}"
+            assert len(line) <= width, f"at width {width}: {line!r} is {len(line)} cells"
+        assert any("…" in line for line in lines), (
+            f"at width {width} the name should ellipsise rather than the data: {lines}"
+        )

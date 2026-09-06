@@ -283,14 +283,66 @@ class _LimitColumns:
     reset: int
 
 
-def _limit_columns(rows: Sequence[LimitRow]) -> _LimitColumns:
+#: The narrowest the profile column is ever squeezed to before the name is ellipsised rather
+#: than the data. Three cells is `a…`-plus-one: enough that the rows are still told apart,
+#: little enough that the gauge survives a pane far narrower than any this app is drawn in.
+#:
+#: It exists because the profile column is a **max across every row**, so without a cap one
+#: oddly-named profile degrades every row in the render: a 23-character
+#: `claude-personal-max-20x` at a 40-cell pane produced 45-cell lines, and the widget's
+#: `text-overflow: ellipsis` then ate the gauge outright, leaving a column of names with no
+#: readable figure beside any of them. `columns()` has always had the equivalent guard one
+#: function over -- it abandons padding below `room < 4` -- and this path had none.
+_MINIMUM_PROFILE_COLUMN = 3
+
+#: The gap between the profile and its first window, and between one window and the next. Two
+#: rather than `_GUTTER`'s one, deliberately: it marks a group boundary against the single
+#: spaces inside a window cell. Named because the stacked layout's indent has to agree with it,
+#: and two literal `2`s that must match are two chances to change one of them.
+_GROUP_GUTTER = 2
+
+#: How many cells `percent_gauge` draws, asked of it rather than written down again. The
+#: number is `session_views._GAUGE_CELLS`' to own (DEC-043), and a second copy here would be a
+#: lockstep site that nothing checks: the gauge would change width and this pane would keep
+#: reserving the old one.
+_GAUGE_WIDTH = len(percent_gauge(0))
+
+
+def _limit_columns(rows: Sequence[LimitRow], width: int | None = None) -> _LimitColumns:
+    """The four column widths, measured across every row, with the profile capped to fit.
+
+    The `default=0` fallbacks are not for an empty `rows` -- `limit_rows_content` returns early
+    on that one level up -- but for a row that has *windows of its own* and none in the render
+    at all, which `limit_rows` can still hand us.
+    """
     windows = [(row, window) for row in rows for window in row.windows]
+    label = max((len(_window_label(window)) for _row, window in windows), default=0)
+    percent = max((len(f"{window.percent}%") for _row, window in windows), default=0)
+    reset = max((len(_reset_text(row, window)) for row, window in windows), default=0)
+    profile = max((len(row.profile) for row in rows), default=0)
     return _LimitColumns(
-        profile=max((len(row.profile) for row in rows), default=0),
-        label=max((len(_window_label(window)) for _row, window in windows), default=0),
-        percent=max((len(f"{window.percent}%") for _row, window in windows), default=0),
-        reset=max((len(_reset_text(row, window)) for row, window in windows), default=0),
+        profile=_capped_profile(profile, width, label=label, percent=percent, reset=reset),
+        label=label,
+        percent=percent,
+        reset=reset,
     )
+
+
+def _capped_profile(
+    profile: int, width: int | None, *, label: int, percent: int, reset: int
+) -> int:
+    """Shrink the profile column until one whole window fits beside it, never below the floor.
+
+    The window is the row's payload and the name is its handle, so when the two cannot both
+    have what they want it is the name that gives way -- the same order of preference
+    `activity_text` applies when a session's display name and an agent's words compete for a
+    message budget.
+    """
+    if width is None or width <= 0:
+        return profile
+    window = label + 1 + _GAUGE_WIDTH + 1 + percent + (1 + reset if reset else 0)
+    room = width - _GROUP_GUTTER - window
+    return max(_MINIMUM_PROFILE_COLUMN, min(profile, room))
 
 
 def _window_label(window) -> str:
@@ -354,7 +406,30 @@ def _trailers(row: LimitRow) -> Content:
     return trailer
 
 
-def limit_row_content(row: LimitRow, columns: _LimitColumns, width: int | None) -> list[Content]:
+def _name(row: LimitRow, columns: _LimitColumns) -> Content:
+    """The profile, padded to the column -- or ellipsised into it when the name is the thing
+    that does not fit. `truncate` both pads and cuts, which is what `columns()` uses one
+    function over for exactly this."""
+    return text(row.profile, None).truncate(columns.profile, ellipsis=True, pad=True)
+
+
+def _one_line(row: LimitRow, columns: _LimitColumns, trailer: Content) -> Content:
+    line = _name(row, columns)
+    for index, window in enumerate(row.windows):
+        cell = _window_content(row, window, columns, last=index == len(row.windows) - 1)
+        line = line + Content(" " * _GROUP_GUTTER) + cell
+    return line + trailer
+
+
+def _overflows(row: LimitRow, columns: _LimitColumns, width: int | None) -> bool:
+    if width is None or width <= 0:
+        return False
+    return _one_line(row, columns, _trailers(row)).cell_length > width
+
+
+def limit_row_content(
+    row: LimitRow, columns: _LimitColumns, width: int | None, *, stack: bool | None = None
+) -> list[Content]:
     """`profile  5h ███░░░░░  34% ↻ 2h  wk █████░░░  61% ↻ 3d`, or one line per window when narrow.
 
     The gauge's fill takes the threshold colour -- under half `$success`, up to 85 `$warning`,
@@ -374,29 +449,24 @@ def limit_row_content(row: LimitRow, columns: _LimitColumns, width: int | None) 
     than as one sentence per agent. That is what the sessions pane has always done through
     `session_contents`, and this list is the one in the surface that did not.
     """
-    name = text(row.profile.ljust(columns.profile), None)
-    cells = [
-        _window_content(row, window, columns, last=index == len(row.windows) - 1)
-        for index, window in enumerate(row.windows)
-    ]
     trailer = _trailers(row)
-    one_line = name
-    for cell in cells:
-        one_line = one_line + Content("  ") + cell
-    one_line = one_line + trailer
-    if width is None or width <= 0 or one_line.cell_length <= width:
-        return [one_line]
+    if stack is None:
+        stack = _overflows(row, columns, width)
+    if not stack:
+        return [_one_line(row, columns, trailer)]
     # Rebuilt without the reset field's trailing pad. That pad exists so the window *after*
     # this one starts in a fixed column; here the next window is on the next line, so it
     # aligns nothing and only inflates `cell_length` -- the measurement that decides whether
     # the trailer fits beside the last window, which would then be pushed onto a line of its
-    # own by spaces the owner cannot see.
+    # own by spaces the owner cannot see. **The trailer-fit arithmetic below depends on this**,
+    # which is the coupling that produced the defect this suppression fixed.
+    name = _name(row, columns)
     stacked = [_window_content(row, window, columns, last=True) for window in row.windows]
-    indent = Content(" " * (columns.profile + 2))
-    lines = [name + Content("  ") + stacked[0]] if stacked else [name]
+    indent = Content(" " * (columns.profile + _GROUP_GUTTER))
+    lines = [name + Content(" " * _GROUP_GUTTER) + stacked[0]] if stacked else [name]
     lines.extend(indent + cell for cell in stacked[1:])
     if trailer:
-        if (lines[-1] + trailer).cell_length <= width:
+        if width is None or width <= 0 or (lines[-1] + trailer).cell_length <= width:
             lines[-1] = lines[-1] + trailer
         else:
             lines.append(indent + Content(trailer.plain.lstrip(" ·")).stylize(DIM))
@@ -408,8 +478,17 @@ def limit_rows_content(rows: Sequence[LimitRow], width: int | None = None) -> li
     them — the limits pane's answer to `session_contents`."""
     if not rows:
         return []
-    columns = _limit_columns(rows)
-    return [line for row in rows for line in limit_row_content(row, columns, width)]
+    columns = _limit_columns(rows, width)
+    # **Decided once, for the whole render.** Asking each row whether it fits produced a band
+    # of widths -- seven columns wide, between a pane that stacks everything and one that
+    # stacks nothing -- where a short row stayed on one line while a longer one stacked, so
+    # one agent's second window sat at column 30 and another's at column 8. That is this
+    # stage's own goal failing inside a single render, and the reason is that the layout is a
+    # property of the table rather than of the row. The routine case is exactly the one that
+    # hits it: Claude's borrowed reading goes stale behind a thirty-minute fence while Codex's
+    # does not, so one row carries countdowns and the other carries a date.
+    stack = any(_overflows(row, columns, width) for row in rows)
+    return [line for row in rows for line in limit_row_content(row, columns, width, stack=stack)]
 
 
 # --- feed ---------------------------------------------------------------------------------
