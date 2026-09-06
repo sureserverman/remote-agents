@@ -35,6 +35,7 @@ from remote_agents.application.session_views import session_identity
 from remote_agents.domain.models import SessionRecord
 from remote_agents.ports.agent_activity import (
     MAXIMUM_DETAIL_CHARACTERS,
+    ActivityConfidence,
     ActivityKind,
     AgentActivity,
     AskClass,
@@ -66,9 +67,16 @@ identity room and tell the owner nothing.
 """
 
 
-def _ask_words(ask: str | None) -> str | None:
-    """What this row says about the class of thing being waited on, if anything."""
-    return ASK_WORDS.get(ask_class(ask)) if ask else None
+def _ask_words(activity: AgentActivity) -> str | None:
+    """What this row says about the class of thing being waited on, if anything.
+
+    Takes the whole observation rather than its token so the confidence guard lives here, at
+    the boundary that renders, rather than resting on the watcher not setting one -- the
+    correction `_detail_of` already had to make for `detail` on 2026-08-30.
+    """
+    if activity.confidence is ActivityConfidence.INFERRED or not activity.ask:
+        return None
+    return ASK_WORDS.get(ask_class(activity.ask))
 
 
 KIND_WORDS = {
@@ -230,11 +238,16 @@ def feed_rows(
         # at the measured width and, when there is none yet, by `text-wrap: nowrap;
         # text-overflow: ellipsis` in both surfaces' DEFAULT_CSS -- which is what survives a
         # resize between two draws.
-        # The agent's own words if it said any; otherwise the class of thing it is waiting on,
-        # in this surface's words. Never both, and never the raw provider token: `ASK_WORDS`
-        # is keyed on `AskClass`, so an ask nobody has measured contributes nothing rather
-        # than putting `MysteryTool` under the owner's session name (DEC-074).
-        detail = _elide(activity.detail) if activity.detail else _ask_words(activity.ask)
+        # The agent's own words, and -- separately -- the class of thing it is waiting on.
+        # Two arguments rather than one slot: the row draws them differently, because one is a
+        # sentence an agent wrote and the other is a phrase this surface chose (DEC-067's
+        # conflation argument, at a presentation slot instead of a port field).
+        #
+        # `_ask_words` is keyed on `AskClass` and drops an `INFERRED` observation's ask
+        # entirely, so neither a token nobody has measured nor a guess the watcher never read
+        # can reach the owner's pane.
+        detail = _elide(activity.detail) if activity.detail else None
+        ask_words = _ask_words(activity) if not activity.detail else None
         key = feed_key(activity)
         occurrence = seen.get(key, 0)
         seen[key] = occurrence + 1
@@ -254,6 +267,7 @@ def feed_rows(
                     width=width,
                     kind_width=kind_width,
                     age_width=age_width,
+                    ask_words=ask_words,
                 ),
                 False,
             )

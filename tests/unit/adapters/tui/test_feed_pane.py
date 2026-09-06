@@ -1321,8 +1321,13 @@ def test_the_agents_own_words_win_over_the_ask_class_when_both_are_present() -> 
 
 
 def test_an_unrecognised_ask_leaves_the_needs_answer_row_exactly_as_it_was() -> None:
-    """Most tokens are unrecognised — the measurement observed only `Bash` — so this is the
-    ordinary case, and it must cost the identity no room at all."""
+    """An unrecognised token is reachable — the measurement calls the value space unverified
+    beyond one observed value — and when one arrives it must cost the identity no room at all.
+
+    Deliberately not "most tokens are unrecognised", which this said until the Stage 3 gate
+    evaluator pointed out that the document supports a claim about the possible SET and not
+    about frequency. All four observations were `Bash`.
+    """
     from remote_agents.adapters.tui.screens.feed import feed_rows
 
     base = _activity(ActivityKind.NEEDS_ANSWER, minutes_ago=1)
@@ -1333,3 +1338,56 @@ def test_an_unrecognised_ask_leaves_the_needs_answer_row_exactly_as_it_was() -> 
         row = feed_rows((observation,), width=80)[0][1].plain
         assert token not in row, f"{token!r} reached the pane as itself"
         assert "—" not in row, "an unrecognised ask contributes no detail cell"
+
+
+def test_the_service_s_phrase_is_drawn_unlike_the_agent_s_own_words() -> None:
+    """One slot held both until the Stage 3 gate evaluator noticed; now the row tells them apart.
+
+    The bot keeps the two kinds of string structurally apart — the agent's words go inside a
+    block quotation, the service's phrase inside the bold headline — and the pane did not: both
+    landed in the detail cell after a muted em dash, in identical style. That is DEC-067's
+    conflation argument reappearing at a presentation slot rather than at a port field.
+
+    A detail follows an em dash; an ask class is parenthesised and dimmer. A row carries either,
+    never both.
+    """
+    from remote_agents.adapters.tui.screens.feed import feed_rows
+
+    base = _activity(ActivityKind.NEEDS_ANSWER, minutes_ago=1)
+    asked = AgentActivity(
+        base.session_id, base.kind, None, base.observed_at, base.confidence, "Bash"
+    )
+    said = AgentActivity(
+        base.session_id,
+        base.kind,
+        "Overwrite config.toml?",
+        base.observed_at,
+        base.confidence,
+        "Bash",
+    )
+
+    ask_row = feed_rows((asked,), width=80)[0][1].plain
+    said_row = feed_rows((said,), width=80)[0][1].plain
+
+    assert "(about a shell command)" in ask_row
+    assert "—" not in ask_row, "the em dash introduces an agent's words, not ours"
+    assert "— Overwrite config.toml?" in said_row
+    assert "about a shell command" not in said_row, "a row carries one or the other"
+
+
+def test_the_feed_drops_an_inferred_observations_ask_as_it_drops_its_detail() -> None:
+    """The confidence guard lives at the renderer here too, not only at the watcher.
+
+    `_detail_of` had to make this exact correction for `detail` on 2026-08-30, after a reviewer
+    called the source-side-only rule convention-only. Adding a second string field reopened the
+    gap, and the Stage 3 gate evaluator found it still open on this surface.
+    """
+    from remote_agents.adapters.tui.screens.feed import feed_rows
+
+    base = _activity(ActivityKind.NEEDS_ANSWER, minutes_ago=1)
+    inferred = AgentActivity(
+        base.session_id, base.kind, None, base.observed_at, ActivityConfidence.INFERRED, "Bash"
+    )
+    row = feed_rows((inferred,), width=80)[0][1].plain
+    assert "shell command" not in row
+    assert "(" not in row

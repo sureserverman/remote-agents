@@ -92,6 +92,12 @@ _DETAIL_FIELDS = ("message", "last_assistant_message")
 #: version of the owner's ask is a sentence -- "waiting for an answer about a shell command" --
 #: which is wording, shared with Claude's `needs_answer`, and a decision to take deliberately
 #: rather than to inherit from a parser change. Recorded as DEC-067.
+#:
+#: **That decision was taken on 2026-09-06 and `tool_name` is now admitted** -- not here, into
+#: `detail`, which is what DEC-067 refused and still refuses, but into `ask`, a field of its
+#: own (`_CODEX_ASK_FIELDS`, DEC-074). This paragraph is kept because its argument is why the
+#: two fields are separate; it is annotated because a reader hits it a hundred lines before the
+#: code that admits the field, and would otherwise leave with the wrong conclusion.
 _CODEX_DETAIL_FIELDS: dict[str, tuple[str, ...]] = {"Stop": ("last_assistant_message",)}
 
 #: What a Codex payload may contribute as an ASK CLASS, per event. `PermissionRequest` only,

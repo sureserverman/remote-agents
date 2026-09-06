@@ -253,14 +253,19 @@ def activity_text(group: SessionGroup, *, display: str) -> str:
     the service were less sure this time -- when it is saying the same structural thing about
     the same kind.
 
-    **Neither trailer can currently sit under a collapsed quotation, and that is structural
-    rather than lucky.** The hedge fires only when a shown observation is `INFERRED`, and
-    `_detail_of` returns `None` for exactly that set, so a lone inferred observation renders
-    with no quotation to sit under. `and N earlier` needs `len(shown) == limit`, which is at
-    least two, which forces the bulleted path. It is worth writing down because
-    `_detail_of` deliberately contemplates an exception -- a future inferred kind carrying the
-    agent's own words -- and that exception would put the hedge directly beneath a collapsed
-    quote: the hedge read, and the words it hedges one tap away, unread.
+    **The hedge leads the observations; only the counter trails them.** That is a correction,
+    and the paragraph it replaces is worth keeping in mind: it argued that neither trailer could
+    ever sit under a collapsed quotation, because a lone inferred observation has no quotation
+    (`_detail_of` drops its detail) and `and N earlier` forces the bulleted path. Both halves
+    were true when written and one stopped being true two commits later, when a group's details
+    each gained a quotation of their own. A group holding an inferred `needs_answer` and a
+    reported `completed` then put "This is a guess, not something it reported." immediately
+    below a block quote of words the agent really did write.
+
+    Leading it is the repair. Per-line hedging was the alternative and was declined: the hedge
+    is deliberately one statement about the group, and repeating it would read as emphasis. A
+    statement that qualifies what *follows* cannot be captured by whatever happens to end the
+    message.
     """
     shown = shown_in_message(group, limit=_MAXIMUM_LINES_PER_MESSAGE)
     hidden = len(group.activities) - len(shown)
@@ -274,7 +279,8 @@ def activity_text(group: SessionGroup, *, display: str) -> str:
     # sort makes first-appearance and newest the same element, so nothing failed.
     newest = shown[-1]
 
-    words = _ASK_WORDS.get(ask_class(newest.ask)) if newest.ask else None
+    asked = _ask_of(newest)
+    words = _ASK_WORDS.get(ask_class(asked)) if asked else None
     headline = (
         f"{_KIND_EMOJI[newest.kind]} <b>{_HEADLINES[newest.kind]}"
         f"{f' {words}' if words else ''}</b>"
@@ -283,7 +289,18 @@ def activity_text(group: SessionGroup, *, display: str) -> str:
     details = [_detail_of(activity) for activity in shown]
     hedged = any(activity.confidence is ActivityConfidence.INFERRED for activity in shown)
 
-    trailers = ([f"and {hidden} earlier."] if hidden else []) + ([_HEDGE] if hedged else [])
+    # The hedge leads; only the counter trails. Until 2026-09-06 both sat at the end, and the
+    # docstring above asserted that neither could ever follow a quotation -- true when written,
+    # and falsified two commits later by the change that gave each grouped detail its own
+    # quotation. A group holding one inferred observation and one `completed` then rendered
+    # "This is a guess, not something it reported." directly beneath a block quote of words the
+    # agent really did write, whose nearest referent it appeared to be.
+    #
+    # Leading is the fix rather than per-line hedging because the hedge is deliberately one
+    # statement about the group (see below): placed first it qualifies what follows, which is
+    # what it always meant, and it cannot acquire a referent by adjacency.
+    leaders = [_HEDGE] if hedged else []
+    trailers = [f"and {hidden} earlier."] if hidden else []
     # Measured with each detail reduced to ONE unit rather than to nothing, and that unit
     # subtracted again below. Passing `None` -- which this did until 2026-09-06 -- makes
     # `_lines` return `[]` on the single-observation path, so the quotation's own wrapper was
@@ -300,7 +317,7 @@ def activity_text(group: SessionGroup, *, display: str) -> str:
     # length here, so a change to the wrapper cannot leave this stale -- which is the failure
     # being fixed, one layer up.
     skeleton = _lines(shown, [_UNIT if detail else None for detail in details], bulleted)
-    fixed = "\n".join([headline, "", *skeleton, *trailers])
+    fixed = "\n".join([headline, "", *leaders, *skeleton, *trailers])
     spent = _utf16_units(fixed) - sum(1 for detail in details if detail)
     share = (MAX_TELEGRAM_TEXT_UNITS - _RESERVED_NAME_UNITS - spent) // max(
         1, sum(1 for detail in details if detail)
@@ -310,7 +327,7 @@ def activity_text(group: SessionGroup, *, display: str) -> str:
         _bounded_escaped(detail, min(_MAXIMUM_DETAIL_UNITS, share)) if detail else None
         for detail in details
     ]
-    body = "\n".join(_lines(shown, bounded, bulleted) + trailers)
+    body = "\n".join(leaders + _lines(shown, bounded, bulleted) + trailers)
     room = MAX_TELEGRAM_TEXT_UNITS - _utf16_units(f"{headline}\n\n{body}")
     name = _bounded_escaped(display, room)
     return "\n".join(line for line in (headline, name, body) if line)
@@ -345,7 +362,7 @@ def _lines(
         return [_quote(detail)] if detail else []
     lines: list[str] = []
     for activity, detail in zip(shown, details, strict=True):
-        lines.append(f"{_BULLET}{kind_headline(activity.kind, activity.ask)}")
+        lines.append(f"{_BULLET}{kind_headline(activity.kind, _ask_of(activity))}")
         if detail:
             lines.append(_quote(detail))
     return lines
@@ -369,6 +386,23 @@ def render_activity(group: SessionGroup, *, display: str, open_session: str) -> 
         activity_text(group, display=display),
         ((Button(OPEN_SESSION_LABEL, open_session),),),
     )
+
+
+def _ask_of(activity: AgentActivity) -> str | None:
+    """The ask class, or nothing at all when nothing reported one.
+
+    The sibling of `_detail_of`, and it exists for the reason that one exists. `_detail_of`'s
+    guard was source-side-only until a reviewer on 2026-08-30 called it convention-only and it
+    was moved to the boundary that renders. Adding `ask` beside `detail` reopened exactly that
+    gap: the rule "an observation nothing reported must not arrive carrying words" rested again
+    on `observe_codex_action_required` remembering not to set one, with nothing at the
+    renderer.
+
+    So the guard is keyed on confidence here too. An inferred observation may not borrow words
+    from *either* field -- a title-derived wait that said "about a shell command" would be this
+    service describing a pane it deliberately never read.
+    """
+    return None if activity.confidence is ActivityConfidence.INFERRED else activity.ask
 
 
 def _detail_of(activity: AgentActivity) -> str | None:

@@ -506,11 +506,23 @@ def feed_row_content(
     width: int | None,
     kind_width: int,
     age_width: int,
+    ask_words: str | None = None,
 ) -> Content:
     """`glyph kind  identity #n — detail  age`, the identity and detail taking the slack.
 
     A row older than `FEED_HISTORY_AGE` is muted whole. The detail is an agent's own words and
     arrives as literal text: `Content(detail)`, never markup.
+
+    **`ask_words` is not a detail and is not drawn like one.** It is this surface's phrase for
+    the class of thing an agent is waiting on -- words this service chose, not words an agent
+    wrote -- so it is parenthesised and dimmer, where a detail follows an em dash at the row's
+    ordinary muted weight. They shared one slot and one style until the Stage 3 gate evaluator
+    pointed out that the bot keeps the two kinds of string structurally apart and the pane did
+    not, which is DEC-067's conflation argument reappearing at a presentation slot rather than
+    at a port field.
+
+    A row may carry either, never both: an agent that said something is quoted, and the class
+    is what there is to say when it did not.
     """
     history = datetime.now(UTC) - observed_at > FEED_HISTORY_AGE
     kind_style = MUTED if history else KIND_STYLE[kind]
@@ -520,6 +532,8 @@ def feed_row_content(
         body = body + Content.assemble((f" #{sequence}", MUTED))
     if detail:
         body = body + Content.assemble((" — ", MUTED), (detail, MUTED))
+    elif ask_words:
+        body = body + Content.assemble((f" ({ask_words})", body_style or DIM))
     cells: list[tuple[Content, int | None]] = [
         (text(KIND_GLYPH[kind], kind_style), 1),
         (text(kind_word, kind_style), kind_width),

@@ -113,9 +113,12 @@ class AskClass(Enum):
 
     **`UNKNOWN` is a member rather than a `None` return, and that is the load-bearing part.**
     `docs/acceptance-2026-08-29-codex-activity-detail.md` records `tool_name` as observed only
-    as `Bash` across all four measured payloads and says its value space is unverified beyond
-    that instance. So an unrecognised token is the ordinary case, not the error case, and every
-    renderer has to have an answer for it. A member forces each of them to choose that answer;
+    as `Bash` across all four measured payloads and says its value space is **unverified**
+    beyond that instance. That is a claim about the possible set, not about how often each
+    member turns up -- all four observations were `Bash`, and nothing measures the frequency of
+    anything else. What follows is only that an unrecognised token is **reachable**, which is
+    enough: every renderer has to have an answer for it. A member forces each of them to
+    choose that answer;
     a `None` would let one fall through a null check into rendering the token itself, which is
     the exact conflation DEC-067 is about.
 

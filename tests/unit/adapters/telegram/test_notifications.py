@@ -1673,3 +1673,63 @@ def test_an_inferred_observation_would_still_drop_words_if_one_ever_carried_them
     )
     assert "a line the watcher never read" not in message.text
     assert "blockquote" not in message.text
+
+
+def test_the_hedge_never_trails_a_quotation_of_words_the_agent_really_wrote() -> None:
+    """A group mixing a guess and a report puts the caveat first, not last.
+
+    Found by the Stage 3 gate evaluator, and it is a regression this plan introduced: Stage 2's
+    remediation asserted in a docstring that no trailer could sit under a quotation, and Stage
+    2's *next* change gave every grouped detail its own quotation. The message then read
+
+        • ❓ Waiting for an answer
+        • ✅ Finished its work
+        <blockquote expandable>Rewrote the parser and all tests pass.</blockquote>
+        This is a guess, not something it reported.
+
+    where the disclaimer's nearest referent is a sentence the agent actually wrote.
+    """
+    inferred = _activity(
+        ActivityKind.NEEDS_ANSWER,
+        confidence=ActivityConfidence.INFERRED,
+        observed_at=OBSERVED,
+    )
+    reported = _activity(
+        ActivityKind.COMPLETED,
+        detail="Rewrote the parser and all tests pass.",
+        observed_at=OBSERVED + timedelta(minutes=1),
+    )
+    message = render_activity(
+        SessionGroup(inferred.session_id, (inferred, reported)),
+        display=DISPLAY,
+        open_session=OPEN,
+    )
+    lines = message.text.split("\n")
+    hedge_at = lines.index(notifications._HEDGE)
+    quote_at = next(i for i, line in enumerate(lines) if line.startswith("<blockquote"))
+    assert hedge_at < quote_at, "the hedge must precede what it qualifies:\n" + message.text
+    assert message.text.count(notifications._HEDGE) == 1, "one hedge covers the group"
+
+
+def test_an_inferred_observation_cannot_borrow_an_ask_either() -> None:
+    """`_ask_of` guards the new field the way `_detail_of` guards the old one.
+
+    The rule is "an observation nothing reported must not arrive carrying words", and it was
+    source-side-only for `detail` until a reviewer called that convention-only in 2026-08-30.
+    Adding a second string field reopened the same gap, so the guard is at the renderer for
+    both. A title-derived wait saying "about a shell command" would be this service describing
+    a pane DEC-063 says it never read.
+    """
+    message = render_activity(
+        _group(
+            _activity(
+                ActivityKind.NEEDS_ANSWER,
+                confidence=ActivityConfidence.INFERRED,
+                ask="Bash",
+            )
+        ),
+        display=DISPLAY,
+        open_session=OPEN,
+    )
+    assert "shell command" not in message.text
+    assert message.text.split("\n")[0].startswith("❓ <b>Waiting for an answer</b> · ")
