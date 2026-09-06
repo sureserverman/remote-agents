@@ -19,8 +19,9 @@ than through a plain mkdir, which would follow one.
 
 What lands here is deliberately narrower than what the hook receives. The notification the
 service will send needs an event name, the field that discriminates that event, one short
-line of detail, a session, and a time; the transcript path and working directory the payload
-also carries would leak filesystem layout into a Telegram message, so they never leave here.
+line of detail, the class of thing an agent is waiting on, a session, and a time; the
+transcript path and working directory the payload also carries would leak filesystem layout
+into a Telegram message, so they never leave here.
 """
 
 from __future__ import annotations
@@ -92,6 +93,13 @@ _DETAIL_FIELDS = ("message", "last_assistant_message")
 #: which is wording, shared with Claude's `needs_answer`, and a decision to take deliberately
 #: rather than to inherit from a parser change. Recorded as DEC-067.
 _CODEX_DETAIL_FIELDS: dict[str, tuple[str, ...]] = {"Stop": ("last_assistant_message",)}
+
+#: What a Codex payload may contribute as an ASK CLASS, per event. `PermissionRequest` only,
+#: and `tool_name` only -- the one field the measurement
+#: (`docs/acceptance-2026-08-29-codex-activity-detail.md`) licenses, whose own licensing
+#: section reads "`PermissionRequest` -> `tool_name` at most, and nothing else". `Stop` admits
+#: none: an agent that has finished is not waiting on anything.
+_CODEX_ASK_FIELDS: dict[str, tuple[str, ...]] = {"PermissionRequest": ("tool_name",)}
 #: How many times a colliding name is stepped over before the record is dropped in silence.
 #:
 #: A collision needs two events in the same *microsecond* for one session, so the hooks
@@ -111,6 +119,29 @@ class ObservedAgentEvent:
     reason: str | None
     detail: str | None
     observed_at: datetime
+    ask: str | None = None
+    """Which CLASS of thing the agent is waiting on, as the provider's own token.
+
+    A third kind of string, kept apart from the other two on purpose. `reason` discriminates an
+    event into a kind and is never rendered; `detail` is **the agent's own words** and is
+    rendered as a sentence the agent wrote. This is neither: `Bash` is a provider's name for a
+    tool, and its whole use is that a *surface* turns it into wording of its own ("waiting for
+    an answer about a shell command").
+
+    **DEC-074**, which supersedes DEC-067's rejected-alternative clause. DEC-067 declined
+    `tool_name` on two grounds. The first -- that putting a token in `detail` conflates two
+    kinds of string in a field every consumer reads as prose -- is answered by this field
+    existing, and stands unamended. The second was the **ordering**: "storing ahead of
+    rendering inverts the rule above", declined because nobody had yet taken the wording
+    decision rendering it would require. That premise is what changed; DEC-074 records the
+    decision and the argument for it.
+
+    An earlier version of this docstring claimed the split "completes DEC-067 on its own terms
+    and supersedes nothing", and asserted the owner's approval inline. Both were wrong in the
+    same way: DEC-067's ordering objection is a separate clause that this does override, and an
+    owner decision living only in a code comment is exactly the unrecorded decision this project
+    treats as reversible by the next edit. A Tier-1 review found it.
+    """
 
     def document(self) -> dict[str, object]:
         return {
@@ -119,6 +150,7 @@ class ObservedAgentEvent:
             "reason": self.reason,
             "detail": self.detail,
             "observed_at": self.observed_at.isoformat(),
+            "ask": self.ask,
         }
 
 
@@ -176,7 +208,18 @@ def _observed_event(
         # claim is scoped to the pane-*title* watcher, which is untouched and still retains one
         # boolean.
         #
-        # `PermissionRequest` admits nothing, deliberately -- see `_CODEX_DETAIL_FIELDS`.
+        # `PermissionRequest` still admits no *detail* -- see `_CODEX_DETAIL_FIELDS` -- and
+        # since 2026-09-06 admits `tool_name` as an `ask`, a different field for a different
+        # kind of string (DEC-074, superseding DEC-067's rejected-alternative clause;
+        # DEC-067's field-conflation reasoning stands and is why `ask` is not `detail`).
+        #
+        # Read through `_plain_token`, not `bounded_detail_line`. The measurement observed
+        # `tool_name` only as `Bash` in all four samples and says so; its value space is
+        # unverified beyond that. The narrow reader is what keeps an unverified space from
+        # becoming a rendering surface: a value carrying a space, a slash or a quote is not a
+        # tool class this project recognises, and it is dropped rather than drawn under the
+        # owner's session name.
+        #
         # What crosses here is bounded by `bounded_detail_line`, exactly as Claude's is, because
         # the far end of the spool measures against the same budget.
         return ObservedAgentEvent(
@@ -185,6 +228,7 @@ def _observed_event(
             reason=None,
             detail=_first(document, _CODEX_DETAIL_FIELDS.get(event, ()), bounded_detail_line),
             observed_at=moment.astimezone(UTC),
+            ask=_first(document, _CODEX_ASK_FIELDS.get(event, ()), _plain_token),
         )
     return ObservedAgentEvent(
         session_id=session_id,
