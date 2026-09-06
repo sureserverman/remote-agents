@@ -386,9 +386,15 @@ def limit_row_content(row: LimitRow, columns: _LimitColumns, width: int | None) 
     one_line = one_line + trailer
     if width is None or width <= 0 or one_line.cell_length <= width:
         return [one_line]
+    # Rebuilt without the reset field's trailing pad. That pad exists so the window *after*
+    # this one starts in a fixed column; here the next window is on the next line, so it
+    # aligns nothing and only inflates `cell_length` -- the measurement that decides whether
+    # the trailer fits beside the last window, which would then be pushed onto a line of its
+    # own by spaces the owner cannot see.
+    stacked = [_window_content(row, window, columns, last=True) for window in row.windows]
     indent = Content(" " * (columns.profile + 2))
-    lines = [name + Content("  ") + cells[0]] if cells else [name]
-    lines.extend(indent + cell for cell in cells[1:])
+    lines = [name + Content("  ") + stacked[0]] if stacked else [name]
+    lines.extend(indent + cell for cell in stacked[1:])
     if trailer:
         if (lines[-1] + trailer).cell_length <= width:
             lines[-1] = lines[-1] + trailer
