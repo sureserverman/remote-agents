@@ -154,7 +154,9 @@ def main(
     subcommands.add_parser("upgrade-sessions")
     agent_event_parser = subcommands.add_parser("agent-event")
     agent_event_parser.add_argument("--activity-dir", type=Path)
-    agent_event_parser.add_argument("--provider", choices=("claude", "codex"), default="claude")
+    agent_event_parser.add_argument(
+        "--provider", choices=("claude", "codex", "opencode"), default="claude"
+    )
     # `allow_abbrev=False` is load-bearing, not tidiness. argparse accepts any unambiguous
     # prefix by default, so `--bot-token` -- the obvious name, the one an operator reaches for
     # first -- was silently accepted as an abbreviation of `--bot-token-file`, which put a
@@ -194,7 +196,9 @@ def main(
     upgrade_parser.add_argument("--repository", type=str, default=DEFAULT_REPOSITORY)
     upgrade_parser.add_argument("--check", action="store_true")
     install_hooks_parser = subcommands.add_parser("install-agent-hooks")
-    install_hooks_parser.add_argument("--provider", choices=("claude", "codex"), default="claude")
+    install_hooks_parser.add_argument(
+        "--provider", choices=("claude", "codex", "opencode"), default="claude"
+    )
     install_hooks_parser.add_argument("--settings", type=Path)
     install_hooks_parser.add_argument("--activity-dir", type=Path)
     install_hooks_parser.add_argument("--remove", action="store_true")

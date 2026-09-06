@@ -80,13 +80,17 @@ from remote_agents.adapters.agents.hook_settings import (
     _foreign_variant_note,
     _HookProvider,
     _read_settings,
+    _refuse_a_planted_plugin_path,
     _refuse_a_spool_others_can_reach,
     _refuse_if_changed_since_it_was_read,
     _refuse_when_removal_would_not_restore,
+    _remove_plugin,
     _with_our_groups,
     _without_our_groups,
     _write_atomically,
+    _write_plugin,
 )
+from remote_agents.adapters.agents.opencode.hooks import PROVIDER as _OPENCODE
 from remote_agents.adapters.agents.opencode.usage import OpenCodeUsageReader
 from remote_agents.domain.models import ProfileId, ProjectId
 from remote_agents.ports.agent_usage import AgentLimits, AgentUsage, UsageQuery
@@ -280,7 +284,7 @@ see ``activity_spool._DISCRIMINATING_FIELDS`` for what that cost.
 """
 
 
-_PROVIDERS = {provider.name: provider for provider in (_CLAUDE, _CODEX)}
+_PROVIDERS = {provider.name: provider for provider in (_CLAUDE, _CODEX, _OPENCODE)}
 
 
 def _provider(name: str) -> _HookProvider:
@@ -304,6 +308,24 @@ def default_settings_path(home: Path, *, provider: str = "claude") -> Path:
     return home / _provider(provider).configuration_relative_path
 
 
+def _agent_event_argv(
+    executable: Path, activity_directory: Path | None, provider: _HookProvider
+) -> list[str]:
+    """Spell the spool command as argv, which is the form that cannot be re-split.
+
+    The one source both shapes are rendered from. A hook settings file wants a string, and the
+    generated plugin spawns without a shell and wants a list; deriving the string from the list
+    means the two spellings cannot drift into disagreeing about which command this project
+    installed.
+    """
+    argv = [str(executable), "-m", "remote_agents", "agent-event"]
+    if not provider.flagless:
+        argv += ["--provider", provider.name]
+    if activity_directory is not None:
+        argv += ["--activity-dir", str(activity_directory)]
+    return argv
+
+
 def agent_event_command(
     executable: Path, activity_directory: Path | None = None, *, provider: str = "claude"
 ) -> str:
@@ -315,13 +337,19 @@ def agent_event_command(
     performing the install fixes the resolution at a moment when it is known to be correct:
     that interpreter is by definition one that can import this package.
     """
-    selected = _provider(provider)
-    command = f"{shlex.quote(str(executable))} -m remote_agents agent-event"
-    if not selected.flagless:
-        command = f"{command} --provider {selected.name}"
-    if activity_directory is None:
-        return command
-    return f"{command} --activity-dir {shlex.quote(str(activity_directory))}"
+    return shlex.join(_agent_event_argv(executable, activity_directory, _provider(provider)))
+
+
+def _plugin_path(settings_path: Path, provider: _HookProvider) -> Path:
+    """Where this provider's generated file lands, derived from the settings file's own home.
+
+    Derived rather than resolved against `Path.home()`, so `--settings` moves both artifacts
+    together: the live drill and every test here point at a temporary tree, and a plugin that
+    kept landing in the operator's real configuration while its entry went somewhere else would
+    be the worst of both.
+    """
+    assert provider.plugin is not None
+    return settings_path.parent / provider.plugin.relative_path
 
 
 def install_agent_hooks(
@@ -331,15 +359,24 @@ def install_agent_hooks(
     activity_directory: Path | None = None,
     provider: str = "claude",
 ) -> HookInstallOutcome:
-    """Add one group per event, replacing any this installer left behind previously."""
+    """Add one group per event — or one plugin entry — replacing any left behind previously."""
     _refuse_a_spool_others_can_reach(activity_directory)
     selected = _provider(provider)
+    if selected.plugin is not None:
+        # Before the settings file is even read: this refusal is about where generated code
+        # would land, and an operator with a link standing at that name should hear about the
+        # link rather than about their JSON.
+        _refuse_a_planted_plugin_path(_plugin_path(settings_path, selected))
     settings = _read_settings(settings_path, selected)
     interpreter = Path(sys.executable) if executable is None else executable
-    base = _without_our_groups(settings.document, selected)
-    installed = _with_our_groups(
-        base, agent_event_command(interpreter, activity_directory, provider=provider), selected
+    argv = _agent_event_argv(interpreter, activity_directory, selected)
+    ours = (
+        _plugin_path(settings_path, selected).as_uri()
+        if selected.plugin is not None
+        else shlex.join(argv)
     )
+    base = _without_our_groups(settings.document, selected)
+    installed = _with_our_groups(base, ours, selected)
     _refuse_when_removal_would_not_restore(settings, base, installed, selected)
     content = settings.style.render(installed)
     # Reported on both paths. Re-running the installer is exactly what an operator does when
@@ -348,14 +385,44 @@ def install_agent_hooks(
     # helpful moment to stay quiet.
     note = _foreign_variant_note(base, selected)
     if content == settings.content:
+        # The config entry names a path and never a version, so it is byte-identical across an
+        # upgrade that rewrote the plugin. Whether anything changed is therefore the plugin's
+        # answer here, not the config's.
+        refreshed = selected.plugin is not None and _write_plugin(
+            _plugin_path(settings_path, selected),
+            selected.plugin.render(argv),
+            selected.plugin.marker,
+        )
+        if not refreshed:
+            return HookInstallOutcome(
+                settings_path, False, f"agent hooks already current in {settings_path}{note}"
+            )
         return HookInstallOutcome(
-            settings_path, False, f"agent hooks already current in {settings_path}{note}"
+            settings_path,
+            True,
+            f"refreshed the {selected.name} activity plugin beside {settings_path}{note}",
         )
     _refuse_if_changed_since_it_was_read(settings_path, settings.content)
+    if selected.plugin is not None:
+        # The file before the entry that names it: an entry pointing at a file that is not there
+        # yet is a load error in the operator's next session, while a file nothing points at is
+        # inert. Ordered for the failure that costs less -- and safe to order that way only
+        # because `_remove_plugin` deletes by marker without needing a config entry to exist, so
+        # an interrupted install between these two writes is recoverable by `--remove` alone.
+        # That invariant is load-bearing for this ordering; an edit to `_remove_plugin` that made
+        # deletion conditional on the entry would strand the file this line writes.
+        _write_plugin(
+            _plugin_path(settings_path, selected),
+            selected.plugin.render(argv),
+            selected.plugin.marker,
+        )
+        summary = f"installed the {selected.name} activity plugin in {settings_path}"
+    else:
+        summary = (
+            f"installed {len(selected.installed_events)} {selected.name} agent hooks "
+            f"in {settings_path}"
+        )
     _write_atomically(settings_path, content, settings.mode)
-    summary = (
-        f"installed {len(selected.installed_events)} {selected.name} agent hooks in {settings_path}"
-    )
     return HookInstallOutcome(settings_path, True, summary + note)
 
 
@@ -368,8 +435,21 @@ def remove_agent_hooks(settings_path: Path, *, provider: str = "claude") -> Hook
     selected = _provider(provider)
     settings = _read_settings(settings_path, selected)
     content = settings.style.render(_without_our_groups(settings.document, selected))
+    # Attempted whatever the config says. The two artifacts can legitimately disagree -- a
+    # hand-removed entry leaving the file, an interrupted install leaving the file before the
+    # entry -- and a removal that only ran when the entry was present would leave executable
+    # code in the operator's configuration with nothing left that knows how to take it out.
+    deleted = selected.plugin is not None and _remove_plugin(
+        _plugin_path(settings_path, selected), selected
+    )
     if content == settings.content:
-        return HookInstallOutcome(settings_path, False, f"no agent hooks in {settings_path}")
+        if not deleted:
+            return HookInstallOutcome(settings_path, False, f"no agent hooks in {settings_path}")
+        return HookInstallOutcome(
+            settings_path,
+            True,
+            f"removed the {selected.name} activity plugin beside {settings_path}",
+        )
     _refuse_if_changed_since_it_was_read(settings_path, settings.content)
     _write_atomically(settings_path, content, settings.mode)
     return HookInstallOutcome(settings_path, True, f"removed agent hooks from {settings_path}")

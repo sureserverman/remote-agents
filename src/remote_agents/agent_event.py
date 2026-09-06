@@ -59,6 +59,6 @@ def run_agent_event(argv: list[str] | None = None) -> int:
     # drove `bootstrap.main`, which is not the path the console script takes.
     parser = NonEchoingArgumentParser(prog="remote-agents agent-event")
     parser.add_argument("--activity-dir", type=Path)
-    parser.add_argument("--provider", choices=("claude", "codex"), default="claude")
+    parser.add_argument("--provider", choices=("claude", "codex", "opencode"), default="claude")
     arguments = parser.parse_args(argv)
     return spool_from_stdin(arguments.activity_dir, provider=arguments.provider)
