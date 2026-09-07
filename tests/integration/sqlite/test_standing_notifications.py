@@ -128,3 +128,82 @@ async def test_retiring_a_notification_leaves_the_feed_its_observation(tmp_path)
 
     assert standing.notification(_CHAT, _SESSION) is None
     assert [one.detail for one in await feed.recent(limit=10)] == ["Found it."]
+
+
+def test_the_class_of_ask_survives_the_round_trip(tmp_path) -> None:
+    """A replacement message must say what the first one said.
+
+    The first message a session sends is rendered from live `AgentActivity` values, so it names
+    the class of ask. A replacement is rebuilt from this table — which is the common case, since
+    replacing is the whole design of a standing notification — and until 2026-09-07 the snapshot
+    did not carry `ask`, so the wording silently downgraded from "Waiting for an answer about a
+    shell command" to "Waiting for an answer" the moment a second report arrived.
+
+    Invisible until Stage 5's live drill, because the running service predated the `ask` column
+    and no ask had ever reached this table to be dropped.
+    """
+    asked = AgentActivity(
+        _SESSION, ActivityKind.NEEDS_ANSWER, None, _OBSERVED, ActivityConfidence.REPORTED, "bash"
+    )
+    database = tmp_path / "sessions.sqlite3"
+
+    connection = open_database(database)
+    SQLiteStandingNotificationStore(connection).record(_CHAT, _notification(asked))
+    connection.close()
+
+    connection = open_database(database)
+    standing = SQLiteStandingNotificationStore(connection).notification(_CHAT, _SESSION)
+    connection.close()
+
+    assert standing is not None
+    assert standing.activities[0].ask == "bash"
+
+
+def test_a_row_written_before_the_ask_key_existed_is_still_readable(tmp_path) -> None:
+    """An upgrade must not restart every notification that was mid-flight across it.
+
+    Subscripting the key would send such a row down the "this build cannot read it" path, which
+    drops the record of the message and starts a new one — a duplicate notification per live
+    session, once, on upgrade. `.get` reads the absence as what it meant: no ask.
+    """
+    import json
+
+    database = tmp_path / "sessions.sqlite3"
+    connection = open_database(database)
+    SQLiteStandingNotificationStore(connection).record(_CHAT, _notification(_activity()))
+    stored = connection.execute("SELECT activities FROM standing_notifications").fetchone()[0]
+    lines = json.loads(stored)
+    for line in lines:
+        line.pop("ask")
+    connection.execute("UPDATE standing_notifications SET activities = ?", (json.dumps(lines),))
+    connection.commit()
+
+    standing = SQLiteStandingNotificationStore(connection).notification(_CHAT, _SESSION)
+    connection.close()
+
+    assert standing is not None, "a pre-upgrade row must be read, not dropped"
+    assert standing.activities[0].ask is None
+
+
+def test_every_rendered_field_of_an_observation_round_trips() -> None:
+    """Structural, because the rule is "all of them" and a case can only check the ones it names.
+
+    `ask` was missing from the snapshot for a week and nothing failed; what was missing was not a
+    test for `ask` but a test for the *rule*. A seventh field on `AgentActivity` now has to be
+    either stored here or deliberately excluded, and excluding it is an edit somebody makes on
+    purpose rather than by not thinking about it.
+    """
+    import dataclasses
+    import re
+    from pathlib import Path
+
+    from remote_agents.adapters.sqlite import standing_notification_store
+
+    source = Path(standing_notification_store.__file__).read_text(encoding="utf-8")
+    stored = set(re.findall(r'"(\w+)": activity\.', source))
+    fields = {field.name for field in dataclasses.fields(AgentActivity)}
+    # The session id is the row's key and is deliberately not repeated per line.
+    assert fields - stored == {"session_id"}, (
+        f"{fields - stored - {'session_id'}} is on AgentActivity and not in the snapshot; a "
+        "replacement message would render it as absent"
+    )
