@@ -455,13 +455,73 @@ async def test_naming_the_project_leaves_the_row_key_alone() -> None:
 
 async def test_a_session_whose_project_left_the_catalogue_still_renders() -> None:
     """Deregistered, or a directory moved, while the session runs. The slug is then the only
-    name there is, and a row the owner cannot see is a session they cannot stop."""
-    app = SessionsPane(_context((_record(name="vanished"),), catalogue=()))
+    name there is, and a row the owner cannot see is a session they cannot stop.
+
+    `refresh_catalogue` is emptied alongside the snapshot, and that is the scenario rather
+    than boilerplate: a project that has *left* is gone from a fresh read too. Leaving the
+    default refresh wired here described a project that was missing from the snapshot and
+    present in the registry -- which is the other test below, and a pane that re-reads the
+    catalogue now correctly renders it under its name.
+    """
+    app = SessionsPane(
+        _context((_record(name="vanished"),), catalogue=(), refresh_catalogue=lambda: ())
+    )
     async with app.run_test() as pilot:
         await pilot.pause()
         choices = app.screen.query_one("#choices", OptionList)
         assert choices.option_count == 1
         assert "vanished" in str(choices.get_option_at_index(0).prompt)
+
+
+async def test_a_project_registered_since_this_pane_started_is_named_without_a_restart() -> None:
+    """The reported defect: a sessions pane showing a 24-character hash where a name belongs.
+
+    The console is four processes and only the projects pane runs a flow that refreshes the
+    catalogue, so this pane's snapshot was frozen for the life of the process -- register a
+    project, launch into it, and every row for it drew the opaque id until the pane was
+    restarted. Nothing on the pane could fix it, which is what made it worth a mechanism
+    rather than a key.
+
+    The snapshot here has no entry for the session's project and the registry does, which is
+    exactly the state a pane is in the moment the owner registers something.
+    """
+    app = SessionsPane(
+        _context(
+            (_record(name="opaque-existing"),),
+            catalogue=(),
+            refresh_catalogue=lambda: (_PROJECT,),
+        )
+    )
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        choices = app.screen.query_one("#choices", OptionList)
+        drawn = str(choices.get_option_at_index(0).prompt)
+        # The opaque id is what a stale snapshot draws, so its *absence* is the assertion that
+        # discriminates -- and here it has to be, because the catalogue name ("existing") is a
+        # substring of the id it replaces ("opaque-existing"). Asserting only that the name
+        # appears passes on the unfixed code, which is how this test was first written.
+        assert "opaque-existing" not in drawn, drawn
+        assert "existing" in drawn, drawn
+
+
+async def test_the_catalogue_is_not_re_read_for_a_listing_it_already_explains() -> None:
+    """The ordinary case pays a set difference, not a registry read and a directory walk.
+
+    Every repaint of every pane passes through the join, so a refresh that fired whenever one
+    was *possible* rather than whenever one could *help* would put a walk of the development
+    root behind a ten-second timer on four processes.
+    """
+    reads = 0
+
+    def refresh() -> tuple[CatalogProject, ...]:
+        nonlocal reads
+        reads += 1
+        return (_PROJECT,)
+
+    app = SessionsPane(_context((_record(),), refresh_catalogue=refresh))
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        assert reads == 0
 
 
 # A key per action that OPENS something, each routed into the detail's own chain ---------------
