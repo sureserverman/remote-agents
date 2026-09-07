@@ -1391,3 +1391,12 @@ def test_the_feed_drops_an_inferred_observations_ask_as_it_drops_its_detail() ->
     row = feed_rows((inferred,), width=80)[0][1].plain
     assert "shell command" not in row
     assert "(" not in row
+
+
+def test_the_feed_words_a_patch_approval_in_its_own_voice() -> None:
+    """The same class, this surface's sentence — a second copy on purpose (DEC-043)."""
+    from remote_agents.adapters.tui.screens.feed import ASK_WORDS
+    from remote_agents.ports.agent_activity import AskClass
+
+    assert ASK_WORDS[AskClass.EDIT] == "about editing a file"
+    assert AskClass.UNKNOWN not in ASK_WORDS
