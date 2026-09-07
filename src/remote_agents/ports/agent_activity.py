@@ -145,17 +145,37 @@ class AskClass(Enum):
     this docstring re-trips it. That is the guard working, not a flaw in it.)
     """
 
+    EDIT = "edit"
+    """An ask about changing a file.
+
+    Added 2026-09-07 for Codex's `apply_patch`, and it is the first member licensed by
+    *production* rather than by a drill: the capture that licensed `SHELL` saw `tool_name` only
+    as `Bash` across four payloads, and the owner's own activity store then held 22
+    `apply_patch` waits against 45 shell ones. A third of the hook-sourced approvals were
+    rendering as the sentence an *unrecognised* ask gets.
+
+    Deliberately about the change, not about the tool. `apply_patch` is Codex's name for the
+    mechanism; what the owner is being asked is whether something may edit a file, and that is
+    the fact both surfaces word for themselves.
+    """
+
     UNKNOWN = "unknown"
 
 
-_ASK_CLASSES: dict[str, AskClass] = {"Bash": AskClass.SHELL, "bash": AskClass.SHELL}
+_ASK_CLASSES: dict[str, AskClass] = {
+    "Bash": AskClass.SHELL,
+    "bash": AskClass.SHELL,
+    "apply_patch": AskClass.EDIT,
+}
 """The measured tokens, and only the measured tokens.
 
 Exact-match, case included: `BASH` is not `Bash`. Matching an unseen casing would be guessing at
 a provider's conventions on a value space both measurements say is unverified, and the honest
 answer to an unmeasured token is `UNKNOWN` -- which the surfaces can say.
 
-Two entries, one per provider, each earned by its own capture: Codex spells it `Bash`
+Three entries, each earned by its own evidence. `apply_patch` is Codex's, and its evidence is
+the strongest of the three: not a drill but 22 real `PermissionRequest` hooks in the owner's
+activity store, against 45 carrying `Bash`. The others: Codex spells the shell one `Bash`
 (`docs/acceptance-2026-08-29-codex-activity-detail.md`, 4 of 4 payloads) and OpenCode spells it
 `bash` (`docs/acceptance-2026-09-06-opencode-activity.md`, 1 of 1). The lowercase entry was
 deliberately absent until 2026-09-06 and the reason for its absence has not been overturned --

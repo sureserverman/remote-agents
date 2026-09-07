@@ -1733,3 +1733,23 @@ def test_an_inferred_observation_cannot_borrow_an_ask_either() -> None:
     )
     assert "shell command" not in message.text
     assert message.text.split("\n")[0].startswith("❓ <b>Waiting for an answer</b> · ")
+
+
+def test_a_patch_approval_says_what_it_is_about() -> None:
+    """22 of the owner's hook-sourced waits were `apply_patch` and said nothing (DEC-043).
+
+    The bot's own sentence, not the feed's: the class is shared, the words are this surface's.
+    """
+    from remote_agents.adapters.telegram.notifications import kind_headline
+    from remote_agents.ports.agent_activity import ActivityKind
+
+    assert kind_headline(ActivityKind.NEEDS_ANSWER, "apply_patch") == (
+        "\u2753 Waiting for an answer about editing a file"
+    )
+    assert kind_headline(ActivityKind.NEEDS_ANSWER, "Bash") == (
+        "\u2753 Waiting for an answer about a shell command"
+    )
+    # An ask this project still does not recognise gains no clause, exactly as before.
+    assert kind_headline(ActivityKind.NEEDS_ANSWER, "some_new_tool") == (
+        "\u2753 Waiting for an answer"
+    )

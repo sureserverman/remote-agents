@@ -37,6 +37,21 @@ def test_ask_class_recognises_the_tokens_the_measurements_observed() -> None:
     assert ask_class("bash") is AskClass.SHELL
 
 
+def test_apply_patch_is_an_edit_ask_rather_than_an_unrecognised_one() -> None:
+    """The third measured token, and the first one production measured rather than a drill.
+
+    `docs/acceptance-2026-08-29-codex-activity-detail.md` saw `tool_name` only as `Bash` across
+    four captured payloads, so `apply_patch` was correctly unrecognised: a class nothing has
+    ever sent is a class no test can be honest about. Production then sent it 22 times. Those
+    are Codex `PermissionRequest` hooks on real sessions, in the owner's own activity store, and
+    they are a stronger sample than the drill that licensed `Bash`.
+
+    Until this, a third of the owner's hook-sourced waits rendered as a bare "Waiting for an
+    answer" — the same sentence an unrecognised ask gets, on an ask that is not unrecognised.
+    """
+    assert ask_class("apply_patch") is AskClass.EDIT
+
+
 @pytest.mark.parametrize(
     "token",
     ["Read", "Edit", "WebFetch", "SomeToolNobodyHasSeen", "", "BASH", "Bash_"],
@@ -76,11 +91,12 @@ def test_no_generated_token_but_the_measured_ones_are_ever_recognised() -> None:
     generated = {
         alphabet[index % len(alphabet)] * (1 + index % 8) + str(index) for index in range(600)
     }
-    measured = {"Bash", "bash"}
+    measured = {"Bash", "bash", "apply_patch"}
     generated |= {"Bash".upper(), "Bas", "Bashh", " Bash", "Bash "} | measured
     for token in generated:
         if token in measured:
             continue
         assert ask_class(token) is AskClass.UNKNOWN, f"{token!r} was recognised"
-    for token in measured:
+    assert ask_class("apply_patch") is AskClass.EDIT
+    for token in measured - {"apply_patch"}:
         assert ask_class(token) is AskClass.SHELL
