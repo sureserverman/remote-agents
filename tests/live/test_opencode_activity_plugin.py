@@ -42,10 +42,19 @@ import pytest
 from remote_agents.adapters.agents.registry import install_agent_hooks, remove_agent_hooks
 from remote_agents.application.activity import drain_activity
 from remote_agents.domain.models import SessionId
-from remote_agents.ports.agent_activity import ActivityKind
+from remote_agents.ports.agent_activity import ActivityKind, AskClass, ask_class
 from remote_agents.ports.session_identity import SESSION_ID_VARIABLE
 
 _TURN = "Reply with exactly the word: spooled"
+
+#: A turn that needs an approval. `opencode run` is non-interactive and auto-rejects, but the
+#: `event` stream carries `permission.asked` either way -- which is the route this project relies
+#: on, and the reason it never had to settle whether the typed `permission.ask` hook is usable.
+_APPROVAL_TURN = (
+    "Use your bash tool to run exactly this command: echo measured. "
+    "Do not answer from memory and do not simulate it — actually run the tool, "
+    "then report the output."
+)
 
 #: Markers of an unavailable model, matched against OpenCode's **log file** and not its output.
 #:
@@ -85,7 +94,17 @@ def _requirements(tmp_path: Path) -> tuple[Path, Path, dict[str, str]]:
     os.symlink(source_auth, data_home / "opencode" / "auth.json")
 
     settings = config_home / "opencode" / "opencode.json"
-    settings.write_text(json.dumps({"$schema": "https://opencode.ai/config.json"}) + "\n", "utf-8")
+    # `bash: ask` makes the approval half deterministic. Without it whether `permission.asked`
+    # fires depends on the model choosing to call the tool and on the default policy, and a drill
+    # whose assertion is skipped on the model's whim proves nothing on the runs it does not skip.
+    settings.write_text(
+        json.dumps(
+            {"$schema": "https://opencode.ai/config.json", "permission": {"bash": "ask"}},
+            indent=2,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
 
     workspace = tmp_path / "workspace"
     workspace.mkdir()
@@ -197,6 +216,41 @@ def test_the_drill_leaves_the_configuration_as_it_found_it(tmp_path: Path) -> No
     remove_agent_hooks(settings, provider="opencode")
 
     assert json.loads(settings.read_text(encoding="utf-8")) == {
-        "$schema": "https://opencode.ai/config.json"
+        "$schema": "https://opencode.ai/config.json",
+        "permission": {"bash": "ask"},
     }
     assert not plugin.exists()
+
+
+@pytest.mark.live_profile
+def test_a_managed_opencode_turn_asking_for_approval_spools_a_named_wait(tmp_path: Path) -> None:
+    """The other half of the vocabulary, and the one that carries an ask class.
+
+    `properties.permission` was measured exactly once, as `"bash"`, so this is the assertion that
+    says the value space is what the acceptance document recorded rather than what one capture
+    happened to hold. The literal command must not travel with it: `patterns` and
+    `metadata.command` both carry `echo measured` on the real payload, and neither is licensed.
+    """
+    workspace, spool, environment = _requirements(tmp_path)
+    session_id = SessionId.new()
+
+    _run_opencode(
+        workspace, {**environment, SESSION_ID_VARIABLE: str(session_id)}, _APPROVAL_TURN
+    )
+
+    activities = drain_activity(spool)
+    waits = [one for one in activities if one.kind is ActivityKind.NEEDS_ANSWER]
+    if not waits:
+        pytest.skip(
+            "BLOCKED: the model answered without asking for approval, so no `permission.asked` "
+            f"was emitted; kinds seen were {[one.kind.value for one in activities]}"
+        )
+    for wait in waits:
+        assert wait.session_id == str(session_id)
+        assert wait.detail is None, "an approval carries no agent words, on any provider"
+        assert wait.ask == "bash", f"the measured tool class is `bash`, not {wait.ask!r}"
+        assert ask_class(wait.ask) is AskClass.SHELL
+    # The literal command the owner was asked to approve, from the real payload's `patterns` and
+    # `metadata.command`. Asserted over every record the turn produced, not just the wait.
+    rendered = json.dumps([one.detail for one in activities] + [one.ask for one in activities])
+    assert "echo measured" not in rendered
