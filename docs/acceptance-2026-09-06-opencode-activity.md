@@ -85,14 +85,20 @@ drill (`tests/live/test_opencode_activity_plugin.py`) reproduced the same silenc
 log instead of the terminal:
 
 ```
-level=ERROR message="stream error" providerID=openai modelID=gpt-5.6-terra
+level=ERROR message="stream error" providerID=<provider> modelID=<model>
   error.error="AI_APICallError: The usage limit has been reached"
 ```
 
+The provider and model are redacted per GDEC-SEC-001: which one it was is the owner's
+configuration and is not the finding.
+
 `opencode run` prints **nothing** when a provider refuses — it retries the stream with backoff
 and never exits — so a driver watching stdout sees a silent process and calls it a hang. The
-correlation with edit permissions and large output was a coincidence of which runs happened to
-land after the quota was spent. The drill now classifies this from
+correlation this table drew with edit permissions and large output is therefore **unsupported
+rather than disproved**, and the distinction is deliberate: what was reproduced is the
+*mechanism*, on a later day and a separate run — not those five runs' own logs, which were not
+retained and have not been re-read. Two reviews found an earlier draft of this paragraph
+asserting the stronger version. The drill now classifies this from
 `$XDG_DATA_HOME/opencode/log/opencode.log` and skips with a named reason (DEC-059) rather than
 waiting it out.
 

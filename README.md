@@ -58,7 +58,7 @@ find `uv`, verify it, and sequence what follows, not to install anything differe
 
 ```bash
 uv tool install --managed-python \
-  "remote-agents @ git+https://github.com/sureserverman/remote-agents@v0.35.0"
+  "remote-agents @ git+https://github.com/sureserverman/remote-agents@v0.36.0"
 remote-agents onboard --install-daemon
 ```
 
@@ -289,8 +289,8 @@ qualified enable/disable interaction; it never carries a prompt, transcript, or 
 
 The service also speaks first when a managed agent stops working: it has
 finished, it hit a usage limit, one reply hit its output length limit, or it is waiting for an
-answer. Those four are the whole vocabulary. `cursor-agent` contributes none of them — it
-publishes nothing a hook or a plugin could subscribe to, so nothing observes it at all — while
+answer. Those four are the whole vocabulary. `cursor-agent` contributes none of them — nobody has
+measured what, if anything, it publishes, so nothing observes it — while
 `claude`, `claude-remote`, `codex` and `opencode` each report for themselves. OpenCode joined
 on 2026-09-06 through a generated plugin rather than a hook command, and reports two of the
 four: it has finished, and it is waiting for an answer. Its completion carries no closing

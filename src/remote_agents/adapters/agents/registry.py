@@ -452,16 +452,52 @@ def install_agent_hooks(
 
 
 def remove_agent_hooks(settings_path: Path, *, provider: str = "claude") -> HookInstallOutcome:
-    """Delete only this installer's own groups, leaving anything sharing an event alone."""
+    """Delete only this installer's own groups, leaving anything sharing an event alone.
+
+    **Two artifacts, and the second one is collected whatever the first says.** Every refusal and
+    early return below was written when the settings file was the only thing an install produced,
+    so each of them aborted before the generated plugin was even considered — and a close-out
+    evaluator proved what that costs on the ordinary path: install writes the plugin file *first*,
+    so a config write that fails on a fresh host leaves executable code in the operator's
+    configuration, and `--remove` then answered `no settings file at <path>` and exited 0 over the
+    top of it. A missing config, an unparseable one and a concurrently-changed one all did the
+    same. DEC-076 names "removal deletes by marker without requiring the entry to exist" as the
+    invariant that makes install's ordering safe; it is implemented here rather than assumed.
+    """
+    selected = _provider(provider)
+    our_plugin = _plugin_path(settings_path, selected) if selected.plugin is not None else None
     if not settings_path.exists():
         # Not an error: uninstalling from a machine that was never installed to, and from one
-        # whose settings file has since been deleted, should look the same and cost nothing.
+        # whose settings file has since been deleted, should look the same and cost nothing --
+        # except that the second of those two may still have our plugin file sitting beside it.
+        if our_plugin is not None and _remove_plugin(our_plugin, selected):
+            return HookInstallOutcome(
+                settings_path,
+                True,
+                f"removed the {selected.name} activity plugin beside {settings_path}, which had "
+                "no settings file left to name it",
+            )
         return HookInstallOutcome(settings_path, False, f"no settings file at {settings_path}")
-    selected = _provider(provider)
-    settings = _read_settings(settings_path, selected)
-    our_plugin = _plugin_path(settings_path, selected) if selected.plugin is not None else None
+    try:
+        settings = _read_settings(settings_path, selected)
+    except HookInstallError as error:
+        # NOT collected here, and the difference from the branch above is the whole rule: a
+        # missing config can never name our file again, while an unreadable one still holds the
+        # entry and the operator is going to repair it. Deleting the plugin now would hand them a
+        # repaired config naming a file that is gone. So the refusal grows a sentence instead.
+        if our_plugin is not None and our_plugin.is_file():
+            raise HookInstallError(
+                f"{error} The {selected.name} activity plugin at {our_plugin} was therefore left "
+                "in place too; repair the file and run this again, or delete both by hand."
+            ) from error
+        raise
     content = settings.style.render(_without_our_groups(settings.document, selected, our_plugin))
     if content != settings.content:
+        # The config write is deliberately NOT wrapped to collect the plugin on failure. The
+        # entry survives a failed write, so deleting the file it names would strand it -- which
+        # is exactly the defect the ordering below was reversed to fix, reintroduced one branch
+        # over. `test_a_removal_that_cannot_write_the_config_has_not_yet_deleted_the_plugin`
+        # caught a first draft of this repair doing precisely that.
         _refuse_if_changed_since_it_was_read(settings_path, settings.content)
         _write_atomically(settings_path, content, settings.mode)
     # The entry first, the file second -- the mirror of install's order, and safe for the same

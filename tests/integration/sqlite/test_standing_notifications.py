@@ -185,25 +185,48 @@ def test_a_row_written_before_the_ask_key_existed_is_still_readable(tmp_path) ->
     assert standing.activities[0].ask is None
 
 
-def test_every_rendered_field_of_an_observation_round_trips() -> None:
-    """Structural, because the rule is "all of them" and a case can only check the ones it names.
+def test_every_rendered_field_of_an_observation_round_trips(tmp_path) -> None:
+    """Encode an observation with every field set, decode it, and require it back whole.
 
-    `ask` was missing from the snapshot for a week and nothing failed; what was missing was not a
-    test for `ask` but a test for the *rule*. A seventh field on `AgentActivity` now has to be
-    either stored here or deliberately excluded, and excluding it is an edit somebody makes on
-    purpose rather than by not thinking about it.
+    The rule is "all of them", and this is the mechanism that actually enforces it. The first
+    attempt grepped the encoder's source for `"key": activity.` pairs and compared the key names
+    against the dataclass's fields. A second independent review took that apart: the regex
+    captures only the JSON *key*, so `"detail": activity.kind.value` — a copy-paste swap — passes
+    it unchanged, and any harmless refactor that breaks the literal adjacency (a dict
+    comprehension, a key split across two lines) fails it for nothing. A test that can pass while
+    the property is false and fail while it holds is worse than no test.
+
+    Full equality over a fixture where **every field carries a distinct, non-default value** does
+    what the grep was reaching for and more: a field the encoder drops fails, a field it maps to
+    the wrong attribute fails, and a seventh field added to `AgentActivity` fails at the coverage
+    assertion below until somebody decides what the snapshot should do with it.
     """
     import dataclasses
-    import re
-    from pathlib import Path
 
-    from remote_agents.adapters.sqlite import standing_notification_store
-
-    source = Path(standing_notification_store.__file__).read_text(encoding="utf-8")
-    stored = set(re.findall(r'"(\w+)": activity\.', source))
-    fields = {field.name for field in dataclasses.fields(AgentActivity)}
-    # The session id is the row's key and is deliberately not repeated per line.
-    assert fields - stored == {"session_id"}, (
-        f"{fields - stored - {'session_id'}} is on AgentActivity and not in the snapshot; a "
-        "replacement message would render it as absent"
+    told = AgentActivity(
+        _SESSION,
+        ActivityKind.NEEDS_ANSWER,
+        "the agent's own words",
+        _OBSERVED,
+        ActivityConfidence.INFERRED,
+        "bash",
     )
+    # The fixture has to exercise every field, or the equality below proves less than it looks:
+    # a value left at its default is indistinguishable from one the encoder never wrote.
+    for field in dataclasses.fields(AgentActivity):
+        assert getattr(told, field.name) is not None, (
+            f"{field.name} is unset in this fixture, so a snapshot that dropped it would still "
+            "compare equal; set it to a distinct value"
+        )
+
+    database = tmp_path / "sessions.sqlite3"
+    connection = open_database(database)
+    SQLiteStandingNotificationStore(connection).record(_CHAT, _notification(told))
+    connection.close()
+
+    connection = open_database(database)
+    standing = SQLiteStandingNotificationStore(connection).notification(_CHAT, _SESSION)
+    connection.close()
+
+    assert standing is not None
+    assert standing.activities == (told,)

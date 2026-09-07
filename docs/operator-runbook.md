@@ -54,7 +54,7 @@ The same two steps without the fetched script:
 
 ```bash
 uv tool install --managed-python \
-  "remote-agents @ git+https://github.com/sureserverman/remote-agents@v0.35.0"
+  "remote-agents @ git+https://github.com/sureserverman/remote-agents@v0.36.0"
 remote-agents onboard --install-daemon
 ```
 
@@ -150,7 +150,7 @@ the repository and the version before installing anything:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/sureserverman/remote-agents/main/scripts/install.sh \
-  | REMOTE_AGENTS_VERSION=v0.35.0 bash
+  | REMOTE_AGENTS_VERSION=v0.36.0 bash
 remote-agents onboard --install-daemon
 ```
 
@@ -694,9 +694,11 @@ field, and every path is inside a `try` so nothing it does can fail the session 
 unmanaged session therefore costs one module load and a comparison per event, and spools
 nothing. `--remove` takes it back out.
 
-`cursor-agent` reports nothing at all: it publishes neither a hook system nor a plugin one and
-sets no title marker, and the pane-digest fallback that was its only signal was retired on
-2026-08-30 for telling the owner nothing they could act on.
+`cursor-agent` reports nothing at all: no hook mechanism or plugin API of its own has been
+measured, it sets no title marker, and the pane-digest fallback that was its only signal was
+retired on 2026-08-30 for telling the owner nothing they could act on. **That is an absence of
+evidence and it is written that way on purpose** — the identical sentence stood for `opencode`
+for six weeks and turned out to mean "nobody has looked" (DEC-076).
 
 None of these are installed by the unit, by `serve`, or by `doctor`. Install them once per host:
 

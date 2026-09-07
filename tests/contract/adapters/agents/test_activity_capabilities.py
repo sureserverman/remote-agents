@@ -50,8 +50,9 @@ def test_cursor_is_observed_by_nothing() -> None:
     Accepted on 2026-08-30 rather than worked around: `cursor-agent` publishes no hooks and
     carries no title marker, so the only signal it ever had was a guess about a pane that had
     stopped changing. Reporting nothing about it is the honest state, and this contract is where
-    it is stated rather than discovered. Unlike OpenCode's, this absence is not one a
-    measurement could close -- there is nothing published to measure.
+    it is stated rather than discovered. It sits on exactly the footing OpenCode's did until
+    somebody measured: nobody has looked. Saying instead that no measurement *could* close it
+    would re-make the claim DEC-076 exists to retract.
     """
     assert activity_source_for("cursor-agent") is ActivitySource.UNOBSERVED
     assert reported_activity_kinds_for("cursor-agent") == frozenset()

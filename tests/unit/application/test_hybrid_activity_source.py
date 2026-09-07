@@ -29,9 +29,10 @@ def test_hooked_providers_keep_the_sources_that_describe_them() -> None:
 def test_a_provider_with_neither_hooks_nor_a_title_watch_contributes_nothing() -> None:
     """The member that replaces `QUIET_ONLY`, and the reason it is not simply `HYBRID`.
 
-    `cursor-agent` publishes nothing and has no title marker, so after the pane digest goes
-    there is nothing left that could observe it. Classifying it as anything the watcher polls
-    would cost a tmux capture per pass for an observation that can never be made.
+    `cursor-agent` has no title marker and no measured hook or plugin surface, so after the pane
+    digest goes there is nothing this project knows of that could observe it. Classifying it as
+    anything the watcher polls would cost a tmux capture per pass for an observation nothing can
+    make.
 
     `opencode` was the second name on this list until 2026-09-06 and is hook-exclusive now, so
     the assertion moved rather than being deleted: what the member describes is a provider

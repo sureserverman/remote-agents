@@ -761,3 +761,55 @@ def test_no_shape_aware_helper_lets_a_caller_forget_which_file_is_ours() -> None
         assert parameter.default is inspect.Parameter.empty, (
             f"{name}'s `ours` has a default again; a caller that forgets it disables the guard"
         )
+
+
+def test_a_removal_collects_the_plugin_when_the_config_is_gone(tmp_path: Path) -> None:
+    """Install writes the file first, so a config write that fails on a fresh host leaves it.
+
+    A close-out evaluator proved the cost: `--remove` answered `no settings file at <path>` and
+    exited 0 over executable code still sitting in the operator's configuration. Nothing can name
+    the file once the config is gone, so collecting it is unambiguous — which is exactly what
+    DEC-076 calls the load-bearing invariant behind install's ordering.
+    """
+    settings = _config(tmp_path)
+    install_agent_hooks(settings, provider="opencode")
+    plugin = _plugin_path(settings)
+    settings.unlink()
+
+    outcome = remove_agent_hooks(settings, provider="opencode")
+
+    assert outcome.changed
+    assert not plugin.exists()
+    assert "no settings file left to name it" in outcome.summary
+
+
+def test_a_removal_leaves_the_plugin_when_the_config_is_unreadable_and_says_so(
+    tmp_path: Path,
+) -> None:
+    """The other half of the rule, and the reason it is a rule rather than "always collect".
+
+    An unreadable config still holds the entry and the operator is going to repair it. Deleting
+    the plugin now would hand them a repaired config naming a file that is gone — the same
+    stranding the removal ordering was reversed to prevent. So the refusal grows a sentence and
+    the file stays.
+    """
+    settings = _config(tmp_path)
+    install_agent_hooks(settings, provider="opencode")
+    plugin = _plugin_path(settings)
+    settings.write_text("{ not json", encoding="utf-8")
+
+    with pytest.raises(HookInstallError, match="was therefore left in place too"):
+        remove_agent_hooks(settings, provider="opencode")
+
+    assert plugin.is_file()
+
+
+def test_a_removal_with_no_config_and_no_plugin_is_still_a_quiet_no_op(tmp_path: Path) -> None:
+    """Collecting an orphan must not turn the ordinary never-installed case into news."""
+    directory = tmp_path / ".config" / "opencode"
+    directory.mkdir(parents=True)
+
+    outcome = remove_agent_hooks(directory / "opencode.json", provider="opencode")
+
+    assert not outcome.changed
+    assert "no settings file" in outcome.summary

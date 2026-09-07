@@ -57,7 +57,9 @@ class _PluginEntry:
 
     **It is not matched as a tail.** An earlier version of this docstring said it was, by analogy
     with `_COMMAND_TAIL`, and that analogy was wrong for a path: `_is_our_plugin_entry` compares
-    the whole resolved path, because a checkout of this project is itself called `remote-agents`
+    the whole absolute path -- *unresolved* on both sides, so a symlinked config directory is
+    compared as the operator wrote it rather than as the filesystem resolves it -- because a
+    checkout of this project is itself called `remote-agents`
     and the two-segment tail therefore matched an operator's own working-tree copy. A round-2
     verification pass found this paragraph still standing after the code beneath it had changed
     -- on the field's own definition, which is the first place a maintainer looks.

@@ -18,14 +18,17 @@ file under a bare `node` harness this project wrote, so it proves the *plugin* b
 real `opencode` proves the thing nobody can assert from the outside — that OpenCode loads a
 `plugin` entry this installer wrote and delivers `session.idle` to it.
 
-**It has not yet proved that.** First run, 2026-09-06: every attempt was blocked upstream of the
-plugin by an unavailable model — `AI_APICallError: The usage limit has been reached` on the
-configured provider, the local ollama holding no models, and no third route. A clean A/B on that
-host, two disposable config homes identical but for the `plugin` entry, reached the *same* point
-in OpenCode's startup either way, so the entry demonstrably changes nothing about what could be
-reached — but "changes nothing" is not the claim this file exists to make. Until it runs green
-somewhere, the load route rests on Stage 4's measurement with a throwaway plugin, and that
-should be read as evidence for the mechanism rather than for this artifact.
+**It proved it on 2026-09-07**, against a real `opencode 1.18.16` turn: a `completed` from
+`session.idle`, a `needs_answer` from `permission.asked` carrying `ask: "bash"` and no command,
+nothing at all from an unmanaged turn, and a config restored byte-for-byte afterwards.
+
+The first attempt, a day earlier, proved nothing — every run was blocked upstream of the plugin
+by a provider at its usage limit. That is kept here rather than deleted because of what finding
+it out was worth: it explained Stage 4's three unexplained hangs, and it is why this file
+classifies a silent `opencode run` from the log instead of waiting out a timeout. The docstring
+claiming the drill was still unproven survived a commit that made it green, and a close-out
+evaluator found it — in the one artifact that commit had nominated as the durable record
+precisely so a stale claim could not hide in the commit log.
 """
 
 from __future__ import annotations
@@ -145,6 +148,21 @@ def _blocked_reason(environment: dict[str, str]) -> str | None:
     )
 
 
+def _refuse_to_blame_the_environment_for_our_own_file(environment: dict[str, str]) -> None:
+    """Fail, rather than skip, when the config this installer wrote is what went wrong."""
+    settings = Path(environment["XDG_CONFIG_HOME"]) / "opencode" / "opencode.json"
+    plugin = settings.parent / "remote-agents" / "activity-plugin.mjs"
+    document = json.loads(settings.read_text(encoding="utf-8"))
+    assert document.get("plugin") == [plugin.as_uri()], (
+        "`opencode` did not finish and the config this installer wrote is not the one it wrote; "
+        "that is a defect here, not an unavailable model"
+    )
+    assert plugin.is_file(), (
+        "`opencode` did not finish and the plugin file the config names is gone; that is a "
+        "defect here, not an unavailable model"
+    )
+
+
 def _run_opencode(workspace: Path, environment: dict[str, str], turn: str = _TURN) -> None:
     try:
         completed = subprocess.run(
@@ -160,6 +178,13 @@ def _run_opencode(workspace: Path, environment: dict[str, str], turn: str = _TUR
         # A silent process is the *symptom* of a refused provider, never the diagnosis. Ask the
         # log before calling it a hang -- and if the log is silent too, say that the drill could
         # not start rather than that the plugin failed, because nothing here has been tested yet.
+        #
+        # But first rule out the one cause that WOULD be ours. A second independent review named
+        # the residual ambiguity: this branch reports every unexplained timeout as environmental,
+        # so an `opencode.json` this installer had corrupted would skip with a message reading
+        # "the model path is unavailable" and be indistinguishable from a spent quota. Checking
+        # the artifact we wrote turns that one case back into a failure.
+        _refuse_to_blame_the_environment_for_our_own_file(environment)
         reason = _blocked_reason(environment)
         pytest.skip(
             f"BLOCKED: OpenCode {reason} is unavailable for the live drill"
@@ -167,10 +192,17 @@ def _run_opencode(workspace: Path, environment: dict[str, str], turn: str = _TUR
             else "BLOCKED: `opencode run` did not finish and its log names no cause; the model "
             "path is unavailable, which is upstream of anything this drill tests"
         )
+    if completed.returncode == 0:
+        # A completed turn is a completed turn. The log is only consulted when something went
+        # wrong, because it accumulates across runs and a *transient* refusal on a turn that
+        # nonetheless succeeded would otherwise turn a real green into a silent named skip --
+        # the failure mode this whole classifier exists to prevent, pointed the other way. A
+        # close-out evaluator found it.
+        return
     reason = _blocked_reason(environment)
     if reason is not None:
         pytest.skip(f"BLOCKED: OpenCode {reason} is unavailable for the live drill")
-    assert completed.returncode == 0, completed.stderr
+    raise AssertionError(completed.stderr or f"`opencode run` exited {completed.returncode}")
 
 
 @pytest.mark.live_profile

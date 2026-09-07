@@ -222,8 +222,13 @@ class ActivitySource(Enum):
     **`opencode` left this member on 2026-09-06** and is hook-exclusive now. It was named here
     as an example for six weeks, and the reason was always "nobody has measured its surface"
     rather than "it has none" -- so the example moved as soon as somebody did
-    (`docs/acceptance-2026-09-06-opencode-activity.md`). `cursor-agent` stays, and stays for the
-    stronger reason: it publishes nothing to measure.
+    (`docs/acceptance-2026-09-06-opencode-activity.md`).
+
+    `cursor-agent` stays, on **exactly the same footing opencode had**: nobody has measured what
+    it publishes. A first draft of this paragraph said it stays "for the stronger reason: it
+    publishes nothing to measure", and a close-out evaluator pointed out that this is the very
+    claim DEC-076 was recorded to retract, re-made about the one provider left. There is no
+    `docs/acceptance-*cursor*` in this repository and nothing anywhere cites a measurement.
     """
 
     HOOK_EXCLUSIVE = "hook_exclusive"

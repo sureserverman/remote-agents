@@ -60,10 +60,12 @@ PLUGIN_RELATIVE_PATH = Path("remote-agents/activity-plugin.mjs")
 #: It waits at all because `session.idle` fires as OpenCode is finishing: a fire-and-forget
 #: spawn would race the process's own exit and lose the record the owner most wants. It waits
 #: *boundedly* because this runs inside the agent's event loop, where an unbounded wait is a
-#: hung session. Measured on this host, the command it waits for costs about 0.07s end to end
-#: (`python -m remote_agents agent-event` against a spool directory), so this is roughly seventy
-#: times its cost -- long enough that a slow machine still delivers, short enough that a broken
-#: install is a pause and not a hang.
+#: hung session. Measured on this host across five runs, the command it waits for costs about
+#: 0.04s end to end (`python -m remote_agents agent-event --provider opencode` against a spool
+#: directory), so this is roughly 125 times its cost -- long enough that a slow machine still
+#: delivers, short enough that a broken install is a pause and not a hang. An earlier version of
+#: this comment said 0.07s and "roughly seventy times", from a single run that included an
+#: interpreter cold start; a close-out evaluator re-measured it.
 _WAIT_MILLISECONDS = 5000
 
 PLUGIN_MARKER = "// remote-agents activity plugin for OpenCode -- GENERATED FILE"

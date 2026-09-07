@@ -62,9 +62,10 @@ jobs:
           shellcheck --version | head -2
           # node runs the generated OpenCode plugin in
           # `tests/provider_contract/per_provider/test_opencode_plugin.py`, which is the only
-          # place that artifact is executed rather than read. Both runner images ship it, so
-          # this is an assertion rather than an install -- and it fails loudly here instead of
-          # letting the test skip itself into a hole the badge would not show.
+          # place CI executes that artifact rather than reading it. (`tests/live` executes it
+          # too, through a real `opencode`, and is deliberately not run here.) Both runner images
+          # ship node, so this is an assertion rather than an install -- and it fails loudly here
+          # instead of letting the test skip itself into a hole the badge would not show.
           node --version
 
       - name: Install uv
