@@ -5,6 +5,11 @@ is unmet (the capability wired None). The Stage 1 gate performed the live reconc
 once — summed the run's SKIPPED report and compared it to this derivation (6 == 6) — and
 what stands guard afterwards is this pin: a declaration change moves the derived number and
 fails here, prompting the gate's summed-grep comparison to be re-run rather than trusted.
+
+**9 -> 8 on 2026-09-06**, and the pin doing its job is the record of why: opencode's `hooks`
+stopped being an UNSUPPORTED declaration when the provider gained a plugin installer, so one
+skip became one driven contract test. The number was re-derived and the live comparison re-run
+at that stage's gate, which is exactly the prompt this assertion exists to produce.
 """
 
 from __future__ import annotations
@@ -26,7 +31,7 @@ def expected_skips() -> int:
 
 
 def test_the_skip_count_is_fully_accounted_for() -> None:
-    assert expected_skips() == 9, (
+    assert expected_skips() == 8, (
         "the kit's skip budget changed; re-derive the gate's grep expectation from this "
         "number rather than editing either side alone"
     )

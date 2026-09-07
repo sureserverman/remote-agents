@@ -139,7 +139,7 @@ class AgentLimits:
     be a tuple of percentages with nothing to attach them to.
 
     **Nothing here is required and nothing is validated beyond `UsageWindow`'s own rules.**
-    `opencode` and `cursor-agent` publish no limits at all, so an empty `windows` is the
+    `opencode` and `cursor-agent` do not publish limits at all, so an empty `windows` is the
     honest answer rather than a degenerate one — and a type that refused it would push those
     readers into either returning `None`, which this project words as "no conversation
     matched" and means something else entirely, or inventing a window. DEC-061 forbids the

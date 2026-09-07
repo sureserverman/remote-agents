@@ -18,6 +18,7 @@ from datetime import UTC, datetime
 from io import BytesIO
 from pathlib import Path
 
+from remote_agents.adapters.agents import activity_spool as spool
 from remote_agents.adapters.agents.activity_spool import _observed_event
 from remote_agents.ports.agent_activity import MAXIMUM_DETAIL_CHARACTERS
 
@@ -58,15 +59,23 @@ def test_a_codex_stop_detail_is_bounded_exactly_as_claudes_is() -> None:
     assert "\n" not in observed.detail
 
 
-def test_a_codex_permission_request_stays_content_free() -> None:
-    """It admits nothing, and "nothing" is a narrowing of what this task set out to do.
+def test_a_codex_permission_request_names_the_ask_and_still_carries_no_agent_words() -> None:
+    """`tool_name` is admitted — as an ASK CLASS, never as the agent's words.
 
-    The measurement found `tool_name` is the *only* field on this event that names the ask
-    without carrying a command, a path or a prompt. What survives is narrower still:
-    `detail` means *the agent's own words*, and a bare provider token is a different kind of
-    string in a field every consumer reads as a sentence the agent wrote. DEC-067 records
-    both the conclusion and the corrected reasoning (the original file's docstring carries
-    the full argument; kept there in history rather than restated wrong).
+    DEC-067 declined `tool_name` in 2026-08-30 and said exactly why the decline was
+    provisional: the measurement found it is the *only* field on this event that names the ask
+    without carrying a command, a path or a prompt, so the obstacle was never retention or
+    safety. It was that `detail` means **the agent's own words** — what `_detail_of` guards and
+    what every consumer reads as a sentence the agent chose to write — and a bare provider
+    token is a different kind of string. DEC-067 named the honest form of the owner's ask as a
+    *sentence* ("waiting for an answer about a shell command"), and called that a wording
+    decision to be taken deliberately.
+
+    The owner took it on 2026-09-06, and it is recorded as **DEC-074** rather than asserted
+    here: this file claimed the decision inline first, which is the failure it is supposed to
+    be guarding against. DEC-074 supersedes DEC-067's *rejected-alternative* clause (which
+    declined storing ahead of rendering) and leaves DEC-067's field-conflation reasoning
+    standing — which is why the token goes in `ask` and `detail` is exactly what it was.
     """
     observed = _codex(_fixture("permission_request.json"))
 
@@ -75,7 +84,27 @@ def test_a_codex_permission_request_stays_content_free() -> None:
     assert observed.reason is None, (
         "nothing renders a reason for this event; storing one is retention"
     )
-    assert observed.detail is None, "a permission request carries no agent words to render"
+    assert observed.detail is None, "a permission request still carries no agent words"
+    assert observed.ask == "Bash", "the tool class names what is being asked about"
+
+
+def test_a_codex_permission_request_admits_the_ask_only_as_a_plain_token() -> None:
+    """A provider that started sending prose in `tool_name` would not get it rendered.
+
+    `tool_name` was observed only as `Bash` across all four measured payloads, so its value
+    space is explicitly unverified beyond that one instance — the acceptance document says so.
+    A field whose values are unknown is read through the narrowest reader that can carry the
+    known one: `_plain_token`, the same guard the discriminating fields use. A value with a
+    space, a slash or a quote in it is not a tool class this project recognises, and it is
+    dropped rather than rendered under the owner's session name.
+    """
+    payload = dict(_fixture("permission_request.json"))
+    payload["tool_name"] = "Bash: rm -rf /home/owner/secret-project"
+
+    observed = _codex(payload)
+
+    assert observed is not None
+    assert observed.ask is None, "a token that is not a plain token is not an ask class"
 
 
 def test_no_codex_payload_field_naming_a_path_command_or_prompt_reaches_disk() -> None:
@@ -100,6 +129,31 @@ def test_no_codex_payload_field_naming_a_path_command_or_prompt_reaches_disk() -
             assert secret not in rendered, (
                 f"{secret!r} reached the spool from {payload['hook_event_name']}"
             )
+
+
+def test_the_codex_field_allow_lists_are_exactly_what_the_measurement_licensed() -> None:
+    """The allow-lists themselves are pinned, not merely their consequences.
+
+    Found by a mutant that SURVIVED: adding `cwd` to the ask fields passed every test in this
+    file. Two accidents hid it — `_first` returns the first field that reads, and `tool_name`
+    comes first; and `_plain_token` rejects a path anyway, so even reordering them yields
+    `Bash`. Both are real defences and neither is the point. The allow-list is a decision
+    licensed by a specific measurement, and a decision nothing asserts is a decision the next
+    edit can make silently.
+
+    `docs/acceptance-2026-08-29-codex-activity-detail.md`'s licensing section is what these
+    two dicts are: `Stop` → `last_assistant_message`, `PermissionRequest` → `tool_name` at
+    most, and **never** `tool_input` (either key), `transcript_path`, `cwd` or `prompt`.
+    Changing either dict should require changing this test, which is the point of it.
+    """
+    assert spool._CODEX_DETAIL_FIELDS == {"Stop": ("last_assistant_message",)}
+    assert spool._CODEX_ASK_FIELDS == {"PermissionRequest": ("tool_name",)}
+
+    licensed = {name for fields in spool._CODEX_ASK_FIELDS.values() for name in fields} | {
+        name for fields in spool._CODEX_DETAIL_FIELDS.values() for name in fields
+    }
+    for refused in ("tool_input", "transcript_path", "cwd", "prompt", "model", "permission_mode"):
+        assert refused not in licensed, f"{refused} is not licensed by the measurement"
 
 
 def test_the_codex_event_allow_list_is_unchanged() -> None:
@@ -128,6 +182,9 @@ def test_claude_parsing_is_untouched_by_the_codex_widening() -> None:
                     "hook_event_name": "Stop",
                     "last_assistant_message": "Claude's line.",
                     "error": "rate_limit",
+                    # Over-filled with the field the codex branch now reads, so the
+                    # assertion below is about isolation rather than about absence.
+                    "tool_name": "Bash",
                 }
             ).encode("utf-8")
         ),
@@ -139,6 +196,11 @@ def test_claude_parsing_is_untouched_by_the_codex_widening() -> None:
     assert observed is not None
     assert observed.detail == "Claude's line."
     assert observed.reason == "rate_limit"
+    # The field the test's own name promises to cover and did not check until a Tier-1 review
+    # asked for it: `ask` is Codex's, and nothing on Claude's path may populate it. A Claude
+    # payload carrying a `tool_name` would still get None here — the reader is only ever
+    # consulted inside the codex branch.
+    assert observed.ask is None, "the ask class is the codex branch's alone"
 
 
 # --------------------------------------------------------------------------------------

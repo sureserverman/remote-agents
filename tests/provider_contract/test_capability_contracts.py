@@ -49,7 +49,12 @@ def test_hooks_contract(descriptor, tmp_path: Path) -> None:
     name = drive_or_skip(descriptor, "hooks")
     from remote_agents.adapters.agents.registry import agent_event_command, default_settings_path
 
-    settings = default_settings_path(tmp_path, provider=name)
+    # `environment={}`, so this answers about `tmp_path` and not about the shell that ran
+    # pytest. A round-2 verification pass measured the alternative: with `XDG_CONFIG_HOME` set --
+    # which is exactly what this stage's own acceptance measurement does -- the opencode case
+    # resolved outside `tmp_path` and the suite went red on a developer's machine and stayed
+    # green on the gate's.
+    settings = default_settings_path(tmp_path, provider=name, environment={})
     assert settings.is_relative_to(tmp_path)
     command = agent_event_command(Path("/usr/bin/python3"), provider=name)
     assert "-m remote_agents agent-event" in command

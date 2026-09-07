@@ -36,6 +36,7 @@ def _activity(
     detail: str | None = None,
     confidence: ActivityConfidence = ActivityConfidence.REPORTED,
     observed_at: datetime = OBSERVED,
+    ask: str | None = None,
 ) -> AgentActivity:
     return AgentActivity(
         session_id="0191f2c2-0000-7000-8000-00000000abcd",
@@ -43,6 +44,7 @@ def _activity(
         detail=detail,
         observed_at=observed_at,
         confidence=confidence,
+        ask=ask,
     )
 
 
@@ -608,11 +610,19 @@ def test_a_session_with_several_things_to_say_gets_one_message_saying_all_of_the
     well as their content, because a renderer that concatenated the three into a paragraph
     would satisfy a substring check and be unreadable on a phone.
     """
+    # Distinct, ascending timestamps. They shared one until 2026-09-06, and that tie is why
+    # this test passed while `activity_text` headlined `shown[0]` -- the STALEST shown line --
+    # against its own comment below: with equal stamps the stable sort makes first-appearance
+    # and newest the same element, so the assertion could not tell the two apart.
     message = render_activity(
         _group(
-            _activity(ActivityKind.COMPLETED, detail="Ran the suite."),
-            _activity(ActivityKind.NEEDS_ANSWER, detail="Overwrite config.toml?"),
-            _activity(ActivityKind.LIMIT_REACHED),
+            _activity(ActivityKind.COMPLETED, detail="Ran the suite.", observed_at=OBSERVED),
+            _activity(
+                ActivityKind.NEEDS_ANSWER,
+                detail="Overwrite config.toml?",
+                observed_at=OBSERVED + timedelta(minutes=1),
+            ),
+            _activity(ActivityKind.LIMIT_REACHED, observed_at=OBSERVED + timedelta(minutes=2)),
         ),
         display=DISPLAY,
         open_session=OPEN,
@@ -620,13 +630,21 @@ def test_a_session_with_several_things_to_say_gets_one_message_saying_all_of_the
 
     body = message.text.split("\n")
     # The headline is the newest observation's; the identity follows it on its own line; then
-    # one bulleted line per observation, its own headline words with the detail folded on.
-    assert body[0].startswith("✅ <b>Finished its work</b> · ")
+    # one bullet per observation, oldest first, each followed by its own collapsed quotation
+    # when it has something to quote -- so the bullets read as a timeline while the headline
+    # is the latest news, and each quote sits directly beneath the bullet it belongs to.
+    # (The details were folded onto the bullets until the owner's decision of 2026-09-06;
+    # three observations then rendered 858 characters of uncollapsed text.)
+    assert body[0].startswith("⛽ <b>Hit a usage limit</b> · ")
     assert body[1] == DISPLAY
-    assert len(body) == 5, "a headline, the identity, and one line per observation"
-    assert "Finished its work" in body[2] and "Ran the suite." in body[2]
-    assert "Waiting for an answer" in body[3] and "Overwrite config.toml?" in body[3]
-    assert "Hit a usage limit" in body[4]
+    assert len(body) == 7, (
+        "a headline, the identity, three bullets, and a quote under each of the two details"
+    )
+    assert "Finished its work" in body[2]
+    assert body[3] == "<blockquote expandable>Ran the suite.</blockquote>"
+    assert "Waiting for an answer" in body[4]
+    assert body[5] == "<blockquote expandable>Overwrite config.toml?</blockquote>"
+    assert "Hit a usage limit" in body[6], "no detail, so no quotation under it"
     assert len(message.keyboard[0]) == 1
 
 
@@ -646,7 +664,7 @@ def test_a_lone_observation_still_reads_exactly_as_it_always_has() -> None:
     headline, identity, quoted = message.text.split("\n")
     assert headline.startswith("✅ <b>Finished its work</b> · ")
     assert identity == DISPLAY
-    assert quoted == "<blockquote>Ran the suite.</blockquote>"
+    assert quoted == "<blockquote expandable>Ran the suite.</blockquote>"
 
 
 def test_a_session_that_said_more_than_a_message_can_hold_says_how_much_more() -> None:
@@ -663,8 +681,9 @@ def test_a_session_that_said_more_than_a_message_can_hold_says_how_much_more() -
     )
 
     body = message.text.split("\n")
-    assert len(body) == 8, (
-        "a headline, the identity, five observations, and the count of what is missing"
+    assert len(body) == 13, (
+        "a headline, the identity, five bullets each with its quotation, and the count of "
+        "what is missing"
     )
     assert "2 earlier" in body[-1]
     assert "Step 6." in message.text, "the newest observation is spelled out, not counted"
@@ -1358,3 +1377,359 @@ def test_a_reported_observation_still_carries_the_agent_s_words() -> None:
     )
 
     assert "Ran the suite; 12 green." in message.text
+
+
+# --- the expandable quotation, 2026-09-06 ---------------------------------------------------
+#
+# `<blockquote expandable>` is the spelling the LIVE API accepts, measured on 2026-09-06 and
+# recorded in `docs/acceptance-2026-09-06-telegram-expandable.md`. The documentation's other
+# candidate, `<expandable_blockquote>`, is refused outright with
+#
+#   Bad Request: can't parse entities: Unsupported start tag "expandable_blockquote"
+#
+# which is why the wrong spelling is asserted against by name below rather than merely left
+# untested: emitting it would have the API refuse every notification carrying a detail, and
+# under DEC-049 a permanently-refused group stops the whole delivery pass — a chat-wide
+# outage rather than one lost message.
+
+
+def test_activity_text_quotes_a_lone_detail_expandably() -> None:
+    """One observation's detail is a collapsed quotation the owner can open."""
+    message = render_activity(
+        _group(_activity(ActivityKind.COMPLETED, detail="Refactored the parser.")),
+        display=DISPLAY,
+        open_session=OPEN,
+    )
+    assert "<blockquote expandable>Refactored the parser.</blockquote>" in message.text
+
+
+def test_the_blockquote_spelling_is_the_one_the_live_api_accepts() -> None:
+    """The refused spelling never appears, on any kind, with or without a detail.
+
+    Swept over the whole kind set rather than checked on the one case above: the tag is
+    written in one place today, and this is the assertion that survives it being written in a
+    second.
+    """
+    for kind in EVERY_KIND:
+        for detail in ("something the agent said", None):
+            message = render_activity(
+                _group(_activity(kind, detail=detail)), display=DISPLAY, open_session=OPEN
+            )
+            assert "<expandable_blockquote" not in message.text, kind
+            assert "</expandable_blockquote>" not in message.text, kind
+
+
+def test_a_message_with_no_detail_carries_no_blockquote_at_all() -> None:
+    """An empty collapsed quotation is a control that opens onto nothing."""
+    message = render_activity(
+        _group(_activity(ActivityKind.COMPLETED, detail=None)),
+        display=DISPLAY,
+        open_session=OPEN,
+    )
+    assert "blockquote" not in message.text
+
+
+def test_a_grouped_message_gives_every_detail_its_own_blockquote() -> None:
+    """Two or more observations keep their bullets AND get a quotation each.
+
+    Reversed by the owner on 2026-09-06, and the reversal is recorded rather than quietly
+    applied. This asserted the opposite hours earlier, on the renderer's own long-standing
+    argument: a detail on its own line gives three observations six lines with nothing saying
+    which text belongs to which headline.
+
+    What overturned it was a measurement, not a preference. Three observations rendered 858
+    characters with every detail inline, against 310 for one collapsed observation — so the
+    message that was harder to take in at a glance was the one that had *not* been collapsed,
+    which inverts the argument collapsing was adopted under. Collapsing answers the original
+    objection rather than ignoring it: a collapsed quote is about a line tall and sits
+    directly under its own bullet.
+    """
+    message = render_activity(
+        _group(
+            _activity(ActivityKind.COMPLETED, detail="first thing"),
+            _activity(ActivityKind.NEEDS_ANSWER, detail="second thing"),
+        ),
+        display=DISPLAY,
+        open_session=OPEN,
+    )
+    assert message.text.count("<blockquote expandable>") == 2
+    assert "<blockquote expandable>first thing</blockquote>" in message.text
+    assert "<blockquote expandable>second thing</blockquote>" in message.text
+    # Each quote follows its own bullet rather than being pooled at the end.
+    lines = message.text.split("\n")
+    for index, line in enumerate(lines):
+        if line.startswith("<blockquote"):
+            assert lines[index - 1].startswith(notifications._BULLET), lines
+
+
+def test_activity_text_headlines_the_newest_observation_not_the_oldest() -> None:
+    """The headline names the freshest thing the session said, and dates it.
+
+    It did not. `grouped_for_delivery` orders a group **oldest-first** so the message reads as
+    a timeline, and `shown_in_message` returns the newest that fit as a tail slice — so within
+    `shown`, the newest is at `[-1]` and `shown[0]` is the *stalest* line being shown.
+    `activity_text` took `shown[0]`, while its own docstring said "a bold headline for the
+    newest observation" and the existing shape test's comment said the same.
+
+    Nothing caught it because every fixture that grouped observations gave them **one shared
+    timestamp**, where the stable sort makes first-appearance and newest the same element.
+    This one dates them a minute apart, which is the whole of what it takes.
+
+    Why it matters more than a wrong age: the headline is the sentence the owner reads on a
+    locked phone. A session that finished, was then asked something, and then hit a limit
+    announced itself as "Finished its work" — the one line of the three that needs nothing
+    from them — and buried the question in a bullet underneath.
+    """
+    older = _activity(ActivityKind.COMPLETED, detail="a", observed_at=OBSERVED)
+    newer = _activity(
+        ActivityKind.NEEDS_ANSWER, detail="b", observed_at=OBSERVED + timedelta(minutes=1)
+    )
+    message = render_activity(
+        SessionGroup(older.session_id, (older, newer)), display=DISPLAY, open_session=OPEN
+    )
+
+    headline = message.text.split("\n")[0]
+    assert "Waiting for an answer" in headline, headline
+    assert "Finished its work" not in headline, headline
+
+
+def test_activity_text_reserves_the_name_slot_even_when_the_detail_share_is_the_binding_bound(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The session can still be named when a detail is allowed to spend the whole budget.
+
+    `activity_text` measures a fixed skeleton, divides what is left among the details, and
+    fits the identity into whatever remains — so the skeleton has to include every character
+    the message will actually carry. It did not include the block quotation's own wrapper:
+    the skeleton was built with `[None] * len(shown)`, and `_lines` returns `[]` for a falsy
+    detail on the single-observation path, so `<blockquote expandable>…</blockquote>` was
+    absent from the sum entirely rather than merely stale by the eleven units `expandable`
+    added.
+
+    **Why the existing budget test could not see it.** `_MAXIMUM_DETAIL_UNITS` (240) is far
+    below the ~4,000-unit share that miscalculation produces, so the cap — not the share —
+    decided every real message, and the final `room` step is computed from the *rendered*
+    body, which does carry the true tag length. Both masks hold today and neither is a reason
+    for the arithmetic to be wrong; raising the detail cap would remove the first, and the
+    second only ever protected the 4,096 ceiling, never the name.
+
+    So this raises the cap, which makes `share` the binding bound, and asserts the thing the
+    under-count actually costs: **`_RESERVED_NAME_UNITS` worth of room for the identity**.
+    Measured, the wrapper's absence spends 37 of those 48 units on the detail instead —
+    the name renders in 11 — and a message the owner cannot attribute to a session is the
+    failure `_RESERVED_NAME_UNITS`' own docstring is about.
+    """
+    monkeypatch.setattr(notifications, "_MAXIMUM_DETAIL_UNITS", 100_000)
+    message = render_activity(
+        _group(_activity(ActivityKind.COMPLETED, detail="d" * 20_000)),
+        display="n" * 500,
+        open_session=OPEN,
+    )
+
+    headline, name, _quoted = message.text.split("\n")
+    assert _utf16_units(message.text) <= MAX_TELEGRAM_TEXT_UNITS
+    assert _utf16_units(name) >= notifications._RESERVED_NAME_UNITS, (
+        f"the identity got {_utf16_units(name)} units of the "
+        f"{notifications._RESERVED_NAME_UNITS} reserved for it"
+    )
+    assert headline.startswith("✅")
+
+
+def test_the_operator_runbook_quotes_the_headlines_the_code_actually_sends() -> None:
+    """The runbook's kind table is checked against the vocabulary, not trusted.
+
+    It drifted for four days without anyone noticing: the four sentences it quoted ("The agent
+    has finished its work.") were replaced by headlines on 2026-09-02 and the table still
+    carried the old wording on 2026-09-06, when a gate evaluator read it. A runbook is read
+    when something is already wrong, which is the worst moment to be reading a description of
+    a message that no longer exists.
+
+    Asserted over the whole `ActivityKind` enum rather than the rows that happened to be
+    stale, because the failure is a class: any kind added or reworded later drifts the same
+    way, silently, and this is the check that will not let it.
+    """
+    from pathlib import Path
+
+    runbook = Path(__file__).resolve().parents[4] / "docs" / "operator-runbook.md"
+    text = runbook.read_text(encoding="utf-8")
+
+    for kind in EVERY_KIND:
+        row = f"| `{kind.value}` |"
+        assert row in text, f"{kind.value} has no row in the runbook's kind table"
+        line = next(line for line in text.splitlines() if line.startswith(row))
+        assert notifications._HEADLINES[kind] in line, (
+            f"{kind.value}: the runbook says {line!r}, the code sends "
+            f"{notifications._HEADLINES[kind]!r}"
+        )
+        assert notifications._KIND_EMOJI[kind] in line, (
+            f"{kind.value}: the runbook's mark is not {notifications._KIND_EMOJI[kind]!r}"
+        )
+
+
+# --- the ask class, worded by this surface, 2026-09-06 --------------------------------------
+
+
+def test_a_needs_answer_headline_says_what_class_of_thing_is_being_waited_on() -> None:
+    """Codex sends a token; the owner reads a sentence.
+
+    DEC-074's whole mechanism: `ask_class` decides what `Bash` means and this adapter decides
+    what to call it, so the two surfaces can word it differently and neither renders the token.
+    """
+    message = render_activity(
+        _group(_activity(ActivityKind.NEEDS_ANSWER, ask="Bash")),
+        display=DISPLAY,
+        open_session=OPEN,
+    )
+    assert message.text.startswith("❓ <b>Waiting for an answer about a shell command</b> · ")
+
+
+def test_an_unrecognised_ask_class_adds_no_words_at_all() -> None:
+    """`tool_name`'s value space is unverified beyond `Bash`, so most tokens are unknown.
+
+    The headline then reads exactly as it did before the ask existed. "About something" would
+    be a word and no information on the most interrupting message this service sends, and the
+    token itself would be the conflation DEC-067 refused.
+    """
+    message = render_activity(
+        _group(_activity(ActivityKind.NEEDS_ANSWER, ask="MysteryTool")),
+        display=DISPLAY,
+        open_session=OPEN,
+    )
+    headline = message.text.split("\n")[0]
+    assert headline.startswith("❓ <b>Waiting for an answer</b> · ")
+    assert "MysteryTool" not in message.text, "a token is never the words"
+    assert "something" not in message.text
+
+
+def test_every_ask_token_is_worded_or_dropped_but_never_rendered_raw() -> None:
+    """Swept over tokens rather than sampled, because the value space is the unknown here."""
+    for token in ("Bash", "Read", "bash", "BASH", "Edit", "Some_Tool-42", "x" * 64):
+        message = render_activity(
+            _group(_activity(ActivityKind.NEEDS_ANSWER, ask=token)),
+            display=DISPLAY,
+            open_session=OPEN,
+        )
+        if token != "Bash":
+            assert token not in message.text, f"{token!r} reached the owner as itself"
+
+
+def test_a_grouped_needs_answer_bullet_carries_the_ask_too() -> None:
+    """The bullet and the headline are one function, so they cannot drift apart."""
+    older = _activity(ActivityKind.NEEDS_ANSWER, ask="Bash", observed_at=OBSERVED)
+    newer = _activity(
+        ActivityKind.COMPLETED, detail="done", observed_at=OBSERVED + timedelta(minutes=1)
+    )
+    message = render_activity(
+        SessionGroup(older.session_id, (older, newer)), display=DISPLAY, open_session=OPEN
+    )
+    assert "❓ Waiting for an answer about a shell command" in message.text
+
+
+def test_an_inferred_needs_answer_says_nothing_about_what_is_being_asked() -> None:
+    """A title-derived wait names no class, because the title does not name one.
+
+    `observe_codex_action_required` matched a fixed marker string and kept one boolean; the
+    tool class is not in a title, so there is nothing to classify. The hook path gained an ask
+    on 2026-09-06 because a `PermissionRequest` payload *names* the tool; the watcher's path
+    did not, and DEC-063 is why — it never read the pane.
+
+    Two failure directions are asserted, not one. The inferred observation must not gain a
+    clause, and it must not lose the hedge that says the whole thing is a guess.
+    """
+    message = render_activity(
+        _group(
+            _activity(
+                ActivityKind.NEEDS_ANSWER, confidence=ActivityConfidence.INFERRED, ask=None
+            )
+        ),
+        display=DISPLAY,
+        open_session=OPEN,
+    )
+    headline = message.text.split("\n")[0]
+    assert headline.startswith("❓ <b>Waiting for an answer</b> · ")
+    assert "about" not in headline
+    assert notifications._HEDGE in message.text, "an inference still says it is one"
+
+
+def test_an_inferred_observation_would_still_drop_words_if_one_ever_carried_them() -> None:
+    """`_detail_of`'s guard is keyed on confidence, and the ask does not route around it.
+
+    The guard exists because "an observation nothing reported must not arrive carrying words" —
+    the last line of an idle screen rendered under a session's name reads exactly like a parting
+    statement the agent chose to make. Adding a second string field is precisely the kind of
+    change that quietly opens a second door into the same room, so this asserts the door is
+    still shut: an INFERRED observation carrying a detail renders none of it.
+    """
+    message = render_activity(
+        _group(
+            _activity(
+                ActivityKind.NEEDS_ANSWER,
+                detail="a line the watcher never read",
+                confidence=ActivityConfidence.INFERRED,
+            )
+        ),
+        display=DISPLAY,
+        open_session=OPEN,
+    )
+    assert "a line the watcher never read" not in message.text
+    assert "blockquote" not in message.text
+
+
+def test_the_hedge_never_trails_a_quotation_of_words_the_agent_really_wrote() -> None:
+    """A group mixing a guess and a report puts the caveat first, not last.
+
+    Found by the Stage 3 gate evaluator, and it is a regression this plan introduced: Stage 2's
+    remediation asserted in a docstring that no trailer could sit under a quotation, and Stage
+    2's *next* change gave every grouped detail its own quotation. The message then read
+
+        • ❓ Waiting for an answer
+        • ✅ Finished its work
+        <blockquote expandable>Rewrote the parser and all tests pass.</blockquote>
+        This is a guess, not something it reported.
+
+    where the disclaimer's nearest referent is a sentence the agent actually wrote.
+    """
+    inferred = _activity(
+        ActivityKind.NEEDS_ANSWER,
+        confidence=ActivityConfidence.INFERRED,
+        observed_at=OBSERVED,
+    )
+    reported = _activity(
+        ActivityKind.COMPLETED,
+        detail="Rewrote the parser and all tests pass.",
+        observed_at=OBSERVED + timedelta(minutes=1),
+    )
+    message = render_activity(
+        SessionGroup(inferred.session_id, (inferred, reported)),
+        display=DISPLAY,
+        open_session=OPEN,
+    )
+    lines = message.text.split("\n")
+    hedge_at = lines.index(notifications._HEDGE)
+    quote_at = next(i for i, line in enumerate(lines) if line.startswith("<blockquote"))
+    assert hedge_at < quote_at, "the hedge must precede what it qualifies:\n" + message.text
+    assert message.text.count(notifications._HEDGE) == 1, "one hedge covers the group"
+
+
+def test_an_inferred_observation_cannot_borrow_an_ask_either() -> None:
+    """`_ask_of` guards the new field the way `_detail_of` guards the old one.
+
+    The rule is "an observation nothing reported must not arrive carrying words", and it was
+    source-side-only for `detail` until a reviewer called that convention-only in 2026-08-30.
+    Adding a second string field reopened the same gap, so the guard is at the renderer for
+    both. A title-derived wait saying "about a shell command" would be this service describing
+    a pane DEC-063 says it never read.
+    """
+    message = render_activity(
+        _group(
+            _activity(
+                ActivityKind.NEEDS_ANSWER,
+                confidence=ActivityConfidence.INFERRED,
+                ask="Bash",
+            )
+        ),
+        display=DISPLAY,
+        open_session=OPEN,
+    )
+    assert "shell command" not in message.text
+    assert message.text.split("\n")[0].startswith("❓ <b>Waiting for an answer</b> · ")

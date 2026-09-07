@@ -88,6 +88,18 @@ def _encoded(activities: tuple[AgentActivity, ...]) -> str:
     The session id is the row's key and is not repeated per line. The agent's own words ride
     along under DEC-037, which already persists them one table over; what is stored here is a
     copy of what is *on screen*, and it leaves with the message.
+
+    **`ask` was missing here until 2026-09-07, and its absence was invisible in exactly the way
+    that matters.** The *first* message is rendered from live `AgentActivity` values, so it names
+    the class of ask correctly; a *replacement* is rebuilt from this snapshot, so the wording
+    silently downgraded from "Waiting for an answer about a shell command" to "Waiting for an
+    answer" the moment a second report arrived — and a replacement is the common case, since that
+    is the whole design of a standing notification. Found by Stage 5's live drill, which is the
+    first time an `ask` had survived far enough to be dropped: the running service predated the
+    `ask` column, so before that it never reached this table at all.
+
+    Everything on `AgentActivity` that a surface renders must round-trip here. That is the rule
+    this field was missing from, not a list to append to.
     """
     return json.dumps(
         [
@@ -96,6 +108,7 @@ def _encoded(activities: tuple[AgentActivity, ...]) -> str:
                 "detail": activity.detail,
                 "confidence": activity.confidence.value,
                 "observed_at": activity.observed_at.astimezone(UTC).isoformat(),
+                "ask": activity.ask,
             }
             for activity in activities
         ]
@@ -120,6 +133,11 @@ def _notification(row: tuple) -> StandingNotification | None:
                 line["detail"],
                 _instant(line["observed_at"]),
                 ActivityConfidence(line["confidence"]),
+                # `.get`, not `[...]`: rows written before this key existed are readable and
+                # simply carry no ask, which is what they meant. Subscripting would send every
+                # one of them down the "this build cannot read it" path below and silently
+                # restart notifications that were mid-flight across the upgrade.
+                line.get("ask"),
             )
             for line in lines
         )

@@ -69,6 +69,8 @@ from remote_agents.ports.agent_activity import (
     ActivityConfidence,
     ActivityKind,
     AgentActivity,
+    AskClass,
+    ask_class,
 )
 from remote_agents.ports.callback_state import CallbackStatePort
 from remote_agents.ports.standing_notification import (
@@ -124,13 +126,33 @@ _KIND_EMOJI: dict[ActivityKind, str] = {
 }
 
 
-def kind_headline(kind: ActivityKind) -> str:
-    """`❓ Waiting for an answer` -- the mark and the headline, before the age is appended.
+_ASK_WORDS: dict[AskClass, str] = {AskClass.SHELL: "about a shell command"}
+"""**The bot's** words for an ask class -- not the application's, and not the feed's (DEC-043).
 
-    The one place the two are joined, so the grouped shape and the lone shape cannot start
+The class is the shared decision; the sentence is each surface's, because a chat message and a
+73-column table row are not sized the same and a shared renderer is how one surface's wording
+quietly becomes the other's.
+
+`AskClass.UNKNOWN` is deliberately absent, and absence is the answer rather than an oversight:
+an ask this project does not recognise gets **no clause at all**, so the headline reads
+"Waiting for an answer" exactly as it did before. Inventing "about something" for it would add
+a word and no information, on the most interrupting message this service sends.
+"""
+
+
+def kind_headline(kind: ActivityKind, ask: str | None = None) -> str:
+    """`❓ Waiting for an answer about a shell command` -- the mark, the headline, the ask.
+
+    The one place the three are joined, so the grouped shape and the lone shape cannot start
     marking a kind differently. Plain text; the bolding is `activity_text`'s.
+
+    The ask clause is **the class's, never the token's**: `ask_class` decides what a provider's
+    `Bash` means and `_ASK_WORDS` decides what this surface calls it, so a token nobody has
+    measured cannot reach the owner as itself (DEC-067's whole argument, DEC-074's mechanism).
     """
-    return f"{_KIND_EMOJI[kind]} {_HEADLINES[kind]}"
+    words = _ASK_WORDS.get(ask_class(ask)) if ask else None
+    clause = f" {words}" if words else ""
+    return f"{_KIND_EMOJI[kind]} {_HEADLINES[kind]}{clause}"
 
 
 # The UTF-16 budget, the escape-then-fit routine and the callback shape are imported from
@@ -139,7 +161,13 @@ def kind_headline(kind: ActivityKind) -> str:
 
 
 _MAXIMUM_LINES_PER_MESSAGE = 5
-"""How many of a session's observations one message will spell out.
+"""How many of a session's OBSERVATIONS one message will spell out.
+
+**It has never counted rendered lines, and since 2026-09-06 the gap is wider.** A grouped
+observation now draws a bullet *and* its own collapsed quotation, so five observations occupy
+up to eleven physical lines. Every consumer reads this as an observation count -- it is spent
+as `group.activities[-limit:]` -- so the doubling invalidates nothing; the name is what is
+misleading, and it was already misleading before the quotations existed.
 
 A backstop, and since `grouped_for_delivery` collapses a session's news on the *kind* it is out
 of ordinary reach: there are fewer kinds than lines here, so a real group no longer overflows it
@@ -168,6 +196,10 @@ editing this module.
 _BULLET = "• "
 """Worn only when there is more than one line to tell apart. See `activity_text`."""
 
+_UNIT = "x"
+"""One UTF-16 unit of stand-in detail, so a wrapper that only renders around a non-empty detail
+is measured rather than skipped. Subtracted again by the caller; never rendered."""
+
 _RESERVED_NAME_UNITS = 48
 """The slice of the budget the observations may not spend, so the session can still be named.
 
@@ -187,9 +219,18 @@ def activity_text(group: SessionGroup, *, display: str) -> str:
 
     **The shape, since the redesign:** a bold headline for the newest observation with its mark
     in front and its age behind (`❓ <b>Waiting for an answer</b> · 2m`), then the session's
-    compact identity on a plain line, then what the agent said in a `<blockquote>`. Bot API 7.0
-    introduced the block quote; the pinned `python-telegram-bot` speaks it, and a client too old
-    to draw one shows the text unquoted rather than refusing the message.
+    compact identity on a plain line, then what the agent said in a collapsed
+    `<blockquote expandable>` the owner opens with a tap.
+
+    **That attribute spelling is measured, not read.** The API documentation's own HTML section
+    was read as naming the tag `<expandable_blockquote>`; sent, that is refused outright --
+    `can't parse entities: Unsupported start tag "expandable_blockquote"` -- which would cost
+    every notification carrying a detail, not merely its formatting, and under DEC-049 a
+    permanently-refused group stops the whole delivery pass. `<blockquote expandable>` is what
+    the live API accepts, and it answers with an `expandable_blockquote` entity.
+    `docs/acceptance-2026-09-06-telegram-expandable.md` is the measurement. A client too old to
+    draw one shows the text unquoted rather than refusing the message, which is the same
+    argument the plain block quote was adopted under.
 
     **A group of two or more keeps that shape and lists its members underneath.** The headline
     is the newest observation's; each member gets a bullet with its own headline words and its
@@ -211,24 +252,73 @@ def activity_text(group: SessionGroup, *, display: str) -> str:
     **One hedge covers the group.** Repeated per line it would read as emphasis -- as though
     the service were less sure this time -- when it is saying the same structural thing about
     the same kind.
+
+    **The hedge leads the observations; only the counter trails them.** That is a correction,
+    and the paragraph it replaces is worth keeping in mind: it argued that neither trailer could
+    ever sit under a collapsed quotation, because a lone inferred observation has no quotation
+    (`_detail_of` drops its detail) and `and N earlier` forces the bulleted path. Both halves
+    were true when written and one stopped being true two commits later, when a group's details
+    each gained a quotation of their own. A group holding an inferred `needs_answer` and a
+    reported `completed` then put "This is a guess, not something it reported." immediately
+    below a block quote of words the agent really did write.
+
+    Leading it is the repair. Per-line hedging was the alternative and was declined: the hedge
+    is deliberately one statement about the group, and repeating it would read as emphasis. A
+    statement that qualifies what *follows* cannot be captured by whatever happens to end the
+    message.
     """
     shown = shown_in_message(group, limit=_MAXIMUM_LINES_PER_MESSAGE)
     hidden = len(group.activities) - len(shown)
     bulleted = len(shown) > 1
-    newest = shown[0]
+    # `[-1]`, not `[0]`. `grouped_for_delivery` orders a group oldest-first so the message
+    # reads as a timeline, and `shown_in_message` returns the newest that fit as a **tail**
+    # slice -- so the newest of what is shown is at the end. Taking `[0]` headlined the
+    # stalest line being displayed, which for a session that finished, was asked something and
+    # then hit a limit announced "Finished its work" and buried the question below it. Every
+    # fixture that grouped observations had given them one shared timestamp, where the stable
+    # sort makes first-appearance and newest the same element, so nothing failed.
+    newest = shown[-1]
 
+    asked = _ask_of(newest)
+    words = _ASK_WORDS.get(ask_class(asked)) if asked else None
     headline = (
-        f"{_KIND_EMOJI[newest.kind]} <b>{_HEADLINES[newest.kind]}</b>"
+        f"{_KIND_EMOJI[newest.kind]} <b>{_HEADLINES[newest.kind]}"
+        f"{f' {words}' if words else ''}</b>"
         f" · {age_short(newest.observed_at)}"
     )
     details = [_detail_of(activity) for activity in shown]
     hedged = any(activity.confidence is ActivityConfidence.INFERRED for activity in shown)
 
-    trailers = ([f"and {hidden} earlier."] if hidden else []) + ([_HEDGE] if hedged else [])
-    # Measured with the details empty, because they are the only part with a budget to
-    # negotiate; everything else in the message is ours and fixed.
-    fixed = "\n".join([headline, "", *_lines(shown, [None] * len(shown), bulleted), *trailers])
-    spent = _utf16_units(fixed)
+    # The hedge leads; only the counter trails. Until 2026-09-06 both sat at the end, and the
+    # docstring above asserted that neither could ever follow a quotation -- true when written,
+    # and falsified two commits later by the change that gave each grouped detail its own
+    # quotation. A group holding one inferred observation and one `completed` then rendered
+    # "This is a guess, not something it reported." directly beneath a block quote of words the
+    # agent really did write, whose nearest referent it appeared to be.
+    #
+    # Leading is the fix rather than per-line hedging because the hedge is deliberately one
+    # statement about the group (see below): placed first it qualifies what follows, which is
+    # what it always meant, and it cannot acquire a referent by adjacency.
+    leaders = [_HEDGE] if hedged else []
+    trailers = [f"and {hidden} earlier."] if hidden else []
+    # Measured with each detail reduced to ONE unit rather than to nothing, and that unit
+    # subtracted again below. Passing `None` -- which this did until 2026-09-06 -- makes
+    # `_lines` return `[]` on the single-observation path, so the quotation's own wrapper was
+    # never counted at all: not under-counted by the eleven units `expandable` added, but
+    # absent from the arithmetic entirely, and equally absent before that attribute existed.
+    #
+    # It reached the API safely on two accidents rather than on this sum: `_MAXIMUM_DETAIL_UNITS`
+    # caps each detail far below the inflated `share` this produced, and `room` below is
+    # computed from the *rendered* body, which does carry the true tag length. Neither is a
+    # reason for the mid-point measurement to be wrong, and both would stop covering it the
+    # moment the detail cap was raised.
+    #
+    # The placeholder is measured through `_lines` itself rather than by adding the tag's
+    # length here, so a change to the wrapper cannot leave this stale -- which is the failure
+    # being fixed, one layer up.
+    skeleton = _lines(shown, [_UNIT if detail else None for detail in details], bulleted)
+    fixed = "\n".join([headline, "", *leaders, *skeleton, *trailers])
+    spent = _utf16_units(fixed) - sum(1 for detail in details if detail)
     share = (MAX_TELEGRAM_TEXT_UNITS - _RESERVED_NAME_UNITS - spent) // max(
         1, sum(1 for detail in details if detail)
     )
@@ -237,7 +327,7 @@ def activity_text(group: SessionGroup, *, display: str) -> str:
         _bounded_escaped(detail, min(_MAXIMUM_DETAIL_UNITS, share)) if detail else None
         for detail in details
     ]
-    body = "\n".join(_lines(shown, bounded, bulleted) + trailers)
+    body = "\n".join(leaders + _lines(shown, bounded, bulleted) + trailers)
     room = MAX_TELEGRAM_TEXT_UNITS - _utf16_units(f"{headline}\n\n{body}")
     name = _bounded_escaped(display, room)
     return "\n".join(line for line in (headline, name, body) if line)
@@ -246,15 +336,41 @@ def activity_text(group: SessionGroup, *, display: str) -> str:
 def _lines(
     shown: tuple[AgentActivity, ...], details: list[str | None], bulleted: bool
 ) -> list[str]:
-    """The quoted detail when there is one observation; one bulleted line per observation when
-    they must be told apart. A detail is already escaped by the time it reaches here."""
+    """Every observation's detail as a collapsed quotation: alone, or under its own bullet.
+
+    A detail is already escaped by the time it reaches here.
+
+    **`<blockquote expandable>`, and never `<expandable_blockquote>`.** The second is what the
+    API documentation's own HTML section was read as naming, and it is refused outright --
+    `can't parse entities: Unsupported start tag` -- which takes down every notification
+    carrying a detail, not merely its formatting, and under DEC-049 a permanently-refused
+    group stops the whole delivery pass. Measured against the live API on 2026-09-06:
+    `docs/acceptance-2026-09-06-telegram-expandable.md`.
+
+    **A group's details are quoted too, by the owner's decision of 2026-09-06.** This folded
+    each detail onto its bullet until then, on the argument -- recorded in `activity_text`'s
+    docstring and still worth reading -- that a detail on its own line gives three
+    observations six lines with nothing saying which text belongs to which headline. The
+    measurement that overturned it: three observations rendered 858 characters, all of it
+    inline, against 310 for one collapsed observation, so the message that was *harder* to
+    take in at a glance was the one that had not been collapsed. Collapsing answers the
+    original objection rather than ignoring it -- a collapsed quote occupies about a line, and
+    it sits directly beneath the bullet it belongs to.
+    """
     if not bulleted:
         detail = details[0] if details else None
-        return [f"<blockquote>{detail}</blockquote>"] if detail else []
-    return [
-        f"{_BULLET}{kind_headline(activity.kind)}" + (f" — {detail}" if detail else "")
-        for activity, detail in zip(shown, details, strict=True)
-    ]
+        return [_quote(detail)] if detail else []
+    lines: list[str] = []
+    for activity, detail in zip(shown, details, strict=True):
+        lines.append(f"{_BULLET}{kind_headline(activity.kind, _ask_of(activity))}")
+        if detail:
+            lines.append(_quote(detail))
+    return lines
+
+
+def _quote(detail: str) -> str:
+    """One collapsed quotation. The single place the tag is spelled."""
+    return f"<blockquote expandable>{detail}</blockquote>"
 
 
 def render_activity(group: SessionGroup, *, display: str, open_session: str) -> RenderedMessage:
@@ -270,6 +386,23 @@ def render_activity(group: SessionGroup, *, display: str, open_session: str) -> 
         activity_text(group, display=display),
         ((Button(OPEN_SESSION_LABEL, open_session),),),
     )
+
+
+def _ask_of(activity: AgentActivity) -> str | None:
+    """The ask class, or nothing at all when nothing reported one.
+
+    The sibling of `_detail_of`, and it exists for the reason that one exists. `_detail_of`'s
+    guard was source-side-only until a reviewer on 2026-08-30 called it convention-only and it
+    was moved to the boundary that renders. Adding `ask` beside `detail` reopened exactly that
+    gap: the rule "an observation nothing reported must not arrive carrying words" rested again
+    on `observe_codex_action_required` remembering not to set one, with nothing at the
+    renderer.
+
+    So the guard is keyed on confidence here too. An inferred observation may not borrow words
+    from *either* field -- a title-derived wait that said "about a shell command" would be this
+    service describing a pane it deliberately never read.
+    """
+    return None if activity.confidence is ActivityConfidence.INFERRED else activity.ask
 
 
 def _detail_of(activity: AgentActivity) -> str | None:

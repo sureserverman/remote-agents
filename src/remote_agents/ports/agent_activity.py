@@ -102,6 +102,84 @@ class ActivityKind(Enum):
     NEEDS_ANSWER = "needs_answer"
 
 
+class AskClass(Enum):
+    """What CLASS of thing an agent is waiting on, as this project names it.
+
+    A provider sends its own token for a tool -- `Bash`. That token is not the words a
+    notification says: DEC-067 declined to render one where a sentence belongs, and DEC-074
+    settles that the token is classified here and **worded by each surface** (DEC-043), so the
+    bot and the local surface can size the sentence for a chat message and a table row
+    independently.
+
+    **`UNKNOWN` is a member rather than a `None` return, and that is the load-bearing part.**
+    `docs/acceptance-2026-08-29-codex-activity-detail.md` records `tool_name` as observed only
+    as `Bash` across all four measured payloads and says its value space is **unverified**
+    beyond that instance. That is a claim about the possible set, not about how often each
+    member turns up -- all four observations were `Bash`, and nothing measures the frequency of
+    anything else. What follows is only that an unrecognised token is **reachable**, which is
+    enough: every renderer has to have an answer for it. A member forces each of them to
+    choose that answer;
+    a `None` would let one fall through a null check into rendering the token itself, which is
+    the exact conflation DEC-067 is about.
+
+    Deliberately one recognised class. Adding `Read`, `Edit` or any other Claude tool name here
+    would be inventing a vocabulary from a provider this field does not come from -- Codex's
+    `PermissionRequest` is the only source -- and a class nothing has ever sent is a class no
+    test can be honest about.
+    """
+
+    SHELL = "shell"
+    """A shell/command-execution ask.
+
+    Named `SHELL` rather than the longer, more obvious spelling because that spelling is one of
+    the tokens `tests/security/check_surface.py` lists in `FORBIDDEN_REMOTE_SURFACES` -- the
+    scanner that fails closed when this project's approved Telegram-to-tmux control surface
+    expands. It flagged the first draft of this member.
+
+    The finding was a false positive in intent: this enum is a vocabulary label for *what an
+    agent asked about*, not a capability this service exposes. But the token is arbitrary and
+    the tripwire is not, so the token moved. Adding an exception to a security guard would have
+    been the alternative, and a guard with one exception is a guard that acquires a second.
+
+    (The scanner is a deliberately dumb text match, so even *naming* the offending spelling in
+    this docstring re-trips it. That is the guard working, not a flaw in it.)
+    """
+
+    UNKNOWN = "unknown"
+
+
+_ASK_CLASSES: dict[str, AskClass] = {"Bash": AskClass.SHELL, "bash": AskClass.SHELL}
+"""The measured tokens, and only the measured tokens.
+
+Exact-match, case included: `BASH` is not `Bash`. Matching an unseen casing would be guessing at
+a provider's conventions on a value space both measurements say is unverified, and the honest
+answer to an unmeasured token is `UNKNOWN` -- which the surfaces can say.
+
+Two entries, one per provider, each earned by its own capture: Codex spells it `Bash`
+(`docs/acceptance-2026-08-29-codex-activity-detail.md`, 4 of 4 payloads) and OpenCode spells it
+`bash` (`docs/acceptance-2026-09-06-opencode-activity.md`, 1 of 1). The lowercase entry was
+deliberately absent until 2026-09-06 and the reason for its absence has not been overturned --
+it was "nobody has measured a provider sending it", and somebody has. This table stays
+provider-blind, so admitting it also means a hypothetical Codex `bash` now classifies as a shell
+command; that is the correct class for the string either way, which is why the flat table is
+still the right shape.
+"""
+
+
+def ask_class(token: str | None) -> AskClass | None:
+    """Classify a provider's ask token; `None` in, `None` out.
+
+    The null passthrough is not a convenience. `None` means the observation names no ask at
+    all -- a `completed`, or a Claude `needs_answer` whose provider sent prose instead -- and
+    that is a different fact from an ask whose class is unrecognised. Collapsing the two would
+    have a surface say "waiting for an answer about something" on an observation that is not
+    waiting for anything.
+    """
+    if token is None:
+        return None
+    return _ASK_CLASSES.get(token, AskClass.UNKNOWN)
+
+
 class ActivityConfidence(Enum):
     """Whether the agent said this, or something guessed it from the outside.
 
@@ -136,10 +214,21 @@ class ActivitySource(Enum):
 
     `UNOBSERVED` replaced `QUIET_ONLY` on 2026-08-30, when the pane-digest watch was retired
     with the `quiet` kind. The old member described profiles this service watched by hashing
-    their pane; there is no such watch now, so the honest name for `opencode`, `cursor-agent`
-    and anything else uncurated is that nothing observes them. It is a member rather than an
-    absence because the watcher has to be able to *skip* them by name: a profile that reaches
-    the polling loop costs a tmux capture per pass for an observation that can never be made.
+    their pane; there is no such watch now, so the honest name for `cursor-agent` and anything
+    else uncurated is that nothing observes them. It is a member rather than an absence because
+    the watcher has to be able to *skip* them by name: a profile that reaches the polling loop
+    costs a tmux capture per pass for an observation that can never be made.
+
+    **`opencode` left this member on 2026-09-06** and is hook-exclusive now. It was named here
+    as an example for six weeks, and the reason was always "nobody has measured its surface"
+    rather than "it has none" -- so the example moved as soon as somebody did
+    (`docs/acceptance-2026-09-06-opencode-activity.md`).
+
+    `cursor-agent` stays, on **exactly the same footing opencode had**: nobody has measured what
+    it publishes. A first draft of this paragraph said it stays "for the stronger reason: it
+    publishes nothing to measure", and a close-out evaluator pointed out that this is the very
+    claim DEC-076 was recorded to retract, re-made about the one provider left. There is no
+    `docs/acceptance-*cursor*` in this repository and nothing anywhere cites a measurement.
     """
 
     HOOK_EXCLUSIVE = "hook_exclusive"
@@ -147,7 +236,7 @@ class ActivitySource(Enum):
     UNOBSERVED = "unobserved"
 
 
-_HOOK_EXCLUSIVE_PROFILES = frozenset({"claude", "claude-remote"})
+_HOOK_EXCLUSIVE_PROFILES = frozenset({"claude", "claude-remote", "opencode"})
 _HYBRID_PROFILES = frozenset({"codex"})
 _REPORTED_KINDS_BY_PROFILE: dict[str, frozenset[ActivityKind]] = {
     "claude": frozenset(
@@ -169,6 +258,14 @@ _REPORTED_KINDS_BY_PROFILE: dict[str, frozenset[ActivityKind]] = {
     # Codex exposes Stop and PermissionRequest hooks. It does not expose a StopFailure
     # equivalent, so limit/output kinds stay absent rather than being guessed from pane text.
     "codex": frozenset({ActivityKind.COMPLETED, ActivityKind.NEEDS_ANSWER}),
+    # OpenCode's plugin acts on two measured `event` types -- `session.idle` and
+    # `permission.asked` -- and the same limit reasoning applies for the same reason: nothing
+    # in that stream distinguishes a rate limit from an ordinary finish, so neither limit kind
+    # is claimed. Its `completed` also carries no detail and never will from this source:
+    # `session.idle`'s payload is one field, and that field is OpenCode's own session id
+    # (`docs/acceptance-2026-09-06-opencode-activity.md`). That is a property of the event, not
+    # a parser this project can widen later.
+    "opencode": frozenset({ActivityKind.COMPLETED, ActivityKind.NEEDS_ANSWER}),
 }
 
 
@@ -201,6 +298,14 @@ class AgentActivity:
     detail: str | None
     observed_at: datetime
     confidence: ActivityConfidence = ActivityConfidence.REPORTED
+    ask: str | None = None
+    """The provider's own token for the class of thing being waited on, or `None`.
+
+    Kept as the raw token rather than as an `AskClass` so the boundary stays one-directional:
+    the spool records what a provider said, `ask_class` decides what this project calls it, and
+    each surface decides what to write. A stored enum would freeze today's classification into
+    every historical row, so a token later recognised would still read as unknown in the feed.
+    """
 
 
 HOOK_SOURCED_PROFILES = _HOOK_EXCLUSIVE_PROFILES
@@ -210,4 +315,9 @@ Codex is intentionally not in this compatibility constant yet: it is a hybrid so
 hook may be absent, disabled, or awaiting the owner's trust review. `activity_source_for` is the
 complete provider contract; the application layer uses its hybrid branch to watch Codex panes
 for the native approval marker its own hook never sends.
+
+`opencode` joined on 2026-09-06 by joining `_HOOK_EXCLUSIVE_PROFILES`, which is what this alias
+tracks. Its "hook" is a generated plugin rather than a hook command, and the distinction does
+not reach here: what this constant is asked is whether the provider reports its own activity
+and is watched no other way, and the answer is yes on both counts.
 """

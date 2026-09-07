@@ -128,3 +128,105 @@ async def test_retiring_a_notification_leaves_the_feed_its_observation(tmp_path)
 
     assert standing.notification(_CHAT, _SESSION) is None
     assert [one.detail for one in await feed.recent(limit=10)] == ["Found it."]
+
+
+def test_the_class_of_ask_survives_the_round_trip(tmp_path) -> None:
+    """A replacement message must say what the first one said.
+
+    The first message a session sends is rendered from live `AgentActivity` values, so it names
+    the class of ask. A replacement is rebuilt from this table — which is the common case, since
+    replacing is the whole design of a standing notification — and until 2026-09-07 the snapshot
+    did not carry `ask`, so the wording silently downgraded from "Waiting for an answer about a
+    shell command" to "Waiting for an answer" the moment a second report arrived.
+
+    Invisible until Stage 5's live drill, because the running service predated the `ask` column
+    and no ask had ever reached this table to be dropped.
+    """
+    asked = AgentActivity(
+        _SESSION, ActivityKind.NEEDS_ANSWER, None, _OBSERVED, ActivityConfidence.REPORTED, "bash"
+    )
+    database = tmp_path / "sessions.sqlite3"
+
+    connection = open_database(database)
+    SQLiteStandingNotificationStore(connection).record(_CHAT, _notification(asked))
+    connection.close()
+
+    connection = open_database(database)
+    standing = SQLiteStandingNotificationStore(connection).notification(_CHAT, _SESSION)
+    connection.close()
+
+    assert standing is not None
+    assert standing.activities[0].ask == "bash"
+
+
+def test_a_row_written_before_the_ask_key_existed_is_still_readable(tmp_path) -> None:
+    """An upgrade must not restart every notification that was mid-flight across it.
+
+    Subscripting the key would send such a row down the "this build cannot read it" path, which
+    drops the record of the message and starts a new one — a duplicate notification per live
+    session, once, on upgrade. `.get` reads the absence as what it meant: no ask.
+    """
+    import json
+
+    database = tmp_path / "sessions.sqlite3"
+    connection = open_database(database)
+    SQLiteStandingNotificationStore(connection).record(_CHAT, _notification(_activity()))
+    stored = connection.execute("SELECT activities FROM standing_notifications").fetchone()[0]
+    lines = json.loads(stored)
+    for line in lines:
+        line.pop("ask")
+    connection.execute("UPDATE standing_notifications SET activities = ?", (json.dumps(lines),))
+    connection.commit()
+
+    standing = SQLiteStandingNotificationStore(connection).notification(_CHAT, _SESSION)
+    connection.close()
+
+    assert standing is not None, "a pre-upgrade row must be read, not dropped"
+    assert standing.activities[0].ask is None
+
+
+def test_every_rendered_field_of_an_observation_round_trips(tmp_path) -> None:
+    """Encode an observation with every field set, decode it, and require it back whole.
+
+    The rule is "all of them", and this is the mechanism that actually enforces it. The first
+    attempt grepped the encoder's source for `"key": activity.` pairs and compared the key names
+    against the dataclass's fields. A second independent review took that apart: the regex
+    captures only the JSON *key*, so `"detail": activity.kind.value` — a copy-paste swap — passes
+    it unchanged, and any harmless refactor that breaks the literal adjacency (a dict
+    comprehension, a key split across two lines) fails it for nothing. A test that can pass while
+    the property is false and fail while it holds is worse than no test.
+
+    Full equality over a fixture where **every field carries a distinct, non-default value** does
+    what the grep was reaching for and more: a field the encoder drops fails, a field it maps to
+    the wrong attribute fails, and a seventh field added to `AgentActivity` fails at the coverage
+    assertion below until somebody decides what the snapshot should do with it.
+    """
+    import dataclasses
+
+    told = AgentActivity(
+        _SESSION,
+        ActivityKind.NEEDS_ANSWER,
+        "the agent's own words",
+        _OBSERVED,
+        ActivityConfidence.INFERRED,
+        "bash",
+    )
+    # The fixture has to exercise every field, or the equality below proves less than it looks:
+    # a value left at its default is indistinguishable from one the encoder never wrote.
+    for field in dataclasses.fields(AgentActivity):
+        assert getattr(told, field.name) is not None, (
+            f"{field.name} is unset in this fixture, so a snapshot that dropped it would still "
+            "compare equal; set it to a distinct value"
+        )
+
+    database = tmp_path / "sessions.sqlite3"
+    connection = open_database(database)
+    SQLiteStandingNotificationStore(connection).record(_CHAT, _notification(told))
+    connection.close()
+
+    connection = open_database(database)
+    standing = SQLiteStandingNotificationStore(connection).notification(_CHAT, _SESSION)
+    connection.close()
+
+    assert standing is not None
+    assert standing.activities == (told,)

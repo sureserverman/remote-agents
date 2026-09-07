@@ -8,8 +8,10 @@ injecting a database path under `tmp_path` — the pattern
 here. The row vocabulary comes from `fixtures/opencode/message_rows.json`, which carries its
 capture provenance; the schema below restates the two tables the reader queries.
 
-OpenCode takes no hooks — that absence lives in `requirements.py` as an UNSUPPORTED
-declaration (DEC-061: absence is declared, never invented), so no test here has to prove it.
+OpenCode's activity plugin is declared SUPPORTED in `requirements.py` since 2026-09-06 and is
+driven by the generic hooks contract plus `tests/unit/adapters/agents/opencode/`, so nothing
+about it needs restating here. What stays absent is `remote_control`, and that absence lives in
+`requirements.py` as an UNSUPPORTED declaration (DEC-061: absence is declared, never invented).
 """
 
 from __future__ import annotations

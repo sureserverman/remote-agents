@@ -113,6 +113,15 @@ _NOTIFICATIONS = {
     "agent_needs_input": (ActivityKind.NEEDS_ANSWER, ActivityConfidence.REPORTED),
 }
 
+_ASK_TOKEN = re.compile(r"[A-Za-z0-9_-]{1,64}")
+"""The same shape `activity_spool._plain_token` writes, asserted again on the way back in.
+
+A deliberate second copy of one regex, not a lockstep site to be deduplicated: the two ends of
+the spool are different processes, and a file written by an older build -- or by anything else
+that can reach the directory -- is untrusted input here however careful the writer was. It is
+the argument `MAXIMUM_DETAIL_CHARACTERS` is written down for, applied to the field beside it.
+"""
+
 
 def drain_activity(activity_directory: Path) -> tuple[AgentActivity, ...]:
     """Take up to `MAXIMUM_DRAIN` of the oldest spooled records and return what they mean.
@@ -304,13 +313,38 @@ def _activity(record: dict) -> AgentActivity | None:
         detail=bounded_detail_line(record.get("detail")),
         observed_at=observed_at,
         confidence=confidence,
+        # Re-narrowed on this side of the spool, as `detail` is: a different process wrote the
+        # file, so the far end bounds again rather than trusting what it finds (the argument
+        # `MAXIMUM_DETAIL_CHARACTERS` is written down for).
+        ask=_ask_token(record.get("ask")),
     )
+
+
+def _ask_token(value: object) -> str | None:
+    """Accept an ask token only in the shape the spool is allowed to have written."""
+    return value if isinstance(value, str) and _ASK_TOKEN.fullmatch(value) else None
 
 
 def _kind(event: object, reason: object) -> tuple[ActivityKind, ActivityConfidence] | None:
     if event == "Stop":
         return ActivityKind.COMPLETED, ActivityConfidence.REPORTED
     if event == "PermissionRequest":
+        return ActivityKind.NEEDS_ANSWER, ActivityConfidence.REPORTED
+    # OpenCode's own names for the same two facts, kept as the provider spells them rather than
+    # translated to Claude's in the plugin. A translation would have made the spool file lie
+    # about which agent wrote it, and this mapping is where the vocabularies are meant to meet.
+    # `REPORTED` on both: the plugin runs inside OpenCode and forwards an event OpenCode emitted,
+    # which is the same standing Claude's hooks have and not the pane-title inference's.
+    #
+    # A Tier-1 review asked whether a *plugin* deserves that standing, since it is code loaded
+    # into the agent's event loop rather than a fixed lifecycle-hook contract. Considered and
+    # judged immaterial: `ActivityConfidence` records whether *anything actually said this*, and
+    # OpenCode's own runtime emitted the event -- the plugin only carried it. The distinction the
+    # enum is drawing is against the pane-title watcher, which reads a marker nobody sent it and
+    # infers an agent behind it. Nothing here is inferred.
+    if event == "session.idle":
+        return ActivityKind.COMPLETED, ActivityConfidence.REPORTED
+    if event == "permission.asked":
         return ActivityKind.NEEDS_ANSWER, ActivityConfidence.REPORTED
     if event == "StopFailure":
         kind = _STOP_FAILURES.get(reason) if isinstance(reason, str) else None
@@ -351,6 +385,15 @@ def observe_codex_action_required(
     Its terminal title nevertheless changes to the fixed marker above, which tmux exposes
     separately from pane capture.  Retaining the title would be terminal-content retention;
     retaining one boolean answers the whole question this observation can safely support.
+
+    **It carries no `ask` either, and that is DEC-063 rather than an omission.** The hook path
+    gained one on 2026-09-06 because a `PermissionRequest` payload *names* the tool being asked
+    about. A title does not: the marker is a fixed string this watcher matched, and the tool
+    class is not in it. Inventing one -- guessing `Bash` because most escalations are commands,
+    or wording it "about something" -- would be the watcher making a claim about pane content
+    it deliberately never read. The observation stays exactly as content-free as the boolean
+    behind it, and the surfaces say the unqualified sentence they said before, under the hedge
+    `ActivityConfidence.INFERRED` already earns it.
     """
     action_required = title.startswith(_CODEX_ACTION_REQUIRED_TITLE)
     if not action_required or was_action_required:

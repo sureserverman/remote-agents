@@ -357,7 +357,17 @@ async def test_the_limits_pane_draws_one_row_per_answering_agent() -> None:
 
         # The redesign's grid: the profile padded to the widest, then each window as a muted
         # label, an eight-cell gauge and the share -- `week` abbreviated to `wk`.
-        assert drawn == ["claude  5h █░░░░░░░ 2%", "codex   wk █████░░░ 61%"]
+        #
+        # The share is padded to the widest share in the render, which is why `2%` carries a
+        # leading space here: `61%` is three cells, so the two figures end in the same column.
+        # A column of percentages is compared down its right edge, and until 2026-09-06 this
+        # pane was the one list in the surface that did not align them (the sessions pane has
+        # measured its columns across the whole listing since it was written).
+        assert drawn == ["claude  5h █░░░░░░░  2%", "codex   wk █████░░░ 61%"]
+
+        # And the property behind the literal, so a future edit cannot quietly return to
+        # ragged rows while keeping two hand-written strings that happen to agree.
+        assert len({line.index("%") for line in drawn}) == 1
 
 
 async def test_every_row_in_the_limits_pane_is_disabled() -> None:

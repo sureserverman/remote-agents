@@ -19,8 +19,9 @@ than through a plain mkdir, which would follow one.
 
 What lands here is deliberately narrower than what the hook receives. The notification the
 service will send needs an event name, the field that discriminates that event, one short
-line of detail, a session, and a time; the transcript path and working directory the payload
-also carries would leak filesystem layout into a Telegram message, so they never leave here.
+line of detail, the class of thing an agent is waiting on, a session, and a time; the
+transcript path and working directory the payload also carries would leak filesystem layout
+into a Telegram message, so they never leave here.
 """
 
 from __future__ import annotations
@@ -91,7 +92,50 @@ _DETAIL_FIELDS = ("message", "last_assistant_message")
 #: version of the owner's ask is a sentence -- "waiting for an answer about a shell command" --
 #: which is wording, shared with Claude's `needs_answer`, and a decision to take deliberately
 #: rather than to inherit from a parser change. Recorded as DEC-067.
+#:
+#: **That decision was taken on 2026-09-06 and `tool_name` is now admitted** -- not here, into
+#: `detail`, which is what DEC-067 refused and still refuses, but into `ask`, a field of its
+#: own (`_CODEX_ASK_FIELDS`, DEC-074). This paragraph is kept because its argument is why the
+#: two fields are separate; it is annotated because a reader hits it a hundred lines before the
+#: code that admits the field, and would otherwise leave with the wrong conclusion.
 _CODEX_DETAIL_FIELDS: dict[str, tuple[str, ...]] = {"Stop": ("last_assistant_message",)}
+
+#: What a Codex payload may contribute as an ASK CLASS, per event. `PermissionRequest` only,
+#: and `tool_name` only -- the one field the measurement
+#: (`docs/acceptance-2026-08-29-codex-activity-detail.md`) licenses, whose own licensing
+#: section reads "`PermissionRequest` -> `tool_name` at most, and nothing else". `Stop` admits
+#: none: an agent that has finished is not waiting on anything.
+_CODEX_ASK_FIELDS: dict[str, tuple[str, ...]] = {"PermissionRequest": ("tool_name",)}
+
+#: The two `event` types OpenCode's generated plugin acts on, and the only ones this branch
+#: admits. Read as an exact set rather than through `_plain_token`, because these names carry a
+#: dot and `_plain_token` -- correctly, for the values it guards -- does not allow one. Widening
+#: that reader to admit a dotted event name would have loosened the guard on `reason` and on
+#: every provider's `ask` at the same time, to make one branch's event names fit.
+_OPENCODE_EVENTS = frozenset({"session.idle", "permission.asked"})
+
+#: What an OpenCode payload may contribute as DETAIL: **nothing, permanently**.
+#:
+#: Empty rather than absent, and empty for a reason that will not change with a wider parser.
+#: `session.idle` -- the only event that could carry a finished agent's words -- has a payload of
+#: exactly one field, and that field is OpenCode's own session id
+#: (`docs/acceptance-2026-09-06-opencode-activity.md`, 2 of 2 samples). There is no
+#: `last_assistant_message` waiting to be admitted the way Codex's `Stop` had one; getting the
+#: agent's last words would mean asking the SDK for the session's messages, which is a different
+#: mechanism reading conversation content and therefore a DEC-013 retention decision rather than
+#: a parser widening. Not proposed, and this dict is where a future reader is told so.
+_OPENCODE_DETAIL_FIELDS: dict[str, tuple[str, ...]] = {}
+
+#: What an OpenCode payload may contribute as an ASK CLASS. `permission.asked` only, and
+#: `properties.permission` only -- the one field the measurement licenses, whose licensing
+#: section reads "`permission.asked` -> `properties.permission` at most, as an ask class". Never
+#: `patterns` or `metadata.command`, which are the literal command, nor `always`, which is a glob
+#: over commands. `session.idle` admits none: an agent that has finished is not waiting.
+#:
+#: Read through `_plain_token` exactly as Codex's `tool_name` is, and for the same measured
+#: reason: one sample, one value (`bash`), so the value space is unverified and a token carrying
+#: a space, a slash or a quote is not a tool class this project recognises.
+_OPENCODE_ASK_FIELDS: dict[str, tuple[str, ...]] = {"permission.asked": ("permission",)}
 #: How many times a colliding name is stepped over before the record is dropped in silence.
 #:
 #: A collision needs two events in the same *microsecond* for one session, so the hooks
@@ -111,6 +155,29 @@ class ObservedAgentEvent:
     reason: str | None
     detail: str | None
     observed_at: datetime
+    ask: str | None = None
+    """Which CLASS of thing the agent is waiting on, as the provider's own token.
+
+    A third kind of string, kept apart from the other two on purpose. `reason` discriminates an
+    event into a kind and is never rendered; `detail` is **the agent's own words** and is
+    rendered as a sentence the agent wrote. This is neither: `Bash` is a provider's name for a
+    tool, and its whole use is that a *surface* turns it into wording of its own ("waiting for
+    an answer about a shell command").
+
+    **DEC-074**, which supersedes DEC-067's rejected-alternative clause. DEC-067 declined
+    `tool_name` on two grounds. The first -- that putting a token in `detail` conflates two
+    kinds of string in a field every consumer reads as prose -- is answered by this field
+    existing, and stands unamended. The second was the **ordering**: "storing ahead of
+    rendering inverts the rule above", declined because nobody had yet taken the wording
+    decision rendering it would require. That premise is what changed; DEC-074 records the
+    decision and the argument for it.
+
+    An earlier version of this docstring claimed the split "completes DEC-067 on its own terms
+    and supersedes nothing", and asserted the owner's approval inline. Both were wrong in the
+    same way: DEC-067's ordering objection is a separate clause that this does override, and an
+    owner decision living only in a code comment is exactly the unrecorded decision this project
+    treats as reversible by the next edit. A Tier-1 review found it.
+    """
 
     def document(self) -> dict[str, object]:
         return {
@@ -119,6 +186,7 @@ class ObservedAgentEvent:
             "reason": self.reason,
             "detail": self.detail,
             "observed_at": self.observed_at.isoformat(),
+            "ask": self.ask,
         }
 
 
@@ -161,6 +229,8 @@ def _observed_event(
         return None
     if not isinstance(document, dict):
         return None
+    if provider == "opencode":
+        return _observed_opencode_event(document, session_id, moment)
     event = _plain_token(document.get("hook_event_name"))
     if event is None:
         return None
@@ -176,7 +246,18 @@ def _observed_event(
         # claim is scoped to the pane-*title* watcher, which is untouched and still retains one
         # boolean.
         #
-        # `PermissionRequest` admits nothing, deliberately -- see `_CODEX_DETAIL_FIELDS`.
+        # `PermissionRequest` still admits no *detail* -- see `_CODEX_DETAIL_FIELDS` -- and
+        # since 2026-09-06 admits `tool_name` as an `ask`, a different field for a different
+        # kind of string (DEC-074, superseding DEC-067's rejected-alternative clause;
+        # DEC-067's field-conflation reasoning stands and is why `ask` is not `detail`).
+        #
+        # Read through `_plain_token`, not `bounded_detail_line`. The measurement observed
+        # `tool_name` only as `Bash` in all four samples and says so; its value space is
+        # unverified beyond that. The narrow reader is what keeps an unverified space from
+        # becoming a rendering surface: a value carrying a space, a slash or a quote is not a
+        # tool class this project recognises, and it is dropped rather than drawn under the
+        # owner's session name.
+        #
         # What crosses here is bounded by `bounded_detail_line`, exactly as Claude's is, because
         # the far end of the spool measures against the same budget.
         return ObservedAgentEvent(
@@ -185,6 +266,7 @@ def _observed_event(
             reason=None,
             detail=_first(document, _CODEX_DETAIL_FIELDS.get(event, ()), bounded_detail_line),
             observed_at=moment.astimezone(UTC),
+            ask=_first(document, _CODEX_ASK_FIELDS.get(event, ()), _plain_token),
         )
     return ObservedAgentEvent(
         session_id=session_id,
@@ -192,6 +274,36 @@ def _observed_event(
         reason=_first(document, _DISCRIMINATING_FIELDS, _plain_token),
         detail=_first(document, _DETAIL_FIELDS, bounded_detail_line),
         observed_at=moment.astimezone(UTC),
+    )
+
+
+def _observed_opencode_event(
+    document: Mapping[str, object], session_id: str, moment: datetime
+) -> ObservedAgentEvent | None:
+    """Read an OpenCode plugin record, admitting the two events and the one licensed field.
+
+    Branched ahead of the shared `_plain_token` read rather than after it, which is the whole
+    reason this is a function and not three more lines in `_observed_event`. OpenCode's event
+    names are dotted; `_plain_token` allows no dot, and it is the same reader that guards
+    `reason` and every provider's `ask`. Making the dotted names fit by widening it would have
+    loosened two guards to admit one branch's vocabulary -- so the branch takes its event names
+    from a fixed set instead, which is narrower than `_plain_token` rather than wider.
+
+    The narrowing here duplicates the plugin's own, deliberately. That code lives in the
+    operator's configuration directory where a hand-edit is possible, and this end of the spool
+    reads a file a different process wrote; a boundary that trusts what it is handed because
+    something upstream was careful is not a boundary.
+    """
+    event = document.get("hook_event_name")
+    if not isinstance(event, str) or event not in _OPENCODE_EVENTS:
+        return None
+    return ObservedAgentEvent(
+        session_id=session_id,
+        event=event,
+        reason=None,
+        detail=_first(document, _OPENCODE_DETAIL_FIELDS.get(event, ()), bounded_detail_line),
+        observed_at=moment.astimezone(UTC),
+        ask=_first(document, _OPENCODE_ASK_FIELDS.get(event, ()), _plain_token),
     )
 
 

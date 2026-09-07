@@ -147,3 +147,51 @@ def test_no_claude_payload_field_naming_a_path_prompt_or_foreign_id_reaches_disk
             assert secret not in rendered, (
                 f"{secret!r} reached the spool from {payload['hook_event_name']}"
             )
+
+
+# --- the two notification types that become `needs_answer`, 2026-09-06 ----------------------
+
+
+def test_a_permission_prompt_carries_the_message_claude_sends_with_it() -> None:
+    """The measured half, and the one 59 of the owner's 78 rows came from.
+
+    `permission_prompt`'s `message` was captured live on 2026-09-06 from this project's own
+    spool — "Claude needs your permission to use Bash" — four times in one session.
+    """
+    observed = _claude(_fixture("notification.json"))
+
+    assert observed is not None
+    assert observed.reason == "permission_prompt"
+    assert observed.detail == "Claude needs your permission to use Bash"
+
+
+def test_a_needs_input_notification_without_a_message_is_still_a_needs_answer() -> None:
+    """The UNMEASURED half, pinned as a shape rather than asserted as a fact.
+
+    19 of the owner's 78 Claude `needs_answer` rows carry no detail, and the investigation of
+    2026-09-06 narrowed the cause to this type by elimination without confirming it:
+
+    * not longstanding — 2 rows on 2026-08-20 and 17 on 2026-09-06, with every day between at
+      100% detail;
+    * not a build artifact — one long-running session produced rows *with* detail on 09-03 and
+      *without* on 09-06, same process;
+    * not `idle_prompt` — measured live that day: it carries "Claude is waiting for your input"
+      **and** is dropped at `_kind` before it can become a row at all;
+    * `permission_prompt` carries its message — measured live the same day, four times.
+
+    That leaves `agent_needs_input`, the only other type `_NOTIFICATIONS` maps, as the
+    deduction. **It is a deduction and not a measurement**, which is why the fixture says so in
+    its own `_provenance` and carries `"_measured": false`. What this test pins is the
+    behaviour either way: a mapped notification with no `message` still produces a
+    `needs_answer` rather than being dropped, and produces it with `detail=None` rather than
+    with an invented one.
+
+    The reason the question could not be answered from the owner's own records is worth as much
+    as the answer: `_activity` uses `reason` to pick a kind and then **discards it**, so no
+    stored row can say which notification type produced it. Filed as BL-048.
+    """
+    observed = _claude(_fixture("notification_agent_needs_input.json"))
+
+    assert observed is not None
+    assert observed.reason == "agent_needs_input"
+    assert observed.detail is None, "nothing invents words the payload did not carry"

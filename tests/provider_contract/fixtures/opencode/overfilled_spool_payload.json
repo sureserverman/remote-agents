@@ -1,0 +1,17 @@
+{
+  "_provenance": "NOT a capture. This is the shape `spool_agent_event --provider opencode` receives on stdin -- the generated plugin's output -- deliberately OVER-FILLED with every field docs/acceptance-2026-09-06-opencode-activity.md refuses, flattened as a hand-edited or foreign writer could send them. The plugin narrows at the source and never emits these; this fixture exists so the spool is proved to refuse them independently, because the spool reads a file written by a different process and trusts nothing it finds. Values are synthetic per GDEC-SEC-001 and deliberately recognisable.",
+  "hook_event_name": "permission.asked",
+  "permission": "bash",
+  "patterns": ["rm -rf /home/owner/secret-project"],
+  "metadata": { "command": "rm -rf /home/owner/secret-project" },
+  "always": ["rm *"],
+  "tool": { "messageID": "msg_synthetic000000000000000", "callID": "call_synthetic00000000000000" },
+  "id": "per_synthetic000000000000000",
+  "sessionID": "ses_synthetic000000000000000",
+  "message": "Do you want to allow deleting /home/owner/secret-project?",
+  "last_assistant_message": "I am about to delete /home/owner/secret-project",
+  "reason": "rate_limit",
+  "notification_type": "permission_prompt",
+  "transcript_path": "/home/owner/.local/share/opencode/opencode.db",
+  "cwd": "/home/owner/secret-project"
+}

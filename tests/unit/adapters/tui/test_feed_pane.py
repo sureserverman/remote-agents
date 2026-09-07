@@ -1223,3 +1223,171 @@ def test_the_feed_has_a_phrase_for_every_kind_and_no_others() -> None:
 
     assert set(KIND_WORDS) == set(ActivityKind)
     assert all(phrase and not phrase.endswith(".") for phrase in KIND_WORDS.values())
+
+
+# --- expansion covers the vocabulary, not one kind, 2026-09-06 -------------------------------
+
+
+@pytest.mark.parametrize("kind", tuple(ActivityKind), ids=lambda k: k.value)
+def test_every_kind_expands_when_it_carries_a_detail(kind: ActivityKind) -> None:
+    """Expansion is keyed on there BEING a detail, never on which kind carries it.
+
+    Written to confirm rather than to build. The owner's 2026-09-06 ask included "make the
+    finished notification for codex expandable the way claude's is", and the measurement
+    behind that ask says the feed half was already done: Codex's `Stop` gained a detail on
+    2026-08-30 (`_CODEX_DETAIL_FIELDS = {"Stop": ("last_assistant_message",)}`), and three real
+    rows in the live database carry one, all dated after that change. What was missing was the
+    *Telegram* half, which is a different task.
+
+    Three rows is thin evidence, so this is the check that the general property holds rather
+    than the one provider's case. It quantifies over the whole `ActivityKind` enum — derived,
+    not hand-listed, so a kind added later is covered without anyone remembering to add it.
+    """
+    from remote_agents.adapters.tui.screens.feed import feed_key, feed_rows
+
+    observation = _activity(kind, minutes_ago=1, detail=_LONG_DETAIL)
+    key = feed_key(observation)
+
+    collapsed = feed_rows((observation,), width=80)
+    opened = feed_rows((observation,), width=80, opened=key)
+
+    assert len(collapsed) == 1, f"{kind}: a collapsed observation is one row"
+    assert len(opened) > 1, f"{kind}: carries a detail, so it must expand"
+    assert all(disabled for _key, _row, disabled in opened[1:]), (
+        f"{kind}: continuation rows must be disabled so the cursor cannot rest on a fragment"
+    )
+
+
+@pytest.mark.parametrize("kind", tuple(ActivityKind), ids=lambda k: k.value)
+def test_no_kind_expands_onto_nothing(kind: ActivityKind) -> None:
+    """An observation with no detail has nothing to show, so Enter must not open an empty box.
+
+    The other half of the property above, and the one that fails if expansion is ever keyed on
+    the kind instead of on the detail.
+    """
+    from remote_agents.adapters.tui.screens.feed import feed_key, feed_rows
+
+    observation = _activity(kind, minutes_ago=1, detail=None)
+    opened = feed_rows((observation,), width=80, opened=feed_key(observation))
+    assert len(opened) == 1, f"{kind}: nothing to expand, so no continuation rows"
+
+
+# --- the ask class, in this surface's words, 2026-09-06 --------------------------------------
+
+
+def test_a_needs_answer_row_says_what_class_of_thing_is_being_waited_on() -> None:
+    """A Codex approval wait now names the kind of ask, in the feed's own words.
+
+    Its own words, and its own map, deliberately: the bot has one of the same shape in its own
+    adapter and the two agreeing today is not a reason to share one (DEC-043). A row that must
+    fit beside an identity in a 73-column pane is not sized like a chat message.
+    """
+    from remote_agents.adapters.tui.screens.feed import feed_rows
+
+    observation = _activity(ActivityKind.NEEDS_ANSWER, minutes_ago=1)
+    observation = AgentActivity(
+        observation.session_id,
+        observation.kind,
+        None,
+        observation.observed_at,
+        observation.confidence,
+        "Bash",
+    )
+    row = feed_rows((observation,), width=80)[0][1].plain
+    assert "about a shell command" in row
+    assert "Bash" not in row, "the row says the class, never the provider's token"
+
+
+def test_the_agents_own_words_win_over_the_ask_class_when_both_are_present() -> None:
+    """A detail is what the agent said; an ask class is what this service inferred it is about.
+
+    Claude's `needs_answer` carries a real message, so it never needs the fallback — and
+    showing both would put two descriptions of one event on a row that has space for neither.
+    """
+    from remote_agents.adapters.tui.screens.feed import feed_rows
+
+    base = _activity(ActivityKind.NEEDS_ANSWER, minutes_ago=1)
+    observation = AgentActivity(
+        base.session_id,
+        base.kind,
+        "Overwrite config.toml?",
+        base.observed_at,
+        base.confidence,
+        "Bash",
+    )
+    row = feed_rows((observation,), width=80)[0][1].plain
+    assert "Overwrite config.toml?" in row
+    assert "about a shell command" not in row
+
+
+def test_an_unrecognised_ask_leaves_the_needs_answer_row_exactly_as_it_was() -> None:
+    """An unrecognised token is reachable — the measurement calls the value space unverified
+    beyond one observed value — and when one arrives it must cost the identity no room at all.
+
+    Deliberately not "most tokens are unrecognised", which this said until the Stage 3 gate
+    evaluator pointed out that the document supports a claim about the possible SET and not
+    about frequency. All four observations were `Bash`.
+    """
+    from remote_agents.adapters.tui.screens.feed import feed_rows
+
+    base = _activity(ActivityKind.NEEDS_ANSWER, minutes_ago=1)
+    for token in ("MysteryTool", "bash", "Read", "Some_Tool-42"):
+        observation = AgentActivity(
+            base.session_id, base.kind, None, base.observed_at, base.confidence, token
+        )
+        row = feed_rows((observation,), width=80)[0][1].plain
+        assert token not in row, f"{token!r} reached the pane as itself"
+        assert "—" not in row, "an unrecognised ask contributes no detail cell"
+
+
+def test_the_service_s_phrase_is_drawn_unlike_the_agent_s_own_words() -> None:
+    """One slot held both until the Stage 3 gate evaluator noticed; now the row tells them apart.
+
+    The bot keeps the two kinds of string structurally apart — the agent's words go inside a
+    block quotation, the service's phrase inside the bold headline — and the pane did not: both
+    landed in the detail cell after a muted em dash, in identical style. That is DEC-067's
+    conflation argument reappearing at a presentation slot rather than at a port field.
+
+    A detail follows an em dash; an ask class is parenthesised and dimmer. A row carries either,
+    never both.
+    """
+    from remote_agents.adapters.tui.screens.feed import feed_rows
+
+    base = _activity(ActivityKind.NEEDS_ANSWER, minutes_ago=1)
+    asked = AgentActivity(
+        base.session_id, base.kind, None, base.observed_at, base.confidence, "Bash"
+    )
+    said = AgentActivity(
+        base.session_id,
+        base.kind,
+        "Overwrite config.toml?",
+        base.observed_at,
+        base.confidence,
+        "Bash",
+    )
+
+    ask_row = feed_rows((asked,), width=80)[0][1].plain
+    said_row = feed_rows((said,), width=80)[0][1].plain
+
+    assert "(about a shell command)" in ask_row
+    assert "—" not in ask_row, "the em dash introduces an agent's words, not ours"
+    assert "— Overwrite config.toml?" in said_row
+    assert "about a shell command" not in said_row, "a row carries one or the other"
+
+
+def test_the_feed_drops_an_inferred_observations_ask_as_it_drops_its_detail() -> None:
+    """The confidence guard lives at the renderer here too, not only at the watcher.
+
+    `_detail_of` had to make this exact correction for `detail` on 2026-08-30, after a reviewer
+    called the source-side-only rule convention-only. Adding a second string field reopened the
+    gap, and the Stage 3 gate evaluator found it still open on this surface.
+    """
+    from remote_agents.adapters.tui.screens.feed import feed_rows
+
+    base = _activity(ActivityKind.NEEDS_ANSWER, minutes_ago=1)
+    inferred = AgentActivity(
+        base.session_id, base.kind, None, base.observed_at, ActivityConfidence.INFERRED, "Bash"
+    )
+    row = feed_rows((inferred,), width=80)[0][1].plain
+    assert "shell command" not in row
+    assert "(" not in row

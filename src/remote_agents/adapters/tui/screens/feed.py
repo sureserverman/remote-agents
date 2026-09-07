@@ -35,8 +35,11 @@ from remote_agents.application.session_views import session_identity
 from remote_agents.domain.models import SessionRecord
 from remote_agents.ports.agent_activity import (
     MAXIMUM_DETAIL_CHARACTERS,
+    ActivityConfidence,
     ActivityKind,
     AgentActivity,
+    AskClass,
+    ask_class,
 )
 
 _LOG = logging.getLogger(__name__)
@@ -50,6 +53,32 @@ _FEED_LIMIT = FEED_LIMIT
 #: One line of owner-facing words per observation kind. Local to this surface on purpose:
 #: the bot's sentences live in its own adapter and carry chat conventions (grouping,
 #: standing messages) a glanceable feed line has no use for.
+ASK_WORDS = {AskClass.SHELL: "about a shell command"}
+"""**This surface's** words for an ask class, and deliberately its own copy (DEC-043).
+
+The bot has a map of the same shape in its own adapter, and the two agreeing today is not a
+reason to share one: the class is the shared decision, the sentence is not, and a row that must
+fit beside an identity in a 73-column pane is not sized like a chat message. A shared renderer
+is how one surface's wording quietly becomes the other's.
+
+`AskClass.UNKNOWN` is absent on purpose. An unrecognised ask contributes no words, so the row
+reads exactly as it did before rather than gaining "about something" -- which would cost the
+identity room and tell the owner nothing.
+"""
+
+
+def _ask_words(activity: AgentActivity) -> str | None:
+    """What this row says about the class of thing being waited on, if anything.
+
+    Takes the whole observation rather than its token so the confidence guard lives here, at
+    the boundary that renders, rather than resting on the watcher not setting one -- the
+    correction `_detail_of` already had to make for `detail` on 2026-08-30.
+    """
+    if activity.confidence is ActivityConfidence.INFERRED or not activity.ask:
+        return None
+    return ASK_WORDS.get(ask_class(activity.ask))
+
+
 KIND_WORDS = {
     ActivityKind.COMPLETED: "finished",
     ActivityKind.LIMIT_REACHED: "usage limit",
@@ -209,7 +238,16 @@ def feed_rows(
         # at the measured width and, when there is none yet, by `text-wrap: nowrap;
         # text-overflow: ellipsis` in both surfaces' DEFAULT_CSS -- which is what survives a
         # resize between two draws.
+        # The agent's own words, and -- separately -- the class of thing it is waiting on.
+        # Two arguments rather than one slot: the row draws them differently, because one is a
+        # sentence an agent wrote and the other is a phrase this surface chose (DEC-067's
+        # conflation argument, at a presentation slot instead of a port field).
+        #
+        # `_ask_words` is keyed on `AskClass` and drops an `INFERRED` observation's ask
+        # entirely, so neither a token nobody has measured nor a guess the watcher never read
+        # can reach the owner's pane.
         detail = _elide(activity.detail) if activity.detail else None
+        ask_words = _ask_words(activity) if not activity.detail else None
         key = feed_key(activity)
         occurrence = seen.get(key, 0)
         seen[key] = occurrence + 1
@@ -229,6 +267,7 @@ def feed_rows(
                     width=width,
                     kind_width=kind_width,
                     age_width=age_width,
+                    ask_words=ask_words,
                 ),
                 False,
             )

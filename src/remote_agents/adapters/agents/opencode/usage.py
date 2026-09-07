@@ -25,7 +25,7 @@ from remote_agents.ports.agent_usage_support import (
 class OpenCodeUsageReader:
     """Read one OpenCode session's context out of the single SQLite database it keeps.
 
-    OpenCode publishes no rate-limit information, so this answers a context window and an empty
+    OpenCode does not publish rate-limit information, so this answers a context window and an empty
     window tuple — which `AgentUsage` distinguishes from "no answer" precisely so a reader like
     this one does not have to pretend the two are the same.
 
@@ -39,7 +39,7 @@ class OpenCodeUsageReader:
     limits_profile = ProfileId("opencode")
 
     def limits(self) -> AgentLimits:
-        """OpenCode publishes no rate limits, which is an answer and not a gap."""
+        """OpenCode does not publish rate limits, which is an answer and not a gap."""
         return AgentLimits(self.limits_profile)
 
     def __init__(self, *, database: Path | None = None, now: object = None) -> None:

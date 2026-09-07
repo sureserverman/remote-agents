@@ -1,0 +1,24 @@
+{
+  "_provenance": "Captured 2026-09-06 from opencode 1.18.16, ONE sample; see docs/acceptance-2026-09-06-opencode-activity.md. `permission` was observed only as \"bash\", so its value space is unverified beyond that instance, and from one sample field PRESENCE is unverified too (the v2 SDK type marks `tool` optional). Every identifier and command string here is synthetic per GDEC-SEC-001 \u2014 the commands are deliberately recognisable so a leak assertion can name them. What was measured is the FIELD NAMES and their nesting, corroborated by @opencode-ai/sdk@1.18.16's v2 type at dist/v2/gen/types.gen.d.ts:1128.",
+  "_measured": true,
+  "id": "evt_synthetic0000000000000001",
+  "type": "permission.asked",
+  "properties": {
+    "id": "per_synthetic000000000000000",
+    "sessionID": "ses_synthetic000000000000000",
+    "permission": "bash",
+    "patterns": [
+      "rm -rf /home/owner/secret-project"
+    ],
+    "metadata": {
+      "command": "rm -rf /home/owner/secret-project"
+    },
+    "always": [
+      "rm *"
+    ],
+    "tool": {
+      "messageID": "msg_synthetic000000000000000",
+      "callID": "call_synthetic00000000000000"
+    }
+  }
+}
