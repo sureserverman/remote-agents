@@ -607,6 +607,139 @@ def _inspectable_boundary(record: SessionRecord, output: str) -> PrivateBotBound
     return boundary
 
 
+@pytest.mark.asyncio
+async def test_a_project_registered_since_the_service_started_is_named_in_the_sessions_list() -> (
+    None
+):
+    """The console pane's defect, one surface over and milder.
+
+    The bot refreshes its catalogue when a *picker* opens -- `launch.open`, `resume.open`,
+    `/launch` -- and the sessions list is not a picker. So a project registered while the
+    service was running, launched into from the local surface, rendered here as the raw
+    24-character opaque id until the owner happened to open Launch.
+
+    The snapshot starts empty and the registry has the project, which is the state this
+    process is in the moment the owner registers something.
+    """
+
+    class _Launcher(SessionUseCaseDouble):
+        async def list_sessions(self):
+            return [_an_unnamed_session()]
+
+        async def refresh_readiness(self) -> None:
+            return None
+
+    boundary = build_private_bot(
+        7,
+        11,
+        backend=backend_for(
+            catalogue=(),
+            refresh_catalogue=lambda: (CatalogProject("a" * 24, "Demo", "tests", "Registered"),),
+            sessions=_Launcher(),
+        ),
+    )
+    chat = FakeChat()
+
+    await boundary.sessions_command(chat.message_update("/sessions"), None)
+
+    anchor_id = chat.bot_messages[0].message_id
+    labels = [
+        unpadded(button.text)
+        for row in chat.messages[anchor_id].reply_markup.inline_keyboard
+        for button in row
+    ]
+    # The opaque id is what a stale snapshot draws, so its *absence* is the assertion that
+    # discriminates. Asserting only that "Demo" appears would pass on a record whose stored
+    # slug already said "Demo" -- which is not the state a real row is in: the store holds the
+    # opaque id and the join is the only thing that ever turns it into a name.
+    assert not any("a" * 24 in label for label in labels), labels
+    assert any("Demo" in label for label in labels), labels
+
+
+@pytest.mark.asyncio
+async def test_closing_the_catalogue_gap_keeps_a_remembered_project_view() -> None:
+    """The reason the gap close re-reads without going through `refresh_catalogue`.
+
+    `refresh_catalogue` drops `_project_views` because *opening a picker* is where a new
+    order is expected. A sessions render is not a picker, and dropping them from there would
+    reshuffle a list the owner may be paging through -- the harm that method's own docstring
+    warns about, arriving from a path that never opens a picker. A search view is the case
+    that cannot be reconstructed, so it is the one worth pinning.
+    """
+
+    class _Launcher(SessionUseCaseDouble):
+        async def list_sessions(self):
+            return [_a_running_session()]
+
+        async def refresh_readiness(self) -> None:
+            return None
+
+    boundary = build_private_bot(
+        7,
+        11,
+        backend=backend_for(
+            catalogue=(),
+            refresh_catalogue=lambda: (CatalogProject("a" * 24, "Demo", "tests", "Registered"),),
+            sessions=_Launcher(),
+        ),
+    )
+    remembered = (CatalogProject("b" * 24, "Searched", "tests", "Registered"),)
+    boundary._project_views["launch:search"] = remembered
+    chat = FakeChat()
+
+    await boundary.sessions_command(chat.message_update("/sessions"), None)
+
+    assert boundary._project_views.get("launch:search") == remembered
+
+
+@pytest.mark.asyncio
+async def test_the_catalogue_is_not_re_read_for_a_listing_it_already_explains() -> None:
+    """The ordinary case pays a set difference, not a registry read and a directory walk."""
+    reads = 0
+
+    def refresh() -> tuple[CatalogProject, ...]:
+        nonlocal reads
+        reads += 1
+        return (CatalogProject("a" * 24, "Demo", "tests", "Registered"),)
+
+    class _Launcher(SessionUseCaseDouble):
+        async def list_sessions(self):
+            return [_a_running_session()]
+
+        async def refresh_readiness(self) -> None:
+            return None
+
+    boundary = build_private_bot(
+        7,
+        11,
+        backend=backend_for(
+            catalogue=(CatalogProject("a" * 24, "Demo", "tests", "Registered"),),
+            refresh_catalogue=refresh,
+            sessions=_Launcher(),
+        ),
+    )
+    chat = FakeChat()
+
+    await boundary.sessions_command(chat.message_update("/sessions"), None)
+
+    assert reads == 0
+
+
+def _an_unnamed_session() -> SessionRecord:
+    """A record as the store actually holds one: the project slug is the opaque id.
+
+    `_a_running_session` names its project "Demo" in the display identity, which is fine for
+    the tests that only need a row to press but useless for testing the *join* -- the assertion
+    would pass without any catalogue at all. Every real row arrives like this one, because
+    `SessionDisplayIdentity` is persisted at launch with the catalogue's `opaque_id` in it and
+    the name is applied at render.
+    """
+    return replace(
+        _a_running_session(),
+        display=SessionDisplayIdentity("a" * 24, "Claude", "regular", 1),
+    )
+
+
 def _a_running_session(state: SessionState = SessionState.RUNNING) -> SessionRecord:
     return SessionRecord(
         SessionId(UUID(int=7)),
@@ -703,8 +836,8 @@ async def test_pressing_trust_answers_the_question_and_the_row_goes() -> None:
 async def test_a_session_not_waiting_on_trust_is_offered_no_such_row() -> None:
     """The guard that keeps a bare Enter away from a working agent.
 
-    `TRUST_KEYS` is a single Enter, which means something to every agent in every pane, so a
-    row offered when no dialog is on screen is a keypress into somebody's work.
+    Answering ends in a confirming Enter, which means something to every agent in every
+    pane, so a row offered when no dialog is on screen is a keypress into somebody's work.
     """
     boundary, launcher = _trust_blocked()
     launcher.states[0] = TrustState.UNKNOWN

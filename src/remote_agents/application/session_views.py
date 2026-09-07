@@ -263,6 +263,44 @@ def with_project_names(
     )
 
 
+#: How long a surface waits before re-reading the catalogue again after a read that still did
+#: not name every project on screen.
+#:
+#: **Shared because the alternative is the constant drifting between the two surfaces**, which
+#: is BL-031's shape applied to a number instead of a function. It bounds the one case that
+#: never resolves -- a session outliving its project's deregistration, which `_with_project_name`
+#: already documents as one of its three declines -- while keeping the case that does resolve, a
+#: project registered since the process started, to under a minute without a restart.
+CATALOGUE_GAP_RETRY_SECONDS = 60.0
+
+
+def unnamed_projects(
+    records: Iterable[SessionRecord], catalogue: Iterable[CatalogProject]
+) -> frozenset[str]:
+    """The project ids in `records` that `catalogue` has no name for.
+
+    **The question a stale snapshot cannot ask itself, asked in one place.** A surface holds
+    the catalogue it last read, and `with_project_names` silently draws the opaque id for a
+    record it cannot name -- correct, unreadable, and indistinguishable from a project that has
+    genuinely gone. Empty here means every row on screen can be named; non-empty means a
+    re-read is the only thing that could help.
+
+    Deliberately *not* the re-read itself. How a surface re-reads its catalogue is that
+    surface's own business -- the bot ranks by recency and decides whether opening a picker
+    also drops the picker views it remembers; the local surface applies whichever of two
+    orders the owner chose -- and DEC-043 keeps that split. What both must agree on is when
+    there is anything to re-read *for*, which is this, and for how long a gap that never
+    closes may go on asking, which is `CATALOGUE_GAP_RETRY_SECONDS` above.
+
+    A frozenset rather than a bool because the ids are what a caller would log; today both
+    callers only ask whether it is empty.
+    """
+    named = {project.opaque_id for project in catalogue}
+    return frozenset(
+        str(record.project_id) for record in records if str(record.project_id) not in named
+    )
+
+
 def _with_project_name(record: SessionRecord, name: str | None) -> SessionRecord:
     """One record under a readable project name, or exactly the record that came in.
 

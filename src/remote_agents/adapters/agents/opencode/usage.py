@@ -47,18 +47,35 @@ class OpenCodeUsageReader:
         self._now = now
 
     def read(self, query: UsageQuery) -> AgentUsage | None:
-        row = self._newest_assistant(query)
-        if row is None:
+        """This session's context, from the newest assistant message that counted any.
+
+        **The newest message that carries a count, rather than the newest message.** OpenCode
+        writes an assistant row as a turn opens and fills its `tokens` in as the turn runs, so
+        the newest row is routinely a placeholder — `{"input": 0, "output": 0, "reasoning": 0,
+        "cache": {...}}`, with no `total` key at all. Reading only that row reported "not
+        reported by this agent" for a session that had counted every turn it ever took, and it
+        did so *while the agent was working*, which is exactly when the owner looks. Found on a
+        live host whose newest row was that placeholder and whose next one held 10285.
+
+        Skipping such a row is not the same as inventing a reading: a turn that has produced no
+        count yet has not produced one, and the previous turn's total is the last thing this
+        conversation actually measured. The three outcomes `AgentUsage` distinguishes are all
+        still reachable and still mean what they meant — no assistant message at all is `None`
+        (no conversation matched), assistant messages that have *never* carried a total is the
+        empty reading (matched, publishes nothing), and anything else is the newest count.
+        """
+        documents = self._assistant_messages(query)
+        if not documents:
             return None
-        tokens = row.get("tokens") if isinstance(row, dict) else None
-        if not isinstance(tokens, dict):
-            return AgentUsage()
-        total = _positive_int(tokens.get("total"))
+        total = next(
+            (counted for counted in map(_message_total, documents) if counted is not None),
+            None,
+        )
         if total is None:
             return AgentUsage()
         return AgentUsage(context=ContextWindow(total), observed_at=_moment(self._now))
 
-    def _newest_assistant(self, query: UsageQuery) -> dict | None:
+    def _assistant_messages(self, query: UsageQuery) -> list[dict]:
         workspace = str(_resolved(query.workspace))
         floor = int((query.started_at.astimezone(UTC) - _START_TOLERANCE).timestamp() * 1000)
         statement = (
@@ -82,8 +99,22 @@ class OpenCodeUsageReader:
             return None
         finally:
             connection.close()
+        documents = []
         for (data,) in rows:
             document = _loads(data)
             if isinstance(document, dict) and document.get("role") == "assistant":
-                return document
+                documents.append(document)
+        return documents
+
+
+def _message_total(document: dict) -> int | None:
+    """The total this message counted, or None if it counted nothing.
+
+    `None` covers both shapes the placeholder takes -- a `tokens` that is not a mapping, and
+    one that is but has no positive `total` -- because the caller does the same thing with
+    them: keep looking at older messages.
+    """
+    tokens = document.get("tokens")
+    if not isinstance(tokens, dict):
         return None
+    return _positive_int(tokens.get("total"))

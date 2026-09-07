@@ -7,6 +7,7 @@ import contextlib
 import logging
 from collections.abc import Callable, Iterable
 from datetime import UTC, datetime
+from time import monotonic
 from typing import TypeVar
 
 from textual import events, work
@@ -84,8 +85,10 @@ from remote_agents.application.session_actions import (
     remote_control_available,
 )
 from remote_agents.application.session_views import (
+    CATALOGUE_GAP_RETRY_SECONDS,
     listed_sessions,
     only_listed,
+    unnamed_projects,
     with_project_names,
 )
 from remote_agents.application.stops import dispatch_stop, resolve_stop
@@ -367,6 +370,10 @@ class RemoteAgentsTui(App[AttachRequest | None]):
         #: `Backend.catalogue` in whatever order `build_catalogue` produced, and ordering it
         #: needs the store, which cannot be read from a synchronous constructor.
         self._catalogue_ordered = False
+        #: When this pane last re-read the catalogue because a session named a project the
+        #: snapshot did not have -- monotonic, and `None` until it happens. See
+        #: `_close_catalogue_gap`, which is the only thing that reads or writes it.
+        self._catalogue_gap_read_at: float | None = None
         self.selection = LaunchSelection()
         self._busy = False
         # Set once, never cleared: see `_leave`. Separate from `_busy` because the two answer
@@ -1797,7 +1804,7 @@ class RemoteAgentsTui(App[AttachRequest | None]):
                 return record
         return None
 
-    def _with_names(self, records: tuple[SessionRecord, ...]) -> tuple[SessionRecord, ...]:
+    async def _with_names(self, records: tuple[SessionRecord, ...]) -> tuple[SessionRecord, ...]:
         """Join this surface's catalogue onto the records, by the shared rule.
 
         **Here rather than in the three renders that show a row, and that is the whole of
@@ -1814,8 +1821,69 @@ class RemoteAgentsTui(App[AttachRequest | None]):
         The rule itself is `application/session_views.with_project_names`; what is this
         surface's own is which catalogue, and that is `self._catalogue` -- the local
         catalogue, refreshed by `reload_catalogue`.
+
+        **Async, because a snapshot that cannot name a project is a fact this method is the
+        first to know.** It is the funnel every named read passes through, so it is the one
+        place that sees an id the catalogue has no entry for -- and making the two callers
+        check for themselves would be the pair of must-agree call sites the paragraph above
+        exists to celebrate having removed. `_close_catalogue_gap` carries the account of
+        what it does about it.
         """
+        await self._close_catalogue_gap(records)
         return with_project_names(records, self._catalogue)
+
+    async def _close_catalogue_gap(self, records: tuple[SessionRecord, ...]) -> None:
+        """Re-read the catalogue when a session names a project this snapshot never had.
+
+        **The defect this closes is a pane that can never recover.** `self._catalogue` is a
+        snapshot taken when the process started, and the console is four processes: the
+        projects pane refreshes it on every launch, resume and add-project flow, while the
+        sessions, limits and feed panes offer no flow at all and so held a catalogue frozen
+        for the life of the process. Register a project, launch into it, and its sessions
+        render as the raw 24-character opaque id for days -- which is what the owner saw, and
+        which no key on that pane could fix, because nothing on it called `reload_catalogue`.
+
+        **Driven by the gap rather than by a timer**, and the distinction is the cost
+        argument. Refreshing on a schedule would walk the development root and re-read the
+        registry on every pane forever to catch something that happens when a project is
+        added. Refreshing when a record names an id the catalogue lacks does the read exactly
+        when a read could help -- and the ordinary case, where every project is known, pays a
+        set difference over a listing already in hand.
+
+        **The retry bound is for the case that never resolves.** A session outlives the
+        deregistration or deletion of its project (`_with_project_name` documents that as one
+        of its three declines), so a gap can be permanent and re-reading would then be per
+        repaint. Marking such ids unresolvable instead would be the wrong trade in the other
+        direction: registering the missing project is a thing the owner may do next, and a
+        permanent mark would hide it until the next restart -- the defect again, wearing the
+        fix's clothes. A time bound keeps both bounded and neither hidden.
+
+        The gap test and the bound are both `application/session_views`', shared with the bot,
+        which has the same stale-snapshot hole on its own sessions list. What stays this
+        surface's is the re-read -- `reload_catalogue` applies the owner's chosen order --
+        which is the DEC-043 split the shared rule was extracted along.
+
+        Failure is silent by design: `reload_catalogue` already logs and reports a bool, and
+        the caller of a *name* has nothing useful to say about a registry read. The rows draw
+        under the opaque id, which is unreadable and correct, exactly as they did before.
+        """
+        if not unnamed_projects(records, self._catalogue):
+            # Cleared rather than left standing, so a project that has just become known does
+            # not spend the rest of the interval it happened to land in unable to try again.
+            self._catalogue_gap_read_at = None
+            return
+        now = monotonic()
+        if (
+            self._catalogue_gap_read_at is not None
+            and now - self._catalogue_gap_read_at < CATALOGUE_GAP_RETRY_SECONDS
+        ):
+            return
+        # Stamped before the await rather than after, for the reason `ensure_catalogue_ordered`
+        # spells out about its own guard: a bound raised after the suspension point does not
+        # bind, and the repaint timers on these panes are quite capable of arriving twice
+        # while a registry read and a usage read are in flight.
+        self._catalogue_gap_read_at = now
+        await self.reload_catalogue()
 
     async def _refresh_context_windows_tick(self) -> None:
         """Keep the cache warm for whichever screen this process mounts.
@@ -1921,7 +1989,7 @@ class RemoteAgentsTui(App[AttachRequest | None]):
         # Named *after* the sync, deliberately. The sync matches records against tmux panes,
         # and while naming touches only `display.project_slug` and no id, handing it the
         # exact tuple it saw before this task removes the question entirely.
-        return self._with_names(records)
+        return await self._with_names(records)
 
     async def raw_sessions(self) -> tuple[SessionRecord, ...]:
         """Every session the store holds, named, and filtered by nothing.
@@ -1935,7 +2003,7 @@ class RemoteAgentsTui(App[AttachRequest | None]):
         `with_project_names(records, catalogue)` -- a second copy of the join `_with_names`
         already is, in the stage whose whole subject was that the join has one home.
         """
-        return self._with_names(await self._services.backend.sessions.list_sessions())
+        return await self._with_names(await self._services.backend.sessions.list_sessions())
 
     async def read_sessions(self) -> tuple[SessionRecord, ...]:
         """List the store's sessions, filtering what no surface can act on."""

@@ -371,6 +371,109 @@ def test_codex_windows_are_named_by_the_duration_the_provider_states(
     assert all(window.resets_at is not None for window in usage.windows)
 
 
+def _rollout_on_day(
+    tmp_path: Path, workspace: Path, name: str, day: datetime, records: list[dict]
+) -> Path:
+    """A rollout filed under an arbitrary day, which is what a resumed one always is.
+
+    `_rollout` above files under `LAUNCHED_AT`'s day, because for a fresh session the
+    conversation and the session begin together. A resumed session's conversation began
+    earlier -- that is what resuming *is* -- so its rollout sits under an earlier directory,
+    and no fixture could express that while the day was hard-coded.
+    """
+    path = (
+        tmp_path
+        / "codex-sessions"
+        / f"{day:%Y}"
+        / f"{day:%m}"
+        / f"{day:%d}"
+        / f"rollout-{day:%Y-%m-%dT%H-%M-%S}-{name}.jsonl"
+    )
+    meta = {"type": "session_meta", "payload": {"cwd": str(workspace.resolve())}}
+    written = _written(path, [meta, *records])
+    _touch(written, LAUNCHED_AT + timedelta(minutes=10))
+    return written
+
+
+def test_a_resumed_rollout_filed_under_an_earlier_day_is_still_found(
+    tmp_path: Path, workspace: Path
+) -> None:
+    """The defect, stated as the test that would have caught it.
+
+    A rollout is filed under the day its *conversation* began, and a resumed session's
+    conversation began before the session did. Searching the two days around the session's own
+    start therefore looked everywhere except where a resumed rollout can be, so every resumed
+    Codex session reported no context for its whole life. Found on a live host: session started
+    09-07, rollout filed under 09-06 and still being appended to.
+    """
+    _rollout_on_day(
+        tmp_path,
+        workspace,
+        "bbbbbbbb-0000-4000-8000-000000000000",
+        LAUNCHED_AT - timedelta(days=9),
+        [_codex_token_count(last=173_484, window=258_400, primary=2.0, secondary=0.0)],
+    )
+
+    usage = CodexUsageReader(sessions_root=tmp_path / "codex-sessions").read(
+        _query("codex", workspace, resume="bbbbbbbb-0000-4000-8000-000000000000")
+    )
+
+    assert usage is not None
+    assert usage.context is not None
+    assert usage.context.used_tokens == 173_484
+
+
+def test_a_resumed_session_is_matched_by_its_id_and_not_by_its_workspace(
+    tmp_path: Path, workspace: Path
+) -> None:
+    """Widening the search must not widen what counts as a match.
+
+    The fresh-session path matches on workspace and takes the newest; this one matches one
+    exact filename. A resumed session that now sweeps every day-directory would, under the
+    other rule, happily attach itself to a newer conversation in the same folder -- so the
+    rollout that answers must be the one whose id was asked for, and nothing else.
+    """
+    _rollout_on_day(
+        tmp_path,
+        workspace,
+        "cccccccc-0000-4000-8000-000000000000",
+        LAUNCHED_AT - timedelta(days=2),
+        [_codex_token_count(last=11, window=258_400, primary=1.0, secondary=0.0)],
+    )
+    _rollout(
+        tmp_path,
+        workspace,
+        "dddddddd-0000-4000-8000-000000000000",
+        [_codex_token_count(last=99_999, window=258_400, primary=1.0, secondary=0.0)],
+    )
+
+    usage = CodexUsageReader(sessions_root=tmp_path / "codex-sessions").read(
+        _query("codex", workspace, resume="cccccccc-0000-4000-8000-000000000000")
+    )
+
+    assert usage is not None
+    assert usage.context is not None
+    assert usage.context.used_tokens == 11
+
+
+def test_a_resumed_session_whose_rollout_is_gone_answers_nothing(
+    tmp_path: Path, workspace: Path
+) -> None:
+    """A wider search still has to be able to say no."""
+    _rollout(
+        tmp_path,
+        workspace,
+        "eeeeeeee-0000-4000-8000-000000000000",
+        [_codex_token_count(last=42, window=258_400, primary=1.0, secondary=0.0)],
+    )
+
+    usage = CodexUsageReader(sessions_root=tmp_path / "codex-sessions").read(
+        _query("codex", workspace, resume="ffffffff-0000-4000-8000-000000000000")
+    )
+
+    assert usage is None
+
+
 def test_a_rollout_from_another_workspace_is_never_matched(tmp_path: Path, workspace: Path) -> None:
     """The workspace is matched exactly, so one project's usage cannot land on another's."""
     other = tmp_path / "dev" / "elsewhere"
@@ -479,7 +582,15 @@ def test_a_null_secondary_window_is_skipped_rather_than_mislabelled(
 # --- opencode ----------------------------------------------------------------------------
 
 
-def _opencode_database(tmp_path: Path, workspace: Path, tokens: dict) -> Path:
+def _opencode_database(tmp_path: Path, workspace: Path, *turns: dict | None) -> Path:
+    """An OpenCode database holding one assistant message per `turns` entry, oldest first.
+
+    Varargs rather than one `tokens` mapping, because the shape that broke this reader needs
+    two rows to express: OpenCode fills an assistant row's `tokens` in as the turn runs, so the
+    newest row is routinely a placeholder and the count lives on the one before it. `None`
+    writes a row with no `tokens` key at all, which is the other shape a turn takes before it
+    has counted anything.
+    """
     path = tmp_path / "opencode.db"
     connection = sqlite3.connect(path)
     connection.executescript(
@@ -488,15 +599,19 @@ def _opencode_database(tmp_path: Path, workspace: Path, tokens: dict) -> Path:
         " time_created INTEGER NOT NULL, data TEXT NOT NULL);"
     )
     connection.execute("INSERT INTO session VALUES (?, ?)", ("ses_1", str(workspace.resolve())))
-    connection.execute(
-        "INSERT INTO message VALUES (?, ?, ?, ?)",
-        (
-            "msg_1",
-            "ses_1",
-            int((LAUNCHED_AT + timedelta(minutes=3)).timestamp() * 1000),
-            json.dumps({"role": "assistant", "tokens": tokens}),
-        ),
-    )
+    for index, tokens in enumerate(turns):
+        document: dict = {"role": "assistant"}
+        if tokens is not None:
+            document["tokens"] = tokens
+        connection.execute(
+            "INSERT INTO message VALUES (?, ?, ?, ?)",
+            (
+                f"msg_{index}",
+                "ses_1",
+                int((LAUNCHED_AT + timedelta(minutes=3 + index)).timestamp() * 1000),
+                json.dumps(document),
+            ),
+        )
     connection.commit()
     connection.close()
     return path
@@ -525,6 +640,57 @@ def test_opencode_publishes_no_rate_limits_and_claims_none(tmp_path: Path, works
 
     assert usage is not None
     assert usage.windows == ()
+
+
+def test_an_in_flight_turn_does_not_erase_the_count_the_last_one_made(
+    tmp_path: Path, workspace: Path
+) -> None:
+    """The defect, stated as the test that would have caught it.
+
+    OpenCode writes the assistant row as the turn opens and fills its `tokens` in as it runs,
+    so the newest row is routinely all zeroes with no `total`. Reading only that row reported
+    "not reported by this agent" for a session that had counted every turn it ever took -- and
+    it did so while the agent was working, which is exactly when the owner looks.
+    """
+    database = _opencode_database(
+        tmp_path,
+        workspace,
+        {"total": 10_285, "input": 2_553, "cache": {"read": 7_680, "write": 0}},
+        {"input": 0, "output": 0, "reasoning": 0, "cache": {"read": 0, "write": 0}},
+    )
+
+    usage = OpenCodeUsageReader(database=database).read(_query("opencode", workspace))
+
+    assert usage is not None
+    assert usage.context is not None
+    assert usage.context.used_tokens == 10_285
+
+
+def test_a_conversation_that_has_never_counted_anything_is_empty_not_absent(
+    tmp_path: Path, workspace: Path
+) -> None:
+    """Skipping uncounted turns must not turn "publishes nothing" into "no conversation".
+
+    The two mean different things to the owner -- one is permanent and the other says *yet* --
+    and scanning past the placeholder rows could have collapsed them by running out of rows.
+    """
+    database = _opencode_database(tmp_path, workspace, None, {"input": 0, "output": 0})
+
+    usage = OpenCodeUsageReader(database=database).read(_query("opencode", workspace))
+
+    assert usage is not None
+    assert usage.is_empty
+
+
+def test_a_workspace_with_no_assistant_message_answers_nothing_at_all(
+    tmp_path: Path, workspace: Path
+) -> None:
+    """The third outcome, kept reachable: no assistant message is `None`, not an empty reading."""
+    database = _opencode_database(tmp_path, workspace)
+
+    usage = OpenCodeUsageReader(database=database).read(_query("opencode", workspace))
+
+    assert usage is None
 
 
 # --- cursor ------------------------------------------------------------------------------

@@ -10,6 +10,7 @@ from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from html import escape
 from math import ceil
+from time import monotonic
 
 from telegram import (
     Bot,
@@ -97,6 +98,7 @@ from remote_agents.application.session_actions import (
     trust_available,
 )
 from remote_agents.application.session_views import (
+    CATALOGUE_GAP_RETRY_SECONDS,
     StateGroup,
     group_counts,
     group_emoji,
@@ -109,6 +111,7 @@ from remote_agents.application.session_views import (
     session_row,
     session_row_parts,
     state_emoji,
+    unnamed_projects,
     usage_lines,
     with_project_names,
 )
@@ -553,6 +556,14 @@ class PrivateBotBoundary:
     marker, which is the cheap half of what it would break. Both arguments were comments
     only until `test_the_bot_handles_updates_sequentially` pinned the literal.
     """
+    _catalogue_gap_read_at: float | None = None
+    """When this process last re-read the catalogue because a session named an unknown project.
+
+    Monotonic, and `None` until it happens. Written and read only by `_close_catalogue_gap`,
+    which carries the account. Process-local like the render state below it, and for a
+    stronger reason: it is a rate limit on a read, so a restart forgetting it costs one extra
+    registry read and nothing else.
+    """
     _sessions_page: int = 1
     """The page number the sessions list is currently drawn at, so Back can return to it.
 
@@ -581,15 +592,8 @@ class PrivateBotBoundary:
     async def refresh_catalogue(self) -> None:
         """Re-read the projects so one created at runtime becomes selectable immediately.
 
-        The registry read and development-root walk run off the event loop, so refreshing
-        never stalls unrelated Telegram interactions or tmux polling.
-
-        The recency ranking is applied **here**, once, rather than in either picker. Launch,
-        Resume and search all render `self.catalogue` — the two pickers share `_projects_reply`
-        and search filters the same tuple — so ordering it at the source reaches all three
-        without a ranking call per rendered row, and without either picker knowing that a
-        ranking exists. It is also why a session launched during the run changes the next
-        render's order: the usage read happens on the refresh that follows it.
+        The read itself, and the ranking it applies, are `_reread_catalogue`'s — this is that
+        read plus the one thing only a picker-open wants, below.
 
         Called when a picker **opens** — `launch.open`, `resume.open`, `/launch` — and not on
         a timer. `self.catalogue` is read by those two screens and by search, so re-reading it
@@ -602,6 +606,34 @@ class PrivateBotBoundary:
         this clears `_project_views` and re-ranks, so a refresh under a thumb would reshuffle
         the list being paged through. Opening is the boundary where a new order is expected.
         """
+        await self._reread_catalogue()
+        # Dropping the remembered picker views belongs to *opening a picker*, not to reading
+        # the catalogue -- which is why it is here and not in `_reread_catalogue`. The
+        # paragraph above says paging must not re-read because a reshuffle under a thumb is
+        # the harm; `_close_catalogue_gap` re-reads on a path that is not a picker at all, and
+        # would do exactly that harm if it cleared these too. A remembered view is a snapshot
+        # of a message already sent, and a row in one that has since left the catalogue is
+        # caught where it is pressed -- `_resume_profiles_reply` checks membership before it
+        # offers anything.
+        self._project_views.clear()
+
+    async def _reread_catalogue(self) -> None:
+        """Read the projects off the event loop and rank them into `self.catalogue`.
+
+        The registry read and development-root walk run on a thread, so refreshing never
+        stalls unrelated Telegram interactions or tmux polling.
+
+        The recency ranking is applied **here**, once, rather than in either picker. Launch,
+        Resume and search all render `self.catalogue` -- the two pickers share
+        `_projects_reply` and search filters the same tuple -- so ordering it at the source
+        reaches all three without a ranking call per rendered row, and without either picker
+        knowing that a ranking exists. It is also why a session launched during the run
+        changes the next render's order: the usage read happens on the refresh that follows it.
+
+        Separated from `refresh_catalogue` so that the two things that want a fresh catalogue
+        can differ in what else they do about it. A host that wired no read is a no-op rather
+        than a failure, exactly as before.
+        """
         if self.backend.refresh_catalogue is None:
             return
         catalogue = await asyncio.to_thread(self.backend.refresh_catalogue)
@@ -612,7 +644,43 @@ class PrivateBotBoundary:
         self.catalogue = await rank_if_usage_is_reported(
             catalogue, self.backend.sessions, datetime.now(UTC)
         )
-        self._project_views.clear()
+
+    async def _close_catalogue_gap(self, records: tuple[SessionRecord, ...]) -> None:
+        """Re-read the catalogue when a session names a project this snapshot never had.
+
+        **The same hole the console's sessions pane had, one surface over.** `self.catalogue`
+        is refreshed when a *picker* opens -- `launch.open`, `resume.open`, `/launch` -- and
+        the sessions list is not a picker. So a project registered while this service was
+        running, whose sessions were launched from the local surface, rendered in Telegram as
+        the raw 24-character opaque id until the owner happened to open Launch. Milder than
+        the pane's version, which could never recover at all, and the same defect.
+
+        The gap test and the retry bound are `application/session_views`', shared with the
+        local surface so the two cannot drift on when a re-read is worth doing. What is this
+        adapter's own is the re-read: `_reread_catalogue` and deliberately not
+        `refresh_catalogue`, because dropping the remembered picker views here would reshuffle
+        a list the owner may be paging through -- the harm `refresh_catalogue`'s own docstring
+        warns about, arriving from a path that never opens a picker.
+
+        Silent on failure, like the join it serves: rows draw under the opaque id, which is
+        unreadable and correct, exactly as they did before.
+        """
+        if not unnamed_projects(records, self.catalogue):
+            # Cleared rather than left standing, so a project that has just become known does
+            # not spend the rest of the interval it landed in unable to try again.
+            self._catalogue_gap_read_at = None
+            return
+        now = monotonic()
+        if (
+            self._catalogue_gap_read_at is not None
+            and now - self._catalogue_gap_read_at < CATALOGUE_GAP_RETRY_SECONDS
+        ):
+            return
+        # Stamped before the await rather than after: a bound raised past the suspension point
+        # does not bind. `concurrent_updates(False)` means two presses cannot interleave here
+        # today, but this rests on that fact rather than restating it.
+        self._catalogue_gap_read_at = now
+        await self._reread_catalogue()
 
     def permits(self, update: Update) -> bool:
         user = update.effective_user
@@ -2574,7 +2642,7 @@ class PrivateBotBoundary:
         """
         if self.backend.sessions is None:
             return ()
-        return self._named(only_listed(await self.backend.sessions.list_sessions()))
+        return await self._named(only_listed(await self.backend.sessions.list_sessions()))
 
     async def _listed_records(self) -> tuple[SessionRecord, ...]:
         """What opening the sessions list reads: the readiness pass and the read, together.
@@ -2585,16 +2653,22 @@ class PrivateBotBoundary:
         """
         if self.backend.sessions is None:
             return ()
-        return self._named(await listed_sessions(self.backend.sessions))
+        return await self._named(await listed_sessions(self.backend.sessions))
 
-    def _named(self, records: tuple[SessionRecord, ...]) -> tuple[SessionRecord, ...]:
+    async def _named(self, records: tuple[SessionRecord, ...]) -> tuple[SessionRecord, ...]:
         """This surface's catalogue, joined by the shared rule.
 
         The join itself is `application/session_views.with_project_names` and no longer this
         adapter's: the local surface needed the same rule, and a second copy here is the
         shape BL-031 records. What stays this surface's is *which* catalogue -- the bot holds
         a ranked snapshot of its own.
+
+        Async because a snapshot that cannot name a project is a fact this method is the first
+        to know, and the funnel every named read passes through is the one place worth acting
+        on it -- see `_close_catalogue_gap`. The same move `RemoteAgentsTui._with_names` makes,
+        for the same defect.
         """
+        await self._close_catalogue_gap(records)
         return with_project_names(records, self.catalogue)
 
     async def _record(self, session_value: str) -> SessionRecord | None:
@@ -2678,6 +2752,10 @@ class PrivateBotBoundary:
                 # Stage 1 exists to end, surviving inside the stage that ended it. The
                 # forbidden-name sweep could not see it: it greps for `def ` names, and this
                 # was an inlined copy with no definition to find.
+                # `with_project_names` directly rather than `_named`: this is one record on
+                # the notification path, and a notification is not a screen the owner is
+                # reading names off a list in. The gap close belongs to the listing reads,
+                # which run when the owner is looking at a list of projects and waiting.
                 (named,) = with_project_names((record,), self.catalogue)
                 # The compact identity the redesign gives every two-line row, with the
                 # sequence outside it -- the notification renders both on one plain line.

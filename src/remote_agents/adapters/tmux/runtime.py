@@ -17,7 +17,7 @@ from remote_agents.adapters.tmux.remote_control import (
     REMOTE_CONTROL_OPEN_MENU_KEYS,
     classify_remote_control_capture,
 )
-from remote_agents.adapters.tmux.trust import TRUST_KEYS, classify_trust_capture
+from remote_agents.adapters.tmux.trust import classify_trust_capture, plan_trust_keys
 from remote_agents.domain.conversations import ProviderConversationId
 from remote_agents.domain.models import ProfileId, ProjectId, SessionId
 from remote_agents.domain.remote_control import RemoteControlState
@@ -442,29 +442,57 @@ class TmuxTerminal:
         never arrives and the startup budget expires. Requiring a live-and-RUNNING session
         here would make the one state this exists to rescue the one state it refuses.
         """
+        capture = await self._trust_capture(session_id)
+        if capture is None:
+            return TrustState.UNKNOWN
+        return classify_trust_capture(capture)
+
+    async def answer_trust(self, session_id: SessionId) -> TrustState:
+        """Answer the folder-trust question, and only when it is actually on screen.
+
+        The guard is the whole safety story. The confirming keypress is meaningful to every
+        agent that ever runs in a pane -- so sending it to a session that is *not* asking
+        this question is sending a stray keypress into somebody's work. Re-reading the pane
+        here, rather than trusting the caller's earlier read, closes the window between a
+        surface rendering the button and the owner pressing it.
+
+        **The read is now used for two things, and that is the fix rather than a tidy-up.**
+        This used to classify from one capture and then send a *fixed* Enter, on the
+        assumption that the dialog rests on its affirmative option. Claude Code 2.1.263 rests
+        it on "No, exit", so that Enter answered no and took the agent down -- the owner
+        pressed *Trust* and got a pane with nothing in it. `plan_trust_keys` reads the
+        cursor's actual row off the very capture that classified the dialog, so the keys and
+        the classification describe one observation rather than two reads with a redraw
+        between them.
+
+        A plan of `None` is a refusal to press anything at all: a dialog this cannot read is
+        left exactly as it stands, for the owner to answer by hand, rather than guessed at.
+        """
+        capture = await self._trust_capture(session_id)
+        if capture is None or classify_trust_capture(capture) is not TrustState.AWAITING:
+            return TrustState.UNKNOWN
+        keys = plan_trust_keys(capture)
+        if keys is None:
+            return TrustState.UNKNOWN
+        await self._gateway.send_keys(session_id, keys)
+        await asyncio.sleep(_TRUST_ANSWER_WAIT_SECONDS)
+        return classify_trust_capture(await self._gateway.capture(session_id))
+
+    async def _trust_capture(self, session_id: SessionId) -> str | None:
+        """This pane's current screen, or None if it is not one that may be asked at all.
+
+        The profile gate lives here rather than in each caller so that reading the state and
+        answering it cannot disagree about which panes are answerable -- the duplication
+        `domain/trust.TRUST_ANSWERABLE` exists to end, made once more at a smaller scale.
+        """
         observation = await self.inspect(session_id)
         if (
             observation is None
             or not observation.live
             or observation.profile_id not in TRUST_ANSWERABLE
         ):
-            return TrustState.UNKNOWN
-        return classify_trust_capture(await self._gateway.capture(session_id))
-
-    async def answer_trust(self, session_id: SessionId) -> TrustState:
-        """Answer the folder-trust question, and only when it is actually on screen.
-
-        The guard is the whole safety story. `TRUST_KEYS` is a bare Enter, which is
-        meaningful to every agent that ever runs in a pane -- so sending it to a session
-        that is *not* asking this question is sending a stray keypress into somebody's
-        work. Re-reading the pane here, rather than trusting the caller's earlier read,
-        closes the window between a surface rendering the button and the owner pressing it.
-        """
-        if await self.trust_state(session_id) is not TrustState.AWAITING:
-            return TrustState.UNKNOWN
-        await self._gateway.send_keys(session_id, TRUST_KEYS)
-        await asyncio.sleep(_TRUST_ANSWER_WAIT_SECONDS)
-        return classify_trust_capture(await self._gateway.capture(session_id))
+            return None
+        return await self._gateway.capture(session_id)
 
     async def managed_observations(self) -> tuple[TerminalObservation, ...]:
         """Return trusted dedicated-server evidence for read-only reconciliation.
