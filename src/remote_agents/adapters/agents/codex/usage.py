@@ -122,17 +122,40 @@ class CodexUsageReader:
             yield from _safe_glob(directory, "rollout-*.jsonl")
 
     def _rollout_for(self, query: UsageQuery) -> Path | None:
-        candidates = list(self._candidates(query.started_at))
         if query.resume_source_id is not None:
             # `rollout-<timestamp>-<conversation uuid>.jsonl`: the id is the filename's tail,
             # so a resumed session is matched by suffix rather than by reading any of them.
+            #
+            # **Searched across the day-directories that exist rather than the two around this
+            # session's start, and that is the whole of the fix.** A rollout is filed under the
+            # day its conversation *began*, and a resumed session's conversation began before
+            # the session did -- by an hour, or by a fortnight. Bounding the search to the
+            # session's own start day therefore looked everywhere except where a resumed
+            # rollout can be, so every resumed Codex session reported no context for its whole
+            # life while its rollout sat one directory back, being appended to. Found on a live
+            # host: session started 09-07, rollout `-01a077f1….jsonl` filed under 09-06 and
+            # last written that minute, holding 173484/258400.
+            #
+            # The same bounded sweep `limits()` uses, and cheap for the same reason it is cheap
+            # there: the suffix is unique and matching it reads no file, only names.
             suffix = f"-{query.resume_source_id}.jsonl"
-            return next((path for path in candidates if path.name.endswith(suffix)), None)
+            return next(
+                (path for path in self._recent_rollouts() if path.name.endswith(suffix)), None
+            )
         workspace = _resolved(query.workspace)
+        candidates = list(self._candidates(query.started_at))
         matching = [path for path in candidates if _codex_rollout_workspace(path) == workspace]
         return _newest_started_after(matching, query.started_at)
 
     def _candidates(self, started_at: datetime) -> Iterator[Path]:
+        """The rollouts a *fresh* session's own conversation could have been filed under.
+
+        Two days because a session that runs past midnight keeps writing into the file it
+        opened, so only the start date can matter and the extra day covers a start landing
+        either side of the boundary from the store's point of view. This reasoning holds only
+        while the conversation and the session begin together, which is why `_rollout_for`
+        sends a resumed session somewhere else entirely.
+        """
         start = started_at.astimezone(UTC)
         for offset in (0, 1):
             day = start + timedelta(days=offset)
