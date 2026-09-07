@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -147,8 +148,8 @@ def test_the_probe_note_survives_all_the_way_to_the_surface(
     the only field left to hold `version_probe_failed`, which the available-profile invariant
     then refuses, and `local_context` raises before it can return.
     """
-    from remote_agents import bootstrap as bootstrap_module
     from remote_agents.adapters.tmux import profiles as profiles_module
+    from remote_agents.composition import tui as composition_module
     from remote_agents.config import load_config
 
     def always_times_out(argv: tuple[str, ...]) -> str:
@@ -161,21 +162,26 @@ def test_the_probe_note_survives_all_the_way_to_the_surface(
     # for a reason with nothing to do with the regression, which makes the test flip with
     # whatever happens to be installed.
     #
-    # **It is patched on `bootstrap`, not on `profiles`, and the difference is the whole bug.**
-    # `probe_profiles` takes `resolve` as a keyword and falls back to the `profiles` module
-    # private only when the caller passes nothing. `_local_runtime` -- which is what
-    # `local_context` composes -- passes its own, built from `_resolve_profile_executable`.
-    # So patching the module default replaced a function this code path never calls, and the
-    # pin it claimed to be doing was not happening.
+    # **It is patched on `composition.tui`, and the module is the whole bug.** `probe_profiles`
+    # takes `resolve` as a keyword and falls back to the `profiles` module private only when
+    # the caller passes nothing. `_local_runtime` -- which is what `local_context` composes --
+    # passes its own, built from `composition.tui._resolve_profile_executable`. So the pin has
+    # to land there and nowhere else.
     #
-    # The test passed anyway, on one machine, for a reason that had nothing to do with it: the
-    # real resolver fell through to `shutil.which("claude")` and found the developer's own
-    # install. On both CI runners, which have no agent CLIs, it resolved to `None`, the profile
-    # came back `executable_missing`, and the assertions below failed exactly as this comment
-    # used to promise they could not. Failing on Ubuntu as well as macOS is what proves it was
-    # never about the platform.
+    # It has now been aimed at two wrong modules in a row. First `adapters.tmux.profiles`,
+    # which is the fallback this path never reaches; then `remote_agents.bootstrap`, whose copy
+    # is real but feeds `production_doctor`, not `local_context`. Each time the test went on
+    # passing locally and failing on both runners, because a pin that misses is invisible on a
+    # machine that has the binaries anyway.
+    #
+    # Which is why the line below it exists. `_resolve_profile_executable` ends in
+    # `shutil.which`, and that is what kept finding the developer's own `claude` and passing
+    # the assertions for reasons unrelated to what they test. Pinned to None, the host cannot
+    # rescue this test any more: the *only* thing that can satisfy it is the patch above
+    # actually taking effect, which makes a third wrong module fail here rather than in CI.
+    monkeypatch.setattr(shutil, "which", lambda _executable, *_args, **_kwargs: None)
     monkeypatch.setattr(
-        bootstrap_module,
+        composition_module,
         "_resolve_profile_executable",
         lambda executable, _home: Path("/usr/bin") / executable,
     )
