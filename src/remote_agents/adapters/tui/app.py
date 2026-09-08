@@ -1190,12 +1190,7 @@ class RemoteAgentsTui(App[AttachRequest | None]):
             subject = getattr(screen, "subject_session", lambda: None)()
             return subject, "This screen names no session."
         if getattr(screen, "owns_session_cursor", False):
-            # `target_session`, not `highlighted_session`: on the sessions listings the two are
-            # different questions since the cursor and the acting target were split, and this
-            # resolver is asked by the chords, which are the keys that act. Every other
-            # cursor-owning position inherits the base class's identity, so the answer there is
-            # unchanged.
-            return screen.target_session(), _NOTHING_SELECTED
+            return screen.highlighted_session(), _NOTHING_SELECTED
         if not await self._holds_console_slot():
             return None, "Session chords act on the console's own panes."
         read = self.services.console_read_selection

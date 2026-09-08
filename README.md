@@ -403,9 +403,8 @@ console. Hold Alt and those row keys work from any pane: `⌥a` Copy attach, `�
 output, `⌥r` Rename, `⌥s` Stop and close, `⌥c` Clean up, `⌥f` Force stop, `⌥m` Claude Remote
 Control, and `⌥d` opens the detail. Each does exactly what its bare letter does on a row —
 same policy, same confirmations, `f` and both Remote Control directions still asking and `s`
-and `c` still not — to **the session the sessions pane has chosen**, the row it marks `▸` in
-yellow, which is in a pane you are not focused on. Scrolling that pane's cursor does not move
-what these act on; `space`, enter or `d` there does. A stop issued from the projects pane therefore reports as a toast
+and `c` still not — to **the session the sessions pane has highlighted**, the row it marks `▸`
+in yellow, which is in a pane you are not focused on. A stop issued from the projects pane therefore reports as a toast
 rather than in the status line: the status line there describes the project list, and that is
 what you are looking at.
 
@@ -438,9 +437,9 @@ a key is broken:
   the app, its subject named and on screen, and it is refused too.
 - **When the sessions cursor rests on nothing.** There is then no selection to act on, and
   every chord says `No session is selected.` and does nothing rather than guessing at a row.
-  This is the ordinary state from the moment the chosen session leaves the list until you
-  choose another one — not a window that closes by itself — see *Keys on the sessions list*
-  below.
+  This is the ordinary state from the moment the row you were on leaves the list until you
+  move the cursor onto another one — not a window that closes by itself — see *Keys on the
+  sessions list* below.
 - **From a client that is not the console.** A tmux key table belongs to the *server*, and
   managed agents are attached to that same server — so the prefix route above would otherwise
   fire from a plain `remote-agents attach`, stopping a row you cannot see. It does not: the
@@ -607,18 +606,16 @@ console's sessions pane: `a` Copy attach, `i` Inspect output, `r` Rename, `s` St
 console pane `p` returns the projects surface. They are bare letters because these two positions
 have no filter to type into.
 
-**They act on the session you have chosen, not on the row your cursor happens to be on**, and
-the list shows you which is which. The cursor is the row drawn in bold under the selection band
-— where you are looking. The chosen session is marked `▸` and drawn in yellow — what a key will
-act on. Arrows move only the first; `space` makes the row under the cursor the chosen one, and
-so do enter and `d`, because opening a session is naming it. The two are the same row most of
-the time, which is the point: they part company exactly when you are scrolling the list with a
-stop key armed.
+**They act on the row your cursor is on**, and that row is marked `▸` in yellow so you can see
+which it is. The marker is not a second selection — it is the cursor, drawn so that it reads
+from somewhere else. That matters because the same keys are Alt chords on the whole console:
+pressing `⌥s` in the projects pane acts on a row in a list you are not focused on, and the
+marker is how that list says which.
 
-Two things move the choice without a keypress. A session that has just **started** becomes the
-chosen one and takes the cursor with it, so the agent you just launched is the one in front of
-you and the one your keys are pointed at. And a chosen session that **leaves the list** — it
-ended, from here or from Telegram — leaves nothing chosen at all, which is the next paragraph.
+A session that has just **started** takes the cursor, so the agent you launched is the one in
+front of you and the one your keys are pointed at, with no hunt down the list. A session that
+**leaves the list** — it ended, from here or from Telegram — leaves the cursor and the marker on
+nothing at all, which is the next paragraph.
 
 A key is a faster way to reach what a row already offers, and **where it acts depends on what
 the key is for.** `a`, `i` and `r` open the session's detail and it performs them. `s`, `c` and
@@ -630,21 +627,20 @@ policy offers the action, so `s` is absent on a preserved row and `c` on a runni
 than being present and inert.
 
 Because two of those keys end a session without asking, **a background refresh that drops the
-session you had chosen leaves nothing chosen at all**, and drops the cursor too rather than
-falling back to the first row. This list re-reads itself every ten seconds and restores your
-place by session rather than by position; when the session has gone there is no honest place to
-put either mark, and moving one silently onto a neighbour would put a live agent one keypress
-from an unasked stop. One `space` chooses again and one arrow press picks up the cursor. Both
-positions answer this way — the full sessions screen and the console's sessions pane — and so
-does the dashboard's own sessions region, which binds no stop keys and takes the same answer
-anyway so that the one code path publishing the console-wide selection cannot disagree with
-itself about which session is chosen.
+row you were on leaves the cursor on nothing at all** rather than falling back to the first
+row. This list re-reads itself every ten seconds and restores your place by session rather
+than by position; when the session you were on has gone there is no honest place to put the
+cursor, and moving it silently onto a neighbour would put a live agent one keypress from an
+unasked stop. One arrow press picks a row again. Both positions answer this way — the full
+sessions screen and the console's sessions pane — and so does the dashboard's own sessions
+region, which binds no stop keys and takes the same answer anyway so that the one code path
+publishing the console-wide selection cannot disagree with itself about where the cursor is.
 
-A stop that *raised* clears the choice for the same reason, and it is the sharper case: the
-session it failed on is still running, so a repeated keypress would re-issue a stop you never
-asked for twice.
+A stop that *raised* clears it for the same reason, and it is the sharper case: the session it
+failed on is still running, so a repeated keypress would re-issue a stop you never asked for
+twice.
 
-A vanished row therefore leaves **no selection** as well as no cursor. Until you choose a row
+A vanished row therefore leaves **no selection**, no cursor, and no marker. Until you pick a row
 again the Alt chords described above have nothing to act on, from any pane, and say so.
 
 Copy attach is always offered and answers when it is chosen: a pane that is not live, or one whose

@@ -1000,33 +1000,22 @@ async def test_the_full_sessions_position_does_not_offer_the_console_key() -> No
 def test_the_unconfirmed_keys_are_tied_to_the_mitigation_that_makes_them_safe() -> None:
     """The import-time guard survived DEC-052's amendment; what it guards changed.
 
-    It used to refuse `s` and `c` outright. It now refuses them while either half of the
-    vanished-row mitigation is off -- because the argument for binding them is entirely that a
-    session which has left the listing leaves nothing behind for them to act on, and both halves
-    live hundreds of lines away in methods whose names say nothing about stop keys. Someone
-    "restoring DEC-007's resting cursor" in `_draw_listing`, or dropping `_decide_active`'s
-    clearing branch, re-opens the hazard while every test of the keys themselves still passes.
-    This pins the tie, so the module refuses to import instead.
-
-    **Both flags, since the cursor and the acting target were split.** `_CLEARS_VANISHED_CURSOR`
-    was the whole of the mitigation while the keys read the cursor; they read
-    `target_session()` now, so `_CLEARS_VANISHED_ACTIVE` is the half that is load-bearing and
-    the other is what keeps enter honest. A guard naming only the first would have gone on
-    passing with the half that matters removed.
+    It used to refuse `s` and `c` outright. It now refuses them only while
+    `_CLEARS_VANISHED_CURSOR` is false -- because the argument for binding them is entirely
+    that a vanished cursor row rests on nothing, and that lives in `_resting_row`, hundreds of
+    lines away in a method whose name says nothing about stop keys. Someone "restoring DEC-007's
+    resting cursor" there re-opens the hazard, and every test of the keys themselves still
+    passes. This pins the tie, so the module refuses to import instead.
     """
     import remote_agents.adapters.tui.screens.sessions as module
 
     source = pathlib.Path(module.__file__).read_text("utf-8")
     assert "raise RuntimeError(" in source, "the import-time guard is gone"
-    assert "_bindable & UNCONFIRMED_MUTATING_ACTIONS and not (" in source, (
-        "the guard no longer ties the unconfirmed keys to the vanished-row mitigation"
-    )
-    assert "_CLEARS_VANISHED_CURSOR and _CLEARS_VANISHED_ACTIVE" in source, (
-        "the guard reads only one half of the mitigation the bound keys rest on"
+    assert "_bindable & UNCONFIRMED_MUTATING_ACTIONS and not _CLEARS_VANISHED_CURSOR" in source, (
+        "the guard no longer ties the unconfirmed keys to the cursor mitigation"
     )
     assert module.UNCONFIRMED_MUTATING_ACTIONS, "the rule must not be vacuous"
     assert module._CLEARS_VANISHED_CURSOR, "the mitigation the bound keys rest on is off"
-    assert module._CLEARS_VANISHED_ACTIVE, "the mitigation the bound keys act through is off"
     # The keys really are the ones the guard is about, so the tie is not vacuous either.
     bindable = {action for _key, action, _label, _word in module.SESSION_ACTION_KEYS}
     assert bindable & module.UNCONFIRMED_MUTATING_ACTIONS, (
@@ -1287,18 +1276,13 @@ def _three() -> tuple[SessionRecord, ...]:
     )
 
 
-async def test_the_pane_publishes_the_row_the_owner_commits() -> None:
+async def test_the_pane_publishes_the_row_the_owner_moves_to() -> None:
     """One writer for a fact three other processes read.
 
     The console's other panes have no cursor of their own; a chord pressed in any of them acts
-    on whatever this pane has published. **What that value is has changed, and the change is
-    the point.** It used to be the cursor, so the owner's arrow was the event that meant "this
-    one" — which made an arrow press retarget an unconfirmed stop in three other panes. It is
-    now the *committed* session, so the arrow means "let me look" and `space` (or enter, or `d`)
-    means "this one".
-
-    Driven through the real key rather than through `set_active_session`, because what is being
-    asserted is that a press reaches the publication at all.
+    on whatever this pane has highlighted. That only works if moving the cursor is what
+    publishes — not opening a detail, not a timer, not the chord asking at press time — because
+    the owner's arrow is the only event that means "this one".
     """
     console = SelectionConsole()
     records = _three()
@@ -1316,11 +1300,9 @@ async def test_the_pane_publishes_the_row_the_owner_commits() -> None:
         choices = app.screen.query_one("#choices", OptionList)
         choices.focus()
         await pilot.press("down")
-        await pilot.press("space")
         await pilot.pause()
-        await asyncio.sleep(0.05)
 
-        assert console.published, "committing a row published nothing at all"
+        assert console.published, "moving the cursor published nothing at all"
         assert console.published[-1] is not None
         assert str(console.published[-1]) == choices.get_option_at_index(1).id
 
@@ -1328,15 +1310,14 @@ async def test_the_pane_publishes_the_row_the_owner_commits() -> None:
 async def test_a_vanished_row_publishes_no_selection_at_all() -> None:
     """The publication DEC-062's mitigation is worthless without.
 
-    `_draw_listing` rests the cursor on nothing when the row it held has left the list, and
-    `_decide_active` drops the target on the same predicate — the pair is what makes a bare `s`
-    safe on this pane. Off the pane it is worth nothing unless the *publication* is cleared too:
-    an option still naming the departed session would let a chord pressed in the projects pane
-    stop it — with no confirmation, and with nothing on screen to say what it was about to act
-    on.
+    `_resting_row` rests the cursor on nothing when the row it held has left the list, and that
+    is what makes a bare `s` safe on this pane. Off the pane it is worth nothing unless the
+    *publication* is cleared too: an option still naming the departed session would let a chord
+    pressed in the projects pane stop it — with no confirmation, and with nothing on screen
+    under a cursor to say what it was about to act on.
 
-    Published from the draw funnel rather than from a cursor handler, which since the split is
-    the only route there is: moving a cursor publishes nothing at all.
+    Textual posts no highlight message for a cleared cursor (`watch_highlighted` returns on
+    `None`), so this cannot ride the move handler and is published from the branch itself.
     """
     console = SelectionConsole()
     first, second, third = _three()
@@ -1356,20 +1337,13 @@ async def test_a_vanished_row_publishes_no_selection_at_all() -> None:
         assert isinstance(screen, SessionsPaneScreen)
         choices = screen.query_one("#choices", OptionList)
         choices.highlighted = 2
-        # Committed, not merely highlighted: since the split a cursor decides nothing, so a test
-        # that only moved it would be asserting that a session nobody selected is not published.
-        screen.set_active_session(str(third.session_id))
         await pilot.pause()
-        await asyncio.sleep(0.05)
-        assert console.published[-1] is not None
 
         launcher.records = (first, second)
         await screen._auto_reload()
         await pilot.pause()
-        await asyncio.sleep(0.05)
 
         assert choices.highlighted is None, "this test needs the cursor cleared to mean anything"
-        assert screen.target_session() is None, "and the target cleared, which is what acts"
         assert console.published[-1] is None, (
             "the pane kept publishing a session that had left the list"
         )
@@ -1457,13 +1431,13 @@ async def test_the_full_sessions_position_publishes_nothing() -> None:
 
 
 async def test_a_slow_publication_never_overwrites_a_newer_one() -> None:
-    """The last row the owner committed is the one that stays published.
+    """The last row the owner moved to is the one that stays published.
 
     Each publication is a `set-option` shelled out to tmux — a real fork/exec with variable
-    latency — and the owner can commit again long before one returns. Issued as independent
-    workers, an earlier commit's write can land *after* a later one's, and the option is then
-    stuck naming a row the owner has moved off. Nothing corrects it: it is simply the answer
-    every other pane's read gives until the target changes again.
+    latency — and the cursor can move again long before one returns. Issued as independent
+    workers, an earlier highlight's write can land *after* a later one's, and the option is then
+    stuck naming a row the owner has left. Nothing corrects it: it is simply the answer every
+    other pane's read gives until the cursor moves again.
 
     That matters here more than it would anywhere else in this surface, because the next stage
     points `alt+s` and `alt+c` at this value and neither asks for confirmation. DEC-007's
@@ -1496,12 +1470,13 @@ async def test_a_slow_publication_never_overwrites_a_newer_one() -> None:
         console.published.clear()
         console.delays = [0.20, 0.0]
 
-        # Two commits, each on its own pass — which is what `space` pressed on two rows does.
-        # Handling them together would hide the defect: the slot is read at *write* time, so two
-        # publications drained in one pass both take the current value and agree by accident.
-        screen.set_active_session(choices.get_option_at_index(1).id)
+        # Two moves, each handled on its own pass — which is what an arrow pressed twice does.
+        # Handling them together would hide the defect: the handler reads the cursor at
+        # *handling* time, so two messages drained in one pass both publish the current row and
+        # agree by accident.
+        choices.highlighted = 1
         await pilot.pause()
-        screen.set_active_session(choices.get_option_at_index(2).id)
+        choices.highlighted = 2
         await pilot.pause()
         landed = choices.get_option_at_index(2).id
         await asyncio.sleep(0.4)
@@ -1644,14 +1619,8 @@ async def test_the_published_selection_equals_the_cursor_after_every_operation()
     An enumeration cannot close that, because the members share nothing — what makes one a
     member is a publication that is *missing*, and no search finds an absent call. So this
     asserts the property instead of listing the paths: after each operation, whatever the pane
-    last published is exactly what its **target** now names. It has no boundary to get wrong,
-    and it fails on the path nobody thought of, which is the only kind left.
-
-    The target rather than the cursor, since the two were split — and the transposition is what
-    keeps the check pointed at the thing that matters. The published value is what a chord in
-    another pane acts on; the target is what a key acts on here; the whole of the contract is
-    that those are one session. A version of this that kept asserting against the cursor would
-    be pinning a fact no key reads.
+    last published is exactly what its cursor now names. It has no boundary to get wrong, and it
+    fails on the path nobody thought of, which is the only kind left.
 
     The operations are driven through the real app, so anything Textual does on its own — a
     highlight moved on mount, a clear on `clear_options`, a disabled row that posts no message —
@@ -1686,9 +1655,9 @@ async def test_the_published_selection_equals_the_cursor_after_every_operation()
             await asyncio.sleep(0.03)
             await pilot.pause()
             published = console.published[-1] if console.published else None
-            expected = screen.target_session()
+            expected = screen.highlighted_session()
             assert (str(published) if published is not None else None) == expected, (
-                f"after {what}: published {published!r}, target on {expected!r}"
+                f"after {what}: published {published!r}, cursor on {expected!r}"
             )
 
         await holds("the opening fill")
@@ -1697,26 +1666,20 @@ async def test_the_published_selection_equals_the_cursor_after_every_operation()
             await pilot.press(key)
             await holds(f"pressing {key}")
 
-        # And the commits, which are the presses that *do* move the published value. Both
-        # halves are driven: an arrow that publishes would fail the loop above, and a `space`
-        # that does not publish fails here.
-        for key in ("down", "space", "down", "space", "home", "space"):
-            await pilot.press(key)
-            await holds(f"pressing {key}")
-
-        screen.set_active_session(str(third.session_id))
-        await holds("committing a session directly")
+        choices.highlighted = 2
+        await holds("assigning the cursor directly")
 
         await screen._auto_reload()
         await holds("a tick with the list unchanged")
 
         launcher.records = (first, third)
         await screen._auto_reload()
-        await holds("a tick that removed a row above the target")
+        await holds("a tick that removed the row above the cursor")
 
+        choices.highlighted = 1
         launcher.records = (first,)
         await screen._auto_reload()
-        await holds("a tick that removed the target row")
+        await holds("a tick that removed the highlighted row")
 
         launcher.records = (first, second, third)
         await screen._auto_reload()
@@ -1743,8 +1706,8 @@ async def test_the_published_selection_equals_the_cursor_after_every_operation()
         # regression in this path is invisible. Measured — the first version of this test had
         # it last and did not fail when the failure fill was reverted to a direct
         # `show_choices` from `app.py`, which is the exact defect that motivated the hook.
-        screen.set_active_session(str(first.session_id))
-        await holds("committing a row before the read fails")
+        choices.highlighted = 1
+        await holds("moving to a row before the read fails")
         app.report_store_failure(RuntimeError("unreadable"), screen)
         await holds("a failed store read")
 

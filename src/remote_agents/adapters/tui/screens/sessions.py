@@ -185,20 +185,24 @@ class OpeningAction(Message):
 #: different session in silence, and one keypress there would have stopped an agent the owner
 #: never selected. That fallback is gone: `_draw_listing` now rests the cursor on *nothing*
 #: when the row it was holding disappears, which was DEC-052's own rejected alternative 3 and
-#: which it called "a genuine improvement".
+#: which it called "a genuine improvement". A key cannot act on a row the owner did not put
+#: the cursor on, because after such a refresh there is no row under the cursor at all.
 #:
-#: **And these keys no longer read that cursor at all**, which is the second amendment and the
-#: stronger one. They act on `target_session()` — the session the owner *committed*, by enter,
-#: `d`, or the `space` key that means nothing else — so the residual DEC-052 named and DEC-018
-#: accepted has narrowed. It is no longer "one keypress, on a row the owner *is* looking at,
-#: irreversible and unasked"; it is one keypress on a row the owner **named**, and which is
-#: marked on screen as named. An arrow press is navigation again. The vanished-row rule
-#: survives the change and applies to the target instead (`_CLEARS_VANISHED_ACTIVE`), and the
-#: import-time invariant below reads both flags.
+#: What is left is the residual DEC-052 named and DEC-018 already accepted: one keypress, on a
+#: row the owner *is* looking at, irreversible and unasked. That is the owner's standing trade
+#: for graceful stop everywhere else on both surfaces, not a new one taken here.
 #:
-#: The one thing that moves the target without a keypress is a session *starting*, which is the
-#: owner naming it by starting it — `_draw_rows`'s arrival branch carries that argument and the
-#: residual it leaves in full.
+#: **The `\u25b8` marker is what that residual bought a mitigation for**, and it is a rendering
+#: rather than a second selection: the row these keys act on is drawn marked and yellow, so
+#: "which session is one keypress from ending" is legible -- including from the panes that
+#: carry the Alt layer and cannot see this cursor at all. A design that made the marker a
+#: *separate*, committed selection was built and reverted; two answers to "which session" cost
+#: more confusion than the scrolling hazard it removed, and DEC-062 had already accepted that
+#: hazard on the owner's behalf.
+#:
+#: The one thing that moves this cursor without a keypress is a session *starting*, which is
+#: the owner naming it by starting it -- `_newest_arrival` carries that argument and its
+#: residual in full.
 #:
 #: The fourth field is the word a one-line region has room for, and it is not the action id.
 #: `graceful` is the lifecycle's name for the action; "Stop and close" is the owner's, and
@@ -244,35 +248,6 @@ UNCONFIRMED_MUTATING_ACTIONS = frozenset(ACTION_LABELS) - {FORCE}
 #: `_draw_listing` is caught by the same one. What the flag buys that the test cannot is the
 #: import-time refusal below, which fires before a surface with live stop keys can start.
 _CLEARS_VANISHED_CURSOR = True
-
-#: Whether the *active* session -- the one the row keys act on, which since the split is not the
-#: row under the cursor -- is cleared when it leaves the listing.
-#:
-#: The cursor flag above was the whole of DEC-062's mitigation while the cursor *was* the target.
-#: It is still true and still worth having, but it no longer covers the hazard on its own: an
-#: arrow press now moves the cursor without moving the target, so what an unconfirmed `s` acts
-#: on is this. Two things hold it, and the flag names both -- `_draw_rows` drops an `_active`
-#: that is not among the rows it just drew, and `target_session` refuses one that is not in
-#: `_drawn`. Asserted against the real behaviour by
-#: `test_a_vanished_row_leaves_nothing_active`, and read by the import-time invariant below, so
-#: a reader who removes either half is stopped before a surface with live stop keys can start.
-_CLEARS_VANISHED_ACTIVE = True
-
-#: The key that makes the row under the cursor the one the keys act on, and does nothing else.
-#:
-#: **The split between the cursor and the target needs a way to commit that is not also a
-#: navigation.** Enter and `d` both commit, because opening a row is naming it -- but on the
-#: console pane enter *exchanges the agent into the left slot* (DEC-040), which is far too
-#: heavy an act to have to perform merely to point `s` somewhere. So there is one key whose
-#: whole meaning is "this one".
-#:
-#: `space` rather than a letter: the bare letters are spent (`a i r s c f m d p`), and both
-#: sessions positions call `hide_entry()`, so nothing can mistake it for typing. `OptionList`
-#: binds it to nothing on the pinned Textual 8.2.8 -- checked rather than assumed, because the
-#: widget owns `enter`, `home`, `end` and both page keys and a collision here would be silent.
-_MAKE_ACTIVE_KEY = "space"
-
-_MAKE_ACTIVE_BINDING = Binding(_MAKE_ACTIVE_KEY, "make_active", "Act on this session", show=False)
 
 #: The Remote Control key, kept out of the table above because it is the one key whose action
 #: is not known until the record is read -- see `action_row_remote_control`.
@@ -326,17 +301,13 @@ SESSION_ACTION_BINDINGS = [
 # still pass. So the two are tied together here: bind an unconfirmed mutating action and the
 # module refuses to import unless the fallback is gone.
 _bindable = {action for _key, action, _label, _word in SESSION_ACTION_KEYS}
-if _bindable & UNCONFIRMED_MUTATING_ACTIONS and not (
-    _CLEARS_VANISHED_CURSOR and _CLEARS_VANISHED_ACTIVE
-):
+if _bindable & UNCONFIRMED_MUTATING_ACTIONS and not _CLEARS_VANISHED_CURSOR:
     raise RuntimeError(  # pragma: no cover - import-time invariant
         "these keys perform an action the detail never asks about: "
         f"{sorted(_bindable & UNCONFIRMED_MUTATING_ACTIONS)}. "
-        "DEC-018 forbids confirming them, so the only thing making them safe is that a "
-        "session which has left the listing leaves nothing behind for them to act on: "
-        "`_draw_listing` rests the cursor on nothing when the row it held has gone, and "
-        "`_draw_rows` drops an active session that is no longer drawn. "
-        "Restore either flag with its fallback, or drop these keys."
+        "DEC-018 forbids confirming them, so the only thing making them safe is that "
+        "`_draw_listing` rests the cursor on nothing when the row it held has gone. "
+        "Restore that flag with the row-0 fallback, or drop these keys."
     )
 del _bindable
 
@@ -654,38 +625,6 @@ class _SessionActionKeys:
     #: state by accident -- `_draw_listing` rebinds the attribute rather than updating it.
     _drawn: Mapping[str, SessionRecord] = MappingProxyType({})
 
-    #: The session the row keys and the Alt chords act on, or `None` while nothing is chosen.
-    #:
-    #: **Not the cursor, and that separation is the point.** `s` and `c` end a session with no
-    #: confirmation (DEC-018), and an arrow press is not a decision to end anything -- so the
-    #: cursor is navigation and this is the target. It changes on three deliberate acts: the
-    #: owner commits a row (enter, `d`, or `space`), the listing's first fill takes row 0 so the
-    #: keys are not inert on arrival, and a session that has just *started* takes it, which is
-    #: what the owner asked for by starting it.
-    #:
-    #: A class-level default for the reason `_drawn` has one: `check_action` can run before any
-    #: `__init__` in this MRO has, and every write rebinds the attribute on the instance.
-    _active: str | None = None
-
-    def target_session(self) -> str | None:
-        """The session this position's keys act on, checked against the rows actually drawn.
-
-        **The membership test is the safety property, and it is the one DEC-062 traded for.**
-        That entry made an unconfirmed `s` legal on this list by having a vanished cursor row
-        rest on nothing; the same rule now applies to the target, in the one place every reader
-        goes through. A session that ended between two ticks is not in `_drawn`, so the keys go
-        inert rather than acting on whatever id was last committed -- and `_draw_rows` clears
-        the field as well, so this is a guard rather than the only answer.
-
-        `_drawn` and not the option list, deliberately: `report_store_failure` leaves a lone
-        `Back` row on a screen whose `_drawn` still names sessions, which is why
-        `draw_failure_rows` clears the field explicitly instead of relying on this.
-        """
-        active = self._active
-        if active is None or active not in self._drawn:
-            return None
-        return active
-
     def _drawn_record(self, session_value: str) -> SessionRecord | None:
         """The record this screen last *drew* for that row, if it still has one.
 
@@ -766,13 +705,8 @@ class _SessionActionKeys:
         nothing then -- but it is a discovery path, so it is named rather than left to be
         rediscovered.
         """
-        if action == "make_active":
-            # Mirrors `action_make_active`'s own early return, which is the rule every other
-            # entry here follows. The key commits the row under the cursor, so it means nothing
-            # while the cursor is on a sentinel row or on nothing at all.
-            return self.highlighted_session() is not None
         if action == "row_action":
-            highlighted = self.target_session()
+            highlighted = self.highlighted_session()
             if highlighted is None:
                 return False
             # `i` is offered only where there is something to inspect, mirroring
@@ -801,7 +735,7 @@ class _SessionActionKeys:
                 return self._policy_offers(highlighted, str(parameters[0]))
             return True
         if action == "row_remote_control":
-            highlighted = self.target_session()
+            highlighted = self.highlighted_session()
             if highlighted is None:
                 return False
             # `remote_control_available`'s own docstring says to consult it before offering
@@ -841,11 +775,11 @@ class _SessionActionKeys:
         `SessionsScreen.confirm_force` — see there for why the modal is raised on this screen
         rather than on a detail pushed to hold it.
 
-        **The session is `target_session()` and not the cursor**, which is what makes the
-        unconfirmed pair answerable for. The cursor sweeps; the target is committed. See that
-        method, and `_MAKE_ACTIVE_KEY` for the key that commits without navigating.
+        **The session is the row under the cursor**, which is the row `session_contents` draws
+        the `\u25b8` marker on -- one fact, one mark, and `_repaint_marker` is what keeps the
+        second true as the first moves.
         """
-        session_value = self.target_session()
+        session_value = self.highlighted_session()
         if session_value is None or self.tui.busy:
             # `busy` mirrors `ChoiceScreen.on_option_list_option_selected`, which refuses a
             # pressed row while a command is in flight. `dispatch_opening` checks it again once
@@ -884,7 +818,7 @@ class _SessionActionKeys:
         lets the owner choose: a surface that guessed would be picking a side of a question
         the policy deliberately declines to answer, on a live pane.
         """
-        session_value = self.target_session()
+        session_value = self.highlighted_session()
         if session_value is None or self.tui.busy:
             return
         await perform_row_remote_control(session_value, screen=self)
@@ -912,7 +846,7 @@ class SessionsScreen(_SessionActionKeys, ChoiceScreen):
     #: bindings. `SessionsPaneScreen` subclasses this one and inherits both.
     carries_row_keys = True
 
-    BINDINGS = [*SESSION_ACTION_BINDINGS, _MAKE_ACTIVE_BINDING]
+    BINDINGS = list(SESSION_ACTION_BINDINGS)
 
     empty_state = "No managed sessions on this host."
 
@@ -932,7 +866,7 @@ class SessionsScreen(_SessionActionKeys, ChoiceScreen):
     #: describing the other surface's keys is a false sentence, not a cosmetic one. The
     #: status itself is the counts (`rows.session_counts_content`); this is the muted row under
     #: it.
-    listing_hint = "space act on this · enter detail · esc back"
+    listing_hint = "enter detail · esc back"
     empty_status = "No managed sessions. Press escape to go back."
     # "…to return to the project list" until the console's panes existed. This screen is
     # pushed, so escape is always real here — but the position it returns to is the
@@ -959,6 +893,14 @@ class SessionsScreen(_SessionActionKeys, ChoiceScreen):
         #: on the host. `_drawn` cannot stand in for this, because the empty-listing branch
         #: leaves it empty on a screen that has drawn.
         self._has_drawn = False
+        #: The row key the `\u25b8` marker was last *drawn* on, or `None` for no marked row.
+        #:
+        #: A record of what is painted, not a selection -- the selection is the cursor, and this
+        #: exists only so `_repaint_marker` can tell a cursor move that needs a re-render from
+        #: one that does not. Nothing reads it to decide what a key acts on, and it must not
+        #: start being read that way: two answers to "which session" is exactly the ambiguity
+        #: this design was reworked to remove.
+        self._marked_row: str | None = None
 
     async def populate(self) -> None:
         self.hide_entry()
@@ -1240,13 +1182,7 @@ class SessionsScreen(_SessionActionKeys, ChoiceScreen):
         The cursor ends on nothing while the option went on naming the session before it.
         """
         super().draw_failure_rows(entries)
-        # The active session goes with the rows. `target_session` reads `_drawn`, which a failed
-        # read leaves standing — the one place in this class where it names sessions that are
-        # not on screen (see `on_resize`) — so the field is cleared here rather than left to a
-        # guard that cannot see this case. Nothing is drawn to act on, and an `s` arriving now
-        # must find nothing rather than the id the last good read committed.
-        self._active = None
-        self._publish_selection(self.target_session())
+        self._publish_selection(self.highlighted_session())
 
     def _publish_selection(self, session_value: str | None) -> None:
         """Publish which session this position has selected. Nothing, on this position.
@@ -1292,12 +1228,7 @@ class SessionsScreen(_SessionActionKeys, ChoiceScreen):
         missing.
         """
         self._draw_rows(records, keep_cursor=keep_cursor, rest_on_nothing=rest_on_nothing)
-        # The **target**, not the cursor, since the two were split. The panes with no sessions
-        # list of their own act on whatever this value names, and what they must act on is what
-        # `s` acts on here — publishing the cursor instead would hand them a row the owner is
-        # merely looking at. This is also why `on_option_list_option_highlighted` is gone: an
-        # arrow press no longer changes anybody's answer, so it no longer costs a tmux write.
-        self._publish_selection(self.target_session())
+        self._publish_selection(self.highlighted_session())
 
     def _newest_arrival(
         self, records: tuple[SessionRecord, ...], previously_drawn: frozenset[str]
@@ -1317,65 +1248,28 @@ class SessionsScreen(_SessionActionKeys, ChoiceScreen):
             return None
         return str(max(arrivals, key=lambda record: record.created_at).session_id)
 
-    def _decide_active(
-        self, keys: list[str], *, arrived: str | None, rest_on_nothing: bool, first_fill: bool
-    ) -> None:
-        """Which session this listing's keys act on after this draw. Four answers, in order.
+    def _repaint_marker(self) -> None:
+        """Move the `\u25b8` onto the row the cursor is now on, in place.
 
-        Ordered rather than independent, and the order is the safety argument:
+        **The marker is a *rendering* of the cursor, never a second selection.** What `s` ends
+        is `highlighted_session()` and nothing else; this method's whole job is to keep the
+        drawn mark agreeing with that as the cursor moves, so the row a key will act on is
+        legible from a pane that is not this one.
 
-        1. **Nothing**, after a stop that raised. `rest_on_nothing` exists because the row the
-           command failed on is demonstrably still live and `s`/`c` carry no confirmation
-           (DEC-018, DEC-062) — so a repeated keypress must find nothing. It outranks an
-           arrival: a failed stop is not a moment to hand the keys a fresh subject.
-        2. **A session that has just started**, which the owner named by starting it.
-        3. **Nothing**, when what was active is no longer drawn. This is
-           `_CLEARS_VANISHED_ACTIVE`, and it is the half of DEC-062's mitigation that moved here
-           when the cursor stopped being the target. One `space` brings a target back —
-           deliberately, because the owner choosing again is the deliberate act a session that
-           has ended can no longer stand in for.
-        4. **Row 0**, on a first fill only. A list that opens with every key inert reads as a
-           broken keymap rather than as a safe one, and a first fill has nothing behind it that
-           an owner could have chosen instead. Every later draw takes answer 3 instead, which is
-           the difference `first_fill` — and the `_has_drawn` flag behind it — exists to make.
+        Memoised on the row it last drew, which is what makes it cheap enough to run from a
+        highlight handler. `show_choices` assigns `highlighted` during a fill, and that posts a
+        highlight message of its own -- so without the memo every draw would be followed by a
+        redundant re-render of every row it had just rendered.
 
-        The untaken fifth answer is the ordinary one: an active session still on the list is
-        left exactly where it is, by every tick, resize and re-read.
+        In place (`_replace_prompts`) rather than through a refill, and that is the same
+        requirement `on_resize` has for the same reason: a refill would bump
+        `_resting_generation`, schedule a fresh `_rest_cursor`, and re-arm the window an arrow
+        press can land in -- from a handler that runs *on* an arrow press.
         """
-        if rest_on_nothing:
-            self._active = None
+        key = self.highlighted_session()
+        if key == self._marked_row:
             return
-        if arrived is not None:
-            self._active = arrived
-            return
-        if self._active in keys:
-            return
-        self._active = keys[0] if first_fill else None
-
-    def set_active_session(self, session_value: str | None) -> None:
-        """Commit one session as the target of this position's keys. The owner's act, always.
-
-        The three callers are the three moments that mean "this one": enter, `d`, and the
-        `space` key that means nothing else. A draw does not come through here — it decides in
-        `_decide_active` and publishes through its own funnel — because publication is allowed
-        only from a closed set of moments
-        (`test_the_selection_is_published_from_a_closed_set_of_moments`), and a draw reaching
-        this method would publish from two of them for one redraw.
-
-        Returns early on an unchanged value so a repeated `space` costs neither a repaint nor a
-        tmux write. The repaint is in-place (`_repaint_rows`), so the marker moves without the
-        list being cleared and refilled — which would bump `_resting_generation`, schedule a
-        fresh `_rest_cursor` and re-arm the window an arrow press can land in, on a key whose
-        whole purpose is to leave the cursor alone.
-        """
-        if session_value == self._active:
-            return
-        self._active = session_value
-        self._repaint_rows()
-        self._publish_selection(self.target_session())
-
-    def _repaint_rows(self) -> None:
-        """Redraw the drawn rows in place, so the marker moves and nothing else does."""
+        self._marked_row = key
         if not (self.showing and self._drawn):
             return
         found = self.query("#choices")
@@ -1383,6 +1277,16 @@ class SessionsScreen(_SessionActionKeys, ChoiceScreen):
         if choices is None:
             return
         self._replace_prompts(choices, self._laid_out_width)
+
+    async def on_option_list_option_highlighted(self, event: object) -> None:
+        """The cursor moved, so the mark moves with it and the console is told.
+
+        Both halves are the same fact stated twice, once on screen and once on the tmux option
+        the other panes read: this row is what a stop key ends. `SessionsScreen`'s
+        `_publish_selection` is a no-op, so off the console this is the repaint alone.
+        """
+        self._repaint_marker()
+        self._publish_selection(self.highlighted_session())
 
     def _replace_prompts(self, choices: OptionList, width: int | None) -> None:
         """Re-render every drawn row at `width` and swap the prompts the list already holds.
@@ -1399,7 +1303,8 @@ class SessionsScreen(_SessionActionKeys, ChoiceScreen):
         """
         records = tuple(self._drawn.values())
         keys = [str(record.session_id) for record in records]
-        active = keys.index(self._active) if self._active in keys else None
+        marked = self._marked_row
+        active = keys.index(marked) if marked in keys else None
         parts = [
             session_row_parts(record, self.tui.context_window_for(record.session_id))
             for record in records
@@ -1410,16 +1315,54 @@ class SessionsScreen(_SessionActionKeys, ChoiceScreen):
             if key in held:
                 choices.replace_option_prompt(key, content)
 
-    async def action_make_active(self) -> None:
-        """`space`: the row under the cursor becomes the one the keys act on. Nothing else.
+    def _resting_row(
+        self,
+        keys: list[str],
+        choices: OptionList,
+        *,
+        arrived: str | None,
+        rest_on_nothing: bool,
+        keep_cursor: bool,
+    ) -> int | None:
+        """Which row this draw rests the cursor on. Four answers, in order, `None` for nothing.
 
-        The commit that is not also a navigation — see `_MAKE_ACTIVE_KEY` for why one is
-        needed, and `target_session` for what it commits to.
+        **Hoisted out of the render branches rather than invented**, and the ordering is the
+        safety argument it always was. What is new is only that the answer is needed *before*
+        the rows are built, because the resting row is drawn with the `\u25b8` marker on it.
+
+        1. **Nothing**, after a stop that raised (`rest_on_nothing`). The session the command
+           failed on is demonstrably still live -- the failure is why it is still there -- and
+           `s`/`c` carry no confirmation, so a repeated keypress must find nothing rather than
+           re-issue a stop nobody chose (DEC-018, DEC-062). It outranks an arrival: a failed
+           stop is not a moment to hand the keys a fresh subject.
+        2. **A session that has just started.** The owner named it by starting it, so the cursor
+           goes to it and the keys go with it -- this is the one exit that moves the cursor on
+           the owner's behalf, and `_newest_arrival` carries the rest of that argument.
+        3. **Row 0**, on a fill that has no cursor to keep. First fills only; every caller that
+           holds a cursor passes `keep_cursor=True`.
+        4. **The held row, restored by key -- or nothing when that key has gone.** This is
+           `_CLEARS_VANISHED_CURSOR`, which the import-time invariant above reads and which is
+           the whole of the argument for binding an unconfirmed `s` at all. Restoring by *key*
+           and not by index, because a session ending between two ticks shortens the list above
+           the cursor and index `n` then names a different session. Falling back to row 0 --
+           which this used to do -- is a live agent selected by a ten-second timer nobody
+           pressed; DEC-052 named that as its central hazard and listed clearing the highlight
+           as its rejected alternative 3, calling it "a genuine improvement".
+
+        DEC-007 is honoured rather than traded away by answer 4. Its rule is that a *resting*
+        cursor is never on something that mutates, and no cursor at all satisfies that strictly:
+        every row key returns early on `highlighted_session() is None`, and Enter reaches no
+        row. One arrow press brings the cursor back, deliberately -- the owner choosing a row
+        again is the deliberate act the vanished one can no longer stand in for.
         """
-        session_value = self.highlighted_session()
-        if session_value is None:
-            return
-        self.set_active_session(session_value)
+        if rest_on_nothing:
+            return None
+        if arrived is not None:
+            return keys.index(arrived)
+        if not keep_cursor:
+            return 0
+        current = held_option_id(choices)
+        return keys.index(current) if current in keys else None
 
     def _draw_rows(
         self,
@@ -1428,13 +1371,14 @@ class SessionsScreen(_SessionActionKeys, ChoiceScreen):
         keep_cursor: bool = False,
         rest_on_nothing: bool = False,
     ) -> None:
-        """Draw a listing: decide which session the keys act on, then where the cursor rests.
+        """Draw a listing, deciding where the cursor rests **before** the rows are rendered.
 
-        Two decisions since they were split, and in that order. `_decide_active` runs first
-        because the active row is *drawn* differently -- the marker and the yellow identity are
-        how the owner sees which session an unconfirmed `s` will end -- so the rows cannot be
-        built until it has answered. The cursor is then the four-branch tail, unchanged except
-        for the arrival branch, which is the one exit that moves it on the owner's behalf.
+        One decision, taken in one place, and the ordering is what this method had to change
+        for. The cursor row is drawn differently -- it carries the `\u25b8` marker and a yellow
+        identity, which is how the owner sees from another pane which session an unconfirmed
+        `s` will end -- so the rows cannot be built until the resting row is known. This used to
+        pick the highlight in four branches *after* rendering; the four answers are unchanged
+        and now live in `_resting_row`, above the render rather than below it.
 
         **Guarded on `showing`, and the guard is load-bearing rather than defensive.** Every
         other render entry point in this class holds one, and this one reached around it: the
@@ -1485,11 +1429,10 @@ class SessionsScreen(_SessionActionKeys, ChoiceScreen):
             # left behind: a resize arriving while the list is empty must not be able to match
             # a width recorded for rows that are gone, and the next fill records its own.
             self._laid_out_width = None
-            # And nothing is drawn, so nothing is the target. `target_session` would already
-            # refuse it -- `_drawn` was emptied above -- but the field is the thing readers
-            # will reach for and leaving a stale id in it is the same shape of trap the comment
-            # above records for `_drawn` itself: an invariant held up by a guard somewhere else.
-            self._active = None
+            # Nothing is drawn, so nothing is marked. The memo is what `_repaint_marker`
+            # compares against, and leaving it naming a row that is gone would make the next
+            # cursor move onto a *rebuilt* list compare equal and skip its repaint.
+            self._marked_row = None
             return
         # The counts are the facts; the keys are the hint. Both from the tuple the rows are drawn
         # from -- one read (the rule `_sessions_reply` states for its own header).
@@ -1505,77 +1448,37 @@ class SessionsScreen(_SessionActionKeys, ChoiceScreen):
         # change look like a repeat.
         self._laid_out_width = width
         keys = [str(record.session_id) for record in records]
-        # **Decided before the rows are built, not after them**, because the active row is drawn
-        # differently — the marker and the yellow identity are what tell the owner which session
-        # `s` will end, and a target chosen after the contents were rendered would be marked one
-        # draw late. The four answers are enumerated in `_decide_active`.
         arrived = self._newest_arrival(records, previously_drawn) if drawn_before else None
-        self._decide_active(
-            keys, arrived=arrived, rest_on_nothing=rest_on_nothing, first_fill=not drawn_before
+        resting = self._resting_row(
+            keys,
+            choices,
+            arrived=arrived,
+            rest_on_nothing=rest_on_nothing,
+            keep_cursor=keep_cursor,
         )
-        active = keys.index(self._active) if self._active in keys else None
-        contents = session_contents(parts, width, active, marks_active=True)
+        # The marker goes on the row this draw is about to rest the cursor on, and the memo
+        # records it so the highlight message `show_choices` posts finds nothing to repaint.
+        self._marked_row = None if resting is None else keys[resting]
+        contents = session_contents(parts, width, resting, marks_active=True)
         rows = tuple(zip(keys, contents, strict=True))
         if rest_on_nothing:
-            # The third answer, and it goes through `show_choices`'s own `highlight=None`
-            # rather than assigning `highlighted` afterwards — which does not work: that call
-            # schedules `_rest_cursor` with `call_after_refresh`, so a later assignment is
-            # overwritten by the deferred rest. Measured, when the first version of
-            # `redraw_after_failure` did exactly that and the cursor came back on row 0.
+            # Through `show_choices`'s own `highlight=None` rather than assigning `highlighted`
+            # afterwards — which does not work: that call schedules `_rest_cursor` with
+            # `call_after_refresh`, so a later assignment is overwritten by the deferred rest.
+            # Measured, when the first version of `redraw_after_failure` did exactly that and
+            # the cursor came back on row 0.
             self.show_choices(rows, highlight=None)
             return
-        if arrived is not None:
-            # **The one redraw exit that moves the cursor the owner did not move**, and it is a
-            # deliberate answer rather than an omission — the fourth this funnel offers, beside
-            # rest-on-nothing, keep-the-held-row and the first fill's row 0.
-            #
-            # Starting a session is the owner naming it: they said which project, which profile
-            # and which agent, and the thing they then want to look at is the session that
-            # answered. So the cursor lands there and `_decide_active` has already made it the
-            # target, which is the pair the owner asked for — one row, bold *and* marked.
-            #
-            # **The residual, named rather than reasoned away.** `s` and `c` do not ask
-            # (DEC-018), and this listing's second writer is the bot — so a session started from
-            # Telegram, or by a reconcile on another host, moves this cursor and this target
-            # too. That is the same single owner by construction (the bot is single-owner and
-            # DEC-018 rests on it), and the marked row says on screen which session moved; what
-            # it is not is the owner's own keystroke in this process. DEC-062's property held
-            # because *nothing* moved the cursor onto a live session; it now holds in the weaker
-            # form that only a session's own arrival does, and arrival is visible.
-            self.show_choices(rows, highlight=keys.index(arrived))
+        if not keep_cursor and arrived is None:
+            # A first fill, whose answer `_resting_row` already computed as row 0. Spelled out
+            # rather than defaulted: `test_every_listing_fill_states_its_highlight` asks every
+            # fill of this listing to state one, and an omitted argument is how a sixth redraw
+            # exit arrives.
+            self.show_choices(rows, highlight=resting)
             return
-        if not keep_cursor:
-            # `highlight=0` spelled out, though it is the default. The caller that reaches here
-            # is a first fill, which has no cursor to preserve; every caller that does have one
-            # passes `keep_cursor=True` and takes the keyed branch below. Stating it is what
-            # keeps a sixth redraw exit from arriving by simply not passing an argument.
-            self.show_choices(rows, highlight=0)
-            return
-        # Restore by row *key*, not by index. A session that ended between two ticks shortens
-        # the list above the cursor, so the index the owner was on now names a different
-        # session — and this list's rows are the handles on the stop actions one screen
-        # deeper, and since DEC-052 was amended they are the handles on two of those actions
-        # one *keypress* deeper.
-        #
-        # **A key that has gone rests the cursor on nothing, and that is what makes `s` and
-        # `c` safe to bind at all** (`_CLEARS_VANISHED_CURSOR`, which the import-time guard
-        # above reads). It used to fall back to row 0, on the argument that the cursor must
-        # always rest somewhere non-mutating (DEC-007) — but row 0 of a list that just lost a
-        # row is a *different session*, silently, on a ten-second timer nobody pressed. DEC-052
-        # named this as its central hazard and listed clearing the highlight as its rejected
-        # alternative 3, calling it "a genuine improvement" that did not on its own justify the
-        # keys; with the keys now bound it is the mitigation rather than an improvement.
-        #
-        # DEC-007 is honoured rather than traded away. Its rule is that a *resting* cursor is
-        # never on something that mutates, and no cursor at all satisfies that strictly: Enter
-        # reaches no row, and since the split the row keys do not read this cursor at all --
-        # they read `target_session()`, which `_decide_active` has cleared on the same
-        # predicate. One arrow press brings the cursor back and one `space` brings the target
-        # back, deliberately: the owner choosing again is exactly the deliberate act a session
-        # that has left the list can no longer stand in for.
-        current = held_option_id(choices)
-        highlight = keys.index(current) if current in keys else None
-        self.show_choices(rows, focus=choices.has_focus, highlight=highlight)
+        # Both remaining answers — the arrival's row, and the held row restored by key — keep
+        # the keyboard where it is, because either can be reached by a background tick.
+        self.show_choices(rows, focus=choices.has_focus, highlight=resting)
 
     def on_resize(self, event: events.Resize) -> None:
         """Lay the columns out again for the new width, from the rows already drawn.
@@ -1653,12 +1556,6 @@ class SessionsScreen(_SessionActionKeys, ChoiceScreen):
             # called directly, and because a screen should be able to answer for its own rows.
             await self.tui.go_back()
             return
-        # **Opening a row is naming it**, so enter commits the target as well as navigating.
-        # Without this the owner would open a session's detail and find the bare keys still
-        # pointed somewhere else — and the detail is `about_one_session`, so a chord pressed
-        # there acts on the session they opened while a chord pressed one escape later acted on
-        # a different one. Committing here is what keeps the two the same session.
-        self.set_active_session(key)
         await self.tui.show_detail(key)
 
     async def redraw_after_failure(self) -> None:
@@ -1717,18 +1614,15 @@ class SessionsPaneScreen(SessionsScreen):
     unchanged.
 
     The resting cursor stays on a non-mutating row (DEC-007) and this pane satisfies that by
-    what Enter *is*: an exchange writes no record and touches no lifecycle (DEC-040). Since the
-    cursor and the acting target were split it satisfies it twice over — the row keys do not
-    read this cursor at all, so where it rests decides nothing destructive.
+    what Enter *is*: an exchange writes no record and touches no lifecycle (DEC-040).
 
     **Every mutating action used to be behind `d`, and three of them no longer are.** `s`, `c`
     and `f` act on this list directly — that is ask 6, and `action_row_action` above carries
     the full account. What still holds is the sentence that matters for this pane's own safety
     argument: *Enter* mutates nothing here. What changed is that a bare `s` or `c` now ends a
-    session without the detail in between, which is safe because they act on the session the
-    owner **committed** rather than on whatever the cursor has swept onto, and because a
-    committed session that leaves the listing leaves nothing behind for them to act on. Both
-    are inherited from `SessionsScreen` rather than restated here.
+    session without the detail in between, which is safe only because `_resting_row` rests a
+    vanished cursor on nothing and `after_command` keeps the cursor on the row the owner acted
+    on. Both are inherited from `SessionsScreen` rather than restated here.
     """
 
     #: Its own name, not `SESSIONS`. It shares the sessions screen's body and inherits its
@@ -1741,7 +1635,7 @@ class SessionsPaneScreen(SessionsScreen):
     #: position — so there is no project list to escape to and escape at rest is inert.
     #: Inherited unchanged, both sentences named the other surface's keys. Found by driving
     #: the real pane at the Stage 1 gate, which is the only place a false status shows.
-    listing_hint = "space act on this · enter open · d detail · p projects · F12 in an agent"
+    listing_hint = "enter open · d detail · p projects · F12 from inside an agent"
     empty_status = (
         "No managed sessions on this host. Launching one starts it here. "
         "p returns the projects pane (or F12 from inside an agent)."
@@ -1753,11 +1647,6 @@ class SessionsPaneScreen(SessionsScreen):
         # with every inherited binding, and the key only means something while a row is
         # highlighted. The status line says so where it is true.
         Binding("d", "session_detail", "Session detail", show=False),
-        # Restated here for the reason the row keys below are, and it earns the repetition twice
-        # over on this position: `enter` commits the target *by exchanging an agent into the
-        # left slot* (DEC-040), which is far more than the owner is asking for when all they
-        # want is to point `s` at a different row.
-        _MAKE_ACTIVE_BINDING,
         # Repeated rather than inherited, because Textual merges `BINDINGS` across the MRO and
         # a subclass that declares its own does *not* lose its parent's -- but this file has
         # been bitten once already by assuming how that merge works, so the set this position
@@ -1788,10 +1677,6 @@ class SessionsPaneScreen(SessionsScreen):
         if key == _BACK:
             await self.tui.go_back()
             return
-        # Committed for the reason `SessionsScreen.choose` commits: exchanging an agent into the
-        # left slot is the owner naming which session they are working on, and the keys that act
-        # on a session should not then be pointed at a different one.
-        self.set_active_session(key)
         await self.tui._open_or_leave(key)
 
     def __init__(self) -> None:
@@ -1956,9 +1841,6 @@ class SessionsPaneScreen(SessionsScreen):
         key = choices.get_option_at_index(index).id
         if key is None or key == _BACK:
             return
-        # Commits, exactly as enter does and for its reason: `d` opens the detail, the detail is
-        # `about_one_session`, and a chord pressed there must name the session the owner opened.
-        self.set_active_session(key)
         await self.tui.show_detail(key)
 
 
