@@ -537,3 +537,86 @@ def test_reconciliation_never_reads_the_host_at_all() -> None:
         "reconcile.py now reads host_session. It is provenance for a reader, not evidence "
         "for a decision: a session's state must not depend on which window is showing it."
     )
+
+
+async def test_a_running_record_whose_pane_shows_a_dialog_is_corrected_to_untrusted() -> None:
+    """The pane is live and the record already says RUNNING, so nothing else would look.
+
+    `_event_for_reconciliation` returns None the moment the observed state matches the
+    record's, which is the right answer for every reason *except* this one: a live pane is
+    not one fact but two, and which of them it is only the readiness check knows. Without
+    this the late-dialog race (claude-remote prints its banner before its question) leaves a
+    green row over an agent that will never run.
+    """
+    running = record(SessionState.RUNNING)
+    store = InMemoryStore((running,))
+
+    async def blocked(session_id, profile_id):
+        del profile_id
+        return TerminalObservation(session_id, live=True, preserved=False, awaiting_trust=True)
+
+    service = ReconciliationService(store, settle_after=timedelta(0), confirm_ready=blocked)
+
+    await service.reconcile((TerminalObservation(running.session_id, live=True, preserved=False),))
+
+    assert store.records[running.session_id].state is SessionState.UNTRUSTED
+    assert store.events == [LifecycleEvent.TRUST_REQUIRED]
+
+
+async def test_a_trust_blocked_pane_is_never_promoted_to_running() -> None:
+    """The regression `confirm_ready` newly reporting a blocked pane as live could cause.
+
+    `_is_ready` read `.live` alone, and a trust-blocked observation is deliberately live now
+    -- the pane really is up. Reading liveness alone would therefore promote exactly the
+    session that must not be promoted, which is the 2026-08-14 incident coming back through
+    the change that was supposed to fix it.
+    """
+    failed = record(SessionState.FAILED)
+    store = InMemoryStore((failed,))
+
+    async def blocked(session_id, profile_id):
+        del profile_id
+        return TerminalObservation(session_id, live=True, preserved=False, awaiting_trust=True)
+
+    service = ReconciliationService(store, settle_after=timedelta(0), confirm_ready=blocked)
+
+    await service.reconcile((TerminalObservation(failed.session_id, live=True, preserved=False),))
+
+    assert store.records[failed.session_id].state is SessionState.UNTRUSTED
+    assert LifecycleEvent.READY not in store.events
+
+
+async def test_an_untrusted_record_whose_pane_became_ready_is_promoted() -> None:
+    """Answered at the keyboard, in the pane the console displays (DEC-047)."""
+    untrusted = record(SessionState.UNTRUSTED)
+    store = InMemoryStore((untrusted,))
+
+    async def ready(session_id, profile_id):
+        del profile_id
+        return TerminalObservation(session_id, live=True, preserved=False)
+
+    service = ReconciliationService(store, settle_after=timedelta(0), confirm_ready=ready)
+
+    await service.reconcile(
+        (TerminalObservation(untrusted.session_id, live=True, preserved=False),)
+    )
+
+    assert store.records[untrusted.session_id].state is SessionState.RUNNING
+    assert store.events == [LifecycleEvent.READY]
+
+
+async def test_an_untrusted_record_whose_pane_is_gone_lands_in_failed() -> None:
+    """An agent that quit at its own dialog never started; ENDED would claim it ran.
+
+    The matrix offers UNTRUSTED -> ENDED only via TRUST_DECLINED, which is this service
+    answering the dialog. A pane that simply vanished was not answered by anything here, so
+    the honest event is the one that says the launch never got going.
+    """
+    untrusted = record(SessionState.UNTRUSTED)
+    store = InMemoryStore((untrusted,))
+    service = ReconciliationService(store, settle_after=timedelta(0))
+
+    await service.reconcile(())
+
+    assert store.records[untrusted.session_id].state is SessionState.FAILED
+    assert store.events == [LifecycleEvent.STARTUP_ERROR]

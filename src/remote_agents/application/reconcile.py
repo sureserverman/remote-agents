@@ -90,6 +90,11 @@ _ConfirmReady = Callable[[SessionId, ProfileId], Awaitable[TerminalObservation]]
 #: case waiting is how one stuck session takes the whole reconciliation loop with it).
 _REPAIR_LOCK_TIMEOUT_SECONDS = 1.0
 
+#: The states an observed trust dialog may correct down to UNTRUSTED. The same three the
+#: matrix gives TRUST_REQUIRED an edge from, and named here rather than inlined so that a
+#: fourth added to one and not the other is a name that does not resolve.
+_TRUST_CORRECTABLE = frozenset({SessionState.STARTING, SessionState.RUNNING, SessionState.FAILED})
+
 
 class ReconciliationService:
     """Persist deterministic terminal evidence and only quarantine trusted unknown tags."""
@@ -128,15 +133,7 @@ class ReconciliationService:
             if record is None:
                 await self._save_trusted_orphan(result, observations)
                 continue
-            event = _event_for_reconciliation(record, result)
-            if event is LifecycleEvent.READY and not await self._is_ready(record):
-                # A live pane is not a running agent. The promotion below reads pane
-                # liveness as proof the agent recovered, which is true for the case it was
-                # written for -- slow or quiet output judged FAILED inside a bounded window
-                # -- and false for an agent stopped on a question it cannot answer. Both
-                # look identical from `managed_observations`, so the difference has to come
-                # from the readiness check that already knows it.
-                continue
+            event = await self._event_for(record, result)
             if event is not None:
                 await self._record_if_unchanged(record, event)
         return results
@@ -197,23 +194,52 @@ class ReconciliationService:
         finally:
             lock.release()
 
-    async def _is_ready(self, record: SessionRecord) -> bool:
-        """Whether the agent behind a live pane is actually ready to be called RUNNING.
+    async def _event_for(
+        self, record: SessionRecord, result: ReconciliationResult
+    ) -> LifecycleEvent | None:
+        """The pure policy's answer, narrowed by what the readiness check can see.
 
-        Answers True when no check was supplied, which keeps every existing caller and the
-        pure `reconcile()` function exactly as they were: this narrows a promotion, and a
-        composition that does not wire the check gets the old behaviour rather than a
-        silently different one.
+        **A live pane is not one fact but two.** The pure policy reads `terminal_live` as a
+        working agent, which is right for the case it was written for -- slow or quiet output
+        judged FAILED inside a bounded window -- and wrong for an agent stopped dead on a
+        question it cannot answer. Both look identical from `managed_observations`, so the
+        difference has to come from the check that already knows it.
+
+        Three narrowings, and no widenings: the check can turn a promotion into a trust
+        correction, or into nothing at all, and it can never manufacture an event the pure
+        policy did not reach for. That is the same direction availability narrows the domain
+        in, and it is what keeps `reconcile()` readable on its own.
+
+        With no check wired, the pure policy stands exactly as it did -- a composition that
+        does not supply one gets the old behaviour rather than a silently different one.
         """
-        if self._confirm_ready is None:
-            return True
-        try:
-            return (await self._confirm_ready(record.session_id, record.profile_id)).live
-        except Exception:
+        fallback = _event_for_reconciliation(record, result)
+        if result.reason != "terminal_live" or self._confirm_ready is None:
+            return fallback
+        reading = await self._readiness(record)
+        if reading is None:
             # A readiness check that cannot run is not evidence of readiness. Refusing the
             # promotion leaves the record where it was, which is the recoverable direction:
             # the next pass tries again, and nothing has claimed a blocked agent is running.
-            return False
+            return None if fallback is LifecycleEvent.READY else fallback
+        if reading.awaiting_trust:
+            if record.state in _TRUST_CORRECTABLE:
+                return LifecycleEvent.TRUST_REQUIRED
+            # Every other state either is already the answer (UNTRUSTED) or has no edge for
+            # this event, so the pure policy's verdict stands rather than being suppressed.
+            return fallback
+        if not reading.live and fallback is LifecycleEvent.READY:
+            return None
+        return fallback
+
+    async def _readiness(self, record: SessionRecord) -> TerminalObservation | None:
+        """The readiness check's observation, or None when it could not be taken."""
+        if self._confirm_ready is None:
+            return None
+        try:
+            return await self._confirm_ready(record.session_id, record.profile_id)
+        except Exception:
+            return None
 
     def _has_settled(self, record: SessionRecord) -> bool:
         """Leave a launch or stop that is still running to the call that started it.
@@ -311,7 +337,16 @@ def _event_for_reconciliation(
         # having failed while its pane keeps working; the matrix has always allowed
         # FAILED -> RUNNING for exactly this repair, and nothing else ever issued it. A
         # live pane means a live process, because an agent that exits kills its pane.
-        if record.state in {SessionState.STARTING, SessionState.FAILED}:
+        if record.state in {
+            SessionState.STARTING,
+            SessionState.FAILED,
+            SessionState.UNTRUSTED,
+        }:
+            # UNTRUSTED belongs here for a reason the other two do not have: the folder-trust
+            # question is answered *in the pane* (DEC-047), and nothing reports that back to
+            # this service. Observing that the dialog has gone is the only way a record ever
+            # leaves this state by being answered, so a policy without this line would let a
+            # session enter UNTRUSTED and never leave it.
             return LifecycleEvent.READY
         if record.state is SessionState.STOP_REQUESTED:
             # Still a *timeout*, and it must stay one. DEC-022 split `GRACEFUL_STOP_NEVER_SENT`
@@ -335,6 +370,12 @@ def _event_for_reconciliation(
             # exactly the reasoning a reader needs, and it is *not* an argument for merging the
             # two events — that would give the ordinary case the wrong name to fix the rare one.
             return LifecycleEvent.GRACEFUL_STOP_TIMED_OUT
+    if result.reason == "terminal_missing" and record.state is SessionState.UNTRUSTED:
+        # Not RECONCILED_TERMINAL_MISSING, which lands in ENDED and would assert that a
+        # session ran and finished. This one never ran: the agent quit at its own dialog, or
+        # something outside took the pane. The matrix reaches ENDED from UNTRUSTED only via
+        # TRUST_DECLINED, which is *this service* answering the question -- and it did not.
+        return LifecycleEvent.STARTUP_ERROR
     if result.reason == "pane_dead" and record.state is SessionState.RUNNING:
         return LifecycleEvent.RECONCILED_PANE_DEAD
     if result.reason == "terminal_missing" and record.state in {

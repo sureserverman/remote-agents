@@ -63,10 +63,12 @@ class FakeTerminal:
         *,
         graceful_preserved: bool = True,
         graceful_detail: str = "",
+        awaiting_trust: bool = False,
     ) -> None:
         self.live = live
         self.graceful_preserved = graceful_preserved
         self.graceful_detail = graceful_detail
+        self.awaiting_trust = awaiting_trust
         self.launches: list[tuple[SessionId, ProjectId, ProfileId]] = []
         self.force_stop_calls = 0
 
@@ -74,7 +76,9 @@ class FakeTerminal:
         self, session_id: SessionId, project_id: ProjectId, profile_id: ProfileId
     ) -> TerminalObservation:
         self.launches.append((session_id, project_id, profile_id))
-        return TerminalObservation(session_id, live=self.live, preserved=False)
+        return TerminalObservation(
+            session_id, live=self.live, preserved=False, awaiting_trust=self.awaiting_trust
+        )
 
     async def inspect(self, session_id: SessionId) -> TerminalObservation | None:
         return TerminalObservation(session_id, live=self.live, preserved=False)
@@ -82,7 +86,9 @@ class FakeTerminal:
     async def confirm_ready(
         self, session_id: SessionId, _profile_id: ProfileId
     ) -> TerminalObservation:
-        return TerminalObservation(session_id, live=self.live, preserved=False)
+        return TerminalObservation(
+            session_id, live=self.live, preserved=False, awaiting_trust=self.awaiting_trust
+        )
 
     async def graceful_stop(
         self, session_id: SessionId, profile_id: ProfileId
@@ -541,3 +547,93 @@ async def test_copy_attach_refuses_a_pane_running_another_profile() -> None:
     terminal._observations[record.session_id] = replace(observation, profile_id=ProfileId("codex"))
 
     assert await service.copy_attach(record.session_id) is None
+
+
+async def test_a_launch_that_lands_on_a_trust_dialog_is_recorded_untrusted() -> None:
+    """Ask 1, at the use case: the record says what happened rather than "failed".
+
+    The observation is `live` *and* `awaiting_trust`, which is the pair the old branch could
+    not represent — it read liveness alone and would have recorded READY here, promoting an
+    agent that has not run a thing.
+    """
+    store = FakeStore()
+    service = SessionService(store, FakeTerminal(live=True, awaiting_trust=True))
+
+    record = await service.launch(
+        LaunchCommand(ProjectId("opaque-editor"), ProfileId("claude"), "trust-launch")
+    )
+
+    assert record.state is SessionState.UNTRUSTED
+    assert store.events == [LifecycleEvent.TRUST_REQUIRED]
+
+
+async def test_a_launch_whose_pane_never_came_up_is_still_a_startup_error() -> None:
+    """`awaiting_trust` must not swallow the failure it sits beside."""
+    store = FakeStore()
+    service = SessionService(store, FakeTerminal(live=False))
+
+    record = await service.launch(
+        LaunchCommand(ProjectId("opaque-editor"), ProfileId("claude"), "dead-launch")
+    )
+
+    assert record.state is SessionState.FAILED
+    assert store.events == [LifecycleEvent.STARTUP_ERROR]
+
+
+async def test_a_recheck_moves_a_running_record_showing_a_dialog_to_untrusted() -> None:
+    """The late-dialog race, corrected: claude-remote's banner precedes its question.
+
+    The record can be RUNNING before anyone has seen the dialog, so a reader that only ever
+    promotes *out* of FAILED would leave the owner with a green row over an agent that is
+    doing nothing.
+    """
+    store = FakeStore()
+    terminal = FakeTerminal(live=True)
+    service = SessionService(store, terminal)
+    record = await service.launch(
+        LaunchCommand(ProjectId("opaque-editor"), ProfileId("claude"), "late-dialog")
+    )
+    assert record.state is SessionState.RUNNING
+
+    terminal.awaiting_trust = True
+    (refreshed,) = await service.refresh_readiness()
+
+    assert refreshed.state is SessionState.UNTRUSTED
+    assert store.events[-1] is LifecycleEvent.TRUST_REQUIRED
+
+
+async def test_a_recheck_clears_untrusted_once_the_dialog_is_answered_in_the_pane() -> None:
+    """DEC-047's other half: the local surface answers the dialog *in the pane*.
+
+    Nothing tells this service that happened, so the state has to be cleared by observation
+    on a later pass rather than by the act. A record that could enter UNTRUSTED and not leave
+    it would strand every session the owner answers at the keyboard.
+    """
+    store = FakeStore()
+    terminal = FakeTerminal(live=True, awaiting_trust=True)
+    service = SessionService(store, terminal)
+    record = await service.launch(
+        LaunchCommand(ProjectId("opaque-editor"), ProfileId("claude"), "answered-by-hand")
+    )
+    assert record.state is SessionState.UNTRUSTED
+
+    terminal.awaiting_trust = False
+    (refreshed,) = await service.refresh_readiness()
+
+    assert refreshed.state is SessionState.RUNNING
+    assert store.events[-1] is LifecycleEvent.READY
+
+
+async def test_a_recheck_leaves_an_untrusted_record_alone_while_the_dialog_stands() -> None:
+    """No churn: an unanswered question is not news on every pass (DEC-048's shape)."""
+    store = FakeStore()
+    terminal = FakeTerminal(live=True, awaiting_trust=True)
+    service = SessionService(store, terminal)
+    await service.launch(
+        LaunchCommand(ProjectId("opaque-editor"), ProfileId("claude"), "still-asking")
+    )
+    before = list(store.events)
+
+    await service.refresh_readiness()
+
+    assert store.events == before

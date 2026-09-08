@@ -90,6 +90,46 @@ class ResumeOutcome:
     created: bool
 
 
+#: The states a fresh capture of the pane can still change the answer for.
+#:
+#: RUNNING is here because a live pane is not one fact but two, and only the readiness check
+#: can say which. UNTRUSTED is here because the answer to its question is given in the pane,
+#: where nothing reports it back -- observation is the only way out.
+_READINESS_REREAD = frozenset({SessionState.FAILED, SessionState.RUNNING, SessionState.UNTRUSTED})
+
+#: The states a trust dialog observed *now* may correct. UNTRUSTED is absent on purpose:
+#: it is already the answer, and re-recording it every pass would be churn (DEC-048's shape).
+_TRUST_CORRECTABLE = frozenset({SessionState.STARTING, SessionState.RUNNING, SessionState.FAILED})
+
+
+def _event_for_launch(observation: TerminalObservation) -> LifecycleEvent:
+    """What a finished launch or resume observation means for the record.
+
+    `awaiting_trust` is read before `live`, and the order is the whole point: a trust-blocked
+    pane is deliberately live -- the process really is up -- so a branch that asked about
+    liveness first would record READY for an agent that has not run a thing.
+    """
+    if observation.awaiting_trust:
+        return LifecycleEvent.TRUST_REQUIRED
+    return LifecycleEvent.READY if observation.live else LifecycleEvent.STARTUP_ERROR
+
+
+def _event_for_recheck(
+    state: SessionState, observation: TerminalObservation
+) -> LifecycleEvent | None:
+    """What a re-read capture means for a record already in `state`, or None to leave it.
+
+    None is the common answer and the safe one: a pane that has not changed its mind is not
+    an event, and writing one anyway is how a durable history fills with repetitions of a
+    single fact.
+    """
+    if observation.awaiting_trust:
+        return LifecycleEvent.TRUST_REQUIRED if state in _TRUST_CORRECTABLE else None
+    if not observation.live:
+        return None
+    return None if state is SessionState.RUNNING else LifecycleEvent.READY
+
+
 class SessionService:
     """Typed operations whose liveness authority is always TerminalPort."""
 
@@ -145,8 +185,7 @@ class SessionService:
                 observation = await self._terminal.launch(
                     session_id, command.project_id, command.profile_id
                 )
-                event = LifecycleEvent.READY if observation.live else LifecycleEvent.STARTUP_ERROR
-                return await self._store.record_event(session_id, event)
+                return await self._store.record_event(session_id, _event_for_launch(observation))
 
     async def resume(self, command: ResumeCommand) -> ResumeOutcome:
         """Create one managed identity for a server-resolved provider conversation."""
@@ -198,28 +237,46 @@ class SessionService:
                 command.profile_id,
                 command.conversation.provider_conversation_id,
             )
-            event = LifecycleEvent.READY if observation.live else LifecycleEvent.STARTUP_ERROR
-            return ResumeOutcome(await self._store.record_event(session_id, event), created=True)
+            return ResumeOutcome(
+                await self._store.record_event(session_id, _event_for_launch(observation)),
+                created=True,
+            )
 
     async def list_sessions(self) -> tuple[SessionRecord, ...]:
         return tuple(await self._store.list())
 
     async def refresh_readiness(self) -> tuple[SessionRecord, ...]:
-        """Promote only failed launches whose owned panes now show readiness evidence."""
+        """Re-read the panes of every record a fresh capture could still correct.
+
+        It used to walk FAILED alone, because promotion was the only repair it could make.
+        There are three now, and they are all the same question asked of one capture:
+
+        * a **FAILED** launch whose pane is working is promoted, as before;
+        * a **RUNNING** record whose pane is sitting on a folder-trust dialog is corrected
+          down to UNTRUSTED -- the late-dialog race, where the agent printed its banner
+          before its question and the deciding capture won it;
+        * an **UNTRUSTED** record whose dialog has gone is promoted, which is the only way
+          this service can ever learn that the owner answered it at the keyboard. DEC-047
+          puts that answer in the pane the console displays, and nothing reports it here.
+
+        UNTRUSTED is also re-read to *stay* UNTRUSTED, and deliberately writes nothing when
+        it does: an unanswered question is not news on every pass.
+        """
         async with self._locks.operation():
             records = tuple(await self._store.list())
             for record in records:
-                if record.state is not SessionState.FAILED:
+                if record.state not in _READINESS_REREAD:
                     continue
                 async with self._locks.for_session(record.session_id):
                     current = await self._require_session(record.session_id)
-                    if current.state is not SessionState.FAILED:
+                    if current.state not in _READINESS_REREAD:
                         continue
                     observation = await self._terminal.confirm_ready(
                         current.session_id, current.profile_id
                     )
-                    if observation.live:
-                        await self._store.record_event(current.session_id, LifecycleEvent.READY)
+                    event = _event_for_recheck(current.state, observation)
+                    if event is not None:
+                        await self._store.record_event(current.session_id, event)
             return tuple(await self._store.list())
 
     async def rename(self, session_id: SessionId, label: str | None) -> SessionRecord:
