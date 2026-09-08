@@ -90,12 +90,25 @@ class ResumeOutcome:
     created: bool
 
 
-#: The states a fresh capture of the pane can still change the answer for.
+#: The states a fresh capture of the pane can still change the answer for, and **only** those.
 #:
-#: RUNNING is here because a live pane is not one fact but two, and only the readiness check
-#: can say which. UNTRUSTED is here because the answer to its question is given in the pane,
-#: where nothing reports it back -- observation is the only way out.
-_READINESS_REREAD = frozenset({SessionState.FAILED, SessionState.RUNNING, SessionState.UNTRUSTED})
+#: The two members are the two states whose answer a re-read is the *only* source of: a FAILED
+#: launch whose pane recovered, and an UNTRUSTED one whose dialog was answered at the keyboard
+#: where nothing reports it back (DEC-047).
+#:
+#: **RUNNING is deliberately absent, and it was briefly here.** A live pane really is two facts
+#: rather than one, and correcting a RUNNING record whose pane is secretly on a dialog is worth
+#: doing -- but this method is on the *list-rendering* path (`session_views.listed_sessions`),
+#: which both surfaces call on every render. Walking RUNNING here turns one tmux capture per
+#: FAILED session into one per *live* session, on every listing, on both surfaces. That is the
+#: exact workload `adapters/tui/screens/feed.py` declines to take on for the feed pane, in a
+#: comment naming this method's cost as "a tmux capture per FAILED session" -- an invariant
+#: this widening silently invalidated, and which a strict double in
+#: `tests/integration/sqlite/test_session_rename.py` caught at the Stage 1 gate.
+#:
+#: The RUNNING correction lives in `ReconciliationService._event_for` instead, which is off the
+#: render path, already asks the readiness check, and runs on its own timer.
+_READINESS_REREAD = frozenset({SessionState.FAILED, SessionState.UNTRUSTED})
 
 #: The states a trust dialog observed *now* may correct. UNTRUSTED is absent on purpose:
 #: it is already the answer, and re-recording it every pass would be churn (DEC-048's shape).
@@ -252,15 +265,16 @@ class SessionService:
         There are three now, and they are all the same question asked of one capture:
 
         * a **FAILED** launch whose pane is working is promoted, as before;
-        * a **RUNNING** record whose pane is sitting on a folder-trust dialog is corrected
-          down to UNTRUSTED -- the late-dialog race, where the agent printed its banner
-          before its question and the deciding capture won it;
         * an **UNTRUSTED** record whose dialog has gone is promoted, which is the only way
           this service can ever learn that the owner answered it at the keyboard. DEC-047
           puts that answer in the pane the console displays, and nothing reports it here.
 
         UNTRUSTED is also re-read to *stay* UNTRUSTED, and deliberately writes nothing when
         it does: an unanswered question is not news on every pass.
+
+        The third repair -- a RUNNING record found sitting on a dialog -- belongs to
+        reconciliation rather than here, because this runs on the list-rendering path. See
+        `_READINESS_REREAD`.
         """
         async with self._locks.operation():
             records = tuple(await self._store.list())

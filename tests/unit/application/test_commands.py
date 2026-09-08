@@ -108,6 +108,20 @@ class FakeTerminal:
         return TerminalObservation(session_id, live=False, preserved=False)
 
 
+class _ProbeCountingTerminal(FakeTerminal):
+    """Counts readiness probes, so a test can assert a pane was *not* read."""
+
+    def __init__(self, *args: object, **kwargs: object) -> None:
+        super().__init__(*args, **kwargs)  # type: ignore[arg-type]
+        self.probes = 0
+
+    async def confirm_ready(
+        self, session_id: SessionId, profile_id: ProfileId
+    ) -> TerminalObservation:
+        self.probes += 1
+        return await super().confirm_ready(session_id, profile_id)
+
+
 class YieldingForceStopTerminal(FakeTerminal):
     async def force_stop(self, session_id: SessionId) -> TerminalObservation:
         self.force_stop_calls += 1
@@ -580,26 +594,31 @@ async def test_a_launch_whose_pane_never_came_up_is_still_a_startup_error() -> N
     assert store.events == [LifecycleEvent.STARTUP_ERROR]
 
 
-async def test_a_recheck_moves_a_running_record_showing_a_dialog_to_untrusted() -> None:
-    """The late-dialog race, corrected: claude-remote's banner precedes its question.
+async def test_a_recheck_never_probes_the_pane_of_a_running_session() -> None:
+    """This method is on the list-rendering path, so what it walks is a cost, not just a rule.
 
-    The record can be RUNNING before anyone has seen the dialog, so a reader that only ever
-    promotes *out* of FAILED would leave the owner with a green row over an agent that is
-    doing nothing.
+    Both surfaces call it through `listed_sessions` on every render. Walking RUNNING here
+    would turn one tmux capture per FAILED session into one per *live* session, on every
+    listing — the exact periodic workload `adapters/tui/screens/feed.py` refuses for the feed
+    pane, citing this method's cost as "a tmux capture per FAILED session".
+
+    The late-dialog race is real and is corrected; it is corrected in
+    `ReconciliationService`, which is off this path and runs on its own timer. Pinned here
+    because the widening was made once, was correct in isolation, and was invisible until a
+    strict double in `tests/integration/sqlite/test_session_rename.py` failed at a gate.
     """
     store = FakeStore()
-    terminal = FakeTerminal(live=True)
+    terminal = _ProbeCountingTerminal(live=True)
     service = SessionService(store, terminal)
     record = await service.launch(
         LaunchCommand(ProjectId("opaque-editor"), ProfileId("claude"), "late-dialog")
     )
     assert record.state is SessionState.RUNNING
+    terminal.probes = 0
 
-    terminal.awaiting_trust = True
-    (refreshed,) = await service.refresh_readiness()
+    await service.refresh_readiness()
 
-    assert refreshed.state is SessionState.UNTRUSTED
-    assert store.events[-1] is LifecycleEvent.TRUST_REQUIRED
+    assert terminal.probes == 0
 
 
 async def test_a_recheck_clears_untrusted_once_the_dialog_is_answered_in_the_pane() -> None:
