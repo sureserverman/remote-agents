@@ -45,9 +45,24 @@ def normalize_label(value: str, *, max_length: int = MAX_LABEL_LENGTH) -> str:
 
 
 class SessionState(StrEnum):
-    """Persisted lifecycle states for a managed session."""
+    """Persisted lifecycle states for a managed session.
+
+    `UNTRUSTED` is the state of a launch whose agent is sitting on its own folder-trust
+    dialog: the pane is live, the agent has started, and nothing will run until the question
+    is answered. It exists because the alternative was to spend the whole startup budget
+    waiting for a readiness marker that cannot arrive and then record `FAILED` — true, and
+    useless (DEC-016, whose affordance half DEC-047 later narrowed to the bot; the sentence
+    quoted here is the half DEC-047 leaves standing).
+
+    **Cutover, not backfill (DEC-022).** Records written `FAILED` by a trust-blocked launch
+    before this state existed stay `FAILED`; nothing rewrites them. A history that says
+    `STARTUP_ERROR` for a launch that was really waiting on a dialog is what happened at the
+    time, and inventing `TRUST_REQUIRED` events for rows nobody observed would make the
+    durable log less trustworthy rather than more.
+    """
 
     STARTING = "starting"
+    UNTRUSTED = "untrusted"
     RUNNING = "running"
     STOP_REQUESTED = "stop_requested"
     PRESERVED = "preserved"

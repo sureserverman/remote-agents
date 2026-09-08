@@ -22,6 +22,8 @@ class LifecycleEvent(StrEnum):
     AMBIGUOUS_TERMINAL_EVIDENCE = "ambiguous_terminal_evidence"
     RECONCILED_TERMINAL_MISSING = "reconciled_terminal_missing"
     RECONCILED_PANE_DEAD = "reconciled_pane_dead"
+    TRUST_REQUIRED = "trust_required"
+    TRUST_DECLINED = "trust_declined"
 
 
 @dataclass(frozen=True, slots=True)
@@ -84,6 +86,26 @@ _TRANSITIONS: dict[tuple[SessionState, LifecycleEvent], SessionState] = {
     # offer to the adopted branch. That is the established direction (availability narrows the
     # domain, never widens it), but it does mean the domain alone is not the guard here.
     (SessionState.ORPHANED, LifecycleEvent.VERIFIED_FORCE_STOP): SessionState.ENDED,
+    # A folder-trust dialog is observable from three states, because when it is *seen* is a
+    # race rather than a fact about the launch. `claude-remote` prints its readiness marker
+    # before the dialog, so the capture that decided the launch may already have moved the
+    # record to RUNNING; and a launch that burned its whole startup budget waiting for a
+    # marker that could never arrive is already FAILED. Both are corrected by the first
+    # capture that actually shows the dialog, which is why TRUST_REQUIRED has three origins
+    # and not one.
+    (SessionState.STARTING, LifecycleEvent.TRUST_REQUIRED): SessionState.UNTRUSTED,
+    (SessionState.RUNNING, LifecycleEvent.TRUST_REQUIRED): SessionState.UNTRUSTED,
+    (SessionState.FAILED, LifecycleEvent.TRUST_REQUIRED): SessionState.UNTRUSTED,
+    # The five ways out, and DEC-020's rule holds for every one of them: each is the
+    # consequence of something observed happening to the pane, never of dismissing the row.
+    # The owner trusts the folder and the agent comes ready; the agent gives up or the pane
+    # dies during startup; the owner declines and the pane is answered and closed; the owner
+    # force stops it; or the pane goes ambiguous under reconciliation.
+    (SessionState.UNTRUSTED, LifecycleEvent.READY): SessionState.RUNNING,
+    (SessionState.UNTRUSTED, LifecycleEvent.STARTUP_ERROR): SessionState.FAILED,
+    (SessionState.UNTRUSTED, LifecycleEvent.TRUST_DECLINED): SessionState.ENDED,
+    (SessionState.UNTRUSTED, LifecycleEvent.VERIFIED_FORCE_STOP): SessionState.ENDED,
+    (SessionState.UNTRUSTED, LifecycleEvent.AMBIGUOUS_TERMINAL_EVIDENCE): SessionState.ORPHANED,
 }
 
 

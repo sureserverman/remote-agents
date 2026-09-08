@@ -4,6 +4,7 @@ import pytest
 
 from remote_agents.domain.models import SessionState
 from remote_agents.domain.state_machine import (
+    TERMINAL_STATES,
     InvalidTransition,
     LifecycleEvent,
     transition,
@@ -37,6 +38,14 @@ LEGAL_TRANSITIONS = {
     (SessionState.PRESERVED, LifecycleEvent.AMBIGUOUS_TERMINAL_EVIDENCE): SessionState.ORPHANED,
     (SessionState.FAILED, LifecycleEvent.AMBIGUOUS_TERMINAL_EVIDENCE): SessionState.ORPHANED,
     (SessionState.ORPHANED, LifecycleEvent.VERIFIED_FORCE_STOP): SessionState.ENDED,
+    (SessionState.STARTING, LifecycleEvent.TRUST_REQUIRED): SessionState.UNTRUSTED,
+    (SessionState.RUNNING, LifecycleEvent.TRUST_REQUIRED): SessionState.UNTRUSTED,
+    (SessionState.FAILED, LifecycleEvent.TRUST_REQUIRED): SessionState.UNTRUSTED,
+    (SessionState.UNTRUSTED, LifecycleEvent.READY): SessionState.RUNNING,
+    (SessionState.UNTRUSTED, LifecycleEvent.STARTUP_ERROR): SessionState.FAILED,
+    (SessionState.UNTRUSTED, LifecycleEvent.TRUST_DECLINED): SessionState.ENDED,
+    (SessionState.UNTRUSTED, LifecycleEvent.VERIFIED_FORCE_STOP): SessionState.ENDED,
+    (SessionState.UNTRUSTED, LifecycleEvent.AMBIGUOUS_TERMINAL_EVIDENCE): SessionState.ORPHANED,
 }
 
 
@@ -130,3 +139,44 @@ def test_orphaned_offers_exactly_one_way_out_and_it_is_not_a_retire() -> None:
     for event in set(LifecycleEvent) - escapes:
         with pytest.raises(InvalidTransition):
             transition(SessionState.ORPHANED, event)
+
+
+def test_untrusted_is_not_terminal_and_names_every_way_out() -> None:
+    """DEC-020's shape, applied to the state a trust dialog puts a session in.
+
+    A session waiting on a folder-trust dialog holds a live pane, so the record must be able
+    to leave: the owner answers yes and it runs, the owner answers no and it ends, the agent
+    gives up and it failed, the pane goes ambiguous and it orphans, or the owner force stops
+    it. Each of those five is an *observed* act, which is the property this asserts — there is
+    no bare dismissal that clears the row without something having happened to the pane.
+    """
+    escapes = {
+        event for event in LifecycleEvent if (SessionState.UNTRUSTED, event) in LEGAL_TRANSITIONS
+    }
+
+    assert SessionState.UNTRUSTED not in TERMINAL_STATES
+    assert escapes == {
+        LifecycleEvent.READY,
+        LifecycleEvent.STARTUP_ERROR,
+        LifecycleEvent.TRUST_DECLINED,
+        LifecycleEvent.VERIFIED_FORCE_STOP,
+        LifecycleEvent.AMBIGUOUS_TERMINAL_EVIDENCE,
+    }
+    for event in set(LifecycleEvent) - escapes:
+        with pytest.raises(InvalidTransition):
+            transition(SessionState.UNTRUSTED, event)
+
+
+def test_every_state_a_launch_can_be_in_can_reach_untrusted() -> None:
+    """The dialog can be read late, so the correction has to be reachable from three states.
+
+    `claude-remote` prints its readiness marker *before* the trust dialog, so whether the
+    first capture that decides a launch sees the marker or the blocker is a race: the record
+    can already be RUNNING, or already FAILED on a startup-budget timeout, when the dialog is
+    finally observed. Both must be correctable, which is why TRUST_REQUIRED has three origins
+    rather than only STARTING.
+    """
+    for origin in (SessionState.STARTING, SessionState.RUNNING, SessionState.FAILED):
+        assert transition(origin, LifecycleEvent.TRUST_REQUIRED).to_state is (
+            SessionState.UNTRUSTED
+        )
