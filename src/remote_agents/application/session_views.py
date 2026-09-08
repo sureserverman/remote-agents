@@ -73,6 +73,12 @@ _GROUP_OF_STATE: dict[SessionState, StateGroup] = {
     SessionState.STARTING: StateGroup.IN_TRANSITION,
     SessionState.STOP_REQUESTED: StateGroup.IN_TRANSITION,
     SessionState.FAILED: StateGroup.NEEDS_ATTENTION,
+    # Not IN_TRANSITION, though a launch is what produced it. Nothing is in flight: the agent
+    # has finished starting and stopped, and it will stay stopped until a person answers. It
+    # belongs beside the other rows that need a hand, which is where an owner scanning the
+    # list looks for the thing that is waiting on them (DEC-010: the word carries the
+    # condition, the colour is the second signal).
+    SessionState.UNTRUSTED: StateGroup.NEEDS_ATTENTION,
     # Both provenances and the pre-migration `None`: DEC-020 gives the two kinds of ORPHANED
     # different *actions*, and the same place in the list -- an orphan is the row an owner most
     # needs to notice, whichever kind it is.

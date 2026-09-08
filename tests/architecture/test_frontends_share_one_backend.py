@@ -567,12 +567,16 @@ def test_rule_two_leaves_an_unrelated_getattr_alone() -> None:
 
 def test_the_shared_use_case_set_is_read_from_its_modules() -> None:
     names = _shared_use_case_names()
-    assert len(names) == 18, (
-        f"the shared use-case modules now define {len(names)} public names, not 18. Adding one "
+    assert len(names) == 19, (
+        f"the shared use-case modules now define {len(names)} public names, not 19. Adding one "
         "is ordinary; this assertion exists so that adding one is *noticed*, because every "
         "name here is a name no adapter may define."
     )
     assert {"resolve_stop", "dispatch_stop", "execute_stop"} <= names
+    # The 19th, noticed here as intended: declining the folder-trust question is lifecycle
+    # policy both surfaces ask rather than either one deciding (DEC-029), so it belongs to
+    # this set exactly as `trust_available` does.
+    assert "decline_trust_available" in names
 
 
 @pytest.mark.parametrize("filename", _SHARED_USE_CASE_MODULES)

@@ -410,9 +410,12 @@ def test_the_ambient_environment_is_read_at_call_time_when_none_is_passed(
 def test_a_relative_xdg_config_home_is_ignored_rather_than_resolved(tmp_path: Path) -> None:
     """The XDG specification says to ignore it, and resolving it would answer about the
     directory this command was run from rather than the one OpenCode reads."""
-    assert default_settings_path(
-        tmp_path, provider="opencode", environment={"XDG_CONFIG_HOME": "relative/path"}
-    ) == tmp_path / ".config" / "opencode" / "opencode.json"
+    assert (
+        default_settings_path(
+            tmp_path, provider="opencode", environment={"XDG_CONFIG_HOME": "relative/path"}
+        )
+        == tmp_path / ".config" / "opencode" / "opencode.json"
+    )
 
 
 def test_the_other_providers_are_untouched_by_the_xdg_branch(tmp_path: Path) -> None:

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
+from types import SimpleNamespace
 
 import pytest
 
@@ -15,11 +16,12 @@ from remote_agents.application.session_actions import (
     UNKNOWN_SESSION,
     StopFailure,
     available_actions,
+    decline_trust_available,
     force_stop_failure,
     notifiable,
     stop_failure,
 )
-from remote_agents.domain.models import OrphanProvenance, SessionState
+from remote_agents.domain.models import OrphanProvenance, ProfileId, SessionState
 
 # Enumerated reflectively so a state added to the enum later fails here until it is
 # classified, rather than silently inheriting whatever the last branch returned.
@@ -34,6 +36,10 @@ EXPECTED: dict[SessionState, tuple[str, ...]] = {
     SessionState.STOP_REQUESTED: ("force",),
     SessionState.PRESERVED: ("cleanup", "force"),
     SessionState.FAILED: ("force",),
+    # Force and nothing else. A trust-blocked pane is live, so it must be endable -- but a
+    # graceful stop signals an agent that is not listening, and there is no preserved output
+    # to clean up because nothing ran.
+    SessionState.UNTRUSTED: ("force",),
     SessionState.ENDED: (),
     # The ambiguous branch, and the branch every row written before migration 6 falls to.
     # The evidence supports no action, so none is offered (DEC-020).
@@ -84,6 +90,9 @@ def test_force_reconciles_the_two_prior_copies(state: SessionState) -> None:
         SessionState.STOP_REQUESTED,
         SessionState.PRESERVED,
         SessionState.FAILED,
+        # UNTRUSTED joins them: its pane is live, so a stop must be able to reach it, and
+        # force is the only one of the three that fits a session which never ran.
+        SessionState.UNTRUSTED,
     }
     assert ("force" in available_actions(state, None)) is (state in forceable)
 
@@ -338,8 +347,16 @@ def test_notifiable_answers_for_every_state_and_only_a_working_one_is_news(
     STARTING is in the True half deliberately and is the half an edit is likeliest to lose —
     it looks like the not-working-yet state, and dropping it would discard a real agent's
     first report whenever its hook beats reconciliation to the record.
+
+    UNTRUSTED is the third, and it is the clearest case of all: a message about it is not
+    reporting the owner's own action back to them, it is the only way they learn that a
+    launch they started is standing still waiting for them.
     """
-    expected = state in {SessionState.STARTING, SessionState.RUNNING}
+    expected = state in {
+        SessionState.STARTING,
+        SessionState.RUNNING,
+        SessionState.UNTRUSTED,
+    }
 
     assert notifiable(state) is expected
 
@@ -365,3 +382,31 @@ def test_a_session_the_owner_has_already_dealt_with_is_never_notified_about(
     is rather than as a table that stopped matching.
     """
     assert notifiable(state) is False
+
+
+@pytest.mark.parametrize("state", list(SessionState))
+def test_declining_trust_is_offered_for_exactly_one_state(state: SessionState) -> None:
+    """Kept outside `available_actions` for the reason `trust_available` is (DEC-007).
+
+    The parity contract compares stop-action sets, and this is not a stop action -- it is the
+    other answer to a question. Folding it in would make the contract's comparison depend on
+    something that is not a stop, which is the coupling `trust_available`'s own comment
+    declines.
+    """
+    record = SimpleNamespace(profile_id=ProfileId("claude"), state=state)
+
+    assert decline_trust_available(record) is (state is SessionState.UNTRUSTED)
+
+
+def test_declining_trust_is_offered_for_a_profile_whose_dialog_cannot_be_answered() -> None:
+    """codex and cursor-agent are not in TRUST_ANSWERABLE, and still get this row.
+
+    Answering *yes* means typing into their dialog, which this project will not do. Answering
+    *no* does not: it ends a session that never started, and that is reachable for any
+    profile. So the two halves of the question have different availability, and this is the
+    one that does not consult the profile at all.
+    """
+    for profile in ("codex", "cursor-agent", "opencode"):
+        record = SimpleNamespace(profile_id=ProfileId(profile), state=SessionState.UNTRUSTED)
+
+        assert decline_trust_available(record)

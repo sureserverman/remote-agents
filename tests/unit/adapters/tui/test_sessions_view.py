@@ -1064,3 +1064,23 @@ async def test_the_gauge_seed_stands_down_when_any_fill_landed_during_its_await(
         assert drawn == [], (
             "the gauge seed redrew its stale listing over a fresher one the owner asked for"
         )
+
+
+async def test_a_trust_blocked_session_reads_untrusted_and_offers_no_answer_here() -> None:
+    """DEC-047, drawn: the local surface shows the state and asks nothing.
+
+    The console exchanges its left pane with the agent, so the dialog is already on screen in
+    front of the owner. A Trust row here would be a second place to answer a question that is
+    already answerable, and a Don't-trust row would be an unconfirmed kill one keypress from
+    the resting cursor. The word is the whole of this surface's job.
+    """
+    launcher = _Listing((_record(SessionState.UNTRUSTED),))
+    app = RemoteAgentsTui(_context(launcher))
+
+    async with app.run_test() as pilot:
+        await app.action_sessions()
+        await pilot.pause()
+        rows = _rows(app)
+
+    assert any("untrusted" in row for row in rows)
+    assert not any("trust" in row.lower().replace("untrusted", "") for row in rows)

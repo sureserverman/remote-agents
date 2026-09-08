@@ -98,6 +98,11 @@ _FORCEABLE = frozenset(
         SessionState.STOP_REQUESTED,
         SessionState.PRESERVED,
         SessionState.FAILED,
+        # A trust-blocked pane is live, so it has to be endable -- and force is the only stop
+        # that fits. A graceful stop signals an agent that is not listening to anything but
+        # its own dialog, and a cleanup wants preserved output that a session which never ran
+        # does not have.
+        SessionState.UNTRUSTED,
     }
 )
 
@@ -147,6 +152,9 @@ _EXPLANATIONS = {
     SessionState.FAILED: (
         "The session did not become ready. Its pane may still exist; a later readiness "
         "check can still promote it."
+    ),
+    SessionState.UNTRUSTED: (
+        "The agent is waiting for you to trust this folder; nothing runs until it is answered."
     ),
     SessionState.ENDED: "The session is closed; nothing is left to reach.",
     # The ambiguous producer, and the default for any row older than migration 6. The
@@ -278,6 +286,27 @@ identically by coincidence rather than by construction, and a coincidence is not
 the state the button leaves the pane in, which is what the detail's `remote` fact line also
 reads back (`Remote Control off`), so the button and the fact use one vocabulary.
 """
+
+
+def decline_trust_available(record: _RemoteControllable) -> bool:
+    """Whether a surface should offer to *decline* the folder-trust question for `record`.
+
+    The two answers to one question have deliberately different availability, and the
+    asymmetry is the point rather than an oversight.
+
+    `trust_available` turns on the **pane** and on the profile, because answering *yes* means
+    typing into a dialog -- which this project will only do for the agents whose dialog it
+    can read (`TRUST_ANSWERABLE`), and only while the dialog is actually on screen. Declining
+    needs neither: it ends a session that never started, which is reachable for any profile
+    and does not depend on the pane still drawing anything. So this reads the record alone,
+    and is the one affordance a codex or cursor-agent session gets here.
+
+    Outside `available_actions` for the same reason `trust_available` is (DEC-007): that
+    function is the *stop-action* policy the parity contract pins, and this is the other
+    answer to a question rather than a stop. It follows `remote_control_available`'s shape,
+    which is the established route for an action that is not one.
+    """
+    return record.state is SessionState.UNTRUSTED
 
 
 def trust_available(record: _RemoteControllable, observed: TrustState) -> bool:
@@ -529,6 +558,11 @@ _NOTIFIABLE = frozenset(
     {
         SessionState.STARTING,
         SessionState.RUNNING,
+        # The state whose whole point is that the owner has not heard about it yet. It is a
+        # live session holding an unanswered question, so a message about it is the opposite
+        # of reporting the owner's own action back to them -- it is the only way they learn
+        # that a launch they started is standing still.
+        SessionState.UNTRUSTED,
     }
 )
 
