@@ -509,11 +509,18 @@ async def test_a_vanished_row_leaves_the_cursor_on_nothing() -> None:
     barred the keys, and listed this exact repair as its rejected alternative 3.
 
     DEC-007 is honoured rather than traded: its rule is about where a *resting* cursor may
-    rest, and no cursor at all satisfies it strictly. The keys check `highlighted_session()`
-    and return early on None, which the assertions below drive rather than assume.
+    rest, and no cursor at all satisfies it strictly.
 
-    One arrow press brings the cursor back. That is the point -- the owner choosing a row
-    again is the deliberate act the vanished row can no longer stand in for.
+    **What the keys check is no longer this**, since the cursor and the acting target were
+    split: they check `target_session()`, and the same vanished-row rule applies to it
+    (`_CLEARS_VANISHED_ACTIVE`). So both halves are driven here -- the cursor is cleared, and a
+    key is refused once the row it was *committed* to is the one that has gone. Asserting the
+    refusal off the cleared cursor alone would now assert nothing: a target still on the list
+    correctly keeps its keys however far the cursor has wandered.
+
+    One arrow press brings the cursor back and one `space` brings the target back. That is the
+    point -- the owner choosing again is the deliberate act the vanished row cannot stand in
+    for.
     """
     first, second = _record(), _record()
     launcher = _Listing((first, second))
@@ -524,6 +531,7 @@ async def test_a_vanished_row_leaves_the_cursor_on_nothing() -> None:
         await pilot.pause()
         choices = app.screen.query_one("#choices", OptionList)
         choices.highlighted = 1
+        app.screen.set_active_session(choices.get_option_at_index(1).id)
 
         launcher.records = (first,)
         await app.screen._auto_reload()
@@ -532,8 +540,9 @@ async def test_a_vanished_row_leaves_the_cursor_on_nothing() -> None:
         assert after.highlighted is None, (
             "the cursor was moved onto a session the owner never selected"
         )
-        # Not merely undrawn: the keys ask this, and this is what refuses them.
         assert app.screen.highlighted_session() is None
+        # Not merely undrawn: the keys ask the *target*, and this is what refuses them.
+        assert app.screen.target_session() is None
         assert app.screen.check_action("row_action", ("graceful",)) is False
 
         # Still focused, or the arrow press that restores the cursor would go nowhere.

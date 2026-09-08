@@ -100,6 +100,20 @@ GAUGE_COLUMN = 12
 
 NO_GAUGE = "—"
 
+#: The mark on the row the sessions positions' keys act on -- the *active* session, which since
+#: the cursor and the target were split is not always the row under the cursor.
+#:
+#: **A glyph and not only the colour, for the reason every other signal on this surface carries
+#: one** (DEC-010, and the note on `GROUP_STYLE`): under `NO_COLOR` the yellow identity below is
+#: byte-identical to every other row, and what it names is which session an unconfirmed `s` will
+#: end. The column is one cell and is reserved for every row of a listing that marks an active
+#: session, so the rows do not shift by two cells the moment nothing is active.
+ACTIVE_MARKER = "▸"
+
+#: The colour of the active row's marker and identity. `$warning` is the surface's yellow, read
+#: through the theme like every other colour here rather than written as a literal.
+ACTIVE_STYLE = "$warning"
+
 _GUTTER = 1
 
 
@@ -173,32 +187,62 @@ def session_content(
     state_width: int,
     age_width: int,
     gauge_width: int,
+    active: bool | None = None,
 ) -> Content:
     """One session row: `glyph identity #n  state  age  gauge`, the identity taking the slack.
 
     A preserved row's identity is muted whole, not just its glyph -- the row is there to be
     found, not to be scanned past what is live. The sequence is always muted: it is the handle
     the row keys act on, and the name is what the eye reads first.
+
+    `active` has **three** values and the third is not a `False` in disguise. `None` means this
+    listing marks no active session at all and the marker column is not drawn -- the dashboard's
+    sessions region, which binds none of the row keys and so has nothing to mark. `True` and
+    `False` both reserve the column, so a listing that marks one does not reflow by two cells
+    the moment nothing is active.
+
+    The active row's **identity** takes `ACTIVE_STYLE` rather than the whole row taking it: the
+    state word keeps its group's colour, which is the row's other signal and the one a stop key
+    is about to be checked against. It overrides the preserved mute deliberately -- a preserved
+    row that is the target of `c` is not a row to be scanned past.
     """
-    identity_style = MUTED if parts.group is StateGroup.PRESERVED else None
+    if active:
+        identity_style: str | None = ACTIVE_STYLE
+    elif parts.group is StateGroup.PRESERVED:
+        identity_style = MUTED
+    else:
+        identity_style = None
     identity = Content.assemble((parts.identity, identity_style), (f" #{parts.sequence}", MUTED))
     if parts.note:
         identity = identity + Content.assemble((f" · {parts.note}", MUTED))
-    return columns(
-        [
-            (session_glyph(parts.group), 1),
-            (identity, None),
-            (text(parts.state, GROUP_STYLE[parts.group]), state_width),
-            (text(parts.age, MUTED), age_width),
-            (gauge_content(parts.gauge), gauge_width),
-        ],
-        width,
-        flexible=1,
-    )
+    cells = [
+        (session_glyph(parts.group), 1),
+        (identity, None),
+        (text(parts.state, GROUP_STYLE[parts.group]), state_width),
+        (text(parts.age, MUTED), age_width),
+        (gauge_content(parts.gauge), gauge_width),
+    ]
+    if active is None:
+        return columns(cells, width, flexible=1)
+    marker = text(ACTIVE_MARKER, ACTIVE_STYLE) if active else Content(" ")
+    return columns([(marker, 1), *cells], width, flexible=2)
 
 
-def session_contents(rows: Sequence[SessionRowParts], width: int | None) -> list[Content]:
-    """Every row of one listing, with the state, age and gauge columns aligned across them."""
+def session_contents(
+    rows: Sequence[SessionRowParts],
+    width: int | None,
+    active: int | None = None,
+    *,
+    marks_active: bool = False,
+) -> list[Content]:
+    """Every row of one listing, with the state, age and gauge columns aligned across them.
+
+    `marks_active` is what reserves the marker column, and `active` is the index inside it --
+    `None` for a listing that marks the column but has nothing active right now, which is what
+    a sessions position looks like between a vanished target and the owner choosing a new one.
+    A caller that marks nothing (the dashboard's region) leaves both alone and draws the row it
+    always drew.
+    """
     if not rows:
         return []
     state_width = max(len(parts.state) for parts in rows)
@@ -211,8 +255,9 @@ def session_contents(rows: Sequence[SessionRowParts], width: int | None) -> list
             state_width=state_width,
             age_width=age_width,
             gauge_width=gauge_width,
+            active=(index == active) if marks_active else None,
         )
-        for parts in rows
+        for index, parts in enumerate(rows)
     ]
 
 

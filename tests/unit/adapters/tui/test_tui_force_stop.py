@@ -606,9 +606,18 @@ async def test_a_session_vanishing_during_an_escape_does_not_take_the_app_down(
 
 
 async def _sessions_list(app: RemoteAgentsTui, pilot, index: int = 0) -> None:
+    """Show the managed sessions and put the cursor **and the target** on a row.
+
+    Both, because since the cursor and the acting target were split, an arrow press alone points
+    no key at anything -- it is navigation. What an owner does to aim `s` at a row is commit it,
+    which `space`, enter and `d` all do and which `set_active_session` is. A helper that moved
+    only the cursor would leave every test below driving the row keys against row 0.
+    """
     await app.action_sessions()
     await pilot.pause()
-    app.screen.query_one("#choices", OptionList).highlighted = index
+    choices = app.screen.query_one("#choices", OptionList)
+    choices.highlighted = index
+    app.screen.set_active_session(choices.get_option_at_index(index).id)
     await pilot.pause()
 
 

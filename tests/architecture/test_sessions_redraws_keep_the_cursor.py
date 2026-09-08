@@ -311,7 +311,12 @@ _PUBLISHERS = frozenset(
         # A read that failed redraws the position with no rows, so the cursor it had is gone.
         # This was the fifth cursor-changing path found outside the funnel.
         "draw_failure_rows",
-        "on_option_list_option_highlighted",
+        # The owner committing a target -- enter, `d`, or `space`. This replaced
+        # `on_option_list_option_highlighted`, and the swap is the whole of the cursor/target
+        # split: an arrow press used to *be* the choice, and publishing it meant every pane with
+        # no sessions list acted on a row the owner was merely looking at. Moving a cursor is
+        # now no evidence of anything, so it publishes nothing and costs no tmux write.
+        "set_active_session",
         "on_unmount",
     }
 )

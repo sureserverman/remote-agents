@@ -383,12 +383,18 @@ async def test_the_selection_capability_publishes_and_reads_when_wired() -> None
     assert await context.console_read_selection() == chosen
 
 
-async def test_selected_session_on_a_sessions_position_answers_from_its_own_cursor() -> None:
-    """A position with a cursor never asks the console what it already knows.
+async def test_selected_session_on_a_sessions_position_answers_from_its_own_list() -> None:
+    """A position with a sessions list of its own never asks the console what it already knows.
 
-    Reading the published option here would answer with whatever the *pane* has highlighted,
-    which on the full sessions position is a different process's cursor entirely — and on the
-    pane itself would be a round trip to read back what it had just written.
+    Reading the published option here would answer with whatever the *pane* published, which on
+    the full sessions position is a different process's list entirely — and on the pane itself
+    would be a round trip to read back what it had just written.
+
+    **From its own target, not its own cursor.** `_resolve_session` is what the chords ask, and
+    the chords act; on these two positions the cursor is navigation and the target is what acts,
+    so a resolver answering from the cursor would hand `alt+s` a row the owner is merely looking
+    at. Driven by moving the cursor and committing a *different* row, which is the only shape
+    that can tell the two answers apart.
     """
     console = SelectionConsole(selected=SessionId.new())
     records = (_record(), _record())
@@ -404,10 +410,11 @@ async def test_selected_session_on_a_sessions_position_answers_from_its_own_curs
         await app.action_sessions()
         await pilot.pause()
         choices = app.screen.query_one("#choices", OptionList)
-        choices.highlighted = 1
+        app.screen.set_active_session(choices.get_option_at_index(1).id)
+        choices.highlighted = 0
 
         assert await app.selected_session() == choices.get_option_at_index(1).id
-        assert console.reads == 0, "a position with its own cursor read the console anyway"
+        assert console.reads == 0, "a position with its own list read the console anyway"
 
 
 async def test_selected_session_elsewhere_answers_from_the_published_selection() -> None:

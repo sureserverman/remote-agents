@@ -1419,6 +1419,26 @@ class ChoiceScreen(Screen[None]):
         """
         return None
 
+    def target_session(self) -> str | None:
+        """The session this screen's *keys* act on, which is not always the one under its cursor.
+
+        Two questions that used to be one. `highlighted_session` answers "which row is the owner
+        looking at"; this answers "which session does `s` end". On every position but the two
+        sessions listings they are the same question and this is the identity, which is what the
+        body says.
+
+        The sessions positions split them, because the row keys there end a session with no
+        confirmation (DEC-018) and an arrow press is not a decision to do that. There the cursor
+        moves freely and the *active* session changes only when the owner commits one -- enter,
+        `d`, or the `space` key that commits and nothing else -- so a cursor sweeping past a
+        running agent can no longer put it under an unconfirmed key.
+
+        Declared here rather than only on those two, for the reason `highlighted_session` is:
+        `RemoteAgentsTui._resolve_session` calls it on any screen that owns a sessions cursor,
+        and `DashboardScreen` is one of them without carrying the row keys at all.
+        """
+        return self.highlighted_session()
+
     #: Whether this screen is about **one particular session** rather than about a list.
     #:
     #: The third answer `owns_session_cursor` cannot give, and the one that keeps `alt+c` on

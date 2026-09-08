@@ -1198,19 +1198,28 @@ uv run --locked remote-agents
    this project's bindings.
 3. Launch a session from the projects pane. Confirm the agent appears in the **left** pane and
    that the sessions list and the feed are still on screen beside it.
-4. With the agent in front, confirm the sessions pane lists it. Press `d` on its row and confirm
-   the detail opens **in the sessions pane** — every stop, inspect, rename and Remote Control
-   affordance is here, and the agent stays displayed. Escape back to the list and confirm the
-   list's **border title** names the row keys `a i r s c f m`, and its **hint row** beneath the
-   status names `d` and `p`. On a running row, confirm
-   `c` is *absent* from the keys panel (Clean up is offered only from PRESERVED) while `s` is
-   present — a key must not be offered where the policy would refuse the action.
-5. **The cursor drill, which is what makes `s` safe to have at all.** With two or more sessions
-   listed, highlight the second one and end that session from Telegram. Within ten seconds the
-   list re-reads itself; confirm the cursor is left on **no row at all** rather than jumping to
-   the first one, and that pressing `s` at that moment does nothing. Press the down arrow and
-   confirm a row is selected again. A cursor that lands on a neighbour here would put a live
-   agent one unasked keypress from being stopped.
+4. With the agent in front, confirm the sessions pane lists it. Confirm the session you just
+   launched is the one marked `▸` in yellow **and** the one the cursor is on — starting a
+   session chooses it. Press `d` on its row and confirm the detail opens **in the sessions
+   pane** — every stop, inspect, rename and Remote Control affordance is here, and the agent
+   stays displayed. Escape back to the list and confirm the list's **border title** names the
+   row keys `a i r s c f m`, and its **hint row** beneath the status names `space`, `d` and `p`.
+   On a running row, confirm `c` is *absent* from the keys panel (Clean up is offered only from
+   PRESERVED) while `s` is present — a key must not be offered where the policy would refuse the
+   action.
+5. **The choice drill, which is what makes `s` safe to have at all.** Two halves, and the first
+   is the one that changed:
+
+   a. With two or more sessions listed, press the down arrow. Confirm the **bold** row moves and
+      the **yellow `▸`** row does not: arrows are navigation, and the keys stay pointed where you
+      left them. Press `space` and confirm the marker moves onto the cursor's row. A cursor that
+      dragged the marker with it would put a live agent one unasked keypress from being stopped
+      every time you scrolled the list.
+
+   b. Choose the second session with `space`, then end that session from Telegram. Within ten
+      seconds the list re-reads itself; confirm **no row is marked** and the cursor is on no row
+      either, rather than either mark jumping to the first one, and that pressing `s` at that
+      moment does nothing. Press `space` on a row and confirm the keys are live again.
 6. Let the agent finish a turn, or stop one from Telegram, and confirm a line arrives in the feed
    while the agent is still in front. This is the whole point of the layout: news reaches you
    without leaving the agent.
@@ -1233,14 +1242,15 @@ uv run --locked remote-agents
 12. **The Alt layer, driven from a pane that is not the sessions pane.** The row keys of step 4
     are also chords on the whole console, with Alt held: `⌥a` Copy attach, `⌥i` Inspect output,
     `⌥r` Rename, `⌥s` Stop and close, `⌥c` Clean up, `⌥f` Force stop, `⌥m` Claude Remote
-    Control, and `⌥d` the detail. Each acts on the session the **sessions pane** highlights, not
-    on anything under the cursor of the pane you press it in. With two or more sessions listed,
-    highlight one in the sessions pane, move to the projects pane (`Ctrl-b ←`; `Ctrl-b o` steps one pane at a time and the console
+    Control, and `⌥d` the detail. Each acts on the session the **sessions pane** has chosen —
+    the row it marks `▸` in yellow — not on anything under the cursor of the pane you press it
+    in, and not on the sessions pane's own cursor either. With two or more sessions listed,
+    choose one in the sessions pane with `space`, move to the projects pane (`Ctrl-b ←`; `Ctrl-b o` steps one pane at a time and the console
    has four), press `/` and
     type two letters of a project name. Confirm three things at once: the filter still holds
     exactly what you typed — bare letters type here and do not act — the muted hint row beneath
-    it reads `⌥ a i r s c f m d` and is *not* dimmed, because a session is selected, and `⌥d`
-    opens the detail of the sessions pane's highlighted row. Escape, and confirm the filter
+    it reads `⌥ a i r s c f m d` and is *not* dimmed, because a session is chosen, and `⌥d`
+    opens the detail of the sessions pane's chosen row. Escape, and confirm the filter
     still holds your two letters. Repeat `⌥i` from the feed pane on the same session. The limits
     pane offers the same chords and does not name them, because it draws no hint row at all; the
     sessions pane does not name them either, since its own frame already lists the same letters
@@ -1250,10 +1260,10 @@ uv run --locked remote-agents
     `r` on a sessions-pane row, which takes you to the rename box, and there press `⌥s`:
     confirm no session is stopped. The three stops are refused wherever the text you are typing
     is a commitment — the rename box and the new-project name step — while the navigating chords
-    still work and Escape returns to the text intact. Second, redo the cursor drill of step 5
-    and, with the cursor resting on nothing, press a chord from the projects pane: confirm it
-    reports `No session is selected.` and does nothing. A vanished row leaves no selection as
-    well as no cursor, on either sessions position. Third, only a pane the console is currently
+    still work and Escape returns to the text intact. Second, redo the choice drill of step 5b
+    and, with nothing marked, press a chord from the projects pane: confirm it reports
+    `No session is selected.` and does nothing. A vanished row leaves no selection as well as
+    no cursor, on either sessions position. Third, only a pane the console is currently
     showing may read that selection: a plain `remote-agents tui` started from a shell on this
     server, and the projects surface after step 3's exchange parked it in the agent's own
     window, are both told `Session chords act on the console's own panes.` The question is
@@ -1272,7 +1282,7 @@ uv run --locked remote-agents
 
 14. **The prefix route, from inside a displayed agent.** Display an agent in the left pane again
     as in step 3 and put the keyboard in it. Press `Ctrl-b` (or your own prefix) and then `M-d`.
-    Confirm the sessions pane opens the detail of its highlighted row and that the agent's own
+    Confirm the sessions pane opens the detail of its chosen row and that the agent's own
     pane received no keystroke — its output is unchanged. The eight chords are bound in tmux's
     *prefix* table rather than as root keys, so they cost a displayed agent nothing and the
     console's root-key budget is still the single `F12` of step 7.
