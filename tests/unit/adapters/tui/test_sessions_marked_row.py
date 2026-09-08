@@ -311,6 +311,61 @@ async def test_a_first_fill_is_not_read_as_an_arrival() -> None:
         )
 
 
+async def test_rows_read_late_are_not_arrivals() -> None:
+    """A pane whose first read comes back empty must still rest its first rows on row 0.
+
+    **Measured on the live console, not reasoned.** After a respawn the sessions pane rested on
+    the *fourth* of four sessions — the youngest by `created_at`, which is `_newest_arrival`'s
+    answer. The first read had come back empty (readiness still pending), that empty draw marked
+    the screen as having drawn, and the next draw then read every one of the host's existing
+    sessions as an arrival. They had not arrived; they were read late, and the cursor landed on a
+    row nobody chose with `s` armed on it.
+
+    So `_has_drawn` means "has drawn **rows**". The genuine empty-to-one case needs no special
+    handling and is asserted below: row 0 *is* the new session when there is one.
+    """
+    launcher = _Launcher(())
+    app = SessionsPane(_context((), sessions=launcher))
+    async with app.run_test(size=(120, 30)) as pilot:
+        await pilot.pause()
+        screen = app.screen
+
+        launcher.records = (
+            _record(_FIRST, "oldest", age_seconds=86400),
+            _record(_SECOND, "middle", sequence=2, age_seconds=3600),
+            _record(_THIRD, "youngest", sequence=3, age_seconds=60),
+        )
+        await screen._auto_reload()
+        await pilot.pause()
+
+        assert screen.highlighted_session() == str(_FIRST), (
+            "rows read late were treated as arrivals and moved the cursor to the youngest"
+        )
+        assert _marked(screen) == [0]
+
+
+async def test_the_first_session_on_an_empty_pane_is_the_one_selected() -> None:
+    """The empty-to-one case the fix above must not break, driven separately.
+
+    A pane showing nothing, on which the owner launches a session, has to end up on that
+    session — which is the owner's original ask. It needs no arrival branch to get there: with
+    one row, row 0 is that session, and this pins the outcome rather than the mechanism.
+    """
+    launcher = _Launcher(())
+    app = SessionsPane(_context((), sessions=launcher))
+    async with app.run_test(size=(120, 30)) as pilot:
+        await pilot.pause()
+        screen = app.screen
+        assert screen.highlighted_session() is None, "this test needs an empty pane to start"
+
+        launcher.records = (_record(_SECOND, "launched", sequence=2, age_seconds=0),)
+        await screen._auto_reload()
+        await pilot.pause()
+
+        assert screen.highlighted_session() == str(_SECOND)
+        assert _marked(screen) == [0]
+
+
 async def test_an_arrival_does_not_outrank_a_stop_that_raised() -> None:
     """`rest_on_nothing` is answer 1 for a reason, and an arrival must not displace it.
 

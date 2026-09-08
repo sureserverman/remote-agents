@@ -886,12 +886,15 @@ class SessionsScreen(_SessionActionKeys, ChoiceScreen):
         #: `on_resize` compares against it so a height-only resize — and the several resizes a
         #: single layout pass emits at one width — do no work at all.
         self._laid_out_width: int | None = None
-        #: Whether this screen has ever drawn a listing, which is what tells a *first fill* from
-        #: a refresh. The two answer the same question — "which rows are new?" — differently and
-        #: incompatibly: on a first fill every row is new and none of them arrived, so reading
-        #: them as arrivals would move the target onto whichever session happens to be youngest
-        #: on the host. `_drawn` cannot stand in for this, because the empty-listing branch
-        #: leaves it empty on a screen that has drawn.
+        #: Whether this screen has ever drawn a listing **of rows**, which is what tells a first
+        #: fill from a refresh. The two answer the same question — "which rows are new?" —
+        #: differently and incompatibly: on a first fill every row is new and none of them
+        #: arrived, so reading them as arrivals rests the cursor on whichever session happens to
+        #: be youngest on the host. `_drawn` cannot stand in for this, because the empty-listing
+        #: branch leaves it empty on a screen that has drawn rows before.
+        #:
+        #: "Of rows" is load-bearing and was measured, not reasoned — see the assignment in
+        #: `_draw_rows`, which is deliberately below the empty-listing return.
         self._has_drawn = False
         #: The row key the `\u25b8` marker was last *drawn* on, or `None` for no marked row.
         #:
@@ -1323,6 +1326,7 @@ class SessionsScreen(_SessionActionKeys, ChoiceScreen):
         arrived: str | None,
         rest_on_nothing: bool,
         keep_cursor: bool,
+        first_fill: bool,
     ) -> int | None:
         """Which row this draw rests the cursor on. Four answers, in order, `None` for nothing.
 
@@ -1338,8 +1342,17 @@ class SessionsScreen(_SessionActionKeys, ChoiceScreen):
         2. **A session that has just started.** The owner named it by starting it, so the cursor
            goes to it and the keys go with it -- this is the one exit that moves the cursor on
            the owner's behalf, and `_newest_arrival` carries the rest of that argument.
-        3. **Row 0**, on a fill that has no cursor to keep. First fills only; every caller that
-           holds a cursor passes `keep_cursor=True`.
+        3. **Row 0**, on a fill that has no cursor to keep — either because the caller says so
+           (`keep_cursor=False`, the opening `populate`) or because no rows have ever been drawn
+           on this screen (`first_fill`), whatever the caller asked for.
+
+           **The second half was measured rather than reasoned, twice over.** A pane that starts
+           while the host's listing reads empty draws nothing, and the rows then arrive through a
+           *tick*, which passes `keep_cursor=True` — so the answer fell through to 4, found the
+           empty-state sentinel under the cursor, and rested on nothing. The owner's first sight
+           of a populated pane was one with no row selected and every key inert. `keep_cursor`
+           describes what the caller wants; `first_fill` describes whether there is anything to
+           keep, and only the second can answer this.
         4. **The held row, restored by key -- or nothing when that key has gone.** This is
            `_CLEARS_VANISHED_CURSOR`, which the import-time invariant above reads and which is
            the whole of the argument for binding an unconfirmed `s` at all. Restoring by *key*
@@ -1359,7 +1372,7 @@ class SessionsScreen(_SessionActionKeys, ChoiceScreen):
             return None
         if arrived is not None:
             return keys.index(arrived)
-        if not keep_cursor:
+        if not keep_cursor or first_fill:
             return 0
         current = held_option_id(choices)
         return keys.index(current) if current in keys else None
@@ -1409,7 +1422,6 @@ class SessionsScreen(_SessionActionKeys, ChoiceScreen):
         # by this being empty: they look identical here and mean opposite things.
         previously_drawn = frozenset(self._drawn)
         drawn_before = self._has_drawn
-        self._has_drawn = True
         # Rebuilt on **every** draw, this branch included, so `_drawn` cannot outlive the rows
         # it describes -- see `_drawn_record`. Assigned before the empty-list return rather
         # than after it: a last session ending leaves that branch drawing an empty list, and a
@@ -1434,6 +1446,18 @@ class SessionsScreen(_SessionActionKeys, ChoiceScreen):
             # cursor move onto a *rebuilt* list compare equal and skip its repaint.
             self._marked_row = None
             return
+        # **Set here and not before the empty return**, so the flag means "has drawn *rows*".
+        # Measured on the live console: a pane whose first read comes back empty -- readiness
+        # still pending, or a slow store -- marked itself as having drawn, and the next draw
+        # then read all four of the host's existing sessions as *arrivals* and rested the cursor
+        # on the youngest. Those sessions did not arrive; they were read late. Row 0 is the
+        # answer for a first fill of rows however many empty draws preceded it.
+        #
+        # The genuine empty-to-one case is unharmed and needs no special handling: a pane
+        # showing nothing, on which the owner launches a session, draws a single row -- and row
+        # 0 *is* that session. Only a pane that already held rows can distinguish an arrival
+        # from a late first read, which is exactly when `previously_drawn` is meaningful.
+        self._has_drawn = True
         # The counts are the facts; the keys are the hint. Both from the tuple the rows are drawn
         # from -- one read (the rule `_sessions_reply` states for its own header).
         self.set_status(session_counts_content(records), hint=self.listing_hint)
@@ -1455,6 +1479,7 @@ class SessionsScreen(_SessionActionKeys, ChoiceScreen):
             arrived=arrived,
             rest_on_nothing=rest_on_nothing,
             keep_cursor=keep_cursor,
+            first_fill=not drawn_before,
         )
         # The marker goes on the row this draw is about to rest the cursor on, and the memo
         # records it so the highlight message `show_choices` posts finds nothing to repaint.
