@@ -439,9 +439,7 @@ def _refuse_a_spool_others_can_reach(activity_directory: Path | None) -> None:
     )
 
 
-def _foreign_variant_note(
-    base: dict[str, Any], provider: _HookProvider, ours: Path | None
-) -> str:
+def _foreign_variant_note(base: dict[str, Any], provider: _HookProvider, ours: Path | None) -> str:
     """Name the events already running our subcommand in a form this installer will not manage.
 
     Leaving such an entry alone is the right call and stays the right call -- it is a wrapper,
@@ -573,11 +571,7 @@ def _refuse_when_removal_would_not_restore(
         or settings.style.render(base) == settings.content
     )
     if restored != settings.style.render(base) or not faithful:
-        container = (
-            f'"{provider.plugin.key}": []'
-            if provider.plugin is not None
-            else '"hooks": {}'
-        )
+        container = f'"{provider.plugin.key}": []' if provider.plugin is not None else '"hooks": {}'
         empty = (
             f'the empty "{provider.plugin.key}" array (or a null in its place)'
             if provider.plugin is not None
@@ -593,9 +587,7 @@ def _refuse_when_removal_would_not_restore(
         )
 
 
-def _holds_our_groups(
-    document: dict[str, Any], provider: _HookProvider, ours: Path | None
-) -> bool:
+def _holds_our_groups(document: dict[str, Any], provider: _HookProvider, ours: Path | None) -> bool:
     """Report whether a previous install is present, which is what makes this a reinstall."""
     if provider.plugin is not None:
         entries = document.get(provider.plugin.key)
@@ -612,9 +604,7 @@ def _holds_our_groups(
     )
 
 
-def _foreign_plugin_note(
-    base: dict[str, Any], provider: _HookProvider, ours: Path | None
-) -> str:
+def _foreign_plugin_note(base: dict[str, Any], provider: _HookProvider, ours: Path | None) -> str:
     """Name a plugin entry pointing at our file in a form this installer will not manage.
 
     The same call the hook shape makes, and it now carries a second population the hook shape has

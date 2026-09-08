@@ -58,6 +58,19 @@ class TerminalObservation:
     what it can answer rather than inventing a default that reads as fact.
     """
 
+    awaiting_trust: bool = False
+    """The agent is stopped on its own folder-trust question right now.
+
+    A *reason*, which is the thing this type could not previously carry. `live` and
+    `preserved` describe the pane; they cannot distinguish an agent that is still starting
+    from one that has finished starting and is waiting for an answer nobody is at the
+    keyboard to give. Without somewhere to say which, a trust-blocked launch could only be
+    reported by spending the whole startup budget and then claiming a failure.
+
+    Defaulted to False so every existing construction keeps its exact meaning: an adapter
+    that cannot tell says nothing rather than guessing.
+    """
+
 
 class TerminalPort(Protocol):
     async def managed_process_roots(self) -> tuple[int, ...]: ...

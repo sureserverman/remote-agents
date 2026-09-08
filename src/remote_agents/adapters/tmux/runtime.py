@@ -6,7 +6,7 @@ import asyncio
 import json
 import os
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 from remote_agents.adapters.tmux.codec import attach_command
@@ -72,6 +72,18 @@ class LaunchProfile:
     """
     graceful_keys: tuple[str, ...] = ("C-c",)
     readiness_blockers: tuple[str, ...] = ()
+    trust_settle_seconds: float = 0.0
+    """How long after the readiness marker a trust dialog may still arrive, for this agent.
+
+    Zero for every agent whose banner and dialog cannot be reordered: the first capture
+    showing the marker is then the answer, and waiting longer only makes a clean launch
+    slower. It is non-zero only where an agent is known to print its readiness marker
+    *before* the question -- where a launch that returned on the marker would report a ready
+    agent that is about to stop on a dialog.
+
+    A window, not a delay: the launch still returns as soon as a blocker appears inside it,
+    and returns the ready observation the moment it closes.
+    """
 
     def __post_init__(self) -> None:
         if (
@@ -214,21 +226,77 @@ class TmuxTerminal:
                 session_id, live=False, preserved=False, detail="launch_failed"
             )
         self._session_profiles[session_id] = profile
-        deadline = asyncio.get_running_loop().time() + self._startup_timeout
-        while asyncio.get_running_loop().time() < deadline:
+        return await self._settle_launch(session_id, profile_id, profile)
+
+    async def _settle_launch(
+        self, session_id: SessionId, profile_id: ProfileId, profile: LaunchProfile
+    ) -> TerminalObservation:
+        """Poll the new pane until it proves ready, proves blocked, or the budget runs out.
+
+        **A blocker is now an answer rather than a reason to keep waiting**, and that is the
+        whole of the delay this removes. The evidence was always on the first capture: an
+        agent that has drawn its folder-trust question has finished starting and will not
+        start further, so polling on to the end of the budget arrives at the same conclusion
+        several seconds later and then reports it as a failure (DEC-016).
+
+        **The settle window exists because the banner is not always last.** `claude-remote`
+        prints its readiness marker *before* the dialog, so a launch that returned on the
+        marker alone would race the redraw and report a ready agent that is about to stop.
+        Where a profile declares a settle, a marker starts a window rather than ending the
+        poll, and a blocker arriving inside it still wins.
+
+        The startup budget bounds *starting*, so it deliberately does not cut a settle short:
+        once readiness has been observed the launch has succeeded, and the only question left
+        is which answer to report.
+        """
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + self._startup_timeout
+        ready: TerminalObservation | None = None
+        settle_deadline = 0.0
+        while True:
+            now = loop.time()
+            if now >= deadline and (ready is None or now >= settle_deadline):
+                break
             observation = await self.inspect(session_id)
             capture = await self._gateway.capture(session_id) if observation is not None else ""
-            if (
-                observation is not None
-                and observation.live
-                and (profile.readiness_marker is None or profile.readiness_marker in capture)
-                and not any(blocker in capture for blocker in profile.readiness_blockers)
-            ):
-                return observation
+            if observation is not None and observation.live:
+                if self._is_awaiting_trust(profile, profile_id, capture):
+                    return replace(observation, awaiting_trust=True)
+                if profile.readiness_marker is None or profile.readiness_marker in capture:
+                    if profile.trust_settle_seconds <= 0.0:
+                        return observation
+                    if ready is None:
+                        ready = observation
+                        settle_deadline = now + profile.trust_settle_seconds
+                    elif now >= settle_deadline:
+                        return ready
             await asyncio.sleep(0.01)
+        if ready is not None:
+            return ready
         return TerminalObservation(
             session_id, live=False, preserved=False, detail="startup_timeout"
         )
+
+    def _is_awaiting_trust(
+        self, profile: LaunchProfile, profile_id: ProfileId, capture: str
+    ) -> bool:
+        """Whether this capture shows an agent stopped on its own folder-trust question.
+
+        Two kinds of evidence, because the profile table and the classifier know different
+        things. A `readiness_blocker` is what the *profile* declares its agent prints while
+        blocked, and it is the only evidence available for codex and cursor-agent, whose
+        dialogs this project cannot answer and therefore does not parse. Classifying the
+        capture is the second, and it is gated on TRUST_ANSWERABLE for the same reason
+        `_trust_capture` is: it is the same classifier the answering path uses, and a pane
+        this cannot answer should not be read with a parser written for a dialog it does not
+        have. It matters because `claude`'s declared blocker is the *pre-trust* screen, so a
+        pane resting on the question itself matches no blocker at all.
+        """
+        if any(blocker in capture for blocker in profile.readiness_blockers):
+            return True
+        if profile_id not in TRUST_ANSWERABLE:
+            return False
+        return classify_trust_capture(capture) is TrustState.AWAITING
 
     def _resolved_profile(
         self, session_id: SessionId, profile_id: ProfileId
@@ -310,9 +378,12 @@ class TmuxTerminal:
                 session_id, live=False, preserved=False, detail="terminal_not_live"
             )
         capture = await self._gateway.capture(session_id)
-        if (
-            profile.readiness_marker is not None and profile.readiness_marker not in capture
-        ) or any(blocker in capture for blocker in profile.readiness_blockers):
+        # Before the marker check, not after: a blocked pane frequently has the marker on
+        # screen too (claude-remote prints it first), so asking "is the marker there" first
+        # would answer *ready* for the one case this branch exists to name.
+        if self._is_awaiting_trust(profile, profile_id, capture):
+            return replace(observation, awaiting_trust=True)
+        if profile.readiness_marker is not None and profile.readiness_marker not in capture:
             return TerminalObservation(session_id, live=False, preserved=False, detail="not_ready")
         return observation
 
@@ -437,10 +508,12 @@ class TmuxTerminal:
     async def trust_state(self, session_id: SessionId) -> TrustState:
         """Report whether this pane is sitting on the folder-trust question.
 
-        Read-only, and deliberately answerable for a pane whose *record* is FAILED: that is
-        precisely the state a trust-blocked launch lands in, because the readiness marker
-        never arrives and the startup budget expires. Requiring a live-and-RUNNING session
-        here would make the one state this exists to rescue the one state it refuses.
+        Read-only, and deliberately answerable for a pane whose *record* is UNTRUSTED --
+        which is where a trust-blocked launch now lands -- and for one still recorded FAILED
+        or STARTING, which is where the same launch landed before the state existed and
+        where a late-observed dialog can still leave it for one pass. Requiring a
+        live-and-RUNNING session here would make the states this exists to rescue the states
+        it refuses.
         """
         capture = await self._trust_capture(session_id)
         if capture is None:

@@ -56,6 +56,18 @@ READINESS_UNUSED = 0.05
 READY_DELAY = 2.0
 AGENT_LIFETIME = 30
 
+# The pre-trust screen `claude`'s profile actually lists as a blocker. Used verbatim so the
+# fake agent is stopped on the same string the real profile table is keyed on rather than on
+# a stand-in that could drift away from it.
+BLOCKER = "Accessing workspace:"
+
+# How long the marker-then-blocker agent waits between the two. Deliberately well under the
+# settle the test configures, because what is being asserted is that the settle *outlasts*
+# the gap -- a test whose gap could exceed its settle under load would be asserting the
+# scheduler rather than the behaviour.
+MARKER_TO_BLOCKER = 0.3
+SETTLE_OUTLASTS_IT = 3.0
+
 # How long `settle_ready` will wait for readiness, expressed as a multiple of the thing it
 # is waiting for rather than as a literal -- because the first version of this was a literal
 # 200 tries (a 2.0s sleep-only floor) sitting beside READY_DELAY = 2.0, i.e. a wait whose
@@ -108,6 +120,91 @@ async def test_terminal_launch_times_out_without_claiming_readiness(tmp_path: Pa
 
         assert observation.live is False
         assert observation.detail == "startup_timeout"
+    finally:
+        try:
+            await gateway.destroy(session_id)
+        except RuntimeError:
+            pass
+
+
+async def test_a_trust_blocked_launch_answers_at_once_rather_than_at_the_budget(
+    tmp_path: Path,
+) -> None:
+    """The whole of ask 1: a blocked launch stops costing the owner the startup budget.
+
+    The budget here is the generous one, so the assertion is not that the launch is fast --
+    it is that the launch *returned before the budget could have expired*, which is only
+    possible if the blocker was treated as an answer rather than as a reason to keep polling.
+    """
+    terminal, gateway = make_terminal(
+        tmp_path, timeout=STARTUP_BUDGET, mode="blocked", blockers=(BLOCKER,)
+    )
+    session_id = SessionId.new()
+    started = asyncio.get_running_loop().time()
+    try:
+        observation = await terminal.launch(
+            session_id, ProjectId("opaque-editor"), ProfileId("fake")
+        )
+        elapsed = asyncio.get_running_loop().time() - started
+
+        assert observation.awaiting_trust
+        assert observation.live
+        assert elapsed < STARTUP_BUDGET / 2
+    finally:
+        try:
+            await gateway.destroy(session_id)
+        except RuntimeError:
+            pass
+
+
+async def test_a_marker_followed_by_a_dialog_inside_the_settle_is_not_ready(
+    tmp_path: Path,
+) -> None:
+    """claude-remote prints its banner *before* the dialog, so the banner is not the answer.
+
+    Without a settle, the first capture wins a race it should not be in: the marker is on
+    screen, no blocker is yet, and the launch reports ready for an agent that is about to
+    stop on a question. The settle is the window in which a later blocker can still correct
+    the reading.
+    """
+    terminal, gateway = make_terminal(
+        tmp_path,
+        timeout=STARTUP_BUDGET,
+        mode="marker_then_blocker",
+        blockers=(BLOCKER,),
+        trust_settle_seconds=SETTLE_OUTLASTS_IT,
+    )
+    session_id = SessionId.new()
+    try:
+        observation = await terminal.launch(
+            session_id, ProjectId("opaque-editor"), ProfileId("fake")
+        )
+
+        assert observation.awaiting_trust
+    finally:
+        try:
+            await gateway.destroy(session_id)
+        except RuntimeError:
+            pass
+
+
+async def test_a_settle_that_sees_no_dialog_still_reports_ready(tmp_path: Path) -> None:
+    """The settle must cost a clean launch its correctness, not only its milliseconds."""
+    terminal, gateway = make_terminal(
+        tmp_path,
+        timeout=STARTUP_BUDGET,
+        mode="ready",
+        blockers=(BLOCKER,),
+        trust_settle_seconds=0.2,
+    )
+    session_id = SessionId.new()
+    try:
+        observation = await terminal.launch(
+            session_id, ProjectId("opaque-editor"), ProfileId("fake")
+        )
+
+        assert observation.live
+        assert not observation.awaiting_trust
     finally:
         try:
             await gateway.destroy(session_id)
@@ -313,12 +410,22 @@ async def settle_ready(
 
 
 def make_terminal(
-    tmp_path: Path, *, timeout: float, mode: str = "ready"
+    tmp_path: Path,
+    *,
+    timeout: float,
+    mode: str = "ready",
+    blockers: tuple[str, ...] = (),
+    trust_settle_seconds: float = 0.0,
 ) -> tuple[TmuxTerminal, TmuxGateway]:
     agent = tmp_path / "fake_agent.py"
     agent.write_text(
         "import sys, time\n"
         f"if sys.argv[1] == 'delayed': time.sleep({READY_DELAY})\n"
+        "if sys.argv[1] == 'blocked':\n"
+        f"    print({BLOCKER!r}, flush=True); time.sleep({AGENT_LIFETIME}); sys.exit()\n"
+        "if sys.argv[1] == 'marker_then_blocker':\n"
+        f"    print('READY', flush=True); time.sleep({MARKER_TO_BLOCKER})\n"
+        f"    print({BLOCKER!r}, flush=True); time.sleep({AGENT_LIFETIME}); sys.exit()\n"
         "if sys.argv[1] != 'immediate_exit': "
         f"print('READY', flush=True); time.sleep({AGENT_LIFETIME})\n",
         encoding="utf-8",
@@ -330,6 +437,9 @@ def make_terminal(
         (sys.executable, str(agent), mode),
         {"PATH": os.environ["PATH"]},
         "READY",
+        ("C-c",),
+        blockers,
+        trust_settle_seconds,
     )
     terminal = TmuxTerminal(
         gateway,

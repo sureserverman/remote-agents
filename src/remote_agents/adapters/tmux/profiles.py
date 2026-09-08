@@ -32,6 +32,16 @@ _READINESS_MARKERS = {
     "opencode": "Ask anything...",
     "cursor-agent": "Cursor",
 }
+#: What each agent prints while it is stopped on a question rather than working.
+#:
+#: These used to mean only "not ready yet", and were consulted to decide whether to *keep
+#: waiting*. They now **answer** the launch: an agent that has drawn its folder-trust
+#: question has finished starting and will not start further, so the first capture carrying
+#: one of these is the conclusion rather than a reason to poll on to the end of the budget.
+#:
+#: `claude`'s entry is the *pre-trust* screen rather than the dialog itself, which is why
+#: `TmuxTerminal._is_awaiting_trust` also classifies the capture for the profiles that can be
+#: asked -- a pane resting on the question matches nothing here.
 _READINESS_BLOCKERS = {
     "claude": ("Accessing workspace:",),
     "claude-remote": ("Accessing workspace:",),
