@@ -50,6 +50,24 @@ _READINESS_BLOCKERS = {
 }
 
 
+#: How long after its readiness marker each agent may still raise a folder-trust dialog.
+#:
+#: **Measured 2026-09-08, and 0.0 for every agent** -- see
+#: `docs/acceptance-2026-09-08-untrusted-launch.md` section 1. Ten launches into never-asked
+#: directories, sampled every 50 ms: the marker appeared in all ten, a dialog in none, so the
+#: gap was never positive.
+#:
+#: The entries are written out rather than left to the `.get` default because the number is a
+#: *measurement*, and a measurement of zero is a different thing from an agent nobody has
+#: measured. `opencode` and `cursor-agent` are absent for the second reason and take the
+#: default.
+_TRUST_SETTLE_SECONDS = {
+    "claude": 0.0,
+    "claude-remote": 0.0,
+    "codex": 0.0,
+}
+
+
 def probe_profiles(
     profiles: tuple[ProfileDefinition, ...],
     *,
@@ -132,6 +150,7 @@ def build_launch_profile(
         _READINESS_MARKERS[str(definition.profile_id)],
         definition.graceful_keys,
         _READINESS_BLOCKERS.get(str(definition.profile_id), ()),
+        _TRUST_SETTLE_SECONDS.get(str(definition.profile_id), 0.0),
     )
 
 
@@ -169,4 +188,9 @@ def build_resume_profile(
         None,
         definition.graceful_keys,
         _READINESS_BLOCKERS.get(str(definition.profile_id), ()),
+        # Read from the same table as the launch construction. A resumed profile carries no
+        # marker at all, so any live pane counts as ready -- which makes the settle worth
+        # strictly more here than at launch, and a second table is how the more exposed of
+        # the two would keep the default forever.
+        _TRUST_SETTLE_SECONDS.get(str(definition.profile_id), 0.0),
     )
