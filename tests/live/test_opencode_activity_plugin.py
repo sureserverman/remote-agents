@@ -266,7 +266,9 @@ def test_a_managed_opencode_turn_asking_for_approval_spools_a_named_wait(tmp_pat
     workspace, spool, environment = _requirements(tmp_path)
     session_id = SessionId.new()
 
-    _run_opencode(workspace, {**environment, SESSION_ID_VARIABLE: str(session_id)}, _APPROVAL_TURN)
+    _run_opencode(
+        workspace, {**environment, SESSION_ID_VARIABLE: str(session_id)}, _APPROVAL_TURN
+    )
 
     activities = drain_activity(spool)
     waits = [one for one in activities if one.kind is ActivityKind.NEEDS_ANSWER]

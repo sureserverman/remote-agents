@@ -78,8 +78,8 @@ def test_current_docs_say_what_opencode_reports_and_what_it_never_will() -> None
         for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1)
         if unwatched.search(line)
     ]
-    assert offenders == [], "a current document still calls opencode unwatched:\n" + "\n".join(
-        offenders
+    assert offenders == [], (
+        "a current document still calls opencode unwatched:\n" + "\n".join(offenders)
     )
 
 
