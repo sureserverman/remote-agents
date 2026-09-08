@@ -620,3 +620,51 @@ async def test_an_untrusted_record_whose_pane_is_gone_lands_in_failed() -> None:
 
     assert store.records[untrusted.session_id].state is SessionState.FAILED
     assert store.events == [LifecycleEvent.STARTUP_ERROR]
+
+
+async def test_an_untrusted_record_whose_dialog_still_stands_is_left_completely_alone() -> None:
+    """The flap. Four passes over a still-blocked pane must write nothing at all.
+
+    This is the gap the two tests either side of it *looked* like they covered and did not:
+    one uses a FAILED record, the other an UNTRUSTED record whose dialog has cleared. Neither
+    is an UNTRUSTED record that is still blocked, which is the ordinary case — the owner has
+    not answered yet — and it flapped RUNNING/UNTRUSTED on alternate passes, two durable
+    events a minute, showing a green ACTIVE row that offered a graceful stop over an agent
+    that had run nothing.
+    """
+    untrusted = record(SessionState.UNTRUSTED)
+    store = InMemoryStore((untrusted,))
+
+    async def blocked(session_id, profile_id):
+        del profile_id
+        return TerminalObservation(session_id, live=True, preserved=False, awaiting_trust=True)
+
+    service = ReconciliationService(store, settle_after=timedelta(0), confirm_ready=blocked)
+
+    for _ in range(4):
+        await service.reconcile(
+            (TerminalObservation(untrusted.session_id, live=True, preserved=False),)
+        )
+
+    assert store.records[untrusted.session_id].state is SessionState.UNTRUSTED
+    assert store.events == []
+
+
+async def test_an_untrusted_record_whose_pane_died_at_the_dialog_lands_in_failed() -> None:
+    """`remain-on-exit` means the pane does not vanish — it dies in place.
+
+    So the reason is `pane_dead`, never `terminal_missing`, and an UNTRUSTED branch written
+    only for the latter never fires for the likeliest ending of all: the agent quit at its own
+    question. Reproduced before the fix as four passes writing nothing, with the record left
+    telling the owner an exited agent was waiting on them.
+    """
+    untrusted = record(SessionState.UNTRUSTED)
+    store = InMemoryStore((untrusted,))
+    service = ReconciliationService(store, settle_after=timedelta(0))
+
+    await service.reconcile(
+        (TerminalObservation(untrusted.session_id, live=False, preserved=True),)
+    )
+
+    assert store.records[untrusted.session_id].state is SessionState.FAILED
+    assert store.events == [LifecycleEvent.STARTUP_ERROR]

@@ -175,3 +175,39 @@ async def test_a_reload_notices_the_session_the_other_writer_stopped() -> None:
     assert ("swap", "%0", "%7") in console.calls, (
         "a session that ended while displayed must give the left slot back to the surface"
     )
+
+
+async def test_a_reload_leaves_a_trust_blocked_agent_on_screen() -> None:
+    """DEC-047's premise, defended where it actually lives.
+
+    The local surface offers no Trust row for a reason: the console has exchanged the agent
+    into its left slot, so the folder-trust dialog is already in front of the owner and a
+    second place to answer it would be a second place to get it wrong. That argument is only
+    true while the pane stays on screen — and `sync` unwinds the surface for any session it
+    does not consider live. UNTRUSTED missing from that set meant the console yanked the
+    dialog away on the next sessions reload, roughly ten seconds after the launch that raised
+    it, leaving the owner with a row reading `untrusted`, no way to answer it locally, and
+    nothing to say where the question went.
+    """
+    console = RecordingConsole(
+        panes=(
+            HostedPane(None, True, 0, 0, "%7", _SESSION),
+            _console_pane("%1", "sessions"),
+            _console_pane("%2", "feed"),
+            HostedPane(_SESSION, False, 0, 0, "%0", None, True, "surface"),
+        )
+    )
+    composer = ConsoleComposer(
+        console, ("remote-agents", "tui"), Path("/tmp"), projects_command=("true",)
+    )
+    launcher = _Launcher([_record(SessionState.UNTRUSTED)])
+    app = RemoteAgentsTui(_context(launcher, composer))
+
+    async with app.run_test() as pilot:
+        await app.load_sessions()
+        await pilot.pause()
+
+    assert ("swap", "%0", "%7") not in console.calls, (
+        "an agent waiting on its own trust dialog must stay on screen; the dialog is the "
+        "only place DEC-047 leaves the owner to answer it locally"
+    )

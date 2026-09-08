@@ -52,19 +52,28 @@ _READINESS_BLOCKERS = {
 
 #: How long after its readiness marker each agent may still raise a folder-trust dialog.
 #:
-#: **Measured 2026-09-08, and 0.0 for every agent** -- see
-#: `docs/acceptance-2026-09-08-untrusted-launch.md` section 1. Ten launches into never-asked
-#: directories, sampled every 50 ms: the marker appeared in all ten, a dialog in none, so the
-#: gap was never positive.
+#: **Measured 2026-09-08, in wall-clock** -- see
+#: `docs/acceptance-2026-09-08-untrusted-launch.md` section 1. Sample counts are not used:
+#: each poll costs a tmux round-trip as well as its sleep, so converting a sample index at the
+#: sleep interval understates real elapsed time.
 #:
-#: The entries are written out rather than left to the `.get` default because the number is a
-#: *measurement*, and a measurement of zero is a different thing from an agent nobody has
-#: measured. `opencode` and `cursor-agent` are absent for the second reason and take the
-#: default.
+#: `codex` is the entry that earns the mechanism. Its banner and its dialog are **0.081-0.084 s
+#: apart** across five launches, and its banner is its readiness marker -- so a launch whose
+#: deciding capture lands in that window reports a ready agent that is about to stop on a
+#: question. 0.1 s is the measured maximum plus one poll interval (0.01 s), rounded up.
+#:
+#: `claude` and `claude-remote` are 0.0 because ten launches produced **no dialog at all** on
+#: this host, which makes their gap *undefined* rather than zero. The number is a floor chosen
+#: in the absence of the race, not a measurement of it, and the acceptance document says so; a
+#: host that does raise the dialog is where to re-measure.
+#:
+#: `opencode` and `cursor-agent` are absent rather than zero, because an unmeasured agent and
+#: an agent measured at zero are different things and the `.get` default is where the first
+#: belongs.
 _TRUST_SETTLE_SECONDS = {
     "claude": 0.0,
     "claude-remote": 0.0,
-    "codex": 0.0,
+    "codex": 0.1,
 }
 
 

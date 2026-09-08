@@ -406,7 +406,10 @@ def test_declining_trust_is_offered_for_a_profile_whose_dialog_cannot_be_answere
     profile. So the two halves of the question have different availability, and this is the
     one that does not consult the profile at all.
     """
-    for profile in ("codex", "cursor-agent", "opencode"):
+    # codex and cursor-agent only. `opencode` declares no readiness blocker and is not in
+    # TRUST_ANSWERABLE, so nothing can ever put one of its sessions in UNTRUSTED -- asserting
+    # the affordance for it would be asserting a combination that cannot arise.
+    for profile in ("codex", "cursor-agent"):
         record = SimpleNamespace(profile_id=ProfileId(profile), state=SessionState.UNTRUSTED)
 
         assert decline_trust_available(record)

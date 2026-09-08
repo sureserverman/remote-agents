@@ -326,11 +326,14 @@ def trust_available(record: _RemoteControllable, observed: TrustState) -> bool:
     follows `remote_control_available` instead, which is the established shape for an action
     that is not a stop.
 
-    Unlike Remote Control, no session state is required. The state a trust-blocked launch
-    lands in is FAILED -- the readiness marker never arrived -- so gating on RUNNING would
-    refuse the one case this exists for. `TmuxRuntime.answer_trust` re-reads the pane before
-    sending anything, so a surface that offers this on a stale observation still cannot fire
-    a keypress into a session that is no longer asking.
+    Unlike Remote Control, no session state is required, and that stays true now that the
+    launch has a state of its own. A trust-blocked launch lands in UNTRUSTED, but *when* it
+    is seen is a race -- `claude-remote` prints its readiness marker before the dialog, and a
+    record can be RUNNING or still FAILED when the pane is finally read -- so gating on any
+    one state would refuse the case this exists for on exactly the pass that matters.
+    `TmuxRuntime.answer_trust` re-reads the pane before sending anything, so a surface that
+    offers this on a stale observation still cannot fire a keypress into a session that is no
+    longer asking.
     """
     return record.profile_id in TRUST_ANSWERABLE and observed is TrustState.AWAITING
 

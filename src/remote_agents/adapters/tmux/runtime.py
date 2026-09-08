@@ -257,19 +257,28 @@ class TmuxTerminal:
             now = loop.time()
             if now >= deadline and (ready is None or now >= settle_deadline):
                 break
+            # Checked here rather than inside the marker branch below, because a settle that
+            # can only expire while the marker is still on screen is not a bound. A banner
+            # that scrolls out of the viewport mid-settle used to skip the expiry test on
+            # every subsequent pass, so a clean launch waited out the entire startup budget --
+            # inside the method written to stop launches costing the owner that budget.
+            if ready is not None and now >= settle_deadline:
+                return ready
             observation = await self.inspect(session_id)
             capture = await self._gateway.capture(session_id) if observation is not None else ""
-            if observation is not None and observation.live:
-                if self._is_awaiting_trust(profile, profile_id, capture):
-                    return replace(observation, awaiting_trust=True)
-                if profile.readiness_marker is None or profile.readiness_marker in capture:
-                    if profile.trust_settle_seconds <= 0.0:
-                        return observation
-                    if ready is None:
-                        ready = observation
-                        settle_deadline = now + profile.trust_settle_seconds
-                    elif now >= settle_deadline:
-                        return ready
+            if observation is None or not observation.live:
+                # A reading taken before the pane died is not evidence about a pane that is
+                # dead now. Returning it would report READY for a launch that has already
+                # failed, and the longer the settle the wider that window is.
+                ready = None
+            elif self._is_awaiting_trust(profile, profile_id, capture):
+                return replace(observation, awaiting_trust=True)
+            elif profile.readiness_marker is None or profile.readiness_marker in capture:
+                if profile.trust_settle_seconds <= 0.0:
+                    return observation
+                if ready is None:
+                    ready = observation
+                    settle_deadline = now + profile.trust_settle_seconds
             await asyncio.sleep(0.01)
         if ready is not None:
             return ready

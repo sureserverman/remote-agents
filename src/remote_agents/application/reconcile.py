@@ -205,10 +205,18 @@ class ReconciliationService:
         question it cannot answer. Both look identical from `managed_observations`, so the
         difference has to come from the check that already knows it.
 
-        Three narrowings, and no widenings: the check can turn a promotion into a trust
-        correction, or into nothing at all, and it can never manufacture an event the pure
-        policy did not reach for. That is the same direction availability narrows the domain
-        in, and it is what keeps `reconcile()` readable on its own.
+        **Narrowings, plus exactly one addition -- and the addition is named because an
+        earlier version of this docstring claimed there were none.** The check can turn a
+        promotion into nothing at all (a slow agent, or one whose readiness cannot be read),
+        and it can turn one into a trust correction. It also *adds* one event the pure policy
+        cannot reach: a RUNNING record whose pane is live is a no-op to `reconcile()` -- the
+        observed state equals the stored one -- so TRUST_REQUIRED from RUNNING has no other
+        producer. That is the late-dialog race, and it is the whole reason this method reads
+        the check for every `terminal_live` result rather than only for promotions.
+
+        What it never does is manufacture an event for a state the matrix has no edge for;
+        `_TRUST_CORRECTABLE` is exactly the three origins of TRUST_REQUIRED, named in both
+        this module and `services.py` rather than inlined, so the two cannot drift.
 
         With no check wired, the pure policy stands exactly as it did -- a composition that
         does not supply one gets the old behaviour rather than a silently different one.
@@ -225,8 +233,19 @@ class ReconciliationService:
         if reading.awaiting_trust:
             if record.state in _TRUST_CORRECTABLE:
                 return LifecycleEvent.TRUST_REQUIRED
-            # Every other state either is already the answer (UNTRUSTED) or has no edge for
-            # this event, so the pure policy's verdict stands rather than being suppressed.
+            if record.state is SessionState.UNTRUSTED:
+                # Already the answer. **Returning `fallback` here instead flapped the record
+                # forever**: the pure policy promotes UNTRUSTED on a live pane (it is how a
+                # dialog answered at the keyboard is noticed), so a still-blocked session
+                # went RUNNING on one pass and UNTRUSTED on the next, every 60 s, writing two
+                # durable events a minute and showing a green ACTIVE row -- offering a
+                # *graceful* stop -- over an agent that has run nothing. That is the
+                # 2026-08-14 incident recreated inside the state invented to end it. The
+                # promotion is correct only when the dialog is *gone*, which is the branch
+                # below; while it stands, the right number of events is none.
+                return None
+            # Every other state has no edge for this event, so the pure policy's verdict
+            # stands rather than being suppressed.
             return fallback
         if not reading.live and fallback is LifecycleEvent.READY:
             return None
@@ -375,6 +394,20 @@ def _event_for_reconciliation(
         # session ran and finished. This one never ran: the agent quit at its own dialog, or
         # something outside took the pane. The matrix reaches ENDED from UNTRUSTED only via
         # TRUST_DECLINED, which is *this service* answering the question -- and it did not.
+        return LifecycleEvent.STARTUP_ERROR
+    if result.reason == "pane_dead" and record.state is SessionState.UNTRUSTED:
+        # The common way an untrusted session ends, not a rare one. Every managed pane is
+        # armed with `remain-on-exit` (`adapters/tmux/gateway.py`), so an agent that quits at
+        # its own dialog does not vanish -- it leaves a dead pane, which reads as `pane_dead`
+        # and never as `terminal_missing`. Without this branch the record sat in UNTRUSTED
+        # forever, `notifiable`, telling the owner an agent was waiting for them to answer
+        # something, about a process that had already exited; the only way out was a force
+        # stop on a session that was already dead.
+        #
+        # STARTUP_ERROR rather than RECONCILED_PANE_DEAD for the reason the `terminal_missing`
+        # branch below gives: PRESERVED means "the agent exited; its output is preserved for
+        # inspection", and a session that never got past its trust dialog has no output worth
+        # the claim.
         return LifecycleEvent.STARTUP_ERROR
     if result.reason == "pane_dead" and record.state is SessionState.RUNNING:
         return LifecycleEvent.RECONCILED_PANE_DEAD

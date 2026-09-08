@@ -102,7 +102,8 @@ class ResumeOutcome:
 #: which both surfaces call on every render. Walking RUNNING here turns one tmux capture per
 #: FAILED session into one per *live* session, on every listing, on both surfaces. That is the
 #: exact workload `adapters/tui/screens/feed.py` declines to take on for the feed pane, in a
-#: comment naming this method's cost as "a tmux capture per FAILED session" -- an invariant
+#: comment naming this method's cost as "a tmux capture per FAILED or UNTRUSTED
+#: session" -- an invariant
 #: this widening silently invalidated, and which a strict double in
 #: `tests/integration/sqlite/test_session_rename.py` caught at the Stage 1 gate.
 #:
@@ -135,6 +136,12 @@ def _event_for_recheck(
     None is the common answer and the safe one: a pane that has not changed its mind is not
     an event, and writing one anyway is how a durable history fills with repetitions of a
     single fact.
+
+    Total over `SessionState`, though `refresh_readiness` only ever hands it the two members
+    of `_READINESS_REREAD`. The STARTING and RUNNING arms are therefore unreachable today and
+    are kept rather than dropped: they are what makes the answer correct if that set widens,
+    and a partial function here would fail by returning the wrong event rather than by
+    raising.
     """
     if observation.awaiting_trust:
         return LifecycleEvent.TRUST_REQUIRED if state in _TRUST_CORRECTABLE else None

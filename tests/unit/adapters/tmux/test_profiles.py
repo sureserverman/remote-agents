@@ -75,64 +75,86 @@ def test_two_sessions_do_not_share_one_environment_mapping() -> None:
     assert SESSION_ID_VARIABLE not in curated
 
 
-def test_no_claude_profile_asks_the_launch_to_wait_after_its_marker() -> None:
-    """The settle is 0.0 for every profile, and the number is measured rather than assumed.
+def test_the_settle_each_agent_gets_is_the_one_that_was_measured_for_it() -> None:
+    """Pins the measured values, and fails if the table stops being consulted at all.
 
-    **Measured 2026-09-08** (`docs/acceptance-2026-09-08-untrusted-launch.md`, section 1):
-    ten launches, five as `claude` and five as `claude-remote`, each into a directory Claude
-    Code had never been asked about, sampling the pane every 50 ms for 10 s. The readiness
-    marker appeared in every run (samples 13-16). A trust dialog appeared in **none** of
-    them, so the marker-to-dialog gap was never positive and the plan's stated fallback --
-    0.0 -- is what the measurement returns.
+    **Measured 2026-09-08 in wall-clock** (`docs/acceptance-2026-09-08-untrusted-launch.md`,
+    section 1), because a sample index converted at the sleep interval is not an elapsed time.
 
-    **Why it was never positive is recorded, because it is not "the race does not exist".**
-    The host's `~/.claude/settings.json` sets `permissions.defaultMode: "auto"`, and Claude
-    Code 2.1.265 does not raise the folder-trust question under it. So this pins a value
-    measured on a host that cannot currently produce the dialog, which is a weaker claim than
-    it looks and is why the number is written down with its date: on a host that does ask,
-    this is the first thing to re-measure. `TmuxTerminal._settle_launch` treats 0.0 as "the
-    first capture showing the marker is the answer", which is exactly the behaviour every
-    profile had before the field existed.
+    `codex` carries the only non-zero value, and it is the assertion that gives this test
+    teeth: 0.1 differs from `LaunchProfile.trust_settle_seconds`'s default and from the `.get`
+    fallback, so an implementation that deleted `_TRUST_SETTLE_SECONDS` outright would fail
+    here. The earlier version of this test asserted only zeros and passed under exactly that
+    deletion.
+
+    Codex earns it on the measurement rather than on caution: its banner *is* its readiness
+    marker and its dialog follows 0.081-0.084 s later, five launches out of five, so a capture
+    landing in that window reports a ready agent that is about to stop.
+
+    The two Claude profiles are 0.0 because ten launches raised no dialog on this host -- an
+    *undefined* gap, not a zero one. On a host that does ask, this is the first thing to
+    re-measure.
     """
     session_id = SessionId.new()
 
-    for profile_id, argv in (
-        ("claude", ("claude",)),
-        ("claude-remote", ("claude", "--remote-control", "{managed_name}")),
+    # Graceful keys come from the curated table `ProfileDefinition` validates against, so
+    # they are part of each fixture rather than a shared constant -- codex takes a second
+    # Enter that Claude does not.
+    for profile_id, executable, argv, graceful, expected in (
+        ("claude", "claude", ("claude",), ("/exit", "Enter"), 0.0),
+        (
+            "claude-remote",
+            "claude",
+            ("claude", "--remote-control", "{managed_name}"),
+            ("/exit", "Enter"),
+            0.0,
+        ),
+        ("codex", "codex", ("codex",), ("/exit", "Enter", "Enter"), 0.1),
     ):
         definition = ProfileDefinition(
-            ProfileId(profile_id), "claude", argv, ("--version",), ("/exit", "Enter")
+            ProfileId(profile_id), executable, argv, ("--version",), graceful
         )
 
         launched = build_launch_profile(
-            definition, Path("/usr/bin/claude"), session_id, dict(_CURATED)
+            definition, Path(f"/usr/bin/{executable}"), session_id, dict(_CURATED)
         )
 
-        assert launched.trust_settle_seconds == 0.0
+        assert launched.trust_settle_seconds == expected
+
+
+def test_an_unmeasured_agent_is_absent_from_the_table_rather_than_zero_in_it() -> None:
+    """The table's stated rationale, enforced: a measured zero is not an unmeasured one."""
+    from remote_agents.adapters.tmux.profiles import _TRUST_SETTLE_SECONDS
+
+    assert set(_TRUST_SETTLE_SECONDS) == {"claude", "claude-remote", "codex"}
+    assert "opencode" not in _TRUST_SETTLE_SECONDS
+    assert "cursor-agent" not in _TRUST_SETTLE_SECONDS
 
 
 def test_the_settle_is_read_from_one_table_by_both_constructions() -> None:
     """Launch and resume must not be able to disagree about the same agent's settle.
 
-    A resumed profile carries no readiness marker at all, so *any* live pane counts as ready
-    -- which makes a settle worth strictly more there than at launch, not less. Two
-    constructions reading two tables is the shape that lets the more exposed one keep the
-    default forever.
+    Asserted on **codex**, the one profile whose value differs from the default: on `claude`
+    the two agree at 0.0 whether or not either construction consults the table at all, so the
+    earlier version of this test proved nothing.
+
+    A resumed profile carries no readiness marker, so *any* live pane counts as ready -- which
+    makes a settle worth strictly more there than at launch, not less. Two constructions
+    reading two tables is the shape that lets the more exposed one keep the default forever.
     """
     session_id = SessionId.new()
     definition = ProfileDefinition(
-        ProfileId("claude"), "claude", ("claude",), ("--version",), ("/exit", "Enter")
+        ProfileId("codex"), "codex", ("codex",), ("--version",), ("/exit", "Enter", "Enter")
     )
 
-    launched = build_launch_profile(
-        definition, Path("/usr/bin/claude"), session_id, dict(_CURATED)
-    )
+    launched = build_launch_profile(definition, Path("/usr/bin/codex"), session_id, dict(_CURATED))
     resumed = build_resume_profile(
         definition,
-        Path("/usr/bin/claude"),
+        Path("/usr/bin/codex"),
         session_id,
         ProviderConversationId("conversation"),
         dict(_CURATED),
     )
 
-    assert launched.trust_settle_seconds == resumed.trust_settle_seconds
+    assert launched.trust_settle_seconds == 0.1
+    assert resumed.trust_settle_seconds == launched.trust_settle_seconds

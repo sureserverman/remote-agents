@@ -400,8 +400,9 @@ async def listed_sessions(sessions: _ListReadableSessions) -> tuple[SessionRecor
     which is the kind of duplicate no sweep for a repeated name can see.
 
     **The pairing is the interesting part, because it is deliberately not applied everywhere.**
-    The pass rescans every record and runs a tmux capture per FAILED session, so the paths
-    that re-read one session — the bot's `_record`, the local surface's `current_record` —
+    The pass rescans every record and runs a tmux capture per FAILED or UNTRUSTED session, so
+    the paths that re-read one session — the bot's `_record`, the local surface's
+    `current_record` —
     read without it, and both had written that reasoning down separately. Putting the pair
     here makes "a list open refreshes, a re-read does not" a single decision with one place to
     change it, instead of an agreement between two comments.

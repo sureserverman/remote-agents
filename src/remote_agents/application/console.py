@@ -285,6 +285,18 @@ class _Reclaim:
     note: str
 
 
+#: The states whose session is still worth having on screen, for `sync`'s stale check.
+#:
+#: **UNTRUSTED is here for the reason the whole state exists.** DEC-047 splits the trust
+#: question by where the pane is: the bot asks it, and the local surface deliberately offers
+#: no Trust row *because the console has the agent's pane in its left slot and the dialog is
+#: already in front of the owner*. Leaving UNTRUSTED out of this set made `sync` read a
+#: trust-blocked session as no longer live and unwind the surface back to the projects list
+#: on the next sessions reload -- pulling the dialog off screen within ten seconds of the
+#: launch that raised it, and taking the premise of DEC-047 with it.
+_DISPLAYABLE = frozenset({SessionState.RUNNING, SessionState.STARTING, SessionState.UNTRUSTED})
+
+
 class ConsoleComposer:
     """Build the console's panes, show one agent in the left slot; degrade on failure."""
 
@@ -571,11 +583,7 @@ class ConsoleComposer:
         `_restore_stale_display` is what puts the projects surface back.
         """
         try:
-            live = {
-                record.session_id
-                for record in records
-                if record.state in {SessionState.RUNNING, SessionState.STARTING}
-            }
+            live = {record.session_id for record in records if record.state in _DISPLAYABLE}
             await self._restore_stale_display(live)
         except Exception:
             _LOG.exception("the console could not be reconciled; it may lag by one pass")

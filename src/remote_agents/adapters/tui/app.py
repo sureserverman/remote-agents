@@ -1795,7 +1795,7 @@ class RemoteAgentsTui(App[AttachRequest | None]):
 
         The re-read is what detects a session stopped by the other writer while this list
         was on screen. The *refresh* is deliberately not repeated: it rescans every record
-        and runs a tmux capture per FAILED session, so repeating it on each navigation
+        and runs a tmux capture per FAILED or UNTRUSTED session, so repeating it on each navigation
         would make opening a detail and copying its attach command cost three full passes.
         The bot refreshes once per list open for the same reason.
         """
@@ -1908,9 +1908,9 @@ class RemoteAgentsTui(App[AttachRequest | None]):
             return
         try:
             # `read_sessions`, not `load_sessions`: the latter refreshes readiness -- a tmux
-            # capture per FAILED session -- and runs the console sync, which is the list-open
-            # pass and has no business on a cache refresh. The gauge needs the records' ids and
-            # nothing else.
+            # capture per FAILED or UNTRUSTED session -- and runs the console sync, which is
+            # the list-open pass and has no business on a cache refresh. The gauge needs
+            # the records' ids and nothing else.
             records = await self.read_sessions()
         except Exception:
             _LOG.debug("the session context gauges could not be refreshed", exc_info=True)

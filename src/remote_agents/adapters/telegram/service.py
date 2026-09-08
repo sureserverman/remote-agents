@@ -2235,8 +2235,10 @@ class PrivateBotBoundary:
         real session to hit the bug. `claude-remote` prints a banner containing its
         readiness marker *before* the trust dialog renders, so the launch loop can observe
         "Claude Code" and no blocker in the same pass and report the session RUNNING while
-        it is in fact stuck on a question. Whether a trust-blocked launch lands in FAILED or
-        RUNNING is a race, so state says nothing about it and the pane is the only authority.
+        it is in fact stuck on a question. Whether a trust-blocked launch lands in UNTRUSTED,
+        RUNNING or FAILED is a race -- all three are origins the lifecycle gives
+        TRUST_REQUIRED an edge from, for that reason -- so state says nothing about it and the
+        pane is the only authority.
         """
         if self.backend.sessions is None or not trust_available(record, TrustState.AWAITING):
             # Asked with AWAITING as a hypothetical: if the answer is False even then, the

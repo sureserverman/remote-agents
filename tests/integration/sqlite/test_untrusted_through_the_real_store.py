@@ -14,8 +14,6 @@ without that.
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
-
 from remote_agents.adapters.sqlite.database import open_database
 from remote_agents.adapters.sqlite.session_store import SQLiteSessionStore
 from remote_agents.application.commands import LaunchCommand
@@ -83,11 +81,14 @@ async def test_the_untrusted_row_survives_a_reopen_of_the_database(tmp_path) -> 
     record = await service.launch(
         LaunchCommand(ProjectId("opaque-editor"), ProfileId("claude"), "trust-reopen")
     )
-    created = datetime.now(UTC)
 
     reopened = SQLiteSessionStore(open_database(database))
     read_back = await reopened.get(record.session_id)
+    events = await reopened.events(record.session_id)
 
     assert read_back is not None
     assert read_back.state is SessionState.UNTRUSTED
-    assert read_back.created_at <= created
+    # The durable history, not just the state column: `SessionState(row[4])` and the event
+    # table are two separate reads of two separate schemas, and only one of them was
+    # exercised above.
+    assert [event.event_type for event in events] == ["trust_required"]

@@ -14,73 +14,96 @@ Plan: `2026-09-08-untrusted-launches-and-console-refresh-sub-01-untrusted-lifecy
 > The session that prepared this document is the session that wrote the code, which is the
 > party whose observations are worth least — so section 1 quotes its commands and their raw
 > figures rather than summarising them.
+>
+> **This section has been re-taken once, and saying so is the point.** The first version
+> measured `claude` and `claude-remote` only, reported sample *indices* converted to seconds
+> at the polling interval, and concluded that every agent's settle was 0.0. A review found
+> two faults in that: the conversion understated real elapsed time (each poll costs a tmux
+> round-trip as well as its sleep), and `codex` — the one agent on this host that does raise
+> its dialog — had never been measured at all, while shipping a 0.0 in a table whose stated
+> rationale is the measured/unmeasured distinction. Re-measured in wall-clock, codex's gap is
+> **positive**, and the conclusion changed with it.
 
 ---
 
-## Section 1 — How long after its banner can Claude Code still ask about the folder?
+## Section 1 — How long after its banner can an agent still ask about the folder?
 
-**What this was for.** `TmuxTerminal._settle_launch` returns the moment a launch looks ready.
-`claude-remote` prints its readiness marker *before* its folder-trust dialog, so a launch that
-returned on the marker alone could report a ready agent that is about to stop on a question.
+**What this is for.** `TmuxTerminal._settle_launch` returns as soon as a launch looks ready.
+If an agent prints its readiness marker *before* its folder-trust dialog, a launch that
+returned on the marker alone reports a ready agent that is about to stop on a question.
 `LaunchProfile.trust_settle_seconds` is the window in which a later dialog still wins, and
-Task 1.5 exists so that the number is measured rather than guessed at.
+Task 1.5 exists so the number is measured rather than guessed.
 
-**Method.** Ten launches — five as `claude`, five as `claude-remote` — each into a freshly
-created directory Claude Code had never been asked about, on a throwaway tmux server at
-120x40. Each launch used the curated argv from `domain/profiles.py` and the curated
-environment from `composition/tui.py` (`HOME`, `LANG`, `PATH`, `TERM` and nothing else), which
-is what the service actually hands an agent. The pane was captured every 50 ms for up to 200
-samples (10 s), recording the first sample at which each of three strings appeared: the
-readiness marker `Claude Code`, the profile's declared blocker `Accessing workspace:`, and the
-dialog `Is this a project you created or one you trust?`.
+**Method.** Fifteen launches — five `claude`, five `claude-remote`, five `codex` — each into a
+freshly created directory the agent had never been asked about, on a throwaway tmux server at
+120x40. Each used the curated argv from `domain/profiles.py` and the curated environment from
+`composition/tui.py` (`HOME`, `LANG`, `PATH`, `TERM` and nothing else), which is what the
+service actually hands an agent. The pane was captured in a loop and **`date +%s.%N` was read
+at each capture**, so every figure below is wall-clock elapsed since `tmux new-session`
+returned — not a sample index. Scripts: `measure_wall.sh`, `measure_codex_wall.sh` (scratchpad;
+reproduced in the Task 1.5 and remediation commit bodies).
 
-Script: `measure_trust.sh` (scratchpad; reproduced in the commit body for Task 1.5).
+### Result — the two Claude profiles
 
-**Result.** Sample indices at 50 ms per sample; `—` means the string never appeared inside the
-10 s window.
+| profile | run | marker | blocker | dialog |
+|---|---|---|---|---|
+| `claude` | 1 | +0.820s | — | — |
+| `claude` | 2 | +0.720s | — | — |
+| `claude` | 3 | +0.734s | — | — |
+| `claude` | 4 | +0.779s | — | — |
+| `claude` | 5 | +0.728s | — | — |
+| `claude-remote` | 1 | +0.684s | — | — |
+| `claude-remote` | 2 | +0.768s | — | — |
+| `claude-remote` | 3 | +0.722s | — | — |
+| `claude-remote` | 4 | +0.728s | — | — |
+| `claude-remote` | 5 | +0.768s | — | — |
 
-| profile | run | marker | blocker | dialog | captures between marker and dialog |
-|---|---|---|---|---|---|
-| `claude`        | 1 | 14 | — | — | n/a — no dialog |
-| `claude`        | 2 | 16 | — | — | n/a — no dialog |
-| `claude`        | 3 | 13 | — | — | n/a — no dialog |
-| `claude`        | 4 | 14 | — | — | n/a — no dialog |
-| `claude`        | 5 | 14 | — | — | n/a — no dialog |
-| `claude-remote` | 1 | 14 | — | — | n/a — no dialog |
-| `claude-remote` | 2 | 14 | — | — | n/a — no dialog |
-| `claude-remote` | 3 | 15 | — | — | n/a — no dialog |
-| `claude-remote` | 4 | 14 | — | — | n/a — no dialog |
-| `claude-remote` | 5 | 16 | — | — | n/a — no dialog |
+`—` means the string never appeared inside a 10 s window. The readiness marker appeared in
+every run. **No run produced a blocker or a dialog.**
 
-The marker landed at samples 13–16 in every run (0.65–0.80 s). **No run produced a blocker or
-a dialog**, so the number of captures between marker and dialog was never positive, and the
-plan's stated fallback is what the measurement returns:
+**So the captures between marker and dialog are *undefined* for these two, not zero**, and the
+0.0 they carry is a floor chosen in the absence of the race rather than a measurement of it.
+Claude Code 2.1.265 did not raise the folder-trust question on this host at all: the cause is
+host configuration, not the agent — `~/.claude/settings.json` sets
+`permissions.defaultMode: "auto"`, and under it none of ten launches was asked, including into
+directories with no entry in `~/.claude.json`, which stayed unregistered afterwards. On a host
+that does ask, this is the first number to re-measure, and `test_profiles.py` says so with this
+date attached.
 
-    _TRUST_SETTLE_SECONDS = {"claude": 0.0, "claude-remote": 0.0, "codex": 0.0}
+A discarded first probe is recorded because it is the likelier trap for whoever repeats this:
+launching `claude` with this session's own environment inherited suppresses the dialog through
+`CLAUDECODE` / `CLAUDE_CODE_CHILD_SESSION`. The measurement scrubs the environment to the
+curated set.
 
-**Why it was never positive, which is not "the race does not exist".** Claude Code 2.1.265 did
-not raise the folder-trust question on this host at all. The cause is host configuration
-rather than the agent: `~/.claude/settings.json` sets `permissions.defaultMode: "auto"`, and
-under it no launch — including ten into directories with no entry in `~/.claude.json` at all,
-which stayed unregistered afterwards — was asked. A first probe also had to be discarded and
-is recorded because it is the likelier trap for whoever repeats this: launching `claude` with
-this session's own environment inherited suppresses the dialog through
-`CLAUDECODE` / `CLAUDE_CODE_CHILD_SESSION`, so the measurement must scrub the environment
-down to the curated set, and this one does.
+### Result — codex, which does ask
 
-**So this is a weaker claim than the table looks, and the code says so.** `0.0` is pinned in
-`tests/unit/adapters/tmux/test_profiles.py` with this date in its docstring, and
-`_settle_launch` treats it as "the first capture showing the marker is the answer" — exactly
-the behaviour every profile had before the field existed. On a host that *does* ask, this
-number is the first thing to re-measure.
+| profile | run | marker (`Codex`) | dialog | **gap** |
+|---|---|---|---|---|
+| `codex` | 1 | +0.138s | +0.218s | **0.081s** |
+| `codex` | 2 | +0.138s | +0.221s | **0.083s** |
+| `codex` | 3 | +0.137s | +0.221s | **0.084s** |
+| `codex` | 4 | +0.138s | +0.220s | **0.082s** |
+| `codex` | 5 | +0.138s | +0.220s | **0.083s** |
 
-**The negative option's wording could not be re-measured for Claude**, for the same reason.
-`adapters/tmux/trust.py` records it as *"No, exit"* from Claude Code 2.1.263, and that value
-stands unchanged; nothing in this branch depends on a fresh reading of it yet (Task 2.1 is
-where it would).
+**This is the race, observed.** Codex's banner *is* its readiness marker
+(`_READINESS_MARKERS["codex"] == "Codex"`), and its dialog follows 0.081–0.084 s later, five
+times out of five. A launch whose deciding capture lands in that window sees the marker, sees
+no blocker, and reports a ready agent that is about to stop on a question — which is exactly
+the failure `trust_settle_seconds` exists to prevent, and it is reachable on this host today.
 
-**Codex, by contrast, asks reliably**, which is what makes it the profile the section 2 drill
-uses. Captured on this host on 2026-09-08 from a launch into a never-asked directory:
+    _TRUST_SETTLE_SECONDS = {"claude": 0.0, "claude-remote": 0.0, "codex": 0.1}
+
+0.1 s is the measured maximum (0.084 s) plus one poll interval (0.01 s), rounded up, which is
+the rule the plan set. `opencode` and `cursor-agent` are **absent** from the table rather than
+zero in it, because an unmeasured agent and an agent measured at zero are different things.
+
+### The dialog wording
+
+**Claude's negative option could not be re-measured**, for the same reason its dialog never
+appeared. `adapters/tmux/trust.py` records it as *"No, exit"* from Claude Code 2.1.263 and that
+value stands unchanged; nothing on this branch yet depends on a fresh reading of it.
+
+**Codex's dialog was re-captured today**, into a never-asked directory:
 
 ```
 > You are in /home/user/dev/.ra-codexprobe-<n>
@@ -91,8 +114,9 @@ uses. Captured on this host on 2026-09-08 from a launch into a never-asked direc
   Press enter to continue
 ```
 
-The first line matches `_READINESS_BLOCKERS["codex"]` exactly, so detection for codex rests on
-a string re-observed today rather than on the profile table's memory of it.
+Its first line matches `_READINESS_BLOCKERS["codex"]` exactly, so codex detection rests on a
+string observed now rather than on the profile table's memory of it. Codex is therefore the
+profile the section 2 drill uses.
 
 ---
 

@@ -68,6 +68,10 @@ BLOCKER = "Accessing workspace:"
 MARKER_TO_BLOCKER = 0.3
 SETTLE_OUTLASTS_IT = 3.0
 
+# Long enough that "the launch did not spend the budget" is a real assertion rather
+# than a coincidence of a short one.
+SLOW_BUDGET = 8.0
+
 # How long `settle_ready` will wait for readiness, expressed as a multiple of the thing it
 # is waiting for rather than as a literal -- because the first version of this was a literal
 # 200 tries (a 2.0s sleep-only floor) sitting beside READY_DELAY = 2.0, i.e. a wait whose
@@ -205,6 +209,70 @@ async def test_a_settle_that_sees_no_dialog_still_reports_ready(tmp_path: Path) 
 
         assert observation.live
         assert not observation.awaiting_trust
+    finally:
+        try:
+            await gateway.destroy(session_id)
+        except RuntimeError:
+            pass
+
+
+async def test_a_pane_that_dies_inside_the_settle_window_is_not_reported_ready(
+    tmp_path: Path,
+) -> None:
+    """A reading taken before the pane died is not evidence about a pane that is dead now.
+
+    The settle latches a ready observation and keeps polling. If the agent then exits inside
+    the window, the latched reading is stale — and returning it reports READY for a launch
+    that has already failed. The wider the settle, the wider that window.
+    """
+    terminal, gateway = make_terminal(
+        tmp_path,
+        timeout=STARTUP_BUDGET,
+        mode="marker_then_exit",
+        blockers=(BLOCKER,),
+        trust_settle_seconds=SETTLE_OUTLASTS_IT,
+    )
+    session_id = SessionId.new()
+    try:
+        observation = await terminal.launch(
+            session_id, ProjectId("opaque-editor"), ProfileId("fake")
+        )
+
+        assert not observation.live
+        assert observation.detail == "startup_timeout"
+    finally:
+        try:
+            await gateway.destroy(session_id)
+        except RuntimeError:
+            pass
+
+
+async def test_a_marker_that_scrolls_away_does_not_cost_the_whole_startup_budget(
+    tmp_path: Path,
+) -> None:
+    """The settle must expire on the clock, not on the banner still being visible.
+
+    An agent whose banner scrolls out of the viewport mid-settle is an ordinary agent, not a
+    failing one. Checking the expiry only while the marker is on screen meant the loop ran to
+    the startup deadline instead — the exact cost `_settle_launch` exists to remove,
+    reintroduced inside it.
+    """
+    terminal, gateway = make_terminal(
+        tmp_path,
+        timeout=SLOW_BUDGET,
+        mode="marker_then_scroll",
+        trust_settle_seconds=0.2,
+    )
+    session_id = SessionId.new()
+    started = asyncio.get_running_loop().time()
+    try:
+        observation = await terminal.launch(
+            session_id, ProjectId("opaque-editor"), ProfileId("fake")
+        )
+        elapsed = asyncio.get_running_loop().time() - started
+
+        assert observation.live
+        assert elapsed < SLOW_BUDGET / 2
     finally:
         try:
             await gateway.destroy(session_id)
@@ -423,6 +491,12 @@ def make_terminal(
         f"if sys.argv[1] == 'delayed': time.sleep({READY_DELAY})\n"
         "if sys.argv[1] == 'blocked':\n"
         f"    print({BLOCKER!r}, flush=True); time.sleep({AGENT_LIFETIME}); sys.exit()\n"
+        "if sys.argv[1] == 'marker_then_exit':\n"
+        f"    print('READY', flush=True); time.sleep({MARKER_TO_BLOCKER}); sys.exit()\n"
+        "if sys.argv[1] == 'marker_then_scroll':\n"
+        f"    print('READY', flush=True); time.sleep({MARKER_TO_BLOCKER})\n"
+        "    [print('filler line %d' % n, flush=True) for n in range(200)]\n"
+        f"    time.sleep({AGENT_LIFETIME}); sys.exit()\n"
         "if sys.argv[1] == 'marker_then_blocker':\n"
         f"    print('READY', flush=True); time.sleep({MARKER_TO_BLOCKER})\n"
         f"    print({BLOCKER!r}, flush=True); time.sleep({AGENT_LIFETIME}); sys.exit()\n"
