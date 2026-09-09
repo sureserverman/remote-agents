@@ -162,18 +162,17 @@ async def test_the_dialog_alone_answers_a_profile_that_may_be_asked(tmp_path) ->
 
     `claude`'s configured blocker is the *pre-trust* screen ("Accessing workspace:"), so a
     pane that has already drawn the question and is resting on it matches no blocker at all.
-    Classifying the capture is what closes that gap, and it is gated on TRUST_ANSWERABLE
-    because it is the same classifier the answering path uses.
+    Classifying the capture is what closes that gap, and it reads the dialog the profile's own
+    vertical declares — the same declaration the answering path uses, so what is noticed and
+    what can be answered cannot disagree.
+
+    Driven from `_DIALOG` rather than a second copy inline. It *was* a copy, and it went stale
+    the day claude's identifier stopped being its affirmative: the shared fixture beside it was
+    updated and this one was not, so the test failed while the behaviour it names was correct.
     """
     profile = _profile(None, ())
-    capture = (
-        "Is this a project you created or one you trust?\n"
-        "\n"
-        "\u276f No, exit\n"
-        "  Yes, I trust this folder\n"
-    )
 
-    observation = await _resume(tmp_path, profile, capture)
+    observation = await _resume(tmp_path, profile, _DIALOG)
 
     assert observation.awaiting_trust
     assert observation.live
@@ -250,8 +249,21 @@ _CODEX_DIALOG = (
     "  2. No, quit\n"
 )
 
+#: Claude's dialog, abbreviated — but no longer abbreviated past its own identifier.
+#:
+#: This dropped `Quick safety check`, the sentence the real dialog opens with, because until
+#: 2026-09-09 nothing read it: claude identified its dialog by its affirmative. That made the
+#: classifier's "three markers" two, so a screen carrying the question and the answer — a file
+#: of this project's own fixtures, displayed in a pane — satisfied all three checks at once.
+#: The identifier is now a marker of its own, and a fixture trimmed past it is no longer the
+#: screen the parser sees. Kept as an abbreviation rather than a full capture because what this
+#: file drives is the *route*; the verbatim 2.1.263 layout lives in
+#: `tests/unit/adapters/tmux/test_trust.py`.
 _DIALOG = (
-    "Is this a project you created or one you trust?\n\n❯ No, exit\n  Yes, I trust this folder\n"
+    "Quick safety check: Is this a project you created or one you trust?\n"
+    "\n"
+    "❯ No, exit\n"
+    "  Yes, I trust this folder\n"
 )
 
 
