@@ -2149,3 +2149,73 @@ def test_serve_closes_the_database_when_secret_resolution_fails(tmp_path, monkey
         main(["serve", "--config", str(config)])
 
     assert closed == [True], "the open connection must be closed when resolution refuses"
+
+
+@pytest.mark.asyncio
+async def test_an_untrusted_launch_asks_the_question_instead_of_reporting_a_failure() -> None:
+    """Ask 1's whole point, at the reply the owner actually reads.
+
+    The sibling test above pins what a *genuine* startup failure still says, and it stays
+    exactly as it was — this is not a rewording of that branch but a different branch beside
+    it. What changed is which launches reach it: a trust-blocked one used to spend the whole
+    startup budget and land there, reporting a failure for an agent that was up and one
+    answer away.
+    """
+    untrusted = _record(SessionState.UNTRUSTED, "untrusted", ProjectId("a" * 24))
+    launcher = _Launcher()
+    # Explicitly claude: the *yes* is confined to TRUST_ANSWERABLE, so the profile is what
+    # decides whether this reply carries one button or two.
+    launcher.launch_result = replace(untrusted, profile_id=ProfileId("claude"))
+    boundary = build_private_bot(
+        7,
+        11,
+        backend=backend_for(
+            catalogue=(CatalogProject("a" * 24, "Demo", "tests", "Registered"),), sessions=launcher
+        ),
+        profiles=(ProfileAvailability("claude", True),),
+    )
+    token = boundary.callbacks.create(
+        "launch.profile", "a" * 24 + "|claude", 7, 11, 1, mutation=True
+    )
+
+    reply = await boundary._launch_reply("a" * 24 + "|claude", token, 1)
+
+    assert "did not become ready" not in reply["text"]
+    assert "never approved remotely" not in reply["text"]
+    assert "Waiting to be trusted" in reply["text"]
+    assert "Nothing runs until you answer." in reply["text"]
+    assert [
+        unpadded(button.text) for row in reply["reply_markup"].inline_keyboard for button in row
+    ] == [
+        "Trust this project",
+        "Don't trust — close it",
+        "Sessions",
+        "Launch",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_an_untrusted_launch_of_an_unreadable_dialog_offers_only_the_no() -> None:
+    """cursor-agent is not TRUST_ANSWERABLE, so the yes would refuse itself when pressed."""
+    untrusted = _record(SessionState.UNTRUSTED, "untrusted", ProjectId("a" * 24))
+    launcher = _Launcher()
+    launcher.launch_result = replace(untrusted, profile_id=ProfileId("cursor-agent"))
+    boundary = build_private_bot(
+        7,
+        11,
+        backend=backend_for(
+            catalogue=(CatalogProject("a" * 24, "Demo", "tests", "Registered"),), sessions=launcher
+        ),
+        profiles=(ProfileAvailability("cursor-agent", True),),
+    )
+    token = boundary.callbacks.create(
+        "launch.profile", "a" * 24 + "|cursor-agent", 7, 11, 1, mutation=True
+    )
+
+    reply = await boundary._launch_reply("a" * 24 + "|cursor-agent", token, 1)
+
+    labels = [
+        unpadded(button.text) for row in reply["reply_markup"].inline_keyboard for button in row
+    ]
+    assert "Trust this project" not in labels
+    assert "Don't trust — close it" in labels

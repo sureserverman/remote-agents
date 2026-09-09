@@ -51,6 +51,12 @@ def test_telegram_action_audit_accepts_the_closed_adapter_surface() -> None:
     project, which is strictly more power than trusting it -- so the addition removes a
     confusing failure rather than granting a new capability. It is the first addition since
     the surface was closed, and this test is what makes the next one visible too.
+
+    `decline` joined it on 2026-09-09 (DEC-078), and it is the next one -- this test caught
+    it, which is what it was for. The capability argument is the same shape and stronger: the
+    bot may already force stop a session, which is strictly more power than declining one
+    that has not started. What is genuinely new is not the power but the *absence of a
+    confirmation step*, and that is why it needed a decision rather than only a roster entry.
     """
     completed = subprocess.run(
         [sys.executable, "tests/architecture/check_telegram_actions.py"],
@@ -60,8 +66,8 @@ def test_telegram_action_audit_accepts_the_closed_adapter_surface() -> None:
     )
 
     assert (
-        "launch/resume/list/inspect/graceful/cleanup/force/create-project/trust/navigation"
-        in completed.stdout
+        "launch/resume/list/inspect/graceful/cleanup/force/create-project/trust/decline/"
+        "navigation" in completed.stdout
     )
 
 
@@ -1812,3 +1818,108 @@ async def test_a_session_ending_between_the_row_and_the_press_is_refused_in_word
     assert chat.messages[anchor].text == (
         "Copy Attach is unavailable: this session has no pane on this host any more."
     )
+
+
+class _DecliningLauncher(_TrustLauncher):
+    """A trust-blocked session that can also be declined."""
+
+    def __init__(self, record: SessionRecord) -> None:
+        super().__init__(record)
+        self.declined: list[SessionId] = []
+
+    async def decline_trust(self, command):
+        self.declined.append(command.session_id)
+        self.record = replace(self.record, state=SessionState.ENDED)
+        return self.record
+
+
+def _untrusted_bot(profile: str = "claude") -> tuple[PrivateBotBoundary, _DecliningLauncher]:
+    record = replace(_a_running_session(SessionState.UNTRUSTED), profile_id=ProfileId(profile))
+    launcher = _DecliningLauncher(record)
+    boundary = build_private_bot(
+        7,
+        11,
+        backend=backend_for(
+            catalogue=(CatalogProject("a" * 24, "Demo", "tests", "Registered"),),
+            sessions=launcher,
+        ),
+    )
+    return boundary, launcher
+
+
+@pytest.mark.asyncio
+async def test_the_detail_screen_offers_both_answers_to_the_trust_question() -> None:
+    """Ask 2's fallback. The notification is the primary route (DEC-049 may abandon it),
+    so the detail screen has to carry both answers too, or a session whose message was
+    refused three times has no way to be answered at all."""
+    boundary, _ = _untrusted_bot()
+    chat = FakeChat()
+    anchor = await _open_detail(chat, boundary)
+
+    labels = [
+        unpadded(button.text)
+        for row in chat.messages[anchor].reply_markup.inline_keyboard
+        for button in row
+    ]
+
+    assert "Trust this project" in labels
+    assert any("Don" in label and "trust" in label for label in labels)
+
+
+@pytest.mark.asyncio
+async def test_a_session_whose_dialog_this_project_cannot_read_is_only_offered_the_no() -> None:
+    """codex is not TRUST_ANSWERABLE: saying yes means typing into a dialog nobody parsed.
+
+    Saying no does not, so the two answers have different availability and the keyboard has
+    to show that rather than offering a button that would refuse itself when pressed.
+    """
+    boundary, _ = _untrusted_bot("codex")
+    chat = FakeChat()
+    anchor = await _open_detail(chat, boundary)
+
+    labels = [
+        unpadded(button.text)
+        for row in chat.messages[anchor].reply_markup.inline_keyboard
+        for button in row
+    ]
+
+    assert "Trust this project" not in labels
+    assert [label for label in labels if "Don" in label and "trust" in label] == [
+        "Don't trust — close it"
+    ]
+
+
+@pytest.mark.asyncio
+async def test_pressing_do_not_trust_ends_the_session() -> None:
+    boundary, launcher = _untrusted_bot()
+    chat = FakeChat()
+    anchor = await _open_detail(chat, boundary)
+    decline = next(
+        button
+        for row in chat.messages[anchor].reply_markup.inline_keyboard
+        for button in row
+        if "Don" in unpadded(button.text) and "trust" in unpadded(button.text)
+    )
+
+    await boundary.callback(chat.press(decline.callback_data, on=anchor), None)
+
+    assert launcher.declined == [launcher.record.session_id]
+
+
+@pytest.mark.asyncio
+async def test_a_declined_session_cannot_be_declined_twice_from_one_render() -> None:
+    """The token is one-shot (DEC-011), and this button ends a session unconfirmed."""
+    boundary, launcher = _untrusted_bot()
+    chat = FakeChat()
+    anchor = await _open_detail(chat, boundary)
+    decline = next(
+        button
+        for row in chat.messages[anchor].reply_markup.inline_keyboard
+        for button in row
+        if "Don" in unpadded(button.text) and "trust" in unpadded(button.text)
+    )
+
+    await boundary.callback(chat.press(decline.callback_data, on=anchor), None)
+    await boundary.callback(chat.press(decline.callback_data, on=anchor), None)
+
+    assert launcher.declined == [launcher.record.session_id], "the second press did nothing"

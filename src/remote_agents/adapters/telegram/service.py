@@ -54,6 +54,7 @@ from remote_agents.adapters.telegram.stops import CONFIRMED_FORCE, StopControlle
 from remote_agents.application.backend import Backend
 from remote_agents.application.commands import (
     AnswerTrustCommand,
+    DeclineTrustCommand,
     InspectQuery,
     LaunchCommand,
     RemoteControlCommand,
@@ -63,7 +64,11 @@ from remote_agents.application.conversations import (
     ConversationCatalogueQuery,
     resume_available,
 )
-from remote_agents.application.errors import ProjectCreationError, SessionNotFoundError
+from remote_agents.application.errors import (
+    ProjectCreationError,
+    SessionNotFoundError,
+    StopNotPermittedError,
+)
 from remote_agents.application.host_remote_control import (
     HOST_REMOTE_CONTROL_LABELS,
     HOST_REMOTE_CONTROL_TITLE,
@@ -89,6 +94,7 @@ from remote_agents.application.session_actions import (
     REMOTE_CONTROL_LABELS,
     StopFailure,
     available_actions,
+    decline_trust_available,
     explain_state,
     notifiable,
     pane_is_attachable,
@@ -1266,6 +1272,8 @@ class PrivateBotBoundary:
         # runs, because its message must be *sent* rather than edited into the live view.
         if action == "session.trust":
             return await self._trust_reply(entity_id, token, message_id)
+        if action == "session.decline":
+            return await self._decline_reply(entity_id, token, message_id)
         if action == "session.inspect":
             return _reply_arguments(await self._inspect_reply(entity_id))
         return _reply_arguments(self._message("That action is no longer available."))
@@ -1322,11 +1330,49 @@ class PrivateBotBoundary:
                     ),
                 )
             )
+        if record.state is SessionState.UNTRUSTED:
+            return _reply_arguments(self._trust_question(record))
         return _reply_arguments(
             self._message(
                 f"<b>Session created</b>\n{escape(record.display.rendered)}\nState: {record.state}",
                 ((Button("Inspect", self._callback("session.detail", str(record.session_id))),),),
             )
+        )
+
+    def _trust_question(self, record: SessionRecord) -> RenderedMessage:
+        """The launch reply for a session that came up on its agent's folder-trust dialog.
+
+        **The launch did not fail, and the reply must not read like it did.** What the owner
+        got before this state existed was "Session did not become ready" after the whole
+        startup budget -- true, and useless (DEC-016). The agent is up and one answer away.
+
+        Both answers, on rows of their own, offered on the same conditions the detail screen
+        uses: a profile whose dialog this project cannot read gets only the *no*.
+        """
+        session_value = str(record.session_id)
+        rows: list[tuple[Button, ...]] = []
+        if record.profile_id in TRUST_ANSWERABLE:
+            rows.append(
+                (
+                    Button(
+                        "Trust this project",
+                        self._callback("session.trust", session_value, mutation=True),
+                    ),
+                )
+            )
+        rows.append(
+            (
+                Button(
+                    "Don't trust — close it",
+                    self._callback("session.decline", session_value, mutation=True),
+                ),
+            )
+        )
+        return self._message(
+            f"🔒 <b>Waiting to be trusted</b>\n{escape(record.display.rendered)}\n"
+            "The agent is asking whether this folder can be trusted. Nothing runs until you "
+            "answer.",
+            tuple(rows),
         )
 
     async def _resume_reply(
@@ -1728,6 +1774,26 @@ class PrivateBotBoundary:
                         # it is claimed once and never replayed, exactly like the confirmed
                         # stop and resume buttons.
                         self._callback("session.trust", session_value, mutation=True),
+                    ),
+                )
+            )
+        if decline_trust_available(record):
+            # **A row of its own, one wide, and offered on a different condition from the
+            # row above it.** Saying yes means typing into the agent's dialog, so it is
+            # confined to the profiles this project can read and costs a pane capture to
+            # decide. Saying no does not: it ends a session that never started, which is
+            # reachable for codex and cursor-agent too and needs only the record. So a
+            # session whose dialog nobody parses gets exactly one of these two buttons,
+            # rather than a Trust that would refuse itself when pressed.
+            #
+            # This is the fallback rather than the primary route -- the notification is --
+            # and it exists because DEC-049 abandons a message after three refusals, which
+            # would otherwise leave that session with no way to be answered at all.
+            buttons.append(
+                (
+                    Button(
+                        "Don't trust — close it",
+                        self._callback("session.decline", session_value, mutation=True),
                     ),
                 )
             )
@@ -2283,6 +2349,48 @@ class PrivateBotBoundary:
         return _reply_arguments(
             self._message("Trusted. The agent can continue; relaunch if it already gave up.")
         )
+
+    async def _decline_reply(
+        self, entity_id: str, token: str, message_id: int
+    ) -> dict[str, object]:
+        """Answer the folder-trust question with *no*, which ends the session (DEC-078).
+
+        The only button on this surface that ends a session without a confirmation step, and
+        the ordering here is the same one `_trust_reply` uses for the same reason: everything
+        re-derivable is re-derived *before* the one-shot is claimed, so a press against a
+        session that has since gone does not burn the token and leave the owner a button that
+        answers "already run" for something that never ran.
+
+        The refusal the service can raise is not an error to report as a failure -- it is the
+        stale-record case, where the dialog was answered elsewhere while this message sat on
+        the owner's phone. They are told what happened rather than that something broke.
+        """
+        if self.backend.sessions is None:
+            return _reply_arguments(self._message("Answering the trust question is unavailable."))
+        record = await self._record(entity_id)
+        if record is None:
+            return _reply_arguments(self._message("That session is no longer available."))
+        if not decline_trust_available(record):
+            return _reply_arguments(self._message("That session is not waiting to be trusted."))
+        if not self.callbacks.claim_mutation(
+            token,
+            owner_id=self.owner_user_id,
+            chat_id=self.owner_chat_id,
+            message_id=message_id,
+        ):
+            return _reply_arguments(self._message("That action has already run."))
+        try:
+            await self.backend.sessions.decline_trust(
+                DeclineTrustCommand(SessionId.parse(entity_id), token)
+            )
+        except StopNotPermittedError:
+            return _reply_arguments(
+                self._message(
+                    "That question has already been answered, so the session is running. "
+                    "Stop it from its own screen if you meant to end it."
+                )
+            )
+        return _reply_arguments(await self._sessions_reply(notice="Closed without trusting."))
 
     async def _inspect_reply(self, session_value: str) -> RenderedMessage:
         """Render captured output over a way back to the session that produced it.
