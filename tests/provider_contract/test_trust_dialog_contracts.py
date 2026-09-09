@@ -69,6 +69,27 @@ def test_every_descriptor_declares_a_complete_trust_dialog_or_none(descriptor) -
     )
 
 
+def test_an_identifier_is_a_marker_of_its_own_and_not_a_restatement(descriptor) -> None:
+    """Three markers must be three strings, or the guard is two wearing a third's name.
+
+    `classify_trust_capture` requires the identifier, the question and the affirmative
+    together, on the argument that any one of them appears in ordinary agent output the moment
+    somebody discusses this feature. That argument collapses if the identifier *is* the
+    affirmative: a screen carrying the question and the answer — a file of this project's own
+    fixtures, displayed in a pane — then satisfies all three at once, and two of the three
+    providers were declared that way until the Stage 1 adversarial pass pointed at it.
+
+    Nothing here can make a wording unspoofable; what it can do is require that a screen carry
+    three independent strings rather than two.
+    """
+    dialog = drive_or_skip(descriptor, "trust_dialog")
+
+    assert dialog.identifies_by not in (dialog.affirmative, dialog.negative, dialog.question), (
+        f"{descriptor.profile_id} identifies its dialog by one of its own answers, so the "
+        "classifier's third marker is not a third marker at all"
+    )
+
+
 def test_no_two_providers_identify_themselves_by_the_same_string() -> None:
     declared = [
         (profile, dialog.identifies_by) for profile, dialog in _dialogs().items() if dialog

@@ -332,3 +332,26 @@ def test_a_row_between_the_two_options_makes_the_count_a_refusal(capfd) -> None:
     )
     # The accept is unaffected: the cursor already rests on it, so no row is crossed at all.
     assert plan_trust_keys(perturbed, _dialog("cursor-agent"), accept=True) == ("Enter",)
+
+
+def test_one_row_carrying_both_answers_plans_nothing() -> None:
+    """*Decline* must never compute *accept*'s keys, and one row can make it do exactly that.
+
+    A side-by-side chooser puts both option strings on one line, so `target` resolves to the
+    same index for either answer and the two plans become identical. On codex and cursor-agent
+    the cursor rests on the **affirmative**, so a bare confirm there grants the trust the owner
+    had just refused — the worst outcome this module can produce, from a press that says no.
+
+    Refused today by all three measured layouts stacking their options vertically, which is a
+    coincidence of those captures rather than a guarantee: this module exists because Claude
+    Code's layout already changed once. Raised by the Stage 1 adversarial pass.
+    """
+    side_by_side = (
+        "Do you trust the contents of this directory?\n"
+        "\n"
+        "› [ Yes, continue ]   [ No, quit ]\n"
+        "  something else\n"
+    )
+
+    assert plan_trust_keys(side_by_side, _dialog("codex"), accept=True) is None
+    assert plan_trust_keys(side_by_side, _dialog("codex"), accept=False) is None

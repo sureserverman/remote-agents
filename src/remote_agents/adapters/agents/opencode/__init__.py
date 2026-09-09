@@ -29,6 +29,14 @@ def descriptor() -> ProviderDescriptor:
 
     `remote_control` stays a declared `None`: OpenCode has no host-level toggle (DEC-061 --
     absence is declared, never invented).
+
+    `trust_dialog` stays a declared `None` too, and it is the one absence with a keypress behind
+    it: OpenCode raises no folder-trust question on any host measured (fourteen seconds, twice,
+    into a directory it had never been asked about -- `docs/acceptance-2026-09-09-trust-dialogs.md`
+    section 3), so a Trust button on one of its sessions would send arrow keys and an Enter into
+    a live prompt with no question on it. Said here rather than left to the field's default,
+    because four other artifacts describe this vertical as *declaring* the absence and a reader
+    who came looking found nothing to read (DEC-009).
     """
     return ProviderDescriptor(
         ProfileId("opencode"),

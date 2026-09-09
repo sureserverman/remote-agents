@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
-from remote_agents.adapters.agents.registry import profile_glyphs, profile_trust_dialogs
+from remote_agents.adapters.agents.registry import (
+    profile_glyphs,
+    profile_trust_dialogs,
+    provider_descriptors,
+)
 from remote_agents.adapters.sqlite.activity_store import SQLiteActivityStore
 from remote_agents.adapters.sqlite.callback_state_store import SQLiteCallbackStateStore
 from remote_agents.adapters.sqlite.chat_view_store import SQLiteChatViewStore
@@ -30,7 +34,21 @@ def _private_boundary(
     config, connection, paths: ProductionPaths, secrets: TelegramSecrets
 ) -> ServiceComposition:
     projects = ProjectCatalogueProvider(config.registry_path, config.dev_root)
-    runtime = _local_runtime(config, paths, projects.paths)
+    # **One build of the descriptors for this whole composition**, with the owner's stated
+    # ceiling, threaded into everything that folds them. Built here rather than left to each
+    # caller because a descriptor constructs its vertical's collaborators — Claude's usage
+    # reader among them — so three unthreaded folds meant three throwaway readers carrying this
+    # project's assumed context window instead of the owner's number (DEC-061). `compose_backend`
+    # makes the same build for the same reason; the gate evaluator found that fixing it there
+    # left both production paths untouched, because each hands `compose_backend` a runtime it
+    # had already built.
+    descriptors = provider_descriptors(
+        claude_context_window=(
+            config.claude_context_window if config.claude_context_window_stated else None
+        ),
+        claude_context_window_stated=config.claude_context_window_stated,
+    )
+    runtime = _local_runtime(config, paths, projects.paths, descriptors)
     terminal = runtime.terminal
     store = SQLiteSessionStore(connection)
     # One lock map, shared by the two objects that write session state. See the note on the
@@ -103,12 +121,12 @@ def _private_boundary(
         # The registry is the one module that may import every vertical (ARCH-02/ARCH-04),
         # and the bot is one that may import none, so the mapping is built on this side of
         # that line and handed over — the same shape `usage_readers` is folded in with.
-        glyphs=profile_glyphs(),
+        glyphs=profile_glyphs(descriptors),
         # The other provider fact this surface is handed rather than knowing: which
         # profiles it may offer *both* answers to. Read off the same registry as the
         # marks, and the same mapping the terminal is given, so the button and the
         # keypress cannot disagree about who can be answered.
-        trust_dialogs=profile_trust_dialogs(),
+        trust_dialogs=profile_trust_dialogs(descriptors),
         project_page_size=config.project_page_size,
         # The durable home for the one standing trust question per session (migration 12).
         # Its absence is what a boundary without a trust pass looks like, so supplying it is

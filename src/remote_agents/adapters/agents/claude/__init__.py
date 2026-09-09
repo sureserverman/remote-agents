@@ -56,6 +56,13 @@ def descriptor(
             affirmative="Yes, I trust this folder",
             negative="No, exit",
             cursor="❯",
-            identifies_by="Yes, I trust this folder",
+            # **Not the affirmative.** An identifier that restates an answer is two markers
+            # dressed as three: any screen carrying the question and the answer — a file of
+            # this project's own fixtures, displayed in a pane — satisfies both at once.
+            # `Quick safety check` is the sentence the dialog opens with and is no answer,
+            # so it is a third string a screen has to carry independently. Carried from
+            # 2.1.263 with the rest of this declaration; if a later version drops the phrase
+            # the parser stops recognising the dialog, which is the safe direction.
+            identifies_by="Quick safety check",
         ),
     )

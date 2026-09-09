@@ -45,6 +45,8 @@ def descriptor() -> ProviderDescriptor:
             affirmative="Yes, continue",
             negative="No, quit",
             cursor="›",
-            identifies_by="Yes, continue",
+            # Not the affirmative, for the reason claude's declaration gives: this is the
+            # sentence codex draws under its question, and it is no answer.
+            identifies_by="Working with untrusted contents",
         ),
     )

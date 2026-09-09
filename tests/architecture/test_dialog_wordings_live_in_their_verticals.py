@@ -27,6 +27,11 @@ _VERTICALS = "adapters/agents/"
 #: The one module outside the verticals that spells two of these strings, named rather than
 #: excluded silently — **BL-052**.
 #:
+#: **DEC-070 already rejected moving those tables** — *"whose move would create a tmux→agents
+#: adapter dependency"* — so this exception is not a deferred refactor waiting for someone to
+#: do it, and the next reader should not re-open that question. What BL-052 tracks is narrower:
+#: the same sentence is now spelled twice, in two places that answer to nothing in common.
+#:
 #: `_READINESS_BLOCKERS` carries codex's question and cursor-agent's `Workspace Trust Required`
 #: because a readiness blocker is a *different fact* from a dialog: it is what the agent prints
 #: while it is not working, which for `claude` is the pre-trust screen and not the dialog at

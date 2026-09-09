@@ -12,7 +12,10 @@ from dataclasses import dataclass
 from functools import partial
 from pathlib import Path
 
-from remote_agents.adapters.agents.registry import profile_trust_dialogs
+from remote_agents.adapters.agents.registry import (
+    profile_trust_dialogs,
+    provider_descriptors,
+)
 from remote_agents.adapters.sqlite.activity_store import SQLiteActivityStore
 from remote_agents.adapters.tmux.codec import attach_argv
 from remote_agents.adapters.tmux.gateway import TmuxGateway
@@ -156,8 +159,12 @@ def _local_runtime(config, paths: ProductionPaths, project_paths, descriptors=No
         # the owner's stated context ceiling. A second build here made one *without* it, which
         # is a reader carrying this project's assumption instead of the owner's number — the
         # invented value DEC-061 forbids, arriving through the composition rather than the
-        # reader. Caught by `test_compose_backend_hands_the_readers_the_declared_ceiling`,
-        # which counts every construction for exactly this reason.
+        # reader. Caught by `test_compose_backend_hands_the_readers_the_declared_ceiling`, which
+        # counts every construction — **but only through `compose_backend`'s own entry point.**
+        # An earlier version of this comment claimed that test covered the production paths. It
+        # does not, and both of them were still building a second set while it said so; the gate
+        # evaluator found the gap by reading the call sites rather than the claim. What covers
+        # them now is `test_every_production_composition_builds_one_descriptor_set`.
         trust_dialogs=profile_trust_dialogs(descriptors),
     )
     return LocalRuntime(terminal, compatibility, gateway)
@@ -294,7 +301,16 @@ def local_context(config, connection, paths: ProductionPaths):
     from remote_agents.adapters.tui.context import FEED_LIMIT, TuiContext
 
     projects = ProjectCatalogueProvider(config.registry_path, config.dev_root)
-    runtime = _local_runtime(config, paths, projects.paths)
+    # One build, threaded — the same reason `_private_boundary` and `compose_backend` do it.
+    # Fixing this inside `compose_backend` alone left both production paths building a second,
+    # ceiling-less set, because each hands it a runtime it had already built.
+    descriptors = provider_descriptors(
+        claude_context_window=(
+            config.claude_context_window if config.claude_context_window_stated else None
+        ),
+        claude_context_window_stated=config.claude_context_window_stated,
+    )
+    runtime = _local_runtime(config, paths, projects.paths, descriptors)
 
     open_in_console = None
     console_sync = None

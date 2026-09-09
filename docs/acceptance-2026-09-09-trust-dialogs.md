@@ -18,6 +18,13 @@ Task 1.1.
 > is not on screen. Every `identifies_by` below is checked against every *other* agent's
 > capture, in a contract test, not by eye.
 
+**The blocks below are the fixtures' own bytes**, blank lines included. That is not
+pedantry: `_option_block` bounds its row count by a run of non-blank lines, so a capture
+with its blank lines stripped is a *different screen* to the parser than the one measured.
+The first version of this document stripped them, and a reader reproducing the arithmetic
+from the page rather than from `tests/fixtures/trust_dialogs/` would have been working from
+a layout the code never sees. Found by the Stage 1 gate evaluator.
+
 Versions measured: `codex-cli 0.153.4`, `cursor-agent 2026.09.08-6caf4ff`,
 `2.1.266 (Claude Code)`, `opencode 1.18.30`. Pane 120x40.
 
@@ -31,11 +38,14 @@ First appearance of the question, wall-clock from `tmux new-session` returning, 
 **cursor codepoint: `›` U+203A**, resting on the **affirmative** row.
 
 ```
-> You are in <the never-asked directory>
+> You are in <never-asked>
+
   Do you trust the contents of this directory? Working with untrusted contents comes with higher risk of prompt
   injection. Trusting the directory allows project-local config, hooks, and exec policies to load.
+
 › 1. Yes, continue
   2. No, quit
+
   Press enter to continue
 ```
 
@@ -53,6 +63,7 @@ First appearance of `Workspace Trust Required`, three runs: **+0.666 s, +0.655 s
 **cursor codepoint: `▶` U+25B6**, resting on the **affirmative** row.
 
 ```
+
   ╭──────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
   │                                                                                                                  │
   │  ⚠ Workspace Trust Required                                                                                      │
@@ -61,7 +72,7 @@ First appearance of `Workspace Trust Required`, three runs: **+0.666 s, +0.655 s
   │                                                                                                                  │
   │  Do you trust the contents of this directory?                                                                    │
   │                                                                                                                  │
-  │    <the never-asked directory>  │
+  │    <never-asked>  │
   │                                                                         │
   │                                                                                                                  │
   │                                                                                                                  │
@@ -95,17 +106,44 @@ readiness blocker, and appears in no other capture here.
 Fourteen seconds, twice: **no dialog, ever**. `opencode` goes straight to its prompt.
 
 ```
+
+
+
+
+
+
+
+
+
+
+
+
+
                                                                           ▄
                                          █▀▀█ █▀▀█ █▀▀█ █▀▀▄ █▀▀▀ █▀▀█ █▀▀█ █▀▀█
                                          █  █ █  █ █▀▀▀ █  █ █    █  █ █  █ █▀▀▀
                                          ▀▀▀▀ █▀▀▀ ▀▀▀▀ ▀▀▀▀ ▀▀▀▀ ▀▀▀▀ ▀▀▀▀ ▀▀▀▀
+
+
                        ┃
                        ┃  Ask anything… "Fix a TODO in the codebase"
                        ┃
                        ┃  Build · GPT-5.6 Terra OpenAI · medium
                        ╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
                                                                        tab agents  ctrl+p commands
-  <the never-asked directory>    1.18.30
+
+
+
+
+
+
+
+
+
+
+
+
+  <never-asked>    1.18.30
   nev
 ```
 
@@ -121,9 +159,39 @@ Twelve seconds each: **no dialog**. `claude` v2.1.266 lands directly on its prom
 `claude --remote-control <name>` does the same.
 
 ```
+
  ▐▛███▛█   Claude Code v2.1.266
 ▝▜██████▀  Opus 5 (1M context) with high effort · Claude Max
   ▝▝ ▝▝    /…/5826f7a8-2680-404d-9378-25b489306788/scratchpad/dirs/nev
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
                                                                                                       ● high · /effort
 ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
 ❯ Try "edit <filepath> to..."
@@ -179,3 +247,27 @@ against the four captures above:
 
 The shared sentence `Do you trust the contents of this directory?` appears in **both** the codex
 and the cursor-agent captures, which is exactly why it identifies neither.
+
+---
+
+## Section 7 — What the owner runs, and it is not run here
+
+The gate's first judgment check names a Telegram press and a keypress into a live pane. Nothing
+above is that, and nothing above claims to be: sections 1–6 measure what each agent *draws* and
+prove the parser reads it, which reaches exactly as far as the pane boundary. The last link —
+the keys arriving, and the row afterwards — is the owner's.
+
+- [ ] From the bot, launch `codex` into a directory it has never been asked about. The reply
+      carries **both** buttons: ✅ Trust this project and ⛔ Don't trust — close it.
+- [ ] Press **Trust**. The agent's dialog is answered in its own words, and the session's row
+      turns `running` rather than staying `untrusted`.
+- [ ] The same for `cursor-agent`, whose dialog is drawn inside a box and whose cursor also
+      rests on the affirmative.
+- [ ] Launch `opencode` into a never-asked directory and confirm the reply carries **only** the
+      decline — it raises no dialog, so a Trust button there would type into a live prompt.
+- [ ] Record which agent versions were running, because §1 and §2's figures belong to
+      `codex-cli 0.153.4` and `cursor-agent 2026.09.08-6caf4ff`.
+
+**What no test covers, stated so it is not mistaken for covered:** nothing in the suite sends
+the planned keys into a live agent's pane. The keys are computed against real captures and the
+sending is exercised against fakes; the join between them is this drill.

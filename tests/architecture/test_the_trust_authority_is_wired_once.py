@@ -81,3 +81,50 @@ def test_the_composed_bot_is_handed_the_same_answer_the_terminal_gets() -> None:
         "the bot is not handed the trust dialogs, so its availability policy would fall back "
         f"to an empty mapping and offer the decline alone for every agent: {sorted(keywords)}"
     )
+
+
+def test_every_production_composition_builds_one_descriptor_set() -> None:
+    """The fix that did not fire, pinned where it failed to.
+
+    `compose_backend` builds the descriptors with the owner's stated context ceiling and hands
+    them on. Both production compositions call `_local_runtime` *first* and pass the built
+    runtime in, so `runtime or _local_runtime(...)` never runs and the fix inside it never
+    fired: each was still folding glyphs and trust dialogs from a second, ceiling-less build —
+    three throwaway `ClaudeUsageReader`s carrying this project's assumed context window instead
+    of the owner's number (DEC-061). Behaviourally inert, because those descriptors are
+    discarded after one field is read; the hazard is that the next capability folded this way
+    would not be.
+
+    Read off the source, because constructing either composition probes for agent binaries and
+    wants a Telegram token. What is asserted is the shape: each entry point builds the set once
+    and every fold in it takes that set.
+    """
+    import ast
+    import pathlib
+
+    root = pathlib.Path(__file__).resolve().parents[2] / "src" / "remote_agents" / "composition"
+
+    for module, entry in (("telegram", "_private_boundary"), ("tui", "local_context")):
+        tree = ast.parse((root / f"{module}.py").read_text(encoding="utf-8"))
+        function = next(
+            node
+            for node in ast.walk(tree)
+            if isinstance(node, ast.AsyncFunctionDef | ast.FunctionDef) and node.name == entry
+        )
+        source = ast.dump(function)
+        builds = source.count("'provider_descriptors'")
+        assert builds == 1, (
+            f"{module}.{entry} calls provider_descriptors {builds} times; one build is threaded "
+            "through the composition so every fold sees the owner's stated ceiling"
+        )
+        folds = [
+            node
+            for node in ast.walk(function)
+            if isinstance(node, ast.Call)
+            and getattr(node.func, "id", "") in {"profile_glyphs", "profile_trust_dialogs"}
+        ]
+        for fold in folds:
+            assert fold.args, (
+                f"{module}.{entry} folds {fold.func.id} without the descriptors it already "  # type: ignore[attr-defined]
+                "built, so it builds a second set"
+            )

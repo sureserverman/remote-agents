@@ -126,6 +126,18 @@ def plan_trust_keys(
     if block is None:
         return None
     cursor = _sole_index(block, dialog.cursor)
+    # **The two answers must be two rows.** Nothing here required that until the Stage 1
+    # adversarial pass asked what happens when one row carries both option strings -- a
+    # side-by-side chooser (`› [ Yes, continue ]  [ No, quit ]`), or any screen where the two
+    # phrases land on one line. `target` is then the same index for both answers, so *decline*
+    # computes *accept*'s keys: on codex and cursor-agent, whose cursor rests on the
+    # affirmative, pressing "Don't trust" would confirm the trust the owner had just refused.
+    # Refused today only because all three measured dialogs stack their options vertically,
+    # which is a coincidence of the layouts and not a check -- and this module exists because a
+    # layout already changed once.
+    if _sole_index(block, dialog.affirmative) == _sole_index(block, dialog.negative):
+        _LOG.debug("both answers resolve to one row; nothing is pressed")
+        return None
     # Anchored on the affirmative even when declining, because `_option_block` is: a capture
     # whose "Yes" row cannot be found is one whose option list this cannot delimit, and
     # counting rows in a block it could not delimit is the arithmetic-over-an-unseen-layout

@@ -312,7 +312,7 @@ def profile_trust_dialogs(
     return resolved
 
 
-def profile_glyphs() -> dict[str, str]:
+def profile_glyphs(descriptors: tuple[ProviderDescriptor, ...] | None = None) -> dict[str, str]:
     """Every curated profile's mark, as one mapping a composition can hand to a surface.
 
     The fold `usage_readers` is for usage, done for identity: a frontend gets the whole
@@ -328,8 +328,9 @@ def profile_glyphs() -> dict[str, str]:
     """
     # Folded from one build of the descriptors rather than one per profile: a descriptor
     # constructs its vertical's collaborators, so `glyph_of` per profile built all four of them
-    # five times over. Same shape, same fix, as `profile_trust_dialogs` below.
-    built = provider_descriptors()
+    # five times over. Same shape, same fix, as `profile_trust_dialogs` below — including
+    # taking the set from a caller that already has one.
+    built = provider_descriptors() if descriptors is None else descriptors
     by_provider = {str(descriptor.profile_id): descriptor.glyph for descriptor in built}
     executables = {str(profile.profile_id): profile.executable for profile in closed_profiles()}
     resolved = {}
