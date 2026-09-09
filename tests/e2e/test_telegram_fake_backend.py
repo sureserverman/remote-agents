@@ -16,6 +16,7 @@ from stop_results import (
 )
 from telegram.error import BadRequest
 
+from remote_agents.adapters.agents.registry import glyph_of, profile_glyphs
 from remote_agents.adapters.sqlite.callback_state_store import SQLiteCallbackStateStore
 from remote_agents.adapters.sqlite.chat_view_store import SQLiteChatViewStore
 from remote_agents.adapters.sqlite.database import open_database
@@ -28,6 +29,7 @@ from remote_agents.application.errors import SessionNotFoundError
 from remote_agents.application.profiles import ProfileAvailability
 from remote_agents.application.project_catalog import CatalogProject
 from remote_agents.application.session_actions import pane_is_attachable
+from remote_agents.application.session_views import state_emoji
 from remote_agents.application.stops import execute_stop
 from remote_agents.domain.models import (
     ProfileId,
@@ -37,6 +39,7 @@ from remote_agents.domain.models import (
     SessionRecord,
     SessionState,
 )
+from remote_agents.domain.profiles import closed_profiles
 from remote_agents.domain.trust import TrustState
 from remote_agents.ports.agent_activity import ActivityKind, AgentActivity
 from remote_agents.ports.terminal import TerminalObservation
@@ -1923,3 +1926,66 @@ async def test_a_declined_session_cannot_be_declined_twice_from_one_render() -> 
     await boundary.callback(chat.press(decline.callback_data, on=anchor), None)
 
     assert launcher.declined == [launcher.record.session_id], "the second press did nothing"
+
+
+class _OnePerProfile(SessionUseCaseDouble):
+    """One running session of every curated profile, all in the same project."""
+
+    def __init__(self) -> None:
+        self.records = [
+            SessionRecord(
+                SessionId(UUID(int=index + 1)),
+                ProjectId("b" * 24),
+                profile.profile_id,
+                SessionDisplayIdentity("demo", "Agent", "regular", index + 1, None),
+                SessionState.RUNNING,
+                datetime(2026, 9, 8, 12, 0, tzinfo=UTC),
+            )
+            for index, profile in enumerate(closed_profiles())
+        ]
+
+    async def list_sessions(self):
+        return self.records
+
+    async def refresh_readiness(self) -> None:
+        return None
+
+
+async def test_every_curated_agent_carries_its_own_mark_on_the_sessions_buttons() -> None:
+    """The ask, end to end: one session per profile, and no two buttons read the same.
+
+    Driven through `profile_glyphs()` — the one expression the running service is composed
+    with — rather than a mapping written for the test, so this fails if the fold the service
+    ships and the marks the verticals declare ever come apart. Five profiles, four marks:
+    `claude-remote` is `claude --remote-control` and draws claude's, which is the one case a
+    per-descriptor test cannot see.
+    """
+    listing = _OnePerProfile()
+    boundary = build_private_bot(
+        7,
+        11,
+        backend=backend_for(
+            catalogue=(CatalogProject("b" * 24, "Demo", "tests", "Registered"),),
+            sessions=listing,
+        ),
+        glyphs=profile_glyphs(),
+    )
+    chat = FakeChat()
+    await boundary.sessions_command(chat.message_update("/sessions"), None)
+    anchor = chat.bot_messages[0].message_id
+    labels = [
+        unpadded(button.text)
+        for row in chat.messages[anchor].reply_markup.inline_keyboard
+        for button in row
+    ]
+
+    running = state_emoji(SessionState.RUNNING)
+    for index, profile in enumerate(closed_profiles()):
+        mark = glyph_of(profile.profile_id)
+        assert mark, f"{profile.profile_id} declares no mark"
+        assert f"{running} {mark} #{index + 1} Demo" in labels, (
+            f"{profile.profile_id}'s button carries no mark of its own; keyboard: {labels}"
+        )
+
+    marks = {glyph_of(profile.profile_id) for profile in closed_profiles()}
+    assert len(marks) == 4, f"five profiles, four providers, {len(marks)} distinct marks: {marks}"

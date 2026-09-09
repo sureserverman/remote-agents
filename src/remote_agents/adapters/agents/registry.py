@@ -245,6 +245,23 @@ def glyph_of(profile_id: ProfileId) -> str:
     return ""
 
 
+def profile_glyphs() -> dict[str, str]:
+    """Every curated profile's mark, as one mapping a composition can hand to a surface.
+
+    The fold `usage_readers` is for usage, done for identity: a frontend gets the whole
+    answer once, at composition time, rather than reaching into the registry from a render.
+    Keyed by the profile's string spelling because that is what a session record carries.
+
+    It exists as a named function rather than a comprehension at the composition site so
+    that what a surface is handed and what a test asserts about are the same expression —
+    a second copy of the fold would agree with this one on the day it was written and
+    answer to nothing afterwards. It folds over the *profiles*, not the descriptors: there
+    are five of the first and four of the second, and the fold that forgets that is one
+    where `claude-remote` silently loses its mark.
+    """
+    return {str(profile.profile_id): glyph_of(profile.profile_id) for profile in closed_profiles()}
+
+
 def usage_readers(descriptors: tuple[ProviderDescriptor, ...]) -> ProfileUsageReaders:
     """Fold the registry's usage capabilities into the one dispatch both surfaces share.
 
