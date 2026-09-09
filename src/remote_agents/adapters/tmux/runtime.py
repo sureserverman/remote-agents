@@ -25,6 +25,8 @@ from remote_agents.domain.trust import TRUST_ANSWERABLE, TrustState
 from remote_agents.ports.private_directory import open_private_directory
 from remote_agents.ports.terminal import (
     GRACEFUL_TIMEOUT,
+    NOT_AWAITING_TRUST,
+    OWNERSHIP_LOST,
     TERMINAL_NOT_LIVE,
     UNKNOWN_SESSION,
     TerminalObservation,
@@ -38,6 +40,12 @@ _REMOTE_CONTROL_DISABLE_WAIT_SECONDS = 2
 # to think. Shorter than every remote-control wait above because nothing is being started --
 # a keypress is being acknowledged.
 _TRUST_ANSWER_WAIT_SECONDS = 1
+# How long a declined agent is given to exit on its own before its pane is killed. Longer than
+# the answer wait above because this one is waiting for a *process* to finish, not for a pump
+# to repaint -- an agent told "no" runs its own shutdown. Bounded because the owner asked for
+# the session to be gone: an agent that takes the keys and stays is not a reason to leave a
+# pane behind.
+_TRUST_DECLINE_WAIT_SECONDS = 3
 
 
 class AsyncTmuxRunner(TmuxRunner):
@@ -560,6 +568,73 @@ class TmuxTerminal:
         await self._gateway.send_keys(session_id, keys)
         await asyncio.sleep(_TRUST_ANSWER_WAIT_SECONDS)
         return classify_trust_capture(await self._gateway.capture(session_id))
+
+    async def decline_trust(self, session_id: SessionId) -> TerminalObservation:
+        """Answer the folder-trust question with *no*, and make sure the pane is gone.
+
+        **Two routes, and which one is taken is a property of the agent rather than of the
+        owner's press.** For a profile whose dialog this project can read, the honest decline
+        is the one the agent understands: send the keys that select its own negative option
+        and let it exit itself, which leaves the agent's own cleanup to run. For every other
+        profile -- codex, cursor-agent -- this project will not type into a dialog it does not
+        parse, so the pane is killed instead. Both are the owner's *no* having happened, which
+        is why `SessionService` records one event for them and does not branch.
+
+        **Three ways to reach the kill, and they are not the same thing.** An agent that takes
+        the keys and does not exit within the bound is killed, because the owner asked for the
+        session to be gone and asking politely is not the same as declining. A profile whose
+        dialog this project will not parse is killed without keys being sent at all. And a
+        dialog that is on screen but unreadable -- `plan_trust_keys` failing closed -- is
+        killed too: refusing to press a key into a screen this cannot read is right, but
+        refusing to end the session the owner just declined is not.
+
+        **What is never killed is a pane that is no longer asking**, whatever the record says.
+        That case is refused before any of the three, and it is the guard the whole unconfirmed
+        path rests on -- see the comment on the check itself.
+
+        A pane that is already gone is reported unreachable rather than as a completed
+        decline, the same distinction DEC-017 draws for a force stop whose target had
+        already died -- the record still ends, but the observation does not claim this call
+        is what ended it.
+        """
+        observation = await self.inspect(session_id)
+        if observation is None or not observation.live:
+            return TerminalObservation(
+                session_id, live=False, preserved=False, detail=OWNERSHIP_LOST
+            )
+        profile = self._resolved_profile(session_id, observation.profile_id)
+        capture = await self._gateway.capture(session_id)
+        if profile is None or not self._is_awaiting_trust(profile, observation.profile_id, capture):
+            # **The guard that makes the unconfirmed kill safe, and it has to be here rather
+            # than on the record.** `SessionService` checked that the *stored* state is
+            # UNTRUSTED, and that reading can be stale: the dialog may have been answered at
+            # the keyboard or from the other surface, and nothing reports that back -- only a
+            # later observation notices, up to a reconciliation interval afterwards. So a
+            # decline arriving in that window would find a live pane running real work, fail
+            # to plan any keys for a dialog that is no longer there, and fall through to an
+            # unconditional kill. Refusing here is what keeps DEC-078's premise true: the
+            # only session this ends unconfirmed is one observed, now, to be waiting.
+            #
+            # This is the same discipline `answer_trust` above already applies for the same
+            # reason, and the two answers to one question should not differ in how carefully
+            # they check that the question is still being asked.
+            return TerminalObservation(
+                session_id, live=True, preserved=False, detail=NOT_AWAITING_TRUST
+            )
+        if observation.profile_id in TRUST_ANSWERABLE:
+            keys = plan_trust_keys(capture, accept=False)
+            if keys is not None:
+                await self._gateway.send_keys(session_id, keys)
+                deadline = asyncio.get_running_loop().time() + _TRUST_DECLINE_WAIT_SECONDS
+                while asyncio.get_running_loop().time() < deadline:
+                    current = await self.inspect(session_id)
+                    if current is None or not current.live:
+                        await self.cleanup(session_id)
+                        return TerminalObservation(session_id, live=False, preserved=False)
+                    # A whole tmux inventory read per turn, so this is deliberately not a
+                    # tight poll: the thing being waited on is a process shutting down.
+                    await asyncio.sleep(0.1)
+        return await self.force_stop(session_id)
 
     async def _trust_capture(self, session_id: SessionId) -> str | None:
         """This pane's current screen, or None if it is not one that may be asked at all.

@@ -8,6 +8,7 @@ from remote_agents.adapters.tmux.codec import ManagedPane
 from remote_agents.adapters.tmux.gateway import TmuxInventory
 from remote_agents.adapters.tmux.runtime import LaunchProfile, TmuxTerminal
 from remote_agents.domain.models import ProfileId, ProjectId, SessionId
+from remote_agents.ports.terminal import NOT_AWAITING_TRUST, OWNERSHIP_LOST
 
 _EXECUTABLE = "/usr/bin/claude"
 
@@ -21,10 +22,17 @@ def _profile(marker: str | None, blockers: tuple[str, ...] = ()) -> LaunchProfil
 class Gateway:
     """A live pane whose capture is whatever a resumed agent happens to be drawing."""
 
-    def __init__(self, session_id: SessionId, capture: str, intent_directory: Path) -> None:
+    def __init__(
+        self,
+        session_id: SessionId,
+        capture: str,
+        intent_directory: Path,
+        profile_id: ProfileId = ProfileId("claude"),
+    ) -> None:
         self._session_id = session_id
         self._capture = capture
         self.intent_directory = intent_directory
+        self.profile_id = profile_id
 
     async def inventory(self) -> TmuxInventory:
         return TmuxInventory(
@@ -35,7 +43,7 @@ class Gateway:
                     True,
                     self._session_id,
                     ProjectId("opaque-editor"),
-                    ProfileId("claude"),
+                    self.profile_id,
                     100,
                     True,
                     False,
@@ -194,3 +202,184 @@ async def test_a_launched_profile_still_has_to_show_its_banner(tmp_path) -> None
 
     assert not observation.live
     assert observation.detail == "startup_timeout"
+
+
+class _DeclineGateway(Gateway):
+    """Records what the decline sent, and can let the pane die on cue."""
+
+    def __init__(
+        self,
+        session_id: SessionId,
+        capture: str,
+        intent_directory: Path,
+        profile_id: ProfileId = ProfileId("claude"),
+    ) -> None:
+        super().__init__(session_id, capture, intent_directory, profile_id)
+        self.sent: list[tuple[str, ...]] = []
+        self.destroyed: list[SessionId] = []
+        self.live = True
+        self.dies_after_keys = False
+
+    async def inventory(self) -> TmuxInventory:
+        full = await super().inventory()
+        if self.live:
+            return full
+        return TmuxInventory((), ())
+
+    async def send_keys(self, session_id: SessionId, keys: tuple[str, ...]) -> None:
+        del session_id
+        self.sent.append(keys)
+        if self.dies_after_keys:
+            self.live = False
+
+    async def destroy(self, session_id: SessionId) -> None:
+        self.destroyed.append(session_id)
+        self.live = False
+
+
+_CODEX_BLOCKER = "Do you trust the contents of this directory?"
+
+_CODEX_DIALOG = (
+    "> You are in /home/user/dev/example\n"
+    f"  {_CODEX_BLOCKER} Working with untrusted contents comes with higher risk.\n"
+    "\u203a 1. Yes, continue\n"
+    "  2. No, quit\n"
+)
+
+_DIALOG = (
+    "Is this a project you created or one you trust?\n\n❯ No, exit\n  Yes, I trust this folder\n"
+)
+
+
+def _decline_terminal(tmp_path: Path, profile_id: str, capture: str, **flags: object):
+    session_id = SessionId.new()
+    project = tmp_path / "opaque-editor"
+    project.mkdir(exist_ok=True)
+    gateway = _DeclineGateway(session_id, capture, tmp_path, ProfileId(profile_id))
+    for name, value in flags.items():
+        setattr(gateway, name, value)
+    # The blocker table is what tells a non-answerable profile's dialog from its ordinary
+    # output, so a codex fixture without codex's blocker is not a codex sitting on a dialog.
+    blockers = () if profile_id in {"claude", "claude-remote"} else (_CODEX_BLOCKER,)
+    terminal = TmuxTerminal(
+        gateway,
+        {ProjectId("opaque-editor"): project},
+        {ProfileId(profile_id): _profile("Claude Code", blockers)},
+        startup_timeout=0.2,
+    )
+    return terminal, gateway, session_id
+
+
+@pytest.mark.asyncio
+async def test_an_answerable_agent_is_told_no_in_its_own_dialog(tmp_path) -> None:
+    """The honest decline: the agent exits itself, so its own shutdown runs."""
+    terminal, gateway, session_id = _decline_terminal(
+        tmp_path, "claude", _DIALOG, dies_after_keys=True
+    )
+
+    observation = await terminal.decline_trust(session_id)
+
+    assert gateway.sent == [("Enter",)], "the cursor already rests on the negative option"
+    assert not observation.live
+    assert gateway.destroyed == [session_id], "cleanup still removes the dead pane"
+
+
+@pytest.mark.asyncio
+async def test_an_agent_that_takes_the_keys_and_stays_is_killed_anyway(tmp_path) -> None:
+    """Bounded, then unconditional. The owner asked for the session to be gone."""
+    terminal, gateway, session_id = _decline_terminal(
+        tmp_path, "claude", _DIALOG, dies_after_keys=False
+    )
+
+    observation = await terminal.decline_trust(session_id)
+
+    assert gateway.sent == [("Enter",)]
+    assert gateway.destroyed == [session_id]
+    assert not observation.live
+
+
+@pytest.mark.asyncio
+async def test_a_profile_whose_dialog_cannot_be_read_has_its_pane_killed(tmp_path) -> None:
+    """codex is not in TRUST_ANSWERABLE, so no key is typed into a dialog nobody parsed.
+
+    The session still ends -- declining is available for every untrusted session, because
+    saying *no* needs no ability to read the screen. What differs is only how the pane goes.
+    """
+    terminal, gateway, session_id = _decline_terminal(tmp_path, "codex", _CODEX_DIALOG)
+
+    observation = await terminal.decline_trust(session_id)
+
+    assert gateway.sent == [], "nothing is typed into a dialog this project does not parse"
+    assert gateway.destroyed == [session_id]
+    assert not observation.live
+
+
+@pytest.mark.asyncio
+async def test_an_unreadable_dialog_falls_through_to_the_kill_rather_than_guessing(
+    tmp_path,
+) -> None:
+    """`plan_trust_keys` fails closed; the decline must not stop there.
+
+    Refusing to press a key is right. Refusing to end the session the owner just declined is
+    not -- so an unplannable dialog takes the kill route instead of leaving the pane up.
+    """
+    unreadable = _DIALOG.replace("❯", " ")  # the dialog is up; the cursor was lost
+    terminal, gateway, session_id = _decline_terminal(tmp_path, "claude", unreadable)
+
+    observation = await terminal.decline_trust(session_id)
+
+    assert gateway.sent == [], "a screen this cannot read gets no keypress"
+    assert gateway.destroyed == [session_id], "but the session the owner declined still ends"
+    assert not observation.live
+
+
+@pytest.mark.asyncio
+async def test_a_pane_that_is_already_gone_reports_unreachable(tmp_path) -> None:
+    """DEC-017's distinction: the record still ends, but this call does not claim it did."""
+    terminal, gateway, session_id = _decline_terminal(tmp_path, "claude", _DIALOG, live=False)
+
+    observation = await terminal.decline_trust(session_id)
+
+    assert observation.detail == OWNERSHIP_LOST
+    assert gateway.sent == []
+    assert gateway.destroyed == []
+
+
+@pytest.mark.asyncio
+async def test_a_pane_that_is_no_longer_asking_is_refused_rather_than_killed(tmp_path) -> None:
+    """The stale-record race, and the reason the unconfirmed kill is safe at all.
+
+    A stored record can read UNTRUSTED while the pane has already been answered — at the
+    keyboard, or from the other surface — because nothing reports that back and only a later
+    observation notices. A decline arriving in that window finds a live pane running real
+    work. Without this refusal it would plan no keys (there is no dialog to plan for) and
+    fall through to an unconditional kill: an agent destroyed mid-edit, unconfirmed, on a
+    button whose whole justification is that the session holds nothing.
+    """
+    working = "● Editing src/thing.py\n  42 lines changed\n"
+    terminal, gateway, session_id = _decline_terminal(tmp_path, "claude", working)
+
+    observation = await terminal.decline_trust(session_id)
+
+    assert observation.detail == NOT_AWAITING_TRUST
+    assert observation.live, "the session is untouched and still running"
+    assert gateway.sent == []
+    assert gateway.destroyed == [], "nothing was killed"
+
+
+@pytest.mark.asyncio
+async def test_a_codex_pane_that_is_no_longer_asking_is_refused_too(tmp_path) -> None:
+    """The parity claim, asserted rather than read off a shared code path.
+
+    codex reaches `_is_awaiting_trust` by its declared blocker string and claude by the
+    capture classifier, so "both families are protected" is a claim about two different
+    branches meeting the same guard. One test on the claude branch does not establish it.
+    """
+    working = "> Running tests\n  14 passed\n"
+    terminal, gateway, session_id = _decline_terminal(tmp_path, "codex", working)
+
+    observation = await terminal.decline_trust(session_id)
+
+    assert observation.detail == NOT_AWAITING_TRUST
+    assert gateway.sent == []
+    assert gateway.destroyed == []

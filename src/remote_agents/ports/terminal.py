@@ -34,6 +34,15 @@ class TerminalTargetMissing(RuntimeError):
 UNKNOWN_SESSION = "unknown_session"
 GRACEFUL_TIMEOUT = "graceful_timeout"
 OWNERSHIP_LOST = "ownership_lost"
+NOT_AWAITING_TRUST = "not_awaiting_trust"
+"""A live pane that is no longer sitting on its folder-trust question.
+
+The distinction a decline turns on. A stored record can read `UNTRUSTED` while the pane has
+already been answered -- at the keyboard, or from the other surface -- because nothing reports
+that back and only a later observation notices. So "the record says untrusted" is not evidence
+that the agent is still waiting, and an unconfirmed kill may not act on it.
+"""
+
 TERMINAL_NOT_LIVE = "terminal_not_live"
 """A readiness recheck found no live pane for this session at all.
 
@@ -99,6 +108,7 @@ class TerminalPort(Protocol):
     ) -> RemoteControlState: ...
     async def trust_state(self, session_id: SessionId) -> TrustState: ...
     async def answer_trust(self, session_id: SessionId) -> TrustState: ...
+    async def decline_trust(self, session_id: SessionId) -> TerminalObservation: ...
     async def inspect(self, session_id: SessionId) -> TerminalObservation | None: ...
     async def confirm_ready(
         self, session_id: SessionId, profile_id: ProfileId

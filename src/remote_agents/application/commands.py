@@ -51,6 +51,21 @@ class ForceStopCommand:
 
 
 @dataclass(frozen=True, slots=True)
+class DeclineTrustCommand:
+    """Answer the folder-trust question with *no*, ending the session, at most once.
+
+    The other half of `AnswerTrustCommand`, and it carries an idempotency key for a sharper
+    reason than its sibling does: this one ends a session with no confirmation step (DEC-078),
+    so a replayed press must not be able to reach whatever the session id means by the time it
+    arrives. The key is minted per render (DEC-011), so a message left open on a phone
+    overnight cannot end tomorrow's session.
+    """
+
+    session_id: SessionId
+    idempotency_key: str
+
+
+@dataclass(frozen=True, slots=True)
 class AnswerTrustCommand:
     """Answer the folder-trust question for one exact session, at most once.
 

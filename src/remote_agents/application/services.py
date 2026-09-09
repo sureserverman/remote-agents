@@ -11,6 +11,7 @@ from datetime import UTC, datetime
 from remote_agents.application.commands import (
     AnswerTrustCommand,
     CleanupCommand,
+    DeclineTrustCommand,
     ForceStopCommand,
     GracefulStopCommand,
     InspectQuery,
@@ -43,7 +44,12 @@ from remote_agents.domain.remote_control import RemoteControlState
 from remote_agents.domain.state_machine import LifecycleEvent, transition
 from remote_agents.domain.trust import TRUST_ANSWERABLE, TrustState
 from remote_agents.ports.session_store import ProjectUsage, SessionStore
-from remote_agents.ports.terminal import TERMINAL_NOT_LIVE, TerminalObservation, TerminalPort
+from remote_agents.ports.terminal import (
+    NOT_AWAITING_TRUST,
+    TERMINAL_NOT_LIVE,
+    TerminalObservation,
+    TerminalPort,
+)
 
 _LOG = logging.getLogger(__name__)
 
@@ -392,6 +398,64 @@ class SessionService:
             if not await self._store.claim_idempotency_key(command.idempotency_key):
                 raise DuplicateCommandError("trust callback was already handled")
             return await self._terminal.answer_trust(command.session_id)
+
+    async def decline_trust(self, command: DeclineTrustCommand) -> SessionRecord:
+        """Answer the folder-trust question with *no*, and end the session (DEC-078).
+
+        **The one action on this control plane that ends a session without confirming**, and
+        the three things that make that safe are all here rather than at the surface that
+        offers it.
+
+        `transition` is asked before anything is sent, so a record that is not UNTRUSTED is
+        refused by the matrix rather than by a second opinion this method would have to keep
+        in step. That refusal is DEC-078's whole bound: the argument for skipping the
+        confirmation is that an untrusted session holds no work, and it stops being true the
+        moment this reaches any other state.
+
+        The idempotency key is claimed before the terminal is touched, because the effect is
+        destructive and a replayed press must not repeat it (DEC-011).
+
+        The console is stood down first, exactly as a force stop does — the agent being
+        declined may be the pane the console is displaying, and a session that ends while
+        displayed leaves the surface parked in a window that is about to disappear.
+
+        What the *terminal* does with the decline differs by profile and is its business, not
+        this layer's: an answerable profile is told no in its own dialog, and one whose dialog
+        this project will not type into has its pane killed. Both are the owner's *no* having
+        happened, which is why one event covers both.
+        """
+        async with self._locks.operation(), self._locks.for_session(command.session_id):
+            record = await self._require_session(command.session_id)
+            transition(record.state, LifecycleEvent.TRUST_DECLINED)
+            if not await self._store.claim_idempotency_key(command.idempotency_key):
+                raise DuplicateCommandError("decline callback was already handled")
+            await self._leave_the_console(command.session_id)
+            try:
+                observation = await self._terminal.decline_trust(command.session_id)
+            except Exception:
+                # The token for this press is already spent and nothing has been recorded, so
+                # the record stays UNTRUSTED and this exact button can no longer act on it.
+                # Said out loud rather than swallowed: the alternative is a session that
+                # silently stops answering the only affordance offered for it. A fresh render
+                # mints a fresh token, and the confirmed force stop is still there.
+                _LOG.exception("declining trust failed after its token was claimed")
+                raise
+            if observation.detail == NOT_AWAITING_TRUST:
+                # **The stale-record case, and the reason this method cannot rely on the
+                # matrix alone.** `record.state` said UNTRUSTED, and that reading can lag the
+                # pane: the dialog may have been answered at the keyboard or from the other
+                # surface, and nothing reports that back -- only a later observation notices.
+                # So the terminal is the authority on whether the question is still being
+                # asked, and it has just said no.
+                #
+                # DEC-078 buys an unconfirmed ending for a session that holds no work. This
+                # one holds work, so the press is refused rather than escalated: ending it
+                # takes the confirmed force stop, like any other running session.
+                raise StopNotPermittedError(
+                    "this session is no longer waiting on the folder-trust question; it has "
+                    "been answered already, so nothing here will end it without confirming"
+                )
+            return await self._store.record_event(command.session_id, LifecycleEvent.TRUST_DECLINED)
 
     async def graceful_stop(self, command: GracefulStopCommand) -> TerminalObservation:
         """Stop the agent on its own terms and remove its pane in the same operation.
