@@ -94,6 +94,7 @@ from remote_agents.adapters.agents.hook_settings import (
 from remote_agents.adapters.agents.opencode.hooks import PROVIDER as _OPENCODE
 from remote_agents.adapters.agents.opencode.usage import OpenCodeUsageReader
 from remote_agents.domain.models import ProfileId, ProjectId
+from remote_agents.domain.profiles import closed_profiles
 from remote_agents.ports.agent_usage import AgentLimits, AgentUsage, UsageQuery
 from remote_agents.ports.provider_descriptor import ProviderDescriptor
 
@@ -211,6 +212,37 @@ def provider_descriptors(
         opencode.descriptor(),
         cursor.descriptor(),
     )
+
+
+def glyph_of(profile_id: ProfileId) -> str:
+    """The mark a surface draws for one *profile*, or nothing at all.
+
+    Profiles and providers are not the same set: five curated spellings, four verticals.
+    `claude-remote` is `claude --remote-control` — the same binary under a second curated
+    name (`domain/profiles.py`) — so it must draw claude's mark, and this is the same
+    resolution `ProfileUsageReaders` performs when it files both spellings under one reader.
+
+    **Resolved through the executable the domain already curates, not through an alias table
+    kept here.** A table would work today and would be a registry edit every time a vertical
+    gained a second spelling, which is precisely the edit DEC-070 says a new provider must
+    not cost: a fifth provider declares its mark in its own package, and any `-remote`-style
+    spelling of it curated in `domain/profiles.py` resolves here for free. The registry adds
+    no mark of its own; it only answers with one a vertical declared.
+
+    Total, and empty for anything unrecognised — the trade `ProfileUsageReaders.read` makes,
+    for the same reason: the caller is a render, and a render that raises over one unknown
+    profile takes the whole keyboard with it. Empty is also what both surfaces collapse to
+    the label they drew before this field existed.
+    """
+    descriptors = provider_descriptors()
+    by_profile = {str(descriptor.profile_id): descriptor.glyph for descriptor in descriptors}
+    name = str(profile_id)
+    if name in by_profile:
+        return by_profile[name]
+    for profile in closed_profiles():
+        if str(profile.profile_id) == name:
+            return by_profile.get(profile.executable, "")
+    return ""
 
 
 def usage_readers(descriptors: tuple[ProviderDescriptor, ...]) -> ProfileUsageReaders:

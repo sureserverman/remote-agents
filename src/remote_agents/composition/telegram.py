@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from remote_agents.adapters.agents.registry import glyph_of
 from remote_agents.adapters.sqlite.activity_store import SQLiteActivityStore
 from remote_agents.adapters.sqlite.callback_state_store import SQLiteCallbackStateStore
 from remote_agents.adapters.sqlite.chat_view_store import SQLiteChatViewStore
@@ -22,6 +23,7 @@ from remote_agents.composition.backend import (
 from remote_agents.composition.service import ServiceComposition
 from remote_agents.composition.tui import _console_composer, _local_runtime
 from remote_agents.config import TelegramSecrets
+from remote_agents.domain.profiles import closed_profiles
 from remote_agents.production import ProductionPaths
 
 
@@ -98,6 +100,13 @@ def _private_boundary(
         # surface needed its own narrowing; `compose_backend` does that narrowing once,
         # so the line that used to be the plausible-looking mistake is the correct one.
         profiles=backend.profiles,
+        # Each curated profile's mark, folded here rather than looked up at render time.
+        # The registry is the one module that may import every vertical (ARCH-02/ARCH-04),
+        # and the bot is one that may import none, so the mapping is built on this side of
+        # that line and handed over — the same shape `usage_readers` is folded in with.
+        glyphs={
+            str(profile.profile_id): glyph_of(profile.profile_id) for profile in closed_profiles()
+        },
         project_page_size=config.project_page_size,
         # The durable home for the one standing trust question per session (migration 12).
         # Its absence is what a boundary without a trust pass looks like, so supplying it is

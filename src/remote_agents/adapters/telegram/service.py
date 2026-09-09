@@ -6,6 +6,7 @@ import asyncio
 import io
 import logging
 import signal
+from collections.abc import Mapping
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from html import escape
@@ -529,6 +530,18 @@ class PrivateBotBoundary:
     `backend.profiles`.
     """
     profiles: tuple[ProfileAvailability, ...] = ()
+    glyphs: Mapping[str, str] = field(default_factory=dict)
+    """Each curated profile's mark, as the composition root read it off the registry.
+
+    A mapping handed in, not a table grown here: the marks belong to the provider verticals
+    (DEC-070) and this adapter imports nothing under `adapters.agents` — the architecture
+    check pins that, and a dict of literals here would pass it while defeating it. This
+    surface owns only the *sentence* the mark is drawn into (DEC-043).
+
+    Empty by default, which is the honest state for the many compositions that wire no
+    registry at all: a profile with no mark renders exactly the label drawn before this
+    field existed.
+    """
     catalogue: tuple[CatalogProject, ...] = field(init=False)
     """The catalogue as currently drawn, seeded from the backend and re-ranked in place.
 
