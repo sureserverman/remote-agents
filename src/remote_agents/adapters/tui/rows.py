@@ -495,6 +495,14 @@ def _trailers(row: LimitRow) -> Content:
     stamp DEC-061 asks for is not drawn here -- it cost the console's 73-column pane its
     one-line row (removed 2026-09-03 on the owner's ask); the bot still says it."""
     trailer = Content("")
+    if row.absence is not None:
+        # A row saying *no reading yet* must not also say *· as of 3d*: the trailer dates a
+        # reading, so beside a phrase denying there is one it contradicts the row it trails.
+        # Reachable, not hypothetical -- Codex stamps `observed_at` from the rollout record
+        # even when every window in it has lapsed, which is the ordinary idle host. Suppressed
+        # here rather than in that reader, because the rule is about what a row may say and
+        # holds for any reader that dates an answer it could not fill.
+        return trailer
     if row.stale_for is not None:
         trailer = trailer + Content.assemble((f" · as of {row.stale_for}", DIM))
     return trailer

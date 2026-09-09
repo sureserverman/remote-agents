@@ -457,9 +457,16 @@ async def test_every_row_in_the_limits_pane_is_disabled() -> None:
         assert all(pane.get_option_at_index(i).disabled for i in range(pane.option_count))
 
 
-async def test_a_raising_limits_read_leaves_the_drawn_text_standing() -> None:
-    """What is drawn is stale, not wrong, and a background read having a bad moment
-    must not blank a pane the owner is reading."""
+async def test_a_raising_read_before_any_figures_says_unreadable_not_pending() -> None:
+    """A fault before the first success reads as a fault, not as waiting.
+
+    "What is drawn is stale, not wrong" needs something drawn to be about. With nothing drawn
+    yet, leaving the pane alone left the seed's *no reading yet* standing -- so a host whose
+    reader raises every time presented as one merely waiting for its first answer. Those are
+    the two absences DEC-061 is most concerned to keep apart: one resolves itself, one needs a
+    person. `test_a_failed_read_still_leaves_the_last_figures_standing` covers the other side,
+    where figures exist and the stale-not-wrong contract takes over again.
+    """
 
     async def exploding() -> tuple[AgentLimits, ...]:
         raise RuntimeError("the provider changed its layout under an upgrade")
@@ -469,9 +476,7 @@ async def test_a_raising_limits_read_leaves_the_drawn_text_standing() -> None:
         await pilot.pause()
         pane = app.screen.query_one("#limits-pane", OptionList)
 
-        # The property is unchanged -- a raising read leaves the pane as it found it. What it
-        # finds is now the grid rather than the sentence, which is the whole of this stage.
-        assert _limit_lines(pane) == ["claude  no reading yet"]
+        assert _limit_lines(pane) == ["claude  unreadable"]
 
 
 async def test_a_host_that_wired_no_limits_reader_still_shows_its_agents() -> None:

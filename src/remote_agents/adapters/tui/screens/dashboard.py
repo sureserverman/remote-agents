@@ -73,6 +73,7 @@ from remote_agents.domain.remote_control import (
     HostRemoteControlStatus,
     RemoteControlState,
 )
+from remote_agents.ports.agent_usage import AgentLimits, LimitsAbsence
 
 _LOG = logging.getLogger(__name__)
 
@@ -314,6 +315,23 @@ class LimitsRegion:
                 entries = await reader()
             except Exception:
                 _LOG.exception("the agent limits pane could not be reloaded")
+                if not self._limit_rows:
+                    # **A fault before the first success reads as a fault, not as pending.**
+                    # The rule above -- a failed read leaves the drawn rows alone, because they
+                    # are stale rather than wrong -- needs something drawn to be about. With
+                    # nothing drawn, leaving the pane alone left the seed's *no reading yet*
+                    # standing, so a host whose reader raises on every attempt presented as one
+                    # merely waiting for its first answer. Those are the two absences DEC-061
+                    # is most concerned to keep apart: one resolves itself and one needs a
+                    # person. Narrow on purpose -- the moment any real figure has been drawn,
+                    # the stale-not-wrong contract takes over again and this branch is dead.
+                    self._limit_rows = limit_rows(
+                        tuple(
+                            AgentLimits(profile, absence=LimitsAbsence.UNREADABLE)
+                            for profile in self._agent_profiles()
+                        ),
+                        self._agent_profiles(),
+                    )
             else:
                 self._limit_rows = limit_rows(entries, self._agent_profiles())
         self._draw_limits()

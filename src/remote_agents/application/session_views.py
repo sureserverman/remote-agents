@@ -525,8 +525,15 @@ class LimitRow:
     """
 
 
-NOT_REPORTED = "not reported"
-"""What `LimitsAbsence.NOT_REPORTED` reads as: the provider publishes no limits at all."""
+NOT_REPORTED = "never reported"
+"""What `LimitsAbsence.NOT_REPORTED` reads as: the provider publishes no limits at all.
+
+*never*, not *not*. The word has to carry the permanence, because the row beside it says
+*no reading yet* and the difference between them is exactly whether waiting will help. "not
+reported" reads as "not reported *this time*", which is the wait-for-a-figure-that-is-never-
+coming failure DEC-061 exists to prevent -- the reader was supplying the permanence from the
+row's position, not from what it said.
+"""
 
 NO_READING = "no reading yet"
 """What `LimitsAbsence.NO_READING` reads as: it does publish them, and none was found."""

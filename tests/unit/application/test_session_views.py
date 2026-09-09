@@ -27,6 +27,7 @@ from remote_agents.application.project_catalog import CatalogProject
 from remote_agents.application.relative_time import age, age_short
 from remote_agents.application.session_actions import state_word
 from remote_agents.application.session_views import (
+    _ABSENCE_WORDS,
     ADOPTED_NOTE,
     NO_READING,
     NOT_REPORTED,
@@ -283,6 +284,26 @@ def test_limit_rows_carry_the_parts_the_surfaces_lay_out() -> None:
     assert row.borrowed is None
 
 
+def test_every_absence_the_port_can_declare_has_a_word_here() -> None:
+    """A member with no word raises `KeyError` from a render, outside anybody's guard.
+
+    `_reload_limits` catches a raising *reader*; this lookup happens in the `else:` branch,
+    after the read succeeded, so a fifth `LimitsAbsence` added without a word would take the
+    pane down on a host whose provider filed it. The words are presentation's to choose
+    (DEC-043) and the members are the port's to declare, which is exactly the seam where the
+    two can be added out of step.
+    """
+    for member in LimitsAbsence:
+        assert member in _ABSENCE_WORDS, (
+            f"{member} has no word in `_ABSENCE_WORDS`; a row filing it would raise KeyError "
+            "from inside a render"
+        )
+        assert _ABSENCE_WORDS[member].strip(), f"{member}'s word is blank"
+    assert len(set(_ABSENCE_WORDS.values())) == len(LimitsAbsence), (
+        "two absences share a word, which is the conflation DEC-061 forbids"
+    )
+
+
 def test_every_curated_agent_keeps_a_limit_row_whatever_it_reported() -> None:
     """A grid is a fixture. An agent that answered nothing is a row that says so.
 
@@ -315,6 +336,10 @@ def test_a_row_with_windows_names_no_absence_and_a_row_without_names_exactly_one
 
     assert not_reported.windows == () and not_reported.absence == NOT_REPORTED
     assert unreadable.windows == () and unreadable.absence == UNREADABLE
+    assert NOT_REPORTED.startswith("never"), (
+        "the permanent absence must say so in its own words: the row beside it reads 'no "
+        "reading yet', and the difference between them is whether waiting will help"
+    )
     assert len({NOT_REPORTED, NO_READING, UNREADABLE}) == 3, (
         "the three absences DEC-061 distinguishes must read as three different things; "
         "two sharing a phrase would conflate exactly what the decision separates"

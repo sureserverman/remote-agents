@@ -334,7 +334,7 @@ def test_a_row_with_no_windows_says_which_silence_it_is_where_its_windows_would_
     """
     rows = (
         LimitRow("claude", (LimitWindow("5h", 34, "2h"),), None, None),
-        LimitRow("cursor-agent", (), None, None, absence="not reported"),
+        LimitRow("cursor-agent", (), None, None, absence="never reported"),
         LimitRow("opencode", (), None, None, absence="no reading yet"),
         LimitRow("codex", (), None, None, absence="unreadable"),
     )
@@ -342,10 +342,35 @@ def test_a_row_with_no_windows_says_which_silence_it_is_where_its_windows_would_
     assert len(lines) == 4, "\n".join(lines)
     first_window = lines[0].index("5h")
 
-    for line, phrase in zip(lines[1:], ("not reported", "no reading yet", "unreadable")):
+    for line, phrase in zip(lines[1:], ("never reported", "no reading yet", "unreadable")):
         assert line.index(phrase) == first_window, (
             f"{phrase!r} starts at {line.index(phrase)}, not the first window column "
             f"{first_window}.\n" + "\n".join(lines)
         )
 
     assert len({line.split()[0] for line in lines}) == 4, "every agent keeps its own row"
+
+
+def test_a_row_that_says_it_has_no_reading_does_not_also_date_one() -> None:
+    """`no reading yet · as of 3d` is a row contradicting itself, and it was reachable.
+
+    Codex stamps `observed_at` from the rollout record it read even when every window in that
+    record has lapsed -- the ordinary idle host -- so the row carried a stale-age trailer with
+    no figure to be stale. A reader takes "as of 3d" as *there is a reading, and it is 3d old*,
+    which is the opposite of the phrase beside it.
+    """
+    rows = (
+        LimitRow("claude", (LimitWindow("5h", 34, "2h"),), None, None),
+        LimitRow("codex", (), None, "3d", absence="no reading yet"),
+    )
+    lines = [content.plain for content in limit_rows_content(rows, WIDE)]
+    _claude, codex = lines
+
+    assert "no reading yet" in codex
+    assert "as of" not in codex, f"the row dates a reading it says it does not have: {codex!r}"
+
+    # And the trailer is not simply gone from the render: a row that *does* have a stale
+    # figure still says how old it is, which is the behaviour this must not have broken.
+    dated = (LimitRow("claude", (LimitWindow("5h", 34, None),), None, "3d"),)
+    (line,) = [content.plain for content in limit_rows_content(dated, WIDE)]
+    assert "as of 3d" in line
