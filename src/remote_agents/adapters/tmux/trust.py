@@ -34,6 +34,17 @@ TRUST_CURSOR = "❯"
 TRUST_QUESTION = "Is this a project you created or one you trust?"
 TRUST_AFFIRMATIVE = "Yes, I trust this folder"
 
+#: The option that answers *no* and takes the agent down with it.
+#:
+#: Recorded from Claude Code 2.1.263 and **not re-measured since**: the host this was last
+#: worked on sets `permissions.defaultMode: "auto"` in `~/.claude/settings.json`, under which
+#: 2.1.265 raises no folder-trust dialog at all, so fifteen launches produced nothing to read
+#: (`docs/acceptance-2026-09-08-untrusted-launch.md`, section 1). It is matched as a substring
+#: for the same reason the affirmative is -- the numbering has come and gone between versions
+#: -- and `plan_trust_keys` fails closed when the row is missing or doubled, so a wording that
+#: has moved on costs a refusal to press anything rather than a wrong key.
+TRUST_NEGATIVE = "No, exit"
+
 #: What confirms the row the cursor is on. Only ever sent after the movement `plan_trust_keys`
 #: computed, and never on its own.
 TRUST_CONFIRM_KEY = "Enter"
@@ -61,8 +72,20 @@ def classify_trust_capture(capture: str) -> TrustState:
     return TrustState.AWAITING
 
 
-def plan_trust_keys(capture: str) -> tuple[str, ...] | None:
-    """The exact keys that move this dialog's cursor onto "Yes" and confirm, or None.
+def plan_trust_keys(capture: str, *, accept: bool = True) -> tuple[str, ...] | None:
+    """The exact keys that move this dialog's cursor onto an answer and confirm, or None.
+
+    `accept` picks which answer. **Both answers are planned by one rule off one capture**,
+    which is the point rather than a convenience: a fixed decline sequence would be wrong in
+    exactly the way the fixed Enter was, and for the same reason -- the two options have
+    already swapped places once between Claude Code versions, so whichever answer is being
+    given, the row it lives on has to be read rather than assumed. Reading both off the same
+    capture also means the two can never disagree about where the cursor is.
+
+    Declining is offered for a narrower reason than accepting and is not its mirror image:
+    saying *yes* commits the owner's trust to a directory, while saying *no* ends a session
+    that has not started. `application/session_actions` is where that asymmetry is decided;
+    this function only draws the keys.
 
     **Why this is computed rather than fixed.** The dialog's geometry is part of the
     profile's contract with the agent it drives, and Claude Code has now changed it once:
@@ -90,10 +113,14 @@ def plan_trust_keys(capture: str) -> tuple[str, ...] | None:
     if block is None:
         return None
     cursor = _sole_index(block, TRUST_CURSOR)
-    affirmative = _sole_index(block, TRUST_AFFIRMATIVE)
-    if cursor is None or affirmative is None:
+    # Anchored on the affirmative even when declining, because `_option_block` is: a capture
+    # whose "Yes" row cannot be found is one whose option list this cannot delimit, and
+    # counting rows in a block it could not delimit is the arithmetic-over-an-unseen-layout
+    # this module already refuses.
+    target = _sole_index(block, TRUST_AFFIRMATIVE if accept else TRUST_NEGATIVE)
+    if cursor is None or target is None:
         return None
-    steps = affirmative - cursor
+    steps = target - cursor
     movement = ("Down",) * steps if steps > 0 else ("Up",) * -steps
     return (*movement, TRUST_CONFIRM_KEY)
 

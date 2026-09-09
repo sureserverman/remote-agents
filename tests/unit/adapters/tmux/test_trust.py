@@ -172,3 +172,58 @@ def test_no_keys_are_planned_when_two_rows_offer_to_trust_the_folder() -> None:
     )
 
     assert plan_trust_keys(doubled) is None
+
+
+def test_declining_walks_to_the_negative_option_by_the_same_rule() -> None:
+    """The other answer to the same question, planned the same way.
+
+    The cursor rests on "No, exit" in the dialog Claude Code 2.1.263 draws, so declining it is
+    a bare confirm — and that is exactly the keypress the accept path had to stop sending.
+    Both plans come off one capture, so they cannot disagree about where the cursor is.
+    """
+    assert plan_trust_keys(_REAL_PROMPT, accept=False) == ("Enter",)
+
+
+def test_declining_the_legacy_layout_walks_down_instead() -> None:
+    """Direction is computed for the decline exactly as it is for the accept.
+
+    The legacy dialog puts the affirmative first and rests on it, so the two answers swap
+    which one needs the arrow — which is the property that makes a *fixed* decline sequence
+    as wrong as the fixed Enter this module already removed once.
+    """
+    assert plan_trust_keys(_LEGACY_PROMPT, accept=False) == ("Down", "Enter")
+
+
+def test_the_two_answers_differ_only_in_how_far_the_cursor_travels() -> None:
+    """Same block, same cursor, same confirm — one row apart, whichever way round it is."""
+    for capture in (_REAL_PROMPT, _LEGACY_PROMPT):
+        accept = plan_trust_keys(capture)
+        decline = plan_trust_keys(capture, accept=False)
+
+        assert accept is not None and decline is not None
+        assert accept[-1] == decline[-1] == "Enter"
+        assert len(accept) + len(decline) == 3, "one of the two is a bare confirm"
+        assert set(accept[:-1]) | set(decline[:-1]) <= {"Up", "Down"}
+
+
+def test_no_decline_is_planned_when_two_rows_look_like_the_negative() -> None:
+    """A screen this cannot choose between is one it presses nothing into.
+
+    The accept path already refuses two affirmatives; the decline needs its own refusal
+    because the ambiguity is on a different row, and this one ends a session rather than
+    starting it.
+    """
+    doubled = _REAL_PROMPT.replace(" ❯ No, exit", " ❯ No, exit\n   No, exit")
+
+    assert plan_trust_keys(doubled, accept=False) is None
+
+
+def test_no_decline_is_planned_for_a_pane_that_is_not_asking() -> None:
+    assert plan_trust_keys("Claude Code", accept=False) is None
+    assert plan_trust_keys("", accept=False) is None
+
+
+def test_no_decline_is_planned_when_the_cursor_cannot_be_found() -> None:
+    cursorless = _REAL_PROMPT.replace("❯", " ")
+
+    assert plan_trust_keys(cursorless, accept=False) is None
