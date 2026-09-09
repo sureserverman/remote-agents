@@ -27,6 +27,54 @@ import pathlib
 _SOURCE = pathlib.Path(__file__).resolve().parents[2] / "src" / "remote_agents"
 
 
+#: The tmux verbs the fold sends. Argv literals, not prose — the distinction this file exists
+#: for: the Stage 2 gate check that swept for these is a `grep`, so it matches the comments
+#: that *explain* the layout as readily as the code that builds it, and it reports a defect
+#: that is not one. What it means is asserted here instead, where it runs on every commit.
+_FOLD_VERBS = ("resize-pane", "select-pane")
+
+
+def _modules_with_an_argv_literal(*wanted: str) -> set[str]:
+    """Every module using one of these strings as a value, ignoring docstrings."""
+    found = set()
+    for path in _SOURCE.rglob("*.py"):
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        docstrings = {
+            node.body[0].value
+            for node in ast.walk(tree)
+            if isinstance(node, ast.AsyncFunctionDef | ast.FunctionDef | ast.ClassDef | ast.Module)
+            and node.body
+            and isinstance(node.body[0], ast.Expr)
+            and isinstance(node.body[0].value, ast.Constant)
+            and isinstance(node.body[0].value.value, str)
+        }
+        for node in ast.walk(tree):
+            if (
+                isinstance(node, ast.Constant)
+                and node.value in wanted
+                and node not in docstrings
+            ):
+                found.add(str(path.relative_to(_SOURCE)))
+    return found
+
+
+def test_only_the_codec_builds_the_verbs_the_fold_sends() -> None:
+    """`resize-pane` and `select-pane` are argv, and DEC-001 says argv is built in one place.
+
+    The fold reaches four live pane processes and a displayed agent, so a resize aimed from
+    somewhere that never learned the console's targeting is a wedged console rather than an
+    untidy one — the reason the plan gated on this at all. Asserted as *values* rather than by
+    grep so a comment naming a verb stays a comment.
+    """
+    building = _modules_with_an_argv_literal(*_FOLD_VERBS)
+
+    assert building <= {"adapters/tmux/codec.py"}, (
+        f"{sorted(building)} assemble tmux pane geometry themselves. Every tmux argv in this "
+        "tree is codec-built (DEC-001): the codec validates the target, scopes it to our "
+        "socket, and is the one place a pane id is turned into an exact target."
+    )
+
+
 def _modules_building_a_bind_key() -> set[str]:
     """Every module with `bind-key` as an argv string literal, ignoring prose."""
     found = set()
