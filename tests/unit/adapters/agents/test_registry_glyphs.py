@@ -1,4 +1,10 @@
-"""The registry's cross-provider answers, where a profile is not simply a descriptor.
+"""The registry's glyph answers, where a profile is not simply a descriptor.
+
+Named `test_registry_glyphs` rather than `test_registry`: `tests/contract/adapters/` already
+holds a `test_registry.py`, neither directory is a package, and pytest refuses to import two
+same-named test modules in that arrangement -- it fails *collection of the whole suite*, so
+the collision is invisible to every narrower run. The repo's other three colliding basenames
+are legal because one side of each pair sits under an `__init__.py`.
 
 `glyph_of` exists because the curated profile set and the descriptor set are not the same
 size: five profiles, four providers. `claude-remote` is `claude --remote-control` -- the
