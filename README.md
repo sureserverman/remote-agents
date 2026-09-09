@@ -239,7 +239,15 @@ A rate-limit window belongs to the whole agent rather than to any session, so it
 once per agent and never under a session, where the same figure read as that session's spend:
 a block on the bot's Sessions screen, and a limits pane on the `tui` dashboard between the
 sessions and notifications panes. The three-pane console does not carry that pane — its panes
-are separate processes and the dashboard is not one of them. Claude's
+are separate processes and the dashboard is not one of them.
+
+**The terminal's pane keeps one row per agent whether or not anything was read**, and one
+column per window kind, so a weekly window is always under the weekly column and never under
+somebody else's five-hour one. An agent with no figure says which silence it is rather than
+leaving a blank: *not reported* (the provider publishes no limits at all), *no reading yet*
+(it does, and none was found — including a Claude cache older than its freshness bound), or
+*unreadable* (the read itself failed). The pane falls back to a single sentence only on a host
+that offers no agents at all. Claude's
 rate limits are the one figure that is not the session's own — Claude Code hands them to a
 status-line command and never writes them down, so they are read from the status-line cache when
 one is fresh, and the line says where they came from. A rate-limit window whose reset has already

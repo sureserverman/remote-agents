@@ -1469,6 +1469,12 @@ not require the Telegram environment file, so it starts where `serve` would refu
 uv run --locked remote-agents tui
 ```
 
+1. Check the `Plan limits` pane before anything else: it shows one row per agent this host
+   offers, with the window columns aligned by kind, from the moment the dashboard is drawn.
+   Before the first read every row reads `no reading yet`; afterwards each row shows its
+   gauges or says which silence it is — `not reported`, `no reading yet`, or `unreadable`.
+   The pane must never collapse to `No agent limits reported.` while any agent is offered;
+   that sentence is now reached only by a host with no agents at all.
 1. Press Ctrl+S, which is available from any screen. Sessions lists every managed session the
    shared store holds, including ones the bot launched and ones an earlier terminal run started.
    ENDED records are filtered because nothing is left to reach or stop. Readiness is refreshed
