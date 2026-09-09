@@ -271,7 +271,12 @@ def test_the_decision_that_permits_an_unconfirmed_end_is_recorded() -> None:
     text = register.read_text(encoding="utf-8")
 
     assert text.count("\n## DEC-078 ") == 1
-    assert "Supersedes:** DEC-018 and DEC-007" in text
+    # Clause-level, which is this register's idiom and which the first draft of the entry got
+    # wrong: it named two entries and no clause of either, and DEC-018 turned out not to be
+    # superseded at all. Asserted on the clause so a future widening of the claim has to
+    # change a line that says what is actually being given up.
+    assert "DEC-007's confirmation mitigation, one clause, for `UNTRUSTED` only" in text
+    assert "DEC-018 is cited here and is deliberately *not* superseded" in text
 
 
 async def test_a_decline_is_refused_when_the_record_is_stale_and_the_pane_has_moved_on(
