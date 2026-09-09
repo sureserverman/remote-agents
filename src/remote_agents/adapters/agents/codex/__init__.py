@@ -29,6 +29,7 @@ def descriptor() -> ProviderDescriptor:
     """
     return ProviderDescriptor(
         ProfileId("codex"),
+        glyph="🔷",
         sessions=_sessions,
         usage=CodexUsageReader(),
         hooks="codex",

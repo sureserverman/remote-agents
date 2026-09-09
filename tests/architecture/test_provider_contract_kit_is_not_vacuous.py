@@ -20,8 +20,17 @@ from remote_agents.ports.provider_descriptor import ProviderDescriptor
 
 _KIT = Path(__file__).resolve().parents[1] / "provider_contract"
 
+#: A capability is a field whose default is `None`, read structurally rather than by naming
+#: the identity fields to exclude. DEC-061 is what makes this the right predicate: every
+#: capability is `<something> | None` because absence is a declared answer, so a field with
+#: no `None` default is not a capability at all -- it is identity (`profile_id`, `glyph`),
+#: required, with nothing to declare about its absence. Read this way a sixth capability
+#: joins the table the day it is declared, and a second identity field stays out of it
+#: without an exclusion list anyone has to remember to update.
 CAPABILITIES = tuple(
-    field.name for field in dataclasses.fields(ProviderDescriptor) if field.name != "profile_id"
+    field.name
+    for field in dataclasses.fields(ProviderDescriptor)
+    if field.default is None and field.default_factory is dataclasses.MISSING
 )
 
 

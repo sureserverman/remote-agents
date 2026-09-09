@@ -32,13 +32,31 @@ from remote_agents.domain.models import ProfileId
 class ProviderDescriptor:
     """One provider's declared capability set, keyed by its profile.
 
-    `profile_id` is the one required field — a descriptor with no identity attaches its
-    capabilities to nothing. Each capability defaults to `None` so a composition that wires
-    only what a provider publishes constructs the honest record without ceremony.
+    `profile_id` and `glyph` are the two required fields — the identity half of the record.
+    A descriptor with no identity attaches its capabilities to nothing, and one with no mark
+    attaches them to a provider the surfaces cannot tell apart. Each *capability* defaults to
+    `None` so a composition that wires only what a provider publishes constructs the honest
+    record without ceremony; that default is also what separates the two halves, since an
+    identity field has no honest absence to declare.
     """
 
     profile_id: ProfileId
     """The curated-agent profile this descriptor speaks for."""
+
+    glyph: str
+    """This provider's mark, for a surface with room for one character and not a name.
+
+    Required, with no default, because DEC-009's "no third answer" argument applies: a
+    provider that declared none would be one the owner cannot distinguish from another in the
+    same project, which is the defect the field exists to remove — and a default would let a
+    fifth vertical acquire that defect silently. It is the *token* only; the sentence around
+    it belongs to whichever surface renders it (DEC-043), and no two providers may declare
+    the same one.
+
+    Not a capability, though it sits in the same record: there is no honest `None` here to
+    read. That distinction is load-bearing for the contract kit, which drives capabilities
+    from a requirements table and identity unconditionally.
+    """
 
     sessions: object | None = None
     """A factory over the live project-path mapping returning the provider's conversation

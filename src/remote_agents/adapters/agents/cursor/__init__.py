@@ -28,6 +28,7 @@ def descriptor() -> ProviderDescriptor:
     """
     return ProviderDescriptor(
         ProfileId("cursor-agent"),
+        glyph="🔶",
         sessions=_sessions,
         usage=CursorUsageReader(),
     )

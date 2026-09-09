@@ -676,9 +676,12 @@ def test_a_registry_declaring_no_host_remote_control_composes_none():
     from remote_agents.domain.models import ProfileId
     from remote_agents.ports.provider_descriptor import ProviderDescriptor
 
+    # `glyph` is required identity, and irrelevant here: these fixtures exercise the
+    # host-toggle fold, which reads `remote_control` alone. A stand-in keeps the fixture
+    # about its own subject rather than restating marks the verticals own.
     barren = (
-        ProviderDescriptor(ProfileId("claude")),
-        ProviderDescriptor(ProfileId("opencode")),
+        ProviderDescriptor(ProfileId("claude"), glyph="?"),
+        ProviderDescriptor(ProfileId("opencode"), glyph="?"),
     )
     assert _host_remote_control(barren, store=object(), locks=object()) is None
 
@@ -697,8 +700,8 @@ def test_exactly_one_descriptor_may_own_the_host_toggle():
     from remote_agents.ports.provider_descriptor import ProviderDescriptor
 
     doubled = (
-        ProviderDescriptor(ProfileId("codex"), remote_control=object()),
-        ProviderDescriptor(ProfileId("opencode"), remote_control=object()),
+        ProviderDescriptor(ProfileId("codex"), glyph="?", remote_control=object()),
+        ProviderDescriptor(ProfileId("opencode"), glyph="?", remote_control=object()),
     )
     with pytest.raises(ValueError):
         _host_remote_control(doubled, store=object(), locks=object())
@@ -740,7 +743,7 @@ async def test_the_host_toggle_is_drained_by_the_same_locks_as_the_session_servi
 
     locks = SessionLocks()
     service = _host_remote_control(
-        (ProviderDescriptor(ProfileId("codex"), remote_control=BlockingControl()),),
+        (ProviderDescriptor(ProfileId("codex"), glyph="?", remote_control=BlockingControl()),),
         store=Store(),
         locks=locks,
     )

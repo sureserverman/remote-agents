@@ -1,4 +1,4 @@
-"""`ProviderDescriptor`'s field set is pinned, so a sixth field is a decision, not drift.
+"""`ProviderDescriptor`'s field set is pinned, so a seventh field is a decision, not drift.
 
 The same treatment `Backend` gets in `test_frontends_share_one_backend.py`: the capability
 set is read off the dataclass rather than restated, and pinned by length as well as by
@@ -9,6 +9,7 @@ value.
 
 from __future__ import annotations
 
+import dataclasses
 import types
 import typing
 
@@ -17,6 +18,13 @@ import typing
 #: host-level Remote Control toggle Codex publishes and the other three do not. Recorded
 #: here rather than assumed, because DEC-070's whole claim is that growing this set is a
 #: reviewable act and not drift.
+#:
+#: It moved 6 -> 7 on 2026-09-08 by the plan
+#: `2026-09-08-...-sub-02-agent-glyphs-light-plan.md`, and that one grew the *identity*
+#: half rather than this one: `glyph` is the mark a surface draws for a provider it has no
+#: room to name. The two halves are pinned separately below because they obey opposite
+#: rules -- a capability must admit `None` (DEC-061), an identity field must not.
+_IDENTITY_FIELDS = ("profile_id", "glyph")
 _CAPABILITY_FIELDS = ("sessions", "usage", "hooks", "activity", "remote_control")
 
 
@@ -28,15 +36,43 @@ def _descriptor_fields() -> tuple[str, ...]:
 
 
 def test_the_descriptor_field_set_is_read_from_the_dataclass() -> None:
-    """Six fields: one identity, five capabilities. A seventh is a reviewable act."""
+    """Seven fields: two identity, five capabilities. An eighth is a reviewable act."""
     fields = _descriptor_fields()
-    assert len(fields) == 6, (
-        f"`ProviderDescriptor` now declares {len(fields)} fields, not 6. That may be fine — "
-        "but every field is a capability a frontend reads as declared rather than discovers, "
-        "so confirm the new field belongs here and update this pin deliberately."
+    expected = len(_IDENTITY_FIELDS) + len(_CAPABILITY_FIELDS)
+    assert len(fields) == expected, (
+        f"`ProviderDescriptor` now declares {len(fields)} fields, not {expected}. That may "
+        "be fine — but every field is something a frontend reads as declared rather than "
+        "discovers, so confirm the new field belongs here, decide whether it is identity or "
+        "a capability, and update this pin deliberately."
     )
-    assert fields[0] == "profile_id"
-    assert set(fields[1:]) == set(_CAPABILITY_FIELDS)
+    assert fields[: len(_IDENTITY_FIELDS)] == _IDENTITY_FIELDS, (
+        "the identity fields must come first and keep their order: both are required, and a "
+        "required field declared after a defaulted one is a dataclass the interpreter refuses"
+    )
+    assert set(fields[len(_IDENTITY_FIELDS) :]) == set(_CAPABILITY_FIELDS)
+
+
+def test_no_identity_field_is_optional() -> None:
+    """The mirror of the capability rule: identity has no honest absence to declare.
+
+    A `glyph` defaulting to `None` would let a fifth vertical join the registry
+    indistinguishable from a sibling and pass every contract in the kit — which is exactly
+    the defect DEC-070 put the field here to remove.
+    """
+    from remote_agents.ports import provider_descriptor
+
+    hints = typing.get_type_hints(provider_descriptor.ProviderDescriptor)
+    fields = provider_descriptor.ProviderDescriptor.__dataclass_fields__
+    for name in _IDENTITY_FIELDS:
+        annotation = hints[name]
+        assert type(None) not in typing.get_args(annotation), (
+            f"`{name}` admits None, so a provider could declare no {name} at all; identity "
+            "is required, and only capabilities carry a declared absence (DEC-061)."
+        )
+        assert fields[name].default is dataclasses.MISSING, (
+            f"`{name}` carries a default, so a vertical can acquire it by omission rather "
+            "than by declaring it."
+        )
 
 
 def test_every_capability_field_is_declared_optional() -> None:

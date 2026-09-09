@@ -32,6 +32,7 @@ def descriptor() -> ProviderDescriptor:
     """
     return ProviderDescriptor(
         ProfileId("opencode"),
+        glyph="🟪",
         sessions=_sessions,
         usage=OpenCodeUsageReader(),
         hooks="opencode",
