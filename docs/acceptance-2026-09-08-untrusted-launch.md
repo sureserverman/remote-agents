@@ -199,4 +199,59 @@ onto this branch (a shipped feature is invisible until it restarts):
 
 ## Section 3 — The notification arrives on its own and answers itself
 
-**NOT YET RUN.** Needs the owner's Telegram client. See the Stage 3 gate.
+**Machine half: RUN AND RECORDED. Owner half: NOT YET RUN.**
+
+### Launch to message, on a real codex through the real service and store
+
+The whole path except Telegram itself: a real `codex` on a throwaway tmux server, launched into
+a directory it had never been asked about, through the real `SessionService`, the real SQLite
+store and the real `TrustNotifier` — with a recording transport standing in for the Bot API, so
+the figures are this service's latency and not Telegram's.
+
+```
+  state after launch: untrusted
+  seconds from launch to message: 0.27
+  keyboard attached: True
+  messages after a second pass: 1 (must stay 1)
+  seconds from launch to message (decline settled): 0.02
+  settled text: ⛔ <b>Closed without trusting.</b>
+```
+
+A second run: `0.25`. Both well inside the six seconds the gate asks for, and against a
+previous behaviour of twenty seconds to a message that said the launch had failed.
+
+### One miss in three, recorded because it is the interesting number
+
+A third run of this drill returned **`running`** — codex's dialog was not caught, and no
+question was asked. The focused probe disagrees: 15 launches at settles of 0.1 s, 0.3 s and
+0.6 s caught the dialog **15 times out of 15**, so widening the settle is not the answer and
+was not taken.
+
+What this says is that `trust_settle_seconds` is **best-effort, not a guarantee**. Codex's
+banner and its dialog are 0.081–0.084 s apart (section 1) and each poll costs two tmux
+round-trips, so under the wrong scheduling the deciding capture can land on the near side of
+the dialog. The margin is 16–19 ms and it was recorded as thin when the number was chosen.
+
+**It is not the last line of defence, which is why the number stands.** A launch that misses
+lands `RUNNING`, and `ReconciliationService._event_for` re-reads the pane and corrects a
+RUNNING record whose pane is on a dialog to `UNTRUSTED` — the path added for exactly this in
+Stage 1. The cost of a miss is therefore one reconciliation interval of a wrong word, not a
+session stranded silently.
+
+### What the owner still has to do
+
+Neither of these can be issued from here. Restart the service onto this branch first — a
+shipped feature is invisible until it restarts.
+
+1. **From the TUI**, launch into a project codex has never been asked about. Time it from the
+   launch key to the message arriving on your phone; it should be seconds, not twenty.
+2. Press **Trust this project** if the agent is `claude` on a host that raises its dialog, or
+   watch the message amend when you answer codex's dialog in the pane. The message should
+   **change in place** rather than a second one arriving, and the row should turn `running`.
+3. **From the bot**, launch into another never-asked directory. The reply itself is the
+   question. Press **Don't trust — close it**; the pane and the row should both go, and the
+   message should amend to *"Closed without trusting."*
+4. **Restart the service while a question is standing.** No second message should arrive — that
+   is what migration 12's row is for.
+5. Check that a chat which refuses the message three times is given up on rather than retried
+   forever (DEC-049); the journal line is `giving up on the folder-trust question`.
