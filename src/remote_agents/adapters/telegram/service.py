@@ -1623,7 +1623,8 @@ class PrivateBotBoundary:
         **The rows live in the message text, not on the buttons.** A keyboard button cannot
         hold a newline, and the two-line row is the redesign's whole answer to a list nobody
         could scan: the identity in bold on one line, the state, age and gauge in monospace
-        on the next. The buttons become short pickers -- `🟢 #7 remote-agents` -- in the same
+        on the next. The buttons become short pickers -- `🟢 <mark> #7 remote-agents`, the
+        mark being the agent's (`glyphs`), absent for a profile that declares none -- in the same
         order as the text, two to a row.
 
         **Grouped by `StateGroup`, in its fixed order, and a bucket with nothing in it is not
@@ -1694,9 +1695,17 @@ class PrivateBotBoundary:
                     f"<b>{escape(parts.identity)}</b> #{parts.sequence}\n"
                     f"<code>{escape(second)}</code>"
                 )
+                # The agent's mark between the state and the sequence: the state group is
+                # what the eye scans first, and the mark answers "which of these two is
+                # which" once it has landed on the group. A profile with no mark -- any
+                # composition wired without the registry, and a fifth provider until it
+                # declares one -- collapses to exactly the label drawn before this existed,
+                # separator and all, rather than to one carrying a hole where a mark goes.
+                glyph = self.glyphs.get(str(record.profile_id), "")
+                mark = f"{glyph} " if glyph else ""
                 pickers.append(
                     Button(
-                        f"{state_emoji(record.state)} #{parts.sequence} "
+                        f"{state_emoji(record.state)} {mark}#{parts.sequence} "
                         f"{record.display.project_slug}",
                         self._callback("session.detail", str(record.session_id)),
                     )
