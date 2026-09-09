@@ -143,11 +143,12 @@ def main(
     pane_parser = subcommands.add_parser("pane")
     pane_parser.add_argument("name", choices=sorted(PANE_NAMES))
     pane_parser.add_argument("--config", type=Path)
-    # What the console's projects key runs. It exists because a tmux key cannot do this
-    # itself: tmux can select a window, but it cannot read our pane marks and work out which
-    # exchange brings the surface home. Not a surface — it arranges panes and exits.
+    # What the console's own keys run. They exist because a tmux key cannot do either of
+    # these itself: tmux can select a window, but it cannot read our pane marks and work out
+    # which exchange brings the surface home, and it cannot slide a split and then remember
+    # across an exchange that it did. Not a surface — each arranges panes and exits.
     console_parser = subcommands.add_parser("console")
-    console_parser.add_argument("action", choices=("projects",))
+    console_parser.add_argument("action", choices=("projects", "panes"))
     # A one-time repair for sessions launched before identity moved to the pane (DEC-038).
     # They stayed manageable but gained no pane to exchange, so the console could not show
     # them. Explicit rather than automatic: it writes onto a running agent's pane.
@@ -459,17 +460,22 @@ def _enter_console(
 
 
 def _console_arrange(action: str) -> int:
-    """Rearrange the console's panes and exit — the operator's route back from an agent.
+    """Rearrange the console's panes and exit — the route back from an agent, or the fold.
 
     Deliberately not a surface: it holds no database handle, renders nothing, and its whole
-    life is one exchange. It is presentation like everything else the composer does, so a
-    failure here is a log line and a non-zero exit, never a session's problem (DEC-006).
+    life is one exchange or one fold. It is presentation like everything else the composer
+    does, so a failure here is a log line and a non-zero exit, never a session's problem
+    (DEC-006).
     """
-    if action != "projects":  # pragma: no cover - argparse `choices` is the real guard
-        print(f"unknown console action: {action}", file=sys.stderr)
-        return 1
-    asyncio.run(_console_composer().show_projects())
-    return 0
+    if action == "projects":
+        asyncio.run(_console_composer().show_projects())
+        return 0
+    if action == "panes":
+        asyncio.run(_console_composer().toggle_panes())
+        return 0
+    # pragma: no cover - argparse `choices` is the real guard
+    print(f"unknown console action: {action}", file=sys.stderr)
+    return 1
 
 
 def _upgrade_sessions() -> int:

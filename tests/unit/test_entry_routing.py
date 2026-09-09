@@ -272,6 +272,42 @@ def test_the_console_verb_asks_the_composer_for_the_projects_surface(
     assert asked == ["show_projects"]
 
 
+def test_the_console_verb_folds_the_panes_when_asked_for_them(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The second console action, and the one a *key* reaches rather than a person.
+
+    `prefix h` cannot fold panes by itself — the fold is eight resizes, a zoom and a window
+    option a later exchange re-applies — so the key runs this verb, exactly as the way back
+    from a displayed agent runs `console projects`.
+    """
+    asked: list[str] = []
+
+    class _Composer:
+        def __init__(self, *args, **kwargs) -> None:
+            self.panes_command = kwargs.get("panes_command")
+
+        async def toggle_panes(self) -> None:
+            asked.append("toggle_panes")
+
+    from remote_agents.application import console
+
+    monkeypatch.setattr(console, "ConsoleComposer", _Composer)
+    assert bootstrap.main(["console", "panes"]) == 0
+    assert asked == ["toggle_panes"]
+
+
+def test_the_fold_key_runs_this_interpreter_rather_than_a_name_on_path() -> None:
+    """The same pipx failure the projects key already avoids, for the same reason."""
+    import sys
+
+    from remote_agents.composition import tui
+
+    command = tui._panes_command()
+    assert command[0] == sys.executable
+    assert command[1:] == ("-m", "remote_agents", "console", "panes")
+
+
 def test_an_unknown_console_action_is_refused(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         bootstrap, "_console_arrange", lambda action: pytest.fail("no such console action")

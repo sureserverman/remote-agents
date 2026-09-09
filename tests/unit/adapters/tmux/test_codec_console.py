@@ -288,3 +288,56 @@ def test_a_forwarding_chord_builds_its_own_command() -> None:
         console_binding_args(
             "M-s", ConsoleBindingAction.FORWARD_TO_SESSIONS, ("true",), table=ConsoleKeyTable.PREFIX
         )
+
+
+def test_the_panes_key_runs_our_own_program_from_the_prefix_table() -> None:
+    """Folding the column is our program's job, and the key that runs it is free.
+
+    **`-T prefix`, and refused anywhere else** (the test below). The root budget is one key
+    (DEC-041) and it is already spent on the way back from a displayed agent; a fold is a
+    convenience, and a convenience does not take a key from every agent on this server.
+
+    **It runs our program rather than tmux's own `resize-pane -Z`** for the reason the option
+    exists at all: the fold is eight measured resizes plus a zoom plus a window option that
+    every later exchange re-applies, and tmux can do none of that from a key. `prefix z`
+    remains the instant, animation-free version and is left alone.
+    """
+    argv = console_binding_args(
+        "h",
+        ConsoleBindingAction.TOGGLE_PANES,
+        ("python", "-m", "remote_agents", "console", "panes"),
+        table=ConsoleKeyTable.PREFIX,
+    )
+
+    assert argv[:4] == ("bind-key", "-T", "prefix", "h"), (
+        f"the fold key must go in the prefix table, not the root one: {argv}"
+    )
+    assert argv[4] == "run-shell"
+    assert "-n" not in argv, "a fold key in the root table would cost every agent a key"
+    assert argv[5] == "python -m remote_agents console panes"
+
+
+def test_the_panes_key_is_refused_in_the_root_table() -> None:
+    """Refused where it is built, exactly as a forwarding chord is.
+
+    The argv is otherwise identical, so a caller that asked for the root table would spend the
+    console's whole budget a second time and no test of the fold itself would notice.
+    """
+    with pytest.raises(ValueError, match="prefix table"):
+        console_binding_args(
+            "h",
+            ConsoleBindingAction.TOGGLE_PANES,
+            ("true",),
+            table=ConsoleKeyTable.ROOT,
+        )
+
+
+def test_the_panes_key_needs_the_command_that_folds_the_column() -> None:
+    """A key bound to nothing is worse than an unbound key: it answers, and does nothing.
+
+    The same refusal `SHOW_PROJECTS` carries, for the same measured reason — the projects
+    command defaulted to empty for one commit of this branch and every console built without
+    one failed to come up at all.
+    """
+    with pytest.raises(ValueError, match="needs the command"):
+        console_binding_args("h", ConsoleBindingAction.TOGGLE_PANES, table=ConsoleKeyTable.PREFIX)

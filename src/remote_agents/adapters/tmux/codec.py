@@ -479,6 +479,15 @@ def console_binding_args(
     elif action is ConsoleBindingAction.SHOW_PROJECTS:
         if not command:
             raise ValueError("the projects binding needs the command that returns the surface")
+    elif action is ConsoleBindingAction.TOGGLE_PANES:
+        if table is not ConsoleKeyTable.PREFIX:
+            # The same refusal the forwarding chords carry, and for the same arithmetic: the
+            # root budget is one key (DEC-041) and it is already spent. The argv is otherwise
+            # identical, so a caller that asked for the root table would spend it twice and
+            # every test of the fold itself would still pass.
+            raise ValueError("the panes binding may only be bound in the prefix table")
+        if not command:
+            raise ValueError("the panes binding needs the command that folds the column")
     else:  # pragma: no cover - the enum has no third member
         raise ValueError(f"no argv is built for {action.value}")
     # shlex.join for /bin/sh, then `#` -> `##` for tmux's own format pass, in that order:

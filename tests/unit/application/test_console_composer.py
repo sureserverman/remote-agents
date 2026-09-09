@@ -17,7 +17,13 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from pathlib import Path
 
-from remote_agents.application.console import CONSOLE_BINDINGS, ConsoleComposer
+import pytest
+
+from remote_agents.application.console import (
+    CONSOLE_BINDINGS,
+    ConsoleComposer,
+    console_panes_binding,
+)
 from remote_agents.domain.models import (
     ProfileId,
     ProjectId,
@@ -210,6 +216,9 @@ class RecordingConsole:
 
 #: What the projects key runs. The composition root supplies the real one; this is its shape.
 _PROJECTS_COMMAND = ("remote-agents", "console", "projects")
+
+#: What the fold key runs — the same shape, from the same place, for the same reason.
+_PANES_COMMAND = ("remote-agents", "console", "panes")
 
 #: One command per pane, exactly as the composition root supplies them.
 _PANE_COMMANDS = {
@@ -569,6 +578,75 @@ async def test_the_projects_binding_carries_our_own_command() -> None:
 
     by_action = {call[2]: call[3] for call in named(console, "install_console_binding")}
     assert by_action[ConsoleBindingAction.SHOW_PROJECTS] == _PROJECTS_COMMAND
+
+
+async def test_the_fold_key_is_a_prefix_key_and_the_root_budget_is_untouched() -> None:
+    """The fold takes a key, and it takes it from the table that costs an agent nothing.
+
+    `CONSOLE_BINDINGS` is the number DEC-041 fixed and the one a reader must not see grow, so
+    the fold key is deliberately *not* in it: it is a separate declaration, in the prefix
+    table, argued for on its own terms. A fold is a convenience — the console works without
+    it — and a convenience does not earn a key every agent on this server can never receive.
+    """
+    binding = console_panes_binding()
+
+    assert binding.key == "h"
+    assert binding.action is ConsoleBindingAction.TOGGLE_PANES
+    assert binding.table is ConsoleKeyTable.PREFIX, (
+        "the fold key in the root table would spend a budget of one a second time"
+    )
+    assert binding.why.strip(), "a key is spent and does not say what it costs"
+    assert binding not in CONSOLE_BINDINGS
+    assert len(CONSOLE_BINDINGS) == 1
+
+
+async def test_ensure_installs_the_fold_key_with_the_command_that_folds() -> None:
+    """Which program the key runs is composition policy, exactly as the projects key is.
+
+    Two actions now need a command of ours, so the composer maps action to command rather
+    than answering "the projects one, or nothing" — a fold key installed with `()` would be
+    refused by the codec, caught by `ensure`'s own handler, and cost the owner the key with
+    nothing but a log line to say so.
+    """
+    console = RecordingConsole()
+    composer = ConsoleComposer(
+        console,
+        ("remote-agents", "tui"),
+        Path("/tmp"),
+        projects_command=_PROJECTS_COMMAND,
+        pane_commands=_PANE_COMMANDS,
+        bindings=CONSOLE_BINDINGS + (console_panes_binding(),),
+        panes_command=_PANES_COMMAND,
+    )
+
+    await composer.ensure()
+
+    by_action = {call[2]: (call[3], call[4]) for call in named(console, "install_console_binding")}
+    assert by_action[ConsoleBindingAction.TOGGLE_PANES] == (
+        _PANES_COMMAND,
+        ConsoleKeyTable.PREFIX,
+    )
+    assert by_action[ConsoleBindingAction.SHOW_PROJECTS] == (
+        _PROJECTS_COMMAND,
+        ConsoleKeyTable.ROOT,
+    )
+
+
+async def test_a_console_that_takes_the_fold_key_without_its_command_is_not_constructible() -> None:
+    """Refused at construction, not at install — the lesson `projects_command` already paid for.
+
+    A missing command reaches tmux as a refusal the composer catches and logs, so the console
+    comes up looking perfectly well with a key that does nothing. That failure was found once,
+    live, on this branch; it is not found a second time by reading a log.
+    """
+    with pytest.raises(ValueError, match="folds its panes"):
+        ConsoleComposer(
+            RecordingConsole(),
+            ("remote-agents", "tui"),
+            Path("/tmp"),
+            projects_command=_PROJECTS_COMMAND,
+            bindings=CONSOLE_BINDINGS + (console_panes_binding(),),
+        )
 
 
 async def test_re_ensure_does_not_stack_the_bindings() -> None:

@@ -72,13 +72,13 @@ class ConsoleBindingAction(Enum):
     """What one console binding does — a closed set, not a description.
 
     Root *and* prefix since the Alt layer: `SHOW_PROJECTS` is the root key DEC-041's budget is
-    spent on, and `FORWARD_TO_SESSIONS` is prefix-only and refused anywhere else. Which table a
-    binding goes in is `ConsoleKeyTable`, not this.
+    spent on, and `FORWARD_TO_SESSIONS` and `TOGGLE_PANES` are prefix-only and refused
+    anywhere else. Which table a binding goes in is `ConsoleKeyTable`, not this.
 
     A binding's action decides tmux argv, so it is chosen from here rather than passed as
     free text (DEC-001).
 
-    **Two members, and a third was removed.** A `FOCUS_NEXT_PANE` action bound a second root key
+    **Three members, and a fourth was removed.** A `FOCUS_NEXT_PANE` action bound a second root key
     to `select-pane -t :.+`, on the premise that a displayed agent consumes the prefix key
     along with everything else the owner types. That premise is false — tmux intercepts the
     prefix in the *client*, before any key reaches the pane, so `prefix + o` already cycles
@@ -119,6 +119,22 @@ class ConsoleBindingAction(Enum):
     select a window by itself, but it cannot read our pane marks and work out which exchange
     brings the surface home. Under the tab model this key was `select-window 0`, which under
     the swap model selects the window the owner is already on.
+    """
+
+    TOGGLE_PANES = "toggle_panes"
+    """Fold the console's right column off the edge, or bring it back — whichever it is not.
+
+    Prefix-only, and refused in the root table: the root budget is one key (DEC-041), it is
+    already spent on the way back from a displayed agent, and a fold is a convenience the
+    console works perfectly well without. A key that costs every agent on this server a
+    keystroke forever has to be the difference between a usable console and a trap; this one
+    is the difference between a wide agent and a full-width one.
+
+    Like `SHOW_PROJECTS`, it runs *our own program*, and for a sharper version of the same
+    reason. tmux can zoom a pane by itself — `prefix z` still does, instantly, and is left
+    bound — but the fold is a measured slide, then a zoom, then a window option that every
+    later exchange re-applies, because `swap-pane -d` silently unzooms the window. None of
+    that is expressible as a key binding, so the key runs the composer that owns it.
     """
 
 

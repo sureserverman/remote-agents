@@ -157,6 +157,7 @@ def test_the_composed_console_installs_the_prefix_layer_and_no_second_root_key()
     is on the *composed* set: exactly one root key, and one prefix key per chord.
     """
     from remote_agents.adapters.tui.screens.sessions import CHORD_KEYS
+    from remote_agents.application.console import console_panes_binding
     from remote_agents.composition.tui import _console_composer
     from remote_agents.ports.console import ConsoleKeyTable
 
@@ -168,8 +169,15 @@ def test_the_composed_console_installs_the_prefix_layer_and_no_second_root_key()
         f"the composed console takes {len(root)} root keys, and the budget is one (DEC-041): "
         f"{[binding.key for binding in root]}"
     )
-    assert {binding.key for binding in prefix} == {f"M-{key}" for key in CHORD_KEYS}, (
-        "the production console does not install the prefix layer, so the Alt chords do not "
-        "reach the one position they were added for — inside a displayed agent"
+    # The chords, plus the fold key — which is a *third* declaration, deliberately outside
+    # `CONSOLE_BINDINGS` and outside the chord layer. Named here rather than allowed by a
+    # subset check: a prefix key still costs the owner's memory, so an unannounced one
+    # appearing in the composed set is exactly what this asserts against.
+    assert {binding.key for binding in prefix} == {f"M-{key}" for key in CHORD_KEYS} | {
+        console_panes_binding().key
+    }, (
+        "the production console does not install the prefix layer, so either the Alt chords "
+        "do not reach the one position they were added for — inside a displayed agent — or "
+        "the fold key does not reach the console at all"
     )
     assert len(composed) == len(root) + len(prefix), "a binding is in neither key table"

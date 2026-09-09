@@ -48,6 +48,16 @@ _LOG = logging.getLogger(__name__)
 #: every agent this key, so it is a function key nothing curated uses.
 JUMP_HOME_KEY = "F12"
 
+#: The prefix-table key that folds the right column away and brings it back.
+#:
+#: Not part of the root budget above, and the distinction is the whole reason this key could be
+#: taken at all: a prefix binding is invisible to every pane, because tmux intercepts the prefix
+#: in the *client* (DEC-041's own finding). `h` for hide, unshifted, and it collides with
+#: nothing: the Alt layer is `M-<key>` and tmux's own default prefix table has `h` unbound.
+#: `prefix z` — tmux's instant zoom — is deliberately left alone beside it: it is the same
+#: destination without the motion, and it costs nothing to keep.
+FOLD_PANES_KEY = "h"
+
 
 @dataclass(frozen=True, slots=True)
 class ConsolePane:
@@ -230,6 +240,34 @@ def console_prefix_bindings(keys: Sequence[str]) -> tuple[ConsoleBinding, ...]:
     )
 
 
+def console_panes_binding() -> ConsoleBinding:
+    """The fold key, declared apart from the root budget because it costs a different thing.
+
+    **Deliberately not in `CONSOLE_BINDINGS`.** That tuple is the number DEC-041 fixed at one
+    and the one a reader must not see grow; folding the column is a convenience the console
+    works perfectly well without, so it goes where a convenience can be afforded — the prefix
+    table, which takes nothing from any agent. Declared as its own function rather than
+    appended to the chord layer for the same reason in the other direction: it is not one of
+    the row chords, carries no forwarding, and would be invisible inside a comprehension over
+    the TUI's key table.
+
+    Like the projects key, the *command* it runs is the composition root's to supply — which
+    entry point folds the panes is composition policy, exactly as which entry point is the
+    dashboard is.
+    """
+    return ConsoleBinding(
+        FOLD_PANES_KEY,
+        ConsoleBindingAction.TOGGLE_PANES,
+        "The whole window for the agent, and the dashboard back when it is wanted. Costs no "
+        "agent a keystroke — tmux takes the prefix in the client — and costs the owner one "
+        "letter behind the prefix they already press to detach. It is a prefix key rather "
+        "than a root one because the console is entirely usable without it: the fold is the "
+        "difference between a wide agent and a full-width one, which is not worth a key every "
+        "agent on this server can never receive (DEC-041).",
+        table=ConsoleKeyTable.PREFIX,
+    )
+
+
 #: How many exchanges `recover` will make before reporting that the console did not settle.
 #: Each pass puts one pane where it belongs, so a console with a handful of agents settles in
 #: a handful; the bound exists for the permutation that does not, which must end in a report
@@ -309,6 +347,7 @@ class ConsoleComposer:
         working_directory: Path,
         *,
         projects_command: tuple[str, ...],
+        panes_command: tuple[str, ...] = (),
         pane_commands: Mapping[ConsolePaneSlot, tuple[str, ...]] | None = None,
         bindings: tuple[ConsoleBinding, ...] = CONSOLE_BINDINGS,
         arrangement_lock: Path | None = None,
@@ -330,6 +369,22 @@ class ConsoleComposer:
         if not projects_command:
             raise ValueError("a console needs the command that returns its projects surface")
         self._projects_command = projects_command
+        # What the fold key runs, on the same argument: which entry point folds the panes is
+        # composition policy. **Optional, unlike the projects command, and checked against the
+        # bindings rather than against nothing** — a composer that takes no fold key needs no
+        # fold command, and most of them do not. But one that takes the key and has no command
+        # is the trap `projects_command` already paid for: `console_binding_args` refuses it,
+        # `ensure` catches the refusal by design (a key must not cost the owner a console), and
+        # what the owner gets is a console that looks perfectly well with a key that answers
+        # and does nothing. Refused here, where the contradiction is visible, rather than in a
+        # log line nobody reads.
+        if not panes_command and any(
+            binding.action is ConsoleBindingAction.TOGGLE_PANES for binding in bindings
+        ):
+            raise ValueError(
+                "a console that binds the fold key needs the command that folds its panes"
+            )
+        self._panes_command = panes_command
         # One command per pane. Absent, `ensure` builds the **one-pane** console it always
         # built, running `dashboard_command` — which is still a real shape (a bare terminal
         # running the combined dashboard) and is what every caller that predates the layout
@@ -386,11 +441,13 @@ class ConsoleComposer:
         # Caught by the Stage 2 gate evaluator, against a test whose *name* already said this
         # was the intended behaviour while its assertion said the opposite.
         for binding in self._bindings:
-            command = (
-                self._projects_command
-                if binding.action is ConsoleBindingAction.SHOW_PROJECTS
-                else ()
-            )
+            # Two actions run a program of ours now, so this is a mapping rather than a
+            # conditional: an action absent from it takes no command, which is what the
+            # forwarding chords need (they derive their own from the key they are bound to).
+            command = {
+                ConsoleBindingAction.SHOW_PROJECTS: self._projects_command,
+                ConsoleBindingAction.TOGGLE_PANES: self._panes_command,
+            }.get(binding.action, ())
             try:
                 await self._console.install_console_binding(
                     binding.key, binding.action, command, binding.table
