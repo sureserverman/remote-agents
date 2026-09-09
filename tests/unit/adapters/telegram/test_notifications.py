@@ -1638,9 +1638,7 @@ def test_an_inferred_needs_answer_says_nothing_about_what_is_being_asked() -> No
     """
     message = render_activity(
         _group(
-            _activity(
-                ActivityKind.NEEDS_ANSWER, confidence=ActivityConfidence.INFERRED, ask=None
-            )
+            _activity(ActivityKind.NEEDS_ANSWER, confidence=ActivityConfidence.INFERRED, ask=None)
         ),
         display=DISPLAY,
         open_session=OPEN,

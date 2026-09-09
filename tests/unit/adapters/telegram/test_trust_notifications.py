@@ -7,6 +7,7 @@ that is not.
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import UTC, datetime
 
 import pytest
@@ -15,6 +16,7 @@ from remote_agents.adapters.telegram.trust_notifications import (
     render_trust_question,
     render_trust_settled,
 )
+from remote_agents.application.session_actions import state_word
 from remote_agents.domain.models import (
     ProfileId,
     ProjectId,
@@ -112,3 +114,38 @@ def test_an_answerable_question_without_a_trust_token_is_a_programming_error() -
     """The two arguments have to agree, and disagreeing silently would draw a dead button."""
     with pytest.raises(ValueError):
         render_trust_question(_record(), answerable=True, decline=_DECLINE)
+
+
+def test_an_owner_supplied_label_cannot_carry_markup_into_the_message() -> None:
+    """The message is sent with `parse_mode=HTML` and the label is the owner's own words.
+
+    Every caller of `_message` escapes; moving the wording into a shared renderer moved that
+    responsibility here, and it was dropped in the move. A label containing a tag does not
+    merely render oddly — Telegram refuses the send outright, which then feeds the refusal
+    counter and can abandon the question entirely.
+    """
+    record = replace(
+        _record(),
+        display=SessionDisplayIdentity("editor", "claude", "regular", 7, "Tom & <b>Jerry</b>"),
+    )
+
+    message = render_trust_question(record, answerable=False, decline=_DECLINE)
+
+    assert "<b>Jerry</b>" not in message.text
+    assert "&lt;b&gt;Jerry&lt;/b&gt;" in message.text
+    assert "Tom &amp; " in message.text
+
+
+def test_a_settled_session_that_is_not_running_is_not_called_running() -> None:
+    """A session can leave UNTRUSTED for more than two destinations.
+
+    Its pane can die (FAILED, PRESERVED) or reconciliation can orphan it. Branching on "still
+    listed" alone called every one of those "Trusted. The agent is running.", which asserts a
+    fact the record does not carry — and for a force-stopped session it would have said the
+    opposite of what happened.
+    """
+    for state in (SessionState.FAILED, SessionState.PRESERVED, SessionState.ORPHANED):
+        message = render_trust_settled(_record(state), open_session=_OPEN)
+
+        assert "The agent is running" not in message.text, state
+        assert state_word(state, None) in message.text, state

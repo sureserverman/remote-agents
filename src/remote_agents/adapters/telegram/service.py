@@ -1382,6 +1382,11 @@ class PrivateBotBoundary:
         # `render_trust_question` rather than `self._message`: this reply is a question the
         # owner answers, and the two answers are the whole of it. It is the same barless
         # construction the activity notification uses (DEC-032).
+        if self.trust_notifier is not None:
+            # The reply *is* the question, so the pass that would otherwise send one five
+            # seconds from now must stand down for this session. Told rather than inferred:
+            # nothing in the record distinguishes "asked on a screen" from "not yet asked".
+            self.trust_notifier.note_asked_on_screen(record.session_id)
         question = render_trust_question(
             record,
             answerable=answerable,

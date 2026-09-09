@@ -50,7 +50,13 @@ class _Store:
     def __init__(self) -> None:
         self.rows: dict[str, dict] = {}
 
+    #: How many writes to refuse, for the "sent but not recorded" interleaving.
+    refuse_writes: int = 0
+
     async def remember(self, session_id, *, chat_id: int, message_id: int) -> None:
+        if self.refuse_writes:
+            self.refuse_writes -= 1
+            raise RuntimeError("the database is busy")
         self.rows[str(session_id)] = {
             "chat_id": chat_id,
             "message_id": message_id,
@@ -93,8 +99,15 @@ class _View:
         #: later, separate one to begin. A bare count cannot express that.
         self._schedule = list(schedule or [])
 
+    #: Sessions whose sends are refused, by the text that names them. Lets a pass have one
+    #: session refused and another delivered, which is the only way to express DEC-049's
+    #: "something else got through" clause.
+    poison: str = ""
+
     async def send_apart(self, bot, arguments):
         del bot
+        if self.poison and self.poison in arguments["text"]:
+            raise BadRequest("chat not found")
         if self._schedule:
             if self._schedule.pop(0):
                 raise BadRequest("chat not found")
@@ -104,8 +117,15 @@ class _View:
         self.sent.append(arguments)
         return 100 + len(self.sent)
 
+    #: How many amendments to refuse before letting one through. The keyboard attach is an
+    #: amendment too, so this is how a "sent but not decorated" message is produced.
+    refuse_amends: int = 0
+
     async def amend_apart(self, bot, message_id, arguments):
         del bot
+        if self.refuse_amends:
+            self.refuse_amends -= 1
+            raise BadRequest("message could not be edited")
         self.amended.append((message_id, arguments))
         return True
 
@@ -192,19 +212,72 @@ async def test_a_declined_session_amends_to_the_closed_wording() -> None:
     assert "Closed without trusting." in view.settlements[0]["text"]
 
 
-async def test_three_consecutive_refusals_abandon_the_question(caplog) -> None:
-    """DEC-049. A chat that will not take the message is not hammered forever."""
+async def test_a_whole_pass_that_got_nothing_through_records_no_strike(caplog) -> None:
+    """DEC-049's load-bearing clause, and the one a bare three-strike counter gets wrong.
+
+    When *nothing* got through, the refusals are evidence about an outage rather than about
+    any one session. At a five-second cadence a bare counter turns a fifteen-second Telegram
+    hiccup into permanent silence for every standing question — which is the failure DEC-049
+    was written to prevent, and it is sharper here than for the activity pass because this
+    message is short and structural, so almost every refusal it can see is an outage.
+    """
     sessions, store, view = _Sessions(_record()), _Store(), _View(refuse=99)
     notifier = _notifier(sessions, store, view)
 
-    for _ in range(3):
-        await notifier.pass_once()
     with caplog.at_level("WARNING"):
-        await notifier.pass_once()
+        for _ in range(6):
+            await notifier.pass_once()
 
-    assert view.sent == []
+    assert "giving up" not in caplog.text, "an outage abandoned a session"
+
+    view._refuse = 0
+    await notifier.pass_once()
+    assert len(view.sent) == 1, "the question was never asked once the outage ended"
+
+
+async def test_a_session_refused_while_others_get_through_is_abandoned(caplog) -> None:
+    """The other half: refusals that *are* about the session still reach the bound."""
+    poisoned = _record()
+
+    def _healthy(n: int) -> SessionRecord:
+        record = _record()
+        object.__setattr__(record, "session_id", SessionId.new())
+        object.__setattr__(
+            record, "display", SessionDisplayIdentity(f"ok{n}", "claude", "regular", n)
+        )
+        return record
+
+    class _Growing:
+        """A fresh untrusted session each pass, so every pass has a delivery in it.
+
+        Needed because a trust question is delivered *once per session ever*: after the first
+        pass a standing row makes `_ask` return early, so a fixture with one healthy session
+        supplies a delivery on pass 1 and none afterwards — and under DEC-049 that means one
+        strike, not three. The decision's accepted consequence is that a lone refusing session
+        on a quiet chat is retried rather than abandoned; reaching the bound requires the chat
+        to be demonstrably reachable on each of the three passes.
+        """
+
+        def __init__(self) -> None:
+            self.records = [poisoned]
+
+        async def list_sessions(self):
+            self.records.append(_healthy(len(self.records)))
+            return tuple(self.records)
+
+    store, view = _Store(), _View()
+    view.poison = "editor"
+    notifier = _notifier(_Growing(), store, view)
+
+    with caplog.at_level("WARNING"):
+        for _ in range(4):
+            await notifier.pass_once()
+
+    assert len(view.sent) >= 3, "the healthy sessions were not delivered"
     assert "giving up" in caplog.text
-    assert len(caplog.records) == 1, "the journal line is written once, not on every pass"
+    assert sum("giving up" in r.message for r in caplog.records) == 1, (
+        "the journal line is written once, not on every pass"
+    )
 
 
 async def test_an_outage_that_ends_does_not_spend_the_abandon_budget() -> None:
@@ -262,3 +335,89 @@ async def test_a_session_that_was_never_untrusted_is_never_asked(state: SessionS
 
     assert view.sent == []
     assert store.rows == {}
+
+
+async def test_a_send_whose_row_could_not_be_written_is_not_sent_again() -> None:
+    """The duplicate-message interleaving: the message landed, the bookkeeping did not.
+
+    `remember` runs after the send, so a write that fails leaves no row — and a pass that
+    read the store alone would see "never asked" and send the owner a second copy of a
+    question they are already looking at. What is owed is the *rest* of the delivery, not
+    another message.
+    """
+    sessions, view = _Sessions(_record()), _View()
+    store = _Store()
+    store.refuse_writes = 1
+    notifier = _notifier(sessions, store, view)
+
+    await notifier.pass_once()
+    await notifier.pass_once()
+
+    assert len(view.sent) == 1, "the owner was sent the same question twice"
+    assert store.rows, "the row was never written, so a restart would ask again"
+
+
+async def test_a_question_whose_keyboard_failed_gets_its_buttons_on_the_next_pass() -> None:
+    """The stranding interleaving, and it is the worse of the two.
+
+    `remember` succeeds and the keyboard amend fails, so the row says "already asked" while
+    the message on the owner's phone has no buttons on it. A pass that trusted the row alone
+    would skip this session forever: a question that can be read and not answered, with no
+    retry and nothing in the journal saying so.
+    """
+    sessions, store, view = _Sessions(_record()), _Store(), _View()
+    view.refuse_amends = 1
+    notifier = _notifier(sessions, store, view)
+
+    await notifier.pass_once()
+    assert view.amended == [], "the keyboard attach was supposed to fail"
+
+    await notifier.pass_once()
+
+    assert len(view.sent) == 1, "a retry of the keyboard re-sent the whole message"
+    assert view.amended, "the question is still on the owner's phone with no buttons"
+    assert "Trust this project" in str(view.amended[0][1]["reply_markup"])
+
+
+async def test_one_session_failing_does_not_defer_every_other_session_s_answer() -> None:
+    """Per-session isolation in the settle loop. One refusing chat is not a stalled pass."""
+    first, second = _record(), _record()
+    object.__setattr__(second, "session_id", SessionId.new())
+
+    class _Two:
+        def __init__(self):
+            self.records = [first, second]
+
+        async def list_sessions(self):
+            return tuple(self.records)
+
+    sessions, store, view = _Two(), _Store(), _View()
+    notifier = _notifier(sessions, store, view)
+    await notifier.pass_once()
+    assert len(view.sent) == 2
+
+    sessions.records = [
+        replace(first, state=SessionState.RUNNING),
+        replace(second, state=SessionState.RUNNING),
+    ]
+    view.refuse_amends = 1
+    await notifier.pass_once()
+
+    assert len(view.settlements) == 1, "one session's failure took the other's answer with it"
+
+
+async def test_a_question_already_on_the_owner_s_screen_is_not_sent_as_a_message() -> None:
+    """The bot's own launch reply *is* the question, so the pass must stand down.
+
+    Without this the pass finds an UNTRUSTED record with no standing row five seconds later
+    and sends the same two buttons again — the "never sent twice" property failing on the one
+    path where the owner is certainly looking at the first copy.
+    """
+    sessions, store, view = _Sessions(_record()), _Store(), _View()
+    notifier = _notifier(sessions, store, view)
+
+    notifier.note_asked_on_screen(sessions.record.session_id)
+    await notifier.pass_once()
+    await notifier.pass_once()
+
+    assert view.sent == [], "the owner got a message for a question already on their screen"

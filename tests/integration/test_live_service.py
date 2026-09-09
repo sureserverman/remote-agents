@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import pathlib
+import tempfile
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
@@ -2232,3 +2234,41 @@ async def test_an_untrusted_launch_of_an_unreadable_dialog_offers_only_the_no() 
     ]
     assert "✅ Trust this project" not in labels
     assert "⛔ Don't trust — close it" in labels
+
+
+@pytest.mark.asyncio
+async def test_a_bot_launch_stands_the_notification_pass_down_for_that_session() -> None:
+    """The reply *is* the question, so the pass must not send a second copy five seconds on.
+
+    Driven through `_launch_reply` rather than by calling the notifier directly, because what
+    is being asserted is that the reply *tells* it — a unit test that calls
+    `note_asked_on_screen` itself passes whether or not anything ever does.
+    """
+    from remote_agents.adapters.sqlite.database import open_database
+    from remote_agents.adapters.sqlite.trust_notifications import SQLiteTrustNotificationStore
+
+    untrusted = _record(SessionState.UNTRUSTED, "untrusted", ProjectId("a" * 24))
+    launcher = _Launcher()
+    launcher.launch_result = replace(untrusted, profile_id=ProfileId("claude"))
+    connection = open_database(pathlib.Path(tempfile.mkdtemp()) / "sessions.sqlite3")
+    boundary = build_private_bot(
+        7,
+        11,
+        backend=backend_for(
+            catalogue=(CatalogProject("a" * 24, "Demo", "tests", "Registered"),),
+            sessions=launcher,
+        ),
+        profiles=(ProfileAvailability("claude", True),),
+        trust_store=SQLiteTrustNotificationStore(connection),
+    )
+    token = boundary.callbacks.create(
+        "launch.profile", "a" * 24 + "|claude", 7, 11, 1, mutation=True
+    )
+
+    await boundary._launch_reply("a" * 24 + "|claude", token, 1)
+
+    assert boundary.trust_notifier is not None
+    assert str(launcher.launch_result.session_id) in boundary.trust_notifier._asked_on_screen, (
+        "the launch reply did not stand the pass down, so the owner will get the same "
+        "question again as a message"
+    )
