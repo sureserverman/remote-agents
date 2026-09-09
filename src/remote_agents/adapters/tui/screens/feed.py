@@ -399,9 +399,9 @@ class FeedRegion:
         observations most worth reading: the ones about work that finished.
 
         **No `refresh_readiness`.** It rescans every record and runs a tmux capture per FAILED
-        session. This pane repaints every ten seconds on two surfaces, so naming rows through
-        the readiness pass would put a periodic tmux workload behind a pane whose whole job is
-        to be glanced at. The feed reads; it does not probe.
+        or UNTRUSTED session. This pane repaints every ten seconds on two surfaces, so naming
+        rows through the readiness pass would put a periodic tmux workload behind a pane whose
+        whole job is to be glanced at. The feed reads; it does not probe.
 
         **A failure returns an empty index rather than propagating.** The rows then render
         their session-id fallback, which is the same contract the activity read above already

@@ -34,6 +34,15 @@ class TerminalTargetMissing(RuntimeError):
 UNKNOWN_SESSION = "unknown_session"
 GRACEFUL_TIMEOUT = "graceful_timeout"
 OWNERSHIP_LOST = "ownership_lost"
+TERMINAL_NOT_LIVE = "terminal_not_live"
+"""A readiness recheck found no live pane for this session at all.
+
+Distinct from a bare "not ready", and the distinction is load-bearing: an agent that is slow
+or quiet is one a later pass can still promote, and a pane that is gone is not. Only the
+adapter can tell them apart, and until this was named the application could only see that
+`live` was False and had to treat both as "come back later" -- which left a session whose
+agent quit at its own trust dialog waiting for a promotion that could never arrive.
+"""
 
 
 @dataclass(frozen=True, slots=True)

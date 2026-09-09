@@ -18,7 +18,7 @@ from remote_agents.application.errors import DuplicateCommandError
 from remote_agents.application.services import SessionService
 from remote_agents.domain.models import ProfileId, ProjectId, SessionId, SessionRecord, SessionState
 from remote_agents.domain.state_machine import LifecycleEvent, transition
-from remote_agents.ports.terminal import TerminalObservation
+from remote_agents.ports.terminal import TERMINAL_NOT_LIVE, TerminalObservation
 
 
 class FakeStore:
@@ -120,6 +120,26 @@ class _ProbeCountingTerminal(FakeTerminal):
     ) -> TerminalObservation:
         self.probes += 1
         return await super().confirm_ready(session_id, profile_id)
+
+
+class _GonePaneTerminal(FakeTerminal):
+    """A recheck that finds no pane at all, as `TmuxTerminal.confirm_ready` reports it."""
+
+    async def confirm_ready(
+        self, session_id: SessionId, _profile_id: ProfileId
+    ) -> TerminalObservation:
+        return TerminalObservation(
+            session_id, live=False, preserved=False, detail=TERMINAL_NOT_LIVE
+        )
+
+
+class _SlowAgentTerminal(FakeTerminal):
+    """A live pane whose agent has not printed its marker yet."""
+
+    async def confirm_ready(
+        self, session_id: SessionId, _profile_id: ProfileId
+    ) -> TerminalObservation:
+        return TerminalObservation(session_id, live=False, preserved=False, detail="not_ready")
 
 
 class YieldingForceStopTerminal(FakeTerminal):
@@ -655,4 +675,50 @@ async def test_a_recheck_leaves_an_untrusted_record_alone_while_the_dialog_stand
 
     await service.refresh_readiness()
 
+    assert store.events == before
+
+
+async def test_a_recheck_ends_an_untrusted_session_whose_pane_is_gone() -> None:
+    """The local surface has no reconciler, so this path has to carry the repair too.
+
+    `composition/tui.py` builds no `ReconciliationService` — only `composition/telegram.py`
+    does. So with the daemon down, `refresh_readiness` is the *only* thing that ever re-reads
+    a record, and an agent that quit at its own trust dialog left a session nothing could
+    clear. Worse together with the console: UNTRUSTED is displayable, so the console kept
+    itself stepped aside for that dead session indefinitely rather than recovering its pane.
+    """
+    store = FakeStore()
+    terminal = _GonePaneTerminal(live=True, awaiting_trust=True)
+    service = SessionService(store, terminal)
+    record = await service.launch(
+        LaunchCommand(ProjectId("opaque-editor"), ProfileId("claude"), "died-at-the-dialog")
+    )
+    assert record.state is SessionState.UNTRUSTED
+
+    terminal.awaiting_trust = False
+    (refreshed,) = await service.refresh_readiness()
+
+    assert refreshed.state is SessionState.FAILED
+    assert store.events[-1] is LifecycleEvent.STARTUP_ERROR
+
+
+async def test_a_recheck_does_not_end_an_untrusted_session_whose_agent_is_merely_slow() -> None:
+    """The reason the repair reads the detail rather than `live` alone.
+
+    A recheck answers `live=False` for a live pane whose marker has not arrived yet, and
+    demoting one of those would fail a launch that was about to succeed. Only a pane that is
+    actually gone ends the session.
+    """
+    store = FakeStore()
+    terminal = _SlowAgentTerminal(live=True, awaiting_trust=True)
+    service = SessionService(store, terminal)
+    await service.launch(
+        LaunchCommand(ProjectId("opaque-editor"), ProfileId("claude"), "slow-but-alive")
+    )
+    before = list(store.events)
+
+    terminal.awaiting_trust = False
+    (refreshed,) = await service.refresh_readiness()
+
+    assert refreshed.state is SessionState.UNTRUSTED
     assert store.events == before

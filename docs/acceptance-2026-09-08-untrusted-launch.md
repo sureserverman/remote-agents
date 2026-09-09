@@ -40,8 +40,12 @@ freshly created directory the agent had never been asked about, on a throwaway t
 `composition/tui.py` (`HOME`, `LANG`, `PATH`, `TERM` and nothing else), which is what the
 service actually hands an agent. The pane was captured in a loop and **`date +%s.%N` was read
 at each capture**, so every figure below is wall-clock elapsed since `tmux new-session`
-returned — not a sample index. Scripts: `measure_wall.sh`, `measure_codex_wall.sh` (scratchpad;
-reproduced in the Task 1.5 and remediation commit bodies).
+returned — not a sample index.
+
+Scripts: `measure_wall.sh` and `measure_codex_wall.sh`, reproduced in full in the body of the
+commit that carries this revision. The superseded sample-index script `measure_trust.sh` is in
+the body of commit `62d8819`; it is the method this document disowns above, and is named only
+so a reader who finds it knows which one it is.
 
 ### Result — the two Claude profiles
 
@@ -85,6 +89,10 @@ curated set.
 | `codex` | 4 | +0.138s | +0.220s | **0.082s** |
 | `codex` | 5 | +0.138s | +0.220s | **0.083s** |
 
+Gaps are computed at full precision and displayed to 3 dp, so two rows do not reconcile if you
+subtract the displayed columns (run 1 shows 0.218 − 0.138 and prints 0.081). The gap column is
+the authoritative figure; the other two are its inputs, rounded.
+
 **This is the race, observed.** Codex's banner *is* its readiness marker
 (`_READINESS_MARKERS["codex"] == "Codex"`), and its dialog follows 0.081–0.084 s later, five
 times out of five. A launch whose deciding capture lands in that window sees the marker, sees
@@ -94,8 +102,22 @@ the failure `trust_settle_seconds` exists to prevent, and it is reachable on thi
     _TRUST_SETTLE_SECONDS = {"claude": 0.0, "claude-remote": 0.0, "codex": 0.1}
 
 0.1 s is the measured maximum (0.084 s) plus one poll interval (0.01 s), rounded up, which is
-the rule the plan set. `opencode` and `cursor-agent` are **absent** from the table rather than
-zero in it, because an unmeasured agent and an agent measured at zero are different things.
+the rule the plan set. **The margin that leaves is thin and is stated rather than implied:**
+16–19 ms over the five observed gaps, from a five-run sample on an idle host with no variance
+figure and no loaded-host reading. The failure it guards is silent — a green RUNNING row over a
+blocked agent — but it is no longer unbounded: `ReconciliationService` re-reads the pane and
+corrects such a record within one pass, so the exposure is at most one reconciliation interval
+of a wrong word rather than a session stuck forever.
+
+`opencode` and `cursor-agent` are **absent** from the table rather than zero in it, because an
+unmeasured agent and an agent measured at zero are different things.
+
+**One implication worth drawing, because the figures make it rather than suggest it.** At an
+82 ms gap and a 10 ms poll, the deciding capture of a codex launch almost always landed *before*
+the dialog drew. So codex sessions were not merely at risk of being recorded RUNNING while
+blocked — on this host they routinely would have been, before this branch existed. Nobody has
+audited the store for such rows; `remote-agents doctor --history` on any codex session that
+never produced activity would show it.
 
 ### The dialog wording
 

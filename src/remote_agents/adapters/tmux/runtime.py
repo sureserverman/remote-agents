@@ -25,6 +25,7 @@ from remote_agents.domain.trust import TRUST_ANSWERABLE, TrustState
 from remote_agents.ports.private_directory import open_private_directory
 from remote_agents.ports.terminal import (
     GRACEFUL_TIMEOUT,
+    TERMINAL_NOT_LIVE,
     UNKNOWN_SESSION,
     TerminalObservation,
     TerminalTargetMissing,
@@ -384,7 +385,7 @@ class TmuxTerminal:
         observation = await self.inspect(session_id)
         if observation is None or not observation.live:
             return TerminalObservation(
-                session_id, live=False, preserved=False, detail="terminal_not_live"
+                session_id, live=False, preserved=False, detail=TERMINAL_NOT_LIVE
             )
         capture = await self._gateway.capture(session_id)
         # Before the marker check, not after: a blocked pane frequently has the marker on

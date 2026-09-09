@@ -43,7 +43,7 @@ from remote_agents.domain.remote_control import RemoteControlState
 from remote_agents.domain.state_machine import LifecycleEvent, transition
 from remote_agents.domain.trust import TRUST_ANSWERABLE, TrustState
 from remote_agents.ports.session_store import ProjectUsage, SessionStore
-from remote_agents.ports.terminal import TerminalObservation, TerminalPort
+from remote_agents.ports.terminal import TERMINAL_NOT_LIVE, TerminalObservation, TerminalPort
 
 _LOG = logging.getLogger(__name__)
 
@@ -99,16 +99,13 @@ class ResumeOutcome:
 #: **RUNNING is deliberately absent, and it was briefly here.** A live pane really is two facts
 #: rather than one, and correcting a RUNNING record whose pane is secretly on a dialog is worth
 #: doing -- but this method is on the *list-rendering* path (`session_views.listed_sessions`),
-#: which both surfaces call on every render. Walking RUNNING here turns one tmux capture per
-#: FAILED session into one per *live* session, on every listing, on both surfaces. That is the
-#: exact workload `adapters/tui/screens/feed.py` declines to take on for the feed pane, in a
-#: comment naming this method's cost as "a tmux capture per FAILED or UNTRUSTED
-#: session" -- an invariant
-#: this widening silently invalidated, and which a strict double in
-#: `tests/integration/sqlite/test_session_rename.py` caught at the Stage 1 gate.
+#: which both surfaces call on every render. Walking RUNNING here would cost one tmux capture
+#: per *live* session on every listing, on both surfaces, rather than one per member of this
+#: set. That is the same periodic workload `adapters/tui/screens/feed.py` declines to take on
+#: for the feed pane, and the invariant that widening silently broke -- caught at the Stage 1
+#: gate by a strict double in `tests/integration/sqlite/test_session_rename.py`.
 #:
 #: The RUNNING correction lives in `ReconciliationService._event_for` instead, which is off the
-#: render path, already asks the readiness check, and runs on its own timer.
 _READINESS_REREAD = frozenset({SessionState.FAILED, SessionState.UNTRUSTED})
 
 #: The states a trust dialog observed *now* may correct. UNTRUSTED is absent on purpose:
@@ -146,6 +143,19 @@ def _event_for_recheck(
     if observation.awaiting_trust:
         return LifecycleEvent.TRUST_REQUIRED if state in _TRUST_CORRECTABLE else None
     if not observation.live:
+        if state is SessionState.UNTRUSTED and observation.detail == TERMINAL_NOT_LIVE:
+            # The same repair `ReconciliationService` makes for a dead pane, made here too --
+            # because the local surface's composition (`composition/tui.py`) builds no
+            # reconciler at all. Without this, an agent that quit at its own trust dialog left
+            # a record that only the daemon could ever clear, and the console kept itself
+            # stepped aside for that dead session indefinitely (UNTRUSTED is displayable, so
+            # `sync` reads it as still worth showing). Two fixes that were each right on their
+            # own composed into a strand on the one composition that had only one of them.
+            #
+            # Gated on the detail rather than on `live` alone: a recheck answers `live=False`
+            # for a *slow* agent too, and demoting one of those would fail a launch that was
+            # about to succeed.
+            return LifecycleEvent.STARTUP_ERROR
         return None
     return None if state is SessionState.RUNNING else LifecycleEvent.READY
 
