@@ -106,18 +106,35 @@ async def test_every_answerable_profile_is_answerable_through_the_real_service(
     assert result is TrustState.UNKNOWN
 
 
-async def test_a_profile_that_never_asks_is_refused_by_the_service(tmp_path: Path) -> None:
-    """The gate still bites, so widening it did not simply delete it."""
+async def test_the_service_delegates_every_profile_to_the_terminal(tmp_path: Path) -> None:
+    """**The bound moved down a layer; it was not deleted, and this is where that is visible.**
+
+    This test read "a profile that never asks is refused by the service" and drove it with
+    `codex`, expecting `ValueError("only for Claude")`. Both halves stopped being true at once:
+    codex asks, and the service no longer holds a profile list of its own. Keeping the old
+    assertion would have meant keeping the list.
+
+    What replaces it is the property that makes the removal safe: the service delegates every
+    profile, and the *terminal* is the single authority — it holds a dialog for exactly the
+    profiles that can be read, so an agent that asks nothing gets `UNKNOWN` and no keypress.
+    That refusal is driven against a real `TmuxTerminal` in
+    `tests/contract/adapters/tmux/test_resume_readiness.py`, which is the layer that can see a
+    pane; asserting it here, over a fake terminal, would assert the fake.
+    """
     store = _store(tmp_path)
     record = _answerable_record("codex")
     await store.save(record)
     terminal = _AnsweringTerminal()
     service = SessionService(store, terminal)
 
-    with pytest.raises(ValueError, match="only for Claude"):
-        await service.answer_trust(AnswerTrustCommand(record.session_id, "key-codex"))
+    await service.answer_trust(
+        AnswerTrustCommand(record.session_id, idempotency_key="answer-codex")
+    )
 
-    assert terminal.answered == [], "a refused profile must not reach the terminal"
+    assert terminal.answered == [record.session_id], (
+        "the service refused a profile of its own accord, which is the second authority the "
+        "derivation exists to remove"
+    )
 
 
 # --- the decline half ------------------------------------------------------------

@@ -253,17 +253,21 @@ def compose_backend(
 
     projects = projects or ProjectCatalogueProvider(config.registry_path, config.dev_root)
     catalogue = projects.refresh().catalogue
-    runtime = runtime or _local_runtime(config, paths, projects.paths)
     # The registry is the one per-provider capability source (ARCH-04). The ceiling reaches
     # Claude's reader only when the owner stated it (DEC-061 — a reader supplying its own
     # ceiling would be inventing one; passing the default unconditionally once rendered every
     # Claude row against this project's assumption, 68% shown for a context 340% full).
+    #
+    # **Built before the runtime, and handed to it.** The runtime needs one provider fact of
+    # its own — which agents' folder-trust dialogs can be read — and folding that from a second
+    # build would construct Claude's reader a second time, without the ceiling this one carries.
     descriptors = provider_descriptors(
         claude_context_window=(
             config.claude_context_window if config.claude_context_window_stated else None
         ),
         claude_context_window_stated=config.claude_context_window_stated,
     )
+    runtime = runtime or _local_runtime(config, paths, projects.paths, descriptors)
     registered = {str(descriptor.profile_id) for descriptor in descriptors}
     curated = {definition.executable for definition in closed_profiles()}
     if registered != curated:

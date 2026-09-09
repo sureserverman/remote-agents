@@ -101,7 +101,7 @@ def _curated_environment(source: Mapping[str, str]) -> dict[str, str]:
     return environment
 
 
-def _local_runtime(config, paths: ProductionPaths, project_paths) -> LocalRuntime:
+def _local_runtime(config, paths: ProductionPaths, project_paths, descriptors=None) -> LocalRuntime:
     """Compose the one tmux terminal and profile probe that every surface shares."""
     definitions = closed_profiles()
     compatibility = probe_profiles(
@@ -149,7 +149,16 @@ def _local_runtime(config, paths: ProductionPaths, project_paths) -> LocalRuntim
         # the adapter and the provider packages. The same mapping goes to the bot's
         # availability policy, so what a surface offers and what the terminal will do cannot
         # disagree.
-        trust_dialogs=profile_trust_dialogs(),
+        #
+        # **`descriptors` is threaded in rather than rebuilt**, on the same argument
+        # `compose_backend` makes for folding usage readers from the set it already has: a
+        # descriptor constructs its vertical's collaborators, and Claude's usage reader takes
+        # the owner's stated context ceiling. A second build here made one *without* it, which
+        # is a reader carrying this project's assumption instead of the owner's number — the
+        # invented value DEC-061 forbids, arriving through the composition rather than the
+        # reader. Caught by `test_compose_backend_hands_the_readers_the_declared_ceiling`,
+        # which counts every construction for exactly this reason.
+        trust_dialogs=profile_trust_dialogs(descriptors),
     )
     return LocalRuntime(terminal, compatibility, gateway)
 

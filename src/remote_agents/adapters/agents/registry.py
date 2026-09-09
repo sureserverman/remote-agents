@@ -279,7 +279,9 @@ def trust_dialog_of(profile_id: ProfileId) -> TrustDialog | None:
     return by_provider.get(executables.get(name, ""))
 
 
-def profile_trust_dialogs() -> dict[str, TrustDialog]:
+def profile_trust_dialogs(
+    descriptors: tuple[ProviderDescriptor, ...] | None = None,
+) -> dict[str, TrustDialog]:
     """Every curated profile that *can* be asked, and the dialog to read it with.
 
     `profile_glyphs`' fold, and the answer to "which profiles are answerable" — which used to
@@ -289,12 +291,25 @@ def profile_trust_dialogs() -> dict[str, TrustDialog]:
 
     Profiles that declare none are **absent** rather than present-with-None, so a caller's
     `in` is the whole question and there is no third state to mishandle.
+
+    **Takes the descriptors, like `usage_readers` does, and the reason is that building one is
+    not free.** A descriptor constructs its vertical's collaborators eagerly — Claude's usage
+    reader among them — so a fold that called `trust_dialog_of` per profile rebuilt all four
+    descriptors five times over, and a composition that folded here *and* built its own
+    descriptors afterwards constructed Claude's reader twice with different arguments. The
+    first version of this did both. Callers that have descriptors pass them; the rest get a
+    single build.
     """
-    return {
-        str(profile.profile_id): dialog
-        for profile in closed_profiles()
-        if (dialog := trust_dialog_of(profile.profile_id)) is not None
-    }
+    built = provider_descriptors() if descriptors is None else descriptors
+    by_provider = {str(descriptor.profile_id): descriptor.trust_dialog for descriptor in built}
+    executables = {str(profile.profile_id): profile.executable for profile in closed_profiles()}
+    resolved = {}
+    for profile in closed_profiles():
+        name = str(profile.profile_id)
+        dialog = by_provider.get(name) or by_provider.get(executables.get(name, ""))
+        if dialog is not None:
+            resolved[name] = dialog
+    return resolved
 
 
 def profile_glyphs() -> dict[str, str]:
@@ -311,7 +326,17 @@ def profile_glyphs() -> dict[str, str]:
     are five of the first and four of the second, and the fold that forgets that is one
     where `claude-remote` silently loses its mark.
     """
-    return {str(profile.profile_id): glyph_of(profile.profile_id) for profile in closed_profiles()}
+    # Folded from one build of the descriptors rather than one per profile: a descriptor
+    # constructs its vertical's collaborators, so `glyph_of` per profile built all four of them
+    # five times over. Same shape, same fix, as `profile_trust_dialogs` below.
+    built = provider_descriptors()
+    by_provider = {str(descriptor.profile_id): descriptor.glyph for descriptor in built}
+    executables = {str(profile.profile_id): profile.executable for profile in closed_profiles()}
+    resolved = {}
+    for profile in closed_profiles():
+        name = str(profile.profile_id)
+        resolved[name] = by_provider.get(name) or by_provider.get(executables.get(name, ""), "")
+    return resolved
 
 
 def usage_readers(descriptors: tuple[ProviderDescriptor, ...]) -> ProfileUsageReaders:

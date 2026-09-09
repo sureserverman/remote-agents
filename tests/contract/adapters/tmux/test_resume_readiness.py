@@ -9,6 +9,7 @@ from remote_agents.adapters.tmux.codec import ManagedPane
 from remote_agents.adapters.tmux.gateway import TmuxInventory
 from remote_agents.adapters.tmux.runtime import LaunchProfile, TmuxTerminal
 from remote_agents.domain.models import ProfileId, ProjectId, SessionId
+from remote_agents.domain.trust import TrustState
 from remote_agents.ports.terminal import NOT_AWAITING_TRUST, OWNERSHIP_LOST
 
 _EXECUTABLE = "/usr/bin/claude"
@@ -321,6 +322,33 @@ async def test_codex_is_told_no_in_its_own_dialog_now_that_it_declares_one(tmp_p
     )
     assert gateway.destroyed == [session_id]
     assert not observation.live
+
+
+@pytest.mark.asyncio
+async def test_answering_yes_presses_nothing_for_a_profile_that_declares_no_dialog(
+    tmp_path,
+) -> None:
+    """The single authority, on the *answer* path, against a real terminal.
+
+    `SessionService.answer_trust` used to refuse a non-Claude profile itself, against a
+    hand-written list. It does not any more — the list is gone and the terminal's injected
+    declarations are the whole of the bound — so this is where "widening it did not delete it"
+    has to be proved. An agent with no declared dialog gets `UNKNOWN` and, the part that
+    matters, **no keys at all**: a Trust press on such a session must not put an Enter into a
+    live prompt.
+
+    Mutation-checked, and the two results are worth keeping apart. Making the lookup fall back
+    to **codex's** declaration — the one the capture here actually matches — turns this red, so
+    the refusal is what the test pins. Making it fall back to *claude's* leaves it green, and
+    that is not a hole: `identifies_by` refuses a codex screen read with claude's declaration on
+    its own. Two independent refusals, and this test is about the first.
+    """
+    terminal, gateway, session_id = _decline_terminal(tmp_path, "opencode", _CODEX_DIALOG)
+
+    answered = await terminal.answer_trust(session_id)
+
+    assert answered is TrustState.UNKNOWN
+    assert gateway.sent == [], "a key was typed into an agent that declares no dialog"
 
 
 @pytest.mark.asyncio
