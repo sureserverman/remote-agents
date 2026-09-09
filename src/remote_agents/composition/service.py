@@ -10,6 +10,7 @@ from pathlib import Path
 
 from remote_agents.adapters.sqlite.activity_store import SQLiteActivityStore
 from remote_agents.adapters.telegram.service import PrivateBotBoundary
+from remote_agents.adapters.telegram.trust_notifications import TrustNotifier
 from remote_agents.adapters.tmux.runtime import TmuxTerminal
 from remote_agents.application.activity import CodexApprovalWatcher, drain_activity
 from remote_agents.application.reconcile import ReconciliationService
@@ -21,6 +22,13 @@ _LOG = logging.getLogger(__name__)
 #: A shutdown courtesy, not a negotiation: past this the child is left to the OS.
 _CLOSE_TIMEOUT_SECONDS = 5.0
 _ACTIVITY_POLL_SECONDS = 30.0
+#: How often the folder-trust question is looked for. Six times the activity cadence, and the
+#: difference is what the two passes are waiting on. An activity report is news about work that
+#: has already happened, so half a minute late is half a minute late. A trust question is a
+#: session standing still until the owner answers it, and the owner asked for it to appear
+#: "immediately" -- neither the 30 s activity poll nor the 60 s reconcile is that. The pass is
+#: cheap: it reads the records it already has and touches Telegram only when something changed.
+_TRUST_POLL_SECONDS = 5.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -61,6 +69,15 @@ class ServiceComposition:
     and never costs the phone its notification.
     """
 
+    trust_notifier: TrustNotifier | None = None
+    """The pass that asks an untrusted session's question, or None where nothing asks it.
+
+    None in compositions that wire no Telegram -- the local surface never asks (DEC-047) -- and
+    in tests predating it. Typed loosely for the reason the fields above are ordered as they
+    are: `ServiceComposition` is constructed positionally in places, so a new field goes at the
+    end with a default and names what it is in prose.
+    """
+
 
 async def _serve_with_reconciliation(
     secrets: TelegramSecrets,
@@ -68,6 +85,7 @@ async def _serve_with_reconciliation(
     serve_runner: Callable[[TelegramSecrets, PrivateBotBoundary], Awaitable[None]],
     interval: float,
     activity_interval: float = _ACTIVITY_POLL_SECONDS,
+    trust_interval: float = _TRUST_POLL_SECONDS,
 ) -> None:
     """Poll Telegram while keeping durable records agreeing with observed panes.
 
@@ -105,6 +123,13 @@ async def _serve_with_reconciliation(
         periodic.append(
             asyncio.create_task(_watch_activity_periodically(composition, activity_interval))
         )
+    if composition.trust_notifier is not None:
+        # Its own task on its own clock, for the reason the activity watch has one: a pass
+        # that hangs must not stop records being reconciled, and these three answer different
+        # questions. Unlike the activity watch it runs from the first tick -- there is no
+        # baseline to establish, because an untrusted session standing at start-up is exactly
+        # what the owner most needs to be told about.
+        periodic.append(asyncio.create_task(_watch_trust_periodically(composition, trust_interval)))
     try:
         await serve_runner(secrets, composition.boundary)
     finally:
@@ -144,6 +169,18 @@ async def _close_host_remote_control(composition: ServiceComposition) -> None:
         _LOG.warning("host remote control did not close within %ss", _CLOSE_TIMEOUT_SECONDS)
     except Exception:  # noqa: BLE001 -- tidying up may not turn a clean stop into a crash
         _LOG.debug("host remote control did not close cleanly", exc_info=True)
+
+
+async def _watch_trust_periodically(composition: ServiceComposition, interval: float) -> None:
+    """Ask, and amend, on a clock of its own — and never raise into the serving loop."""
+    while True:
+        await asyncio.sleep(interval)
+        try:
+            await composition.trust_notifier.pass_once()
+        except Exception:
+            # One pass, logged. A trust question that could not be asked this time is asked
+            # next time; a loop that dies takes every later question with it.
+            _LOG.exception("the folder-trust pass failed; it will be retried")
 
 
 async def _watch_activity_periodically(composition: ServiceComposition, interval: float) -> None:

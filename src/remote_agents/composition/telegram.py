@@ -9,6 +9,7 @@ from remote_agents.adapters.sqlite.session_store import SQLiteSessionStore
 from remote_agents.adapters.sqlite.standing_notification_store import (
     SQLiteStandingNotificationStore,
 )
+from remote_agents.adapters.sqlite.trust_notifications import SQLiteTrustNotificationStore
 from remote_agents.adapters.telegram import FRONTEND
 from remote_agents.adapters.telegram.service import build_private_bot
 from remote_agents.application.activity import CodexApprovalWatcher
@@ -69,36 +70,42 @@ def _private_boundary(
             hide_in_console=console.hide,
         ),
     )
+    # Named rather than inlined, because the serve loop needs the pass the factory built: the
+    # boundary owns it (it speaks through the live view and mints against the same callbacks),
+    # and `ServiceComposition` is what puts it on a clock.
+    boundary = build_private_bot(
+        secrets.owner_user_id,
+        secrets.owner_chat_id,
+        # The durable store, not the in-memory default: a restart used to void every
+        # button in the chat, and only this half of the pair actually fixes that.
+        callbacks=SQLiteCallbackStateStore(connection),
+        # And the durable anchor for the same reason: a restart that forgot which
+        # message the live view is would send a second one and leave the first above it,
+        # still holding buttons that — since Stage 1 — still resolve.
+        anchors=SQLiteChatViewStore(connection),
+        # And the durable standing notifications, which close the other half of that
+        # same defect. A restart that forgot which message a session's notification is
+        # sent a *second* one on the session's next report and left the first above the
+        # live view — observed in the chat on 2026-08-20, when the 21:23 restart turned
+        # one session's alert into one message above the menu and one below.
+        standing=SQLiteStandingNotificationStore(connection),
+        # The whole backend, not five of its fields taken out and handed over one at a
+        # time. `catalogue` and `max_label_length` came through here too and are on it;
+        # the boundary seeds its render copy of the first from `Backend.catalogue`.
+        backend=backend,
+        # Profiles come off the backend like everything else now. They were a separate
+        # argument for as long as `Backend.profiles` held the domain type and this
+        # surface needed its own narrowing; `compose_backend` does that narrowing once,
+        # so the line that used to be the plausible-looking mistake is the correct one.
+        profiles=backend.profiles,
+        project_page_size=config.project_page_size,
+        # The durable home for the one standing trust question per session (migration 12).
+        # Its absence is what a boundary without a trust pass looks like, so supplying it is
+        # the whole of the wiring here.
+        trust_store=SQLiteTrustNotificationStore(connection),
+    )
     return ServiceComposition(
-        # The factory, not the class: it wires the stop controller, the live view and the
-        # notifier, which the boundary used to build for itself out of whatever it had.
-        build_private_bot(
-            secrets.owner_user_id,
-            secrets.owner_chat_id,
-            # The durable store, not the in-memory default: a restart used to void every
-            # button in the chat, and only this half of the pair actually fixes that.
-            callbacks=SQLiteCallbackStateStore(connection),
-            # And the durable anchor for the same reason: a restart that forgot which
-            # message the live view is would send a second one and leave the first above it,
-            # still holding buttons that — since Stage 1 — still resolve.
-            anchors=SQLiteChatViewStore(connection),
-            # And the durable standing notifications, which close the other half of that
-            # same defect. A restart that forgot which message a session's notification is
-            # sent a *second* one on the session's next report and left the first above the
-            # live view — observed in the chat on 2026-08-20, when the 21:23 restart turned
-            # one session's alert into one message above the menu and one below.
-            standing=SQLiteStandingNotificationStore(connection),
-            # The whole backend, not five of its fields taken out and handed over one at a
-            # time. `catalogue` and `max_label_length` came through here too and are on it;
-            # the boundary seeds its render copy of the first from `Backend.catalogue`.
-            backend=backend,
-            # Profiles come off the backend like everything else now. They were a separate
-            # argument for as long as `Backend.profiles` held the domain type and this
-            # surface needed its own narrowing; `compose_backend` does that narrowing once,
-            # so the line that used to be the plausible-looking mistake is the correct one.
-            profiles=backend.profiles,
-            project_page_size=config.project_page_size,
-        ),
+        boundary,
         terminal,
         # Readiness is wired in deliberately: without it, reconciliation promotes any
         # FAILED session with a live pane to RUNNING, including one stopped dead on a
@@ -113,4 +120,5 @@ def _private_boundary(
         CodexApprovalWatcher(store, terminal.pane_title),
         paths.activity_directory,
         SQLiteActivityStore(connection),
+        trust_notifier=boundary.trust_notifier,
     )

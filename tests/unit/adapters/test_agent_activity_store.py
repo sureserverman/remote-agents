@@ -105,7 +105,7 @@ def test_the_migration_count_is_pinned_by_hand() -> None:
     """`len(MIGRATIONS)` comparisons elsewhere are conveniences; this literal is the one
     assertion an accidentally dropped migration cannot pass. Bump this — and only this —
     when adding a migration."""
-    assert len(MIGRATIONS) == 11
+    assert len(MIGRATIONS) == 12
 
 
 async def test_a_retired_kind_among_the_newest_rows_does_not_shorten_the_glance(store) -> None:

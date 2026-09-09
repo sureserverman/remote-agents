@@ -51,7 +51,10 @@ from remote_agents.adapters.telegram.presenters import (
     uniform_keyboard,
 )
 from remote_agents.adapters.telegram.stops import CONFIRMED_FORCE, StopController
-from remote_agents.adapters.telegram.trust_notifications import render_trust_question
+from remote_agents.adapters.telegram.trust_notifications import (
+    TrustNotifier,
+    render_trust_question,
+)
 from remote_agents.application.backend import Backend
 from remote_agents.application.commands import (
     AnswerTrustCommand,
@@ -537,6 +540,17 @@ class PrivateBotBoundary:
     stops: StopController = field(init=False)
     view: LiveView = field(init=False)
     notifier: ActivityNotifier = field(init=False)
+    trust_notifier: TrustNotifier | None = None
+    """The pass that asks an untrusted session's folder-trust question, or None where none does.
+
+    Optional rather than `init=False`, unlike the three below it, because it is genuinely
+    absent from most compositions: only a service wired with a durable trust store has one, and
+    every boundary a test constructs directly has none. `run_private_bot` guards on it.
+
+    Named rather than `object`, which is what `test_the_boundary_declares_no_untyped_backend_
+    field` insists on and was right to: an untyped seam on this class is how a collaborator
+    gets swapped for something that only happens to answer the same calls.
+    """
     """The three collaborators, filled by `build_private_bot` rather than by this class.
 
     `init=False` and genuinely unset until the factory runs, which is the honest state: a
@@ -3218,6 +3232,7 @@ def build_private_bot(
     stops: StopController | None = None,
     view: LiveView | None = None,
     notifier: ActivityNotifier | None = None,
+    trust_store: object | None = None,
     **boundary: object,
 ) -> PrivateBotBoundary:
     """Compose a working bot: the boundary, and the three collaborators it drives.
@@ -3259,6 +3274,18 @@ def build_private_bot(
             finished=bot._finished_sessions,  # noqa: SLF001
         )
     )
+    if trust_store is not None:
+        object.__setattr__(
+            bot,
+            "trust_notifier",
+            TrustNotifier(
+                sessions=bot.backend.sessions,
+                store=trust_store,
+                view=bot.view,
+                callbacks=bot.callbacks,
+                owner_user_id=owner_user_id,
+            ),
+        )
     return bot
 
 
@@ -3302,6 +3329,11 @@ async def run_private_bot(
     # notification answers nothing, so it needs the application's, and the application does
     # not exist until here.
     boundary.notifier.attach(application.bot)
+    # The same handle, for the same reason, to the pass that asks the folder-trust question:
+    # it answers no update either. Guarded because a boundary built by a composition that
+    # wires no trust pass -- every test that constructs one directly -- has none.
+    if boundary.trust_notifier is not None:
+        boundary.trust_notifier.attach(application.bot)
     try:
         await _sync_owner_metadata(
             application.bot, secrets.owner_chat_id, owner_commands(boundary.backend)

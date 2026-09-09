@@ -53,6 +53,16 @@ _EXPECTED_CALLS = {
         "Control plan and recorded in DEC-071, per this file's own instruction that "
         "changing a number here belongs in the decision register",
     ),
+    "trust_notifications.py": (
+        3,
+        "the folder-trust question and the two shapes of its amendment. A message, not a "
+        "screen: it outlives the screen it was sent from, so a bar on it is a control the "
+        "owner can press days later about a session that has since ended. Fourth barless "
+        "render, added 2026-09-09 and recorded in DEC-078, per this file's own instruction "
+        "that changing a number here belongs in the decision register. The launch *reply* is "
+        "deliberately not among them -- it is a screen the owner is standing on, and it "
+        "re-wraps this module's rendering through `_message` to get its bar back",
+    ),
 }
 
 

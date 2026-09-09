@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import asyncio
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -494,3 +496,75 @@ async def test_activity_watching_gives_up_on_a_capture_that_never_returns(
         watcher._title_timeout = 0.05
 
         assert await asyncio.wait_for(watcher.poll(), timeout=5) == ()
+
+
+async def test_the_trust_pass_runs_on_its_own_clock_and_a_failure_costs_one_pass() -> None:
+    """The loop's two guarantees, and the second is why it exists as a separate task.
+
+    A trust question that could not be asked this time is asked next time; a loop that dies
+    takes every later question with it — and it runs beside the loop that serves the owner, so
+    a failure here must never reach that one.
+    """
+    from remote_agents.composition.service import _watch_trust_periodically
+
+    class _Failing:
+        def __init__(self) -> None:
+            self.passes = 0
+
+        async def pass_once(self) -> None:
+            self.passes += 1
+            if self.passes == 1:
+                raise RuntimeError("Telegram is having a moment")
+
+    notifier = _Failing()
+    composition = SimpleNamespace(trust_notifier=notifier)
+    task = asyncio.create_task(_watch_trust_periodically(composition, 0.01))
+    try:
+        # Bounded, because the failure this asserts is a loop that *stops* — an unbounded
+        # wait for a counter that will never move again does not fail, it hangs, and a test
+        # that hangs on the bug it is testing is worse than no test.
+        async with asyncio.timeout(5):
+            while notifier.passes < 3:
+                await asyncio.sleep(0.01)
+    except TimeoutError:
+        pass
+    finally:
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+
+    assert notifier.passes >= 3, "the loop stopped after a pass raised"
+
+
+async def test_the_serve_loop_actually_schedules_the_trust_pass(tmp_path: Path) -> None:
+    """The wiring, not the loop. Mutating the schedule guard past the loop's own test is easy.
+
+    `_watch_trust_periodically` is tested above by calling it directly, which says nothing
+    about whether `_serve_with_reconciliation` ever starts it — and removing the branch that
+    does left every other test in this file green.
+    """
+    connection = open_database(tmp_path / "sessions.sqlite3")
+    try:
+        store = SQLiteSessionStore(connection)
+        terminal = StubTerminal()
+
+        class _Counting:
+            def __init__(self) -> None:
+                self.passes = 0
+
+            async def pass_once(self) -> None:
+                self.passes += 1
+
+        notifier = _Counting()
+        composition = replace(_composition(store, terminal), trust_notifier=notifier)
+
+        async def poll(secrets: TelegramSecrets, boundary: PrivateBotBoundary) -> None:
+            del secrets, boundary
+            async with asyncio.timeout(5):
+                while notifier.passes == 0:
+                    await asyncio.sleep(0.01)
+
+        await _serve_with_reconciliation(_SECRETS, composition, poll, 3600, trust_interval=0.01)
+
+        assert notifier.passes >= 1, "the serve loop never started the trust pass"
+    finally:
+        connection.close()
