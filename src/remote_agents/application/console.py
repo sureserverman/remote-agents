@@ -560,6 +560,10 @@ class ConsoleComposer:
             adopted = (*await self._build_panes(), *await self._adopt_surface())
         except Exception:
             _LOG.exception("the console could not be built or marked; recovery may not find it")
+        # A rebuild is `split-window`, which unzooms the window as surely as an exchange does.
+        # `recover` below re-asserts too, and the double is free: the zoom verb reads the flag
+        # first and issues nothing when the window is already where it should be.
+        await self._reassert_panes()
         report = await self.recover()
         for note in report.moved:
             _LOG.info("console recovery: %s", note)
@@ -653,6 +657,10 @@ class ConsoleComposer:
             # long as it is open. `settle` reports the same state once, at start, where the
             # owner can act on it.
             _LOG.debug("console: %s", note)
+        # This path exchanges panes without anybody pressing anything -- it runs on the
+        # sessions reload whenever a displayed session dies -- so it unzooms the window like
+        # any other exchange and has to put the fold back.
+        await self._reassert_panes()
 
     async def open(self, session_id: SessionId) -> str | None:
         """Show one session in the console — which, under the swap model, *is* `show`.
@@ -898,6 +906,10 @@ class ConsoleComposer:
                 arrangement = await self._console.pane_arrangement()
                 measured = self._left_pane_and_window(geometry, arrangement)
                 if measured is None:
+                    _LOG.warning(
+                        "the console's left slot could not be measured; its panes stay as "
+                        "they are and nothing is recorded"
+                    )
                     return
                 pane_id, width, window = measured
                 await self._slide(pane_id, width, _folded_width(window))
@@ -924,14 +936,25 @@ class ConsoleComposer:
         _PaneSlide.busy = True
         try:
             async with self._links:
-                await self._console.write_console_option(PANES_HIDDEN_OPTION, "")
                 geometry = await self._console.console_pane_geometry()
                 arrangement = await self._console.pane_arrangement()
                 measured = self._left_pane_and_window(geometry, arrangement)
                 if measured is None:
+                    _LOG.warning(
+                        "the console's left slot could not be measured; its panes stay as "
+                        "they are and the record is left describing them"
+                    )
                     return
                 pane_id, width, window = measured
+                # The unzoom first, then the record, then the motion. An earlier version
+                # cleared the option at the top, which was the mirror of `hide_panes` in shape
+                # and not in effect: a geometry read that raised, an arrangement read that
+                # raised, an unzoom that raised, or an unmeasurable slot all left the record
+                # saying "showing" over a window that was still folded -- the inverse of the
+                # lie `hide_panes` orders itself to avoid, and one nothing corrects, because
+                # `_reassert_panes` only ever zooms.
                 await self._console.zoom_console_pane(pane_id, wanted=False)
+                await self._console.write_console_option(PANES_HIDDEN_OPTION, "")
                 await self._slide(pane_id, width, _projects_width(window))
         except ConsoleBusy:
             _LOG.debug("another writer holds the console; this unfold is dropped")
@@ -1035,6 +1058,9 @@ class ConsoleComposer:
             before=plan.before,
         )
         await self._normalize()
+        # Reached from `show`'s early returns as well as from `sync`, and those return before
+        # the caller's own reassert. A rejoin is a `split-window`, which unzooms.
+        await self._reassert_panes()
 
     async def _normalize(self) -> None:
         """Put the console window back in the proportions `CONSOLE_LAYOUT` declares.
@@ -1172,6 +1198,7 @@ class ConsoleComposer:
             # `moved` is kept deliberately. A pass that made three exchanges and then lost the
             # server has moved three panes, and reporting nothing would be the same error this
             # type exists to prevent, pointing the other way.
+            await self._reassert_panes()
             return RecoveryReport(tuple(moved), blocked, settled=False)
         for note in blocked:
             _LOG.warning("console recovery could not act: %s", note)

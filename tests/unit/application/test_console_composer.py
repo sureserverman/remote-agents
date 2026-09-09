@@ -908,3 +908,84 @@ async def test_recovery_re_applies_the_fold_it_exchanged_away() -> None:
     await composer.recover()
 
     assert _zooms(console) and _zooms(console)[-1][2] is True
+
+
+async def test_the_sessions_reload_re_applies_the_fold_when_it_moves_a_pane() -> None:
+    """The exchange nobody pressed a key for: a displayed session dies and `sync` unwinds it.
+
+    Named separately from the keypress paths because it is the one that can fold the console
+    back on an owner who is not touching the console at all.
+    """
+    console = RecordingConsole(arrangement=_showing_an_agent())
+    console.options["@remote_agents_panes_hidden"] = "1"
+    composer = _composer(console)
+
+    await composer.sync(set())
+
+    assert _zooms(console) and _zooms(console)[-1][2] is True
+
+
+async def test_recovery_that_fails_part_way_still_re_applies_the_fold() -> None:
+    """Its `except` path used to return before the reassert, so a partial recovery unfolded."""
+    console = RecordingConsole(arrangement=_showing_an_agent())
+    console.options["@remote_agents_panes_hidden"] = "1"
+    composer = _composer(console)
+
+    calls = {"n": 0}
+    original = console.swap_panes
+
+    async def failing(source_pane: str, target_pane: str) -> None:
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise RuntimeError("the pane went away mid-recovery")
+        await original(source_pane, target_pane)
+
+    console.swap_panes = failing  # type: ignore[method-assign]
+
+    await composer.recover()
+
+    assert _zooms(console) and _zooms(console)[-1][2] is True
+
+
+async def test_a_show_that_cannot_measure_the_slot_leaves_the_record_describing_it() -> None:
+    """The inverse lie: the record must never say "showing" over a window that is folded.
+
+    `hide_panes` orders itself to avoid claiming a fold it did not reach. This is the same
+    rule pointing the other way, and it was the direction that was wrong -- the option was
+    cleared before anything had been read, so a failed read left the record showing and the
+    window hidden, which nothing corrects because the reassert only ever zooms.
+    """
+    console = RecordingConsole(arrangement=_three_pane_console())
+    console.options["@remote_agents_panes_hidden"] = "1"
+    console.geometry = ()
+    composer = _composer(console)
+
+    await composer.show_panes()
+
+    assert console.options["@remote_agents_panes_hidden"] == "1", (
+        "the console is still folded, so the record must still say so"
+    )
+
+
+async def test_a_show_whose_unzoom_fails_leaves_the_record_saying_folded() -> None:
+    """The ordering itself, not just the early return: unzoom first, then record.
+
+    With the record cleared first, an unzoom that raises leaves the window folded and the
+    option saying it is not -- and nothing corrects that, because `_reassert_panes` only ever
+    zooms. The next press would then try to fold an already-folded console.
+    """
+    console = RecordingConsole(arrangement=_three_pane_console())
+    console.options["@remote_agents_panes_hidden"] = "1"
+    console.geometry = (("%0", 181), ("%1", 1), ("", 183))
+    composer = _composer(console)
+
+    async def failing(pane_id: str, *, wanted: bool) -> None:
+        raise RuntimeError("the window went away")
+
+    console.zoom_console_pane = failing  # type: ignore[method-assign]
+
+    await composer.show_panes()
+
+    assert console.options["@remote_agents_panes_hidden"] == "1", (
+        "the window is still folded, so the record must still say folded"
+    )

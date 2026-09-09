@@ -606,10 +606,17 @@ def console_zoom_pane_args(
     re-asserts the hidden state after every exchange, and a toggle fired unconditionally
     would unfold the column each time it was already folded.
 
-    **Zooming selects the pane first.** Measured on tmux 3.4: `-Z` zooms the pane named by
-    `-t` and leaves the *active* pane alone, so zooming the left slot while the sessions pane
-    is active hides the pane the keyboard is in. Unzooming needs no such care -- every pane is
-    visible again -- and issuing a select there would move the owner's cursor for no reason.
+    **Zooming selects the pane first, and the reason first written here was wrong.** That
+    version claimed `-Z` leaves the active pane alone, so zooming the left slot while another
+    pane was active would hide the pane the keyboard is in. Re-measured on this host's tmux
+    3.4, attached and detached: `resize-pane -t %0 -Z` makes `%0` active as well as zooming
+    it, and selecting another pane while zoomed auto-unzooms -- "zoomed onto a pane that is
+    not selected" is not a state tmux 3.4 will hold. The select is kept because it makes the
+    intent explicit and costs one argv, not because tmux needs it; it must not be removed on
+    the strength of the old claim, nor kept on it.
+
+    Unzooming issues no select: every pane is visible again, and moving the owner's cursor
+    there would be a change nobody asked for.
     """
     if zoomed == wanted:
         return ()
