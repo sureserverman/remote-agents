@@ -84,12 +84,15 @@ $ tmux -L remote-agents list-keys -T prefix | grep -c 'console panes'
 ```
 
 **The first figure is not a defect and the check that reads it cannot pass anywhere.** tmux 3.4
-ships seventeen root-table bindings of its own — every mouse event: `MouseDown1Pane`,
-`WheelUpPane`, `DoubleClick1Pane` and the rest — on a pristine server with no configuration at
-all. `grep -c bind-key` counts those too. What DEC-041 fixes at one is the number of root keys
-*this project* takes, and that number is the second figure: **1**, the `F12` that runs
-`remote_agents console projects`. The 8 prefix bindings are the Alt chord layer (the other 12
-`M-` entries in that table are tmux's own).
+ships root-table bindings of its own — every mouse event: `MouseDown1Pane`, `WheelUpPane`,
+`DoubleClick1Pane` and the rest — on a pristine server with no configuration at all, and
+`grep -c bind-key` counts those too. Measured rather than asserted, because the first version
+of this paragraph said "seventeen" and was wrong: a pristine `tmux -L probe -f /dev/null` here
+has **16**, and diffing its key names against the live server's 18 names the two extra exactly:
+`F12`, which is ours, and `MouseUp1Pane`, which is not (tmux binds it once a client has been
+attached). What DEC-041 fixes at one is the number of root keys *this project* takes, and that
+number is the second figure: **1**, the `F12` that runs `remote_agents console projects`. The 8
+prefix bindings are the Alt chord layer (the other 12 `M-` entries in that table are tmux's own).
 
 **`console panes` is 0, and that is the owner half of this gate, not a failure.** The live
 console installed its bindings when it was created, from the build that was current then; the

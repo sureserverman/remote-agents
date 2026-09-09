@@ -314,7 +314,26 @@ def test_the_panes_key_runs_our_own_program_from_the_prefix_table() -> None:
     )
     assert argv[4] == "run-shell"
     assert "-n" not in argv, "a fold key in the root table would cost every agent a key"
-    assert argv[5] == "python -m remote_agents console panes"
+    script = argv[5]
+    assert "exec python -m remote_agents console panes" in script, script
+
+    # **The guard, and it is the price of the key being free.** A key table belongs to the
+    # *server* and every managed agent is attached to that same socket, so a prefix binding
+    # fires from any client on it unless the script asks who pressed it — the reach DEC-073(3)
+    # recorded after reproducing it on the forwarding chords. Without this clause, an owner
+    # attached to an agent with the session detail's own `remote-agents attach ra-<uuid>` folds
+    # the console's column from a terminal that is not the console.
+    #
+    # The whole clause, not its parts, for the reason the forwarding chord's twin says: an
+    # inverted `!=` still contains `= "ra-console"`, and `|| true` in place of `|| exit 0` is
+    # asserted by nothing at all.
+    guard = (
+        f'test "$(tmux display-message -p "##{{client_session}}")" = "{CONSOLE_SESSION_NAME}" '
+        f"|| exit 0;"
+    )
+    assert guard in script, (
+        f"the fold key does not refuse a client attached to anything but the console: {script}"
+    )
 
 
 def test_the_panes_key_is_refused_in_the_root_table() -> None:

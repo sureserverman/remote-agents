@@ -782,6 +782,92 @@ async def test_showing_unzooms_before_it_slides_back() -> None:
     assert names.index("zoom_console_pane") < names.index("resize_console_pane")
 
 
+async def test_a_fold_whose_zoom_fails_records_the_state_the_next_exchange_will_reach() -> None:
+    """The one place the record is deliberately ahead of the window, and the direction matters.
+
+    `hide_panes` writes the option *before* the zoom. If the zoom raises, the record says
+    folded over a window that is merely narrow -- and `_reassert_panes` zooms it on the next
+    exchange, so the two agree again without anybody pressing anything. The other order would
+    leave a failed zoom recorded as *showing* over a window slid to its last two columns, and
+    nothing corrects that, because a reassert only ever zooms. Untested until the Stage 2
+    review asked why the two methods order themselves differently.
+    """
+    gateway = RecordingConsole(arrangement=_three_pane_console())
+
+    async def refuse(pane_id: str, *, wanted: bool) -> None:
+        gateway.calls.append(("zoom_console_pane", pane_id, wanted))
+        raise RuntimeError("the pane went away")
+
+    gateway.zoom_console_pane = refuse  # type: ignore[method-assign]
+
+    await _composer(gateway).hide_panes()
+
+    assert gateway.options["@remote_agents_panes_hidden"] == "1", (
+        "a failed zoom recorded the console as showing, which no reassert will ever repair"
+    )
+
+
+async def test_a_second_press_that_wants_what_is_already_done_moves_nothing() -> None:
+    """The repeat as it really arrives: a *separate process*, so the in-process flag is clear.
+
+    The key runs `remote-agents console panes`, a fresh interpreter per press, so
+    `_PaneSlide.busy` — the guard the unit test below exercises — is always `False` when a real
+    second press starts. What the two presses share is the console's file lock, and a lock
+    serialises rather than drops: without the re-read under it, the second press re-runs the
+    whole fold, unzooming on its first resize and re-zooming at the end. A flicker for nothing.
+
+    Simulated the way it actually happens, by driving two composers that share no process
+    state and letting the second start from the record the first left.
+    """
+    gateway = RecordingConsole(arrangement=_three_pane_console())
+
+    await _composer(gateway).hide_panes()
+    assert gateway.options["@remote_agents_panes_hidden"] == "1"
+    moved = len(_slide_widths(gateway))
+
+    # A second press, from a process that never saw the first: same record, new composer.
+    await _composer(gateway).hide_panes()
+
+    assert len(_slide_widths(gateway)) == moved, (
+        "the second press folded an already-folded column, which is a visible flicker"
+    )
+    assert gateway.options["@remote_agents_panes_hidden"] == "1"
+
+
+async def test_a_second_unfold_that_wants_what_is_already_done_moves_nothing() -> None:
+    """The mirror, on a console that is already showing its column."""
+    gateway = RecordingConsole(arrangement=_three_pane_console())
+    gateway.options["@remote_agents_panes_hidden"] = ""
+
+    await _composer(gateway).show_panes()
+
+    assert _slide_widths(gateway) == [], "an unfold ran against a console that was not folded"
+
+
+async def test_the_unfold_lands_where_tmux_puts_the_split_at_any_width() -> None:
+    """Not at 183, which is the one width where the wrong formula is also right.
+
+    `main-pane-width 60%` takes its percent of the window **minus the divider column**, so the
+    layout the console is declared to have is `(w - 1) * 60 // 100`. At the owner's 183 that is
+    109 and so is `w * 60 // 100` — which is why the first version of this arithmetic, and the
+    test above it, agreed with tmux at exactly one width and were one column out at every other.
+    Measured on tmux 3.4 at each width below, with the same `main-pane-width` +
+    `select-layout main-vertical` the console itself sends.
+    """
+    for window, expected in ((180, 107), (185, 110), (200, 119), (100, 59)):
+        gateway = RecordingConsole(arrangement=_three_pane_console())
+        gateway.geometry = (("%0", window - 2), ("%1", 1), ("", window))
+        gateway.options["@remote_agents_panes_hidden"] = "1"
+
+        await _composer(gateway).show_panes()
+
+        widths = _slide_widths(gateway)
+        assert widths[-1] == expected, (
+            f"a {window}-column console unfolds to {widths[-1]}, and tmux puts the split at "
+            f"{expected}: the fold comes back a column wider than the console it left"
+        )
+
+
 async def test_a_toggle_reads_the_option_and_calls_the_other_one() -> None:
     gateway = RecordingConsole(arrangement=_three_pane_console())
     composer = _composer(gateway)
@@ -892,6 +978,69 @@ async def test_showing_an_agent_re_applies_the_fold_it_silently_undid() -> None:
     zoomed = [index for index, call in enumerate(console.calls) if call[0] == "zoom_console_pane"]
     assert swapped and zoomed and zoomed[-1] > swapped[-1], (
         "the fold must be re-applied *after* the exchange that undid it"
+    )
+
+
+async def test_a_show_that_gives_up_part_way_still_re_applies_the_fold() -> None:
+    """The early return after an exchange, which is the one path that skipped the reassert.
+
+    `show` sends the agent already on screen home first — a real `swap_panes`, and therefore a
+    real unzoom — then re-reads and gives up if the slot did not free up. Before this, that
+    `return` went straight out past the tail call, so a folded console was left showing its
+    column with the record still saying hidden until some later exchange happened to notice.
+    The reassert is a `finally` now, which is why this passes.
+    """
+    other = SessionId.parse("fedcba98-7654-3210-fedc-ba9876543210")
+    # The console is showing one agent while a second one waits in its own window: the shape
+    # where `show` must send the first home before it can swap the second in.
+    console = RecordingConsole(
+        arrangement=(
+            *_showing_an_agent(),
+            HostedPane(
+                host=other,
+                on_console=False,
+                window_index=0,
+                pane_index=0,
+                pane_id="%11",
+                session_id=other,
+            ),
+        )
+    )
+    console.options["@remote_agents_panes_hidden"] = "1"
+    composer = _composer(console)
+
+    async def sent_home_but_still_occupied(arrangement, slot) -> bool:
+        console.calls.append(("swap_panes", "%pretend", slot.pane_id))
+        return True
+
+    composer._send_home = sent_home_but_still_occupied  # type: ignore[method-assign]
+    # The re-read returns the same arrangement, so the slot is still an agent's and `show`
+    # gives up with its "did not free up" -- the shape a stop landing in that instant makes.
+
+    message = await composer.show(other)
+
+    assert message == "The left pane did not free up. Try again."
+    assert _zooms(console) and _zooms(console)[-1][2] is True, (
+        "the console gave up after an exchange and left the fold undone"
+    )
+
+
+async def test_a_show_that_raises_after_an_exchange_still_re_applies_the_fold() -> None:
+    """The same hole, on the exception path — where `recover` already knew to reassert."""
+    console = RecordingConsole(arrangement=_console_and_a_running_agent())
+    console.options["@remote_agents_panes_hidden"] = "1"
+
+    async def raise_after_swapping(source: str, target: str) -> None:
+        console.calls.append(("swap_panes", source, target))
+        raise RuntimeError("the server went away mid-exchange")
+
+    console.swap_panes = raise_after_swapping  # type: ignore[method-assign]
+
+    message = await _composer(console).show(_RUNNING)
+
+    assert message is not None and "could not show" in message
+    assert _zooms(console) and _zooms(console)[-1][2] is True, (
+        "an exchange that raised part-way left the window unzoomed and the record folded"
     )
 
 

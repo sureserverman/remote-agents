@@ -1316,9 +1316,22 @@ uv run --locked remote-agents
     slide.
 
     Two limits, both by design. The fold is a property of the console's *window*, so it does
-    not survive step 9's kill: a rebuilt console comes up unfolded. And a second press
-    arriving while the slide is still moving is **dropped**, not queued — press it twice
-    quickly and the column ends where the first press was taking it.
+    not survive step 9's kill: a rebuilt console comes up unfolded.
+
+    And each press is a **separate program** — the key runs `remote-agents console panes`, one
+    process per press — so two presses a fraction of a second apart are serialised by the
+    console's own lock rather than racing. Press it twice quickly and confirm: nothing is
+    abandoned half-way, and the second press does not fold an already-folded column back and
+    forth. If it wanted what the first press was already doing, it finds the column there and
+    does nothing; if it wanted the opposite, it happens after the first finishes (DEC-008 — a
+    repeat is dropped, never a cancel of the one in flight).
+
+    **Also press `Ctrl-b h` from a terminal attached to an *agent* rather than to the
+    console** — the session detail hands you that `remote-agents attach ra-<uuid>` command —
+    and confirm nothing happens. A tmux key table belongs to the *server*, and every managed
+    agent is attached to the same one, so the binding asks which session the pressing client
+    is on and does nothing unless it is the console (DEC-073(3)), exactly as the Alt chords do
+    in step 13.
 
 ## Terminal and service on one database
 

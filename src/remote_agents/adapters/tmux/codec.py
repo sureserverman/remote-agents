@@ -373,6 +373,36 @@ _BINDABLE_KEY_CHARACTERS = frozenset(
 #: without the socket being spelled again. Measured on tmux 3.4 rather than read off the manual,
 #: together with the delivery itself: the emitted argv resolves the marked pane and the key
 #: arrives in it.
+#: The clause every console prefix binding starts with: do nothing unless the client that
+#: pressed the key is attached to the console.
+#:
+#: **Spelled once, because a key table belongs to the server and every managed agent is
+#: attached to that same socket.** Without it a prefix binding fires from a plain
+#: `remote-agents attach ra-<uuid>` — a terminal with no console pane on screen at all —
+#: which is the reach DEC-073(3) recorded after reproducing it. It was written inline in the
+#: forwarding script and is lifted here because the fold key needs the identical sentence: a
+#: second copy is a second thing to get wrong, and the one that is wrong will be the quiet one.
+_PRESSED_FROM_THE_CONSOLE = (
+    f'test "$(tmux display-message -p "#{{client_session}}")" = "{CONSOLE_SESSION_NAME}" '
+    f"|| exit 0;"
+)
+
+
+def _console_only_command(command: tuple[str, ...]) -> tuple[str, ...]:
+    """Run our own argv, but only for a client attached to the console.
+
+    `SHOW_PROJECTS` spends a *root* key and takes this on the chin — DEC-041 costed that key in
+    keystrokes taken from agents, and its reach from a foreign client was accepted with it. A
+    prefix binding is a different bargain: it is free precisely because tmux takes it in the
+    client, which is the same fact that makes it fire from **every** client on the server. So a
+    prefix binding of ours asks who pressed it (DEC-073(3)).
+
+    `exec` because the shell has nothing left to do: the guard has already decided, and an
+    extra process between tmux and our program buys nothing.
+    """
+    return ("sh", "-c", f"{_PRESSED_FROM_THE_CONSOLE} exec {shlex.join(command)}")
+
+
 def _forward_to_sessions_command(key: str) -> tuple[str, ...]:
     """The `sh -c` argv that forwards one key to the console's sessions pane.
 
@@ -394,8 +424,7 @@ def _forward_to_sessions_command(key: str) -> tuple[str, ...]:
     refactor.
     """
     script = (
-        f'test "$(tmux display-message -p "#{{client_session}}")" = "{CONSOLE_SESSION_NAME}" '
-        f"|| exit 0; "
+        f"{_PRESSED_FROM_THE_CONSOLE} "
         f'pane=$(tmux list-panes -a -F "#{{pane_id}}" '
         f'-f "#{{==:#{{{CONSOLE_SLOT_OPTION}}},{ConsolePaneSlot.SESSIONS.value}}}" '
         f"| head -n 1); "
@@ -488,6 +517,7 @@ def console_binding_args(
             raise ValueError("the panes binding may only be bound in the prefix table")
         if not command:
             raise ValueError("the panes binding needs the command that folds the column")
+        command = _console_only_command(command)
     else:  # pragma: no cover - the enum has no third member
         raise ValueError(f"no argv is built for {action.value}")
     # shlex.join for /bin/sh, then `#` -> `##` for tmux's own format pass, in that order:

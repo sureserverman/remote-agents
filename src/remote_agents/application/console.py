@@ -758,6 +758,15 @@ class ConsoleComposer:
         cannot be displayed and is left alone rather than refused loudly, and every failure
         degrades to a log line. Nothing on this path writes a record or touches lifecycle.
         """
+        # **`finally`, not a tail call, and the difference is a defect this had.** Every
+        # `return` below is reached with panes possibly already moved: the send-home path
+        # exchanges and *then* re-reads, and returns early when the slot did not free up --
+        # so a tail call after the `try` was skipped exactly when an exchange had just
+        # unzoomed the window, leaving a folded console showing its column with the record
+        # still saying hidden until some later exchange happened to reassert. The exception
+        # handlers have the same shape, which is why `recover` already reasserts in its own.
+        # Outside the lock in every case: the `async with` is inside the `try`, so the lock is
+        # released before this runs, and `_reassert_panes` takes none of its own.
         try:
             async with self._links:
                 arrangement = await self._console.pane_arrangement()
@@ -836,10 +845,8 @@ class ConsoleComposer:
                 "showing %s in the console failed; the arrangement is unchanged", session_id
             )
             return f"The console could not show this session: {error}"
-        # Outside the lock, because `_reassert_panes` takes no lock of its own and the swap
-        # above is what needed serialising. The exchange silently unzoomed the window; this
-        # puts the owner's fold back.
-        await self._reassert_panes()
+        finally:
+            await self._reassert_panes()
         return None
 
     async def show_projects(self) -> None:
@@ -861,8 +868,10 @@ class ConsoleComposer:
             _LOG.exception(
                 "returning the projects surface failed; the console still shows an agent"
             )
-            return
-        await self._reassert_panes()
+        finally:
+            # `finally`, for the reason `show` states: an exchange that raised part-way has
+            # already unzoomed the window, and a tail call would be skipped exactly then.
+            await self._reassert_panes()
 
     #: How many resizes one fold is made of. Eight, because the motion has to read as a
     #: motion rather than a jump and tmux has no animation of its own: the pane edge is moved
@@ -946,8 +955,14 @@ class ConsoleComposer:
         would make the slide invisible -- the column is already gone -- so the owner would see
         a jump where they asked for a fold.
 
-        **The option is written only after the layout it describes has been reached.** Every
-        later reassert believes it (DEC-040's exchanges silently unzoom, so the composer
+        **The option is written only after the slide it describes has been made** -- and
+        *before* the zoom, which is the one asymmetry here and is deliberate. A zoom that
+        raises leaves the record saying folded over a window that is merely narrow, and the
+        next exchange's `_reassert_panes` zooms it: the record is ahead of the window by one
+        exchange, in the direction that heals. Writing it after the zoom instead would leave a
+        failed zoom recorded as *showing* over a window slid to its last two columns, which is
+        the state nothing corrects, because a reassert only ever zooms. Every later reassert
+        believes it (DEC-040's exchanges silently unzoom, so the composer
         re-applies the fold from this option), and an option written ahead of a slide that
         then failed would fold a console the owner is looking at, on the next exchange, with
         no key pressed. DEC-036 is the other half: a failure ends in a log line and the record
@@ -959,6 +974,19 @@ class ConsoleComposer:
         _PaneSlide.busy = True
         try:
             async with self._links:
+                # **The record is re-read here, inside the lock, and that is what makes the
+                # repeat a repeat.** `_PaneSlide.busy` is process state, and in production every
+                # press is a *fresh process* -- the key runs `remote-agents console panes` --
+                # so that flag is always clear and never sees the press it is written for. What
+                # the two presses really share is this file lock, which serialises rather than
+                # drops: the second waits, and would then re-run a fold the first has just
+                # finished, unzooming on its first resize and re-zooming at the end. A visible
+                # flicker for nothing. Asked again under the lock, the second press finds the
+                # column already where it was going and does nothing, which is DEC-008's word
+                # rather than an approximation of it.
+                if await self._console.read_console_option(PANES_HIDDEN_OPTION) == "1":
+                    _LOG.debug("the column is already folded; this press is dropped (DEC-008)")
+                    return
                 geometry = await self._console.console_pane_geometry()
                 arrangement = await self._console.pane_arrangement()
                 measured = self._left_pane_and_window(geometry, arrangement)
@@ -993,6 +1021,12 @@ class ConsoleComposer:
         _PaneSlide.busy = True
         try:
             async with self._links:
+                # The mirror of `hide_panes`' re-read, and it exists for the same press: a
+                # second unfold that queued behind the first would unzoom an already-unzoomed
+                # window and slide a split that is already home.
+                if await self._console.read_console_option(PANES_HIDDEN_OPTION) != "1":
+                    _LOG.debug("the column is already showing; this press is dropped (DEC-008)")
+                    return
                 geometry = await self._console.console_pane_geometry()
                 arrangement = await self._console.pane_arrangement()
                 measured = self._left_pane_and_window(geometry, arrangement)
@@ -1003,6 +1037,13 @@ class ConsoleComposer:
                     )
                     return
                 pane_id, width, window = measured
+                # **The width a zoomed pane reports is the whole window, not the width it will
+                # have when the zoom comes off.** tmux answers `list-panes` for a zoomed pane
+                # with the window's own width (measured: 183 on a folded 183-column console
+                # whose real split is at 181), so sliding from that reading makes the first
+                # step a 7-column move where every other step is 9. Clamped to where the fold
+                # actually left the split; the endpoint was always exact.
+                width = min(width, _folded_width(window))
                 # The unzoom first, then the record, then the motion. An earlier version
                 # cleared the option at the top, which was the mirror of `hide_panes` in shape
                 # and not in effect: a geometry read that raised, an arrangement read that
@@ -1055,8 +1096,8 @@ class ConsoleComposer:
                 await self._send_home(arrangement, slot)
         except Exception:
             _LOG.exception("the console could not be returned to the projects surface")
-            return
-        await self._reassert_panes()
+        finally:
+            await self._reassert_panes()
 
     async def _send_home(self, arrangement: tuple[HostedPane, ...], slot: HostedPane) -> bool:
         """Exchange the slot's agent with the console's own surface — only where that is safe.
@@ -1337,11 +1378,15 @@ def _projects_width(window_width: int) -> int:
     projects = next(
         (pane.percent for pane in CONSOLE_LAYOUT if pane.slot is ConsolePaneSlot.PROJECTS), 60
     )
-    # Floor, not round, because this has to agree with tmux rather than with arithmetic:
-    # `main-pane-width 60%` on the owner's 183-column window gives the left pane **109**
-    # columns, and 183 * 60 / 100 is 109.8. Rounding lands 110 and the fold comes back one
-    # column wider than the console it left, every time.
-    return max(1, window_width * projects // 100)
+    # **The percent is of the window minus its divider, and floored.** This has to agree with
+    # tmux rather than with arithmetic, and the first version of it agreed with tmux at exactly
+    # one width -- 183, the owner's -- where `w * 60 // 100` and `(w - 1) * 60 // 100` are both
+    # 109 and the difference is invisible. Measured on tmux 3.4 at seven widths, with the same
+    # `main-pane-width 60%` + `select-layout main-vertical` the console itself sends: 180 -> 107,
+    # 183 -> 109, 185 -> 110, 100 -> 59. Every one is `(w - 1) * 60 // 100`; the divider column
+    # is not the main pane's to spend. Without the `- 1` the fold comes back one column wider
+    # than the console it left at every width except the one this was calibrated on.
+    return max(1, (window_width - 1) * projects // 100)
 
 
 def _left_slot(arrangement: tuple[HostedPane, ...]) -> HostedPane | None:

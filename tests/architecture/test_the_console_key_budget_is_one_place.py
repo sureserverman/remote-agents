@@ -183,9 +183,19 @@ def test_every_binding_states_what_it_costs() -> None:
     the plan's gate reads when it asks whether a budget is worth its price.
     """
     from remote_agents.adapters.tui.screens.sessions import CHORD_KEYS
-    from remote_agents.application.console import CONSOLE_BINDINGS, console_prefix_bindings
+    from remote_agents.application.console import (
+        CONSOLE_BINDINGS,
+        console_panes_binding,
+        console_prefix_bindings,
+    )
 
-    for binding in (*CONSOLE_BINDINGS, *console_prefix_bindings(CHORD_KEYS)):
+    # The fold key is a *third* declaration, outside both tuples by design — which made it the
+    # one binding whose `why` nothing asserted. It has a good one; this is what keeps it.
+    for binding in (
+        *CONSOLE_BINDINGS,
+        *console_prefix_bindings(CHORD_KEYS),
+        console_panes_binding(),
+    ):
         assert binding.why.strip(), f"{binding.key} is bound with no argument for its cost"
 
 

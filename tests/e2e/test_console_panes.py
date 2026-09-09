@@ -207,6 +207,7 @@ def _fold_script(root: Path) -> Path:
         '    ("true",),\n'
         "    Path(sys.argv[2]),\n"
         '    projects_command=("true",),\n'
+        "    arrangement_lock=Path(sys.argv[3]),\n"
         ")\n"
         "asyncio.run(composer.toggle_panes())\n",
         encoding="utf-8",
@@ -266,7 +267,17 @@ async def console_with_surfaces(tmp_path):
         ("sleep", "600"),
         home,
         projects_command=("true",),
-        panes_command=(_venv_python(), str(_fold_script(tmp_path)), console_socket, str(home)),
+        panes_command=(
+            _venv_python(),
+            str(_fold_script(tmp_path)),
+            console_socket,
+            str(home),
+            str(tmp_path / "console.lock"),
+        ),
+        # The cross-process lock production always supplies. Without it the drive would differ
+        # from the shipped path in exactly the dimension the toggles are about -- two presses
+        # arriving at once -- and the fold script below names the same file for the same reason.
+        arrangement_lock=tmp_path / "console.lock",
         bindings=(console_panes_binding(),),
         pane_commands={
             slot: (
