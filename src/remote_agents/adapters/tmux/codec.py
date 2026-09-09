@@ -563,6 +563,87 @@ def console_zoom_args() -> tuple[str, ...]:
     )
 
 
+PANES_HIDDEN_OPTION = "@remote_agents_panes_hidden"
+"""Whether the console's right column is folded away, kept as a window option of ours.
+
+**Not tmux's own zoom flag, and that is the load-bearing choice.** Measured on tmux 3.4:
+`swap-pane -d` -- the console's agent exchange (DEC-040) -- and `split-window` -- its rebuild
+-- both leave `window_zoomed_flag` at 0 without saying so. A hidden state stored as the zoom
+flag would therefore pop the column back into view every time the owner displayed an agent,
+which is precisely when they asked for the whole window. This option survives both, and the
+composer re-applies the zoom from it.
+
+Namespaced because the console window is not this project's alone to write options on: tmux
+requires a user option to begin with `@`, and the rest says whose.
+"""
+
+
+def console_pane_geometry_args() -> tuple[str, ...]:
+    """Return the argv suffix listing every console pane's id, width, and the window's.
+
+    One read answers both questions a slide asks -- where the split is now, and how far right
+    it may go -- so the motion never issues a resize computed from a stale reading. The window
+    width repeats on every line, which is tmux's shape rather than ours and costs nothing.
+    """
+    return (
+        "list-panes",
+        "-t",
+        console_target(),
+        "-F",
+        "#{pane_id}|#{pane_width}|#{window_width}",
+    )
+
+
+def console_resize_pane_args(pane_id: str, width: int) -> tuple[str, ...]:
+    """Return the argv suffix setting one console pane's width, in whole columns.
+
+    Exact-targeted for the reason every pane operation here is: a resize that reaches the
+    wrong pane is not a cosmetic slip, it is a live agent's window changing shape under it
+    (DEC-040). `-x` takes columns rather than a percentage because the slide steps through
+    measured widths, and a percentage would re-derive a different number at each step.
+    """
+    if width < 1:
+        raise ValueError("a pane is at least one column wide")
+    return ("resize-pane", "-t", exact_pane_target(pane_id), "-x", str(width))
+
+
+def console_zoom_pane_args(
+    pane_id: str, *, zoomed: bool, wanted: bool
+) -> tuple[tuple[str, ...], ...]:
+    """Return the argv suffixes that put the window into the wanted zoom state, or none.
+
+    **`resize-pane -Z` is a toggle**, so this takes the current flag as well as the wanted
+    one and issues nothing when they already agree. That is not an optimisation: the composer
+    re-asserts the hidden state after every exchange, and a toggle fired unconditionally
+    would unfold the column each time it was already folded.
+
+    **Zooming selects the pane first.** Measured on tmux 3.4: `-Z` zooms the pane named by
+    `-t` and leaves the *active* pane alone, so zooming the left slot while the sessions pane
+    is active hides the pane the keyboard is in. Unzooming needs no such care -- every pane is
+    visible again -- and issuing a select there would move the owner's cursor for no reason.
+    """
+    if zoomed == wanted:
+        return ()
+    toggle = ("resize-pane", "-t", exact_pane_target(pane_id), "-Z")
+    if not wanted:
+        return (toggle,)
+    return (("select-pane", "-t", exact_pane_target(pane_id)), toggle)
+
+
+def console_option_args(name: str, value: str | None) -> tuple[str, ...]:
+    """Return the argv suffix writing one console window option, or reading it back.
+
+    `None` reads. `-q` on the read because an option that was never set is the ordinary case
+    -- every console built before this existed -- and tmux treats asking for one as an error
+    loud enough to reach a log line that would say nothing useful.
+    """
+    if not name.startswith("@"):
+        raise ValueError("a tmux user option is namespaced with a leading @")
+    if value is None:
+        return ("show-options", "-w", "-q", "-v", "-t", console_target(), name)
+    return ("set-option", "-w", "-t", console_target(), name, value)
+
+
 def console_slot_mark_args(
     pane_id: str, slot: ConsolePaneSlot = ConsolePaneSlot.PROJECTS
 ) -> tuple[str, ...]:

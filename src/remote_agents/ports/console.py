@@ -296,3 +296,37 @@ class ConsolePort(Protocol):
     async def normalize_console_layout(
         self, main_percent: int, column: Sequence[tuple[str, int]]
     ) -> None: ...
+
+    async def console_pane_geometry(self) -> tuple[tuple[str, int], ...]:
+        """Every console pane's id and width, plus the window's, as `(id, width)` pairs with
+        the window under the id `""`.
+
+        One read rather than a call per question, because a slide computed from two reads
+        taken a moment apart is a slide computed from a layout that no longer exists.
+        """
+        ...
+
+    async def resize_console_pane(self, pane_id: str, width: int) -> None:
+        """Set one console pane's width in whole columns.
+
+        Raises on failure; the composer catches and writes the log line, which is where
+        DEC-036 puts it for every other console verb.
+        """
+        ...
+
+    async def zoom_console_pane(self, pane_id: str, *, wanted: bool) -> None:
+        """Put the window into the wanted zoom state on `pane_id`, or leave it alone.
+
+        Takes the *wanted* state rather than "toggle", because every caller here knows which
+        state it wants and tmux's own verb is a toggle -- the reassert after an exchange would
+        otherwise undo itself whenever it was already right.
+        """
+        ...
+
+    async def read_console_option(self, name: str) -> str:
+        """One console window option's value, or the empty string when it was never set."""
+        ...
+
+    async def write_console_option(self, name: str, value: str) -> None:
+        """Write one console window option. Raises; the composer owns the log line."""
+        ...

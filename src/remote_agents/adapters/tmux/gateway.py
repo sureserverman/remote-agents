@@ -14,9 +14,13 @@ from remote_agents.adapters.tmux.codec import (
     ManagedPane,
     console_binding_args,
     console_layout_args,
+    console_option_args,
+    console_pane_geometry_args,
+    console_resize_pane_args,
     console_slot_mark_args,
     console_target,
     console_zoom_args,
+    console_zoom_pane_args,
     decode_selection,
     display_message_args,
     exact_pane_target,
@@ -516,6 +520,89 @@ class TmuxGateway:
         """
         for arguments in console_layout_args(main_percent, column):
             await self._runner.run(*self._base_argv(), *arguments)
+
+    async def console_pane_geometry(self) -> tuple[tuple[str, int], ...]:
+        """Read the console's pane widths, and the window's, in one call.
+
+        The window width arrives repeated on every line -- tmux's shape, not ours -- and is
+        returned once under the empty id so a caller reads both facts from one answer. An
+        absent server or console is an empty answer rather than a raise: a console that is not
+        there cannot be folded, and DEC-036 makes that a log line, not a crash.
+        """
+        try:
+            output = await self._runner.run(*self._base_argv(), *console_pane_geometry_args())
+        except RuntimeError as error:
+            message = str(error)
+            if _reports_absent_server(message) or _reports_absent_target(message):
+                return ()
+            raise
+        panes: list[tuple[str, int]] = []
+        window = 0
+        for line in output.splitlines():
+            pane_id, _, rest = line.strip().partition("|")
+            width, _, window_width = rest.partition("|")
+            if not pane_id.startswith("%") or not width.isdigit():
+                continue
+            panes.append((pane_id, int(width)))
+            if window_width.isdigit():
+                window = int(window_width)
+        if not panes:
+            return ()
+        return (*panes, ("", window))
+
+    async def resize_console_pane(self, pane_id: str, width: int) -> None:
+        """Move one pane's edge.
+
+        Raises rather than swallowing, and that is deliberate: this module has no logger and
+        does not want one. DEC-036's "every failure ends in a log line" is the *composer's*
+        contract, and `application/console.py` is where every other gateway failure is caught
+        and written down. A second, quieter policy here would leave the composer believing a
+        slide it never made.
+        """
+        await self._runner.run(*self._base_argv(), *console_resize_pane_args(pane_id, width))
+
+    async def zoom_console_pane(self, pane_id: str, *, wanted: bool) -> None:
+        """Zoom or unzoom the window on one pane, reading the current flag first.
+
+        The read is what makes this idempotent: tmux's verb is a toggle, and the composer
+        calls this after every exchange, so a caller that could not tell "already folded" from
+        "not folded" would unfold the column on the owner each time they displayed an agent.
+        """
+        try:
+            zoomed = await self._runner.run(
+                *self._base_argv(),
+                "display-message",
+                "-p",
+                "-t",
+                console_target(),
+                "#{window_zoomed_flag}",
+            )
+        except RuntimeError as error:
+            message = str(error)
+            if _reports_absent_server(message) or _reports_absent_target(message):
+                return
+            raise
+        for arguments in console_zoom_pane_args(
+            pane_id, zoomed=zoomed.strip() == "1", wanted=wanted
+        ):
+            await self._runner.run(*self._base_argv(), *arguments)
+
+    async def read_console_option(self, name: str) -> str:
+        """One window option, empty when unset -- which is every console built before this."""
+        try:
+            output = await self._runner.run(
+                *self._base_argv(), *console_option_args(name, None)
+            )
+        except RuntimeError as error:
+            message = str(error)
+            if _reports_absent_server(message) or _reports_absent_target(message):
+                return ""
+            raise
+        return output.strip()
+
+    async def write_console_option(self, name: str, value: str) -> None:
+        """Record one window option. Raises; the composer owns the log line (DEC-036)."""
+        await self._runner.run(*self._base_argv(), *console_option_args(name, value))
 
     async def rejoin_console_pane(
         self,
