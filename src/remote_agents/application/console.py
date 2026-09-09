@@ -900,7 +900,7 @@ class ConsoleComposer:
                 if measured is None:
                     return
                 pane_id, width, window = measured
-                await self._slide(pane_id, width, window - 1)
+                await self._slide(pane_id, width, _folded_width(window))
                 await self._console.write_console_option(PANES_HIDDEN_OPTION, "1")
                 await self._console.zoom_console_pane(pane_id, wanted=True)
         except ConsoleBusy:
@@ -1226,6 +1226,21 @@ class _PaneSlide:
     """
 
     busy = False
+
+
+def _folded_width(window_width: int) -> int:
+    """How wide the left pane is when the column is folded away, in columns.
+
+    **Window minus two, not minus one**, and the difference is a real one tmux hides. The
+    right column keeps a floor of one column and the divider between them takes another, so a
+    183-column window folds to 181. Asking for 182 is not an error -- tmux clamps it -- but the
+    slide would then record a width it never reached, and the last step of the motion would be
+    a no-op that makes the fold look like it stops one column early.
+
+    Measured on a real four-pane console at 183x44 (`tests/e2e/test_console_panes.py`), which
+    is where the first version of this was caught asking for 182 and getting 181.
+    """
+    return max(1, window_width - 2)
 
 
 def _projects_width(window_width: int) -> int:

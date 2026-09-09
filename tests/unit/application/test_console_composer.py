@@ -673,7 +673,10 @@ async def test_hiding_slides_the_split_to_the_edge_then_zooms() -> None:
     assert len(widths) == 8, widths
     assert widths == sorted(widths), f"the slide must move outward every step: {widths}"
     assert len(set(widths)) == 8, f"every step must be a new width: {widths}"
-    assert widths[-1] == 182, f"the last step leaves the column its one-column floor: {widths}"
+    assert widths[-1] == 181, (
+        "the last step leaves the column its one-column floor *and* the divider its own: a "
+        f"183-column window folds to 181, which is what tmux clamps 182 to anyway: {widths}"
+    )
     assert widths[0] > 109, f"the first step must move: {widths}"
 
     names = [call[0] for call in gateway.calls]
@@ -684,7 +687,7 @@ async def test_hiding_slides_the_split_to_the_edge_then_zooms() -> None:
 async def test_showing_unzooms_before_it_slides_back() -> None:
     """The mirror, and its order is the mirror too: unzoom first or the slide is invisible."""
     gateway = RecordingConsole(arrangement=_three_pane_console())
-    gateway.geometry = (("%0", 182), ("%1", 1), ("", 183))
+    gateway.geometry = (("%0", 181), ("%1", 1), ("", 183))
     gateway.options["@remote_agents_panes_hidden"] = "1"
     composer = _composer(gateway)
 
@@ -708,7 +711,7 @@ async def test_a_toggle_reads_the_option_and_calls_the_other_one() -> None:
     await composer.toggle_panes()
     assert gateway.options["@remote_agents_panes_hidden"] == "1"
 
-    gateway.geometry = (("%0", 182), ("%1", 1), ("", 183))
+    gateway.geometry = (("%0", 181), ("%1", 1), ("", 183))
     await composer.toggle_panes()
     assert gateway.options["@remote_agents_panes_hidden"] == ""
 
