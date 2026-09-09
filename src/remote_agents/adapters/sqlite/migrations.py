@@ -182,6 +182,28 @@ MIGRATIONS: tuple[tuple[int, str], ...] = (
         ALTER TABLE agent_activity ADD COLUMN ask TEXT;
         """,
     ),
+    # One standing trust question per session, so a restart does not ask it twice.
+    #
+    # **Keyed on the session alone, unlike `standing_notifications` above**, and the difference
+    # is what the two messages are about. An activity notification is about a chat's view of a
+    # session, so the same session can legitimately stand in more than one; the trust question
+    # is about the *session*, which has exactly one answer whoever is looking. A second row
+    # would be a second copy of a question that can only be answered once.
+    #
+    # `settled` rather than deleting the row: the amendment (DEC-034) edits the message in
+    # place, so the row has to outlive the answer in order to name the message being amended.
+    # A deleted row and an unsettled one are the same absence, and the pass would send again.
+    (
+        12,
+        """
+        CREATE TABLE trust_notifications (
+            session_id TEXT PRIMARY KEY,
+            chat_id INTEGER NOT NULL,
+            message_id INTEGER NOT NULL,
+            settled INTEGER NOT NULL DEFAULT 0
+        );
+        """,
+    ),
 )
 
 
