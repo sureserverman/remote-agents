@@ -29,7 +29,7 @@ from remote_agents.application.errors import SessionNotFoundError
 from remote_agents.application.profiles import ProfileAvailability
 from remote_agents.application.project_catalog import CatalogProject
 from remote_agents.application.session_actions import pane_is_attachable
-from remote_agents.application.session_views import state_emoji
+from remote_agents.application.session_views import state_emoji, state_group
 from remote_agents.application.stops import execute_stop
 from remote_agents.domain.models import (
     ProfileId,
@@ -1989,3 +1989,61 @@ async def test_every_curated_agent_carries_its_own_mark_on_the_sessions_buttons(
 
     marks = {glyph_of(profile.profile_id) for profile in closed_profiles()}
     assert len(marks) == 4, f"five profiles, four providers, {len(marks)} distinct marks: {marks}"
+
+
+class _OneStatePerRow(SessionUseCaseDouble):
+    """One session per listed state, so every group the keyboard draws is exercised."""
+
+    def __init__(self, states: tuple[SessionState, ...]) -> None:
+        self.records = [
+            SessionRecord(
+                SessionId(UUID(int=index + 40)),
+                ProjectId("c" * 24),
+                ProfileId("codex"),
+                SessionDisplayIdentity("demo", "Codex", "regular", index + 1, None),
+                state,
+                datetime(2026, 9, 8, 12, 0, tzinfo=UTC),
+            )
+            for index, state in enumerate(states)
+        ]
+
+    async def list_sessions(self):
+        return self.records
+
+    async def refresh_readiness(self) -> None:
+        return None
+
+
+async def test_every_listed_state_draws_its_mark_on_the_button_including_untrusted() -> None:
+    """The mark is a property of the row, not of one state group.
+
+    The states come from `state_group` rather than a list written here, so a state added to
+    the lifecycle after this is written is covered the day it can be listed -- `untrusted`
+    is exactly such a state, added one sub-plan ago, and it is the one the master's gate
+    names because it is the newest place a per-state branch could have been forgotten.
+    """
+    listed = tuple(state for state in SessionState if state_group(state) is not None)
+    assert SessionState.UNTRUSTED in listed
+    listing = _OneStatePerRow(listed)
+    boundary = build_private_bot(
+        7,
+        11,
+        backend=backend_for(
+            catalogue=(CatalogProject("c" * 24, "Demo", "tests", "Registered"),),
+            sessions=listing,
+        ),
+        glyphs=profile_glyphs(),
+    )
+    chat = FakeChat()
+    await boundary.sessions_command(chat.message_update("/sessions"), None)
+    anchor = chat.bot_messages[0].message_id
+    labels = [
+        unpadded(button.text)
+        for row in chat.messages[anchor].reply_markup.inline_keyboard
+        for button in row
+    ]
+
+    mark = glyph_of(ProfileId("codex"))
+    for index, state in enumerate(listed):
+        expected = f"{state_emoji(state)} {mark} #{index + 1} Demo"
+        assert expected in labels, f"{state.value} drew {labels} without {expected!r}"

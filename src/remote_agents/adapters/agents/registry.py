@@ -234,15 +234,14 @@ def glyph_of(profile_id: ProfileId) -> str:
     profile takes the whole keyboard with it. Empty is also what both surfaces collapse to
     the label they drew before this field existed.
     """
-    descriptors = provider_descriptors()
-    by_profile = {str(descriptor.profile_id): descriptor.glyph for descriptor in descriptors}
+    by_provider = {
+        str(descriptor.profile_id): descriptor.glyph for descriptor in provider_descriptors()
+    }
     name = str(profile_id)
-    if name in by_profile:
-        return by_profile[name]
-    for profile in closed_profiles():
-        if str(profile.profile_id) == name:
-            return by_profile.get(profile.executable, "")
-    return ""
+    if name in by_provider:
+        return by_provider[name]
+    executables = {str(profile.profile_id): profile.executable for profile in closed_profiles()}
+    return by_provider.get(executables.get(name, ""), "")
 
 
 def profile_glyphs() -> dict[str, str]:

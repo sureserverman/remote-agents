@@ -375,8 +375,9 @@ whose heading carries the total, active, and preserved counts — the total beca
 starting, untrusted, stop-requested, failed, or orphaned and so in neither of the other two
 buckets — and
 which closes, like every screen, with the fixed `Sessions · Launch · Resume` bar. That bar
-carries no `Resume` on a host that wired no conversation service. Each row's picker button
-reads `<state> <mark> #<sequence> <project>`, the mark being the agent's own — ✳️ Claude
+carries no `Resume` on a host that wired no conversation service.
+
+Each row's picker button reads `<state> <mark> #<sequence> <project>`, the mark being the agent's own — ✳️ Claude
 (both spellings), 🔷 Codex, 🟪 OpenCode, 🔶 Cursor Agent — so two sessions of different
 agents in one project are told apart on the keyboard and not only in the row text above it.
 A profile that declares no mark renders the label without one, unchanged. There is no Home screen and

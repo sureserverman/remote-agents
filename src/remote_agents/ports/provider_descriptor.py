@@ -23,7 +23,7 @@ whose subject is the machine rather than a pane.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import MISSING, dataclass, fields
 
 from remote_agents.domain.models import ProfileId
 
@@ -83,3 +83,25 @@ class ProviderDescriptor:
     action and lives on the terminal port instead, so claude declares None here and is not
     thereby less capable — the two are different subjects, not two depths of one
     capability."""
+
+
+def capability_fields() -> tuple[str, ...]:
+    """Which of this record's fields are capabilities, as opposed to identity.
+
+    The predicate is structural rather than a list of names to keep updated: a capability
+    is a field whose default is `None`, because DEC-061 is what makes it one — absence is a
+    *declared* answer a frontend reads with `is None`, so a field with no such absence to
+    declare is identity (`profile_id`, `glyph`), required and always present.
+
+    It lives here, beside the dataclass, because it is a statement about this record and not
+    about any one caller's use of it. Two test modules gate the provider-contract kit on
+    exactly this set — every capability of every provider must carry a requirements
+    declaration — and they held one copy of the predicate each. The copies agreed on the day
+    they were written; nothing made them keep agreeing, and each called itself "the"
+    capability set.
+    """
+    return tuple(
+        field.name
+        for field in fields(ProviderDescriptor)
+        if field.default is None and field.default_factory is MISSING
+    )

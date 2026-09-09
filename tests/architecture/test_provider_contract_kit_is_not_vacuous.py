@@ -10,28 +10,20 @@ capability no provider supports at all (which would make its whole contract row 
 
 from __future__ import annotations
 
-import dataclasses
 from pathlib import Path
 
 import pytest
 
 from remote_agents.adapters.agents.registry import provider_descriptors
-from remote_agents.ports.provider_descriptor import ProviderDescriptor
+from remote_agents.ports.provider_descriptor import capability_fields
 
 _KIT = Path(__file__).resolve().parents[1] / "provider_contract"
 
-#: A capability is a field whose default is `None`, read structurally rather than by naming
-#: the identity fields to exclude. DEC-061 is what makes this the right predicate: every
-#: capability is `<something> | None` because absence is a declared answer, so a field with
-#: no `None` default is not a capability at all -- it is identity (`profile_id`, `glyph`),
-#: required, with nothing to declare about its absence. Read this way a sixth capability
-#: joins the table the day it is declared, and a second identity field stays out of it
-#: without an exclusion list anyone has to remember to update.
-CAPABILITIES = tuple(
-    field.name
-    for field in dataclasses.fields(ProviderDescriptor)
-    if field.default is None and field.default_factory is dataclasses.MISSING
-)
+#: Asked of the port rather than derived here. The predicate -- a capability is the field
+#: with a declared `None` absence (DEC-061) -- is a statement about `ProviderDescriptor`,
+#: and this module is one of two that gate the kit on it; a copy in each agreed the day it
+#: was written and was answerable to nothing afterwards.
+CAPABILITIES = capability_fields()
 
 
 def _requirements():
