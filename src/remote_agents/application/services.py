@@ -429,7 +429,6 @@ class SessionService:
             transition(record.state, LifecycleEvent.TRUST_DECLINED)
             if not await self._store.claim_idempotency_key(command.idempotency_key):
                 raise DuplicateCommandError("decline callback was already handled")
-            await self._leave_the_console(command.session_id)
             try:
                 observation = await self._terminal.decline_trust(command.session_id)
             except Exception:
@@ -455,6 +454,21 @@ class SessionService:
                     "this session is no longer waiting on the folder-trust question; it has "
                     "been answered already, so nothing here will end it without confirming"
                 )
+            # **After the terminal, not before it -- which is `graceful_stop`'s placement and
+            # not `force_stop`'s, and the difference is whether the call can fail without
+            # ending the session.** `force_stop` stands the console down first because
+            # DEC-017 makes it end the record either way, so there is no path where it moved
+            # the surface for nothing. This method has exactly such a path: the stale-record
+            # refusal above, which is the case DEC-078 is built around -- the store says
+            # UNTRUSTED and the agent is editing files. Standing down first would kick the
+            # owner's console off a live pane for a decline that was refused.
+            #
+            # The cost of the later placement is a brief window where the console displays a
+            # pane that has just gone, and it is the window `ConsoleComposer._restore_stale_
+            # display` exists to close -- it notices on the next sessions reload and puts the
+            # projects surface back. Paying a recoverable arrangement lag beats moving the
+            # surface for something that did not happen.
+            await self._leave_the_console(command.session_id)
             return await self._store.record_event(command.session_id, LifecycleEvent.TRUST_DECLINED)
 
     async def graceful_stop(self, command: GracefulStopCommand) -> TerminalObservation:

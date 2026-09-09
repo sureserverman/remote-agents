@@ -1,22 +1,119 @@
-"""Declining trust, end to end through the real service and the real store.
+"""Both answers to the folder-trust question, driven through the real `SessionService`.
 
-DEC-078 is the entry this file exists to keep honest: it lets one button end a session with no
-confirmation, on the argument that an `UNTRUSTED` session holds no work. That argument is only
-safe while the refusal it depends on actually holds, so the refusal is asserted here beside the
-happy path rather than trusted to the matrix.
+**Why a real service and a real store, and not a fake launcher.** This file exists because of
+a specific escape. The trust *answer* had three profile gates — the policy, the tmux runtime,
+and the service — and the first two were widened to accept `claude-remote` while the third was
+not. Every test passed: the unit tests exercised the policy, the e2e journey drove a *fake*
+launcher with no profile gate at all, and 1709 tests were green while the button rendered and
+then refused itself on the only session that ever needed it. A fake that omits the layer
+holding the bug cannot see the bug.
+
+The *decline* half was added here for the same reason, and DEC-078 makes the stakes higher: it
+is the one action on this control plane that ends a session with no confirmation step, so the
+guards that bound it have to be exercised against the real matrix and the real store rather
+than against a double that would agree with anything.
+
+**The answer half's two tests were briefly deleted from this file and are restored.** They
+were lost to a whole-file overwrite while the decline tests were being added — which is exactly
+the escape described above, reopened in the same change that hardened its sibling. They are
+first in the file now, ahead of the newer material, so the next person to extend it appends.
 """
 
 from __future__ import annotations
+
+from datetime import UTC, datetime
+from pathlib import Path
 
 import pytest
 
 from remote_agents.adapters.sqlite.database import open_database
 from remote_agents.adapters.sqlite.session_store import SQLiteSessionStore
-from remote_agents.application.commands import DeclineTrustCommand, LaunchCommand
+from remote_agents.application.commands import (
+    AnswerTrustCommand,
+    DeclineTrustCommand,
+    LaunchCommand,
+)
 from remote_agents.application.services import SessionService
-from remote_agents.domain.models import ProfileId, ProjectId, SessionId, SessionState
+from remote_agents.domain.models import (
+    ProfileId,
+    ProjectId,
+    SessionDisplayIdentity,
+    SessionId,
+    SessionRecord,
+    SessionState,
+)
 from remote_agents.domain.state_machine import InvalidTransition
+from remote_agents.domain.trust import TRUST_ANSWERABLE, TrustState
 from remote_agents.ports.terminal import NOT_AWAITING_TRUST, TerminalObservation
+
+
+class _AnsweringTerminal:
+    def __init__(self) -> None:
+        self.answered: list[SessionId] = []
+
+    async def trust_state(self, session_id: SessionId) -> TrustState:
+        del session_id
+        return TrustState.AWAITING
+
+    async def answer_trust(self, session_id: SessionId) -> TrustState:
+        self.answered.append(session_id)
+        return TrustState.UNKNOWN
+
+
+def _answerable_record(profile: str) -> SessionRecord:
+    return SessionRecord(
+        SessionId.new(),
+        ProjectId("a" * 24),
+        ProfileId(profile),
+        SessionDisplayIdentity("Demo", profile, "regular", 1),
+        SessionState.FAILED,
+        datetime.now(UTC),
+    )
+
+
+def _store(tmp_path: Path) -> SQLiteSessionStore:
+    return SQLiteSessionStore(open_database(tmp_path / "sessions.sqlite3"))
+
+
+# --- the answer half -------------------------------------------------------------
+
+
+@pytest.mark.parametrize("profile", sorted(str(p) for p in TRUST_ANSWERABLE))
+async def test_every_answerable_profile_is_answerable_through_the_real_service(
+    tmp_path: Path, profile: str
+) -> None:
+    """Parametrized over the authority itself, so a profile added there is covered here.
+
+    This is the assertion whose absence let `claude-remote` through: it was in the policy's
+    set and refused by the service, and nothing compared the two.
+    """
+    store = _store(tmp_path)
+    record = _answerable_record(profile)
+    await store.save(record)
+    terminal = _AnsweringTerminal()
+    service = SessionService(store, terminal)
+
+    result = await service.answer_trust(AnswerTrustCommand(record.session_id, f"key-{profile}"))
+
+    assert terminal.answered == [record.session_id], f"{profile} never reached the terminal"
+    assert result is TrustState.UNKNOWN
+
+
+async def test_a_profile_that_never_asks_is_refused_by_the_service(tmp_path: Path) -> None:
+    """The gate still bites, so widening it did not simply delete it."""
+    store = _store(tmp_path)
+    record = _answerable_record("codex")
+    await store.save(record)
+    terminal = _AnsweringTerminal()
+    service = SessionService(store, terminal)
+
+    with pytest.raises(ValueError, match="only for Claude"):
+        await service.answer_trust(AnswerTrustCommand(record.session_id, "key-codex"))
+
+    assert terminal.answered == [], "a refused profile must not reach the terminal"
+
+
+# --- the decline half ------------------------------------------------------------
 
 
 class _Terminal:
@@ -202,3 +299,58 @@ async def test_a_decline_is_refused_when_the_record_is_stale_and_the_pane_has_mo
 
     assert terminal.declined == []
     assert (await service._store.get(record.session_id)).state is SessionState.UNTRUSTED
+
+
+async def test_a_refused_decline_does_not_move_the_owner_s_console(tmp_path) -> None:
+    """The ordering finding, pinned. A refusal must not cost the owner their view.
+
+    `force_stop` stands the console down *before* the terminal call, because DEC-017 makes it
+    end the record either way — there is no path where it moved the surface for nothing. This
+    method has exactly such a path: the stale-record refusal, which is the case DEC-078 is
+    built around. Standing down first would kick the console off a pane whose agent is
+    working, for a decline that was then refused.
+    """
+    from remote_agents.application.errors import StopNotPermittedError
+
+    terminal = _Terminal()
+    stood_down: list[SessionId] = []
+
+    async def _hide(session_id: SessionId) -> None:
+        stood_down.append(session_id)
+
+    service = SessionService(
+        SQLiteSessionStore(open_database(tmp_path / "s.sqlite3")),
+        terminal,
+        hide_in_console=_hide,
+    )
+    record = await service.launch(
+        LaunchCommand(ProjectId("opaque-editor"), ProfileId("claude"), "refused-decline")
+    )
+    terminal.still_asking = False
+
+    with pytest.raises(StopNotPermittedError):
+        await service.decline_trust(DeclineTrustCommand(record.session_id, "refused-press"))
+
+    assert stood_down == [], "a refused decline moved the console anyway"
+
+
+async def test_a_decline_that_lands_does_stand_the_console_down(tmp_path) -> None:
+    """The other half: the session really ending must still release the console's slot."""
+    terminal = _Terminal()
+    stood_down: list[SessionId] = []
+
+    async def _hide(session_id: SessionId) -> None:
+        stood_down.append(session_id)
+
+    service = SessionService(
+        SQLiteSessionStore(open_database(tmp_path / "s.sqlite3")),
+        terminal,
+        hide_in_console=_hide,
+    )
+    record = await service.launch(
+        LaunchCommand(ProjectId("opaque-editor"), ProfileId("claude"), "landed-decline")
+    )
+
+    await service.decline_trust(DeclineTrustCommand(record.session_id, "landed-press"))
+
+    assert stood_down == [record.session_id]
