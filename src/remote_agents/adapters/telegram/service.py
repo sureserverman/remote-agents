@@ -289,6 +289,13 @@ _PENDING_NOTICES = {
     "graceful": "Stopping the session — waiting for the agent to exit…",
     "cleanup": "Cleaning up the session…",
     CONFIRMED_FORCE: "Force stopping the session…",
+    # A decline is not a store read. It sends the agent's own negative keys and then polls the
+    # pane for up to `_TRUST_DECLINE_WAIT_SECONDS` before falling through to a kill, which is
+    # well past this table's admission rule. Two things follow from being absent, and both are
+    # the reasons the table exists: the owner waits on a still-live button with no notice, and
+    # `callback`'s `if pending is None: raise` costs them the screen on a failure whose token
+    # has already been spent.
+    "session.decline": "Closing the session without trusting it…",
     "launch.profile": "Launching — waiting for the agent to become ready…",
     "resume.confirm": "Resuming — waiting for the agent to become ready…",
     # The slowest action in this bot, and it had no notice. Enabling probes the daemon (10 s
@@ -309,13 +316,14 @@ this table answers from the store or from one tmux call, fast enough that a noti
 flash and be gone.
 """
 
-_SESSION_ENDING_ACTIONS = frozenset({GRACEFUL, CLEANUP, CONFIRMED_FORCE})
+_SESSION_ENDING_ACTIONS = frozenset({GRACEFUL, CLEANUP, CONFIRMED_FORCE, "session.decline"})
 """The actions after which a session is no longer one this service speaks first about.
 
-The same three members as `_LIST_LANDING_ACTIONS` below and deliberately a separate name: that
+The same four members as `_LIST_LANDING_ACTIONS` below and deliberately a separate name: that
 one is about which *screen* to draw next, this one about which messages have stopped being
 true. Bare `FORCE` is absent from both, and for the same reason -- it draws the confirmation,
-so nothing has happened yet.
+so nothing has happened yet. `session.decline` is present in both because it really does end
+the session on the press, with no second screen between (DEC-078).
 
 What it triggers is about timing and nothing more. `ActivityNotifier.retire_finished` runs on
 the delivery pass regardless, because the local console ends sessions in another process and
@@ -323,14 +331,15 @@ this handler never hears about those; sweeping here as well is what makes the ow
 own stop take its notification with it, rather than find it gone half a minute later.
 """
 
-_LIST_LANDING_ACTIONS = frozenset({GRACEFUL, CLEANUP, CONFIRMED_FORCE})
+_LIST_LANDING_ACTIONS = frozenset({GRACEFUL, CLEANUP, CONFIRMED_FORCE, "session.decline"})
 """The actions that draw the **session list** rather than a screen about their own session.
 
 `_release_attachment` is told what the next screen is about, and every other action can
 answer that with the entity it carries. These cannot: they carry a session id and then land
 somewhere that is not about it, so a captured document would be retained on behalf of a
 session the owner can no longer see. Unconfirmed `FORCE` is deliberately absent — it draws
-the confirmation, which *is* about that session.
+the confirmation, which *is* about that session. `session.decline` is present: it lands on the
+list, and the session it names is gone by then.
 """
 
 
@@ -2355,8 +2364,11 @@ class PrivateBotBoundary:
     ) -> dict[str, object]:
         """Answer the folder-trust question with *no*, which ends the session (DEC-078).
 
-        The only button on this surface that ends a session without a confirmation step, and
-        the ordering here is the same one `_trust_reply` uses for the same reason: everything
+        Not the only button here that ends a session unconfirmed — Stop and close and Clean up
+        both do, per DEC-018. What is particular to this one is that it is the only ending
+        offered from a state whose stop policy otherwise carries force alone, which is why it
+        needed a decision. The ordering below is the same one `_trust_reply` uses for the same
+        reason: everything
         re-derivable is re-derived *before* the one-shot is claimed, so a press against a
         session that has since gone does not burn the token and leave the owner a button that
         answers "already run" for something that never ran.

@@ -21,6 +21,7 @@ class FakeTerminal:
         #: surface stopped offering the row once the question was gone.
         self.trust_states: list[TrustState] = []
         self.trust_answers = 0
+        self.trust_declines = 0
 
     async def managed_process_roots(self) -> tuple[int, ...]:
         return ()
@@ -98,6 +99,18 @@ class FakeTerminal:
         del session_id
         self.trust_answers += 1
         return TrustState.UNKNOWN
+
+    async def decline_trust(self, session_id: SessionId) -> TerminalObservation:
+        """The other answer, so this fake stays as wide as the port it stands in for.
+
+        A fake narrower than its port is how a gate that exists in production goes unexercised
+        in tests — which is the failure `tests/integration/sqlite/test_trust_through_the_real_
+        service.py` was written about, in this very feature. It ends the session, because that
+        is what declining does; it does not model the live re-read, because a caller that needs
+        to exercise the refusal wants the real terminal or a double that can say no.
+        """
+        self.trust_declines += 1
+        return TerminalObservation(session_id, live=False, preserved=False)
 
     async def graceful_stop(
         self, session_id: SessionId, profile_id: ProfileId

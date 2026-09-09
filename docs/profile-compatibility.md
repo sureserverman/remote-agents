@@ -18,8 +18,10 @@ failing (DEC-016). The owner answers from the bot, which is where the pane is *n
 the local surface shows the word and hands over the dialog itself, because the console has the
 agent's pane on screen (DEC-047). Saying *yes* is confined to the agents whose dialog this
 project can read — `claude` and `claude-remote` — and is a keypress into that dialog. Saying
-*no* is available for every agent, because it ends a session that never started, and it is the
-one action on this control plane that takes effect without a confirmation step (DEC-078).
+*no* is available for every agent, because it ends a session that never started. It takes
+effect without a confirmation step (DEC-078) — not uniquely, since Stop and close and Clean up
+are unconfirmed too (DEC-018), but it is the only ending offered from a state whose stop policy
+otherwise carries force alone.
 
 | Profile | Fixed launch argv | Availability/auth/trust | Resume catalogue / selection | Readiness evidence | Fixed graceful exit |
 | --- | --- | --- | --- | --- | --- |

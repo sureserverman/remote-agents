@@ -402,9 +402,12 @@ class SessionService:
     async def decline_trust(self, command: DeclineTrustCommand) -> SessionRecord:
         """Answer the folder-trust question with *no*, and end the session (DEC-078).
 
-        **The one action on this control plane that ends a session without confirming**, and
-        the three things that make that safe are all here rather than at the surface that
-        offers it.
+        **Not the only unconfirmed ending on this control plane** — DEC-018 already leaves
+        graceful stop and cleanup unconfirmed on both surfaces, and both end sessions. What is
+        new is narrower: an unconfirmed ending from a state whose stop policy otherwise offers
+        **force alone**, so it is the first press that ends a session where the owner's only
+        alternative was a confirmed one. The three things that make that safe are all here
+        rather than at the surface that offers it.
 
         `transition` is asked before anything is sent, so a record that is not UNTRUSTED is
         refused by the matrix rather than by a second opinion this method would have to keep
