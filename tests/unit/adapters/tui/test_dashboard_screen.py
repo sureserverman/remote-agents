@@ -40,7 +40,13 @@ from remote_agents.domain.models import (
 )
 from remote_agents.domain.projects import ProjectIdentity
 from remote_agents.ports.agent_activity import ActivityKind
-from remote_agents.ports.agent_usage import AgentLimits, AgentUsage, ContextWindow, UsageWindow
+from remote_agents.ports.agent_usage import (
+    AgentLimits,
+    AgentUsage,
+    ContextWindow,
+    LimitsAbsence,
+    UsageWindow,
+)
 
 _PROJECT = CatalogProject("opaque-existing", "existing", "infra", "Registered")
 _SESSION = SessionId.parse("01234567-89ab-cdef-0123-456789abcdef")
@@ -324,26 +330,23 @@ async def test_the_limits_pane_sits_between_the_sessions_and_the_notifications()
 
 
 async def test_the_limits_pane_declares_something_before_any_read() -> None:
-    """DEC-009, and seeded at compose time for the reason `#feed-pane` is.
+    """DEC-009: a declared state at compose time rather than a blank box.
 
-    `_reload_limits` returns early when the capability is absent or the read raises, so a pane
-    left blank would answer both of those with an empty box instead of a declared state.
-
-    **What it declares changed on 2026-09-08.** It used to be the sentence, which is a claim
-    about the providers -- "no agent limits reported" -- made by a screen that had not yet
-    asked any of them anything (DEC-065). It is now the grid the host will fill, every row
-    saying *no reading yet*, which is the true statement at that moment. The sentence remains
-    the declared empty state and is tested where it is now reached: a host offering no agents.
+    **What it declares moved twice in two days, and this is the settled position.** It was the
+    sentence; on 2026-09-08 it became a grid of *no reading yet* rows, one per curated profile,
+    because a screen that has asked nobody anything must not claim that nobody reports
+    (DEC-065); on 2026-09-09 the owner narrowed the grid to the agents that publish limits at
+    all, and which those are is an answer only a reading produces. So the seed is the sentence
+    again -- not as a claim, but as the one thing that is true before a read on a host that may
+    have no reader at all. It is replaced by the first reload, which runs on mount.
     """
     app = RemoteAgentsTui(_context())
     async with app.run_test() as pilot:
         await pilot.pause()
         pane = app.screen.query_one("#limits-pane", OptionList)
 
-        assert _limit_lines(pane) == ["claude  no reading yet"]
-        option = pane.get_option_at_index(0)
-        assert option.disabled is True
-        assert NO_LIMITS not in _limit_lines(pane)
+        assert _limit_lines(pane) == [NO_LIMITS]
+        assert pane.get_option_at_index(0).disabled is True
 
 
 _ALL_AGENTS = tuple(
@@ -358,40 +361,48 @@ def _every_agent(**kwargs) -> TuiContext:
     return replace(context, profiles=_ALL_AGENTS)
 
 
-async def test_the_grid_keeps_a_row_per_agent_when_the_read_answers_nothing() -> None:
-    """A successful read that found nothing is still a grid, not a sentence.
+async def test_a_reporting_agent_that_answered_nothing_keeps_its_row() -> None:
+    """A successful read that found nothing is still a grid, for the agents that report.
 
-    This is the routine state and not an exotic one: two of the four providers publish no
-    limits at all, and Claude's borrowed cache is fenced at thirty minutes -- so a host idle
-    for half an hour used to lose the whole pane and with it any way to tell "spent nothing"
-    from "nothing read".
+    The routine state, not an exotic one: Claude's borrowed cache is fenced at thirty minutes,
+    so a host idle for half an hour used to lose the whole pane and with it any way to tell
+    "spent nothing" from "nothing read". Narrowed on 2026-09-09 to the agents that publish
+    limits at all -- `opencode` and `cursor-agent` never do, so a row for them said only that
+    nothing would ever appear there.
     """
-    app = RemoteAgentsTui(_every_agent(limits=_limits_reader()))
+    app = RemoteAgentsTui(
+        _every_agent(
+            limits=_limits_reader(
+                AgentLimits(ProfileId("claude"), absence=LimitsAbsence.NO_READING),
+                AgentLimits(ProfileId("codex"), absence=LimitsAbsence.NO_READING),
+                AgentLimits(ProfileId("opencode"), absence=LimitsAbsence.NOT_REPORTED),
+                AgentLimits(ProfileId("cursor-agent"), absence=LimitsAbsence.NOT_REPORTED),
+            )
+        )
+    )
     async with app.run_test() as pilot:
         await pilot.pause()
         drawn = _limit_lines(app.screen.query_one("#limits-pane", OptionList))
 
-        assert len(drawn) == len(_ALL_AGENTS), drawn
-        assert [line.split()[0] for line in drawn] == [
-            profile.profile_id for profile in _ALL_AGENTS
-        ]
+        assert [line.split()[0] for line in drawn] == ["claude", "codex"]
+        assert all("no reading yet" in line for line in drawn), drawn
         assert NO_LIMITS not in drawn
 
 
-async def test_a_pane_that_has_never_read_says_no_reading_yet_rather_than_nothing() -> None:
-    """DEC-065 made visible: a cache this process never filled is not an empty account.
+async def test_a_host_with_no_limits_reader_keeps_the_declared_sentence() -> None:
+    """With no reader wired, nothing can report -- so the sentence is the true answer.
 
-    The compose-time seed used to be the empty-state sentence, so a screen mounted in a
-    process whose limits capability was absent -- and one merely waiting for its first read --
-    both declared that no agent reports limits, which is a claim about the providers.
+    This inverted on 2026-09-09. While the grid carried every curated agent, a host with no
+    reader showed a row each saying *no reading yet*, because "nobody reports" was a claim the
+    screen had not earned. Now that the grid carries only agents that publish limits, and no
+    reader means no such agent is known, the sentence says exactly what is the case.
     """
     app = RemoteAgentsTui(_every_agent())
     async with app.run_test() as pilot:
         await pilot.pause()
         drawn = _limit_lines(app.screen.query_one("#limits-pane", OptionList))
 
-        assert len(drawn) == len(_ALL_AGENTS), drawn
-        assert all("no reading yet" in line for line in drawn), drawn
+        assert drawn == [NO_LIMITS]
 
 
 async def test_the_empty_sentence_is_reached_only_by_a_host_offering_no_agents() -> None:
@@ -479,19 +490,7 @@ async def test_a_raising_read_before_any_figures_says_unreadable_not_pending() -
         assert _limit_lines(pane) == ["claude  unreadable"]
 
 
-async def test_a_host_that_wired_no_limits_reader_still_shows_its_agents() -> None:
-    """A host with no limits capability has read nothing, which is what the rows say.
 
-    Not the sentence: "no agent limits reported" is a claim about the providers, and this host
-    never asked them. Not "not reported by this agent" either, which is a claim only a
-    provider's own reader is in a position to make (DEC-061).
-    """
-    app = RemoteAgentsTui(_context(limits=None))
-    async with app.run_test() as pilot:
-        await pilot.pause()
-        pane = app.screen.query_one("#limits-pane", OptionList)
-
-        assert _limit_lines(pane) == ["claude  no reading yet"]
 
 
 async def test_the_limits_pane_rides_the_tick_the_other_two_panes_ride() -> None:

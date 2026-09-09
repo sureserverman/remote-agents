@@ -526,7 +526,13 @@ class LimitRow:
 
 
 NOT_REPORTED = "never reported"
-"""What `LimitsAbsence.NOT_REPORTED` reads as: the provider publishes no limits at all.
+"""What `LimitsAbsence.NOT_REPORTED` *would* read as: the provider publishes no limits at all.
+
+**No surface draws it since 2026-09-09.** That member now decides something stronger than a
+phrase: an agent that publishes no limits ever has no row on the grid at all, so the word has
+no cell to sit in. It is kept because the member is load-bearing -- `limit_rows` filters on it
+-- and because a rendering for it must exist and be distinct the moment any surface chooses to
+show one, rather than being invented then.
 
 *never*, not *not*. The word has to carry the permanence, because the row beside it says
 *no reading yet* and the difference between them is exactly whether waiting will help. "not
@@ -584,7 +590,21 @@ def limit_rows(
     # would silently lose a row here rather than drawing a duplicate line, which is the trade.
     entries = {str(entry.profile_id): entry for entry in limits}
     if profiles:
-        wanted = [str(profile) for profile in profiles]
+        # **One row per provider that publishes rate limits at all**, in the profile set's
+        # order. Narrowed here on 2026-09-09, from a row per curated profile, at the owner's
+        # instruction: two of the four providers publish no limits ever and say so with
+        # `NOT_REPORTED`, and `claude-remote` has no reading of its own because it is the same
+        # account as `claude`. Both produced a permanent line of screen saying nothing would
+        # ever appear there -- and in `claude-remote`'s case saying it in the words that mean
+        # *this may resolve*.
+        #
+        # A rule rather than a pair, so nothing has to be re-decided: a provider that starts
+        # publishing limits gets a row the day it does, and one that never will has none.
+        wanted = [
+            name
+            for name in (str(profile) for profile in profiles)
+            if name in entries and entries[name].absence is not LimitsAbsence.NOT_REPORTED
+        ]
         # A reading is never dropped for want of a matching profile. The profile set decides
         # the grid's *shape*; it does not get to silence an agent that answered -- a host
         # whose narrowing and whose readers disagree is a wiring question, and hiding a real

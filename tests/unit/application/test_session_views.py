@@ -304,42 +304,54 @@ def test_every_absence_the_port_can_declare_has_a_word_here() -> None:
     )
 
 
-def test_every_curated_agent_keeps_a_limit_row_whatever_it_reported() -> None:
-    """A grid is a fixture. An agent that answered nothing is a row that says so.
+def test_a_reporting_agent_keeps_its_row_whatever_it_reported() -> None:
+    """A grid is a fixture *for the agents on it*. One that answered nothing still has a row.
 
-    Before this, an agent with no windows contributed no row and a host where none answered
-    lost the whole grid -- so the pane's shape depended on what the providers happened to
-    publish that minute, and the owner could not tell "spent nothing" from "nothing read".
+    Before any of this, an agent with no windows contributed no row and a host where none
+    answered lost the whole grid -- so the pane's shape depended on what the providers happened
+    to publish that minute, and the owner could not tell "spent nothing" from "nothing read".
+    That is the property here, and it survives the 2026-09-09 narrowing unchanged: what
+    narrowed is *which agents are on the grid at all*, not whether a missing figure costs one
+    its place. See `test_the_grid_carries_only_agents_that_report_limits_at_all`.
     """
-    profiles = tuple(ProfileId(name) for name in ("claude", "claude-remote", "codex", "opencode"))
-    rows = limit_rows((_account("codex", UsageWindow("5h", 41.0)),), profiles)
+    profiles = (ProfileId("claude"), ProfileId("codex"))
+    rows = limit_rows(
+        (
+            AgentLimits(ProfileId("claude"), absence=LimitsAbsence.NO_READING),
+            _account("codex", UsageWindow("5h", 41.0)),
+        ),
+        profiles,
+    )
 
-    assert [row.profile for row in rows] == [str(profile) for profile in profiles]
-    assert [row.absence for row in rows] == [NO_READING, NO_READING, None, NO_READING]
+    assert [row.profile for row in rows] == ["claude", "codex"]
+    assert [row.absence for row in rows] == [NO_READING, None]
 
 
 def test_a_row_with_windows_names_no_absence_and_a_row_without_names_exactly_one() -> None:
     """The two are exclusive: a phrase beside a gauge would be a contradiction on one line."""
-    profiles = (ProfileId("claude"), ProfileId("cursor-agent"), ProfileId("opencode"))
+    profiles = (ProfileId("claude"), ProfileId("codex"), ProfileId("opencode"))
     rows = limit_rows(
         (
             _account("claude", UsageWindow("5h", 2.0)),
-            AgentLimits(ProfileId("cursor-agent"), absence=LimitsAbsence.NOT_REPORTED),
+            AgentLimits(ProfileId("codex"), absence=LimitsAbsence.NO_READING),
             AgentLimits(ProfileId("opencode"), absence=LimitsAbsence.UNREADABLE),
         ),
         profiles,
     )
 
-    with_windows, not_reported, unreadable = rows
+    with_windows, no_reading, unreadable = rows
     assert with_windows.windows and with_windows.absence is None
     assert not with_windows.absence
 
-    assert not_reported.windows == () and not_reported.absence == NOT_REPORTED
+    assert no_reading.windows == () and no_reading.absence == NO_READING
     assert unreadable.windows == () and unreadable.absence == UNREADABLE
     assert NOT_REPORTED.startswith("never"), (
         "the permanent absence must say so in its own words: the row beside it reads 'no "
         "reading yet', and the difference between them is whether waiting will help"
     )
+    # All three words stay distinct even though only two of them reach a row since the
+    # 2026-09-09 narrowing: `NOT_REPORTED` now decides that an agent has no row at all, and a
+    # word that ever becomes reachable again must not arrive already colliding with another.
     assert len({NOT_REPORTED, NO_READING, UNREADABLE}) == 3, (
         "the three absences DEC-061 distinguishes must read as three different things; "
         "two sharing a phrase would conflate exactly what the decision separates"
@@ -862,3 +874,57 @@ def test_the_bar_is_clamped_even_though_the_percent_is_not() -> None:
     gauge = context_gauge(ContextWindow(1_000_000, 1_000))
 
     assert len(gauge.split(" ")[0]) == 8
+
+
+def test_the_grid_carries_only_agents_that_report_limits_at_all() -> None:
+    """Two rows on this host -- claude and codex -- and the rule, not the pair, is what is coded.
+
+    Narrowed on the owner's instruction 2026-09-09, after the pane shipped with a row per
+    curated profile. Their words: "we need only codex and claude/claude-remote (named claude),
+    others we don't need at all". The rule that produces exactly that, and keeps producing the
+    right thing without being re-decided, is **a row for every provider that publishes rate
+    limits at all**:
+
+    - `opencode` and `cursor-agent` publish none, ever, and say so with `NOT_REPORTED`. A row
+      reading "never reported" on every refresh is a permanent line of screen saying nothing
+      will ever appear there.
+    - `claude-remote` has no reading *of its own* -- it is `claude --remote-control`, the same
+      account, and `ClaudeUsageReader` files one answer for both spellings under `claude`. Its
+      row could only ever say "no reading yet", which means *this may resolve*, and for that
+      row it never would.
+
+    What survives is the distinction that earns its place: for an agent that does report,
+    "no reading yet" and "unreadable" still get their own words (DEC-061), because there a
+    missing number is news.
+    """
+    profiles = tuple(
+        ProfileId(name) for name in ("claude", "claude-remote", "codex", "opencode", "cursor-agent")
+    )
+    rows = limit_rows(
+        (
+            _account("claude", UsageWindow("5h", 9.0)),
+            AgentLimits(ProfileId("codex"), absence=LimitsAbsence.NO_READING),
+            AgentLimits(ProfileId("opencode"), absence=LimitsAbsence.NOT_REPORTED),
+            AgentLimits(ProfileId("cursor-agent"), absence=LimitsAbsence.NOT_REPORTED),
+        ),
+        profiles,
+    )
+
+    assert [row.profile for row in rows] == ["claude", "codex"]
+    assert rows[1].absence == NO_READING, "an agent that does report keeps its absence words"
+
+
+def test_an_agent_whose_read_failed_keeps_its_row_and_says_so() -> None:
+    """`unreadable` is a fault on an agent that reports, so it must not be filtered away.
+
+    The filter is "publishes nothing, ever", not "has nothing right now" -- collapsing the two
+    would hide a broken reader behind a provider that never had anything to say, which is the
+    conflation DEC-061 exists to prevent.
+    """
+    rows = limit_rows(
+        (AgentLimits(ProfileId("codex"), absence=LimitsAbsence.UNREADABLE),),
+        (ProfileId("codex"), ProfileId("opencode")),
+    )
+
+    assert [row.profile for row in rows] == ["codex"]
+    assert rows[0].absence == UNREADABLE

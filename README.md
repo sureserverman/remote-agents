@@ -241,13 +241,18 @@ a block on the bot's Sessions screen, and a limits pane on the `tui` dashboard b
 sessions and notifications panes. The three-pane console does not carry that pane — its panes
 are separate processes and the dashboard is not one of them.
 
-**The terminal's pane keeps one row per agent whether or not anything was read**, and one
-column per window kind, so a weekly window is always under the weekly column and never under
-somebody else's five-hour one. An agent with no figure says which silence it is rather than
-leaving a blank: *not reported* (the provider publishes no limits at all), *no reading yet*
-(it does, and none was found — including a Claude cache older than its freshness bound), or
-*unreadable* (the read itself failed). The pane falls back to a single sentence only on a host
-that offers no agents at all. Claude's
+**The terminal's pane carries one row per agent that publishes rate limits at all** — today
+Claude and Codex; OpenCode and Cursor publish none, ever, so they get no row rather than a
+permanent line saying nothing will appear there. `claude-remote` is the same account as
+`claude` and shares its row. Columns are keyed by window kind, so a weekly window is always
+under the weekly column and never under somebody else's five-hour one.
+
+A reporting agent with no figure keeps its row and says which silence it is rather than
+leaving a blank: *no reading yet* (it does publish limits and none was found — including a
+Claude cache older than its freshness bound) or *unreadable* (the read itself failed). Those
+two are worth telling apart: the first may resolve on the agent's next turn, the second wants
+a person. The pane shows a single sentence before its first read, and on a host that wired no
+limits reader at all. Claude's
 rate limits are the one figure that is not the session's own — Claude Code hands them to a
 status-line command and never writes them down, so they are read from the status-line cache when
 one is fresh, and the line says where they came from. A rate-limit window whose reset has already

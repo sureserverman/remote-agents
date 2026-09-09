@@ -378,7 +378,7 @@ which closes, like every screen, with the fixed `Sessions · Launch · Resume` b
 carries no `Resume` on a host that wired no conversation service.
 
 Each row's picker button reads `<state> <mark> #<sequence> <project>`, the mark being the agent's own — ✳️ Claude
-(both spellings), 🔷 Codex, 🟪 OpenCode, 🔶 Cursor Agent — so two sessions of different
+(both spellings), 🔷 Codex, 🔺 OpenCode, 🔶 Cursor Agent — so two sessions of different
 agents in one project are told apart on the keyboard and not only in the row text above it.
 A profile that declares no mark renders the label without one, unchanged. There is no Home screen and
 no Refresh: every
@@ -1469,12 +1469,13 @@ not require the Telegram environment file, so it starts where `serve` would refu
 uv run --locked remote-agents tui
 ```
 
-1. Check the `Plan limits` pane before anything else: it shows one row per agent this host
-   offers, with the window columns aligned by kind, from the moment the dashboard is drawn.
-   Before the first read every row reads `no reading yet`; afterwards each row shows its
-   gauges or says which silence it is — `not reported`, `no reading yet`, or `unreadable`.
-   The pane must never collapse to `No agent limits reported.` while any agent is offered;
-   that sentence is now reached only by a host with no agents at all.
+1. Check the `Plan limits` pane before anything else: it shows one row per agent that
+   publishes rate limits — Claude and Codex on this host, with `claude-remote` sharing
+   Claude's row and the two agents that publish none absent entirely — with the window
+   columns aligned by kind. Each row shows its gauges or says which silence it is,
+   `no reading yet` or `unreadable`. The pane must never collapse to
+   `No agent limits reported.` once a read has landed and any agent reported; that sentence
+   belongs to the moment before the first read and to a host with no limits reader wired.
 1. Press Ctrl+S, which is available from any screen. Sessions lists every managed session the
    shared store holds, including ones the bot launched and ones an earlier terminal run started.
    ENDED records are filtered because nothing is left to reach or stop. Readiness is refreshed

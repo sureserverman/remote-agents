@@ -337,19 +337,20 @@ class LimitsRegion:
         self._draw_limits()
 
     def _seed_options(self) -> tuple[Option, ...]:
-        """What the pane holds before its first read: the grid, not a claim about providers.
+        """What the pane holds before its first read.
 
-        DEC-009 still satisfied -- the pane declares a state at compose time rather than being
-        left blank -- but the state it declares is now true at the moment it is drawn. A host
-        offering no agents has nothing to lay out and keeps the sentence.
+        **The sentence, and no longer a grid of phrases.** For one day this seeded a row per
+        curated profile reading *no reading yet*, which was true and useful while the grid
+        carried every agent. Since the 2026-09-09 narrowing it cannot: which agents belong on
+        the grid is "those that publish limits at all", and that is an answer only a reading
+        produces. Seeding a guess would put rows on screen that the first read then removes.
+
+        The window this covers is one reload -- `_reload_limits` runs on mount -- and on a host
+        that wired no limits reader at all it is the permanent and correct state, because with
+        no reader nothing can report. DEC-009 is satisfied the way it was before: a declared
+        empty state rather than a blank box.
         """
-        rows = self._unread_rows()
-        if not rows:
-            return (Option(NO_LIMITS, id=_EMPTY_LIMITS_ROW, disabled=True),)
-        return tuple(
-            Option(content, id=f"{_LIMITS_ROW_PREFIX}{index}", disabled=True)
-            for index, content in enumerate(limit_rows_content(rows))
-        )
+        return (Option(NO_LIMITS, id=_EMPTY_LIMITS_ROW, disabled=True),)
 
     def _agent_profiles(self) -> tuple[ProfileId, ...]:
         """Every agent this host offers, which is what the grid's rows are.
@@ -361,15 +362,6 @@ class LimitsRegion:
         all, which is the empty state DEC-009 requires it to declare.
         """
         return tuple(ProfileId(profile.profile_id) for profile in self.services.profiles)
-
-    def _unread_rows(self) -> tuple[LimitRow, ...]:
-        """The grid before anything has been read: one row per agent, all *no reading yet*.
-
-        DEC-065 made visible. A cache this process has never filled is not an account with
-        nothing in it, and the seed used to say the second -- a claim about the providers made
-        by a screen that had not yet asked them anything.
-        """
-        return limit_rows((), self._agent_profiles())
 
     async def _reload_host_remote_control(self) -> None:
         """Re-read this machine's host Remote Control, or leave the last reading drawn.
@@ -425,7 +417,7 @@ class LimitsRegion:
         pane = found.first(OptionList)
         pane.clear_options()
         host_line = Content(host_remote_control_line(self._host_status))
-        rows = self._limit_rows or self._unread_rows()
+        rows = self._limit_rows
         if not rows:
             # Reached only by a host that offers no agents at all -- the one state in which
             # there is genuinely nothing to lay out. It is still a *declared* empty state

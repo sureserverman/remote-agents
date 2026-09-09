@@ -32,7 +32,15 @@ def descriptor() -> ProviderDescriptor:
     """
     return ProviderDescriptor(
         ProfileId("opencode"),
-        glyph="🟪",
+        # A triangle, and the shape is the whole reason. Every *status* mark this project
+        # draws is a circle, so no provider mark may be one; codex and cursor took the two
+        # diamonds and claude the star, which left the purple square sharing a primitive with
+        # codex's diamond -- a square and a rotated square, in adjacent hues, which is the
+        # pair that collapses first under red-green colour-vision deficiency. Changed on the
+        # owner's instruction 2026-09-09 after the gate evaluator raised it. A triangle is the
+        # one basic shape nothing else here uses, so the four now differ by shape alone and
+        # colour is only the second signal (DEC-010).
+        glyph="🔺",
         sessions=_sessions,
         usage=OpenCodeUsageReader(),
         hooks="opencode",
