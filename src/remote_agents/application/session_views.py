@@ -573,6 +573,11 @@ def limit_rows(
     entries = {str(entry.profile_id): entry for entry in limits}
     if profiles:
         wanted = [str(profile) for profile in profiles]
+        # A reading is never dropped for want of a matching profile. The profile set decides
+        # the grid's *shape*; it does not get to silence an agent that answered -- a host
+        # whose narrowing and whose readers disagree is a wiring question, and hiding a real
+        # figure to keep the table tidy would answer it by lying.
+        wanted += [name for name, entry in entries.items() if entry.windows and name not in wanted]
     else:
         wanted = [name for name, entry in entries.items() if entry.windows]
     rows = []

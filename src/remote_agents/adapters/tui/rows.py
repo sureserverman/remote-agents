@@ -513,7 +513,13 @@ def _one_line(row: LimitRow, columns: _LimitColumns, trailer: Content) -> Conten
     """
     line = _name(row, columns)
     if not columns.labels:
-        return line + _absence_cell(row, columns) + trailer if row.absence else line + trailer
+        # No agent in this render published a window, so the table has no window columns at
+        # all and every row is a phrase. The gutter still applies: without it the phrase abuts
+        # a profile name that exactly fills its column, and `claude-remote` renders as
+        # `claude-remoteno reading yet`.
+        if not row.absence:
+            return line + trailer
+        return line + Content(" " * _GROUP_GUTTER) + _absence_cell(row, columns) + trailer
     published = _row_windows(row, columns)
     # Trailing blank columns are dropped rather than padded: they align nothing, and the
     # spaces would count toward the length that decides whether this row stacks.
@@ -576,6 +582,12 @@ def limit_row_content(
     name = _name(row, columns)
     stacked = [_window_content(row, window, columns, last=True) for window in row.windows]
     indent = Content(" " * (columns.profile + _GROUP_GUTTER))
+    if not stacked and row.absence:
+        # A row with no windows has nothing to stack, and its phrase is the whole of it. Left
+        # out of this branch when the phrase was added, so a pane narrow enough to stack --
+        # which the dashboard's limits pane is at every ordinary width -- drew the agent's name
+        # and then silence, which is the defect the phrase exists to end.
+        return [name + Content(" " * _GROUP_GUTTER) + _absence_cell(row, columns) + trailer]
     lines = [name + Content(" " * _GROUP_GUTTER) + stacked[0]] if stacked else [name]
     lines.extend(indent + cell for cell in stacked[1:])
     if trailer:

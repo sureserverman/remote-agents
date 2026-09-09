@@ -67,7 +67,7 @@ from remote_agents.application.host_remote_control import (
 )
 from remote_agents.application.project_catalog import CatalogProject
 from remote_agents.application.session_views import LimitRow, limit_rows, session_row_parts
-from remote_agents.domain.models import SessionRecord
+from remote_agents.domain.models import ProfileId, SessionRecord
 from remote_agents.domain.remote_control import (
     HostConnection,
     HostRemoteControlStatus,
@@ -83,13 +83,19 @@ _SESSIONS_AUTO_REFRESH = 10.0
 _NO_SESSIONS = "No sessions are running."
 
 NO_LIMITS = "No agent limits reported."
-"""DEC-009's answer for the limits pane, in the vocabulary the readers already use.
+"""DEC-009's answer for the limits pane, reached by one situation rather than three.
 
-Reached three ways that are one sentence to the owner: a host that wired no reader, a read
-that raised, and every installed agent publishing nothing (`opencode` and `cursor-agent`
-always, `codex` on a host that has not run it, `claude` when its borrowed cache went stale).
-Distinguishing them here would report on this project's plumbing rather than on the owner's
-plan.
+**It used to be reached three ways** -- a host that wired no reader, a read that raised, and
+every installed agent publishing nothing -- on the argument that the three were one sentence
+to the owner. They are not: two of them are ordinary and self-resolving and the third is a
+fault, and collapsing them cost the owner the entire grid every time Claude's borrowed cache
+aged past its thirty-minute fence. Those three now keep the grid and name the silence in the
+row it belongs to (`LimitsAbsence`, DEC-061).
+
+What is left is the one state with genuinely nothing to lay out: a host that offers no agents
+at all. Still declared rather than blank, because a pane with no runtime-variable empty state
+is what DEC-009 forbids -- but now a statement about this host, which is checkable, rather
+than about every provider, which was not.
 """
 
 _EMPTY_LIMITS_ROW = "limits:none"
@@ -309,8 +315,43 @@ class LimitsRegion:
             except Exception:
                 _LOG.exception("the agent limits pane could not be reloaded")
             else:
-                self._limit_rows = limit_rows(entries)
+                self._limit_rows = limit_rows(entries, self._agent_profiles())
         self._draw_limits()
+
+    def _seed_options(self) -> tuple[Option, ...]:
+        """What the pane holds before its first read: the grid, not a claim about providers.
+
+        DEC-009 still satisfied -- the pane declares a state at compose time rather than being
+        left blank -- but the state it declares is now true at the moment it is drawn. A host
+        offering no agents has nothing to lay out and keeps the sentence.
+        """
+        rows = self._unread_rows()
+        if not rows:
+            return (Option(NO_LIMITS, id=_EMPTY_LIMITS_ROW, disabled=True),)
+        return tuple(
+            Option(content, id=f"{_LIMITS_ROW_PREFIX}{index}", disabled=True)
+            for index, content in enumerate(limit_rows_content(rows))
+        )
+
+    def _agent_profiles(self) -> tuple[ProfileId, ...]:
+        """Every agent this host offers, which is what the grid's rows are.
+
+        Read off the surface's own profile narrowing rather than from the readings, so the
+        table's shape is a property of the host and not of what the providers happened to
+        publish this minute. An agent that answered nothing keeps its row and says which
+        silence it is (DEC-061); the pane loses its grid only on a host offering no agents at
+        all, which is the empty state DEC-009 requires it to declare.
+        """
+        return tuple(ProfileId(profile.profile_id) for profile in self.services.profiles)
+
+    def _unread_rows(self) -> tuple[LimitRow, ...]:
+        """The grid before anything has been read: one row per agent, all *no reading yet*.
+
+        DEC-065 made visible. A cache this process has never filled is not an account with
+        nothing in it, and the seed used to say the second -- a claim about the providers made
+        by a screen that had not yet asked them anything.
+        """
+        return limit_rows((), self._agent_profiles())
 
     async def _reload_host_remote_control(self) -> None:
         """Re-read this machine's host Remote Control, or leave the last reading drawn.
@@ -366,15 +407,18 @@ class LimitsRegion:
         pane = found.first(OptionList)
         pane.clear_options()
         host_line = Content(host_remote_control_line(self._host_status))
-        if not self._limit_rows:
-            # A *successful* read that found nothing is not the same event as a read that
-            # raised, and this used to treat them alike -- it returned early, leaving the last
-            # figures drawn. That is the routine state, not an exotic one: Claude's borrowed
-            # cache is fenced at thirty minutes, so half an hour of idleness pinned a stale
-            # percentage on screen permanently, countdown and all, with `(resets in 3h)` still
-            # reading 3h four hours later. Worse, the bot correctly dropped its block at the
-            # same instant, so the two surfaces asserted different things about one account --
-            # the exact divergence sharing `limit_rows` exists to prevent.
+        rows = self._limit_rows or self._unread_rows()
+        if not rows:
+            # Reached only by a host that offers no agents at all -- the one state in which
+            # there is genuinely nothing to lay out. It is still a *declared* empty state
+            # (DEC-009), and it is no longer reached by "nothing answered this minute": that
+            # was never a property of the pane's contents, and treating it as one is what cost
+            # the owner the whole grid every time Claude's borrowed cache went stale behind
+            # its thirty-minute fence.
+            #
+            # A *successful* read that found nothing is still not the same event as a read
+            # that raised. The raising read leaves the last figures drawn, up in
+            # `_reload_limits`; this branch is the other one.
             pane.add_option(Option(NO_LIMITS, id=_EMPTY_LIMITS_ROW, disabled=True))
             self._add_host_row(pane, host_line)
             _fit_to_content(pane, (Content(NO_LIMITS), host_line))
@@ -385,7 +429,7 @@ class LimitsRegion:
             # for an unknown width now and rebuilt for the real one after the first refresh --
             # the same deferral `_fit_to_content` makes for its measurement.
             pane.call_after_refresh(self._draw_limits)
-        contents = limit_rows_content(self._limit_rows, width or None)
+        contents = limit_rows_content(rows, width or None)
         for index, content in enumerate(contents):
             pane.add_option(Option(content, id=f"{_LIMITS_ROW_PREFIX}{index}", disabled=True))
         self._add_host_row(pane, host_line)
@@ -599,7 +643,7 @@ class LimitsPaneScreen(LimitsRegion, ChoiceScreen):
             # so an unseeded list would answer both with an empty box instead of the sentence
             # DEC-009 requires this pane to declare.
             pane = OptionList(
-                Option(NO_LIMITS, id=_EMPTY_LIMITS_ROW, disabled=True),
+                *self._seed_options(),
                 id="limits-pane",
                 markup=False,
             )
@@ -755,7 +799,7 @@ class DashboardScreen(LimitsRegion, FeedRegion, ProjectsPaneScreen):
                     # cursor resting here would answer Enter with silence -- which reads as a
                     # broken key rather than as a pane that never had anything to open.
                     limits = OptionList(
-                        Option(NO_LIMITS, id=_EMPTY_LIMITS_ROW, disabled=True),
+                        *self._seed_options(),
                         id="limits-pane",
                         markup=False,
                     )

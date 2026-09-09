@@ -323,22 +323,91 @@ async def test_the_limits_pane_sits_between_the_sessions_and_the_notifications()
         assert ids == ["sessions-pane", "limits-pane", "feed-pane"]
 
 
-async def test_the_limits_pane_declares_its_empty_state_before_any_read() -> None:
+async def test_the_limits_pane_declares_something_before_any_read() -> None:
     """DEC-009, and seeded at compose time for the reason `#feed-pane` is.
 
     `_reload_limits` returns early when the capability is absent or the read raises, so a pane
-    left blank would answer both of those with an empty box instead of the sentence the
-    decision requires it to declare.
+    left blank would answer both of those with an empty box instead of a declared state.
+
+    **What it declares changed on 2026-09-08.** It used to be the sentence, which is a claim
+    about the providers -- "no agent limits reported" -- made by a screen that had not yet
+    asked any of them anything (DEC-065). It is now the grid the host will fill, every row
+    saying *no reading yet*, which is the true statement at that moment. The sentence remains
+    the declared empty state and is tested where it is now reached: a host offering no agents.
     """
     app = RemoteAgentsTui(_context())
     async with app.run_test() as pilot:
         await pilot.pause()
         pane = app.screen.query_one("#limits-pane", OptionList)
 
-        assert _limit_lines(pane) == [NO_LIMITS]
+        assert _limit_lines(pane) == ["claude  no reading yet"]
         option = pane.get_option_at_index(0)
         assert option.disabled is True
-        assert "No agent limits" in str(option.prompt)
+        assert NO_LIMITS not in _limit_lines(pane)
+
+
+_ALL_AGENTS = tuple(
+    ProfileAvailability(name, True)
+    for name in ("claude", "claude-remote", "codex", "opencode", "cursor-agent")
+)
+
+
+def _every_agent(**kwargs) -> TuiContext:
+    """A host offering every curated agent, which is what the owner's actually does."""
+    context = _context(**kwargs)
+    return replace(context, profiles=_ALL_AGENTS)
+
+
+async def test_the_grid_keeps_a_row_per_agent_when_the_read_answers_nothing() -> None:
+    """A successful read that found nothing is still a grid, not a sentence.
+
+    This is the routine state and not an exotic one: two of the four providers publish no
+    limits at all, and Claude's borrowed cache is fenced at thirty minutes -- so a host idle
+    for half an hour used to lose the whole pane and with it any way to tell "spent nothing"
+    from "nothing read".
+    """
+    app = RemoteAgentsTui(_every_agent(limits=_limits_reader()))
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        drawn = _limit_lines(app.screen.query_one("#limits-pane", OptionList))
+
+        assert len(drawn) == len(_ALL_AGENTS), drawn
+        assert [line.split()[0] for line in drawn] == [
+            profile.profile_id for profile in _ALL_AGENTS
+        ]
+        assert NO_LIMITS not in drawn
+
+
+async def test_a_pane_that_has_never_read_says_no_reading_yet_rather_than_nothing() -> None:
+    """DEC-065 made visible: a cache this process never filled is not an empty account.
+
+    The compose-time seed used to be the empty-state sentence, so a screen mounted in a
+    process whose limits capability was absent -- and one merely waiting for its first read --
+    both declared that no agent reports limits, which is a claim about the providers.
+    """
+    app = RemoteAgentsTui(_every_agent())
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        drawn = _limit_lines(app.screen.query_one("#limits-pane", OptionList))
+
+        assert len(drawn) == len(_ALL_AGENTS), drawn
+        assert all("no reading yet" in line for line in drawn), drawn
+
+
+async def test_the_empty_sentence_is_reached_only_by_a_host_offering_no_agents() -> None:
+    """DEC-009's declared empty state, narrowed to the one case that is genuinely empty.
+
+    The pane still declares one -- a screen with no runtime-variable empty state is the thing
+    the decision forbids -- but the state is now "this host offers no agents at all" rather
+    than "no agent answered this minute", which was never a property of the pane's contents.
+    """
+    app = RemoteAgentsTui(replace(_context(), profiles=()))
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        pane = app.screen.query_one("#limits-pane", OptionList)
+
+        assert _limit_lines(pane) == [NO_LIMITS]
+        assert pane.get_option_at_index(0).disabled is True
 
 
 async def test_the_limits_pane_draws_one_row_per_answering_agent() -> None:
@@ -400,16 +469,24 @@ async def test_a_raising_limits_read_leaves_the_drawn_text_standing() -> None:
         await pilot.pause()
         pane = app.screen.query_one("#limits-pane", OptionList)
 
-        assert _limit_lines(pane) == [NO_LIMITS]
+        # The property is unchanged -- a raising read leaves the pane as it found it. What it
+        # finds is now the grid rather than the sentence, which is the whole of this stage.
+        assert _limit_lines(pane) == ["claude  no reading yet"]
 
 
-async def test_a_host_that_wired_no_limits_reader_keeps_its_empty_sentence() -> None:
+async def test_a_host_that_wired_no_limits_reader_still_shows_its_agents() -> None:
+    """A host with no limits capability has read nothing, which is what the rows say.
+
+    Not the sentence: "no agent limits reported" is a claim about the providers, and this host
+    never asked them. Not "not reported by this agent" either, which is a claim only a
+    provider's own reader is in a position to make (DEC-061).
+    """
     app = RemoteAgentsTui(_context(limits=None))
     async with app.run_test() as pilot:
         await pilot.pause()
         pane = app.screen.query_one("#limits-pane", OptionList)
 
-        assert _limit_lines(pane) == [NO_LIMITS]
+        assert _limit_lines(pane) == ["claude  no reading yet"]
 
 
 async def test_the_limits_pane_rides_the_tick_the_other_two_panes_ride() -> None:
@@ -461,7 +538,12 @@ async def test_a_read_that_finds_nothing_withdraws_the_figures_it_last_drew() ->
         assert isinstance(screen, DashboardScreen)
         await screen._reload_limits()
 
-        assert _limit_lines(pane) == [NO_LIMITS]
+        # Withdrawn, and the row stays. The figure going away is the point of this test and
+        # is unchanged; what changed on 2026-09-08 is that the agent keeps its place in the
+        # grid and says why the cell is empty, instead of the whole pane collapsing to a
+        # sentence about every provider.
+        assert _limit_lines(pane) == ["claude  no reading yet"]
+        assert "2%" not in "".join(_limit_lines(pane))
 
 
 async def test_a_failed_read_still_leaves_the_last_figures_standing() -> None:
