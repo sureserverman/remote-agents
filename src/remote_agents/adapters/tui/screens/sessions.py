@@ -832,6 +832,16 @@ class SessionsScreen(_SessionActionKeys, ChoiceScreen):
     start, stop or be reconciled while the owner sits here reading. Ctrl+R has re-read it on
     demand since sub-plan 3; this screen now also re-reads itself on an interval, and stops
     doing so the moment it is not the screen on top.
+
+    **`untrusted` is a word this screen shows and never a question it asks.** A session whose
+    agent is sitting on its own folder-trust dialog reads `untrusted` here like any other
+    state — the vocabulary comes from `state_word` (DEC-029) and no row is added for it. Both
+    answers to that question live on the bot, which is DEC-047: the console has exchanged the
+    agent's pane into its left slot, so the dialog is already in front of the owner and is
+    answered by typing into it. A row here would be a second, differently-worded route to a
+    security answer, and the *decline* half would additionally be an unconfirmed ending
+    (DEC-078) one keypress from a resting cursor. `test_the_local_surface_does_not_re_ask_for
+    _trust.py` is what holds that shut.
     """
 
     draws_session_rows = True

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
@@ -1084,3 +1085,50 @@ async def test_a_trust_blocked_session_reads_untrusted_and_offers_no_answer_here
 
     assert any("untrusted" in row for row in rows)
     assert not any("trust" in row.lower().replace("untrusted", "") for row in rows)
+
+
+class _TrustBlockedLauncher(_Listing):
+    """A launcher whose launch lands on the agent's folder-trust dialog."""
+
+    launched: int = 0
+
+    async def launch(self, _command):
+        self.launched += 1
+        return _record(SessionState.UNTRUSTED)
+
+
+async def test_a_trust_blocked_launch_opens_the_session_rather_than_reporting_a_failure() -> None:
+    """DEC-047's other half, at the moment it matters: the owner is handed the dialog.
+
+    A trust-blocked launch used to land in FAILED, so this surface answered with the
+    `LaunchFailure` branch — "The session did not become ready, but its pane may still
+    exist", plus an attach command to copy. That is the wrong thing to say about an agent
+    that is up and waiting for one keypress, and worse, it stops short of the one action that
+    helps: exchanging the pane in so the owner can answer it.
+
+    The state must therefore take the ordinary open route. The absence of a `LaunchFailure`
+    is the assertion, and the console exchange it enables is what the whole no-trust-row
+    argument on this surface rests on.
+    """
+    launcher = _TrustBlockedLauncher((_record(SessionState.UNTRUSTED),))
+    app = RemoteAgentsTui(_context(launcher))
+
+    async with app.run_test() as pilot:
+        app.selection = dataclasses.replace(
+            app.selection,
+            project=_EXISTING,
+            profile=ProfileAvailability("claude", True),
+        )
+        failure = await app.launch()
+        await pilot.pause()
+
+    # Absence proves nothing about a launch that never happened. `launch()` returns None
+    # early when the wizard has gathered no project or profile, which is exactly the shape
+    # that makes the assertion below pass for the wrong reason — and did, until a mutation
+    # that should have reddened this test did not.
+    assert launcher.launched == 1, "the launch never reached the backend; the assert is vacuous"
+    assert failure is None, (
+        "the local surface reported a trust-blocked launch as a failure. It is not one: the "
+        "agent is up and asking a question, and this surface's job is to put its pane in "
+        "front of the owner (DEC-047)"
+    )

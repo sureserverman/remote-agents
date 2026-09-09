@@ -174,3 +174,64 @@ async def test_the_row_is_not_missing_because_the_policy_refuses_it() -> None:
         "the record this file pins is no longer one the policy would offer the row for, so "
         "the assertions above no longer say anything about the trust row"
     )
+
+
+DECLINE_ROW = "Don't trust — close it"
+
+
+def _untrusted_record() -> SessionRecord:
+    """The same session, in the state a trust-blocked launch now lands in.
+
+    The record above is RUNNING because that is what `trust_available` reads; this one is
+    UNTRUSTED because that is what `decline_trust_available` reads. Two records, because the
+    two affordances turn on different fields — and both must be absent here.
+    """
+    from dataclasses import replace
+
+    return replace(_awaiting_record(), state=SessionState.UNTRUSTED)
+
+
+async def test_neither_answer_is_offered_for_an_untrusted_session() -> None:
+    """DEC-047 extended to the state that made the question visible in the first place.
+
+    The trust row was the temptation when this file was written. The decline row is the new
+    one, and it is the more dangerous of the two: it ends a session **without a confirmation
+    step** (DEC-078), so putting it on this surface would place an unconfirmed kill one
+    keypress from a resting cursor — which is precisely the shape DEC-052 and DEC-062 weighed
+    and bounded for the row keys, and which DEC-078 was only ever granted on the bot, where a
+    press is on a message naming one session.
+
+    The owner is looking at the dialog: the console has exchanged the agent's pane into its
+    left slot and answers go there. That is still the whole argument, and it now has a second
+    beneficiary.
+    """
+    launcher = _PaneIsAwaitingTrust(_untrusted_record())
+
+    rows = await _rendered_rows(launcher)
+
+    assert rows, "the session detail rendered no rows at all; the assertions below are vacuous"
+    assert TRUST_ROW not in rows
+    assert DECLINE_ROW not in rows, (
+        "the local surface now offers an unconfirmed end to a session. DEC-047 keeps the "
+        "trust question off this surface entirely, and DEC-078 granted the unconfirmed "
+        "ending on the bot alone, where the press is on a message naming exactly one "
+        "session. Supersede both before changing this."
+    )
+    assert not any("trust" in row.lower() for row in rows), (
+        "some row on this surface now says 'trust'; the word belongs to the state, not to "
+        "an action offered here"
+    )
+
+
+def test_the_decline_row_is_not_missing_because_the_policy_refuses_it() -> None:
+    """The same guard the trust assertions have: rule out passing for an unrelated reason.
+
+    `decline_trust_available` really does say yes for this record — the bot draws the row
+    from it. So the absence above is this surface's decision and not the policy's.
+    """
+    from remote_agents.application.session_actions import decline_trust_available
+
+    assert decline_trust_available(_untrusted_record()), (
+        "the record this file pins is no longer one the policy would offer a decline for, "
+        "so the assertion above no longer says anything"
+    )
