@@ -45,6 +45,67 @@ def test_current_docs_describe_the_qualified_codex_activity_boundary() -> None:
     assert not re.search(obsolete_claim, current)
 
 
+#: Prose that would tell an operator OpenCode is not watched -- the claim, in the shapes it is
+#: actually written in, since a promise is made in prose rather than in an identifier.
+_UNWATCHED = re.compile(
+    r"opencode[^.]{0,120}(no hooks|takes no hooks|unobserved|publish(es)? no"
+    r"|nothing observes|reports? nothing|contributes? none)",
+    re.IGNORECASE,
+)
+
+#: The **other** thing an agent can publish none of, and the reason this sweep needs a subject.
+#: OpenCode publishes no rate limits -- truthfully, permanently, and the limits pane says so in
+#: exactly the words above (`publish none, ever`). That sentence is not an activity claim, and
+#: the sweep matched it the day the owner wrote it, turning a true document into a red suite.
+_ABOUT_LIMITS = re.compile(r"limit", re.IGNORECASE)
+
+#: The vocabulary that says a line IS about activity after all, which is what keeps the
+#: exemption from swallowing the failure this sweep exists for: a line may name limits and
+#: still make the claim, and then it is an offender.
+_ABOUT_ACTIVITY = re.compile(
+    r"hook|notif|activity|observ|watch|event|idle|completed|needs[_ ]answer", re.IGNORECASE
+)
+
+
+def _claims_matching(text: str, pattern: re.Pattern[str]) -> list[tuple[int, str]]:
+    """Every sentence in one document matching `pattern`, with the line an operator would open.
+
+    Flattening the newlines is what makes this a prose sweep rather than a line sweep, and the
+    replacement is one character wide so every offset -- and therefore every reported line
+    number -- is unchanged. A hard-wrapped document is the ordinary case here, not the corner.
+    """
+    flat = text.replace("\n", " ")
+    return [
+        (text.count("\n", 0, match.start()) + 1, _sentence_around(flat, match.start()))
+        for match in pattern.finditer(flat)
+    ]
+
+
+def _sentence_around(text: str, position: int) -> str:
+    """The sentence a match sits in, which is the unit a prose claim is actually made in."""
+    start = text.rfind(".", 0, position) + 1
+    end = text.find(".", position)
+    return text[start : end if end != -1 else len(text)].strip()
+
+
+def _calls_opencode_unwatched(text: str) -> list[tuple[int, str]]:
+    """Every sentence in one document that tells an operator OpenCode is not watched.
+
+    **Read by sentence, not by line, and both halves of that are load-bearing.** These
+    documents are hard-wrapped, so a per-line sweep sees a claim only when it happens to fit
+    on one line — which is the *weaker* of the two faults it caused: the subject of the
+    sentence ("rate limits" or "activity") routinely sits on the line above the words that
+    match, so a line-by-line reader can neither find a wrapped claim nor tell what a found one
+    is about. Flattening the newlines keeps every offset identical, so a match still reports
+    the line the operator would look at.
+    """
+    return [
+        (number, sentence)
+        for number, sentence in _claims_matching(text, _UNWATCHED)
+        if not _ABOUT_LIMITS.search(sentence) or _ABOUT_ACTIVITY.search(sentence)
+    ]
+
+
 def test_current_docs_say_what_opencode_reports_and_what_it_never_will() -> None:
     """OpenCode joined the reporting providers on 2026-09-06, and the docs have to say so.
 
@@ -67,20 +128,32 @@ def test_current_docs_say_what_opencode_reports_and_what_it_never_will() -> None
     assert "no closing sentence" in readme + runbook, (
         "the negative half: an OpenCode completion is wordless permanently, not pending"
     )
-    unwatched = re.compile(
-        r"opencode[^.]{0,120}(no hooks|takes no hooks|unobserved|publish(es)? no"
-        r"|nothing observes|reports? nothing|contributes? none)",
-        re.IGNORECASE,
-    )
     offenders = [
-        f"{path.relative_to(_ROOT)}:{number}: {line.strip()}"
+        f"{path.relative_to(_ROOT)}:{number}: {sentence}"
         for path in _CURRENT_ACTIVITY_DOCS
-        for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1)
-        if unwatched.search(line)
+        for number, sentence in _calls_opencode_unwatched(
+            path.read_text(encoding="utf-8")
+        )
     ]
     assert offenders == [], (
         "a current document still calls opencode unwatched:\n" + "\n".join(offenders)
     )
+
+    # **The exemption is asserted, not trusted.** A sweep that learns to ignore a subject can
+    # ignore the failure it exists for, and nothing about a green run would show it -- so all
+    # three controls are checked here, in the test that relies on them, rather than left to a
+    # reader. The third is the wrap: the sentence that broke this sweep was split across two
+    # lines, with its subject on the first and the matching words on the second.
+    assert not _calls_opencode_unwatched(
+        "The pane carries one row per agent that publishes rate limits at all -- today\n"
+        "Claude and Codex; OpenCode and Cursor publish none, ever, so they get no row."
+    ), "the limits sentence is being read as an activity claim again"
+    assert _calls_opencode_unwatched(
+        "OpenCode takes no hooks, so its rate limits are unknown too."
+    ), "a real activity claim escaped by naming limits in the same breath"
+    assert _calls_opencode_unwatched(
+        "Nothing is installed for OpenCode, which\ntakes no hooks."
+    ), "a claim wrapped across two lines is invisible again, which is how this sweep read past"
 
 
 def test_no_current_document_still_offers_the_retired_pane_quiet_fallback() -> None:
@@ -104,21 +177,59 @@ def test_no_current_document_still_offers_the_retired_pane_quiet_fallback() -> N
     # the close-out evaluator found it by reading rather than grepping. A promise is made in
     # prose, so the sweep has to look for the promise.
     retired = re.compile(
-        r"gone quiet|pane[ -]quiet|quiet fallback|`quiet`"
+        r"pane[ -]quiet|quiet fallback|`quiet`"
         r"|no output since|stopped changing|profiles with no hook system",
         re.IGNORECASE,
     )
+    # **`gone quiet` is ordinary English and had to be separated from the feature's own
+    # vocabulary.** Reading by sentence found it wrapped across two lines in the symlink
+    # troubleshooting section -- "if notifications have gone quiet with a healthy service,
+    # check the path itself" -- which is a symptom an operator observes, not a promise this
+    # project makes. The phrase counts only where the sentence also names the mechanism the
+    # retired fallback used, which is what every real instance of the claim did.
+    symptom = re.compile(r"gone quiet", re.IGNORECASE)
+    mechanism = re.compile(r"pane|output|fallback|profile|hook|notification kind", re.IGNORECASE)
 
+    # By sentence, for the reason the OpenCode sweep above is: these documents are
+    # hard-wrapped, so `profiles with no hook system` -- one of the phrases this looks for, and
+    # the one a close-out evaluator found by reading after a sweep read past it -- is more
+    # likely to straddle two lines than to sit on one.
     offenders = [
-        f"{path.relative_to(_ROOT)}:{number}: {line.strip()}"
+        f"{path.relative_to(_ROOT)}:{number}: {sentence}"
         for path in swept
-        for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1)
-        if retired.search(line)
+        for text in (path.read_text(encoding="utf-8"),)
+        for number, sentence in (
+            *_claims_matching(text, retired),
+            *(
+                claim
+                for claim in _claims_matching(text, symptom)
+                if mechanism.search(claim[1])
+            ),
+        )
     ]
 
     assert offenders == [], (
         "a current document still claims the pane-quiet fallback:\n" + "\n".join(offenders)
     )
+
+    # The two controls the split above needs, for the reason the sibling sweep states: an
+    # exemption nobody asserts is an exemption that can quietly swallow the failure.
+    assert not [
+        claim
+        for claim in _claims_matching(
+            "If notifications have gone quiet with a healthy service, check the path.", symptom
+        )
+        if mechanism.search(claim[1])
+    ], "an operator's symptom is being read as this project's retired promise again"
+    assert [
+        claim
+        for claim in _claims_matching(
+            "For those profiles the session is reported to have gone quiet when its pane "
+            "stops changing.",
+            symptom,
+        )
+        if mechanism.search(claim[1])
+    ], "the retired promise escaped by being phrased as a symptom"
 
 
 def test_current_docs_say_what_a_codex_notification_carries_and_what_it_does_not() -> None:
