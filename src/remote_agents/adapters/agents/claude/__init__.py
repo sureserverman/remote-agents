@@ -8,7 +8,7 @@ from pathlib import Path
 from remote_agents.adapters.agents.claude.sessions import ClaudeSessionCatalogue
 from remote_agents.adapters.agents.claude.usage import ClaudeUsageReader
 from remote_agents.domain.models import ProfileId, ProjectId
-from remote_agents.ports.provider_descriptor import ProviderDescriptor
+from remote_agents.ports.provider_descriptor import ProviderDescriptor, TrustDialog
 
 
 def _sessions(project_paths: Mapping[ProjectId, Path]) -> ClaudeSessionCatalogue:
@@ -41,4 +41,21 @@ def descriptor(
             context_window=context_window, context_window_stated=context_window_stated
         ),
         hooks="claude",
+        # **Carried from 2.1.263, not measured** -- and the acceptance document
+        # (`docs/acceptance-2026-09-09-trust-dialogs.md` §5) is labelled as the one section
+        # that is not a measurement, because this host sets `permissions.defaultMode: "auto"`
+        # and 2.1.266 raises no dialog under it at all. Eighteen launches produced nothing to
+        # read. On a host that does ask, this is the first thing to re-measure; until then the
+        # parser's failing closed is what stands between a moved wording and a wrong keypress.
+        #
+        # Claude is also the one agent that rests its cursor on the **negative**, which is why
+        # this project reads the rows off the capture instead of sending a bare Enter: on this
+        # dialog a bare Enter answers "No, exit" and the agent leaves.
+        trust_dialog=TrustDialog(
+            question="Is this a project you created or one you trust?",
+            affirmative="Yes, I trust this folder",
+            negative="No, exit",
+            cursor="❯",
+            identifies_by="Yes, I trust this folder",
+        ),
     )

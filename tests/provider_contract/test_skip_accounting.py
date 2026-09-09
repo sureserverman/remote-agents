@@ -10,6 +10,14 @@ fails here, prompting the gate's summed-grep comparison to be re-run rather than
 stopped being an UNSUPPORTED declaration when the provider gained a plugin installer, so one
 skip became one driven contract test. The number was re-derived and the live comparison re-run
 at that stage's gate, which is exactly the prompt this assertion exists to produce.
+
+**8 -> 9 on 2026-09-09**, the same mechanism in the other direction: `trust_dialog` joined the
+descriptor and `opencode` declares it UNSUPPORTED, because it raises no folder-trust dialog on
+any host measured. It caught something on the way, which is the better half of the record: the
+first version of `test_trust_dialog_contracts.py` wrote its own `if state is UNSUPPORTED`
+branch instead of calling `drive_or_skip`, so the derivation said 9 while the run reported 8 --
+a declared skip that never became a skip. The test was moved onto the kit's own idiom and the
+live comparison re-run (9 == 9).
 """
 
 from __future__ import annotations
@@ -31,7 +39,7 @@ def expected_skips() -> int:
 
 
 def test_the_skip_count_is_fully_accounted_for() -> None:
-    assert expected_skips() == 8, (
+    assert expected_skips() == 9, (
         "the kit's skip budget changed; re-derive the gate's grep expectation from this "
         "number rather than editing either side alone"
     )

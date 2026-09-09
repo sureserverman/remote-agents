@@ -24,8 +24,16 @@ import typing
 #: half rather than this one: `glyph` is the mark a surface draws for a provider it has no
 #: room to name. The two halves are pinned separately below because they obey opposite
 #: rules -- a capability must admit `None` (DEC-061), an identity field must not.
+#: It moved 7 -> 8 on 2026-09-09 by the plan
+#: `2026-09-08-...-sub-05-answerable-dialogs-light-plan.md`, and this one grew the capability
+#: half: `trust_dialog` is how an agent draws the folder-trust question, which is exactly a
+#: capability with a real `None` -- `opencode` raises no such dialog on any host measured, and
+#: that absence is what stops a Trust button appearing over a pane with no question on it.
+#: It is also the first field carrying a *typed* value rather than an adapter object, which is
+#: legal here for the reason the port's own docstring gives: five strings pull nothing into the
+#: ports layer.
 _IDENTITY_FIELDS = ("profile_id", "glyph")
-_CAPABILITY_FIELDS = ("sessions", "usage", "hooks", "activity", "remote_control")
+_CAPABILITY_FIELDS = ("sessions", "usage", "hooks", "activity", "remote_control", "trust_dialog")
 
 
 def _descriptor_fields() -> tuple[str, ...]:
@@ -36,7 +44,7 @@ def _descriptor_fields() -> tuple[str, ...]:
 
 
 def test_the_descriptor_field_set_is_read_from_the_dataclass() -> None:
-    """Seven fields: two identity, five capabilities. An eighth is a reviewable act."""
+    """Eight fields: two identity, six capabilities. A ninth is a reviewable act."""
     fields = _descriptor_fields()
     expected = len(_IDENTITY_FIELDS) + len(_CAPABILITY_FIELDS)
     assert len(fields) == expected, (

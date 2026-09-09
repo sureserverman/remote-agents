@@ -45,6 +45,10 @@ DECLARATIONS: dict[str, dict[str, tuple[Requirement, str]]] = {
             "claude's toggle is a pane action, not a host one; the registry declares None",
         ),
         "activity": (CONDITIONAL, "placeholder until the vertical wires an activity source"),
+        "trust_dialog": (
+            SUPPORTED,
+            "asks about folder trust; strings carried from 2.1.263 (this host never asks)",
+        ),
     },
     "codex": {
         "sessions": (SUPPORTED, "rollout catalogue via the app-server client"),
@@ -52,6 +56,7 @@ DECLARATIONS: dict[str, dict[str, tuple[Requirement, str]]] = {
         "hooks": (SUPPORTED, "hooks.json hook groups (codex, flagged)"),
         "remote_control": (SUPPORTED, "daemon-level toggle over the fixed argv table"),
         "activity": (CONDITIONAL, "placeholder until the vertical wires an activity source"),
+        "trust_dialog": (SUPPORTED, "asks about folder trust, measured 2026-09-09 at +0.22s"),
     },
     "opencode": {
         "sessions": (SUPPORTED, "opencode.db catalogue via the CLI runner"),
@@ -62,6 +67,10 @@ DECLARATIONS: dict[str, dict[str, tuple[Requirement, str]]] = {
             "opencode has no remote control; the registry declares None",
         ),
         "activity": (CONDITIONAL, "placeholder until the vertical wires an activity source"),
+        "trust_dialog": (
+            UNSUPPORTED,
+            "opencode raises no folder-trust dialog at all; the registry declares None",
+        ),
     },
     "cursor-agent": {
         "sessions": (SUPPORTED, "constant catalogue; workspace-blind by design"),
@@ -72,5 +81,6 @@ DECLARATIONS: dict[str, dict[str, tuple[Requirement, str]]] = {
             "cursor has no remote control; the registry declares None",
         ),
         "activity": (CONDITIONAL, "placeholder until the vertical wires an activity source"),
+        "trust_dialog": (SUPPORTED, "asks about folder trust, measured 2026-09-09 at +0.66s"),
     },
 }

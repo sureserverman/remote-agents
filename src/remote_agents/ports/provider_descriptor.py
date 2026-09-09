@@ -29,6 +29,52 @@ from remote_agents.domain.models import ProfileId
 
 
 @dataclass(frozen=True, slots=True)
+class TrustDialog:
+    """How one agent draws the folder-trust question, so this project can read and answer it.
+
+    Values only — the arithmetic that turns them into keypresses is
+    `adapters/tmux/trust.py`'s, and the sentence around the answer is the bot's (DEC-043).
+    Every field here was read off a real pane and is recorded in
+    `docs/acceptance-2026-09-09-trust-dialogs.md`; a field carried from an older version says
+    so there rather than pretending to be a measurement.
+
+    **`identifies_by` exists because the question does not identify the agent.** `codex` and
+    `cursor-agent` draw *"Do you trust the contents of this directory?"* **verbatim**, and it
+    is currently codex's readiness blocker. Answering one agent's dialog with another's row
+    arithmetic is not a near miss: codex rests its cursor on the affirmative and claude on the
+    negative, so the confirming keypress lands on exactly the wrong option and the owner who
+    pressed *Trust* watches the agent quit. So a dialog is recognised by a string only its own
+    agent draws, cross-checked in `tests/provider_contract` against every other agent's real
+    capture rather than against its siblings' declarations.
+
+    Short strings, deliberately. A pane capture wraps at the pane's width, so a long sentence
+    can be split across two rows at a width nobody measured — and an identifier that wraps is
+    an identifier that vanishes exactly when the dialog is on screen.
+    """
+
+    question: str
+    """The sentence the dialog asks. Not an identifier — two agents share one word for word."""
+
+    affirmative: str
+    """The row that answers *yes*, matched as a substring: the numbering some versions carry
+    (`1. Yes, continue`) and others do not is not part of the contract."""
+
+    negative: str
+    """The row that answers *no*, matched the same way."""
+
+    cursor: str
+    """The one character this agent draws on the row its selection rests on.
+
+    One character, and not anchored to the start of a line: `cursor-agent` draws its dialog
+    inside a box, so its `▶` sits behind a `│` and two spaces. A parser that looked for a row
+    *starting* with the glyph would find nothing there.
+    """
+
+    identifies_by: str
+    """The substring only this agent draws, which is what says whose dialog is on screen."""
+
+
+@dataclass(frozen=True, slots=True)
 class ProviderDescriptor:
     """One provider's declared capability set, keyed by its profile.
 
@@ -73,6 +119,19 @@ class ProviderDescriptor:
 
     activity: object | None = None
     """The provider's activity source, or None when it reports no activity events."""
+
+    trust_dialog: TrustDialog | None = None
+    """How this agent asks about folder trust, or None when it never asks.
+
+    A capability with a real absence, and the `None` is what makes the surfaces honest in the
+    one direction that costs something: `opencode` raises no such dialog on any host measured,
+    so a Trust button on an `opencode` session would send arrow keys and an Enter into a live
+    prompt with no question on it. DEC-009 — the absence is declared by the vertical, never
+    inferred from a missing entry somewhere else.
+
+    Typed, unlike its neighbours, because it carries no adapter: a `TrustDialog` is five
+    strings, so naming it here pulls nothing into the ports layer that was not already here.
+    """
 
     remote_control: object | None = None
     """The provider's host-level Remote Control, shaped like `ports.host_remote_control`'s

@@ -12,7 +12,7 @@ from remote_agents.adapters.agents.codex.sessions import (
 )
 from remote_agents.adapters.agents.codex.usage import CodexUsageReader
 from remote_agents.domain.models import ProfileId, ProjectId
-from remote_agents.ports.provider_descriptor import ProviderDescriptor
+from remote_agents.ports.provider_descriptor import ProviderDescriptor, TrustDialog
 
 
 def _sessions(project_paths: Mapping[ProjectId, Path]) -> CodexSessionCatalogue:
@@ -34,4 +34,17 @@ def descriptor() -> ProviderDescriptor:
         usage=CodexUsageReader(),
         hooks="codex",
         remote_control=CodexRemoteControl(),
+        # Measured 2026-09-09 on codex-cli 0.153.4: the dialog is up 0.22 s after launch, and
+        # the cursor rests on the **affirmative** -- the opposite of claude's, which is the
+        # whole reason the keys are computed from the capture rather than fixed.
+        #
+        # `identifies_by` is NOT the question: codex and cursor-agent draw "Do you trust the
+        # contents of this directory?" word for word, so it identifies neither of them.
+        trust_dialog=TrustDialog(
+            question="Do you trust the contents of this directory?",
+            affirmative="Yes, continue",
+            negative="No, quit",
+            cursor="›",
+            identifies_by="Yes, continue",
+        ),
     )
