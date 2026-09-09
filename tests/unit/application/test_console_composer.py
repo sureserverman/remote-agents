@@ -765,3 +765,143 @@ async def test_a_gateway_that_fails_mid_slide_leaves_the_option_telling_the_trut
     assert recorded == "", (
         "the console did not reach the hidden layout, so nothing may claim it did"
     )
+
+
+# --- the fold survives every exchange -------------------------------------------------------
+#
+# `swap-pane -d` and `split-window` both unzoom the window silently (measured, tmux 3.4), so
+# every path that rearranges panes has to put the fold back. Without this the column reappears
+# exactly when the owner displays an agent -- which is the moment they asked for the whole
+# window, so the feature would fail on its own use case.
+
+
+def _zooms(console) -> list[tuple]:
+    return [call for call in console.calls if call[0] == "zoom_console_pane"]
+
+
+def _console_and_a_running_agent() -> tuple[HostedPane, ...]:
+    """The console at rest, plus one agent living in its own window -- what `show` exchanges.
+
+    Without the agent's own pane in the arrangement `show` declines before it swaps anything,
+    which is correct and is why this fixture exists: a test that omitted it would assert the
+    reassert never fired and pass for the wrong reason.
+    """
+    return _three_pane_console() + (
+        HostedPane(
+            host=_RUNNING,
+            on_console=False,
+            window_index=0,
+            pane_index=0,
+            pane_id="%9",
+            session_id=_RUNNING,
+        ),
+    )
+
+
+async def test_showing_an_agent_re_applies_the_fold_it_silently_undid() -> None:
+    console = RecordingConsole(arrangement=_console_and_a_running_agent())
+    console.options["@remote_agents_panes_hidden"] = "1"
+    composer = _composer(console)
+
+    await composer.show(_RUNNING)
+
+    assert _zooms(console), "the exchange left the console unfolded"
+    assert _zooms(console)[-1][2] is True
+    swapped = [index for index, call in enumerate(console.calls) if call[0] == "swap_panes"]
+    zoomed = [index for index, call in enumerate(console.calls) if call[0] == "zoom_console_pane"]
+    assert swapped and zoomed and zoomed[-1] > swapped[-1], (
+        "the fold must be re-applied *after* the exchange that undid it"
+    )
+
+
+def _showing_an_agent() -> tuple[HostedPane, ...]:
+    """The console with an agent in its left slot and the surface parked in that agent's own
+    window -- the arrangement `show_projects` exists to undo."""
+    projects = ConsolePaneSlot.PROJECTS.value
+    return tuple(
+        pane for pane in _three_pane_console() if pane.console_slot != projects
+    ) + (
+        HostedPane(
+            host=None,
+            on_console=True,
+            window_index=0,
+            pane_index=0,
+            pane_id="%9",
+            session_id=_RUNNING,
+        ),
+        HostedPane(
+            host=_RUNNING,
+            on_console=False,
+            window_index=0,
+            pane_index=0,
+            pane_id="%0",
+            session_id=None,
+            surface=True,
+            console_slot=projects,
+        ),
+    )
+
+
+async def test_returning_the_surface_re_applies_the_fold() -> None:
+    console = RecordingConsole(arrangement=_showing_an_agent())
+    console.options["@remote_agents_panes_hidden"] = "1"
+    composer = _composer(console)
+
+    await composer.show_projects()
+
+    assert _zooms(console) and _zooms(console)[-1][2] is True
+
+
+async def test_an_unfolded_console_is_not_zoomed_by_an_exchange() -> None:
+    """The other direction, and the one a careless reassert breaks: no option, no zoom.
+
+    A reassert that zoomed unconditionally would fold the column for an owner who never
+    asked, on every agent they displayed.
+    """
+    console = RecordingConsole(arrangement=_console_and_a_running_agent())
+    composer = _composer(console)
+
+    await composer.show(_RUNNING)
+    await composer.show_projects()
+
+    assert not [call for call in _zooms(console) if call[2] is True], console.calls
+
+
+async def test_the_reassert_does_not_slide_because_the_column_was_never_visible() -> None:
+    """Folding again after an exchange is a zoom, not a motion.
+
+    The column did not come back on screen -- tmux merely stopped hiding it behind the zoom
+    while the panes were swapped -- so an animated slide here would draw a fold the owner
+    never saw unfold.
+    """
+    console = RecordingConsole(arrangement=_console_and_a_running_agent())
+    console.options["@remote_agents_panes_hidden"] = "1"
+    composer = _composer(console)
+
+    await composer.show(_RUNNING)
+
+    assert not [call for call in console.calls if call[0] == "resize_console_pane"], (
+        "the reassert slid the panes; it must only re-zoom"
+    )
+
+
+async def test_a_stop_that_returns_the_surface_re_applies_the_fold() -> None:
+    """`hide` is wired into every stop, so it is the exchange that fires without a keypress."""
+    console = RecordingConsole(arrangement=_showing_an_agent())
+    console.options["@remote_agents_panes_hidden"] = "1"
+    composer = _composer(console)
+
+    await composer.hide(_RUNNING)
+
+    assert _zooms(console) and _zooms(console)[-1][2] is True
+
+
+async def test_recovery_re_applies_the_fold_it_exchanged_away() -> None:
+    """Recovery is a run of exchanges, so it unzooms the window as surely as one does."""
+    console = RecordingConsole(arrangement=_showing_an_agent())
+    console.options["@remote_agents_panes_hidden"] = "1"
+    composer = _composer(console)
+
+    await composer.recover()
+
+    assert _zooms(console) and _zooms(console)[-1][2] is True

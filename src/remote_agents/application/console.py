@@ -771,6 +771,10 @@ class ConsoleComposer:
                 "showing %s in the console failed; the arrangement is unchanged", session_id
             )
             return f"The console could not show this session: {error}"
+        # Outside the lock, because `_reassert_panes` takes no lock of its own and the swap
+        # above is what needed serialising. The exchange silently unzoomed the window; this
+        # puts the owner's fold back.
+        await self._reassert_panes()
         return None
 
     async def show_projects(self) -> None:
@@ -792,6 +796,8 @@ class ConsoleComposer:
             _LOG.exception(
                 "returning the projects surface failed; the console still shows an agent"
             )
+            return
+        await self._reassert_panes()
 
     #: How many resizes one fold is made of. Eight, because the motion has to read as a
     #: motion rather than a jump and tmux has no animation of its own: the pane edge is moved
@@ -838,6 +844,35 @@ class ConsoleComposer:
         if left.pane_id not in widths or window < 2:
             return None
         return left.pane_id, widths[left.pane_id], window
+
+    async def _reassert_panes(self) -> None:
+        """Put the fold back if the option says it should be there, without a slide.
+
+        Called at the end of every path that rearranges panes, because the two verbs those
+        paths use -- `swap-pane -d` and `split-window` -- both leave `window_zoomed_flag` at 0
+        without saying so (measured, tmux 3.4). Without this the column reappears exactly when
+        the owner displays an agent, which is the moment they asked for the whole window: the
+        feature would fail on its own use case.
+
+        **A zoom, never a slide.** The column did not come back on screen -- tmux merely
+        stopped hiding it while the panes were swapped -- so animating a fold here would draw
+        a motion the owner never saw the other half of.
+
+        Silent when the option is clear, which is the ordinary console: a reassert that zoomed
+        unconditionally would fold the column for an owner who never asked, on every agent
+        they displayed. Failure is a log line and nothing else (DEC-036): the arrangement the
+        caller made is worth more than the fold.
+        """
+        try:
+            if await self._console.read_console_option(PANES_HIDDEN_OPTION) != "1":
+                return
+            arrangement = await self._console.pane_arrangement()
+            slot = _left_slot(arrangement)
+            if slot is None:
+                return
+            await self._console.zoom_console_pane(slot.pane_id, wanted=True)
+        except Exception:
+            _LOG.exception("the console could not re-apply its folded panes")
 
     async def hide_panes(self) -> None:
         """Fold the right column off the edge and give the left pane the whole window.
@@ -940,6 +975,8 @@ class ConsoleComposer:
                 await self._send_home(arrangement, slot)
         except Exception:
             _LOG.exception("the console could not be returned to the projects surface")
+            return
+        await self._reassert_panes()
 
     async def _send_home(self, arrangement: tuple[HostedPane, ...], slot: HostedPane) -> bool:
         """Exchange the slot's agent with the console's own surface — only where that is safe.
@@ -1138,6 +1175,8 @@ class ConsoleComposer:
             return RecoveryReport(tuple(moved), blocked, settled=False)
         for note in blocked:
             _LOG.warning("console recovery could not act: %s", note)
+        # Recovery is a run of exchanges, so it unzooms the window as surely as one does.
+        await self._reassert_panes()
         return RecoveryReport(tuple(moved), blocked, settled=settled)
 
     async def flash(self, text: str) -> None:
