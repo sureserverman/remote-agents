@@ -64,6 +64,9 @@ class RecordingConsole:
         self._next_pane = 90
         self.error = error
         self.zoomed_pane: str | None = "%0"
+        #: The console at rest, measured on the owner's own window: 183 columns, left 109.
+        self.geometry: tuple[tuple[str, int], ...] = (("%0", 109), ("%1", 73), ("", 183))
+        self.options: dict[str, str] = {}
         self.calls: list[tuple] = []
 
     def _raise_if_armed(self) -> None:
@@ -176,6 +179,29 @@ class RecordingConsole:
         self.calls.append(("console_zoomed_pane",))
         self._raise_if_armed()
         return self.zoomed_pane
+
+    async def console_pane_geometry(self) -> tuple[tuple[str, int], ...]:
+        self.calls.append(("console_pane_geometry",))
+        self._raise_if_armed()
+        return self.geometry
+
+    async def resize_console_pane(self, pane_id: str, width: int) -> None:
+        self.calls.append(("resize_console_pane", pane_id, width))
+        self._raise_if_armed()
+
+    async def zoom_console_pane(self, pane_id: str, *, wanted: bool) -> None:
+        self.calls.append(("zoom_console_pane", pane_id, wanted))
+        self._raise_if_armed()
+
+    async def read_console_option(self, name: str) -> str:
+        self.calls.append(("read_console_option", name))
+        self._raise_if_armed()
+        return self.options.get(name, "")
+
+    async def write_console_option(self, name: str, value: str) -> None:
+        self.calls.append(("write_console_option", name, value))
+        self._raise_if_armed()
+        self.options[name] = value
 
     async def display_message(self, text: str) -> None:
         self.calls.append(("display_message", text))
@@ -621,3 +647,121 @@ async def test_flash_is_suppressed_while_the_feed_that_carries_it_is_on_screen()
 async def test_a_failing_flash_is_silence_never_an_exception() -> None:
     broken = RecordingConsole(error=RuntimeError("no server"))
     await _composer(broken).flash("news")  # must not raise
+
+
+# --- the right column folds away and comes back ---------------------------------------------
+
+
+def _slide_widths(gateway) -> list[int]:
+    """Every width the composer asked for, in the order it asked."""
+    return [call[2] for call in gateway.calls if call[0] == "resize_console_pane"]
+
+
+async def test_hiding_slides_the_split_to_the_edge_then_zooms() -> None:
+    """The motion is the point: eight measured steps, then the zoom that hides the divider.
+
+    Ordered, and the order is load-bearing. Zooming first would make the slide invisible --
+    the column is already gone -- so the owner would see a jump rather than a fold, which is
+    the whole of what was asked for.
+    """
+    gateway = RecordingConsole(arrangement=_three_pane_console())
+    composer = _composer(gateway)
+
+    await composer.hide_panes()
+
+    widths = _slide_widths(gateway)
+    assert len(widths) == 8, widths
+    assert widths == sorted(widths), f"the slide must move outward every step: {widths}"
+    assert len(set(widths)) == 8, f"every step must be a new width: {widths}"
+    assert widths[-1] == 182, f"the last step leaves the column its one-column floor: {widths}"
+    assert widths[0] > 109, f"the first step must move: {widths}"
+
+    names = [call[0] for call in gateway.calls]
+    assert names.index("write_console_option") > names.index("resize_console_pane")
+    assert names.index("zoom_console_pane") > names.index("write_console_option")
+
+
+async def test_showing_unzooms_before_it_slides_back() -> None:
+    """The mirror, and its order is the mirror too: unzoom first or the slide is invisible."""
+    gateway = RecordingConsole(arrangement=_three_pane_console())
+    gateway.geometry = (("%0", 182), ("%1", 1), ("", 183))
+    gateway.options["@remote_agents_panes_hidden"] = "1"
+    composer = _composer(gateway)
+
+    await composer.show_panes()
+
+    widths = _slide_widths(gateway)
+    assert len(widths) == 8, widths
+    assert widths == sorted(widths, reverse=True), (
+        f"the slide must come back inward: {widths}"
+    )
+    assert widths[-1] == 109, f"it lands on the declared projects width: {widths}"
+
+    names = [call[0] for call in gateway.calls]
+    assert names.index("zoom_console_pane") < names.index("resize_console_pane")
+
+
+async def test_a_toggle_reads_the_option_and_calls_the_other_one() -> None:
+    gateway = RecordingConsole(arrangement=_three_pane_console())
+    composer = _composer(gateway)
+
+    await composer.toggle_panes()
+    assert gateway.options["@remote_agents_panes_hidden"] == "1"
+
+    gateway.geometry = (("%0", 182), ("%1", 1), ("", 183))
+    await composer.toggle_panes()
+    assert gateway.options["@remote_agents_panes_hidden"] == ""
+
+
+async def test_a_toggle_arriving_mid_slide_is_dropped_rather_than_cancelling(caplog) -> None:
+    """DEC-008: a repeat is dropped, never a cancel of the one in flight.
+
+    A cancel here is worse than elsewhere: the motion it would interrupt is a sequence of
+    resizes, so cancelling mid-slide leaves the split at whatever width the last step reached
+    and the option describing a state the window is not in.
+    """
+    import asyncio
+
+    gateway = RecordingConsole(arrangement=_three_pane_console())
+    composer = _composer(gateway)
+
+    first = asyncio.create_task(composer.hide_panes())
+    await asyncio.sleep(0)
+    second = asyncio.create_task(composer.toggle_panes())
+    await asyncio.gather(first, second)
+
+    assert len(_slide_widths(gateway)) == 8, (
+        "a second toggle during a slide added resizes; it must be dropped whole"
+    )
+
+
+async def test_a_gateway_that_fails_mid_slide_leaves_the_option_telling_the_truth() -> None:
+    """DEC-036: the motion ends in a log line, and the record matches the window.
+
+    The option is what every later reassert believes, so an option written before a slide
+    that then failed would fold a console the owner is looking at, on the next exchange, with
+    no key pressed.
+    """
+    gateway = RecordingConsole(arrangement=_three_pane_console())
+    composer = _composer(gateway)
+
+    class _Exploding(Exception):
+        pass
+
+    calls = {"n": 0}
+    original = gateway.resize_console_pane
+
+    async def failing(pane_id: str, width: int) -> None:
+        calls["n"] += 1
+        if calls["n"] == 3:
+            raise _Exploding("the pane went away mid-slide")
+        await original(pane_id, width)
+
+    gateway.resize_console_pane = failing  # type: ignore[method-assign]
+
+    await composer.hide_panes()
+
+    recorded = gateway.options.get("@remote_agents_panes_hidden", "")
+    assert recorded == "", (
+        "the console did not reach the hidden layout, so nothing may claim it did"
+    )

@@ -24,6 +24,7 @@ agent it is displaying with it (DEC-040's first accepted cost).
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
@@ -32,6 +33,7 @@ from pathlib import Path
 from remote_agents.application.console_lock import ConsoleArrangementLock, ConsoleBusy
 from remote_agents.domain.models import SessionId, SessionRecord, SessionState
 from remote_agents.ports.console import (
+    PANES_HIDDEN_OPTION,
     ConsoleBindingAction,
     ConsoleKeyTable,
     ConsolePaneSlot,
@@ -791,6 +793,132 @@ class ConsoleComposer:
                 "returning the projects surface failed; the console still shows an agent"
             )
 
+    #: How many resizes one fold is made of. Eight, because the motion has to read as a
+    #: motion rather than a jump and tmux has no animation of its own: the pane edge is moved
+    #: in whole columns, so "smooth" here is a number of steps and an interval between them.
+    #: Measured on this host at 183 columns: eight steps of ~9 columns at 30 ms is 240 ms end
+    #: to end, which reads as a slide; three steps reads as stuttering and twenty is a wait.
+    _SLIDE_STEPS = 8
+
+    #: The pause between steps. Deliberately short: this is the whole cost of the motion, and
+    #: it is paid while the arrangement lock is held, so a long slide is a long time in which
+    #: no other console operation can run.
+    _SLIDE_STEP_SECONDS = 0.03
+
+    async def _slide(self, pane_id: str, from_width: int, to_width: int) -> None:
+        """Move one pane's edge from where it is to where it is going, in whole columns.
+
+        Every step is a width rather than a delta, so a step that fails leaves the pane at the
+        last width that worked instead of somewhere derived from a move that never happened.
+        The endpoint is always issued exactly: integer division would otherwise land a column
+        or two short and leave the divider visible after a fold that claimed to finish.
+        """
+        if from_width == to_width:
+            return
+        span = to_width - from_width
+        for step in range(1, self._SLIDE_STEPS + 1):
+            width = from_width + round(span * step / self._SLIDE_STEPS)
+            await self._console.resize_console_pane(pane_id, width)
+            if step < self._SLIDE_STEPS:
+                await asyncio.sleep(self._SLIDE_STEP_SECONDS)
+
+    def _left_pane_and_window(
+        self, geometry: tuple[tuple[str, int], ...], arrangement: tuple[HostedPane, ...]
+    ) -> tuple[str, int, int] | None:
+        """The left slot's pane id, its width now, and the window's — or None to do nothing.
+
+        Read together from one geometry call, because a slide computed from two reads taken a
+        moment apart is a slide computed from a layout that no longer exists.
+        """
+        left = _left_slot(arrangement)
+        if left is None:
+            return None
+        widths = {pane_id: width for pane_id, width in geometry if pane_id}
+        window = next((width for pane_id, width in geometry if not pane_id), 0)
+        if left.pane_id not in widths or window < 2:
+            return None
+        return left.pane_id, widths[left.pane_id], window
+
+    async def hide_panes(self) -> None:
+        """Fold the right column off the edge and give the left pane the whole window.
+
+        Two motions, in this order and not the other: the slide, then the zoom. Zooming first
+        would make the slide invisible -- the column is already gone -- so the owner would see
+        a jump where they asked for a fold.
+
+        **The option is written only after the layout it describes has been reached.** Every
+        later reassert believes it (DEC-040's exchanges silently unzoom, so the composer
+        re-applies the fold from this option), and an option written ahead of a slide that
+        then failed would fold a console the owner is looking at, on the next exchange, with
+        no key pressed. DEC-036 is the other half: a failure ends in a log line and the record
+        still matches the window.
+        """
+        if _PaneSlide.busy:
+            _LOG.debug("a pane slide is already running; this toggle is dropped (DEC-008)")
+            return
+        _PaneSlide.busy = True
+        try:
+            async with self._links:
+                geometry = await self._console.console_pane_geometry()
+                arrangement = await self._console.pane_arrangement()
+                measured = self._left_pane_and_window(geometry, arrangement)
+                if measured is None:
+                    return
+                pane_id, width, window = measured
+                await self._slide(pane_id, width, window - 1)
+                await self._console.write_console_option(PANES_HIDDEN_OPTION, "1")
+                await self._console.zoom_console_pane(pane_id, wanted=True)
+        except ConsoleBusy:
+            _LOG.debug("another writer holds the console; this fold is dropped")
+        except Exception:
+            _LOG.exception("the console could not fold its panes away; the layout stands")
+        finally:
+            _PaneSlide.busy = False
+
+    async def show_panes(self) -> None:
+        """Bring the right column back, unzooming first so the slide is visible.
+
+        The option is cleared *before* the motion for the reason `hide_panes` writes it after:
+        both orders keep the record from claiming a layout the window is not in. Here the
+        window stops being folded the moment the unzoom lands, so a failure part-way leaves a
+        console that is merely mid-slide rather than one recorded as hidden while showing.
+        """
+        if _PaneSlide.busy:
+            _LOG.debug("a pane slide is already running; this toggle is dropped (DEC-008)")
+            return
+        _PaneSlide.busy = True
+        try:
+            async with self._links:
+                await self._console.write_console_option(PANES_HIDDEN_OPTION, "")
+                geometry = await self._console.console_pane_geometry()
+                arrangement = await self._console.pane_arrangement()
+                measured = self._left_pane_and_window(geometry, arrangement)
+                if measured is None:
+                    return
+                pane_id, width, window = measured
+                await self._console.zoom_console_pane(pane_id, wanted=False)
+                await self._slide(pane_id, width, _projects_width(window))
+        except ConsoleBusy:
+            _LOG.debug("another writer holds the console; this unfold is dropped")
+        except Exception:
+            _LOG.exception("the console could not bring its panes back; the layout stands")
+        finally:
+            _PaneSlide.busy = False
+
+    async def toggle_panes(self) -> None:
+        """Whichever of the two the console is not already in.
+
+        Reads the option rather than the zoom flag, for the reason the option exists: an
+        exchange leaves the window unzoomed while the owner still means it to be folded, and
+        a toggle keyed off the flag would then *fold* on a press that meant unfold.
+        """
+        try:
+            hidden = await self._console.read_console_option(PANES_HIDDEN_OPTION) == "1"
+        except Exception:
+            _LOG.exception("the console could not be asked whether its panes are folded")
+            return
+        await (self.show_panes() if hidden else self.hide_panes())
+
     async def hide(self, session_id: SessionId) -> None:
         """Return the surface to the slot, but only if *this* session is the one shown.
 
@@ -1042,6 +1170,40 @@ class ConsoleComposer:
             await self._console.display_message(text)
         except Exception:
             _LOG.exception("the console status flash failed")
+
+
+class _PaneSlide:
+    """Whether a fold is in flight, as process state rather than composer state.
+
+    Module-level because the console is arranged by more than one process (the bot steps it
+    aside before a stop; the key runs `console panes` in a process of its own), and the guard
+    that matters *within* a process is this one. Across processes the arrangement lock is what
+    serialises, and it is held for the whole slide.
+
+    DEC-008: a repeat is **dropped**, never a cancel of the one in flight. A cancel here is
+    worse than elsewhere -- the motion is a sequence of resizes, so interrupting it leaves the
+    split at whatever width the last step reached and the option describing a state the window
+    is not in.
+    """
+
+    busy = False
+
+
+def _projects_width(window_width: int) -> int:
+    """What the left pane is worth when the column is showing, in columns.
+
+    Derived from `CONSOLE_LAYOUT`'s declared percent rather than from a remembered width, so
+    the fold comes back to the layout the console is *declared* to have rather than to
+    whatever it happened to be when somebody last dragged a divider.
+    """
+    projects = next(
+        (pane.percent for pane in CONSOLE_LAYOUT if pane.slot is ConsolePaneSlot.PROJECTS), 60
+    )
+    # Floor, not round, because this has to agree with tmux rather than with arithmetic:
+    # `main-pane-width 60%` on the owner's 183-column window gives the left pane **109**
+    # columns, and 183 * 60 / 100 is 109.8. Rounding lands 110 and the fold comes back one
+    # column wider than the console it left, every time.
+    return max(1, window_width * projects // 100)
 
 
 def _left_slot(arrangement: tuple[HostedPane, ...]) -> HostedPane | None:

@@ -8,7 +8,11 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from remote_agents.domain.models import ProfileId, ProjectId, SessionId
-from remote_agents.ports.console import ConsoleBindingAction, ConsoleKeyTable, ConsolePaneSlot
+from remote_agents.ports.console import (
+    ConsoleBindingAction,
+    ConsoleKeyTable,
+    ConsolePaneSlot,
+)
 
 _DELIMITER = "|"
 
@@ -561,21 +565,6 @@ def console_zoom_args() -> tuple[str, ...]:
         console_target(),
         "#{window_zoomed_flag}|#{pane_id}",
     )
-
-
-PANES_HIDDEN_OPTION = "@remote_agents_panes_hidden"
-"""Whether the console's right column is folded away, kept as a window option of ours.
-
-**Not tmux's own zoom flag, and that is the load-bearing choice.** Measured on tmux 3.4:
-`swap-pane -d` -- the console's agent exchange (DEC-040) -- and `split-window` -- its rebuild
--- both leave `window_zoomed_flag` at 0 without saying so. A hidden state stored as the zoom
-flag would therefore pop the column back into view every time the owner displayed an agent,
-which is precisely when they asked for the whole window. This option survives both, and the
-composer re-applies the zoom from it.
-
-Namespaced because the console window is not this project's alone to write options on: tmux
-requires a user option to begin with `@`, and the rest says whose.
-"""
 
 
 def console_pane_geometry_args() -> tuple[str, ...]:
