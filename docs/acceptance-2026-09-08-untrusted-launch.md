@@ -142,9 +142,58 @@ profile the section 2 drill uses.
 
 ---
 
-## Section 2 — Declining trust from the bot ends the session
+## Section 2 — Declining trust ends the session
 
-**NOT YET RUN.** Needs the owner's Telegram client. See the Stage 2 gate.
+**Machine half: RUN AND RECORDED. Owner half: NOT YET RUN.**
+
+### What was run here, on a real codex and a real tmux server
+
+`codex` is the profile this drill uses because it is the one agent that reliably raises its
+folder-trust dialog on this host (section 1). A throwaway tmux server, a directory codex had
+never been asked about, the curated argv and environment, driven through the **real**
+`SessionService` and a **real** SQLite store — not a fake terminal:
+
+```
+  launch returned in 0.26s  state=untrusted
+  events=['trust_required']
+  pane shows the dialog: True
+   | > You are in /home/user/dev/.ra-drill-<n>/never-asked
+   |   Do you trust the contents of this directory? Working with untrusted contents
+   |   comes with higher risk of prompt injection. Trusting the directory allows
+   |   project-local config, hooks, and exec policies to load.
+   | › 1. Yes, continue
+   |   2. No, quit
+   |   Press enter to continue
+  decline returned in 0.02s  state=ended
+  events=['trust_required', 'trust_declined']
+  panes left for this session: 0
+```
+
+**0.26 s to `untrusted`.** The old behaviour was to poll this same pane until the 20-second
+startup budget expired and then record `FAILED` with no reason attached. The durable history
+now reads `trust_required` → `trust_declined`, and the pane is gone.
+
+**A discarded first run is recorded, because it is the trap.** The same drill under
+`/tmp/claude-1000/…` returned `state=running` in 0.27 s and no dialog: codex does not raise the
+question for every directory. The run above is under `~/dev`, which is where section 1's
+measurements were taken. A drill in the wrong place does not fail — it passes as an ordinary
+launch, and says nothing.
+
+### What the owner still has to do
+
+The Stage 2 gate asks for the row to read `untrusted` **on both surfaces** and for
+`Don't trust — close it` to be **pressed in Telegram**. Neither can be issued from here: one
+needs eyes on the console, the other needs a real client. Steps, once the service is restarted
+onto this branch (a shipped feature is invisible until it restarts):
+
+1. From the bot, launch `codex` into a project directory codex has never been asked about.
+2. The reply should be *"🔒 Waiting to be trusted"* with one button, `Don't trust — close it` —
+   one button and not two, because codex's dialog is not one this project will type into.
+3. The sessions list should show that row as `untrusted`, on the bot **and** in the TUI, within
+   a couple of seconds rather than after twenty.
+4. Press `Don't trust — close it`. The pane and the row should both be gone.
+5. Repeat with `claude` if you have a host that raises its dialog (this one does not — see
+   section 1); the reply should then carry **two** buttons.
 
 ---
 
