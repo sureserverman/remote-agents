@@ -570,6 +570,11 @@ def limit_rows(
     not `NOT_REPORTED`, which is a claim about the provider that only the provider's own reader
     is in a position to make.
     """
+    # Keyed by profile, which makes "one reading per profile" the contract where it used to be
+    # "one row per reading". Every registered reader files under a distinct `limits_profile` --
+    # that is exactly what the claude/claude-remote fold in `ProfileUsageReaders` guarantees --
+    # so nothing collides today. A future reader that forgot to give itself a distinct one
+    # would silently lose a row here rather than drawing a duplicate line, which is the trade.
     entries = {str(entry.profile_id): entry for entry in limits}
     if profiles:
         wanted = [str(profile) for profile in profiles]

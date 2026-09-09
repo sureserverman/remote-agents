@@ -375,9 +375,11 @@ def _limit_columns(rows: Sequence[LimitRow], width: int | None = None) -> _Limit
     percent = max((len(f"{window.percent}%") for _row, window in windows), default=0)
     reset = max((len(_reset_text(row, window)) for row, window in windows), default=0)
     profile = max((len(row.profile) for row in rows), default=0)
-    # An absence phrase is drawn in the first window column, so it is measured with the
-    # windows: a `label` narrower than the phrase would let the phrase run into the next
-    # column and undo the alignment this whole function exists to hold.
+    # The absence phrase is deliberately *not* measured into any column width, and an earlier
+    # version of this comment claimed otherwise. It is safe unpadded because a row carrying one
+    # has no windows at all, so nothing is drawn after it -- `_one_line` breaks out of the
+    # column walk at the first index. Were that ever to change, the phrase would need a width
+    # reserved here, and it does not have one.
     labels: list[str] = []
     for _row, window in windows:
         if window.label not in labels:
@@ -472,7 +474,8 @@ def _cell_width(columns: _LimitColumns, *, last: bool) -> int:
     return width
 
 
-def _row_windows(row: LimitRow, columns: _LimitColumns) -> dict[str, object]:
+def _row_windows(row: LimitRow) -> dict[str, object]:
+    """This row's windows, keyed by the column each one belongs in."""
     return {window.label: window for window in row.windows}
 
 
@@ -520,7 +523,7 @@ def _one_line(row: LimitRow, columns: _LimitColumns, trailer: Content) -> Conten
         if not row.absence:
             return line + trailer
         return line + Content(" " * _GROUP_GUTTER) + _absence_cell(row, columns) + trailer
-    published = _row_windows(row, columns)
+    published = _row_windows(row)
     # Trailing blank columns are dropped rather than padded: they align nothing, and the
     # spaces would count toward the length that decides whether this row stacks.
     drawn = [label for label in columns.labels if label in published]
