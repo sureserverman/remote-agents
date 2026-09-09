@@ -78,6 +78,32 @@ def _percent_ends(line: str) -> list[int]:
     return ends
 
 
+def _labelled_gauges(line: str) -> dict[str, tuple[int, int]]:
+    """Each drawn window's gauge span, keyed by the label naming the column it sits in.
+
+    Keyed by label rather than by position because that is what a column now *is* (BL-046).
+    The label is read back off the line -- it is the token immediately before the gauge, which
+    is how `_window_content` assembles a cell -- so these assertions follow the layout instead
+    of restating its arithmetic.
+    """
+    found = {}
+    for start, end in _gauge_spans(line):
+        found[line[:start].rstrip().split()[-1]] = (start, end)
+    return found
+
+
+def _column_offsets(lines: list[str]) -> dict[str, set[int]]:
+    """Every offset each window kind was drawn at, across the whole render.
+
+    A grid is exactly the claim that each of these sets has one member.
+    """
+    offsets: dict[str, set[int]] = {}
+    for line in lines:
+        for label, (start, _end) in _labelled_gauges(line).items():
+            offsets.setdefault(label, set()).add(start)
+    return offsets
+
+
 def _rows() -> tuple[LimitRow, ...]:
     """Two agents whose windows differ in every dimension that moves a column boundary.
 
@@ -110,36 +136,48 @@ def _rows() -> tuple[LimitRow, ...]:
     )
 
 
-def test_every_row_starts_its_nth_window_in_the_same_column() -> None:
-    """The gauge of window N begins at one offset, whichever agent's row it is drawn on."""
+def test_a_window_kind_begins_at_one_offset_across_the_whole_render() -> None:
+    """A column belongs to a window *kind*, and a kind is drawn at one offset (BL-046).
+
+    This used to read "the gauge of window N begins at one offset", which was the same claim
+    only for as long as every agent published the same kinds in the same order. The moment one
+    did not -- the routine case, since Codex publishes whatever its rollout carried -- the
+    positional version was satisfied by drawing a weekly window under a five-hour one.
+    """
     lines = [content.plain for content in limit_rows_content(_rows(), WIDE)]
     assert len(lines) == len(_rows()), "each row should occupy exactly one line at this width"
 
-    per_row = [_gauge_spans(line) for line in lines]
-    assert {len(spans) for spans in per_row} == {2}, "both agents publish two windows"
-
-    for index in range(2):
-        starts = {spans[index][0] for spans in per_row}
+    offsets = _column_offsets(lines)
+    # Read back as drawn: the pane abbreviates `week` to `wk` (`_WINDOW_LABELS`), and these
+    # assertions are about what the owner sees rather than about the key behind it.
+    assert set(offsets) == {"5h", "wk", "day"}, offsets
+    for label, starts in offsets.items():
         assert len(starts) == 1, (
-            f"window {index} starts at {sorted(starts)} across rows; a column is one offset.\n"
-            + "\n".join(lines)
+            f"{label} is drawn at {sorted(starts)}; a column is one offset.\n" + "\n".join(lines)
         )
 
+    # And the columns are laid out in one order, left to right, first-seen -- so a row's
+    # windows cannot be permuted into somebody else's columns while still "aligning".
+    ordered = [label for label, _ in sorted(offsets.items(), key=lambda pair: min(pair[1]))]
+    assert ordered == ["5h", "wk", "day"], ordered
 
-def test_every_row_ends_its_nth_percent_in_the_same_column() -> None:
-    """A percent is read by comparing figures, so the figures share a right edge.
+
+def test_a_window_kind_ends_its_percent_at_one_offset() -> None:
+    """A percent is read by comparing figures, so a kind's figures share a right edge.
 
     Separate from the gauge assertion because the two fail for different repairs: aligning the
     starts alone still lets `3%` and `100%` push the following cell apart, which is the defect
     one column over rather than the defect fixed.
     """
     lines = [content.plain for content in limit_rows_content(_rows(), WIDE)]
-    per_row = [_percent_ends(line) for line in lines]
+    ends: dict[str, set[int]] = {}
+    for line in lines:
+        for label, (_start, gauge_end) in _labelled_gauges(line).items():
+            ends.setdefault(label, set()).add(line.index("%", gauge_end) + 1)
 
-    for index in range(2):
-        ends = {ends[index] for ends in per_row}
-        assert len(ends) == 1, (
-            f"window {index}'s percent ends at {sorted(ends)} across rows.\n" + "\n".join(lines)
+    for label, edges in ends.items():
+        assert len(edges) == 1, (
+            f"{label}'s percent ends at {sorted(edges)} across rows.\n" + "\n".join(lines)
         )
 
 
@@ -168,12 +206,10 @@ def test_the_columns_are_a_property_of_the_set_not_of_the_first_row(
         LimitRow(profiles[1], second.windows, second.borrowed, second.stale_for),
     )
     lines = [content.plain for content in limit_rows_content(reordered, WIDE)]
-    per_row = [_gauge_spans(line) for line in lines]
 
-    for index in range(2):
-        starts = {spans[index][0] for spans in per_row}
+    for label, starts in _column_offsets(lines).items():
         assert len(starts) == 1, (
-            f"window {index} starts at {sorted(starts)} for {profiles}.\n" + "\n".join(lines)
+            f"{label} is drawn at {sorted(starts)} for {profiles}.\n" + "\n".join(lines)
         )
 
 
@@ -233,3 +269,83 @@ def test_one_long_profile_id_does_not_cost_every_row_its_gauge() -> None:
         assert any("…" in line for line in lines), (
             f"at width {width} the name should ellipsise rather than the data: {lines}"
         )
+
+
+# --- columns are a window kind, not a position (BL-046) ------------------------------------
+
+
+def _asymmetric() -> tuple[LimitRow, ...]:
+    """One agent publishing two windows, one publishing only the second of them.
+
+    BL-046's own shape, and not a contrived one: Claude publishes a five-hour and a weekly
+    window, Codex publishes whatever its rollout carried, and a host whose Codex has only
+    crossed into its weekly window publishes exactly this. Positional layout puts `wk` under
+    `5h` here -- two different questions in one column, both labelled truthfully, which is
+    what makes the misreading so easy.
+    """
+    return (
+        LimitRow("claude", (LimitWindow("5h", 34, "2h"), LimitWindow("wk", 61, "3d")), None, None),
+        LimitRow("codex", (LimitWindow("wk", 9, None),), None, None),
+    )
+
+
+def test_a_window_lands_under_the_same_window_and_not_under_the_same_position() -> None:
+    """BL-046: `wk` sits under `wk`, and the column `5h` owns stays `5h`'s.
+
+    Asserted on the label's own offset rather than the gauge's, because the label is what
+    names the column; a gauge that happened to line up while the labels did not would be the
+    same defect drawn more carefully.
+    """
+    lines = [content.plain for content in limit_rows_content(_asymmetric(), WIDE)]
+    assert len(lines) == 2, "\n".join(lines)
+    claude, codex = lines
+
+    assert claude.index("wk") == codex.index("wk"), (
+        "the weekly window sits in two different columns, so the grid reads one agent's week "
+        "against another's five hours.\n" + "\n".join(lines)
+    )
+    assert codex.index("wk") > claude.index("5h"), (
+        "codex's only window has been pulled into the column 5h owns.\n" + "\n".join(lines)
+    )
+
+
+def test_a_column_a_row_does_not_publish_is_blank_and_not_closed_up() -> None:
+    """The blank is the point: a row keeps the shape of the table it belongs to."""
+    lines = [content.plain for content in limit_rows_content(_asymmetric(), WIDE)]
+    claude, codex = lines
+
+    # The span claude's five-hour cell occupies: from where the first window begins to where
+    # the second does. Measured off claude's row rather than written down, so the assertion
+    # follows the layout instead of restating it.
+    cell = slice(claude.index("5h"), claude.index("wk"))
+    assert codex[cell].strip() == "", (
+        "codex publishes no five-hour window, so that column must be blank on its row -- "
+        f"found {codex[cell]!r}.\n" + "\n".join(lines)
+    )
+    assert "5h" not in codex, "codex publishes no five-hour window and must not show one"
+
+
+def test_a_row_with_no_windows_says_which_silence_it_is_where_its_windows_would_be() -> None:
+    """DEC-061's three absences, drawn as words in the first window column.
+
+    A word rather than a colour or a dash (DEC-010): the grid has to survive monochrome, and a
+    dash would be a fourth thing meaning none of the three. The phrase starts where the first
+    window would, so the eye reads down one column and finds either a gauge or a reason.
+    """
+    rows = (
+        LimitRow("claude", (LimitWindow("5h", 34, "2h"),), None, None),
+        LimitRow("cursor-agent", (), None, None, absence="not reported"),
+        LimitRow("opencode", (), None, None, absence="no reading yet"),
+        LimitRow("codex", (), None, None, absence="unreadable"),
+    )
+    lines = [content.plain for content in limit_rows_content(rows, WIDE)]
+    assert len(lines) == 4, "\n".join(lines)
+    first_window = lines[0].index("5h")
+
+    for line, phrase in zip(lines[1:], ("not reported", "no reading yet", "unreadable")):
+        assert line.index(phrase) == first_window, (
+            f"{phrase!r} starts at {line.index(phrase)}, not the first window column "
+            f"{first_window}.\n" + "\n".join(lines)
+        )
+
+    assert len({line.split()[0] for line in lines}) == 4, "every agent keeps its own row"

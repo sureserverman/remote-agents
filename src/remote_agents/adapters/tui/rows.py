@@ -326,6 +326,16 @@ class _LimitColumns:
     label: int
     percent: int
     reset: int
+    labels: tuple[str, ...] = ()
+    """Which window kinds the table has a column for, left to right, first-seen order.
+
+    A column is a *window kind*, not a position. Positional layout was BL-046: an agent that
+    published only a weekly window had it drawn in the column its neighbour used for five
+    hours, so the grid invited the owner to read one agent's week against another's afternoon,
+    with both labels truthful. First-seen order rather than sorted, because the providers
+    publish shortest-first and the reading order that produces is the one the owner already
+    has; sorting would reorder the common case to fix nothing.
+    """
 
 
 #: The narrowest the profile column is ever squeezed to before the name is ellipsised rather
@@ -365,11 +375,19 @@ def _limit_columns(rows: Sequence[LimitRow], width: int | None = None) -> _Limit
     percent = max((len(f"{window.percent}%") for _row, window in windows), default=0)
     reset = max((len(_reset_text(row, window)) for row, window in windows), default=0)
     profile = max((len(row.profile) for row in rows), default=0)
+    # An absence phrase is drawn in the first window column, so it is measured with the
+    # windows: a `label` narrower than the phrase would let the phrase run into the next
+    # column and undo the alignment this whole function exists to hold.
+    labels: list[str] = []
+    for _row, window in windows:
+        if window.label not in labels:
+            labels.append(window.label)
     return _LimitColumns(
         profile=_capped_profile(profile, width, label=label, percent=percent, reset=reset),
         label=label,
         percent=percent,
         reset=reset,
+        labels=tuple(labels),
     )
 
 
@@ -441,6 +459,34 @@ def _window_content(row: LimitRow, window, columns: _LimitColumns, *, last: bool
     return cell + Content.assemble((f" {padded}", MUTED))
 
 
+def _cell_width(columns: _LimitColumns, *, last: bool) -> int:
+    """How wide one window cell is, including the padding that holds the next column's edge.
+
+    Derived from the same four numbers `_window_content` assembles from, rather than measured
+    off a rendered cell: a blank column has no cell to measure, and that is precisely the case
+    this exists for.
+    """
+    width = columns.label + 1 + _GAUGE_WIDTH + 1 + columns.percent
+    if columns.reset and not last:
+        width += 1 + columns.reset
+    return width
+
+
+def _row_windows(row: LimitRow, columns: _LimitColumns) -> dict[str, object]:
+    return {window.label: window for window in row.windows}
+
+
+def _absence_cell(row: LimitRow, columns: _LimitColumns) -> Content:
+    """A row's silence, in the first window column, muted and in words.
+
+    Words rather than a colour or a dash, per DEC-010: the pane is read in monochrome by
+    someone who has never been told a convention, and a dash would be a fourth thing meaning
+    none of DEC-061's three. Not padded to a cell width -- nothing follows it, and padding
+    would only inflate the row's measured length.
+    """
+    return Content.assemble((row.absence or "", MUTED))
+
+
 def _trailers(row: LimitRow) -> Content:
     """What a row says after its windows: how old a stale reading is, dim. The borrowed-source
     stamp DEC-061 asks for is not drawn here -- it cost the console's 73-column pane its
@@ -459,10 +505,32 @@ def _name(row: LimitRow, columns: _LimitColumns) -> Content:
 
 
 def _one_line(row: LimitRow, columns: _LimitColumns, trailer: Content) -> Content:
+    """The row, laid out against the table's columns rather than against its own windows.
+
+    Walking `columns.labels` rather than `row.windows` is the whole of BL-046's fix: a window
+    is drawn in the column its *kind* owns, and a kind this row does not publish leaves that
+    column blank instead of pulling the next window left into it.
+    """
     line = _name(row, columns)
-    for index, window in enumerate(row.windows):
-        cell = _window_content(row, window, columns, last=index == len(row.windows) - 1)
+    if not columns.labels:
+        return line + _absence_cell(row, columns) + trailer if row.absence else line + trailer
+    published = _row_windows(row, columns)
+    # Trailing blank columns are dropped rather than padded: they align nothing, and the
+    # spaces would count toward the length that decides whether this row stacks.
+    drawn = [label for label in columns.labels if label in published]
+    last_drawn = columns.labels.index(drawn[-1]) if drawn else -1
+    for index, label in enumerate(columns.labels):
+        if index > last_drawn:
+            break
+        last = index == last_drawn
+        window = published.get(label)
+        if window is None:
+            cell = Content(" " * _cell_width(columns, last=last))
+        else:
+            cell = _window_content(row, window, columns, last=last)
         line = line + Content(" " * _GROUP_GUTTER) + cell
+    if not drawn and row.absence:
+        line = line + Content(" " * _GROUP_GUTTER) + _absence_cell(row, columns)
     return line + trailer
 
 
