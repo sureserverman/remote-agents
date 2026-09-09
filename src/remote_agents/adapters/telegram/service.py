@@ -1315,8 +1315,8 @@ class PrivateBotBoundary:
             return _reply_arguments(
                 self._message(
                     f"<b>Session did not become ready</b>\n{escape(record.display.rendered)}\n"
-                    "Workspace trust is never approved remotely. Resolve any trust or startup "
-                    "check locally, then open Sessions to recheck.",
+                    "Its pane may still exist. Check this host, then open Sessions to "
+                    "recheck.",
                     # Details only. "Sessions" and "Launch another" were the ways on before
                     # a permanent way on existed, and both now name a destination the bar
                     # carries on the next row -- "Launch another" beside a *marked* Launch.

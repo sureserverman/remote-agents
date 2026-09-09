@@ -9,13 +9,22 @@ uv run --locked remote-agents doctor --profiles --json | python -m json.tool
 The profile record contains no credentials, terminal output, project paths, prompts, or
 environment values. `AVAILABLE` means the executable is present; its version is diagnostic
 information only, so a local update does not disable Telegram launches. Every launch still has
-to reach its agent-specific readiness state. Authentication and workspace trust are never
-bypassed; a trust dialog remains a local operator action.
+to reach its agent-specific readiness state. Authentication is never bypassed and stays a
+local operator action.
+
+**Workspace trust is not.** A launch that lands on an agent's folder-trust dialog is recorded
+`untrusted` on the first capture that shows it, rather than spending the startup budget and
+failing (DEC-016). The owner answers from the bot, which is where the pane is *not* visible;
+the local surface shows the word and hands over the dialog itself, because the console has the
+agent's pane on screen (DEC-047). Saying *yes* is confined to the agents whose dialog this
+project can read — `claude` and `claude-remote` — and is a keypress into that dialog. Saying
+*no* is available for every agent, because it ends a session that never started, and it is the
+one action on this control plane that takes effect without a confirmation step (DEC-078).
 
 | Profile | Fixed launch argv | Availability/auth/trust | Resume catalogue / selection | Readiness evidence | Fixed graceful exit |
 | --- | --- | --- | --- | --- | --- |
-| `claude` | `claude` | executable must be present; local auth/trust stays local | documented UUID filenames/project directories plus a bounded generated title or stored resume description; enabled when the catalogue is available | `Claude Code`, rejecting workspace-trust dialog | `/exit`, Enter |
-| `claude-remote` | `claude --remote-control ra-<uuid>` | executable must be present; local auth/trust stays local | not a resume profile | `Claude Code`, rejecting workspace-trust dialog | `/exit`, Enter |
+| `claude` | `claude` | executable must be present; local auth/trust stays local | documented UUID filenames/project directories plus a bounded generated title or stored resume description; enabled when the catalogue is available | `Claude Code`; a workspace-trust dialog answers the launch as `untrusted` | `/exit`, Enter |
+| `claude-remote` | `claude --remote-control ra-<uuid>` | executable must be present; local auth/trust stays local | not a resume profile | `Claude Code`; a workspace-trust dialog answers the launch as `untrusted` | `/exit`, Enter |
 | `codex` | `codex` | executable must be present; local auth/trust stays local | feature-probed app-server `thread/list` with a bounded provider title or preview when supplied | `/exit` command selection and submit | `/exit`, Enter, Enter |
 | `opencode` | `opencode` | executable must be present; local auth/trust stays local | `session list --format json`; enabled only after its JSON contract succeeds | `Ask anything...` interactive UI | Ctrl-C |
 | `cursor-agent` | `cursor-agent` | executable must be present; local auth/trust stays local | disabled: `ls` is interactive and has no structured safe identifier catalogue | `/quit` command selection and submit | `/quit`, Enter, Enter |

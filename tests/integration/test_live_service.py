@@ -206,7 +206,16 @@ async def test_private_bot_boundary_launches_on_the_agent_press_and_drops_a_repe
 
 
 @pytest.mark.asyncio
-async def test_failed_launch_explains_that_workspace_trust_is_never_approved_remotely() -> None:
+async def test_a_genuinely_failed_launch_no_longer_blames_workspace_trust() -> None:
+    """The branch survives; the sentence it used to carry does not.
+
+    It said "Workspace trust is never approved remotely. Resolve any trust or startup check
+    locally" — which was the honest thing to say when a trust-blocked launch was the main way
+    to reach this reply. It no longer is: those launches are recorded `untrusted` and answered
+    from the bot (DEC-016, DEC-047, DEC-078). What is left here is a launch that really did
+    fail, and telling that owner to go and check a trust dialog sends them looking for a
+    screen that is not there.
+    """
     failed = _record(SessionState.FAILED, "failed", ProjectId("a" * 24))
     launcher = _Launcher()
     launcher.launch_result = failed
@@ -225,7 +234,8 @@ async def test_failed_launch_explains_that_workspace_trust_is_never_approved_rem
     reply = await boundary._launch_reply("a" * 24 + "|cursor-agent", token, 1)
 
     assert "Session did not become ready" in reply["text"]
-    assert "never approved remotely" in reply["text"]
+    assert "never approved remotely" not in reply["text"]
+    assert "trust" not in reply["text"].lower()
     assert [
         unpadded(button.text) for row in reply["reply_markup"].inline_keyboard for button in row
     ] == [

@@ -372,7 +372,8 @@ rebuild.
 
 Begin with `/start`. Use only the configured private chat. It lands on the sessions list,
 whose heading carries the total, active, and preserved counts — the total because a row can be
-starting, stop-requested, failed, or orphaned and so in neither of the other two buckets — and
+starting, untrusted, stop-requested, failed, or orphaned and so in neither of the other two
+buckets — and
 which closes, like every screen, with the fixed `Sessions · Launch · Resume` bar. That bar
 carries no `Resume` on a host that wired no conversation service. There is no Home screen and
 no Refresh: every
@@ -932,8 +933,9 @@ between two observations for the same session; only the first half is fixed here
 staying put after a restart until you next press something is unchanged.
 
 **A session that has finished loses its notification.** Every delivery pass asks the records
-which of the notified sessions are still `starting` or `running`; one you stopped, force-stopped
-or cleaned up has already answered the question its alert was asking, so the message is deleted
+which of the notified sessions are still `starting`, `running` or `untrusted`; one you stopped,
+force-stopped or cleaned up has already answered the question its alert was asking, so the
+message is deleted
 and its `Open session` token pruned with it. A stop pressed in the bot collects it immediately;
 a stop made in the local console is collected by the next pass, within `activity_poll_seconds`,
 because that surface is a different process and this one only finds out by reading. If Telegram
@@ -1017,7 +1019,10 @@ unreachable: a managed session stopping on a rate limit spooled a record whose r
 the drain dropped it, silently. `tests/live/test_agent_activity_hooks.py` now reads the installed
 bundle rather than a fixture, so the same drift fails a test instead of losing notifications.
 
-**Notifications are only sent about a session that is still live** — `starting` or `running`.
+**Notifications are only sent about a session that is still live** — `starting`, `running`, or
+`untrusted`. The last is the clearest case rather than the marginal one: a message about a
+session waiting on its folder-trust dialog is not the owner's own action reported back to them,
+it is the only way they learn a launch they started is standing still.
 A record that has reached `stop_requested`, `preserved`, `failed`, `ended` or `orphaned` is one
 the owner has already dealt with, so an agent's report about it tells them their own action back.
 That check is made when the message is *sent*, not when the record was drained, which is the case
@@ -1480,7 +1485,7 @@ uv run --locked remote-agents tui
    a pane emitting it is not rendering text.
 4. The stops offered are exactly the ones the shared policy allows from the session's current
    state: graceful only from RUNNING, cleanup only from PRESERVED, and force from RUNNING,
-   STOP_REQUESTED, PRESERVED, or FAILED. Both surfaces label them from one map beside that
+   STOP_REQUESTED, PRESERVED, FAILED, or UNTRUSTED. Both surfaces label them from one map beside that
    policy — "Stop and close", "Clean up", "Force stop" — so an action is named the same wherever
    it is offered. Stop and close is the whole stop: once the pane exits it is cleaned up in the
    same action and the session reaches ENDED, so its output is not left to read. Clean up is

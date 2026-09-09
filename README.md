@@ -560,8 +560,12 @@ list is on screen. The detail names the session and its state, and explains in o
 state means. It offers exactly the stops the shared policy allows from that state: Stop and close
 only from RUNNING (which ends the session outright, cleaning up the pane it exited), Clean up only
 from PRESERVED — now reached only by a pane that died on its own — and Force stop from RUNNING,
-STOP_REQUESTED, PRESERVED, or FAILED. A starting session offers none, because the domain has no
-stop transition out of STARTING and reconciliation is what resolves one that is stuck. An orphaned
+STOP_REQUESTED, PRESERVED, FAILED, or UNTRUSTED. An untrusted session is forceable because its
+pane is live and must be endable, and force is the only one of the three that fits: a graceful
+stop signals an agent listening to nothing but its own dialog, and a cleanup wants preserved
+output that a session which never ran does not have. A starting session offers none, because the
+domain has no stop transition out of STARTING and reconciliation is what resolves one that is
+stuck. An orphaned
 session depends on how it got there: one that reconciliation adopted — a running agent found with
 no record of it — offers Force stop and nothing else, while one whose pane evidence was merely
 ambiguous offers none, as does any record predating the column that stores the difference.
