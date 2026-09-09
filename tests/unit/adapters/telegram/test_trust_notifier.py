@@ -421,3 +421,18 @@ async def test_a_question_already_on_the_owner_s_screen_is_not_sent_as_a_message
     await notifier.pass_once()
 
     assert view.sent == [], "the owner got a message for a question already on their screen"
+
+
+def test_the_trust_question_s_buttons_are_never_adopted_as_the_live_view() -> None:
+    """A message sent apart from the live view must not become it.
+
+    Adopting one makes the next render draw a screen *over* the question, and the notifier's
+    own later amendment then paints the settled text back over that screen. The vulnerable
+    state — a chat with no recorded anchor and a notification already in it — is more
+    characteristic here than for the activity notification, not less: an owner who launches
+    only from the local surface may never have pressed a bot screen, so the trust question can
+    be the one and only message in their chat.
+    """
+    from remote_agents.adapters.telegram.service import _SENT_APART_ACTIONS
+
+    assert {"session.trust", "session.decline"} <= _SENT_APART_ACTIONS

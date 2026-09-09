@@ -187,9 +187,16 @@ class TrustNotifier:
         #:
         #: Process-local and deliberately not the durable row. The row would have to name the
         #: live view's message, and settling later *amends* that message -- which by then is
-        #: whatever screen the owner has navigated to. Losing this on a restart is the right
-        #: answer rather than a shortcoming: the screen is gone too, so a message is once
-        #: again the only way to reach them.
+        #: whatever screen the owner has navigated to. Migration 12's `message_id NOT NULL`
+        #: leaves no third option without a schema change.
+        #:
+        #: **Accepted cost, and an earlier comment here got it wrong.** It claimed losing this
+        #: on a restart was harmless "because the screen is gone too". It is not: the live
+        #: view's anchor and its callback tokens are both durable, precisely so a restart does
+        #: not void the buttons in the chat. So after a restart the launch reply is still
+        #: standing, still showing the question and still pressable, and this pass -- having
+        #: lost the set and never written a row -- sends a second copy. One extra message in a
+        #: narrow window, never silence, which is the direction to fail in.
         self._asked_on_screen: set[str] = set()
 
     def note_asked_on_screen(self, session_id: object) -> None:

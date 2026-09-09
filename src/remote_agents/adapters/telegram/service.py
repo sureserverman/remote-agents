@@ -289,6 +289,12 @@ class _TextEntry:
     input_message_id: int = 0
 
 
+#: Actions whose token lives on a message sent *apart* from the live view, and which must
+#: therefore never be adopted as it. Every one of them is a button on a notification: adopting
+#: one makes the next render draw a screen over the message, and the notifier's own later
+#: amendment then paints its text back over that screen.
+_SENT_APART_ACTIONS = frozenset({_NOTIFIED_DETAIL, "session.trust", "session.decline"})
+
 _PENDING_NOTICES = {
     "graceful": "Stopping the session — waiting for the agent to exit…",
     "cleanup": "Cleaning up the session…",
@@ -1090,7 +1096,16 @@ class PrivateBotBoundary:
         # in this process, because the vulnerable state — a chat with no recorded anchor and a
         # notification already in it — is exactly what a restored database leaves behind, and a
         # process-local set is empty precisely then.
-        if state is None or state.action != _NOTIFIED_DETAIL:
+        #
+        # **The folder-trust question is sent the same way and needs the same exemption.** Its
+        # three buttons -- Trust, Don't trust, and the Open session its amendment carries --
+        # all sit on a message sent apart from the live view, so adopting any of them makes
+        # the next render draw a screen over the question and `TrustNotifier._settle` later
+        # amend it back over that screen. The vulnerable state is the same one and is now more
+        # characteristic rather than less: an owner who launches only from the local surface
+        # may never have pressed a bot screen at all, so the trust question is the one and
+        # only message in their chat.
+        if state is None or state.action not in _SENT_APART_ACTIONS:
             self.view.adopt(message_id)
         notified = state is not None and state.action == _NOTIFIED_DETAIL
         if notified:
