@@ -28,6 +28,9 @@ from remote_agents.application.relative_time import age, age_short
 from remote_agents.application.session_actions import state_word
 from remote_agents.application.session_views import (
     ADOPTED_NOTE,
+    NO_READING,
+    NOT_REPORTED,
+    UNREADABLE,
     StateGroup,
     _window_phrase,
     context_gauge,
@@ -57,7 +60,12 @@ from remote_agents.domain.models import (
     SessionRecord,
     SessionState,
 )
-from remote_agents.ports.agent_usage import AgentLimits, ContextWindow, UsageWindow
+from remote_agents.ports.agent_usage import (
+    AgentLimits,
+    ContextWindow,
+    LimitsAbsence,
+    UsageWindow,
+)
 
 _NOW = datetime(2026, 8, 22, 12, 0, tzinfo=UTC)
 
@@ -273,6 +281,61 @@ def test_limit_rows_carry_the_parts_the_surfaces_lay_out() -> None:
     ]
     assert row.stale_for == "8h"
     assert row.borrowed is None
+
+
+def test_every_curated_agent_keeps_a_limit_row_whatever_it_reported() -> None:
+    """A grid is a fixture. An agent that answered nothing is a row that says so.
+
+    Before this, an agent with no windows contributed no row and a host where none answered
+    lost the whole grid -- so the pane's shape depended on what the providers happened to
+    publish that minute, and the owner could not tell "spent nothing" from "nothing read".
+    """
+    profiles = tuple(ProfileId(name) for name in ("claude", "claude-remote", "codex", "opencode"))
+    rows = limit_rows((_account("codex", UsageWindow("5h", 41.0)),), profiles)
+
+    assert [row.profile for row in rows] == [str(profile) for profile in profiles]
+    assert [row.absence for row in rows] == [NO_READING, NO_READING, None, NO_READING]
+
+
+def test_a_row_with_windows_names_no_absence_and_a_row_without_names_exactly_one() -> None:
+    """The two are exclusive: a phrase beside a gauge would be a contradiction on one line."""
+    profiles = (ProfileId("claude"), ProfileId("cursor-agent"), ProfileId("opencode"))
+    rows = limit_rows(
+        (
+            _account("claude", UsageWindow("5h", 2.0)),
+            AgentLimits(ProfileId("cursor-agent"), absence=LimitsAbsence.NOT_REPORTED),
+            AgentLimits(ProfileId("opencode"), absence=LimitsAbsence.UNREADABLE),
+        ),
+        profiles,
+    )
+
+    with_windows, not_reported, unreadable = rows
+    assert with_windows.windows and with_windows.absence is None
+    assert not with_windows.absence
+
+    assert not_reported.windows == () and not_reported.absence == NOT_REPORTED
+    assert unreadable.windows == () and unreadable.absence == UNREADABLE
+    assert len({NOT_REPORTED, NO_READING, UNREADABLE}) == 3, (
+        "the three absences DEC-061 distinguishes must read as three different things; "
+        "two sharing a phrase would conflate exactly what the decision separates"
+    )
+
+
+def test_limit_rows_without_a_profile_set_still_answers_the_way_the_bot_reads_it() -> None:
+    """The bot is deliberately out of this change's scope, so its call must not move.
+
+    `_limit_block` passes no profile set and lays out only agents that answered; keeping that
+    the default is what lets the local surface grow a fixture grid without the bot growing
+    rows of phrases it has no column for.
+    """
+    rows = limit_rows(
+        (
+            _account("codex", UsageWindow("5h", 41.0)),
+            AgentLimits(ProfileId("cursor-agent"), absence=LimitsAbsence.NOT_REPORTED),
+        )
+    )
+
+    assert [row.profile for row in rows] == ["codex"]
 
 
 def test_limit_lines_are_built_from_the_same_rows() -> None:

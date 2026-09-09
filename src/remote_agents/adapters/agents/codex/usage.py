@@ -11,6 +11,7 @@ from remote_agents.ports.agent_usage import (
     AgentLimits,
     AgentUsage,
     ContextWindow,
+    LimitsAbsence,
     UsageQuery,
     UsageWindow,
 )
@@ -106,13 +107,20 @@ class CodexUsageReader:
         """
         rollout = _newest(self._recent_rollouts())
         if rollout is None:
-            return AgentLimits(self.limits_profile)
+            # Codex *does* publish limits, so this silence is "none found", not "none
+            # published" -- a host that has simply not run codex recently, which resolves
+            # itself on the next turn (DEC-061).
+            return AgentLimits(self.limits_profile, absence=LimitsAbsence.NO_READING)
         record = _last_json_line(rollout, _is_codex_token_count)
         payload = None if record is None else record.get("payload")
         payload = payload if isinstance(payload, dict) else {}
+        windows = _codex_windows(payload.get("rate_limits"), now=self._now)
         return AgentLimits(
             self.limits_profile,
-            _codex_windows(payload.get("rate_limits"), now=self._now),
+            windows,
+            # A rollout with no usable `rate_limits` is the same kind of silence as no rollout
+            # at all: the provider publishes them and this read found none.
+            absence=None if windows else LimitsAbsence.NO_READING,
             observed_at=_instant(None if record is None else record.get("timestamp")),
         )
 

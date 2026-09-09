@@ -95,7 +95,12 @@ from remote_agents.adapters.agents.opencode.hooks import PROVIDER as _OPENCODE
 from remote_agents.adapters.agents.opencode.usage import OpenCodeUsageReader
 from remote_agents.domain.models import ProfileId, ProjectId
 from remote_agents.domain.profiles import closed_profiles
-from remote_agents.ports.agent_usage import AgentLimits, AgentUsage, UsageQuery
+from remote_agents.ports.agent_usage import (
+    AgentLimits,
+    AgentUsage,
+    LimitsAbsence,
+    UsageQuery,
+)
 from remote_agents.ports.provider_descriptor import ProviderDescriptor
 
 ProjectPaths = Mapping[ProjectId, Path]
@@ -179,7 +184,11 @@ class ProfileUsageReaders:
             try:
                 answers.append(reader.limits())  # type: ignore[attr-defined]
             except (OSError, ValueError, ArithmeticError, sqlite3.Error):
-                answers.append(AgentLimits(profile))
+                # `UNREADABLE`, not a bare empty answer. This branch is the one absence that
+                # names a *fault* -- the provider's files are there and this process could not
+                # read them -- and rendering it the way a provider that publishes nothing
+                # renders would hide a broken host behind a legitimate silence (DEC-061).
+                answers.append(AgentLimits(profile, absence=LimitsAbsence.UNREADABLE))
         return tuple(answers)
 
     def read(self, query: UsageQuery) -> AgentUsage | None:

@@ -3,7 +3,12 @@
 from __future__ import annotations
 
 from remote_agents.domain.models import ProfileId
-from remote_agents.ports.agent_usage import AgentLimits, AgentUsage, UsageQuery
+from remote_agents.ports.agent_usage import (
+    AgentLimits,
+    AgentUsage,
+    LimitsAbsence,
+    UsageQuery,
+)
 
 
 class CursorUsageReader:
@@ -34,5 +39,10 @@ class CursorUsageReader:
         return AgentUsage()
 
     def limits(self) -> AgentLimits:
-        """Constant for the reason `read` is: there is nothing on disk to consult."""
-        return AgentLimits(self.limits_profile)
+        """Constant for the reason `read` is: there is nothing on disk to consult.
+
+        `NOT_REPORTED` rather than a bare empty answer: this provider publishes no limits at
+        all, which is permanent and complete, and a surface that cannot tell it from "nothing
+        read yet" invites the owner to wait for a figure that is never coming (DEC-061).
+        """
+        return AgentLimits(self.limits_profile, absence=LimitsAbsence.NOT_REPORTED)

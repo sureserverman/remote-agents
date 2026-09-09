@@ -26,7 +26,12 @@ from remote_agents.adapters.agents.opencode.usage import OpenCodeUsageReader
 from remote_agents.adapters.agents.registry import ProfileUsageReaders
 from remote_agents.domain.models import ProfileId
 from remote_agents.domain.profiles import closed_profiles
-from remote_agents.ports.agent_usage import AgentLimits, UsageQuery, UsageWindow
+from remote_agents.ports.agent_usage import (
+    AgentLimits,
+    LimitsAbsence,
+    UsageQuery,
+    UsageWindow,
+)
 
 LAUNCHED_AT = datetime(2026, 8, 27, 6, 0, tzinfo=UTC)
 
@@ -895,6 +900,50 @@ def test_the_providers_that_publish_no_limits_say_so_rather_than_failing(tmp_pat
     assert CursorUsageReader().limits().profile_id == ProfileId("cursor-agent")
 
 
+def test_each_reader_files_the_silence_it_actually_means(tmp_path: Path) -> None:
+    """Which of DEC-061's three absences a reader files is the whole value of the field.
+
+    Asserted per reader rather than "an absence is present", because the two readers that
+    publish nothing and the two that merely found nothing are the pair a single grid cell used
+    to conflate -- and swapping one for the other is a change no other test in this suite can
+    see. `NOT_REPORTED` is permanent and complete; `NO_READING` may resolve on the provider's
+    next turn, and telling the owner to wait for the first is the failure DEC-061 names.
+    """
+    absent_cache = tmp_path / "no-cache"
+
+    assert OpenCodeUsageReader(database=tmp_path / "absent.db").limits().absence is (
+        LimitsAbsence.NOT_REPORTED
+    ), "opencode publishes no limits at all; that is permanent, not pending"
+    assert CursorUsageReader().limits().absence is LimitsAbsence.NOT_REPORTED, (
+        "cursor publishes no limits at all; that is permanent, not pending"
+    )
+    assert _claude_reader(tmp_path, cache=absent_cache).limits().absence is (
+        LimitsAbsence.NO_READING
+    ), "claude does publish limits; an absent cache is 'none found', not 'none published'"
+    assert CodexUsageReader(
+        sessions_root=tmp_path / "no-codex-sessions", now=lambda: LAUNCHED_AT
+    ).limits().absence is LimitsAbsence.NO_READING, (
+        "codex does publish limits; no rollout on disk is 'none found', not 'none published'"
+    )
+
+
+def test_a_reader_that_answers_with_windows_names_no_absence(tmp_path: Path) -> None:
+    """The mirror, and the half a positive test alone would leave open.
+
+    A reader that filed an absence beside real windows would put a phrase and a gauge on one
+    row, which is a contradiction the grid has no way to render.
+    """
+    cache = tmp_path / "claude-cache"
+    cache.mkdir()
+    _written_json(
+        cache / "statusline-usage-cache-d1c0b541.json",
+        {"five_hour": {"utilization": 2, "resets_at": _iso_in(hours=3)}},
+    )
+    answer = _claude_reader(tmp_path, cache=cache).limits()
+
+    assert answer.windows and answer.absence is None
+
+
 def test_the_claude_variants_share_one_account_and_so_one_entry(tmp_path: Path) -> None:
     """`claude` and `claude-remote` are the same executable under a different argv.
 
@@ -940,6 +989,11 @@ def test_an_unreadable_source_costs_one_entry_and_never_the_screen(tmp_path: Pat
 
     assert [str(entry.profile_id) for entry in entries] == ["codex"]
     assert entries[0].windows == ()
+    assert entries[0].absence is LimitsAbsence.UNREADABLE, (
+        "a reader that raised must not be indistinguishable from a provider with nothing to "
+        "say: this is the one absence that names a fault, and hiding it behind an ordinary "
+        "silence is how a broken host reads as a quiet one (DEC-061)"
+    )
 
 
 # --- the account-wide limits type --------------------------------------------------------

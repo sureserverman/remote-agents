@@ -25,6 +25,7 @@ from __future__ import annotations
 
 from dataclasses import KW_ONLY, dataclass
 from datetime import datetime
+from enum import Enum
 from pathlib import Path
 
 from remote_agents.domain.models import ProfileId
@@ -123,6 +124,35 @@ class AgentUsage:
         return self.context is None and not self.windows
 
 
+class LimitsAbsence(Enum):
+    """Why an agent published no rate-limit windows — three answers, never one blank.
+
+    DEC-061's clause, made a type. An empty `windows` was already legal and already honest,
+    but it was only ever *one* silence covering three different situations, and a surface
+    reading it could say nothing more useful than nothing. The owner cannot act on a blank:
+    "this agent never publishes limits" is permanent and fine, "no reading yet" may resolve
+    on its own, and "unreadable" is a fault worth looking at. They must not render alike.
+
+    Deliberately not a `str` subclass and deliberately not carrying its own wording: the
+    *word* for each of these is presentation's to choose once (DEC-043), in
+    `application.session_views`, so the two surfaces cannot drift into two vocabularies for
+    one condition.
+    """
+
+    NOT_REPORTED = "not_reported"
+    """The provider publishes no limits at all, by design — `cursor-agent`'s answer, and a
+    complete one. Nothing is pending and nothing is broken."""
+
+    NO_READING = "no_reading"
+    """The provider does publish limits, and none was found this time — no file yet, nothing
+    matched, or the figure was past its freshness bound and discarded rather than shown."""
+
+    UNREADABLE = "unreadable"
+    """The read itself failed. The one absence that names a fault rather than a state, and
+    the reason `registry.limits` files it: a reader that raised must not be indistinguishable
+    from a provider that had nothing to say."""
+
+
 @dataclass(frozen=True, slots=True)
 class AgentLimits:
     """What one agent has spent against its plan, for the whole account rather than a session.
@@ -173,6 +203,16 @@ class AgentLimits:
     `AgentUsage.observed_at` means the other thing — when the read happened — because a context
     window is re-derived from the transcript on every read and has no separate observation
     instant. The names match; the questions do not.
+    """
+
+    absence: LimitsAbsence | None = None
+    """Why `windows` is empty, or `None` when it is not empty.
+
+    The two are exclusive by construction and by test: a set of windows *is* the answer, so an
+    absence beside it would be a contradiction on one row. Kept as a plain default rather than
+    validated in `__post_init__` because the honest failure is a reader that forgot to say
+    which silence it means, and that is a gap a contract test can name — where a raise here
+    would take out the pane of a host whose provider merely changed its file format.
     """
 
     stale_source: str | None = None

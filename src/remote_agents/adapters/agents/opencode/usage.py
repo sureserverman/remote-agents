@@ -11,6 +11,7 @@ from remote_agents.ports.agent_usage import (
     AgentLimits,
     AgentUsage,
     ContextWindow,
+    LimitsAbsence,
     UsageQuery,
 )
 from remote_agents.ports.agent_usage_support import (
@@ -39,8 +40,12 @@ class OpenCodeUsageReader:
     limits_profile = ProfileId("opencode")
 
     def limits(self) -> AgentLimits:
-        """OpenCode does not publish rate limits, which is an answer and not a gap."""
-        return AgentLimits(self.limits_profile)
+        """OpenCode does not publish rate limits, which is an answer and not a gap.
+
+        Named `NOT_REPORTED` so the gap has a word: permanent, complete, and distinct from the
+        silence of a provider that does publish limits and had none to give today (DEC-061).
+        """
+        return AgentLimits(self.limits_profile, absence=LimitsAbsence.NOT_REPORTED)
 
     def __init__(self, *, database: Path | None = None, now: object = None) -> None:
         self._database = database or Path.home() / ".local" / "share" / "opencode" / "opencode.db"

@@ -44,6 +44,33 @@ def test_usage_contract(descriptor, tmp_path: Path) -> None:
     assert callable(reader.limits)  # driven with sandbox roots by the quirks modules only
 
 
+def test_limits_absence_is_named_whenever_there_are_no_windows(descriptor) -> None:
+    """An empty limits answer must say *which* silence it is (DEC-061).
+
+    `limits()` is deliberately not driven for its figures here -- the production readers
+    resolve their account files from host defaults, and a contract that exercised them would
+    read the developer's real usage, which is why the quirks modules own that depth. What is
+    driven is the *shape* of the answer, which is host-independent: windows and an absence are
+    exclusive, and a reader that returns neither has left a silence unnamed, which renders as
+    a blank cell the owner cannot act on.
+
+    This is the guard a fifth provider meets on the day its descriptor lands, without an edit
+    here: the kit parametrizes off the live registry.
+    """
+    reader = drive_or_skip(descriptor, "usage")
+    answer = reader.limits()
+    if answer.windows:
+        assert answer.absence is None, (
+            f"{descriptor.profile_id} reports windows *and* an absence; the two are exclusive"
+        )
+    else:
+        assert answer.absence is not None, (
+            f"{descriptor.profile_id} reports no windows and does not say why. One of "
+            "LimitsAbsence's three answers must be filed, or the grid shows a blank cell that "
+            "conflates 'publishes nothing' with 'nothing read' with 'read failed' (DEC-061)."
+        )
+
+
 def test_hooks_contract(descriptor, tmp_path: Path) -> None:
     """The declared hook name resolves through the install surface, against a tmp home."""
     name = drive_or_skip(descriptor, "hooks")

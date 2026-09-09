@@ -16,6 +16,7 @@ from remote_agents.ports.agent_usage import (
     AgentLimits,
     AgentUsage,
     ContextWindow,
+    LimitsAbsence,
     UsageQuery,
     UsageWindow,
 )
@@ -139,7 +140,17 @@ class ClaudeUsageReader:
         same method, so the two renders cannot drift.
         """
         windows, stale, observed = self._limits()
-        return AgentLimits(self.limits_profile, windows, observed_at=observed, stale_source=stale)
+        return AgentLimits(
+            self.limits_profile,
+            windows,
+            # Claude publishes limits, but only into a cache another program maintains, so an
+            # empty answer here means the cache was absent, unmatched, or past the freshness
+            # bound `_limits` discards at -- all of them "no reading yet" and none of them a
+            # statement that Claude reports nothing (DEC-061).
+            absence=None if windows else LimitsAbsence.NO_READING,
+            observed_at=observed,
+            stale_source=stale,
+        )
 
     def _limits(self) -> tuple[tuple[UsageWindow, ...], str | None, datetime | None]:
         """Read the borrowed status-line cache, or answer with nothing at all."""

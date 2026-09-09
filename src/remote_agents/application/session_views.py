@@ -30,9 +30,20 @@ from typing import Protocol
 from remote_agents.application.project_catalog import CatalogProject
 from remote_agents.application.relative_time import age, age_short, until
 from remote_agents.application.session_actions import state_word
-from remote_agents.domain.models import OrphanProvenance, SessionRecord, SessionState
+from remote_agents.domain.models import (
+    OrphanProvenance,
+    ProfileId,
+    SessionRecord,
+    SessionState,
+)
 from remote_agents.domain.projects import ProjectIdentity
-from remote_agents.ports.agent_usage import AgentLimits, AgentUsage, ContextWindow, UsageWindow
+from remote_agents.ports.agent_usage import (
+    AgentLimits,
+    AgentUsage,
+    ContextWindow,
+    LimitsAbsence,
+    UsageWindow,
+)
 
 
 def session_row(record: SessionRecord) -> str:
@@ -506,33 +517,86 @@ class LimitRow:
     windows: tuple[LimitWindow, ...]
     borrowed: str | None
     stale_for: str | None
+    absence: str | None = None
+    """The word for why `windows` is empty, or None when it is not.
+
+    Defaulted so the many fixtures that build a populated row positionally keep working, and
+    because a populated row genuinely has nothing to say here -- the two are exclusive.
+    """
 
 
-def limit_rows(limits: Iterable[AgentLimits]) -> tuple[LimitRow, ...]:
-    """Each agent's windows as parts, one row per agent that has any -- the decision half.
+NOT_REPORTED = "not reported"
+"""What `LimitsAbsence.NOT_REPORTED` reads as: the provider publishes no limits at all."""
+
+NO_READING = "no reading yet"
+"""What `LimitsAbsence.NO_READING` reads as: it does publish them, and none was found."""
+
+UNREADABLE = "unreadable"
+"""What `LimitsAbsence.UNREADABLE` reads as: the read failed. A fault, not a state."""
+
+_ABSENCE_WORDS: dict[LimitsAbsence, str] = {
+    LimitsAbsence.NOT_REPORTED: NOT_REPORTED,
+    LimitsAbsence.NO_READING: NO_READING,
+    LimitsAbsence.UNREADABLE: UNREADABLE,
+}
+"""The word for each silence, chosen here once and rendered verbatim by both surfaces.
+
+DEC-043's split: the port decides *which* absence a reading is, presentation decides what it
+is called. Two surfaces choosing their own phrases would be two vocabularies for one
+condition, which is the failure `session_views` exists to prevent. DEC-010 is the other half:
+the three are told apart by their words, so the grid still reads correctly in monochrome and a
+colour is only ever a second signal.
+"""
+
+
+def limit_rows(
+    limits: Iterable[AgentLimits], profiles: Iterable[ProfileId] = ()
+) -> tuple[LimitRow, ...]:
+    """Each agent's windows as parts -- the decision half, shared by both surfaces.
 
     `limit_lines` below joins these into the one-line sentence; the redesigned surfaces lay the
     same parts out as a grid (the local surface) and a padded monospace block (the bot), so the
     parts are what both read. Which agents contribute a row, how a percent is rounded, and when a
     reading is old enough to be dated are all decided here once (DEC-043).
+
+    **`profiles` decides the row set, and its absence keeps the old answer.** Given one, the
+    result is one row per profile in that order, windows possibly empty and the silence named --
+    a grid whose shape is a property of the host rather than of what the providers happened to
+    publish this minute. Given none, only agents that answered contribute, which is what the
+    bot's block reads and why that surface needs no edit to stay exactly as it was.
+
+    A profile the readings do not mention at all is `NO_READING`: nothing was read for it. That
+    is the same answer a reader gives when it looked and found nothing, and it is deliberately
+    not `NOT_REPORTED`, which is a claim about the provider that only the provider's own reader
+    is in a position to make.
     """
+    entries = {str(entry.profile_id): entry for entry in limits}
+    if profiles:
+        wanted = [str(profile) for profile in profiles]
+    else:
+        wanted = [name for name, entry in entries.items() if entry.windows]
     rows = []
-    for entry in limits:
-        if not entry.windows:
-            continue
+    for name in wanted:
+        entry = entries.get(name)
+        windows = entry.windows if entry is not None else ()
+        absence = None
+        if not windows:
+            declared = entry.absence if entry is not None else None
+            absence = _ABSENCE_WORDS[declared] if declared is not None else NO_READING
         rows.append(
             LimitRow(
-                profile=str(entry.profile_id),
+                profile=name,
                 windows=tuple(
                     LimitWindow(
                         window.label,
                         round(window.used_percent),
                         None if window.resets_at is None else until(window.resets_at),
                     )
-                    for window in entry.windows
+                    for window in windows
                 ),
-                borrowed=entry.stale_source,
-                stale_for=_stale_for(entry.observed_at),
+                borrowed=entry.stale_source if entry is not None else None,
+                stale_for=_stale_for(entry.observed_at) if entry is not None else None,
+                absence=absence,
             )
         )
     return tuple(rows)
