@@ -66,7 +66,12 @@ def test_inside_the_console_it_says_so_instead_of_nesting(
         exec_argv=lambda p, a: pytest.fail("a client already on our server must not exec"),
     )
     assert code == 0
-    assert "Already in the console" in capsys.readouterr().out
+    # Both of the console's keys are named, because this line is the only place the running
+    # program tells the owner what it binds — `doctor` answers whether a console is possible,
+    # never what it costs in keys.
+    printed = capsys.readouterr().out
+    assert "Already in the console" in printed
+    assert "F12" in printed and "prefix h" in printed, printed
 
 
 def test_inside_foreign_tmux_the_command_is_printed_never_nested(

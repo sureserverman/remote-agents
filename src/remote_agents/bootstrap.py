@@ -433,7 +433,14 @@ def _enter_console(
     mode = hosting_mode(values)
     command = " ".join(console_attach_argv())
     if mode is HostingMode.CONSOLE:
-        print("Already in the console. F12 shows the projects pane.")
+        # Both keys, because this line is the only place the program itself tells the owner
+        # what the console binds — `doctor` reports whether a console is *possible*, not what
+        # it costs in keys. The fold is named second and by its table: it is the one key here
+        # that reads differently on a host with its own prefix.
+        print(
+            "Already in the console. F12 shows the projects pane; "
+            "prefix h folds the right column away."
+        )
         return 0
     if mode is HostingMode.FOREIGN:
         print(

@@ -390,12 +390,29 @@ attach to it rather than replace it. To get the three-pane console, kill it once
 
 ### Keys the console takes
 
-**One**, and it is worth knowing why. `F12` brings the projects surface back to the left
-pane. It is a tmux *root* binding — no prefix — installed on this project's own tmux server
-only, so your own tmux configuration is never touched, but on that server it is a key no
-agent can ever receive. It earns that because the route back is the one thing that must not
+**One root key**, and it is worth knowing why. `F12` brings the projects surface back to the
+left pane. It is a tmux *root* binding — no prefix — installed on this project's own tmux
+server only, so your own tmux configuration is never touched, but on that server it is a key
+no agent can ever receive. It earns that because the route back is the one thing that must not
 require remembering configuration: an agent fills the pane you were working in, and that is
 exactly when a console looks stuck.
+
+**And one behind the prefix: `prefix h` folds the right column away.** Press `Ctrl-b h` (or
+`h` under whatever prefix this host sets) and the sessions, limits and feed panes slide off
+the right edge, giving the agent in the left pane the whole window; press it again and they
+slide back. It costs no agent anything — tmux takes the prefix in the client, before any key
+reaches a pane — which is why it is a prefix key rather than a second root one: the console is
+entirely usable without it. Two things are worth knowing about the fold:
+
+- **It survives displaying an agent.** Folded, launch a session and the agent arrives in the
+  full-width left pane with the column still away. The console remembers the fold as a
+  property of its own window, because the exchange that puts an agent in front unhides a
+  zoomed pane without saying so.
+- **It does not survive killing the console.** A console rebuilt from scratch comes up
+  unfolded, which is the state everything else assumes.
+
+`prefix z` is tmux's own zoom and is left bound beside it: same destination, instantly, with
+no slide.
 
 Everything else uses tmux's own keys. **Moving between the four panes is `Ctrl-b o`** (or
 the same `o` under whatever prefix this host's `~/.tmux.conf` sets) — the prefix reaches the
@@ -436,7 +453,8 @@ sessions pane: the detail names each action in full already.
 every key you type, so the same eight chords are also bound in tmux's *prefix* table: press
 `Ctrl-b` (or your own prefix) and then the chord — `Ctrl-b M-d` — and it is forwarded to the
 sessions pane. The agent is never sent the key. This costs no root binding, so the console's
-root-key budget is still the single `F12` above.
+root-key budget is still the single `F12` above — as does `prefix h`, the fold, for the same
+reason.
 
 **Three cases where a chord deliberately does nothing**, each worth knowing before you conclude
 a key is broken:

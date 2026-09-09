@@ -1205,7 +1205,8 @@ uv run --locked remote-agents
    the filter and the projects list beneath it.
 2. Press `Ctrl-b o` (or your own prefix + `o`) and confirm focus moves through all four panes
    and back. The console takes no key for this — if it stops working, your prefix changed, not
-   this project's bindings.
+   this project's bindings. (The console does take one key behind the prefix — `prefix h`, the
+   fold — which step 15 drives.)
 3. Launch a session from the projects pane. Confirm the agent appears in the **left** pane and
    that the sessions list and the feed are still on screen beside it.
 4. With the agent in front, confirm the sessions pane lists it, and that the session you just
@@ -1296,6 +1297,28 @@ uv run --locked remote-agents
     pane received no keystroke — its output is unchanged. The eight chords are bound in tmux's
     *prefix* table rather than as root keys, so they cost a displayed agent nothing and the
     console's root-key budget is still the single `F12` of step 7.
+
+15. **The fold, and it is three presses rather than one.** With an agent displayed as in step
+    3, press `Ctrl-b h` (or `h` under your own prefix). Confirm the sessions, limits and feed
+    panes *slide* off the right edge rather than vanishing in one jump, and that the agent now
+    has the whole window. Note the width you did this at — the motion is eight steps, so a very
+    narrow window has less of a slide to show.
+
+    Then, still folded, launch a second session from Telegram, or trust one from the bot's
+    notification. Confirm the column **stays away** while the console displays the new agent.
+    This is the case the fold exists for and the one it is easiest to get wrong: the exchange
+    that puts an agent in front unzooms the window without saying so, so the console re-applies
+    the fold after every exchange it makes.
+
+    Press `Ctrl-b h` again and confirm the column slides back to its usual proportions with the
+    sessions list showing the session you just launched as `running`. `Ctrl-b z` — tmux's own
+    zoom — is left bound beside the fold and reaches the same place instantly, without the
+    slide.
+
+    Two limits, both by design. The fold is a property of the console's *window*, so it does
+    not survive step 9's kill: a rebuilt console comes up unfolded. And a second press
+    arriving while the slide is still moving is **dropped**, not queued — press it twice
+    quickly and the column ends where the first press was taking it.
 
 ## Terminal and service on one database
 
