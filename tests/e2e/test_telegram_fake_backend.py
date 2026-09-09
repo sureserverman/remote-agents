@@ -16,7 +16,11 @@ from stop_results import (
 )
 from telegram.error import BadRequest
 
-from remote_agents.adapters.agents.registry import glyph_of, profile_glyphs
+from remote_agents.adapters.agents.registry import (
+    glyph_of,
+    profile_glyphs,
+    provider_descriptors,
+)
 from remote_agents.adapters.sqlite.callback_state_store import SQLiteCallbackStateStore
 from remote_agents.adapters.sqlite.chat_view_store import SQLiteChatViewStore
 from remote_agents.adapters.sqlite.database import open_database
@@ -1987,8 +1991,16 @@ async def test_every_curated_agent_carries_its_own_mark_on_the_sessions_buttons(
             f"{profile.profile_id}'s button carries no mark of its own; keyboard: {labels}"
         )
 
+    # Derived, not pinned: `4` here would be an edit a fifth provider owes to a file outside
+    # its own package, which is the scatter DEC-070 exists to prevent. One distinct mark per
+    # registered provider is the same claim and maintains itself -- and it still catches the
+    # regression it was written for, since `claude-remote` folding onto `claude` is exactly
+    # what makes five profiles yield one mark fewer.
     marks = {glyph_of(profile.profile_id) for profile in closed_profiles()}
-    assert len(marks) == 4, f"five profiles, four providers, {len(marks)} distinct marks: {marks}"
+    assert len(marks) == len(provider_descriptors()), (
+        f"{len(closed_profiles())} profiles, {len(provider_descriptors())} providers, "
+        f"{len(marks)} distinct marks: {marks}"
+    )
 
 
 class _OneStatePerRow(SessionUseCaseDouble):

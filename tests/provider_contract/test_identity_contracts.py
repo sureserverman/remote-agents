@@ -66,6 +66,30 @@ def test_the_descriptor_declares_a_glyph_that_fits_a_button(descriptor) -> None:
     )
 
 
+def test_no_descriptor_declares_a_glyph_that_is_a_status_signal(descriptor) -> None:
+    """A mark says *which agent*. A circle says *how the session is doing*.
+
+    The two ride one label -- `🟢 🔷 #7 demo` -- so a provider declaring 🟡 would render a
+    button carrying two status marks and no agent, and every other contract here would pass
+    it: presence holds, one cluster holds, and distinctness only ever compared providers
+    with each other. DEC-077's "one selection, drawn twice" and DEC-010's "the colour is the
+    second signal" both assume the two vocabularies stay apart, and until this test the
+    assumption lived in a comment in one vertical.
+
+    The forbidden set is read from `_EMOJI_OF_GROUP` rather than restated, so a fifth status
+    colour is forbidden as a mark the day it is introduced -- and the guard stays generic:
+    it constrains what a vertical may declare without the bot knowing any provider's name.
+    """
+    from remote_agents.application.session_views import _EMOJI_OF_GROUP
+
+    status = set(_EMOJI_OF_GROUP.values())
+    assert status, "the status vocabulary is empty; this guard would forbid nothing"
+    assert descriptor.glyph not in status, (
+        f"{descriptor.profile_id} declares {descriptor.glyph!r}, which is a status mark; a "
+        "button carrying it would read as a state twice over and name no agent"
+    )
+
+
 def test_no_two_descriptors_share_a_glyph() -> None:
     """Distinctness is the point: two agents in one project must not draw the same mark."""
     descriptors = provider_descriptors()
