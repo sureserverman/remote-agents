@@ -101,7 +101,7 @@ from remote_agents.ports.agent_usage import (
     LimitsAbsence,
     UsageQuery,
 )
-from remote_agents.ports.provider_descriptor import ProviderDescriptor
+from remote_agents.ports.provider_descriptor import ProviderDescriptor, TrustDialog
 
 ProjectPaths = Mapping[ProjectId, Path]
 
@@ -251,6 +251,50 @@ def glyph_of(profile_id: ProfileId) -> str:
         return by_provider[name]
     executables = {str(profile.profile_id): profile.executable for profile in closed_profiles()}
     return by_provider.get(executables.get(name, ""), "")
+
+
+def trust_dialog_of(profile_id: ProfileId) -> TrustDialog | None:
+    """How this *profile*'s agent asks about folder trust, or None when it never asks.
+
+    `glyph_of`'s resolution, for the other provider-discriminating value, and resolved the same
+    way for the same reason: `claude-remote` is `claude --remote-control`, the same binary
+    drawing the same dialog, so it resolves through the executable the domain already curates
+    rather than through an alias table kept here. A fifth provider that declares a dialog — and
+    any `-remote`-style spelling of it curated in `domain/profiles.py` — becomes answerable
+    without an edit anywhere but its own package (DEC-070).
+
+    `None` is an answer, not a gap (DEC-009): `opencode` raises no folder-trust dialog on any
+    host measured, and this is the value that keeps a Trust button off its sessions. Total, and
+    `None` for anything unrecognised, for the reason `glyph_of` is total: the callers are a
+    render and a launch, and neither should take an unknown profile as an exception.
+    """
+    by_provider = {
+        str(descriptor.profile_id): descriptor.trust_dialog
+        for descriptor in provider_descriptors()
+    }
+    name = str(profile_id)
+    if name in by_provider:
+        return by_provider[name]
+    executables = {str(profile.profile_id): profile.executable for profile in closed_profiles()}
+    return by_provider.get(executables.get(name, ""))
+
+
+def profile_trust_dialogs() -> dict[str, TrustDialog]:
+    """Every curated profile that *can* be asked, and the dialog to read it with.
+
+    `profile_glyphs`' fold, and the answer to "which profiles are answerable" — which used to
+    be a hand-written frozenset in the domain naming claude and claude-remote, and was
+    therefore a second place to remember when a provider learned to declare its dialog. It is
+    now derived: a profile is answerable exactly when its vertical declares a dialog.
+
+    Profiles that declare none are **absent** rather than present-with-None, so a caller's
+    `in` is the whole question and there is no third state to mishandle.
+    """
+    return {
+        str(profile.profile_id): dialog
+        for profile in closed_profiles()
+        if (dialog := trust_dialog_of(profile.profile_id)) is not None
+    }
 
 
 def profile_glyphs() -> dict[str, str]:

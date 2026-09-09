@@ -14,6 +14,7 @@ from backends import SessionUseCaseDouble, backend_for
 from stop_results import a_clean_stop, a_stop_that_did_not_take, a_verified_force_stop
 from telegram.error import BadRequest, TelegramError
 
+from remote_agents.adapters.agents.registry import profile_trust_dialogs
 from remote_agents.adapters.sqlite.callback_state_store import SQLiteCallbackStateStore
 from remote_agents.adapters.sqlite.database import open_database
 from remote_agents.adapters.telegram.presenters import unpadded
@@ -2175,8 +2176,8 @@ async def test_an_untrusted_launch_asks_the_question_instead_of_reporting_a_fail
     """
     untrusted = _record(SessionState.UNTRUSTED, "untrusted", ProjectId("a" * 24))
     launcher = _Launcher()
-    # Explicitly claude: the *yes* is confined to TRUST_ANSWERABLE, so the profile is what
-    # decides whether this reply carries one button or two.
+    # Explicitly claude: whether this reply carries one button or two is decided by whether
+    # the profile's vertical declares a dialog this project can read.
     launcher.launch_result = replace(untrusted, profile_id=ProfileId("claude"))
     boundary = build_private_bot(
         7,
@@ -2185,6 +2186,7 @@ async def test_an_untrusted_launch_asks_the_question_instead_of_reporting_a_fail
             catalogue=(CatalogProject("a" * 24, "Demo", "tests", "Registered"),), sessions=launcher
         ),
         profiles=(ProfileAvailability("claude", True),),
+        trust_dialogs=profile_trust_dialogs(),
     )
     token = boundary.callbacks.create(
         "launch.profile", "a" * 24 + "|claude", 7, 11, 1, mutation=True
@@ -2210,8 +2212,14 @@ async def test_an_untrusted_launch_asks_the_question_instead_of_reporting_a_fail
 
 
 @pytest.mark.asyncio
-async def test_an_untrusted_launch_of_an_unreadable_dialog_offers_only_the_no() -> None:
-    """cursor-agent is not TRUST_ANSWERABLE, so the yes would refuse itself when pressed."""
+async def test_an_untrusted_launch_of_a_readable_dialog_offers_both_answers() -> None:
+    """**Inverted from what it was.** cursor-agent declares its dialog, so the yes is offered.
+
+    It read "cursor-agent is not TRUST_ANSWERABLE, so the yes would refuse itself when
+    pressed", which was true of a hand-written list and is the divergence from the owner's ask
+    this plan closes. The dialog was measured on 2026-09-09 — it is drawn inside a box with
+    the cursor on the affirmative — and the vertical declares it, so both answers appear.
+    """
     untrusted = _record(SessionState.UNTRUSTED, "untrusted", ProjectId("a" * 24))
     launcher = _Launcher()
     launcher.launch_result = replace(untrusted, profile_id=ProfileId("cursor-agent"))
@@ -2222,6 +2230,7 @@ async def test_an_untrusted_launch_of_an_unreadable_dialog_offers_only_the_no() 
             catalogue=(CatalogProject("a" * 24, "Demo", "tests", "Registered"),), sessions=launcher
         ),
         profiles=(ProfileAvailability("cursor-agent", True),),
+        trust_dialogs=profile_trust_dialogs(),
     )
     token = boundary.callbacks.create(
         "launch.profile", "a" * 24 + "|cursor-agent", 7, 11, 1, mutation=True
@@ -2232,8 +2241,43 @@ async def test_an_untrusted_launch_of_an_unreadable_dialog_offers_only_the_no() 
     labels = [
         unpadded(button.text) for row in reply["reply_markup"].inline_keyboard for button in row
     ]
-    assert "✅ Trust this project" not in labels
+    assert "✅ Trust this project" in labels
     assert "⛔ Don't trust — close it" in labels
+
+
+@pytest.mark.asyncio
+async def test_an_untrusted_launch_of_an_agent_that_asks_nothing_offers_only_the_no() -> None:
+    """`opencode` declares no dialog, so the *yes* would type into a pane with no question.
+
+    The case the cursor-agent test above used to carry, moved onto an agent that genuinely
+    never asks. The asymmetry survives the widening — it is decided by what the agent
+    declares now, rather than by which agents somebody had listed.
+    """
+    untrusted = _record(SessionState.UNTRUSTED, "untrusted", ProjectId("a" * 24))
+    launcher = _Launcher()
+    launcher.launch_result = replace(untrusted, profile_id=ProfileId("opencode"))
+    boundary = build_private_bot(
+        7,
+        11,
+        backend=backend_for(
+            catalogue=(CatalogProject("a" * 24, "Demo", "tests", "Registered"),), sessions=launcher
+        ),
+        profiles=(ProfileAvailability("opencode", True),),
+        trust_dialogs=profile_trust_dialogs(),
+    )
+    token = boundary.callbacks.create(
+        "launch.profile", "a" * 24 + "|opencode", 7, 11, 1, mutation=True
+    )
+
+    reply = await boundary._launch_reply("a" * 24 + "|opencode", token, 1)
+
+    labels = [
+        unpadded(button.text) for row in reply["reply_markup"].inline_keyboard for button in row
+    ]
+    assert "✅ Trust this project" not in labels
+    assert "⛔ Don't trust — close it" in labels, (
+        "declining ends a session that never started and needs no screen to read"
+    )
 
 
 @pytest.mark.asyncio

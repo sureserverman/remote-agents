@@ -19,6 +19,7 @@ from telegram.error import BadRequest
 from remote_agents.adapters.agents.registry import (
     glyph_of,
     profile_glyphs,
+    profile_trust_dialogs,
     provider_descriptors,
 )
 from remote_agents.adapters.sqlite.callback_state_store import SQLiteCallbackStateStore
@@ -798,6 +799,7 @@ def _trust_blocked() -> tuple[PrivateBotBoundary, _TrustLauncher]:
         backend=backend_for(
             catalogue=(CatalogProject("a" * 24, "Demo", "tests", "Registered"),), sessions=launcher
         ),
+        trust_dialogs=profile_trust_dialogs(),
     )
     return boundary, launcher
 
@@ -1850,6 +1852,11 @@ def _untrusted_bot(profile: str = "claude") -> tuple[PrivateBotBoundary, _Declin
             catalogue=(CatalogProject("a" * 24, "Demo", "tests", "Registered"),),
             sessions=launcher,
         ),
+        # What the composition root hands the real bot, read off the registry rather than
+        # restated. Without it every profile here is unanswerable and the assertions below
+        # would pass on an empty mapping while production offered two buttons -- a test green
+        # for the opposite of the reason it claims.
+        trust_dialogs=profile_trust_dialogs(),
     )
     return boundary, launcher
 
@@ -1874,13 +1881,42 @@ async def test_the_detail_screen_offers_both_answers_to_the_trust_question() -> 
 
 
 @pytest.mark.asyncio
-async def test_a_session_whose_dialog_this_project_cannot_read_is_only_offered_the_no() -> None:
-    """codex is not TRUST_ANSWERABLE: saying yes means typing into a dialog nobody parsed.
+async def test_codex_is_offered_both_answers_now_that_it_declares_its_dialog() -> None:
+    """**Inverted, and the inversion is the ask being met.**
 
-    Saying no does not, so the two answers have different availability and the keyboard has
-    to show that rather than offering a button that would refuse itself when pressed.
+    This read "codex is not TRUST_ANSWERABLE: saying yes means typing into a dialog nobody
+    parsed" — true of a frozenset that named claude, and the reason the owner pressed Trust on
+    a codex session and saw one button where they had asked for two. codex declares its dialog
+    now, so both answers are offered, and pressing yes types into a screen this project has
+    measured rather than guessed at.
     """
     boundary, _ = _untrusted_bot("codex")
+    chat = FakeChat()
+    anchor = await _open_detail(chat, boundary)
+
+    labels = [
+        unpadded(button.text)
+        for row in chat.messages[anchor].reply_markup.inline_keyboard
+        for button in row
+    ]
+
+    assert "Trust this project" in labels
+    assert [label for label in labels if "Don" in label and "trust" in label] == [
+        "Don't trust — close it"
+    ]
+
+
+@pytest.mark.asyncio
+async def test_a_session_whose_agent_asks_nothing_is_only_offered_the_no() -> None:
+    """The case the test above used to stand in for, on an agent that really is silent.
+
+    `opencode` raises no folder-trust dialog on any host measured, so its vertical declares
+    none. Offering *yes* there would send arrow keys and an Enter into a live prompt with no
+    question on it. Saying *no* needs no screen at all — it ends a session that never started
+    — so the two answers keep their different availability, now decided by what the agent
+    declares rather than by a list.
+    """
+    boundary, _ = _untrusted_bot("opencode")
     chat = FakeChat()
     anchor = await _open_detail(chat, boundary)
 

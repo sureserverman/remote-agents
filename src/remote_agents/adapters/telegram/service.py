@@ -144,7 +144,8 @@ from remote_agents.domain.remote_control import (
     HostRemoteControlStatus,
     RemoteControlState,
 )
-from remote_agents.domain.trust import TRUST_ANSWERABLE, TrustState
+from remote_agents.domain.trust import TrustState
+from remote_agents.domain.trust import answerable as trust_answerable
 from remote_agents.ports.agent_usage import ContextWindow
 from remote_agents.ports.callback_state import CallbackStatePort
 from remote_agents.ports.chat_view import ChatViewPort
@@ -530,6 +531,15 @@ class PrivateBotBoundary:
     `backend.profiles`.
     """
     profiles: tuple[ProfileAvailability, ...] = ()
+    trust_dialogs: Mapping[str, object] = field(default_factory=dict)
+    """Which curated profiles this project can read a folder-trust dialog for.
+
+    Handed in for exactly the reason `glyphs` is, and from the same registry fold: the dialogs
+    belong to the provider verticals (DEC-070) and this adapter imports nothing under
+    `adapters.agents`. It replaced a frozenset in the domain naming claude alone, which is why
+    a codex session used to carry one answer where the owner had asked for two.
+    """
+
     glyphs: Mapping[str, str] = field(default_factory=dict)
     """Each curated profile's mark, as the composition root read it off the registry.
 
@@ -1402,7 +1412,7 @@ class PrivateBotBoundary:
         uses: a profile whose dialog this project cannot read gets only the *no*.
         """
         session_value = str(record.session_id)
-        answerable = record.profile_id in TRUST_ANSWERABLE
+        answerable = trust_answerable(record.profile_id, self.trust_dialogs)
         # Through the shared renderer, not beside it. The notification sent on its own says
         # same thing about the same session, and two wordings for one question is one wording
         # plus a future divergence -- which is the shape DEC-043 keeps out of this adapter.
@@ -2374,26 +2384,36 @@ class PrivateBotBoundary:
         TRUST_REQUIRED an edge from, for that reason -- so state says nothing about it and the
         pane is the only authority.
         """
-        if self.backend.sessions is None or not trust_available(record, TrustState.AWAITING):
+        if self.backend.sessions is None or not trust_available(
+            record, TrustState.AWAITING, self.trust_dialogs
+        ):
             # Asked with AWAITING as a hypothetical: if the answer is False even then, the
             # record alone rules the row out (wrong profile) and the pane never has to be
             # read. Only a session that *could* be answered costs a capture.
             return False
         state = await self.backend.sessions.trust_state(record.session_id)
-        return trust_available(record, state)
+        return trust_available(record, state, self.trust_dialogs)
 
     async def _trust_reply(self, entity_id: str, token: str, message_id: int) -> dict[str, object]:
         if self.backend.sessions is None:
             return _reply_arguments(self._message("Answering the trust question is unavailable."))
         # Re-read before the claim, for the reason `_launch_reply` and `_remote_control_reply`
         # both give: this button outlives the screen that drew it. The profile is re-checked
-        # here too, and that is not belt-and-braces -- the service raises on a profile it
-        # cannot answer, and claiming first meant a refused press still burned the one-shot,
-        # so the retry answered "already run" for a button that had never worked once.
+        # here too, and claiming first meant a refused press still burned the one-shot, so the
+        # retry answered "already run" for a button that had never worked once.
+        #
+        # **This check is now the only one of its kind on this route, and that is deliberate.**
+        # `SessionService.answer_trust` used to raise on a profile it could not answer, against
+        # a hand-written list; it does not any more, because the authority moved to the
+        # terminal's injected declarations — an agent with no dialog declared gets `UNKNOWN`
+        # from `answer_trust` and no key is pressed. So this is a surface-side refusal with a
+        # sentence for the owner, not the outer half of two agreeing guards: removing it would
+        # not reopen a keypress, but it would replace "that agent does not ask this question"
+        # with a silent no-op.
         record = await self._record(entity_id)
         if record is None:
             return _reply_arguments(self._message("That session is no longer available."))
-        if record.profile_id not in TRUST_ANSWERABLE:
+        if not trust_answerable(record.profile_id, self.trust_dialogs):
             return _reply_arguments(
                 self._message("That session's agent does not ask this question.")
             )
@@ -3326,6 +3346,7 @@ def build_private_bot(
                 view=bot.view,
                 callbacks=bot.callbacks,
                 owner_user_id=owner_user_id,
+                trust_dialogs=bot.trust_dialogs,
             ),
         )
     return bot

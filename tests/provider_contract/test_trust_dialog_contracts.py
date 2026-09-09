@@ -17,18 +17,16 @@ merely against its siblings' declarations.
 
 from __future__ import annotations
 
-import pathlib
-
 import pytest
 from kit import drive_or_skip
+from trust_captures import capture, measured_profiles
 
 from remote_agents.adapters.agents.registry import provider_descriptors
 
-_FIXTURES = pathlib.Path(__file__).resolve().parent / "fixtures" / "trust_dialogs"
-
 #: The recorded captures, by the profile they were taken from. Real panes, 120x40, each agent
-#: launched into a directory it had never been asked about (Task 1.1).
-_CAPTURES = {path.stem: path.read_text(encoding="utf-8") for path in _FIXTURES.glob("*.txt")}
+#: launched into a directory it had never been asked about (Task 1.1). Read through
+#: `tests/support` because the unit suite drives its key arithmetic over the same bytes.
+_CAPTURES = {profile: capture(profile) for profile in measured_profiles()}
 
 
 def _dialogs() -> dict[str, object]:

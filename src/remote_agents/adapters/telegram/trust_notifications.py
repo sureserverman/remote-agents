@@ -19,6 +19,7 @@ so it is what this names it by too.
 from __future__ import annotations
 
 import logging
+from collections.abc import Mapping
 from html import escape
 
 from telegram.constants import ParseMode
@@ -34,7 +35,7 @@ from remote_agents.adapters.telegram.presenters import (
 from remote_agents.application.session_actions import state_word
 from remote_agents.application.session_views import listed_in_sessions
 from remote_agents.domain.models import SessionRecord, SessionState
-from remote_agents.domain.trust import TRUST_ANSWERABLE
+from remote_agents.domain.trust import answerable
 from remote_agents.ports.trust_notifications import (
     StandingTrustQuestion,
     TrustNotificationStore,
@@ -154,10 +155,18 @@ class TrustNotifier:
         view: object,
         callbacks: object,
         owner_user_id: int,
+        trust_dialogs: Mapping[str, object] | None = None,
     ) -> None:
         self._sessions = sessions
         self._store = store
         self._view = view
+        # Which profiles carry *both* answers, handed in like every other provider fact this
+        # adapter is not allowed to look up (DEC-070). Its own parameter rather than a reach
+        # into `view`: the live view is the chat's screen and knows nothing about agents, and
+        # an earlier draft that read it from there would have raised `AttributeError` on the
+        # first real notification while every unit test passed -- the fake view had grown the
+        # attribute the real one never had.
+        self._trust_dialogs = dict(trust_dialogs or {})
         self._callbacks = callbacks
         self._owner_user_id = owner_user_id
         self._bot: object | None = None
@@ -294,7 +303,9 @@ class TrustNotifier:
                 record.session_id, chat_id=self._view.chat_id, message_id=message_id
             )
             await self._attach_answers(
-                record, message_id, answerable=record.profile_id in TRUST_ANSWERABLE
+                record,
+                message_id,
+                answerable=answerable(record.profile_id, self._trust_dialogs),
             )
         except Exception:
             # Left in `_incomplete`, so the next pass finishes it rather than re-sending. The

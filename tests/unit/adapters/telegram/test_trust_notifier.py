@@ -14,6 +14,7 @@ from datetime import UTC, datetime
 import pytest
 from telegram.error import BadRequest
 
+from remote_agents.adapters.agents.registry import profile_trust_dialogs
 from remote_agents.adapters.telegram.trust_notifications import TrustNotifier
 from remote_agents.domain.models import (
     ProfileId,
@@ -160,6 +161,10 @@ def _notifier(sessions, store, view, callbacks=None) -> TrustNotifier:
         view=view,
         callbacks=callbacks or _Callbacks(),
         owner_user_id=7,
+        # The real mapping, read off the registry rather than restated: a literal here would
+        # agree with the shipped verticals on the day it was written and answer to nothing
+        # afterwards, which is exactly the failure the frozenset it replaced had.
+        trust_dialogs=profile_trust_dialogs(),
     )
     notifier.attach(object())
     return notifier
@@ -316,7 +321,12 @@ async def test_a_pass_before_the_bot_is_attached_sends_nothing_and_forgets_nothi
     """The composition root builds this long before there is a Telegram to speak through."""
     sessions, store, view = _Sessions(_record()), _Store(), _View()
     notifier = TrustNotifier(
-        sessions=sessions, store=store, view=view, callbacks=_Callbacks(), owner_user_id=7
+        sessions=sessions,
+        store=store,
+        view=view,
+        callbacks=_Callbacks(),
+        owner_user_id=7,
+        trust_dialogs=profile_trust_dialogs(),
     )
 
     await notifier.pass_once()

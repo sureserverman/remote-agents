@@ -26,6 +26,7 @@ from pathlib import Path
 
 import pytest
 
+from remote_agents.adapters.agents.registry import profile_trust_dialogs
 from remote_agents.adapters.sqlite.database import open_database
 from remote_agents.adapters.sqlite.session_store import SQLiteSessionStore
 from remote_agents.application.commands import (
@@ -43,7 +44,7 @@ from remote_agents.domain.models import (
     SessionState,
 )
 from remote_agents.domain.state_machine import InvalidTransition
-from remote_agents.domain.trust import TRUST_ANSWERABLE, TrustState
+from remote_agents.domain.trust import TrustState
 from remote_agents.ports.terminal import NOT_AWAITING_TRUST, TerminalObservation
 
 
@@ -78,7 +79,7 @@ def _store(tmp_path: Path) -> SQLiteSessionStore:
 # --- the answer half -------------------------------------------------------------
 
 
-@pytest.mark.parametrize("profile", sorted(str(p) for p in TRUST_ANSWERABLE))
+@pytest.mark.parametrize("profile", sorted(profile_trust_dialogs()))
 async def test_every_answerable_profile_is_answerable_through_the_real_service(
     tmp_path: Path, profile: str
 ) -> None:
@@ -86,6 +87,12 @@ async def test_every_answerable_profile_is_answerable_through_the_real_service(
 
     This is the assertion whose absence let `claude-remote` through: it was in the policy's
     set and refused by the service, and nothing compared the two.
+
+    The authority is no longer a list to add to — it is "which verticals declare a dialog"
+    (`profile_trust_dialogs`), so this now covers codex and cursor-agent because they declare
+    one, not because anybody remembered to widen a frozenset. That is the same failure in its
+    other direction: the list was right about claude-remote and silently wrong about the two
+    agents that learned to ask afterwards.
     """
     store = _store(tmp_path)
     record = _answerable_record(profile)
@@ -176,12 +183,14 @@ async def test_declining_ends_an_untrusted_claude_session(tmp_path) -> None:
 
 
 async def test_declining_a_codex_session_still_ends_it(tmp_path) -> None:
-    """The profile whose dialog this project will not type into still gets the *no*.
+    """The *no* ends the session whichever route the terminal takes to deliver it.
 
-    codex is not in TRUST_ANSWERABLE, so the terminal reaches it by killing the pane rather
-    than by answering the question. The lifecycle does not care which route was taken — the
-    session ended because the owner said no — and that is the whole reason the decline is a
-    lifecycle event rather than a keystroke.
+    codex now declares its own dialog, so the terminal tells it no in its own words rather
+    than killing the pane — but this test is not about that, and deliberately does not assert
+    it: the lifecycle does not care which route was taken, and that indifference is the whole
+    reason the decline is a lifecycle event rather than a keystroke. The route itself is
+    pinned where it can be seen, against the real captures, in
+    `tests/contract/adapters/tmux/test_resume_readiness.py`.
     """
     terminal = _Terminal()
     service = _service(tmp_path, terminal)

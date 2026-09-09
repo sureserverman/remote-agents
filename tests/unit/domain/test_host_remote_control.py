@@ -3,7 +3,7 @@
 Codex's Remote Control is a property of the shared app-server daemon, not of a pane, so its
 snapshot carries a *connection* — what the daemon reports — and derives the lifecycle
 `RemoteControlState` both surfaces already render from it. The derivation lives here, in the
-domain, for the reason `TRUST_ANSWERABLE` does: the adapter, the application policy and both
+domain, for the reason the folder-trust authority does: the adapter, the application policy and both
 surfaces must agree on it and none of them may import another.
 
 `PairingCode` is the sharpest instance of DEC-013 -- what a provider hands this service is

@@ -398,17 +398,19 @@ def test_declining_trust_is_offered_for_exactly_one_state(state: SessionState) -
     assert decline_trust_available(record) is (state is SessionState.UNTRUSTED)
 
 
-def test_declining_trust_is_offered_for_a_profile_whose_dialog_cannot_be_answered() -> None:
-    """codex and cursor-agent are not in TRUST_ANSWERABLE, and still get this row.
+def test_declining_trust_is_offered_without_consulting_the_profile_at_all() -> None:
+    """The row that does not depend on being able to read a screen, whichever agent it is.
 
-    Answering *yes* means typing into their dialog, which this project will not do. Answering
-    *no* does not: it ends a session that never started, and that is reachable for any
-    profile. So the two halves of the question have different availability, and this is the
-    one that does not consult the profile at all.
+    Answering *yes* means typing into the agent's dialog, so it is offered only where a
+    vertical declares one. Answering *no* ends a session that never started, which needs no
+    screen — so the two halves of one question keep different availability, and this half
+    consults nothing but the state. That asymmetry is unchanged by the widening: what changed
+    is only which agents the *other* half reaches.
     """
-    # codex and cursor-agent only. `opencode` declares no readiness blocker and is not in
-    # TRUST_ANSWERABLE, so nothing can ever put one of its sessions in UNTRUSTED -- asserting
-    # the affordance for it would be asserting a combination that cannot arise.
+    # codex and cursor-agent, which both declare a dialog now, so this asserts the half that
+    # does not care. `opencode` declares no readiness blocker, so nothing can put one of its
+    # sessions in UNTRUSTED -- asserting the affordance for it would be asserting a
+    # combination that cannot arise.
     for profile in ("codex", "cursor-agent"):
         record = SimpleNamespace(profile_id=ProfileId(profile), state=SessionState.UNTRUSTED)
 

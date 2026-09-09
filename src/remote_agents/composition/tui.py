@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from functools import partial
 from pathlib import Path
 
+from remote_agents.adapters.agents.registry import profile_trust_dialogs
 from remote_agents.adapters.sqlite.activity_store import SQLiteActivityStore
 from remote_agents.adapters.tmux.codec import attach_argv
 from remote_agents.adapters.tmux.gateway import TmuxGateway
@@ -143,6 +144,12 @@ def _local_runtime(config, paths: ProductionPaths, project_paths) -> LocalRuntim
         startup_timeout=20,
         profile_factories=profile_factories,
         resume_profile_factories=resume_profile_factories,
+        # Which agents can be asked the folder-trust question, and the dialog to read each
+        # with — read off the registry here because this is the one place allowed to know both
+        # the adapter and the provider packages. The same mapping goes to the bot's
+        # availability policy, so what a surface offers and what the terminal will do cannot
+        # disagree.
+        trust_dialogs=profile_trust_dialogs(),
     )
     return LocalRuntime(terminal, compatibility, gateway)
 

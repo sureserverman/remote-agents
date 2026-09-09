@@ -21,8 +21,9 @@ from remote_agents.adapters.tmux.trust import classify_trust_capture, plan_trust
 from remote_agents.domain.conversations import ProviderConversationId
 from remote_agents.domain.models import ProfileId, ProjectId, SessionId
 from remote_agents.domain.remote_control import RemoteControlState
-from remote_agents.domain.trust import TRUST_ANSWERABLE, TrustState
+from remote_agents.domain.trust import TrustState
 from remote_agents.ports.private_directory import open_private_directory
+from remote_agents.ports.provider_descriptor import TrustDialog
 from remote_agents.ports.terminal import (
     GRACEFUL_TIMEOUT,
     NOT_AWAITING_TRUST,
@@ -118,7 +119,20 @@ class TmuxTerminal:
         resume_profile_factories: (
             dict[ProfileId, Callable[[SessionId, ProviderConversationId], LaunchProfile]] | None
         ) = None,
+        trust_dialogs: Mapping[str, TrustDialog] | None = None,
     ) -> None:
+        # Which profiles can be asked the folder-trust question, and the dialog to read each
+        # one with. **Injected, not imported**: this is an adapter, the answer is a provider
+        # fact, and an adapter that imported a provider package would be the exact dependency
+        # `tests/architecture/check_imports.py` refuses (DEC-070's shape -- the composition
+        # root is the one place allowed to know both). A profile absent from this mapping is
+        # a profile this terminal will not read a dialog for and will not press a key into.
+        #
+        # It replaces `domain.trust.TRUST_ANSWERABLE`, a hand-written frozenset naming claude
+        # and claude-remote, which was a second place to remember whenever a vertical learned
+        # to declare its dialog -- and was the whole reason the owner saw one button where the
+        # ask said two.
+        self._trust_dialogs = dict(trust_dialogs or {})
         self._gateway = gateway
         self._project_paths = project_paths
         self._profiles = profiles
@@ -302,19 +316,21 @@ class TmuxTerminal:
 
         Two kinds of evidence, because the profile table and the classifier know different
         things. A `readiness_blocker` is what the *profile* declares its agent prints while
-        blocked, and it is the only evidence available for codex and cursor-agent, whose
-        dialogs this project cannot answer and therefore does not parse. Classifying the
-        capture is the second, and it is gated on TRUST_ANSWERABLE for the same reason
-        `_trust_capture` is: it is the same classifier the answering path uses, and a pane
-        this cannot answer should not be read with a parser written for a dialog it does not
-        have. It matters because `claude`'s declared blocker is the *pre-trust* screen, so a
-        pane resting on the question itself matches no blocker at all.
+        blocked, and it is the only evidence available for an agent whose dialog no vertical
+        declares — `opencode` today, and it was codex and cursor-agent until they declared
+        theirs. Classifying the capture is the second, and it is gated on the same declaration
+        `_trust_capture` reads, for the same reason: it is the classifier the answering path
+        uses, and a pane whose dialog this holds no declaration for must not be read with
+        another agent's parser. It matters because `claude`'s declared blocker is the
+        *pre-trust* screen, so a pane resting on the question itself matches no blocker at
+        all.
         """
         if any(blocker in capture for blocker in profile.readiness_blockers):
             return True
-        if profile_id not in TRUST_ANSWERABLE:
+        dialog = self._trust_dialogs.get(str(profile_id))
+        if dialog is None:
             return False
-        return classify_trust_capture(capture) is TrustState.AWAITING
+        return classify_trust_capture(capture, dialog) is TrustState.AWAITING
 
     def _resolved_profile(
         self, session_id: SessionId, profile_id: ProfileId
@@ -533,10 +549,11 @@ class TmuxTerminal:
         live-and-RUNNING session here would make the states this exists to rescue the states
         it refuses.
         """
-        capture = await self._trust_capture(session_id)
-        if capture is None:
+        read = await self._trust_capture(session_id)
+        if read is None:
             return TrustState.UNKNOWN
-        return classify_trust_capture(capture)
+        capture, dialog = read
+        return classify_trust_capture(capture, dialog)
 
     async def answer_trust(self, session_id: SessionId) -> TrustState:
         """Answer the folder-trust question, and only when it is actually on screen.
@@ -559,15 +576,18 @@ class TmuxTerminal:
         A plan of `None` is a refusal to press anything at all: a dialog this cannot read is
         left exactly as it stands, for the owner to answer by hand, rather than guessed at.
         """
-        capture = await self._trust_capture(session_id)
-        if capture is None or classify_trust_capture(capture) is not TrustState.AWAITING:
+        read = await self._trust_capture(session_id)
+        if read is None:
             return TrustState.UNKNOWN
-        keys = plan_trust_keys(capture)
+        capture, dialog = read
+        if classify_trust_capture(capture, dialog) is not TrustState.AWAITING:
+            return TrustState.UNKNOWN
+        keys = plan_trust_keys(capture, dialog)
         if keys is None:
             return TrustState.UNKNOWN
         await self._gateway.send_keys(session_id, keys)
         await asyncio.sleep(_TRUST_ANSWER_WAIT_SECONDS)
-        return classify_trust_capture(await self._gateway.capture(session_id))
+        return classify_trust_capture(await self._gateway.capture(session_id), dialog)
 
     async def decline_trust(self, session_id: SessionId) -> TerminalObservation:
         """Answer the folder-trust question with *no*, and make sure the pane is gone.
@@ -621,8 +641,9 @@ class TmuxTerminal:
             return TerminalObservation(
                 session_id, live=True, preserved=False, detail=NOT_AWAITING_TRUST
             )
-        if observation.profile_id in TRUST_ANSWERABLE:
-            keys = plan_trust_keys(capture, accept=False)
+        dialog = self._trust_dialogs.get(str(observation.profile_id))
+        if dialog is not None:
+            keys = plan_trust_keys(capture, dialog, accept=False)
             if keys is not None:
                 await self._gateway.send_keys(session_id, keys)
                 deadline = asyncio.get_running_loop().time() + _TRUST_DECLINE_WAIT_SECONDS
@@ -636,21 +657,25 @@ class TmuxTerminal:
                     await asyncio.sleep(0.1)
         return await self.force_stop(session_id)
 
-    async def _trust_capture(self, session_id: SessionId) -> str | None:
-        """This pane's current screen, or None if it is not one that may be asked at all.
+    async def _trust_capture(self, session_id: SessionId) -> tuple[str, TrustDialog] | None:
+        """This pane's screen **and the dialog to read it with**, or None if it may not be asked.
 
         The profile gate lives here rather than in each caller so that reading the state and
-        answering it cannot disagree about which panes are answerable -- the duplication
-        `domain/trust.TRUST_ANSWERABLE` exists to end, made once more at a smaller scale.
+        answering it cannot disagree about which panes are answerable -- the duplication the
+        old `domain/trust.TRUST_ANSWERABLE` existed to end, made once more at a smaller scale.
+
+        It returns the pair because the two facts must not be looked up separately: a caller
+        that fetched the capture here and resolved the dialog itself could read one agent's
+        pane with another agent's declaration, and codex and cursor-agent draw the same
+        question word for word. One lookup, one answer.
         """
         observation = await self.inspect(session_id)
-        if (
-            observation is None
-            or not observation.live
-            or observation.profile_id not in TRUST_ANSWERABLE
-        ):
+        if observation is None or not observation.live:
             return None
-        return await self._gateway.capture(session_id)
+        dialog = self._trust_dialogs.get(str(observation.profile_id))
+        if dialog is None:
+            return None
+        return await self._gateway.capture(session_id), dialog
 
     async def managed_observations(self) -> tuple[TerminalObservation, ...]:
         """Return trusted dedicated-server evidence for read-only reconciliation.

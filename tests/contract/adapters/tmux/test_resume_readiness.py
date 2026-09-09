@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pytest
 
+from remote_agents.adapters.agents.registry import profile_trust_dialogs
 from remote_agents.adapters.tmux.codec import ManagedPane
 from remote_agents.adapters.tmux.gateway import TmuxInventory
 from remote_agents.adapters.tmux.runtime import LaunchProfile, TmuxTerminal
@@ -75,6 +76,7 @@ async def _resume(tmp_path: Path, profile: LaunchProfile, capture: str):
         {},
         startup_timeout=0.2,
         resume_profile_factories={ProfileId("claude"): lambda _s, _c: profile},
+        trust_dialogs=profile_trust_dialogs(),
     )
     return await terminal._launch_profile(
         session_id, ProjectId("opaque-editor"), ProfileId("claude"), profile
@@ -91,6 +93,7 @@ async def _confirm(tmp_path: Path, profile: LaunchProfile, capture: str):
         {ProjectId("opaque-editor"): project},
         {ProfileId("claude"): profile},
         startup_timeout=0.2,
+        trust_dialogs=profile_trust_dialogs(),
     )
     return await terminal.confirm_ready(session_id, ProfileId("claude"))
 
@@ -266,6 +269,7 @@ def _decline_terminal(tmp_path: Path, profile_id: str, capture: str, **flags: ob
         {ProjectId("opaque-editor"): project},
         {ProfileId(profile_id): _profile("Claude Code", blockers)},
         startup_timeout=0.2,
+        trust_dialogs=profile_trust_dialogs(),
     )
     return terminal, gateway, session_id
 
@@ -299,17 +303,40 @@ async def test_an_agent_that_takes_the_keys_and_stays_is_killed_anyway(tmp_path)
 
 
 @pytest.mark.asyncio
-async def test_a_profile_whose_dialog_cannot_be_read_has_its_pane_killed(tmp_path) -> None:
-    """codex is not in TRUST_ANSWERABLE, so no key is typed into a dialog nobody parsed.
+async def test_codex_is_told_no_in_its_own_dialog_now_that_it_declares_one(tmp_path) -> None:
+    """**This assertion is inverted from what it was, and the inversion is the feature.**
 
-    The session still ends -- declining is available for every untrusted session, because
-    saying *no* needs no ability to read the screen. What differs is only how the pane goes.
+    It read "codex is not in TRUST_ANSWERABLE, so no key is typed into a dialog nobody
+    parsed", and that was true of a hand-written frozenset naming claude. codex declares its
+    dialog now, so it is told *no* in its own words: its cursor rests on the affirmative, so
+    the decline walks one row down and confirms — the mirror of claude's, which is exactly why
+    a fixed key sequence could never have served both.
     """
     terminal, gateway, session_id = _decline_terminal(tmp_path, "codex", _CODEX_DIALOG)
 
     observation = await terminal.decline_trust(session_id)
 
-    assert gateway.sent == [], "nothing is typed into a dialog this project does not parse"
+    assert gateway.sent == [("Down", "Enter")], (
+        "codex rests its cursor on 'Yes, continue', so declining is one row down from it"
+    )
+    assert gateway.destroyed == [session_id]
+    assert not observation.live
+
+
+@pytest.mark.asyncio
+async def test_a_profile_that_declares_no_dialog_has_its_pane_killed(tmp_path) -> None:
+    """The case the test above used to stand in for, driven by an agent that really is silent.
+
+    `opencode` raises no folder-trust question on any host measured, so its vertical declares
+    none — and nothing is typed into a pane whose screen this project has no declaration for.
+    The session still ends: declining needs no ability to read the screen, because saying *no*
+    ends a session that never started. What differs is only how the pane goes.
+    """
+    terminal, gateway, session_id = _decline_terminal(tmp_path, "opencode", _CODEX_DIALOG)
+
+    observation = await terminal.decline_trust(session_id)
+
+    assert gateway.sent == [], "a key was typed into a pane with no declared dialog to read"
     assert gateway.destroyed == [session_id]
     assert not observation.live
 

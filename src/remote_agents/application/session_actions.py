@@ -51,12 +51,13 @@ strength of a *parseable managed tag with no store row*, and never reads `observ
 from __future__ import annotations
 
 import logging
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Protocol
 
 from remote_agents.domain.models import OrphanProvenance, ProfileId, SessionRecord, SessionState
 from remote_agents.domain.remote_control import RemoteControlState
-from remote_agents.domain.trust import TRUST_ANSWERABLE, TrustState
+from remote_agents.domain.trust import TrustState, answerable
 from remote_agents.ports.terminal import (
     GRACEFUL_TIMEOUT,
     OWNERSHIP_LOST,
@@ -296,7 +297,8 @@ def decline_trust_available(record: _RemoteControllable) -> bool:
 
     `trust_available` turns on the **pane** and on the profile, because answering *yes* means
     typing into a dialog -- which this project will only do for the agents whose dialog it
-    can read (`TRUST_ANSWERABLE`), and only while the dialog is actually on screen. Declining
+    can read (a dialog its own vertical declares), and only while it is actually on screen.
+    Declining
     needs neither: it ends a session that never started, which is reachable for any profile
     and does not depend on the pane still drawing anything. So this reads the record alone,
     and is the one affordance a codex or cursor-agent session gets here.
@@ -309,8 +311,19 @@ def decline_trust_available(record: _RemoteControllable) -> bool:
     return record.state is SessionState.UNTRUSTED
 
 
-def trust_available(record: _RemoteControllable, observed: TrustState) -> bool:
+def trust_available(
+    record: _RemoteControllable,
+    observed: TrustState,
+    trust_dialogs: Mapping[str, object],
+) -> bool:
     """Whether a surface should offer to answer the folder-trust question for `record`.
+
+    `trust_dialogs` is which profiles this project can read a dialog for, handed in rather
+    than imported. It was a hand-written frozenset in the domain naming claude and
+    claude-remote — which is why the owner pressed Trust on a codex session and saw one button
+    where the ask said two. The composition root now hands the same mapping to this policy and
+    to the terminal that presses the keys, so a surface still cannot offer a button the runtime
+    would refuse, and a fifth provider becomes answerable by declaring its own dialog.
 
     Availability turns on the **pane**, not the record, which is why the observed state is a
     parameter rather than something this function goes and reads. A record cannot tell you
@@ -335,7 +348,7 @@ def trust_available(record: _RemoteControllable, observed: TrustState) -> bool:
     offers this on a stale observation still cannot fire a keypress into a session that is no
     longer asking.
     """
-    return record.profile_id in TRUST_ANSWERABLE and observed is TrustState.AWAITING
+    return answerable(record.profile_id, trust_dialogs) and observed is TrustState.AWAITING
 
 
 # Re-exported, not redefined: the vocabulary lives on `ports.terminal` beside the `detail`

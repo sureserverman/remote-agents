@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from remote_agents.adapters.agents.registry import profile_glyphs
+from remote_agents.adapters.agents.registry import profile_glyphs, profile_trust_dialogs
 from remote_agents.adapters.sqlite.activity_store import SQLiteActivityStore
 from remote_agents.adapters.sqlite.callback_state_store import SQLiteCallbackStateStore
 from remote_agents.adapters.sqlite.chat_view_store import SQLiteChatViewStore
@@ -104,6 +104,11 @@ def _private_boundary(
         # and the bot is one that may import none, so the mapping is built on this side of
         # that line and handed over — the same shape `usage_readers` is folded in with.
         glyphs=profile_glyphs(),
+        # The other provider fact this surface is handed rather than knowing: which
+        # profiles it may offer *both* answers to. Read off the same registry as the
+        # marks, and the same mapping the terminal is given, so the button and the
+        # keypress cannot disagree about who can be answered.
+        trust_dialogs=profile_trust_dialogs(),
         project_page_size=config.project_page_size,
         # The durable home for the one standing trust question per session (migration 12).
         # Its absence is what a boundary without a trust pass looks like, so supplying it is
