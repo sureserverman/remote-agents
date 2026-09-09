@@ -2197,8 +2197,11 @@ async def test_an_untrusted_launch_asks_the_question_instead_of_reporting_a_fail
     assert [
         unpadded(button.text) for row in reply["reply_markup"].inline_keyboard for button in row
     ] == [
-        "Trust this project",
-        "Don't trust — close it",
+        # The notification's labels, because the reply and the message sent on its own render
+        # through one function -- and the bar, because this is a screen the owner is standing
+        # on rather than a message that outlives its screen (DEC-032).
+        "✅ Trust this project",
+        "⛔ Don't trust — close it",
         "Sessions",
         "Launch",
     ]
@@ -2227,5 +2230,5 @@ async def test_an_untrusted_launch_of_an_unreadable_dialog_offers_only_the_no() 
     labels = [
         unpadded(button.text) for row in reply["reply_markup"].inline_keyboard for button in row
     ]
-    assert "Trust this project" not in labels
-    assert "Don't trust — close it" in labels
+    assert "✅ Trust this project" not in labels
+    assert "⛔ Don't trust — close it" in labels

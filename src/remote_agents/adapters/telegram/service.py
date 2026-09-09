@@ -51,6 +51,7 @@ from remote_agents.adapters.telegram.presenters import (
     uniform_keyboard,
 )
 from remote_agents.adapters.telegram.stops import CONFIRMED_FORCE, StopController
+from remote_agents.adapters.telegram.trust_notifications import render_trust_question
 from remote_agents.application.backend import Backend
 from remote_agents.application.commands import (
     AnswerTrustCommand,
@@ -1359,30 +1360,32 @@ class PrivateBotBoundary:
         uses: a profile whose dialog this project cannot read gets only the *no*.
         """
         session_value = str(record.session_id)
-        rows: list[tuple[Button, ...]] = []
-        if record.profile_id in TRUST_ANSWERABLE:
-            rows.append(
-                (
-                    Button(
-                        "Trust this project",
-                        self._callback("session.trust", session_value, mutation=True),
-                    ),
-                )
-            )
-        rows.append(
-            (
-                Button(
-                    "Don't trust — close it",
-                    self._callback("session.decline", session_value, mutation=True),
-                ),
-            )
+        answerable = record.profile_id in TRUST_ANSWERABLE
+        # Through the shared renderer, not beside it. The notification sent on its own says
+        # same thing about the same session, and two wordings for one question is one wording
+        # plus a future divergence -- which is the shape DEC-043 keeps out of this adapter.
+        #
+        # `render_trust_question` rather than `self._message`: this reply is a question the
+        # owner answers, and the two answers are the whole of it. It is the same barless
+        # construction the activity notification uses (DEC-032).
+        question = render_trust_question(
+            record,
+            answerable=answerable,
+            trust=(
+                self._callback("session.trust", session_value, mutation=True)
+                if answerable
+                else None
+            ),
+            decline=self._callback("session.decline", session_value, mutation=True),
         )
-        return self._message(
-            f"🔒 <b>Waiting to be trusted</b>\n{escape(record.display.rendered)}\n"
-            "The agent is asking whether this folder can be trusted. Nothing runs until you "
-            "answer.",
-            tuple(rows),
-        )
+        # Re-wrapped through `_message` so the bar comes back, and that is not a
+        # contradiction of DEC-032 -- it is DEC-032. A notification is barless because it is a
+        # *message*, outliving the screen it was sent from; this is a **screen the owner is
+        # standing on** immediately after a launch, and every other launch reply carries the
+        # bar. What the two share is the wording and the shape of the answers, which is what
+        # the renderer is for; where the owner can go next is a property of the surface they
+        # are on.
+        return self._message(question.text, question.keyboard)
 
     async def _resume_reply(
         self, reference_value: str, token: str, message_id: int
