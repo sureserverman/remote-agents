@@ -5,7 +5,8 @@ Branch: `untrusted-launches-and-console-refresh`
 Plan: `2026-09-08-untrusted-launches-and-console-refresh-sub-05-answerable-dialogs-light-plan.md`
 Task 1.1.
 
-> **Status: RUN AND RECORDED, on this host, for all five profiles.** Every capture below is a
+> **Status: RUN AND RECORDED, on this host, for all five profiles — and the owner's live
+> drill was run on 2026-09-10 and is recorded in section 8.** Every capture below is a
 > real launch of the real binary into a directory that agent had never been asked about, with
 > the curated argv from `domain/profiles.py` and the curated environment from
 > `composition/tui.py` — `env -i` with `HOME`, `LANG`, `PATH`, `TERM=xterm-256color` and
@@ -247,6 +248,38 @@ against the four captures above:
 
 The shared sentence `Do you trust the contents of this directory?` appears in **both** the codex
 and the cursor-agent captures, which is exactly why it identifies neither.
+
+---
+
+## Section 8 — The drill, RUN 2026-09-10 on the owner's own service
+
+Run by the owner from Telegram, against their live bot, after restarting it onto this branch.
+Every line below is read from `sessions.sqlite3` rather than from what the screen looked like.
+
+| session | profile | events (UTC) |
+|---|---|---|
+| `e9581e2a` | codex | `ready` 06:20:37 → **`trust_required` 06:21:21** → `ready` 06:21:36 |
+| `a325b3df` | cursor-agent | `trust_required` 06:26:49 → **`trust_declined`** 06:26:58 |
+| `bd8bbf04` | cursor-agent | `trust_required` 06:27:09 → **`ready`** 06:27:16 |
+| `35e1e810` | opencode | `startup_error` 06:25:50 — see below |
+
+**Both agents were offered the question and both answers worked**: Trust ran the session,
+Don't-trust closed it. Before this branch, codex and cursor-agent carried one button.
+
+**The presses reached the real dialogs, not just the records.** Re-launching both agents into
+`/home/user/dev/ai-tools/basic-harness` afterwards: neither asks any more. They are trusted
+because keys were typed into their panes.
+
+**The codex line is the late-dialog race, caught live.** It was recorded `ready` first and
+corrected to `trust_required` **44 seconds later** — the exact race DEC-016 removed the state
+gate for, and the reason DEC-080's correction is bounded rather than deleted. 44 s sits well
+inside the five-minute window; a tighter bound would have failed this drill.
+
+**What the drill found that it was not looking for.** The opencode launch died with
+`startup_error` at exactly 20 seconds, the whole startup budget. `_READINESS_MARKERS` waited
+for `Ask anything...` (three ASCII dots) and opencode draws `Ask anything…` (U+2026), so no
+opencode launch could ever be seen coming up. Fixed by matching the words alone, and pinned by
+a test that compares each marker against a real capture instead of against itself.
 
 ---
 
