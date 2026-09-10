@@ -7,7 +7,7 @@ from remote_agents.domain.conversations import ProviderConversationId
 from remote_agents.domain.models import ProfileId, ProjectId, SessionId
 from remote_agents.domain.remote_control import RemoteControlState
 from remote_agents.domain.trust import TrustState
-from remote_agents.ports.terminal import TerminalObservation
+from remote_agents.ports.terminal import TerminalObservation, TrustAnswer
 
 
 class FakeTerminal:
@@ -95,10 +95,18 @@ class FakeTerminal:
         del session_id
         return self.trust_states.pop(0) if self.trust_states else TrustState.UNKNOWN
 
-    async def answer_trust(self, session_id: SessionId) -> TrustState:
+    async def answer_trust(self, session_id: SessionId) -> TrustAnswer:
+        """A press that lands, because a fake has no dialog it could fail to read.
+
+        `pressed=True` is the honest answer for this double: it counts the call and reports
+        the cleared dialog the real runtime reports after a successful answer. A fake that
+        said `pressed=False` would exercise the refusal sentence on every test that never
+        thought about trust, which is the same defaulting mistake `trust_state` avoids one
+        method up -- in the other direction.
+        """
         del session_id
         self.trust_answers += 1
-        return TrustState.UNKNOWN
+        return TrustAnswer(pressed=True, observed=TrustState.UNKNOWN)
 
     async def decline_trust(self, session_id: SessionId) -> TerminalObservation:
         """The other answer, so this fake stays as wide as the port it stands in for.

@@ -359,7 +359,8 @@ async def test_answering_yes_presses_nothing_for_a_profile_that_declares_no_dial
 
     answered = await terminal.answer_trust(session_id)
 
-    assert answered is TrustState.UNKNOWN
+    assert not answered.pressed, "no dialog is declared for this profile, so nothing is sent"
+    assert answered.observed is TrustState.UNKNOWN
     assert gateway.sent == [], "a key was typed into an agent that declares no dialog"
 
 
@@ -450,3 +451,56 @@ async def test_a_codex_pane_that_is_no_longer_asking_is_refused_too(tmp_path) ->
     assert observation.detail == NOT_AWAITING_TRUST
     assert gateway.sent == []
     assert gateway.destroyed == []
+
+
+#: codex's dialog with its cursor glyph removed -- every classifier marker present, so
+#: `classify_trust_capture` says AWAITING, and no `›` for `plan_trust_keys` to count rows
+#: from, so it fails closed. The screen a parser can *recognise* and cannot *read*.
+_CODEX_DIALOG_WITHOUT_A_CURSOR = (
+    "> You are in /home/user/dev/example\n"
+    f"  {_CODEX_BLOCKER} Working with untrusted contents comes with higher risk.\n"
+    "  1. Yes, continue\n"
+    "  2. No, quit\n"
+)
+
+
+@pytest.mark.asyncio
+async def test_a_press_that_read_nothing_is_distinguishable_from_one_that_worked(
+    tmp_path,
+) -> None:
+    """Failing closed is right; reporting it as success is not (BL-053's second finding).
+
+    `answer_trust` has three refusal paths -- no dialog declared, the dialog gone, and
+    `plan_trust_keys` failing closed on a layout it cannot read -- and every one of them
+    returned `TrustState.UNKNOWN`, which is *also* what the success path returns, because
+    answering clears the dialog and the capture taken afterwards no longer matches. So the
+    caller could not tell "I pressed the key and it worked" from "I pressed nothing at all",
+    and the bot told the owner **Trusted. The agent can continue** for a session whose pane it
+    had refused to touch -- after burning the one-shot token that would have let them retry.
+
+    The pane state is not the defect. `TrustState` has exactly two members on purpose
+    (`classify_trust_capture`: there is nothing in a capture that separates "answered a moment
+    ago" from "never asked", and inventing a third from an absence is what DEC-009 forbids).
+    What was missing is a different fact entirely -- *did this call send a key* -- which the
+    terminal knows for certain and was throwing away.
+    """
+    refusing, refusing_gateway, refusing_id = _decline_terminal(
+        tmp_path, "codex", _CODEX_DIALOG_WITHOUT_A_CURSOR
+    )
+    working, working_gateway, working_id = _decline_terminal(tmp_path, "codex", _CODEX_DIALOG)
+
+    refused = await refusing.answer_trust(refusing_id)
+    worked = await working.answer_trust(working_id)
+
+    assert refusing_gateway.sent == [], (
+        "the layout could not be read, so nothing may be typed into the pane"
+    )
+    assert working_gateway.sent == [("Enter",)], (
+        "the readable dialog rests its cursor on the affirmative, so one Enter answers it"
+    )
+    assert not refused.pressed, "no key was sent, and the answer has to say so"
+    assert worked.pressed, "a key was sent"
+    assert refused != worked, (
+        "a refusal to press and a successful press must not be the same value -- that "
+        "equality is what let the surface report a refusal as 'Trusted'"
+    )

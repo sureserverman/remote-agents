@@ -305,6 +305,13 @@ class TrustNotifier:
             await self._attach_answers(
                 record,
                 message_id,
+                # **The profile alone, and deliberately no pane read** -- the one gate this
+                # surface does not share with the detail screen, which reads a capture every
+                # render (`service._awaiting_trust`, DEC-080). A message is sent once and then
+                # outlives its own read, so a capture taken here would pin the button to an
+                # observation already stale when it was minted. The press is protected where it
+                # can actually be protected: `answer_trust` re-reads the pane before sending
+                # anything, and reports a refusal as a refusal (BL-053, `TrustAnswer`).
                 answerable=answerable(record.profile_id, self._trust_dialogs),
             )
         except Exception:

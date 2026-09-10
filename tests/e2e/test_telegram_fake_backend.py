@@ -47,7 +47,7 @@ from remote_agents.domain.models import (
 from remote_agents.domain.profiles import closed_profiles
 from remote_agents.domain.trust import TrustState
 from remote_agents.ports.agent_activity import ActivityKind, AgentActivity
-from remote_agents.ports.terminal import TerminalObservation
+from remote_agents.ports.terminal import TerminalObservation, TrustAnswer
 
 
 def test_telegram_action_audit_accepts_the_closed_adapter_surface() -> None:
@@ -788,7 +788,7 @@ class _TrustLauncher(SessionUseCaseDouble):
         # What the real terminal does: answering clears the dialog, so the next capture no
         # longer matches and the row stops being offered.
         self.states[0] = TrustState.UNKNOWN
-        return TrustState.UNKNOWN
+        return TrustAnswer(pressed=True, observed=TrustState.UNKNOWN)
 
 
 def _trust_blocked() -> tuple[PrivateBotBoundary, _TrustLauncher]:
@@ -2217,3 +2217,153 @@ async def test_every_listed_state_draws_its_mark_on_the_button_including_untrust
     for index, state in enumerate(listed):
         expected = f"{state_emoji(state)} {mark} #{index + 1} Demo"
         assert expected in labels, f"{state.value} drew {labels} without {expected!r}"
+
+
+@pytest.mark.asyncio
+async def test_a_press_that_pressed_nothing_does_not_report_it_as_trusted() -> None:
+    """The owner's side of the refusal that used to read as success (BL-053, second finding).
+
+    `answer_trust` fails closed on a dialog it cannot read -- it leaves the pane alone rather
+    than counting rows on a layout that is not there, which is right. What was wrong is what
+    the owner was then told: **Trusted. The agent can continue**, for a pane nothing was typed
+    into, after the one-shot token had already been spent. The retry that sentence invites
+    answers "That action has already run."
+
+    So the reply must say the press did nothing, and must not claim the folder was trusted.
+    """
+
+    class _CouldNotRead(_TrustLauncher):
+        async def answer_trust(self, command):
+            self.answered.append(command.session_id)
+            # The pane is still asking -- this call simply refused to type into it.
+            return TrustAnswer(pressed=False, observed=TrustState.AWAITING)
+
+    untrusted = replace(
+        _a_running_session(SessionState.UNTRUSTED), profile_id=ProfileId("claude")
+    )
+    boundary = build_private_bot(
+        7,
+        11,
+        backend=backend_for(
+            catalogue=(CatalogProject("a" * 24, "Demo", "tests", "Registered"),),
+            sessions=_CouldNotRead(untrusted),
+        ),
+        trust_dialogs=profile_trust_dialogs(),
+    )
+    token = boundary.callbacks.create(
+        "session.trust", str(untrusted.session_id), 7, 11, 1, mutation=True
+    )
+
+    reply = await boundary._trust_reply(str(untrusted.session_id), token, 1)
+
+    assert "Trusted" not in reply["text"], (
+        f"nothing was sent to the pane, so this may not report success: {reply['text']!r}"
+    )
+    assert "nothing was sent to it" in reply["text"], reply["text"]
+    assert "at the keyboard" in reply["text"], (
+        "the one-shot token is spent, so the reply must name the route that still works "
+        "(DEC-047) rather than inviting a retry this button will refuse"
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_press_that_landed_still_reports_success() -> None:
+    """The other half, so the fix above cannot be 'never say it worked'.
+
+    A press that actually sent its keys and found the dialog gone is the success path, and it
+    keeps its sentence. Without this the refusal wording could be applied to every press and
+    both tests would still be green -- which is the mutation that matters here.
+    """
+    boundary, launcher = _trust_blocked()
+    record = launcher.record
+    token = boundary.callbacks.create(
+        "session.trust", str(record.session_id), 7, 11, 1, mutation=True
+    )
+
+    reply = await boundary._trust_reply(str(record.session_id), token, 1)
+
+    assert "Trusted" in reply["text"], reply["text"]
+    assert launcher.answered == [record.session_id]
+
+
+@pytest.mark.asyncio
+async def test_a_press_whose_pane_stopped_asking_does_not_claim_it_is_still_waiting() -> None:
+    """The second of the three refusals, which the first fix wrongly gave the first's sentence.
+
+    `answer_trust` refuses for three different reasons and only one of them means "on screen and
+    unreadable". This is another: the question resolved between the button being drawn and
+    pressed -- answered at the keyboard, or the pane is no longer live -- so `observed` comes
+    back UNKNOWN. Telling the owner the session "is still waiting" here is a false statement
+    about pane state, which is the very defect class this task exists to close; it would just be
+    one notch milder than the one it started with. Found by this task's Tier-1 review.
+    """
+
+    class _NoLongerAsking(_TrustLauncher):
+        async def answer_trust(self, command):
+            self.answered.append(command.session_id)
+            return TrustAnswer(pressed=False, observed=TrustState.UNKNOWN)
+
+    untrusted = replace(
+        _a_running_session(SessionState.UNTRUSTED), profile_id=ProfileId("claude")
+    )
+    boundary = build_private_bot(
+        7,
+        11,
+        backend=backend_for(
+            catalogue=(CatalogProject("a" * 24, "Demo", "tests", "Registered"),),
+            sessions=_NoLongerAsking(untrusted),
+        ),
+        trust_dialogs=profile_trust_dialogs(),
+    )
+    token = boundary.callbacks.create(
+        "session.trust", str(untrusted.session_id), 7, 11, 1, mutation=True
+    )
+
+    reply = await boundary._trust_reply(str(untrusted.session_id), token, 1)
+
+    assert "Trusted" not in reply["text"], reply["text"]
+    assert "nothing was sent" in reply["text"].lower(), reply["text"]
+    assert "still waiting" not in reply["text"], (
+        f"the pane stopped showing the question, so this may not say it is waiting: "
+        f"{reply['text']!r}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_press_that_landed_but_left_the_question_up_does_not_invite_a_dead_retry() -> None:
+    """`pressed` and still AWAITING: the keys went in and the dialog did not move.
+
+    This branch used to say "Try again", which the one-shot token makes false -- `claim_mutation`
+    is spent by the time this renders, so pressing the same button answers "That action has
+    already run." It is the identical spent-token invitation the refusal branch is careful not
+    to make, left standing here only because it predates it. The detail screen re-renders and
+    mints a fresh token, so that is the route worth naming.
+    """
+
+    class _KeysDidNotTake(_TrustLauncher):
+        async def answer_trust(self, command):
+            self.answered.append(command.session_id)
+            return TrustAnswer(pressed=True, observed=TrustState.AWAITING)
+
+    untrusted = replace(
+        _a_running_session(SessionState.UNTRUSTED), profile_id=ProfileId("claude")
+    )
+    boundary = build_private_bot(
+        7,
+        11,
+        backend=backend_for(
+            catalogue=(CatalogProject("a" * 24, "Demo", "tests", "Registered"),),
+            sessions=_KeysDidNotTake(untrusted),
+        ),
+        trust_dialogs=profile_trust_dialogs(),
+    )
+    token = boundary.callbacks.create(
+        "session.trust", str(untrusted.session_id), 7, 11, 1, mutation=True
+    )
+
+    reply = await boundary._trust_reply(str(untrusted.session_id), token, 1)
+
+    assert "Try again" not in reply["text"], (
+        f"the token is already spent, so a retry on this button cannot work: {reply['text']!r}"
+    )
+    assert "Open the session" in reply["text"], reply["text"]

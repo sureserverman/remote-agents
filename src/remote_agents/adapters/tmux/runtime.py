@@ -32,6 +32,7 @@ from remote_agents.ports.terminal import (
     UNKNOWN_SESSION,
     TerminalObservation,
     TerminalTargetMissing,
+    TrustAnswer,
 )
 
 _REMOTE_CONTROL_ENABLE_WAIT_SECONDS = 3
@@ -576,7 +577,7 @@ class TmuxTerminal:
         capture, dialog = read
         return classify_trust_capture(capture, dialog)
 
-    async def answer_trust(self, session_id: SessionId) -> TrustState:
+    async def answer_trust(self, session_id: SessionId) -> TrustAnswer:
         """Answer the folder-trust question, and only when it is actually on screen.
 
         The guard is the whole safety story. The confirming keypress is meaningful to every
@@ -596,19 +597,37 @@ class TmuxTerminal:
 
         A plan of `None` is a refusal to press anything at all: a dialog this cannot read is
         left exactly as it stands, for the owner to answer by hand, rather than guessed at.
+
+        **Each of the three refusals reports `pressed=False`, and the difference is the whole
+        of BL-053's second finding.** All three used to return a bare `TrustState.UNKNOWN`,
+        which is exactly what the success path returns — answering clears the dialog, so the
+        capture taken afterwards no longer matches. Identical values for "it worked" and "I
+        touched nothing", so the bot said *Trusted. The agent can continue* over a pane it had
+        declined to type into, having already spent the one-shot token that would have let the
+        owner retry. This method always knew which had happened; it simply had nowhere to say
+        it (`ports.terminal.TrustAnswer`).
         """
         read = await self._trust_capture(session_id)
         if read is None:
-            return TrustState.UNKNOWN
+            # No dialog declared for this profile, or the pane could not be captured.
+            return TrustAnswer(pressed=False, observed=TrustState.UNKNOWN)
         capture, dialog = read
-        if classify_trust_capture(capture, dialog) is not TrustState.AWAITING:
-            return TrustState.UNKNOWN
+        observed = classify_trust_capture(capture, dialog)
+        if observed is not TrustState.AWAITING:
+            # The question is over -- answered at the keyboard, or from the other surface.
+            return TrustAnswer(pressed=False, observed=observed)
         keys = plan_trust_keys(capture, dialog)
         if keys is None:
-            return TrustState.UNKNOWN
+            # On screen and unreadable. Failing closed leaves the pane exactly as it stands;
+            # `observed` stays AWAITING because that is what it is, and the owner is told the
+            # press did nothing rather than being told it succeeded.
+            return TrustAnswer(pressed=False, observed=TrustState.AWAITING)
         await self._gateway.send_keys(session_id, keys)
         await asyncio.sleep(_TRUST_ANSWER_WAIT_SECONDS)
-        return classify_trust_capture(await self._gateway.capture(session_id), dialog)
+        return TrustAnswer(
+            pressed=True,
+            observed=classify_trust_capture(await self._gateway.capture(session_id), dialog),
+        )
 
     async def decline_trust(self, session_id: SessionId) -> TerminalObservation:
         """Answer the folder-trust question with *no*, and make sure the pane is gone.

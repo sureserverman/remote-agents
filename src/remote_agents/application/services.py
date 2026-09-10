@@ -49,6 +49,7 @@ from remote_agents.ports.terminal import (
     TERMINAL_NOT_LIVE,
     TerminalObservation,
     TerminalPort,
+    TrustAnswer,
 )
 
 _LOG = logging.getLogger(__name__)
@@ -409,7 +410,7 @@ class SessionService:
         """
         return await self._terminal.trust_state(session_id)
 
-    async def answer_trust(self, command: AnswerTrustCommand) -> TrustState:
+    async def answer_trust(self, command: AnswerTrustCommand) -> TrustAnswer:
         """Answer the folder-trust question once, for a session whose dialog can be read.
 
         **The profile check moved down rather than away.** It used to be a membership test
@@ -417,9 +418,15 @@ class SessionService:
         "only for Claude" — which stopped being true the day the verticals began declaring
         their own dialogs. The authority is now the terminal's injected mapping: it holds a
         dialog for exactly the profiles that can be read, so a session whose agent asks
-        nothing returns UNKNOWN from `answer_trust` and no key is pressed. That is one
+        nothing gets a `TrustAnswer` carrying `observed=UNKNOWN` from `answer_trust`, with
+        `pressed=False`, and no key goes near the pane. That is one
         authority instead of two agreeing, which is what the old constant's own comment said
         it existed to achieve and could not, being a copy.
+
+        **What comes back is a `TrustAnswer`, not a bare state**, and this layer is a
+        pass-through for it: whether a key was sent is the terminal's fact to report and the
+        surface's to render, and inventing a policy for it here would put a third opinion
+        between the two things that actually know (DEC-001).
 
         The *pane* half is re-checked one layer further down for the same reason it always
         was: only the terminal can see whether the dialog is still on screen.

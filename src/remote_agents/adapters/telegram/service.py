@@ -2401,10 +2401,29 @@ class PrivateBotBoundary:
         exactly, and this repository's own trust fixtures are such a file. So a healthy
         RUNNING session showed a live *Trust this project* button, and pressing it sent
         movement keys and an Enter into a working agent. No marker count closes that (a
-        verbatim copy satisfies any number of them); asking the lifecycle does. The notifier
-        has always filtered this way — `trust_notifications.py` refuses any record that is not
-        `UNTRUSTED` — so this is the detail screen agreeing with its sibling rather than a new
-        rule. DEC-080.
+        verbatim copy satisfies any number of them); asking the lifecycle does. DEC-080.
+
+        **What the sibling actually shares, corrected.** This used to end by saying the
+        notifier "has always filtered this way", so that the state gate was "the detail screen
+        agreeing with its sibling rather than a new rule". That is true of **one** of the two
+        gates and was read as both. `trust_notifications.py` shares the *state* filter — its
+        pass skips any record that is not `UNTRUSTED` — and does **not** share the pane read:
+        it offers Trust on `answerable(profile_id, ...)` alone, with no capture taken at all.
+
+        **That asymmetry is correct and deliberate, not a gap to close.** This screen is
+        re-rendered on demand, so a capture taken as it draws describes the pane the owner is
+        looking at. A notification is sent once and then outlives its own read by any amount of
+        time, so a pane gate there would pin a button to an observation that was already stale
+        when it was minted — ceremony, not safety. What actually protects that press is one
+        layer down and unconditional: `TmuxRuntime.answer_trust` re-reads the pane before
+        sending anything, and since BL-053's second finding it reports honestly when it refused
+        rather than returning the same value as success (`ports.terminal.TrustAnswer`). So the
+        notification's button cannot fire a keypress into a session that is no longer asking,
+        and a press that read nothing now says so instead of claiming the folder was trusted.
+
+        And after DEC-081 the record this gate consults is itself sounder: a pane may **clear**
+        `untrusted` but may no longer **set** it, so the state half can no longer be conjured
+        by an agent that merely has the dialog's words on screen.
         """
         if record.state is not SessionState.UNTRUSTED:
             return False
@@ -2467,12 +2486,55 @@ class PrivateBotBoundary:
                     "waiting. Nothing was sent to it."
                 )
             )
-        # UNKNOWN is the expected answer, not a failure: answering clears the dialog, so the
-        # capture taken afterwards no longer matches. Reporting it as an outcome would tell
-        # the owner the thing worked only when it did not.
-        if result is TrustState.AWAITING:
+        # **`pressed` first, because it is the only branch that is not about the pane.**
+        # Every refusal to type -- no dialog declared, the question already over, or a layout
+        # `plan_trust_keys` would not count rows on -- used to arrive here as the same
+        # `TrustState.UNKNOWN` the *success* path returns, since answering clears the dialog
+        # and the capture taken afterwards stops matching. So this method reported **Trusted.
+        # The agent can continue** for a pane nothing had been sent to, after the one-shot
+        # token was already spent -- and the retry that sentence invites answers "That action
+        # has already run." Failing closed is right; saying it worked is not (BL-053).
+        if not result.pressed:
+            # **Split on what the pane actually said, because the three refusals are not one
+            # story.** A single sentence here claimed the session was "still waiting" for all
+            # of them, which is true of exactly one: `plan_trust_keys` failing closed on a
+            # layout it will not count rows on. The other two -- the pane not live or no dialog
+            # declared, and the question already resolved between this button being drawn and
+            # pressed -- are cases where "still waiting" is the same kind of false statement
+            # about pane state that BL-053 is about. `observed` is carried precisely so they can
+            # be told apart; throwing it away here would reintroduce the defect one notch
+            # milder. Found by the Tier-1 review of this task.
+            if result.observed is TrustState.AWAITING:
+                # On screen, and this project will not type into a layout it cannot read. No
+                # "try again": the token is claimed above and will refuse a second press, so
+                # inviting one is the same dishonesty one layer along. The keyboard is the
+                # route that still works, and DEC-047 is why it is the one named.
+                return _reply_arguments(
+                    self._message(
+                        "That dialog could not be read, so nothing was sent to it. The session "
+                        "is still waiting — answer it at the keyboard, or close it from its "
+                        "screen."
+                    )
+                )
             return _reply_arguments(
-                self._message("The project is still waiting to be trusted. Try again.")
+                self._message(
+                    "Nothing was sent — its pane is no longer showing the question. It may "
+                    "already have been answered, or the session may no longer be live. Open "
+                    "the session to see where it stands."
+                )
+            )
+        # Past here a key was sent, so the pane state is an outcome. UNKNOWN is the expected
+        # one and not a failure: answering clears the dialog.
+        if result.observed is TrustState.AWAITING:
+            # The keys went in and the question is still up. **Not "Try again"** -- that was
+            # the same spent-token invitation the refusal branch above refuses to make, left
+            # standing here because it predates it. The detail screen re-renders and mints a
+            # fresh token, so it is the route that actually works.
+            return _reply_arguments(
+                self._message(
+                    "The keys were sent, but the question is still on screen. Open the session "
+                    "and answer it from there."
+                )
             )
         return _reply_arguments(
             self._message("Trusted. The agent can continue; relaunch if it already gave up.")
