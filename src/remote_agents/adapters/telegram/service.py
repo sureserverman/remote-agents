@@ -2371,19 +2371,43 @@ class PrivateBotBoundary:
         )
 
     async def _awaiting_trust(self, record: SessionRecord) -> bool:
-        """Whether to offer the trust row. Costs one pane capture per detail render.
+        """Whether to offer the trust row: `untrusted`, and the pane still asking.
 
-        There is deliberately no session-state gate, and the first version of this had one
-        (FAILED and STARTING only) on the reasoning that a trust-blocked launch never
-        becomes ready. That reasoning was wrong, and it hid the button on the very first
-        real session to hit the bug. `claude-remote` prints a banner containing its
-        readiness marker *before* the trust dialog renders, so the launch loop can observe
-        "Claude Code" and no blocker in the same pass and report the session RUNNING while
-        it is in fact stuck on a question. Whether a trust-blocked launch lands in UNTRUSTED,
-        RUNNING or FAILED is a race -- all three are origins the lifecycle gives
-        TRUST_REQUIRED an edge from, for that reason -- so state says nothing about it and the
-        pane is the only authority.
+        **Two gates, and neither is sufficient alone.** The record says whether this is a
+        session the lifecycle believes is blocked on the question; the pane says whether the
+        dialog is still on screen this instant. A row offered on the record alone would
+        outlive an answer given at the keyboard; a row offered on the pane alone is the defect
+        below.
+
+        **The state gate was removed once, deliberately, and is back for a reason that did
+        not exist then.** It gated on FAILED and STARTING, on the reasoning that a
+        trust-blocked launch never becomes ready — and that hid the button on the first real
+        session to hit the bug, because `claude-remote` prints its readiness banner *before*
+        the dialog renders, so the launch loop can report RUNNING over an agent stuck on a
+        question. The conclusion drawn was that state says nothing and the pane is the only
+        authority.
+
+        What has changed is not the race but who handles it. `ReconciliationService` now reads
+        the same readiness check on **every** live observation and issues `TRUST_REQUIRED`
+        from RUNNING, STARTING or FAILED (`application/reconcile.py`, "that is the late-dialog
+        race, and it is the whole reason this method reads the check for every `terminal_live`
+        result"). A stuck session therefore *becomes* `untrusted` on its own, and the button
+        follows it. The cost is bounded and real: a session caught by the race waits one
+        reconciliation pass for its row, where before it had one immediately.
+
+        **What the pane-only version cost, which is why that trade is worth taking.** The
+        classifier decides "this pane is asking" by matching text, and text is not proof that
+        a dialog is drawn — an agent displaying a file that *contains* the dialog matches it
+        exactly, and this repository's own trust fixtures are such a file. So a healthy
+        RUNNING session showed a live *Trust this project* button, and pressing it sent
+        movement keys and an Enter into a working agent. No marker count closes that (a
+        verbatim copy satisfies any number of them); asking the lifecycle does. The notifier
+        has always filtered this way — `trust_notifications.py` refuses any record that is not
+        `UNTRUSTED` — so this is the detail screen agreeing with its sibling rather than a new
+        rule. DEC-080.
         """
+        if record.state is not SessionState.UNTRUSTED:
+            return False
         if self.backend.sessions is None or not trust_available(
             record, TrustState.AWAITING, self.trust_dialogs
         ):

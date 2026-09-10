@@ -398,7 +398,17 @@ class SessionService:
         was: only the terminal can see whether the dialog is still on screen.
         """
         async with self._locks.operation(), self._locks.for_session(command.session_id):
-            await self._require_session(command.session_id)
+            record = await self._require_session(command.session_id)
+            if record.state is not SessionState.UNTRUSTED:
+                # **The stale button.** A token minted while the session was blocked outlives
+                # the screen that drew it: the owner can answer the dialog at the keyboard, the
+                # record moves on, and the old button is still in the chat. Without this, the
+                # press reaches a session doing real work and the terminal's pane re-read is
+                # the only thing left between it and a keypress — and that re-read cannot tell
+                # a drawn dialog from a file that quotes one (DEC-080). Asked here rather than
+                # on the surface that rendered it, because it is lifecycle policy and every
+                # caller owes it.
+                raise ValueError("that session is not waiting to be trusted")
             if not await self._store.claim_idempotency_key(command.idempotency_key):
                 raise DuplicateCommandError("trust callback was already handled")
             return await self._terminal.answer_trust(command.session_id)

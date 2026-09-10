@@ -792,7 +792,17 @@ class _TrustLauncher(SessionUseCaseDouble):
 
 
 def _trust_blocked() -> tuple[PrivateBotBoundary, _TrustLauncher]:
-    launcher = _TrustLauncher(_a_running_session(SessionState.FAILED))
+    """A session the lifecycle has recorded as blocked on the question, pane still asking.
+
+    `SessionState.FAILED` until 2026-09-10, which was the state a trust-blocked launch landed
+    in before sub-plan 1 gave it one of its own — and which, now that the row is gated on the
+    record, is no longer a state that carries the button. A FAILED session whose pane really
+    is asking becomes `untrusted` on the next reconciliation pass (`TRUST_REQUIRED` has an edge
+    from FAILED) and gets its row then; that transition is `ReconciliationService`'s to make,
+    and asserting the button over a FAILED record here would be asserting the defect the gate
+    removed.
+    """
+    launcher = _TrustLauncher(_a_running_session(SessionState.UNTRUSTED))
     boundary = build_private_bot(
         7,
         11,
@@ -1878,6 +1888,79 @@ async def test_the_detail_screen_offers_both_answers_to_the_trust_question() -> 
 
     assert "Trust this project" in labels
     assert any("Don" in label and "trust" in label for label in labels)
+
+
+@pytest.mark.asyncio
+async def test_a_working_session_is_offered_no_trust_button_whatever_its_pane_shows() -> None:
+    """The pane is evidence about a screen; the record is evidence about a *session*.
+
+    The classifier decides "this pane is asking about folder trust" by matching text, and text
+    is not proof that a dialog is drawn: an agent displaying a file that *contains* the dialog
+    — this project's own trust fixtures, say — matches it exactly. That put a live *Trust this
+    project* button on a healthy RUNNING session, and pressing it sent `Down` and `Enter` into
+    whatever that agent was doing.
+
+    No count of markers closes that, because a verbatim copy of a dialog satisfies any number
+    of them. What closes it is asking the lifecycle rather than the screen: only a session
+    recorded `untrusted` is offered the answer. The notifier has always filtered this way
+    (`trust_notifications.py`); this is the detail screen agreeing with it.
+    """
+    running = replace(_a_running_session(SessionState.RUNNING), profile_id=ProfileId("claude"))
+    boundary = build_private_bot(
+        7,
+        11,
+        backend=backend_for(
+            catalogue=(CatalogProject("a" * 24, "Demo", "tests", "Registered"),),
+            sessions=_TrustLauncher(running),
+        ),
+        trust_dialogs=profile_trust_dialogs(),
+    )
+    chat = FakeChat()
+    anchor = await _open_detail(chat, boundary)
+
+    labels = [
+        unpadded(button.text)
+        for row in chat.messages[anchor].reply_markup.inline_keyboard
+        for button in row
+    ]
+
+    assert "Trust this project" not in labels, (
+        "a working session was offered a button that types into its pane, because the pane "
+        "happened to be showing text that looks like a trust dialog"
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_session_the_lifecycle_has_not_caught_up_with_waits_for_it() -> None:
+    """The accepted cost of the gate, pinned so it is a decision rather than a surprise.
+
+    `claude-remote` prints its readiness banner before the dialog renders, so a launch can be
+    recorded RUNNING — or, before sub-plan 1, FAILED — over an agent that is in fact stuck. The
+    row does not appear for such a record, and that is the trade: `ReconciliationService` reads
+    the readiness check on every live observation and issues `TRUST_REQUIRED` from any of the
+    three origin states, so the session becomes `untrusted` on its own and the row follows.
+    What the owner pays is one reconciliation pass, not the row (DEC-080).
+    """
+    stuck = replace(_a_running_session(SessionState.FAILED), profile_id=ProfileId("claude"))
+    boundary = build_private_bot(
+        7,
+        11,
+        backend=backend_for(
+            catalogue=(CatalogProject("a" * 24, "Demo", "tests", "Registered"),),
+            sessions=_TrustLauncher(stuck),
+        ),
+        trust_dialogs=profile_trust_dialogs(),
+    )
+    chat = FakeChat()
+    anchor = await _open_detail(chat, boundary)
+
+    labels = [
+        unpadded(button.text)
+        for row in chat.messages[anchor].reply_markup.inline_keyboard
+        for button in row
+    ]
+
+    assert "Trust this project" not in labels
 
 
 @pytest.mark.asyncio

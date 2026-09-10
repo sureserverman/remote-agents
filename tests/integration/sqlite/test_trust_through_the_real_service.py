@@ -25,6 +25,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
+from dataclasses import replace
 
 from remote_agents.adapters.agents.registry import profile_trust_dialogs
 from remote_agents.adapters.sqlite.database import open_database
@@ -62,12 +63,20 @@ class _AnsweringTerminal:
 
 
 def _answerable_record(profile: str) -> SessionRecord:
+    """A session the lifecycle records as blocked on the question — which is what makes it one.
+
+    `SessionState.FAILED` until 2026-09-10, because that is where a trust-blocked launch landed
+    before sub-plan 1 gave it a state of its own, and because the service did not ask. It asks
+    now (DEC-080): a press is refused unless the record says `untrusted`, so a FAILED record is
+    no longer an answerable one — a FAILED session whose pane really is asking becomes
+    `untrusted` on the next reconciliation pass and is answerable then.
+    """
     return SessionRecord(
         SessionId.new(),
         ProjectId("a" * 24),
         ProfileId(profile),
         SessionDisplayIdentity("Demo", profile, "regular", 1),
-        SessionState.FAILED,
+        SessionState.UNTRUSTED,
         datetime.now(UTC),
     )
 
@@ -104,6 +113,32 @@ async def test_every_answerable_profile_is_answerable_through_the_real_service(
 
     assert terminal.answered == [record.session_id], f"{profile} never reached the terminal"
     assert result is TrustState.UNKNOWN
+
+
+async def test_a_session_that_is_no_longer_untrusted_is_refused_the_answer(tmp_path: Path) -> None:
+    """The stale button, closed where lifecycle policy lives rather than on one surface.
+
+    The bot no longer *renders* the row for a session that is not `untrusted` (DEC-080), but a
+    token minted while it was one outlives the screen that drew it: the owner answers the dialog
+    at the keyboard, the record moves on, and the old button is still in the chat. Pressing it
+    would reach a session that is running real work, and the terminal's pane re-read is then the
+    only thing between that and a keypress — which is exactly the evidence DEC-080 says cannot
+    tell a drawn dialog from a file that quotes one.
+
+    So the state is asked here too, once, for every surface and every future caller.
+    """
+    store = _store(tmp_path)
+    record = replace(_answerable_record("claude"), state=SessionState.RUNNING)
+    await store.save(record)
+    terminal = _AnsweringTerminal()
+    service = SessionService(store, terminal)
+
+    with pytest.raises(ValueError, match="not waiting"):
+        await service.answer_trust(
+            AnswerTrustCommand(record.session_id, idempotency_key="stale-token")
+        )
+
+    assert terminal.answered == [], "a keypress reached a session that had moved on"
 
 
 async def test_the_service_delegates_every_profile_to_the_terminal(tmp_path: Path) -> None:
