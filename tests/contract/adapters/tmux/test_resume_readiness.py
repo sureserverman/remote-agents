@@ -580,3 +580,78 @@ async def test_a_pane_gone_before_the_keys_reports_that_nothing_was_sent(tmp_pat
     assert gateway.sent == [], "nothing was delivered"
     assert not answered.pressed
     assert answered.observed is TrustState.UNKNOWN
+
+
+@pytest.mark.asyncio
+async def test_a_read_of_a_vanished_pane_answers_in_the_read_methods_own_vocabulary(
+    tmp_path,
+) -> None:
+    """`trust_state` is a read and returns a `TrustState`. Nothing may make it return the other.
+
+    This exists because it happened. `trust_state` and `answer_trust` open with the same two
+    lines, so a guard written for the second landed in the first, and `trust_state` began
+    returning `TrustAnswer(pressed=False, ...)`. Nothing failed: there is no type checker in
+    this project's dev group, and ruff's rules cannot see a wrong return type. The live effect
+    was a hidden Trust button -- `trust_available` compares `observed is TrustState.AWAITING`,
+    which a dataclass is not -- so the row disappeared by accident while looking like policy.
+
+    Asserting the type rather than only the value is the point: the old bug's *value* was
+    falsy in the right direction, and that is exactly why nothing noticed.
+    """
+
+    class _Vanished(_DeclineGateway):
+        async def capture(self, session_id: SessionId) -> str:
+            raise TerminalTargetMissing(f"ra-{session_id}")
+
+    session_id = SessionId.new()
+    project = tmp_path / "opaque-editor"
+    project.mkdir(exist_ok=True)
+    gateway = _Vanished(session_id, _CODEX_DIALOG, tmp_path, ProfileId("codex"))
+    terminal = TmuxTerminal(
+        gateway,
+        {ProjectId("opaque-editor"): project},
+        {ProfileId("codex"): _profile("Claude Code", (_CODEX_BLOCKER,))},
+        startup_timeout=0.2,
+        trust_dialogs=profile_trust_dialogs(),
+    )
+
+    state = await terminal.trust_state(session_id)
+
+    assert isinstance(state, TrustState), (
+        f"trust_state must answer in TrustState, not {type(state).__name__} -- "
+        "TerminalPort.trust_state says so and trust_available depends on it"
+    )
+    assert state is TrustState.UNKNOWN, "a pane that is gone is not a pane that is asking"
+
+
+@pytest.mark.asyncio
+async def test_a_pane_gone_before_the_first_read_reports_that_nothing_was_sent(tmp_path) -> None:
+    """The third of `answer_trust`'s windows, and the one its guard originally missed.
+
+    Its docstring claims three `try` blocks; for one revision the code had two, because this
+    one had been spliced into `trust_state` instead. The owner's cost was the same as the
+    other two windows: the token is claimed before the terminal call, so an escaping
+    exception left a spent one-shot, a cleared spinner and no words.
+    """
+
+    class _Vanished(_DeclineGateway):
+        async def capture(self, session_id: SessionId) -> str:
+            raise TerminalTargetMissing(f"ra-{session_id}")
+
+    session_id = SessionId.new()
+    project = tmp_path / "opaque-editor"
+    project.mkdir(exist_ok=True)
+    gateway = _Vanished(session_id, _CODEX_DIALOG, tmp_path, ProfileId("codex"))
+    terminal = TmuxTerminal(
+        gateway,
+        {ProjectId("opaque-editor"): project},
+        {ProfileId("codex"): _profile("Claude Code", (_CODEX_BLOCKER,))},
+        startup_timeout=0.2,
+        trust_dialogs=profile_trust_dialogs(),
+    )
+
+    answered = await terminal.answer_trust(session_id)
+
+    assert gateway.sent == [], "there was no pane to send anything to"
+    assert not answered.pressed
+    assert answered.observed is TrustState.UNKNOWN

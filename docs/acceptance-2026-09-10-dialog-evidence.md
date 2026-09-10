@@ -238,6 +238,45 @@ direction that strands the owner with a question they cannot answer from their p
 
 ---
 
+## The last link, measured: does that capture actually move a record?
+
+Every candidate above is about whether a *pane* can be read. The thing that matters is whether
+the reading reaches the **lifecycle record**, because that record is what DEC-080's button and
+DEC-078's unconfirmed kill are gated on. Recorded here because BL-053 stated this result and
+nothing in the repository backed it — a claim about trust evidence written ahead of its proof,
+which is this plan's own subject.
+
+Driven through the project's own functions — `TmuxTerminal._is_awaiting_trust` on a real
+`TmuxTerminal`, and `services._event_for_recheck` — against two captures: a shell pane running
+`sed -n '44,62p' src/remote_agents/adapters/tmux/profiles.py`, and a live **trusted, RUNNING**
+codex pane with that same blocker table typed into its composer. Both carry all three blocker
+strings; `profiles.py` satisfies **every** profile's blocker, not only codex's.
+
+```
+_is_awaiting_trust(real method, real capture) = True      # both captures
+```
+
+and `_event_for_recheck(state, awaiting_trust=True, age)`:
+
+| age | STARTING / RUNNING / FAILED | UNTRUSTED |
+|---|---|---|
+| 1 minute | **`trust_required`** — the record moves | `None` |
+| 6 minutes | `None` — the reading is refused as too old | `None` |
+
+**So the pane does move the record, inside `_LATE_DIALOG_WINDOW` and not outside it.** Three
+boundaries this exposes, all of them residual rather than introduced:
+
+1. Inside the window the record moves for exactly the states `_TRUST_CORRECTABLE` names —
+   `RUNNING` among them, via `reconcile._event_for`.
+2. **The launch/resume settle has no window at all.** `services._event_for_launch` records
+   `trust_required` from a settle capture outright. Narrow in practice, and DEC-081 deliberately
+   keeps that path — a launch is the one moment the pane is trustworthy evidence.
+3. **`untrusted` is absorbing, with no clock in it.** `_event_for_recheck(UNTRUSTED, …)` returns
+   `None` at every age, so a session answered at the keyboard whose agent later shows these
+   words never leaves `untrusted`. BL-053 records this; the window does not touch it.
+
+---
+
 ## What the three measurements leave
 
 Nothing on the list works. Stated plainly so Task 1.3 decides from the measurement rather than

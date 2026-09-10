@@ -574,8 +574,13 @@ class TmuxTerminal:
         try:
             read = await self._trust_capture(session_id)
         except TerminalTargetMissing:
-            # Gone before anything was read: nothing was sent, and nothing is known.
-            return TrustAnswer(pressed=False, observed=TrustState.UNKNOWN)
+            # A pane that is gone is not a pane that is asking, and this is a *read*: it
+            # answers in its own vocabulary. An earlier revision returned a `TrustAnswer`
+            # here -- `answer_trust`'s guard, misplaced into this method because the two open
+            # with identical lines -- which broke `TerminalPort.trust_state` outright and,
+            # via `trust_available`'s `observed is TrustState.AWAITING`, hid the row by
+            # accident rather than by rule. Found by this stage's gate evaluator.
+            return TrustState.UNKNOWN
         if read is None:
             return TrustState.UNKNOWN
         capture, dialog = read
@@ -620,7 +625,11 @@ class TmuxTerminal:
         caught separately because they do **not** get the same answer, which is the reason
         they are three `try` blocks rather than one.
         """
-        read = await self._trust_capture(session_id)
+        try:
+            read = await self._trust_capture(session_id)
+        except TerminalTargetMissing:
+            # Gone before anything was read: nothing was sent, and nothing is known.
+            return TrustAnswer(pressed=False, observed=TrustState.UNKNOWN)
         if read is None:
             # No dialog declared for this profile, or the pane could not be captured.
             return TrustAnswer(pressed=False, observed=TrustState.UNKNOWN)
