@@ -571,7 +571,11 @@ class TmuxTerminal:
         live-and-RUNNING session here would make the states this exists to rescue the states
         it refuses.
         """
-        read = await self._trust_capture(session_id)
+        try:
+            read = await self._trust_capture(session_id)
+        except TerminalTargetMissing:
+            # Gone before anything was read: nothing was sent, and nothing is known.
+            return TrustAnswer(pressed=False, observed=TrustState.UNKNOWN)
         if read is None:
             return TrustState.UNKNOWN
         capture, dialog = read
@@ -606,6 +610,15 @@ class TmuxTerminal:
         declined to type into, having already spent the one-shot token that would have let the
         owner retry. This method always knew which had happened; it simply had nowhere to say
         it (`ports.terminal.TrustAnswer`).
+
+        **A pane that dies mid-answer is answered, not raised.** `TerminalTargetMissing` is
+        ordinary evidence of an ended session rather than a fault -- its own docstring says so
+        -- and letting it unwind from here threw away the very fact this method had just been
+        given somewhere to report. It did so on the one path where the press may actually have
+        landed: the callback token is claimed before this call, so an escaping exception cost
+        the owner a spent token, a cleared spinner and no words at all. The three windows are
+        caught separately because they do **not** get the same answer, which is the reason
+        they are three `try` blocks rather than one.
         """
         read = await self._trust_capture(session_id)
         if read is None:
@@ -622,12 +635,24 @@ class TmuxTerminal:
             # `observed` stays AWAITING because that is what it is, and the owner is told the
             # press did nothing rather than being told it succeeded.
             return TrustAnswer(pressed=False, observed=TrustState.AWAITING)
-        await self._gateway.send_keys(session_id, keys)
+        try:
+            await self._gateway.send_keys(session_id, keys)
+        except TerminalTargetMissing:
+            # **`pressed=False`, because of what tmux means by this error.** The target did
+            # not exist, so `send-keys` delivered nothing -- a missing pane is not a pane that
+            # received a keystroke. Reporting `True` here would be the guess this type exists
+            # to stop anyone making.
+            return TrustAnswer(pressed=False, observed=TrustState.UNKNOWN)
         await asyncio.sleep(_TRUST_ANSWER_WAIT_SECONDS)
-        return TrustAnswer(
-            pressed=True,
-            observed=classify_trust_capture(await self._gateway.capture(session_id), dialog),
-        )
+        try:
+            after = await self._gateway.capture(session_id)
+        except TerminalTargetMissing:
+            # **`pressed=True`, and this is the case the catch exists for.** The keys went in
+            # and the pane is gone a beat later -- an agent that took the answer and exited,
+            # or one killed meanwhile. What was sent was sent, whatever happened after, and
+            # the owner's wording already covers the rest ("relaunch if it already gave up").
+            return TrustAnswer(pressed=True, observed=TrustState.UNKNOWN)
+        return TrustAnswer(pressed=True, observed=classify_trust_capture(after, dialog))
 
     async def decline_trust(self, session_id: SessionId) -> TerminalObservation:
         """Answer the folder-trust question with *no*, and make sure the pane is gone.

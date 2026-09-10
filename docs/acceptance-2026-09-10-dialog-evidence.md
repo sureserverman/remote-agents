@@ -100,11 +100,26 @@ displaying the dialog's text does not?
    codex dialog's geometry**. The first natural attempt (`ctl-adv`) landed one row off at +4;
    removing one trailing line closed the gap. The offset is a function of how many rows were
    drawn, and a file controls that completely.
-3. **The signal is inverted.** The live RUNNING agent quoting the dialog put the cursor at
-   `(41, 15)` — **on the row carrying `Yes, continue`**, offset 0. So the strictest reading of
-   this candidate, "the cursor sits inside the option block", is satisfied by the **false
-   positive** and by neither true positive. Adopting it would not have been a weak rule; it
-   would have been a rule that prefers the impostor.
+3. **It does not correlate with the truth in either direction.** The live RUNNING agent
+   quoting the dialog put the cursor at `(41, 15)` — **on the row carrying `Yes, continue`**,
+   offset 0. So the strictest reading of this candidate, "the cursor sits inside the option
+   block", was satisfied by the **false positive** and by neither true positive.
+
+   **Said carefully, because an earlier draft of this section said "the signal is inverted"
+   and that overclaims.** A polarity is a rule, and one sample cannot establish one here: that
+   caret is a text-input cursor resting at the end of whatever was typed, so its row is
+   line-wrap arithmetic for that sentence at that width, not a property of live agents quoting
+   dialogs. Rephrase the same text, or take it at a different pane width, and the caret moves
+   to a row with no relationship to the option block. This is precisely the coincidence flagged
+   two points above for `ctl-exact`, and it deserved naming here too rather than being read as
+   a signal with the sign flipped.
+
+   The rejection does not depend on it. Point 1 alone is decisive and is a property of the
+   real dialogs rather than of any control: **neither asking agent puts the cursor inside its
+   option block**, so the rule fails on every true positive before a false positive is even
+   considered. What the row-0 measurement adds is only that the converse is not available
+   either — nobody should resurrect this candidate by testing for the cursor being *outside*
+   the block. It correlates with nothing.
 
 **Cost if it had been adopted.** *False positive:* every healthy session whose agent has the
 dialog's words on screen with the cursor near them — a session the owner is using to read
@@ -230,7 +245,7 @@ from the shape of the options:
 
 | candidate | verdict | the figure that decided it |
 |---|---|---|
-| cursor position | **rejected, inverted** | real codex +3, real cursor-agent +6, **false positive 0** |
+| cursor position | **rejected — uncorrelated in both directions** | real codex +3, real cursor-agent +6, **false positive 0** |
 | redraw stability | **rejected** | live quoting pane re-rendered cleanly; markers `ALL PRESENT` at 90 cols |
 | agent-reported hook | **rejected** | `[lines: 0]` with the dialog up; `Stop` in the same spool after a turn |
 

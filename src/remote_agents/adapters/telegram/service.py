@@ -308,6 +308,13 @@ _PENDING_NOTICES = {
     # `callback`'s `if pending is None: raise` costs them the screen on a failure whose token
     # has already been spent.
     "session.decline": "Closing the session without trusting it…",
+    # **The accept half, for every word of the reason above.** It sends the agent's own
+    # affirmative keys and then sleeps `_TRUST_ANSWER_WAIT_SECONDS` before re-reading the
+    # pane, so it makes the owner wait exactly as its sibling does -- and its token is claimed
+    # before the terminal call, so an escaping failure spent the one-shot and left them a
+    # cleared spinner with no words. It was absent while `session.decline` was present, which
+    # is the asymmetry rather than a decision; found by the second Tier-2 pass on this task.
+    "session.trust": "Answering the folder-trust question…",
     "launch.profile": "Launching — waiting for the agent to become ready…",
     "resume.confirm": "Resuming — waiting for the agent to become ready…",
     # The slowest action in this bot, and it had no notice. Enabling probes the daemon (10 s
@@ -2421,9 +2428,23 @@ class PrivateBotBoundary:
         notification's button cannot fire a keypress into a session that is no longer asking,
         and a press that read nothing now says so instead of claiming the folder was trusted.
 
-        And after DEC-081 the record this gate consults is itself sounder: a pane may **clear**
-        `untrusted` but may no longer **set** it, so the state half can no longer be conjured
-        by an agent that merely has the dialog's words on screen.
+        **What DEC-081 does and does not change, stated in the right tense.** It *decides* that
+        a pane may **clear** `untrusted` and may no longer **set** it -- and that is a decision,
+        not code. No implementation ships with it, deliberately: the plan that recorded it
+        (2026-09-10) authored no task for the evidence change, because what it costs differs by
+        an order of magnitude between the routes and that plan is written from the decision
+        rather than before it.
+
+        So the state half of this gate is **still conjurable today**, and the bound is the only
+        thing narrowing it. `reconcile._TRUST_CORRECTABLE` is `{STARTING, RUNNING, FAILED}` and
+        `reading.awaiting_trust` is still the one-substring blocker check, so inside
+        `_LATE_DIALOG_WINDOW` -- five minutes from `created_at` -- an agent displaying any of
+        the thirteen files carrying codex's blocker can still move a working session to
+        `untrusted`, which is the state this gate consults and the state DEC-078's unconfirmed
+        kill is offered from. Past that window the reading is refused and the record stands.
+        That is a mitigation, not an elimination; BL-053 carries the residual, and an earlier
+        draft of this very paragraph asserted the hole was closed, which is the same false
+        claim about trust evidence that BL-053 is itself about.
         """
         if record.state is not SessionState.UNTRUSTED:
             return False

@@ -504,9 +504,14 @@ async def test_the_notification_still_shares_the_state_filter_it_was_credited_wi
     """The half of the claim that *was* true, pinned so the correction does not overshoot.
 
     Correcting "the two surfaces agree" must not turn into "the two surfaces share nothing".
-    They share the state filter, and it is the half DEC-081 made sounder -- a pane may now
-    clear `untrusted` but may no longer set it, so this filter can no longer be conjured by an
-    agent that merely has the dialog's words on screen.
+    They share the state filter, and that is the whole of what this asserts.
+
+    **It deliberately claims nothing about DEC-081.** An earlier draft of this docstring said
+    the filter "can no longer be conjured", which this test does not exercise and which is not
+    true of the code today -- DEC-081 is a recorded decision with no implementation yet, and
+    inside `reconcile._LATE_DIALOG_WINDOW` a pane may still set `untrusted`. A test docstring
+    making a claim its body never checks is the same defect one layer down, so the claim is
+    gone rather than restated.
     """
     view = _View()
     await _notifier(_Sessions(_record(state=SessionState.RUNNING)), _Store(), view).pass_once()
