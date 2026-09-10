@@ -1,0 +1,40 @@
+
+
+  Cursor Agent
+  v2026.09.08-6caf4ff
+  Tip: Use /config to customize Cursor settings and behavior.
+
+
+
+
+  → Plan, search, build anything
+
+
+  Auto · allowlist · ~/dev/ai-tools/basic-harness · main
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

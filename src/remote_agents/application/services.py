@@ -6,7 +6,7 @@ import asyncio
 import logging
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 from remote_agents.application.commands import (
     AnswerTrustCommand,
@@ -131,8 +131,23 @@ def _event_for_launch(observation: TerminalObservation) -> LifecycleEvent:
     return LifecycleEvent.READY if observation.live else LifecycleEvent.STARTUP_ERROR
 
 
+#: How long after launch a re-read may still move a record down to UNTRUSTED.
+#:
+#: The same number and the same argument as `application/reconcile._LATE_DIALOG_WINDOW`, and
+#: **it is a second copy of a bound that existed in one place while the hazard lived in two.**
+#: `refresh_readiness` runs on every session-list open, on both surfaces, and its FAILED arm
+#: corrected to UNTRUSTED with no bound at all — a faster door than the reconciler's 60 s pass,
+#: and the one an adversarial review walked through after the other was shut. A FAILED record
+#: can hold a live, working agent: every opencode launch did, for months, because a readiness
+#: marker was three ASCII dots where the agent draws an ellipsis.
+#:
+#: Named separately rather than imported because `application/reconcile` imports this module;
+#: the duplication is a cycle avoided, and the test below asserts the two stay equal.
+_LATE_DIALOG_WINDOW = timedelta(minutes=5)
+
+
 def _event_for_recheck(
-    state: SessionState, observation: TerminalObservation
+    state: SessionState, observation: TerminalObservation, age: timedelta
 ) -> LifecycleEvent | None:
     """What a re-read capture means for a record already in `state`, or None to leave it.
 
@@ -147,6 +162,12 @@ def _event_for_recheck(
     raising.
     """
     if observation.awaiting_trust:
+        if age >= _LATE_DIALOG_WINDOW:
+            # Past the race this correction exists for, so the reading is likelier to be a
+            # screen carrying the dialog's words than an agent asking them (DEC-080). `None`
+            # rather than falling through: a reading too old to be trusted as evidence of a
+            # dialog is not thereby evidence that the pane is ready.
+            return None
         return LifecycleEvent.TRUST_REQUIRED if state in _TRUST_CORRECTABLE else None
     if not observation.live:
         if state is SessionState.UNTRUSTED and observation.detail == TERMINAL_NOT_LIVE:
@@ -176,7 +197,11 @@ class SessionService:
         *,
         locks: SessionLocks | None = None,
         hide_in_console: Callable[[SessionId], Awaitable[None]] | None = None,
+        now: Callable[[], datetime] = lambda: datetime.now(UTC),
     ) -> None:
+        # Injected for the reason `ReconciliationService`'s is: the late-dialog window below is
+        # measured against it, and a test that cannot move the clock cannot drive the bound.
+        self._now = now
         self._store = store
         self._terminal = terminal
         self._locks = locks or SessionLocks()
@@ -311,7 +336,9 @@ class SessionService:
                     observation = await self._terminal.confirm_ready(
                         current.session_id, current.profile_id
                     )
-                    event = _event_for_recheck(current.state, observation)
+                    event = _event_for_recheck(
+                        current.state, observation, self._now() - current.created_at
+                    )
                     if event is not None:
                         await self._store.record_event(current.session_id, event)
             return tuple(await self._store.list())

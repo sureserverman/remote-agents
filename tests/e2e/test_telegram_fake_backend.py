@@ -1931,6 +1931,45 @@ async def test_a_working_session_is_offered_no_trust_button_whatever_its_pane_sh
 
 
 @pytest.mark.asyncio
+async def test_a_stale_trust_press_says_so_instead_of_going_silent() -> None:
+    """The refusal DEC-080 added, from the owner's side of it.
+
+    The button outlives the screen that drew it: the owner answers at the keyboard, the record
+    moves on, and an older copy of the question is still in the chat. `SessionService` refuses
+    that press — the security half, and it was already covered — but the `ValueError` it raises
+    had no handler here, and `session.trust` carries no pending notice, so the dispatcher
+    re-raised it. What the owner got was a cleared spinner and no words: indistinguishable from
+    a broken button. Found by the review of that gate; its sibling `_decline_reply` has caught
+    the equivalent since it was written.
+    """
+
+    class _Refusing(_TrustLauncher):
+        async def answer_trust(self, command):
+            raise ValueError("that session is not waiting to be trusted")
+
+    untrusted = replace(
+        _a_running_session(SessionState.UNTRUSTED), profile_id=ProfileId("claude")
+    )
+    boundary = build_private_bot(
+        7,
+        11,
+        backend=backend_for(
+            catalogue=(CatalogProject("a" * 24, "Demo", "tests", "Registered"),),
+            sessions=_Refusing(untrusted),
+        ),
+        trust_dialogs=profile_trust_dialogs(),
+    )
+    token = boundary.callbacks.create(
+        "session.trust", str(untrusted.session_id), 7, 11, 1, mutation=True
+    )
+
+    reply = await boundary._trust_reply(str(untrusted.session_id), token, 1)
+
+    assert "already been answered" in reply["text"], reply["text"]
+    assert "Nothing was sent to it" in reply["text"]
+
+
+@pytest.mark.asyncio
 async def test_a_session_the_lifecycle_has_not_caught_up_with_waits_for_it() -> None:
     """The accepted cost of the gate, pinned so it is a decision rather than a surprise.
 

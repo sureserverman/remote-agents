@@ -21,11 +21,11 @@ first in the file now, ahead of the newer material, so the next person to extend
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from dataclasses import replace
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
-from dataclasses import replace
 
 from remote_agents.adapters.agents.registry import profile_trust_dialogs
 from remote_agents.adapters.sqlite.database import open_database
@@ -113,6 +113,79 @@ async def test_every_answerable_profile_is_answerable_through_the_real_service(
 
     assert terminal.answered == [record.session_id], f"{profile} never reached the terminal"
     assert result is TrustState.UNKNOWN
+
+
+async def test_a_list_open_does_not_relabel_an_aged_failed_session(tmp_path: Path) -> None:
+    """**The faster door, shut.** `refresh_readiness` runs on every session-list open.
+
+    The bound that keeps a screenful of text from rewriting a working session's record lived
+    only in `ReconciliationService`, which looks once a minute. This path looks every time
+    either surface renders a list, and its FAILED arm corrected to `untrusted` with no bound at
+    all — so the hazard DEC-080 was written for survived, through a door that opens faster than
+    the one that was closed. Found by an adversarial review after the first fix.
+
+    A FAILED record holding a live, working agent is not hypothetical: every opencode launch was
+    one, for months, because a readiness marker was three ASCII dots where the agent draws an
+    ellipsis. `untrusted` carries DEC-078's unconfirmed kill, so this is a one-press loss of
+    real work.
+    """
+    store = _store(tmp_path)
+    aged = replace(
+        _answerable_record("codex"),
+        state=SessionState.FAILED,
+        created_at=datetime.now(UTC) - timedelta(hours=3),
+    )
+    await store.save(aged)
+
+    class _Blocked:
+        async def confirm_ready(self, session_id, profile_id):
+            del profile_id
+            return TerminalObservation(
+                session_id, live=True, preserved=False, awaiting_trust=True
+            )
+
+    service = SessionService(store, _Blocked())
+
+    await service.refresh_readiness()
+
+    assert (await store.get(aged.session_id)).state is SessionState.FAILED, (
+        "a three-hour-old FAILED session was relabelled untrusted by a list render, which "
+        "hands a working agent a one-press unconfirmed kill"
+    )
+
+
+async def test_a_fresh_failed_session_is_still_corrected_on_a_list_open(tmp_path: Path) -> None:
+    """The bound narrows *when*, not *whether* — the rescue path still works while it is fresh."""
+    store = _store(tmp_path)
+    fresh = replace(_answerable_record("codex"), state=SessionState.FAILED)
+    await store.save(fresh)
+
+    class _Blocked:
+        async def confirm_ready(self, session_id, profile_id):
+            del profile_id
+            return TerminalObservation(
+                session_id, live=True, preserved=False, awaiting_trust=True
+            )
+
+    service = SessionService(store, _Blocked())
+
+    await service.refresh_readiness()
+
+    assert (await store.get(fresh.session_id)).state is SessionState.UNTRUSTED
+
+
+async def test_the_two_late_dialog_windows_are_the_same_number(tmp_path: Path) -> None:
+    """Two copies of one bound, in two modules, because reconcile imports services.
+
+    The duplication is a deliberate cycle avoidance and this is what keeps it honest: a window
+    widened in one place and not the other would leave the faster door open again, which is
+    exactly how this defect survived its first fix.
+    """
+    del tmp_path
+    from remote_agents.application.reconcile import _LATE_DIALOG_WINDOW as reconciler
+    from remote_agents.application.services import _LATE_DIALOG_WINDOW as service
+
+    assert reconciler == service, (reconciler, service)
 
 
 async def test_a_session_that_is_no_longer_untrusted_is_refused_the_answer(tmp_path: Path) -> None:

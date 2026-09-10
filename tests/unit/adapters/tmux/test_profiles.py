@@ -174,18 +174,25 @@ def test_a_readiness_marker_is_a_string_the_agent_actually_draws() -> None:
     against a **real capture** here — the same committed pane dumps the trust parser is driven
     over, so the assertion is about what the agent draws rather than about what somebody typed.
 
-    **Only the profiles whose committed capture is a *ready* screen can be checked this way**,
-    which today is claude and opencode. codex's and cursor-agent's captures are of their
-    folder-trust dialogs — a screen that appears *instead of* the banner — so they would fail
-    this for a reason that is not a defect, and asserting over them would teach the next reader
-    to add exceptions. Their markers are exercised by the launches in `tests/live` and, on
-    2026-09-10, by that same drill: codex reached `ready` in 0.4 s.
+    **All four providers, and getting there took the drill.** The first version of this checked
+    claude and opencode only, because the captures this repository had for codex and
+    cursor-agent were of their *folder-trust dialogs* — a screen that appears instead of the
+    banner — and there was no way to launch either past that dialog without answering it. The
+    review that read this said so plainly: the two markers left unchecked were in the same
+    coverage gap that let the opencode bug ship. What closed it was the owner's live drill on
+    2026-09-10, which trusted `basic-harness` for both agents; their ready screens could then be
+    captured for the first time (`tests/fixtures/ready_screens/`).
+
+    Every marker in the table is now compared against the screen its own agent draws.
     """
     from remote_agents.adapters.tmux.profiles import _READINESS_MARKERS
 
-    captures = Path(__file__).resolve().parents[3] / "fixtures" / "trust_dialogs"
-    for profile in ("claude", "opencode"):
-        drawn = (captures / f"{profile}.txt").read_text(encoding="utf-8")
+    captures = Path(__file__).resolve().parents[3] / "fixtures" / "ready_screens"
+    for profile in ("claude", "claude-remote", "codex", "cursor-agent", "opencode"):
+        # `claude-remote` is `claude --remote-control`: the same binary drawing the same
+        # banner, and the registry resolves it that way everywhere else too.
+        screen = "claude" if profile.startswith("claude") else profile
+        drawn = (captures / f"{screen}.txt").read_text(encoding="utf-8")
         marker = _READINESS_MARKERS[profile]
 
         assert marker in drawn, (

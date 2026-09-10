@@ -95,7 +95,7 @@ _REPAIR_LOCK_TIMEOUT_SECONDS = 1.0
 #: fourth added to one and not the other is a name that does not resolve.
 _TRUST_CORRECTABLE = frozenset({SessionState.STARTING, SessionState.RUNNING, SessionState.FAILED})
 
-#: How long after launch a **RUNNING** record may still be corrected down to UNTRUSTED.
+#: How long after launch a record may still be corrected down to UNTRUSTED.
 #:
 #: The correction exists for one race and only one: an agent prints its readiness banner
 #: *before* its folder-trust question renders, so the launch loop can observe "ready" and
@@ -115,9 +115,19 @@ _TRUST_CORRECTABLE = frozenset({SessionState.STARTING, SessionState.RUNNING, Ses
 #: it as though it were cost it its good standing — and, because `untrusted` carries the
 #: unconfirmed *Don't trust — close it* (DEC-078), put a one-press kill on a working agent.
 #:
-#: **STARTING and FAILED are deliberately not bounded.** Those are launches that never became
-#: ready, where finding the pane asking is the ordinary reading however late the service looks:
-#: there is no "it was working and now it is not" to protect.
+#: **It applies to all three origins, and the exemption it used to carry was wrong.** The first
+#: version bounded RUNNING alone, arguing that STARTING and FAILED are launches that never came
+#: up and so hold no work to protect. The review that read it refuted that from the *other*
+#: commit in the same change: opencode's readiness marker was three ASCII dots where the agent
+#: draws an ellipsis, so every opencode launch burned its startup budget and landed in FAILED —
+#: with a live pane, running a perfectly good agent, for months. A FAILED record is not evidence
+#: that nothing is working; it is evidence that nothing was *seen* working, and a readiness
+#: marker is exactly the sort of thing that can be quietly wrong. Left unbounded, that is the
+#: same hazard through a second door: an aged screen carrying the dialog's words moves a working
+#: session to `untrusted`, which carries DEC-078's unconfirmed kill.
+#:
+#: The argument is the same for all three: the race is sub-second, the first pass that can
+#: notice it is 60 s away, and a reading hours later is likelier to be a screen than a question.
 _LATE_DIALOG_WINDOW = timedelta(minutes=5)
 
 
@@ -256,13 +266,16 @@ class ReconciliationService:
             # the next pass tries again, and nothing has claimed a blocked agent is running.
             return None if fallback is LifecycleEvent.READY else fallback
         if reading.awaiting_trust:
-            if record.state is SessionState.RUNNING and not self._inside_late_dialog_window(
-                record
-            ):
+            if not self._inside_late_dialog_window(record):
                 # Past the race, so the reading is likelier to be a screen carrying the words
-                # than an agent asking them. Left exactly where it was rather than corrected:
-                # the fallback for a live RUNNING pane is no event at all.
-                return fallback
+                # than an agent asking them — and **`None`, not the fallback**. Distrusting how
+                # old a reading is cannot turn it into evidence of the opposite: for a STARTING
+                # or FAILED record the pure policy's answer to a live pane is `READY`, so
+                # falling through would *promote* a pane that just told us it was showing a
+                # dialog. That is the promotion `_is_ready` refuses a trust-blocked observation
+                # for, arrived at by another road. The reading is not usable in either
+                # direction, so the right number of events is none.
+                return None
             if record.state in _TRUST_CORRECTABLE:
                 return LifecycleEvent.TRUST_REQUIRED
             if record.state is SessionState.UNTRUSTED:
@@ -345,18 +358,24 @@ class ReconciliationService:
         return self._now() - record.created_at >= self._settle_after
 
     def _inside_late_dialog_window(self, record: SessionRecord) -> bool:
-        """Whether this RUNNING record is young enough to still be in the late-dialog race.
+        """Whether this record is young enough to still be in the late-dialog race.
 
         Measured from the record's creation, which is the only timestamp a record carries and
         is the right one: the race is between *launch* observing readiness and the question
         appearing moments later.
 
-        **The residual, named rather than left to be discovered.** A session that was launched
-        into the race and then went unobserved for longer than this window — the service down,
-        the host asleep — is not corrected when it comes back, and stays RUNNING with a pane
-        that is genuinely asking. It costs the owner the row until they look at the pane. The
-        alternative costs a working agent its record, and now and then a one-press kill, which
-        is the trade taken.
+        **Two residuals, named rather than left to be discovered.**
+
+        A session launched into the race that then goes unobserved for longer than this window
+        — the service down, the host asleep, a reconciliation loop starved past four intervals
+        — is not corrected when it comes back, and keeps whatever state it had over a pane that
+        is genuinely asking. It costs the owner the row until they look at the pane.
+
+        And this cannot tell that case from a *genuine late trust question*: an agent that has
+        been working for an hour and only now touches an untrusted directory raises a real
+        dialog, and it is past the window. `TRUST_REQUIRED` has no other edge into a RUNNING
+        record, so nothing else will notice. Likely rare, and the trade is the same one: the
+        alternative costs a working agent its record, and with it a one-press unconfirmed kill.
         """
         return self._now() - record.created_at < _LATE_DIALOG_WINDOW
 

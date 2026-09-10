@@ -2448,9 +2448,25 @@ class PrivateBotBoundary:
             message_id=message_id,
         ):
             return _reply_arguments(self._message("That action has already run."))
-        result = await self.backend.sessions.answer_trust(
-            AnswerTrustCommand(SessionId.parse(entity_id), token)
-        )
+        try:
+            result = await self.backend.sessions.answer_trust(
+                AnswerTrustCommand(SessionId.parse(entity_id), token)
+            )
+        except ValueError:
+            # **The refusal DEC-080 added, given a sentence.** The service refuses a press for
+            # a record that is no longer `untrusted`, which is exactly the stale button this
+            # screen cannot help minting: the owner answers at the keyboard, the record moves
+            # on, and an older copy of the question is still in the chat. Uncaught, that
+            # reached the dispatcher's re-raise — `session.trust` has no pending notice — and
+            # the owner got a cleared spinner and no words at all, which reads as the button
+            # being broken rather than as the question being over. Its sibling `_decline_reply`
+            # has caught the equivalent from the start; this is the trust half catching up.
+            return _reply_arguments(
+                self._message(
+                    "That question has already been answered, so the session is no longer "
+                    "waiting. Nothing was sent to it."
+                )
+            )
         # UNKNOWN is the expected answer, not a failure: answering clears the dialog, so the
         # capture taken afterwards no longer matches. Reporting it as an outcome would tell
         # the owner the thing worked only when it did not.

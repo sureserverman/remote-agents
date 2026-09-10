@@ -605,14 +605,25 @@ async def test_a_long_running_session_is_not_re_labelled_from_what_its_screen_sh
     assert store.events == []
 
 
-async def test_a_launch_that_never_became_ready_is_still_corrected_however_late() -> None:
-    """The other half of the bound, so it narrows one origin rather than the mechanism.
+async def test_no_origin_is_re_labelled_from_an_aged_screen_including_the_failed_one() -> None:
+    """**The exemption I wrote for STARTING and FAILED was wrong, and this diff proves it.**
 
-    A STARTING or FAILED record is a launch that never came up. If its pane is found asking,
-    that is the ordinary reading of it however long the service took to look — there is no
-    "it was working and now it is not" to protect, because it never was.
+    It read: those are launches that never came up, so there is no "it was working and now it
+    is not" to protect. A review pointed at the *other* commit in this same change to refute
+    it. opencode's readiness marker was three ASCII dots where the agent draws an ellipsis, so
+    every opencode launch burned its whole startup budget and landed in **FAILED** — with a
+    live pane, running a perfectly good agent. A FAILED record is not proof that nothing is
+    working; it is proof that nothing was *seen* working, and a readiness marker is exactly the
+    kind of thing that can be wrong for months without anyone noticing.
+
+    So a FAILED session with a live pane can hold real work, and leaving its correction
+    unbounded left the DEC-080 hazard open through a second door: an aged screen carrying the
+    dialog's words moves it to `untrusted`, which carries DEC-078's *unconfirmed* kill. The
+    window is the same for all three origins now, and the argument is the same for all three:
+    the race is sub-second, the first pass that can notice it is 60 s away, and anything hours
+    later is likelier to be a screen than a question.
     """
-    for state in (SessionState.STARTING, SessionState.FAILED):
+    for state in (SessionState.STARTING, SessionState.FAILED, SessionState.RUNNING):
         aged = replace(record(state), created_at=datetime.now(UTC) - timedelta(hours=3))
         store = InMemoryStore((aged,))
 
@@ -626,7 +637,29 @@ async def test_a_launch_that_never_became_ready_is_still_corrected_however_late(
             (TerminalObservation(aged.session_id, live=True, preserved=False),)
         )
 
-        assert store.records[aged.session_id].state is SessionState.UNTRUSTED, state
+        assert store.records[aged.session_id].state is state, (
+            f"a {state.value} session three hours old was moved to untrusted from what its "
+            "screen showed, which is the unconfirmed-kill hazard through another origin"
+        )
+
+
+async def test_every_origin_is_still_corrected_inside_the_window() -> None:
+    """The bound narrows *when*, not *which*: all three origins still work while it is fresh."""
+    for state in (SessionState.STARTING, SessionState.FAILED):
+        fresh = record(state)
+        store = InMemoryStore((fresh,))
+
+        async def blocked(session_id, profile_id):
+            del profile_id
+            return TerminalObservation(session_id, live=True, preserved=False, awaiting_trust=True)
+
+        service = ReconciliationService(store, settle_after=timedelta(0), confirm_ready=blocked)
+
+        await service.reconcile(
+            (TerminalObservation(fresh.session_id, live=True, preserved=False),)
+        )
+
+        assert store.records[fresh.session_id].state is SessionState.UNTRUSTED, state
         assert store.events == [LifecycleEvent.TRUST_REQUIRED], state
 
 
