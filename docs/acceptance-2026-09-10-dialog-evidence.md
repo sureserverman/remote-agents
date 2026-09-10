@@ -277,6 +277,57 @@ boundaries this exposes, all of them residual rather than introduced:
 
 ---
 
+## The live drill, RUN 2026-09-10 by the owner on their own service
+
+Gate criterion J2. Run by the owner from Telegram against their live bot, after the service was
+installed **non-editable at this branch's `53643af` (0.39.1)** and restarted — deliberately off
+Task 1.1's `v0.39.0` pin, because the pinned tag predates every line under test and a drill
+against it would have measured the previous release. Six pre-existing sessions survived the
+restart. Two projects were created for it, never asked about by any agent:
+`~/dev/infra/trust-drill-codex` and `~/dev/infra/trust-drill-cursor`.
+
+Every line below is read from `sessions.sqlite3`, not from what a screen looked like.
+
+| time (UTC) | session | profile | record | what it evidences |
+|---|---|---|---|---|
+| 18:32:16.226 | `88639902` | codex | — | launch token claimed |
+| 18:32:16.495 | `88639902` | codex | `ready` | **the banner landed first** — the late-dialog race |
+| 18:32:38.453 | `88639902` | codex | `trust_required` | reconciliation read the pane and corrected it |
+| 18:33:34.257 | `88639902` | codex | — | **Trust** pressed; one-shot token claimed |
+| 18:33:36.957 | `88639902` | codex | `ready` | keys sent, dialog cleared, record moved; notification `settled=1` |
+| 18:34:57.935 | `59e291bf` | cursor-agent | `trust_required` | **no intervening `ready`** — the blocker answered the launch |
+| 18:35:11.493 | `59e291bf` | cursor-agent | `trust_declined` | **Don't trust** pressed; session `ended`, pane gone |
+
+No event carries an `error_code`. codex's pane was captured mid-drill sitting on its real dialog
+in the drill directory, and afterwards trusted at its prompt.
+
+**Both answers reached the phone, for both agents — and one of those is proven rather than
+inferred.** `render_trust_question` appends the decline row *unconditionally* and the Trust row
+only when the profile is answerable, so a **pressable Trust button proves both rows were drawn**
+(codex). For cursor-agent the decline press proves the decline row, and the Trust row follows
+from `profile_trust_dialogs()` carrying its dialog — measured here, not assumed:
+
+```
+codex          answerable=True  affirmative='Yes, continue'         negative='No, quit'
+cursor-agent   answerable=True  affirmative='Trust this workspace'  negative='Quit'
+```
+
+**The two halves took different delivery routes, which is more than the criterion asked for.**
+codex's launch reported ready, so its launch reply was an ordinary one and the question arrived
+later as a **standing notification** from the notifier's own pass (`trust_notifications` 2 → 3).
+cursor-agent's blocker answered the launch outright, so **the launch reply itself was the
+question** and `_asked_on_screen` correctly suppressed a second copy — which is why it has no
+notification row. Both routes delivered; the absence of a row for `59e291bf` is the mechanism
+working, not a miss.
+
+**What this does and does not establish.** It establishes that the feature still works end to
+end on this branch, including the changed answer path: the codex press returned
+`pressed=True, observed=UNKNOWN` and reported *Trusted*, which is now true because keys really
+were sent — under the old code that sentence printed either way. It establishes nothing about
+BL-053's residual, which is unchanged and is not what J2 asks.
+
+---
+
 ## What the three measurements leave
 
 Nothing on the list works. Stated plainly so Task 1.3 decides from the measurement rather than
