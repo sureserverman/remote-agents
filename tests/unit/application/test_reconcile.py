@@ -563,6 +563,73 @@ async def test_a_running_record_whose_pane_shows_a_dialog_is_corrected_to_untrus
     assert store.events == [LifecycleEvent.TRUST_REQUIRED]
 
 
+async def test_a_long_running_session_is_not_re_labelled_from_what_its_screen_shows() -> None:
+    """**This one happened.** Session `8f4e954d`, 2026-09-09: `ready` 19:34, `untrusted` 22:51.
+
+    Nothing happened to that agent at 22:51. It was a healthy `claude-remote` that had been
+    working for three hours and seventeen minutes, and what was on its screen at that moment
+    was this project's own trust-dialog strings being written into files. A reconciliation pass
+    read the pane, matched the dialog, and rewrote the lifecycle record of a working session.
+
+    The correction above exists for a **race**: `claude-remote` prints its readiness banner
+    before its question renders, so a launch can be recorded RUNNING over an agent that is in
+    fact stuck. That race is measured in *fractions of a second* — 0.081–0.084 s for codex
+    (`docs/acceptance-2026-09-08-untrusted-launch.md`). A session that has been running for
+    hours is not in it, and treating the two the same is what let a screenful of text end a
+    session's good standing.
+
+    It matters more than a wrong word on a row: `untrusted` is the state that carries
+    **Don't trust — close it**, which DEC-078 makes *unconfirmed*. For the hour that record was
+    wrong, one press would have destroyed a working session, and the pane re-read that guards
+    it would have agreed, because the pane really did carry the words.
+
+    So the RUNNING origin is bounded by the window the race actually lives in. STARTING and
+    FAILED are not: those are launches that never became ready, where a late reading is the
+    ordinary case rather than the suspicious one.
+    """
+    aged = replace(record(SessionState.RUNNING), created_at=datetime.now(UTC) - timedelta(hours=3))
+    store = InMemoryStore((aged,))
+
+    async def blocked(session_id, profile_id):
+        del profile_id
+        return TerminalObservation(session_id, live=True, preserved=False, awaiting_trust=True)
+
+    service = ReconciliationService(store, settle_after=timedelta(0), confirm_ready=blocked)
+
+    await service.reconcile((TerminalObservation(aged.session_id, live=True, preserved=False),))
+
+    assert store.records[aged.session_id].state is SessionState.RUNNING, (
+        "a session that had been running for three hours was moved to untrusted because its "
+        "screen carried the words of a dialog it never drew"
+    )
+    assert store.events == []
+
+
+async def test_a_launch_that_never_became_ready_is_still_corrected_however_late() -> None:
+    """The other half of the bound, so it narrows one origin rather than the mechanism.
+
+    A STARTING or FAILED record is a launch that never came up. If its pane is found asking,
+    that is the ordinary reading of it however long the service took to look — there is no
+    "it was working and now it is not" to protect, because it never was.
+    """
+    for state in (SessionState.STARTING, SessionState.FAILED):
+        aged = replace(record(state), created_at=datetime.now(UTC) - timedelta(hours=3))
+        store = InMemoryStore((aged,))
+
+        async def blocked(session_id, profile_id):
+            del profile_id
+            return TerminalObservation(session_id, live=True, preserved=False, awaiting_trust=True)
+
+        service = ReconciliationService(store, settle_after=timedelta(0), confirm_ready=blocked)
+
+        await service.reconcile(
+            (TerminalObservation(aged.session_id, live=True, preserved=False),)
+        )
+
+        assert store.records[aged.session_id].state is SessionState.UNTRUSTED, state
+        assert store.events == [LifecycleEvent.TRUST_REQUIRED], state
+
+
 async def test_a_trust_blocked_pane_is_never_promoted_to_running() -> None:
     """The regression `confirm_ready` newly reporting a blocked pane as live could cause.
 

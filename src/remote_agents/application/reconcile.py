@@ -95,6 +95,31 @@ _REPAIR_LOCK_TIMEOUT_SECONDS = 1.0
 #: fourth added to one and not the other is a name that does not resolve.
 _TRUST_CORRECTABLE = frozenset({SessionState.STARTING, SessionState.RUNNING, SessionState.FAILED})
 
+#: How long after launch a **RUNNING** record may still be corrected down to UNTRUSTED.
+#:
+#: The correction exists for one race and only one: an agent prints its readiness banner
+#: *before* its folder-trust question renders, so the launch loop can observe "ready" and
+#: report RUNNING over an agent that is in fact stuck. That gap is measured in fractions of a
+#: second — 0.081–0.084 s for codex, across five launches
+#: (`docs/acceptance-2026-09-08-untrusted-launch.md` §1). What the window has to cover is not
+#: the gap but the wait for the first reconciliation pass that can notice it, which is one
+#: interval — 60 s in production (`bootstrap._RECONCILE_INTERVAL_SECONDS`). Five minutes is
+#: five of those, so a missed pass or a slow host costs nothing.
+#:
+#: **Unbounded, this correction rewrote the lifecycle record of a working session.** Session
+#: `8f4e954d` on 2026-09-09 was `ready` at 19:34 and `untrusted` at 22:51 — a healthy
+#: `claude-remote` that had been running for over three hours, whose screen happened to be
+#: carrying this project's own trust-dialog strings while they were being written. The
+#: classifier matches text, and text on a screen is not evidence that a dialog was *drawn*
+#: (DEC-080). A session hours into its work is not in the race this exists for, and treating
+#: it as though it were cost it its good standing — and, because `untrusted` carries the
+#: unconfirmed *Don't trust — close it* (DEC-078), put a one-press kill on a working agent.
+#:
+#: **STARTING and FAILED are deliberately not bounded.** Those are launches that never became
+#: ready, where finding the pane asking is the ordinary reading however late the service looks:
+#: there is no "it was working and now it is not" to protect.
+_LATE_DIALOG_WINDOW = timedelta(minutes=5)
+
 
 class ReconciliationService:
     """Persist deterministic terminal evidence and only quarantine trusted unknown tags."""
@@ -231,6 +256,13 @@ class ReconciliationService:
             # the next pass tries again, and nothing has claimed a blocked agent is running.
             return None if fallback is LifecycleEvent.READY else fallback
         if reading.awaiting_trust:
+            if record.state is SessionState.RUNNING and not self._inside_late_dialog_window(
+                record
+            ):
+                # Past the race, so the reading is likelier to be a screen carrying the words
+                # than an agent asking them. Left exactly where it was rather than corrected:
+                # the fallback for a live RUNNING pane is no event at all.
+                return fallback
             if record.state in _TRUST_CORRECTABLE:
                 return LifecycleEvent.TRUST_REQUIRED
             if record.state is SessionState.UNTRUSTED:
@@ -311,6 +343,22 @@ class ReconciliationService:
         if self._locks is not None and self._locks.session_is_busy(record.session_id):
             return False
         return self._now() - record.created_at >= self._settle_after
+
+    def _inside_late_dialog_window(self, record: SessionRecord) -> bool:
+        """Whether this RUNNING record is young enough to still be in the late-dialog race.
+
+        Measured from the record's creation, which is the only timestamp a record carries and
+        is the right one: the race is between *launch* observing readiness and the question
+        appearing moments later.
+
+        **The residual, named rather than left to be discovered.** A session that was launched
+        into the race and then went unobserved for longer than this window — the service down,
+        the host asleep — is not corrected when it comes back, and stays RUNNING with a pane
+        that is genuinely asking. It costs the owner the row until they look at the pane. The
+        alternative costs a working agent its record, and now and then a one-press kill, which
+        is the trade taken.
+        """
+        return self._now() - record.created_at < _LATE_DIALOG_WINDOW
 
     async def _save_trusted_orphan(
         self,
