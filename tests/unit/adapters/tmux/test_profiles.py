@@ -158,3 +158,38 @@ def test_the_settle_is_read_from_one_table_by_both_constructions() -> None:
 
     assert launched.trust_settle_seconds == 0.1
     assert resumed.trust_settle_seconds == launched.trust_settle_seconds
+
+
+def test_a_readiness_marker_is_a_string_the_agent_actually_draws() -> None:
+    """**This one shipped broken and a live drill found it.**
+
+    `_READINESS_MARKERS` is what `TmuxTerminal` waits to see before it calls a launch ready. The
+    entry for opencode was `Ask anything...` — three ASCII full stops — and opencode draws
+    `Ask anything…`, one U+2026. They never matched, so every opencode launch burned the whole
+    20-second startup budget and landed in `startup_error`. Observed on the owner's own service
+    on 2026-09-10 (session `35e1e810`: `startup_error`, 20 s after launch), while running a
+    drill for something else entirely.
+
+    Nothing caught it because the marker was only ever compared against itself. It is compared
+    against a **real capture** here — the same committed pane dumps the trust parser is driven
+    over, so the assertion is about what the agent draws rather than about what somebody typed.
+
+    **Only the profiles whose committed capture is a *ready* screen can be checked this way**,
+    which today is claude and opencode. codex's and cursor-agent's captures are of their
+    folder-trust dialogs — a screen that appears *instead of* the banner — so they would fail
+    this for a reason that is not a defect, and asserting over them would teach the next reader
+    to add exceptions. Their markers are exercised by the launches in `tests/live` and, on
+    2026-09-10, by that same drill: codex reached `ready` in 0.4 s.
+    """
+    from remote_agents.adapters.tmux.profiles import _READINESS_MARKERS
+
+    captures = Path(__file__).resolve().parents[3] / "fixtures" / "trust_dialogs"
+    for profile in ("claude", "opencode"):
+        drawn = (captures / f"{profile}.txt").read_text(encoding="utf-8")
+        marker = _READINESS_MARKERS[profile]
+
+        assert marker in drawn, (
+            f"{profile} is launched waiting for {marker!r}, which is not on the screen it "
+            "actually draws when it is ready — every launch will burn the whole startup "
+            "budget and report a failure for an agent that came up fine"
+        )

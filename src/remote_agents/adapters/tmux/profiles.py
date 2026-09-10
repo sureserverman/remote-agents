@@ -29,7 +29,16 @@ _READINESS_MARKERS = {
     "claude": "Claude Code",
     "claude-remote": "Claude Code",
     "codex": "Codex",
-    "opencode": "Ask anything...",
+    # **`Ask anything`, and deliberately not the punctuation after it.** This read
+    # `Ask anything...` — three ASCII full stops — and opencode draws `Ask anything…`, one
+    # U+2026. They never matched, so every opencode launch waited out the whole 20-second
+    # startup budget and reported `startup_error` for an agent that had come up fine. Found on
+    # the owner's live service on 2026-09-10, by a drill for an unrelated feature; nothing in
+    # the suite could see it, because the marker was only ever compared against itself.
+    #
+    # Matched on the words alone so a vendor's choice between an ellipsis character and three
+    # dots — or a change of the prompt that follows — costs nothing.
+    "opencode": "Ask anything",
     "cursor-agent": "Cursor",
 }
 #: What each agent prints while it is stopped on a question rather than working.
