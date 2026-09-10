@@ -328,7 +328,9 @@ class TmuxTerminal:
         """
         # **A blocker alone decides this, and that is a known hole — not an oversight.**
         # codex's declared blocker *is* the shared question, `Do you trust the contents of this
-        # directory?`, which appears in thirteen files of this repository. So an agent
+        # directory?`, which appears in **fourteen** files of this repository as of
+        # 2026-09-10 -- thirteen before the plan that measured this, whose own acceptance
+        # document became the fourteenth. So an agent
         # displaying `profiles.py`, `trust.py`, either acceptance document or the fixtures
         # satisfies this line, and this line writes the record (`services.py`, `reconcile.py`)
         # and guards DEC-078's unconfirmed kill. `classify_trust_capture` below wants three

@@ -8,10 +8,18 @@ Plan: `2026-09-10-trust-evidence-and-release-pinning-light-plan.md`, Task 1.2.
 > rejected.** This document does not pick a winner, because nothing won. That is the result,
 > and Task 1.3 decides from it.
 >
-> **Every figure below was taken against the pinned release.** Task 1.1 replaced the editable
-> uv tool install with `remote-agents==0.39.0` from git rev `14966d3` (tag `v0.39.0`) and
-> restarted the service, so no measurement here was taken against a working tree that could
-> move under it.
+> **Every figure in the candidate sections below was taken against the pinned release.** Task
+> 1.1 replaced the editable uv tool install with `remote-agents==0.39.0` from git rev `14966d3`
+> (tag `v0.39.0`) and restarted the service, so no candidate measurement was taken against a
+> working tree that could move under it.
+>
+> **The one exception is *The live drill*, and it is deliberate.** That section was appended two
+> commits later and the pin was **lifted for it** on the owner's instruction — the drill tests
+> code the pinned tag predates, so measuring it against `v0.39.0` would have measured the
+> previous release. The section says so itself. This sentence originally read "every figure
+> below" without qualification and was falsified by its own document the moment the drill
+> landed; the gate evaluator caught it, and it is the same blanket-evidence-claim failure this
+> plan is otherwise about.
 >
 > The party taking these measurements is the session executing the plan — the party whose
 > observations are worth least — so every section quotes the command and its raw output rather

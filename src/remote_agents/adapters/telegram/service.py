@@ -310,7 +310,10 @@ _PENDING_NOTICES = {
     "session.decline": "Closing the session without trusting it…",
     # **The accept half, for every word of the reason above.** It sends the agent's own
     # affirmative keys and then sleeps `_TRUST_ANSWER_WAIT_SECONDS` before re-reading the
-    # pane, so it makes the owner wait exactly as its sibling does -- and its token is claimed
+    # pane, so it makes the owner wait for the same *reason* as its sibling, though not for the
+    # same span: this one sleeps a fixed second, while a decline polls up to
+    # `_TRUST_DECLINE_WAIT_SECONDS` and then kills. Same shape, different bound -- and its token
+    # is claimed
     # before the terminal call, so an escaping failure spent the one-shot and left them a
     # cleared spinner with no words. It was absent while `session.decline` was present, which
     # is the asymmetry rather than a decision; found by the second Tier-2 pass on this task.
@@ -2439,7 +2442,7 @@ class PrivateBotBoundary:
         thing narrowing it. `reconcile._TRUST_CORRECTABLE` is `{STARTING, RUNNING, FAILED}` and
         `reading.awaiting_trust` is still the one-substring blocker check, so inside
         `_LATE_DIALOG_WINDOW` -- five minutes from `created_at` -- an agent displaying any of
-        the thirteen files carrying codex's blocker can still move a working session to
+        the fourteen files carrying codex's blocker can still move a working session to
         `untrusted`, which is the state this gate consults and the state DEC-078's unconfirmed
         kill is offered from. Past that window the reading is refused and the record stands.
         That is a mitigation, not an elimination; BL-053 carries the residual, and an earlier
@@ -2497,7 +2500,8 @@ class PrivateBotBoundary:
             # a record that is no longer `untrusted`, which is exactly the stale button this
             # screen cannot help minting: the owner answers at the keyboard, the record moves
             # on, and an older copy of the question is still in the chat. Uncaught, that
-            # reached the dispatcher's re-raise — `session.trust` has no pending notice — and
+            # reached the dispatcher's re-raise — `session.trust` had no pending notice then;
+            # it has one now, added by this same change — and
             # the owner got a cleared spinner and no words at all, which reads as the button
             # being broken rather than as the question being over. Its sibling `_decline_reply`
             # has caught the equivalent from the start; this is the trust half catching up.

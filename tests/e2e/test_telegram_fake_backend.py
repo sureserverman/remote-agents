@@ -1937,10 +1937,14 @@ async def test_a_stale_trust_press_says_so_instead_of_going_silent() -> None:
     The button outlives the screen that drew it: the owner answers at the keyboard, the record
     moves on, and an older copy of the question is still in the chat. `SessionService` refuses
     that press — the security half, and it was already covered — but the `ValueError` it raises
-    had no handler here, and `session.trust` carries no pending notice, so the dispatcher
+    had no handler here, and `session.trust` carried no pending notice, so the dispatcher
     re-raised it. What the owner got was a cleared spinner and no words: indistinguishable from
     a broken button. Found by the review of that gate; its sibling `_decline_reply` has caught
     the equivalent since it was written.
+
+    **Both halves of that sentence are now past tense.** The handler is here, and
+    `session.trust` has a `_PENDING_NOTICES` entry as of 2026-09-10 — so the dispatcher's
+    `if pending is None: raise` no longer costs the owner the screen on this route either.
     """
 
     class _Refusing(_TrustLauncher):
