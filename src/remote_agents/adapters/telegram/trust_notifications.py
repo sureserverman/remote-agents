@@ -366,6 +366,37 @@ class TrustNotifier:
         )
 
     async def _settle(self, standing: StandingTrustQuestion, record: SessionRecord) -> None:
+        """Take the answered question out of the chat, and settle its row either way.
+
+        **The question disappears once answered** (DEC-082). It used to be amended in place to
+        *Trusted. The agent is running.* with a way into the session, which is what DEC-034 asks
+        of an amendment — and the result was a message that had served its purpose and then
+        stayed in the chat for good. The owner asked for it to go; the sessions list is already
+        the record of what exists, so neither ending needs a standing message to carry it.
+
+        **Amending is the fallback, not the behaviour**, and it is why `render_trust_settled`
+        is still here. `discard` answers whether the message is actually gone, and Telegram
+        refuses to delete past 48 hours — a question answered days late cannot be removed. The
+        wrong response to that is to settle the row and walk away, which leaves the owner a
+        message still headed *Waiting to be trusted* with two live answers on it. So a refused
+        deletion falls back to the amendment: the message stops asking, even though it stays.
+
+        The row settles on both paths. It records that this question has been dealt with, which
+        is true whether the message went or was rewritten — and leaving it unsettled would have
+        the next pass try the whole thing again every five seconds.
+        """
+        if await self._view.discard(self._bot, standing.message_id):
+            await self._store.settle(record.session_id)
+            return
+        # **Named as the likely cause, not the verified one.** `discard` answers `False` for
+        # any `BadRequest` it does not recognise, so this branch is not proof of the 48-hour
+        # window -- that is simply the only cause anyone has seen in a single-owner chat.
+        # `LiveView._delete` logs the raw error for the case where it is something else.
+        _LOG.info(
+            "the folder-trust question for session %s could not be deleted, most likely past "
+            "Telegram's 48-hour delete window; amending it in place instead so it stops asking",
+            record.session_id,
+        )
         rendered = render_trust_settled(
             record,
             open_session=self._callbacks.create(

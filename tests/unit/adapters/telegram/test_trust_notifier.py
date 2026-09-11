@@ -12,7 +12,7 @@ from dataclasses import replace
 from datetime import UTC, datetime
 
 import pytest
-from telegram.error import BadRequest
+from telegram.error import BadRequest, TelegramError
 
 from remote_agents.adapters.agents.registry import profile_trust_dialogs
 from remote_agents.adapters.telegram.trust_notifications import TrustNotifier
@@ -95,6 +95,8 @@ class _View:
     def __init__(self, *, refuse: int = 0, schedule: list[bool] | None = None) -> None:
         self.sent: list[dict] = []
         self.amended: list[tuple[int, dict]] = []
+        #: Message ids actually taken out of the chat.
+        self.discarded: list[int] = []
         self._refuse = refuse
         #: Per-send refusal flags, for the tests that need an outage to *end* and then a
         #: later, separate one to begin. A bare count cannot express that.
@@ -122,12 +124,38 @@ class _View:
     #: amendment too, so this is how a "sent but not decorated" message is produced.
     refuse_amends: int = 0
 
+    #: How many deletions Telegram *declines* -- answered `False`, not raised. That is the
+    #: real 48-hour case: the message survives and the caller must stop treating it as
+    #: standing, which is what the amend fallback is for.
+    refuse_discards: int = 0
+
+    #: How many deletions fail outright. A different thing from a refusal, and the pass has to
+    #: keep going for every other session when one does it.
+    #:
+    #: **A `TelegramError`, deliberately, and not the `BadRequest` this first used.** The text
+    #: it raised was `message to delete not found` -- which is `live_view._ALREADY_GONE`, the
+    #: one string the real `_delete` maps to *success*. So the fixture simulated an exception
+    #: that provably cannot escape the real `discard`, while reading as though it were the
+    #: ordinary failure case. What genuinely escapes is a transport error.
+    raise_discards: int = 0
+
     async def amend_apart(self, bot, message_id, arguments):
         del bot
         if self.refuse_amends:
             self.refuse_amends -= 1
             raise BadRequest("message could not be edited")
         self.amended.append((message_id, arguments))
+        return True
+
+    async def discard(self, bot, message_id: int) -> bool:
+        del bot
+        if self.raise_discards:
+            self.raise_discards -= 1
+            raise TelegramError("connection reset")
+        if self.refuse_discards:
+            self.refuse_discards -= 1
+            return False
+        self.discarded.append(message_id)
         return True
 
     @property
@@ -180,21 +208,31 @@ async def test_one_message_per_session_however_many_passes_run() -> None:
     assert len(view.sent) == 1, "the question was asked more than once"
 
 
-async def test_a_session_that_became_ready_amends_the_message_in_place() -> None:
-    """DEC-034: a repeat is amended, not re-sent — the owner's phone buzzes once."""
+async def test_a_session_that_became_ready_has_its_question_taken_out_of_the_chat() -> None:
+    """DEC-082: the question disappears once answered, rather than becoming a receipt.
+
+    It used to be amended in place to *Trusted. The agent is running.* with a way into the
+    session — DEC-034's rule for an amendment — and the message then stayed in the chat for
+    good. The owner asked for it to go: the sessions list is already the record of what
+    exists, so a trusted session needs no standing message to say so.
+    """
     sessions, store, view = _Sessions(_record()), _Store(), _View()
     notifier = _notifier(sessions, store, view)
     await notifier.pass_once()
+    asked = view.sent[0]
 
     sessions.record = replace(sessions.record, state=SessionState.RUNNING)
     await notifier.pass_once()
 
     assert len(view.sent) == 1, "the answer arrived as a second message"
-    assert len(view.settlements) == 1
-    assert "Trusted" in view.settlements[0]["text"]
+    assert view.discarded == [101], "the answered question is still in the chat"
+    assert view.settlements == [], "it was amended into a receipt instead of removed"
+    assert "Waiting to be trusted" in asked["text"], "sanity: that was the question"
+    assert store.rows[str(_SESSION)]["settled"] is True
 
 
-async def test_a_settled_question_is_amended_exactly_once() -> None:
+async def test_a_settled_question_is_removed_exactly_once() -> None:
+    """The durable row is what stops a second pass trying to delete a message again."""
     sessions, store, view = _Sessions(_record()), _Store(), _View()
     notifier = _notifier(sessions, store, view)
     await notifier.pass_once()
@@ -203,10 +241,17 @@ async def test_a_settled_question_is_amended_exactly_once() -> None:
     await notifier.pass_once()
     await notifier.pass_once()
 
-    assert len(view.settlements) == 1, "a settled row was amended again"
+    assert view.discarded == [101], "a settled row was acted on again"
 
 
-async def test_a_declined_session_amends_to_the_closed_wording() -> None:
+async def test_a_declined_session_has_its_question_removed_too() -> None:
+    """Both endings, one rule — which is why the owner chose *delete both*.
+
+    A declined session used to leave *Closed without trusting.* standing. It is the only
+    trace that the session ever existed, which is an argument for keeping it; the argument
+    that won is that the decline press already answers with that sentence as a transient
+    notice, so the persistent copy adds nothing but accumulation.
+    """
     sessions, store, view = _Sessions(_record()), _Store(), _View()
     notifier = _notifier(sessions, store, view)
     await notifier.pass_once()
@@ -214,7 +259,8 @@ async def test_a_declined_session_amends_to_the_closed_wording() -> None:
     sessions.record = replace(sessions.record, state=SessionState.ENDED)
     await notifier.pass_once()
 
-    assert "Closed without trusting." in view.settlements[0]["text"]
+    assert view.discarded == [101]
+    assert view.settlements == [], "the declined ending was left standing in the chat"
 
 
 async def test_a_whole_pass_that_got_nothing_through_records_no_strike(caplog) -> None:
@@ -410,10 +456,10 @@ async def test_one_session_failing_does_not_defer_every_other_session_s_answer()
         replace(first, state=SessionState.RUNNING),
         replace(second, state=SessionState.RUNNING),
     ]
-    view.refuse_amends = 1
+    view.raise_discards = 1
     await notifier.pass_once()
 
-    assert len(view.settlements) == 1, "one session's failure took the other's answer with it"
+    assert len(view.discarded) == 1, "one session's failure took the other's answer with it"
 
 
 async def test_a_question_already_on_the_owner_s_screen_is_not_sent_as_a_message() -> None:
@@ -517,3 +563,55 @@ async def test_the_notification_still_shares_the_state_filter_it_was_credited_wi
     await _notifier(_Sessions(_record(state=SessionState.RUNNING)), _Store(), view).pass_once()
 
     assert view.sent == [], "a running session is not asking, so no question is sent about it"
+
+async def test_a_question_too_old_to_delete_is_amended_so_it_stops_asking() -> None:
+    """The 48-hour case, and the reason `render_trust_settled` is still here.
+
+    Telegram refuses to delete a message past 48 hours, so a question answered days late
+    cannot be removed. The wrong answer is to settle the row and walk away: that leaves the
+    owner a message still headed *Waiting to be trusted*, with two live answers on it, for a
+    session that stopped waiting long ago. So a refused deletion falls back to the amendment
+    — the message stays, but it stops asking.
+
+    `discard` answering `False` rather than raising is what makes this reachable; that is the
+    distinction its own docstring draws between "deleted" and "refused".
+    """
+    sessions, store, view = _Sessions(_record()), _Store(), _View()
+    notifier = _notifier(sessions, store, view)
+    await notifier.pass_once()
+
+    view.refuse_discards = 1
+    sessions.record = replace(sessions.record, state=SessionState.RUNNING)
+    await notifier.pass_once()
+
+    assert view.discarded == [], "Telegram refused, so nothing was removed"
+    assert len(view.settlements) == 1, "a refused deletion must still stop the message asking"
+    assert "Trusted" in view.settlements[0]["text"]
+    assert store.rows[str(_SESSION)]["settled"] is True, (
+        "the row must settle on both paths, or every pass retries this for as long as the "
+        "record survives"
+    )
+
+
+async def test_a_refused_deletion_is_not_retried_forever() -> None:
+    """Settling on the fallback path is what bounds it, and this is why that matters.
+
+    A message Telegram will not delete will still not be deletable on the next pass, and the
+    pass runs every five seconds. Without the row settling on the fallback path, each one
+    would attempt the delete and then rewrite the same amendment, for as long as the record
+    exists.
+    """
+    sessions, store, view = _Sessions(_record()), _Store(), _View()
+    notifier = _notifier(sessions, store, view)
+    await notifier.pass_once()
+
+    # Refused on *every* pass, not just the first -- a message too old to delete stays too
+    # old. With only the first refused, later passes would simply succeed and the retry loop
+    # this test exists for could never appear.
+    view.refuse_discards = 9
+    sessions.record = replace(sessions.record, state=SessionState.RUNNING)
+    await notifier.pass_once()
+    await notifier.pass_once()
+    await notifier.pass_once()
+
+    assert len(view.settlements) == 1, "the fallback amendment was rewritten on later passes"
