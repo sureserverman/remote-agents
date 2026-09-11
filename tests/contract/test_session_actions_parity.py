@@ -236,28 +236,27 @@ async def _terminal_remote_control(record: SessionRecord) -> list[str]:
 
 
 @pytest.mark.parametrize(
-    ("observed", "expected"),
-    [
-        (None, ["Remote Control on", "Remote Control off"]),
-        (RemoteControlState.ACTIVE, ["Remote Control off"]),
-        (RemoteControlState.INACTIVE, ["Remote Control on"]),
-    ],
+    "observed",
+    [None, RemoteControlState.ACTIVE, RemoteControlState.INACTIVE, RemoteControlState.UNKNOWN],
 )
 @pytest.mark.parametrize(
     ("surface", "rows"),
     [("telegram", _telegram_remote_control), ("terminal", _terminal_remote_control)],
 )
 async def test_both_surfaces_offer_the_same_remote_control_directions(
-    observed, expected, surface, rows
+    observed, surface, rows
 ) -> None:
-    """One observation, one answer, on both surfaces.
+    """One button, the same one, on both surfaces — whatever this record last observed.
 
-    Unknown offers both, which is what every surface did before the state was stored — so the
-    fallback is the old behaviour rather than a new way to hide the action the owner needs.
+    This check used to be parametrized over the *answer* as well as the surface, because the
+    stored observation picked the direction and the two surfaces had to pick it alike. They
+    no longer pick: the pane is read when the owner presses, and the confirmation is what
+    names a direction. So the surviving parity claim is narrower and stronger — one row,
+    one wording, independent of a stored state that may be stale.
     """
     record = replace(_record(SessionState.RUNNING), remote_control_state=observed)
 
-    assert await rows(record) == expected, f"{surface} disagrees for observed={observed}"
+    assert await rows(record) == ["Remote Control"], f"{surface} disagrees for observed={observed}"
 
 
 # --- The host action -------------------------------------------------------------------

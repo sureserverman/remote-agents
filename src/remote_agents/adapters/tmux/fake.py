@@ -19,6 +19,10 @@ class FakeTerminal:
         #: single value so a test can drive the sequence a real pane produces -- AWAITING
         #: before the answer, UNKNOWN after it -- which is the only way to assert that a
         #: surface stopped offering the row once the question was gone.
+        #: What the next `remote_control_state` read reports, armed the same way and for the
+        #: same reason: a confirmation naming a direction is only testable against a pane
+        #: whose reading the test chose.
+        self.remote_control_states: list[RemoteControlState] = []
         self.trust_states: list[TrustState] = []
         self.trust_answers = 0
         self.trust_declines = 0
@@ -83,6 +87,21 @@ class FakeTerminal:
         return (
             desired_state
             if await self.inspect(session_id) is not None
+            else RemoteControlState.UNKNOWN
+        )
+
+    async def remote_control_state(self, session_id: SessionId) -> RemoteControlState:
+        """Answer from a list the test arms, for the same reason `trust_state` does.
+
+        Defaults to UNKNOWN rather than to a direction: a fake that reported ACTIVE would
+        make every confirmation in every test that never thought about Remote Control say
+        "Turn it off?", and the one case worth reaching on purpose -- an unreadable pane,
+        where DEC-003 allows only *on* -- would become the case nobody could reach.
+        """
+        del session_id
+        return (
+            self.remote_control_states.pop(0)
+            if self.remote_control_states
             else RemoteControlState.UNKNOWN
         )
 

@@ -5,11 +5,20 @@ pane toggle's subject is one live owned Claude session; this one's subject is th
 Folding them into a single function would produce one whose argument means two different
 things depending on who called it, and both surfaces would then have to know which.
 
-What the two *do* share is the vocabulary, and the sharing is by identity rather than by
-agreement: `HOST_REMOTE_CONTROL_LABELS` **is** `REMOTE_CONTROL_LABELS`. The bot and the
-terminal once spelled the pane toggle's labels identically by coincidence, and the note on
-that table records why a coincidence is not a contract. Re-stating the same two strings here
-would have recreated exactly the drift it was written to end (DEC-007).
+The two once shared the vocabulary by identity rather than by agreement --
+`HOST_REMOTE_CONTROL_LABELS` **was** `REMOTE_CONTROL_LABELS`, because both subjects offered
+the same two directions and re-stating two identical strings in two modules is the drift
+DEC-007 exists to end.
+
+**That alias is gone as of 2026-09-11, and its going is the sibling rule being honored
+rather than broken.** The pane toggle became one button whose direction is read from the
+pane when the owner presses it, so its table holds a single direction-free word. This one
+still offers a direction per press: the daemon's enrollment is a persisted preference this
+project reads over a socket, not a screen it can classify on demand, so "which way" is still
+a rendering-time question here and "on" / "off" are still the honest labels for it. One
+object could no longer carry both truths, and the drift the identity prevented is prevented
+now by `tests/unit/application/test_host_remote_control_policy.py`, which pins this table's
+contents and that the two no longer overlap.
 """
 
 from __future__ import annotations
@@ -19,7 +28,6 @@ from dataclasses import dataclass
 
 from remote_agents.application.errors import DuplicateCommandError
 from remote_agents.application.reconcile import SessionLocks
-from remote_agents.application.session_actions import REMOTE_CONTROL_LABELS
 from remote_agents.domain.remote_control import (
     HostConnection,
     HostRemoteControlStatus,
@@ -30,8 +38,13 @@ from remote_agents.ports.host_remote_control import HostRemoteControl
 from remote_agents.ports.provider_errors import ProviderUnavailable
 from remote_agents.ports.session_store import SessionStore
 
-#: What each direction is called on screen -- the pane toggle's table, by identity.
-HOST_REMOTE_CONTROL_LABELS = REMOTE_CONTROL_LABELS
+#: What each direction is called on screen. This host's own table since 2026-09-11 -- see the
+#: module docstring for why it stopped being the pane toggle's, and what replaced the alias
+#: as the guard against the two drifting apart.
+HOST_REMOTE_CONTROL_LABELS: dict[RemoteControlState, str] = {
+    RemoteControlState.ACTIVE: "Remote Control on",
+    RemoteControlState.INACTIVE: "Remote Control off",
+}
 
 #: What the fact itself is called. Named for the provider because the subject is the host:
 #: an owner who already knows the Claude pane toggle would otherwise read a bare "Remote

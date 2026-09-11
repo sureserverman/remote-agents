@@ -43,6 +43,7 @@ from remote_agents.application.session_actions import (
     FORCE,
     GRACEFUL,
     REMOTE_CONTROL_LABELS,
+    RemoteControlDirection,
     available_actions,
     explain_state,
     remote_control_available,
@@ -63,9 +64,13 @@ _INSPECT_MAX_BYTES = 512 * 1024
 #: would not have caught, since it compares what each surface *renders* rather than what each
 #: surface stores. A row still cannot exist without a direction behind it: the key is derived
 #: from the state rather than sitting beside it.
+#:
+#: One entry since 2026-09-11, where there were two. The pair `remote-control-active` /
+#: `remote-control-inactive` named the direction a press would take, which this surface can
+#: no longer promise before the pane has been read; the reading happens in the confirmation
+#: now, so the row is one and its key says only which subject it is about.
 _REMOTE_CONTROL_DIRECTIONS = {
-    "remote-control-active": RemoteControlState.ACTIVE,
-    "remote-control-inactive": RemoteControlState.INACTIVE,
+    "remote-control": RemoteControlDirection.TOGGLE,
 }
 _REMOTE_CONTROL_KEYS = {state: key for key, state in _REMOTE_CONTROL_DIRECTIONS.items()}
 

@@ -53,6 +53,7 @@ from __future__ import annotations
 import logging
 from collections.abc import Mapping
 from dataclasses import dataclass
+from enum import StrEnum
 from typing import Protocol
 
 from remote_agents.domain.models import OrphanProvenance, ProfileId, SessionRecord, SessionState
@@ -246,46 +247,73 @@ def remote_control_available(record: _RemoteControllable) -> bool:
     return record.profile_id == ProfileId("claude") and record.state is SessionState.RUNNING
 
 
+class RemoteControlDirection(StrEnum):
+    """What a surface may offer for the Claude pane toggle — and there is exactly one.
+
+    A single-member enum rather than a bare constant, because every caller consumes this as
+    one of a *tuple of directions*: the bot loops the tuple into buttons, the terminal loops
+    it into rows, and the parity contract compares the two renderings. Keeping the shape
+    keeps those three readers unchanged while the count inside it drops to one, and leaves
+    the obvious room for a second member if a pane ever grows a third thing to be asked.
+    """
+
+    TOGGLE = "toggle"
+
+
 def remote_control_directions(
     record: _RemoteControllable, observed: RemoteControlState | None
-) -> tuple[RemoteControlState, ...]:
-    """Which Remote Control directions a surface should offer, given what was last observed.
+) -> tuple[RemoteControlDirection, ...]:
+    """Whether this session may be offered the Remote Control toggle — no longer which way.
 
-    Both surfaces used to render Enable *and* Disable together, because nothing knew which
-    state a pane was in — so half the pair was always a no-op, on the deepest screen either
-    surface has. Now that the observation is stored, the direction is policy rather than
-    presentation, and it lives here beside `remote_control_available` for the reason DEC-007
-    gives: the owner learns one vocabulary and meets it on both surfaces.
+    Both surfaces once rendered Enable *and* Disable together, because nothing knew which
+    state a pane was in, so half the pair was always a no-op on the deepest screen either
+    surface has. Storing the observation fixed that by letting this function pick a
+    direction — and traded one defect for a quieter one: the stored reading is as old as the
+    last toggle, so the button could confidently name the wrong direction for a pane the
+    owner had since changed from inside Claude itself.
 
-    `None` — nobody has toggled this session, the row predates migration 7, or the toggle
-    came back UNKNOWN — offers **both**. That is deliberately the old behaviour: unknown must
-    not hide the action the owner actually needs, and offering one action on a guess is the
-    failure this function exists to avoid rather than to introduce.
+    So the direction is no longer decided here, or at render time at all. The owner presses
+    one button; the confirmation reads the pane and names the direction that reading implies
+    (`TerminalPort.remote_control_state`), and only then is a direction carried into
+    `RemoteControlCommand`. What survives in this module is the half that was always a
+    *policy* question and is answered from the record alone — may this session be toggled —
+    which is what DEC-007 asks to live in one place for both surfaces.
+
+    `observed` is therefore no longer read. It stays in the signature because it is still
+    what both surfaces render on the detail as a *fact* (`remote  Remote Control off`), and
+    because taking it away would change three call sites in two adapters to prove a negative;
+    a caller that passes the record's stored state and receives an answer that does not
+    depend on it is exactly the guarantee this docstring is making.
 
     Returns `()` when the toggle is unavailable at all, so a caller can render this without
     consulting `remote_control_available` first and cannot disagree with it.
     """
+    del observed
     if not remote_control_available(record):
         return ()
-    if observed is RemoteControlState.ACTIVE:
-        return (RemoteControlState.INACTIVE,)
-    if observed is RemoteControlState.INACTIVE:
-        return (RemoteControlState.ACTIVE,)
-    return (RemoteControlState.ACTIVE, RemoteControlState.INACTIVE)
+    return (RemoteControlDirection.TOGGLE,)
 
 
-REMOTE_CONTROL_LABELS: dict[RemoteControlState, str] = {
-    RemoteControlState.ACTIVE: "Remote Control on",
-    RemoteControlState.INACTIVE: "Remote Control off",
+REMOTE_CONTROL_LABELS: dict[RemoteControlDirection, str] = {
+    RemoteControlDirection.TOGGLE: "Remote Control",
 }
-"""What each direction is called on screen, for every surface that offers one.
+"""What the pane toggle is called on screen, for every surface that offers it.
 
 Beside `ACTION_LABELS` and for the same reason: the bot and the terminal spelled these
 identically by coincidence rather than by construction, and a coincidence is not a contract.
 
-`on` / `off` rather than `Enable` / `Disable` since the 2026-09-02 redesign: the label names
-the state the button leaves the pane in, which is what the detail's `remote` fact line also
-reads back (`Remote Control off`), so the button and the fact use one vocabulary.
+**The label names no direction, and that is the change.** It read `Remote Control on` /
+`Remote Control off` from the 2026-09-02 redesign until 2026-09-11, naming the state the
+press would leave the pane in. One button cannot promise that before it has looked, so the
+wording moved to the confirmation, which asks *"Remote Control is on. Turn it off?"* from a
+reading taken at press time. The detail's `remote` fact line keeps the old words and is now
+the only place they appear, which is the right place: it reports a state rather than offering
+one.
+
+`HOST_REMOTE_CONTROL_LABELS` was this table by identity until the same change. It is its own
+table now — Codex's host toggle still offers a direction per press (DEC-071 keeps it a
+sibling of this one, not a generalisation), so the two vocabularies stopped agreeing and an
+alias would have forced one of them to be spelled wrong.
 """
 
 

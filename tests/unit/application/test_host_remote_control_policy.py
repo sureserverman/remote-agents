@@ -94,9 +94,27 @@ def test_pairing_is_not_offered_without_the_capability() -> None:
     assert pair_available(None) is False
 
 
-def test_the_labels_are_the_pane_toggle_s_table_and_not_a_second_one() -> None:
-    """Identity, not equality: two tables that agree today are a coincidence, not a contract."""
-    assert HOST_REMOTE_CONTROL_LABELS is REMOTE_CONTROL_LABELS
+def test_the_host_labels_are_its_own_table_because_the_pane_toggle_stopped_having_two() -> None:
+    """The identity is gone, and its disappearance is the point rather than a regression.
+
+    These two tables were deliberately *one object*: both surfaces once rendered "Remote
+    Control on" / "Remote Control off" for both subjects, and re-stating two identical
+    strings in two modules is the drift DEC-007 ends. That argument held only while the two
+    vocabularies agreed. The pane toggle is one button now -- its direction is read from the
+    pane at confirm time, so it has no "on" and no "off" to name -- while the host toggle
+    still offers a direction per press (DEC-071 keeps it a sibling, not a generalisation).
+    Keeping the alias would have forced one of those two truths to be spelled wrong.
+
+    What replaces the identity is this test plus `test_every_offerable_direction_has_a_label`
+    below: the host table must cover exactly the directions the host policy can offer, and
+    must not borrow the pane's single word.
+    """
+    assert HOST_REMOTE_CONTROL_LABELS is not REMOTE_CONTROL_LABELS
+    assert HOST_REMOTE_CONTROL_LABELS == {
+        RemoteControlState.ACTIVE: "Remote Control on",
+        RemoteControlState.INACTIVE: "Remote Control off",
+    }
+    assert set(HOST_REMOTE_CONTROL_LABELS).isdisjoint(REMOTE_CONTROL_LABELS)
 
 
 def test_every_offerable_direction_has_a_label() -> None:

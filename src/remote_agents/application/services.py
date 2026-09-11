@@ -401,6 +401,19 @@ class SessionService:
             await self._store.set_remote_control_state(command.session_id, observed)
             return observed
 
+    async def remote_control_state(self, session_id: SessionId) -> RemoteControlState:
+        """Read what this session's pane says about Remote Control, sending nothing.
+
+        Read-only and unlocked, exactly like `trust_state` below and for the same reason: it
+        answers a question about a pane right now, and a surface rendering a confirmation
+        must not be able to queue ahead of a stop the owner is trying to issue. There is no
+        profile check here — the terminal's own guard answers UNKNOWN for anything that is
+        not a live Claude pane, and a second opinion in this layer would be a third place the
+        rule is written (DEC-001). `set_remote_control` below still re-checks it, because
+        that one types.
+        """
+        return await self._terminal.remote_control_state(session_id)
+
     async def trust_state(self, session_id: SessionId) -> TrustState:
         """Read whether this session's pane is waiting on the folder-trust question.
 

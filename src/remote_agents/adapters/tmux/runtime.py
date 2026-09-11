@@ -603,6 +603,31 @@ class TmuxTerminal:
             await asyncio.sleep(self._waits.remote_control_disable)
         return _remote_control_state(await self._gateway.capture(session_id))
 
+    async def remote_control_state(self, session_id: SessionId) -> RemoteControlState:
+        """Report what this pane says about Remote Control, without typing at it.
+
+        The same capture-and-classify `remote_control` performs before it acts, with the keys
+        left out -- which is what lets one button ask the owner "Remote Control is on. Turn it
+        off?" instead of offering a pair and letting half of it be a no-op.
+
+        **The guard is duplicated from `remote_control` rather than shared, deliberately.**
+        Both methods refuse anything that is not a live exact managed Claude pane, but they
+        must refuse it at *different* points: this one answers UNKNOWN and stops, while
+        `remote_control` has to distinguish "no reading" from "read as UNKNOWN" -- the first
+        sends nothing at all, the second still sends the enable sequence, because turning
+        Remote Control *on* from an unreadable pane was always the safe direction (DEC-003).
+        Routing `remote_control` through this read would collapse those two into one and put
+        the enable keys one wrong branch away from a pane this project does not own.
+        """
+        observation = await self.inspect(session_id)
+        if (
+            observation is None
+            or not observation.live
+            or observation.profile_id != ProfileId("claude")
+        ):
+            return RemoteControlState.UNKNOWN
+        return _remote_control_state(await self._gateway.capture(session_id))
+
     async def trust_state(self, session_id: SessionId) -> TrustState:
         """Report whether this pane is sitting on the folder-trust question.
 
