@@ -1,4 +1,11 @@
-"""Disposable live qualification of the fixed Claude Remote Control interaction."""
+"""Disposable live qualification of the one-button Claude Remote Control toggle.
+
+Three readings and two presses against one real `claude` pane, on a socket this test
+creates and destroys. The two presses are the *same* button: what decides the direction is
+`TerminalPort.remote_control_state`, read between the press and the question, resolved by
+`remote_control_target`. That pairing is the surface's whole behaviour with the surface
+taken out, which is what makes it drillable here at all.
+"""
 
 from __future__ import annotations
 
@@ -11,6 +18,7 @@ import pytest
 from remote_agents.adapters.tmux.gateway import TmuxGateway
 from remote_agents.adapters.tmux.profiles import build_launch_profile
 from remote_agents.adapters.tmux.runtime import AsyncTmuxRunner, TmuxTerminal
+from remote_agents.application.session_actions import remote_control_target
 from remote_agents.domain.models import ProfileId, ProjectId, SessionId
 from remote_agents.domain.profiles import closed_profiles
 from remote_agents.domain.remote_control import RemoteControlState
@@ -56,11 +64,35 @@ async def test_claude_remote_control_toggle_on_an_exact_disposable_managed_pane(
     try:
         launched = await terminal.launch(session_id, project_id, definition.profile_id)
         assert launched.live, launched.detail
-        enabled_state = await terminal.remote_control(session_id, RemoteControlState.ACTIVE)
+
+        # --- Press one: a pane nobody has toggled ------------------------------------------
+        #
+        # This is the UNKNOWN case, taken from a real pane rather than contrived: a freshly
+        # launched Claude shows none of the three markers, so the read that a confirmation
+        # takes answers UNKNOWN, and the policy offers *on* only. The plan suggested reaching
+        # UNKNOWN by scrolling the marker out of the capture; a pane that has never been
+        # toggled is the same reading, is what production actually meets first, and is
+        # deterministic here instead of depending on how tall the pane happens to be.
+        assert await terminal.remote_control_state(session_id) is RemoteControlState.UNKNOWN
+        first = remote_control_target(RemoteControlState.UNKNOWN)
+        assert first is RemoteControlState.ACTIVE, (
+            "an unreadable pane must be offered on -- disabling opens Claude's status menu "
+            "and arrowing through a menu we cannot see is what DEC-003 refuses"
+        )
+        enabled_state = await terminal.remote_control(session_id, first)
         assert enabled_state is RemoteControlState.ACTIVE
 
-        disabled_state = await terminal.remote_control(session_id, RemoteControlState.INACTIVE)
+        # --- Press two: the same button, the other way -------------------------------------
+        #
+        # Nothing about the button changed between the two presses. What changed is what the
+        # pane says, which is the whole claim the single toggle rests on.
+        observed = await terminal.remote_control_state(session_id)
+        assert observed is RemoteControlState.ACTIVE, "the read must see the press that landed"
+        disabled_state = await terminal.remote_control(session_id, remote_control_target(observed))
         assert disabled_state is RemoteControlState.INACTIVE
+
+        # --- And the reading follows it back -----------------------------------------------
+        assert await terminal.remote_control_state(session_id) is RemoteControlState.INACTIVE
     finally:
         try:
             await gateway.destroy(session_id)
