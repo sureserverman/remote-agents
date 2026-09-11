@@ -335,6 +335,13 @@ class LiveView:
         capture is ours and superseded, so it always belonged to the first category in
         spirit, but a rule that says "exactly three" and permits four is not a rule.
 
+        **The fifth is a question of ours that *has* been answered** — the standing folder-trust
+        question, once the session it asks about has stopped waiting. It is deliberately its own
+        category rather than folded into the third: "nobody is going to answer this" and
+        "somebody answered this" are opposite facts about the same message, and the owner's
+        answer is exactly what makes it safe to remove. Added by the same rule the paragraph
+        above states; permitting a fifth without saying so would repeat the defect it records.
+
         Answers whether the message is actually gone. A caller tracking a message it must
         eventually remove needs to know the difference between "deleted" and "refused" —
         without it, the only record of a surviving message is dropped on the assumption it
