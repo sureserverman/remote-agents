@@ -50,6 +50,44 @@ _TRUST_ANSWER_WAIT_SECONDS = 1
 _TRUST_DECLINE_WAIT_SECONDS = 3
 
 
+@dataclass(frozen=True, slots=True)
+class TerminalWaits:
+    """How long this terminal waits for a pane to catch up, injectable for the same reason
+    `startup_timeout` already is.
+
+    **These were module constants, and that cost real wall-clock in the test suite.** Every
+    test crossing a wait path paid it: the two decline tests in
+    `tests/contract/adapters/tmux/test_resume_readiness.py` took 3.01s each, which is
+    `decline` below, spent sleeping. A test had no lever to pull -- unlike `startup_timeout`,
+    which tests have always passed as `0.2`. The inconsistency was the defect: the same class
+    of number, one injectable and five not.
+
+    The defaults are the measured production values and are unchanged, so a caller that does
+    not care is unaffected. What each one is waiting *for* is recorded on its field rather
+    than lost: they are deliberately different numbers, and a single knob would flatten
+    "time for a pump to repaint" into "time for a process to exit".
+    """
+
+    remote_control_enable: float = float(_REMOTE_CONTROL_ENABLE_WAIT_SECONDS)
+    """A daemon being started and a pairing round-trip, not a redraw."""
+
+    remote_control_menu: float = float(_REMOTE_CONTROL_MENU_WAIT_SECONDS)
+    """One menu drawing itself."""
+
+    remote_control_disable: float = float(_REMOTE_CONTROL_DISABLE_WAIT_SECONDS)
+    """A daemon being told to stop."""
+
+    trust_answer: float = float(_TRUST_ANSWER_WAIT_SECONDS)
+    """The dialog clearing in one redraw -- the pump's time to repaint, not the agent's to think."""
+
+    decline: float = float(_TRUST_DECLINE_WAIT_SECONDS)
+    """A declined agent running its own shutdown before its pane is killed."""
+
+
+#: What a caller that has no opinion gets, so the production path names nothing.
+_DEFAULT_WAITS = TerminalWaits()
+
+
 class AsyncTmuxRunner(TmuxRunner):
     """Run only prevalidated tmux argument vectors without a shell."""
 
@@ -121,6 +159,7 @@ class TmuxTerminal:
             dict[ProfileId, Callable[[SessionId, ProviderConversationId], LaunchProfile]] | None
         ) = None,
         trust_dialogs: Mapping[str, TrustDialog] | None = None,
+        waits: TerminalWaits | None = None,
     ) -> None:
         # Which profiles can be asked the folder-trust question, and the dialog to read each
         # one with. **Injected, not imported**: this is an adapter, the answer is a provider
@@ -134,6 +173,7 @@ class TmuxTerminal:
         # to declare its dialog -- and was the whole reason the owner saw one button where the
         # ask said two.
         self._trust_dialogs = dict(trust_dialogs or {})
+        self._waits = waits or _DEFAULT_WAITS
         self._gateway = gateway
         self._project_paths = project_paths
         self._profiles = profiles
@@ -555,12 +595,12 @@ class TmuxTerminal:
             return current
         if desired_state is RemoteControlState.ACTIVE:
             await self._gateway.send_keys(session_id, REMOTE_CONTROL_ENABLE_KEYS)
-            await asyncio.sleep(_REMOTE_CONTROL_ENABLE_WAIT_SECONDS)
+            await asyncio.sleep(self._waits.remote_control_enable)
         else:
             await self._gateway.send_keys(session_id, REMOTE_CONTROL_OPEN_MENU_KEYS)
-            await asyncio.sleep(_REMOTE_CONTROL_MENU_WAIT_SECONDS)
+            await asyncio.sleep(self._waits.remote_control_menu)
             await self._gateway.send_keys(session_id, REMOTE_CONTROL_DISCONNECT_KEYS)
-            await asyncio.sleep(_REMOTE_CONTROL_DISABLE_WAIT_SECONDS)
+            await asyncio.sleep(self._waits.remote_control_disable)
         return _remote_control_state(await self._gateway.capture(session_id))
 
     async def trust_state(self, session_id: SessionId) -> TrustState:
@@ -654,7 +694,7 @@ class TmuxTerminal:
             # received a keystroke. Reporting `True` here would be the guess this type exists
             # to stop anyone making.
             return TrustAnswer(pressed=False, observed=TrustState.UNKNOWN)
-        await asyncio.sleep(_TRUST_ANSWER_WAIT_SECONDS)
+        await asyncio.sleep(self._waits.trust_answer)
         try:
             after = await self._gateway.capture(session_id)
         except TerminalTargetMissing:
@@ -722,7 +762,7 @@ class TmuxTerminal:
             keys = plan_trust_keys(capture, dialog, accept=False)
             if keys is not None:
                 await self._gateway.send_keys(session_id, keys)
-                deadline = asyncio.get_running_loop().time() + _TRUST_DECLINE_WAIT_SECONDS
+                deadline = asyncio.get_running_loop().time() + self._waits.decline
                 while asyncio.get_running_loop().time() < deadline:
                     current = await self.inspect(session_id)
                     if current is None or not current.live:

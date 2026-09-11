@@ -40,6 +40,7 @@ remote-agents = "remote_agents.__main__:main"
 dev = [
   "pytest==9.1.1",
   "pytest-asyncio==1.4.0",
+  "pytest-xdist>=3.8.0",
   "ruff==0.15.22",
   "textual-dev==1.8.0",
   "twine==7.0.0",

@@ -7,7 +7,7 @@ import pytest
 from remote_agents.adapters.agents.registry import profile_trust_dialogs
 from remote_agents.adapters.tmux.codec import ManagedPane
 from remote_agents.adapters.tmux.gateway import TmuxInventory
-from remote_agents.adapters.tmux.runtime import LaunchProfile, TmuxTerminal
+from remote_agents.adapters.tmux.runtime import LaunchProfile, TerminalWaits, TmuxTerminal
 from remote_agents.domain.models import ProfileId, ProjectId, SessionId
 from remote_agents.domain.trust import TrustState
 from remote_agents.ports.terminal import NOT_AWAITING_TRUST, OWNERSHIP_LOST, TerminalTargetMissing
@@ -78,6 +78,22 @@ async def _resume(tmp_path: Path, profile: LaunchProfile, capture: str):
         startup_timeout=0.2,
         resume_profile_factories={ProfileId("claude"): lambda _s, _c: profile},
         trust_dialogs=profile_trust_dialogs(),
+        # Near-zero waits: this file asserts what the terminal *does* at each bound, never
+        # how long the bound is. Two tests here took 3.01s each paying `decline` in real
+        # wall-clock before the waits became injectable.
+        #
+        # **`decline` is small rather than zero, and that is a measured distinction.** At
+        # exactly 0.0 the deadline expires before the poll loop can observe an agent that
+        # exited on its own, so `test_an_answerable_agent_is_told_no_in_its_own_dialog` -- whose
+        # whole subject is the agent running its own shutdown -- went red as the honest decline
+        # turned into a kill. The window has to exist; it does not have to be three seconds.
+        waits=TerminalWaits(
+            remote_control_enable=0.0,
+            remote_control_menu=0.0,
+            remote_control_disable=0.0,
+            trust_answer=0.0,
+            decline=0.05,
+        ),
     )
     return await terminal._launch_profile(
         session_id, ProjectId("opaque-editor"), ProfileId("claude"), profile
@@ -95,6 +111,16 @@ async def _confirm(tmp_path: Path, profile: LaunchProfile, capture: str):
         {ProfileId("claude"): profile},
         startup_timeout=0.2,
         trust_dialogs=profile_trust_dialogs(),
+        # Zero waits: this file asserts what the terminal *does* at each bound, never how
+        # long the bound is. Two tests here took 3.01s each paying `decline` in real
+        # wall-clock before the waits became injectable.
+        waits=TerminalWaits(
+            remote_control_enable=0.0,
+            remote_control_menu=0.0,
+            remote_control_disable=0.0,
+            trust_answer=0.0,
+            decline=0.05,
+        ),
     )
     return await terminal.confirm_ready(session_id, ProfileId("claude"))
 
@@ -283,6 +309,16 @@ def _decline_terminal(tmp_path: Path, profile_id: str, capture: str, **flags: ob
         {ProfileId(profile_id): _profile("Claude Code", blockers)},
         startup_timeout=0.2,
         trust_dialogs=profile_trust_dialogs(),
+        # Zero waits: this file asserts what the terminal *does* at each bound, never how
+        # long the bound is. Two tests here took 3.01s each paying `decline` in real
+        # wall-clock before the waits became injectable.
+        waits=TerminalWaits(
+            remote_control_enable=0.0,
+            remote_control_menu=0.0,
+            remote_control_disable=0.0,
+            trust_answer=0.0,
+            decline=0.05,
+        ),
     )
     return terminal, gateway, session_id
 
