@@ -294,6 +294,27 @@ def remote_control_directions(
     return (RemoteControlDirection.TOGGLE,)
 
 
+def remote_control_target(observed: RemoteControlState) -> RemoteControlState:
+    """Which direction one press should take, given what the pane was *just* read to be.
+
+    The other half of the toggle, and it lives here rather than in either surface because
+    both ask the same question a second apart and must answer it identically (DEC-007). What
+    each surface owns is the *wording* -- "Turn it off?" on the phone, a modal row in the
+    terminal -- and that stays where the wording belongs.
+
+    UNKNOWN targets ACTIVE, which is not a guess but the one direction that was always safe
+    from an unreadable pane. Enabling sends one curated sequence; disabling has to open
+    Claude's status menu and arrow through it, so a disable aimed at a pane that was not
+    where we thought it was leaves a menu open in somebody's session.
+    `TmuxTerminal.remote_control` has always refused that direction from an UNKNOWN reading
+    (DEC-003) -- this function is that refusal expressed as a proposal, so the owner meets it
+    as a question rather than as an error after pressing.
+    """
+    if observed is RemoteControlState.ACTIVE:
+        return RemoteControlState.INACTIVE
+    return RemoteControlState.ACTIVE
+
+
 REMOTE_CONTROL_LABELS: dict[RemoteControlDirection, str] = {
     RemoteControlDirection.TOGGLE: "Remote Control",
 }

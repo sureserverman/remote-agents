@@ -1790,6 +1790,19 @@ class RemoteAgentsTui(App[AttachRequest | None]):
         )
         target.announce(f"The managed sessions could not be read: {error}")
 
+    async def remote_control_state(self, session_id) -> RemoteControlState:
+        """What this session's pane says about Remote Control, read now and typing nothing.
+
+        Beside `current_record` because it is the other thing a confirmation needs and the
+        store cannot answer it: the record carries the last *observed* state, which is as old
+        as the last toggle, while this asks the pane. A confirmation built from the record
+        would name a direction for a pane the owner may have changed from inside Claude.
+
+        No refresh and no readiness pass, for `current_record`'s reason: this is one capture
+        of one pane, taken between a keypress and a question.
+        """
+        return await self._services.backend.sessions.remote_control_state(session_id)
+
     async def current_record(self, session_value: str) -> SessionRecord | None:
         """Re-read one session from the store, without refreshing readiness.
 

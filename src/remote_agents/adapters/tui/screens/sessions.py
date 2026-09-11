@@ -48,10 +48,10 @@ from remote_agents.application.session_actions import (
     explain_state,
     remote_control_available,
     remote_control_directions,
+    remote_control_target,
 )
 from remote_agents.application.session_views import session_row_parts
 from remote_agents.domain.models import SessionId, SessionRecord
-from remote_agents.domain.remote_control import RemoteControlState
 
 _LOG = logging.getLogger(__name__)
 
@@ -552,15 +552,15 @@ async def perform_row_remote_control(
         # for is not a refusal, it is a refusal-shaped move.
         screen.announce("Remote Control is only for a running Claude session.", severity="warning")
         return
-    # The direction is picked from this read and re-checked by `confirm_remote_control`'s
-    # own read -- which asks whether Remote Control is *available*, not whether the
-    # direction is still the right one. So a foreign writer toggling between the two reads
-    # can leave the owner asked to enable something already enabled. That window is the
-    # row path's too (a rendered row fixes its direction and is never re-diffed either);
-    # this key narrows it from human-paced to machine-paced rather than opening it. Noted
-    # so the omission is not read as an oversight.
+    # This read decides only whether the key *moves* -- the policy offers one row or none,
+    # and the row names no direction. The window this comment used to describe is gone with
+    # the direction: a foreign writer toggling between the availability read and the press
+    # could once leave the owner asked to enable something already enabled, because the
+    # direction was fixed here from a stored observation. `confirm_remote_control` captures
+    # the pane itself now, after the modal is about to open, so the reading the question
+    # names is the freshest one this surface can take.
     directions = remote_control_directions(record, record.remote_control_state)
-    opening = _REMOTE_CONTROL_KEYS[directions[0]] if len(directions) == 1 else None
+    opening = _REMOTE_CONTROL_KEYS[directions[0]] if directions else None
     if mark_excursion:
         screen.mark_excursion()
     await screen.tui.show_detail(session_value, opening)
@@ -2086,7 +2086,7 @@ class SessionDetailScreen(ChoiceScreen):
         elif key == "rename":
             await self.show_rename()
         elif key in _REMOTE_CONTROL_DIRECTIONS:
-            await self.confirm_remote_control(_REMOTE_CONTROL_DIRECTIONS[key])
+            await self.confirm_remote_control()
         elif key == FORCE:
             await self.confirm_force()
         elif key in ACTION_LABELS and key != FORCE:
@@ -2172,8 +2172,20 @@ class SessionDetailScreen(ChoiceScreen):
                 return
         await self.tui.stop(FORCE, self.session_value, self)
 
-    async def confirm_remote_control(self, desired: RemoteControlState) -> None:
-        """Ask before changing a live pane's control mode, re-checking the policy first.
+    async def confirm_remote_control(self) -> None:
+        """Read the pane, then ask about the one direction that reading implies.
+
+        Takes no direction any more. The row that reaches here names only its subject, so the
+        direction is resolved between the press and the question -- from
+        `RemoteAgentsTui.remote_control_state`, which captures the pane and types nothing,
+        and `remote_control_target`, which is the same resolver the bot uses so the two
+        surfaces cannot answer one reading differently (DEC-007).
+
+        **The read is inside the guard, before `showing` is re-checked**, so a pane capture
+        cannot start after the owner has navigated away. A failed read is not special-cased:
+        the terminal answers UNKNOWN for a pane it could not capture, and UNKNOWN is already
+        a case this screen knows how to ask about -- it proposes *on*, the direction that was
+        always safe from an unreadable pane (DEC-003).
 
         Guarded, answered and released for the reasons given on `confirm_force`, and to the
         same shape: read under the guard, check the policy, ask, refresh on an abort without
@@ -2201,11 +2213,13 @@ class SessionDetailScreen(ChoiceScreen):
                     f"{explain_state(record.state, record.orphan_provenance)}"
                 )
                 return
+            observed = await self.tui.remote_control_state(record.session_id)
+            desired = remote_control_target(observed)
             if not self.showing:
                 return
             try:
                 confirmed = await self.tui.ask_to_confirm(
-                    RemoteControlConfirmModal.for_change(record, desired)
+                    RemoteControlConfirmModal.for_change(record, observed)
                 )
             except Exception as error:
                 _LOG.exception("the Remote Control confirmation could not be shown")

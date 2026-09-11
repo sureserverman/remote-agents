@@ -304,6 +304,10 @@ class _Launcher(SessionUseCaseDouble):
     async def copy_attach(self, _session_id):
         return self.attach
 
+    async def remote_control_state(self, _session_id) -> RemoteControlState:
+        """The confirmation's reading. UNKNOWN, which DEC-003 sends to ACTIVE."""
+        return RemoteControlState.UNKNOWN
+
     async def set_remote_control(self, _command):
         return RemoteControlState.ACTIVE
 

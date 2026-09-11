@@ -106,6 +106,7 @@ from remote_agents.application.session_actions import (
     pane_is_attachable,
     remote_control_available,
     remote_control_directions,
+    remote_control_target,
     state_word,
     trust_available,
 )
@@ -402,30 +403,19 @@ doing, where the button can only propose. The two are read at different moments 
 honestly disagree — this line is as old as the last toggle, the confirmation below is as old
 as the press."""
 
-#: What the confirmation asks, and what the press will therefore be asked to do, for each
-#: reading the pane can produce. Every member of the enum appears: the screen resolves one
-#: reading into one question, and a reading with no entry would be a blank confirmation.
+#: How this surface words the question, for each reading the pane can produce. Every member
+#: of the enum appears: the screen resolves one reading into one question, and a reading with
+#: no entry would be a blank confirmation.
 #:
-#: UNKNOWN proposes *on* rather than refusing, which is the asymmetry DEC-003 has always
-#: carried and the reason a single button is safe at all. Enabling is one curated sequence
-#: sent at a pane; disabling has to open Claude's status menu and arrow through it, so a
-#: disable aimed at a pane that was not where we thought it was leaves a menu open in
-#: somebody's session. `TmuxTerminal.remote_control` refuses that direction from an
-#: unreadable pane, and this table is that refusal expressed as a question rather than as an
-#: error the owner meets after pressing.
-_REMOTE_CONTROL_QUESTIONS: dict[RemoteControlState, tuple[RemoteControlState, str, str]] = {
-    RemoteControlState.ACTIVE: (
-        RemoteControlState.INACTIVE,
-        "Remote Control is on. Turn it off?",
-        "Turn it off",
-    ),
-    RemoteControlState.INACTIVE: (
-        RemoteControlState.ACTIVE,
-        "Remote Control is off. Turn it on?",
-        "Turn it on",
-    ),
+#: **Wording only.** *Which* direction the press will take is `remote_control_target`, in the
+#: application, because the terminal asks the same question a second apart and the two must
+#: not be able to disagree (DEC-007) -- while how each of them says it is the surface's own
+#: (DEC-043). That split is why UNKNOWN's sentence says "could not be read" here and the
+#: terminal's modal says it differently, yet both propose *on*.
+_REMOTE_CONTROL_QUESTIONS: dict[RemoteControlState, tuple[str, str]] = {
+    RemoteControlState.ACTIVE: ("Remote Control is on. Turn it off?", "Turn it off"),
+    RemoteControlState.INACTIVE: ("Remote Control is off. Turn it on?", "Turn it on"),
     RemoteControlState.UNKNOWN: (
-        RemoteControlState.ACTIVE,
         "Remote Control could not be read. Turn it on?",
         "Turn it on",
     ),
@@ -2134,7 +2124,8 @@ class PrivateBotBoundary:
         if record is None or not remote_control_available(record):
             return self._message("Remote Control is unavailable for this session.")
         reading = await self.backend.sessions.remote_control_state(record.session_id)
-        desired, question, action = _REMOTE_CONTROL_QUESTIONS[reading]
+        desired = remote_control_target(reading)
+        question, action = _REMOTE_CONTROL_QUESTIONS[reading]
         return self._message(
             f"<b>{question}</b>\nThis uses only the verified Claude interaction.",
             (

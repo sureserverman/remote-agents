@@ -18,7 +18,7 @@ from datetime import UTC, datetime
 
 import pytest
 from backends import SessionUseCaseDouble, backend_for
-from textual.widgets import OptionList
+from textual.widgets import OptionList, Static
 from tui_feedback import announcements
 from tui_feedback import status as _status
 from tui_positions import position
@@ -60,6 +60,10 @@ class _RecordingLauncher(SessionUseCaseDouble):
     issued: list[RemoteControlCommand] = field(default_factory=list)
     result: RemoteControlState = RemoteControlState.ACTIVE
     error: Exception | None = None
+    #: What the pane reads as when the confirmation asks. UNKNOWN by default, which is what
+    #: an unarmed double honestly has and what DEC-003 lets the surface still propose.
+    reading: RemoteControlState = RemoteControlState.UNKNOWN
+    reads: int = 0
 
     async def refresh_readiness(self) -> tuple[SessionRecord, ...]:
         return self.records
@@ -69,6 +73,10 @@ class _RecordingLauncher(SessionUseCaseDouble):
 
     async def copy_attach(self, _session_id) -> str | None:
         return None
+
+    async def remote_control_state(self, _session_id) -> RemoteControlState:
+        self.reads += 1
+        return self.reading
 
     async def set_remote_control(self, command: RemoteControlCommand) -> RemoteControlState:
         self.issued.append(command)
@@ -94,13 +102,15 @@ def _keys(app: RemoteAgentsTui) -> list[str]:
     return [option.id for option in app.screen.query_one("#choices", OptionList).options]
 
 
-#: The two rows the detail offers when the policy allows the toggle at all.
-_ENABLE = "remote-control-active"
-_DISABLE = "remote-control-inactive"
+#: The one row the detail offers when the policy allows the toggle at all. It was a pair
+#: (`remote-control-active` / `remote-control-inactive`) until 2026-09-11: the row named the
+#: direction a press would take, which this surface cannot promise before the pane has been
+#: read. The read happens in the confirmation now, so the row names only its subject.
+_TOGGLE = "remote-control"
 
 
-async def _open_the_confirm(app: RemoteAgentsTui, pilot, key: str = _ENABLE) -> asyncio.Task:
-    """Choose a direction on the detail and leave its confirmation open."""
+async def _open_the_confirm(app: RemoteAgentsTui, pilot, key: str = _TOGGLE) -> asyncio.Task:
+    """Choose the toggle on the detail and leave its confirmation open."""
     task = asyncio.create_task(app.screen.choose(key))
     await pilot.pause()
     return task
@@ -129,15 +139,15 @@ async def test_the_toggle_is_offered_exactly_where_the_policy_allows_it(
         # opening nothing, and passed. Found by sweeping for that key at the stage gate.
         offered = {key for key in _keys(app) if key and key.startswith("remote-control")}
 
-    # Both directions or neither: the policy decides whether the toggle exists at all, and
-    # nothing in the surface may offer one half of it, or a third thing beside it.
-    assert offered == ({_ENABLE, _DISABLE} if remote_control_available(record) else set())
+    # Exactly the one row, or none. Still swept by prefix rather than compared to the key
+    # this test expects: a *second* remote-control row -- one of the retired direction pair
+    # left behind, say -- would sit on the detail opening nothing, and a filtered assertion
+    # would pass over it. That sweep caught one at this stage's own gate once already.
+    assert offered == ({_TOGGLE} if remote_control_available(record) else set())
 
 
-@pytest.mark.parametrize("key", [_ENABLE, _DISABLE])
-async def test_each_direction_requires_a_confirm_step(key: str) -> None:
-    """Neither direction changes anything on the first selection — parametrized because the
-    detail now has two rows that mutate, and covering one would leave the other unpinned."""
+async def test_the_toggle_requires_a_confirm_step() -> None:
+    """Selecting the row changes nothing: the press opens a question, it does not answer one."""
     record = _record()
     launcher = _RecordingLauncher((record,))
     app = RemoteAgentsTui(_context(launcher))
@@ -145,7 +155,7 @@ async def test_each_direction_requires_a_confirm_step(key: str) -> None:
     async with app.run_test() as pilot:
         await app.show_detail(str(record.session_id))
         await pilot.pause()
-        asking = await _open_the_confirm(app, pilot, key)
+        asking = await _open_the_confirm(app, pilot)
         step = position(app)
         modal = app.screen.is_modal
         await pilot.press("escape")
@@ -157,28 +167,47 @@ async def test_each_direction_requires_a_confirm_step(key: str) -> None:
 
 
 @pytest.mark.parametrize(
-    "key,desired",
-    [(_ENABLE, RemoteControlState.ACTIVE), (_DISABLE, RemoteControlState.INACTIVE)],
+    "reading,desired,named",
+    [
+        (RemoteControlState.ACTIVE, RemoteControlState.INACTIVE, "Turn off"),
+        (RemoteControlState.INACTIVE, RemoteControlState.ACTIVE, "Turn on"),
+        (RemoteControlState.UNKNOWN, RemoteControlState.ACTIVE, "Turn on"),
+    ],
 )
-async def test_the_confirmed_direction_is_the_one_the_row_asked_for(key, desired) -> None:
-    """The direction is chosen on the detail, so it must survive the modal unchanged.
+async def test_the_confirmed_direction_is_the_one_the_pane_read_implies(
+    reading, desired, named
+) -> None:
+    """One row, and the reading taken when it is chosen decides what confirming will do.
 
-    This is what the three-row confirmation could not be asked: there, both directions were
-    live until the last keypress, and a mis-wired row would have been indistinguishable from
-    the owner choosing the other one.
+    The direction used to be chosen on the detail from the *stored* observation, which is as
+    old as the last toggle -- so a pane the owner had since changed from inside Claude could
+    be offered a row that confidently named the wrong way. The reading is taken here instead,
+    between the press and the question, and the question says which way it found.
+
+    UNKNOWN proposes *on*: enabling is one curated sequence, while disabling opens Claude's
+    status menu and arrows through it, so a disable aimed at a pane that was not where we
+    thought it was leaves a menu open in somebody's session (DEC-003).
     """
     record = _record()
-    launcher = _RecordingLauncher((record,))
+    launcher = _RecordingLauncher((record,), reading=reading)
     app = RemoteAgentsTui(_context(launcher))
 
     async with app.run_test() as pilot:
         await app.show_detail(str(record.session_id))
         await pilot.pause()
-        asking = await _open_the_confirm(app, pilot, key)
+        asking = await _open_the_confirm(app, pilot)
+        # `#status` is the modal's prompt: `ConfirmScreen.compose` deliberately reuses the
+        # shared body's ids so a renamed widget cannot hide from the checks that matter.
+        prompt = app.screen.query_one("#status", Static)
+        question = " ".join(
+            prompt.render_line(row).text for row in range(max(prompt.size.height, 0))
+        )
         await _confirm(pilot)
         await asyncio.wait_for(asking, timeout=5)
 
+    assert launcher.reads == 1, "the confirmation reads the pane, once, per press"
     assert [command.desired_state for command in launcher.issued] == [desired]
+    assert named.casefold() in question.casefold(), question
 
 
 async def test_confirming_issues_the_command_with_a_tui_idempotency_key() -> None:
@@ -281,13 +310,15 @@ async def test_a_non_claude_session_offers_no_toggle_even_when_running() -> None
         await app.show_detail(str(record.session_id))
         await pilot.pause()
         keys = _keys(app)
-        # Even a stale key must not drive it. Both directions, since either would be a way in.
-        await asyncio.wait_for(app.screen.choose(_ENABLE), timeout=5)
-        await asyncio.wait_for(app.screen.choose(_DISABLE), timeout=5)
+        # Even a stale key must not drive it. The two retired direction keys are pressed
+        # beside the live one: a screen that still answered either of them would be a way in
+        # that nothing else here would notice, since neither is drawn any more.
+        for stale in (_TOGGLE, "remote-control-active", "remote-control-inactive"):
+            await asyncio.wait_for(app.screen.choose(stale), timeout=5)
         await pilot.pause()
         step = position(app)
 
-    assert _ENABLE not in keys and _DISABLE not in keys
+    assert not [key for key in keys if key and key.startswith("remote-control")]
     assert launcher.issued == []
     assert step == "SESSION_DETAIL", "a stale key opened a confirmation the policy forbids"
 

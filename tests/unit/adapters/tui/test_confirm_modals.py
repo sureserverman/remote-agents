@@ -64,6 +64,7 @@ from remote_agents.application.session_actions import (
     FORCE,
     available_actions,
     remote_control_available,
+    remote_control_target,
 )
 from remote_agents.domain.models import (
     ProfileId,
@@ -141,6 +142,17 @@ class _Launcher(SessionUseCaseDouble):
     async def cleanup(self, command) -> None:
         self.issued.append(command)
 
+    async def remote_control_state(self, _session_id) -> RemoteControlState:
+        """The reading the confirmation takes before it names a direction.
+
+        Beside `set_remote_control` rather than on `SessionUseCaseDouble`, on that class's
+        own rule: this is an action-time read, not one of the three every detail makes while
+        drawing, so a double that models the toggle models the read and one that does not
+        fails loudly. UNKNOWN is what an unmodelled pane honestly reads as, and DEC-003 sends
+        it to ACTIVE -- so a test that does not care about the direction still gets one.
+        """
+        return RemoteControlState.UNKNOWN
+
     async def set_remote_control(self, command: RemoteControlCommand) -> RemoteControlState:
         self.issued.append(command)
         return RemoteControlState.ACTIVE
@@ -206,29 +218,29 @@ _ARRANGED: dict[type[ConfirmScreen], tuple[_Arrangement, ...]] = {
     ),
     # `remote_control_available` requires a RUNNING Claude pane, so PRESERVED is the same
     # shape of refusal for the toggle.
-    RemoteControlConfirmModal: tuple(
+    #
+    # **One arrangement, where there were two.** The detail offered `remote-control-active`
+    # and `remote-control-inactive` until 2026-09-11, and both were arranged here because a
+    # row that named a direction could be mis-wired to the other one. The row names no
+    # direction now -- `confirm_remote_control` reads the pane and resolves it -- so what
+    # this sweep covers is the one row, and *which* direction a reading implies is pinned
+    # where the reading can be varied, in `test_tui_remote_control.py`.
+    #
+    # `_Launcher` reads UNKNOWN (`SessionUseCaseDouble` models no pane), which DEC-003 sends
+    # to ACTIVE. Written as the resolver rather than as the word, so this expectation follows
+    # the policy instead of restating it.
+    RemoteControlConfirmModal: (
         _Arrangement(
-            open_key=key,
+            open_key="remote-control",
             offered_when=remote_control_available,
             refused_state=SessionState.PRESERVED,
             refusal_names="remote control",
-            # The direction the row asked for, not merely "a change happened". Swapping the
-            # two rows' states survived a version that checked a name, and hard-coding the
-            # direction inside the command survived a version that covered only Enable.
-            expects=(
-                lambda desired: (
-                    lambda command: (
-                        isinstance(command, RemoteControlCommand)
-                        and command.session_id == _SESSION_ID
-                        and command.desired_state is desired
-                    )
-                )
-            )(desired),
-        )
-        for key, desired in (
-            ("remote-control-active", RemoteControlState.ACTIVE),
-            ("remote-control-inactive", RemoteControlState.INACTIVE),
-        )
+            expects=lambda command: (
+                isinstance(command, RemoteControlCommand)
+                and command.session_id == _SESSION_ID
+                and command.desired_state is remote_control_target(RemoteControlState.UNKNOWN)
+            ),
+        ),
     ),
 }
 

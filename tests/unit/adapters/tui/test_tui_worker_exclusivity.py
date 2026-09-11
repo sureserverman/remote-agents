@@ -141,6 +141,10 @@ class _SlowLauncher(SessionUseCaseDouble):
         await self._record_and_wait("force")
         return a_verified_force_stop()
 
+    async def remote_control_state(self, _session_id) -> RemoteControlState:
+        """The confirmation's reading. UNKNOWN, which DEC-003 sends to ACTIVE."""
+        return RemoteControlState.UNKNOWN
+
     async def set_remote_control(self, _command):
         await self._record_and_wait("remote-control")
         return RemoteControlState.ACTIVE

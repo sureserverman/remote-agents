@@ -114,7 +114,7 @@ from remote_agents.application.host_remote_control import (
     HOST_REMOTE_CONTROL_LABELS,
     HOST_REMOTE_CONTROL_TITLE,
 )
-from remote_agents.application.session_actions import explain_state
+from remote_agents.application.session_actions import explain_state, remote_control_target
 from remote_agents.domain.models import SessionRecord
 from remote_agents.domain.remote_control import PairingCode, RemoteControlState
 
@@ -315,14 +315,20 @@ class ForceConfirmModal(ConfirmScreen):
 class RemoteControlConfirmModal(ConfirmScreen):
     """Ask before changing a live pane's control mode, with Cancel as the resting row.
 
-    Which direction is being confirmed is chosen on the session detail and carried here in
-    the question, rather than being a second decision taken inside the confirmation. That is
-    what lets this be the same `ModalScreen[bool]` as the force confirm — and it is what the
-    bot does too, from the same shared policy: `remote_control_directions` decides which
-    directions each detail screen offers, and the confirmation that follows asks about
-    exactly one of them. Since that policy reads the last observed state, the usual case is
-    a single row on the detail and this modal confirming it; both rows appear only while
-    nothing has been observed yet.
+    **This modal is where the toggle stops being a toggle**, which is a change from how it
+    worked until 2026-09-11. The direction used to be chosen on the session detail -- one row
+    per direction, picked from the record's last observation -- and carried here already
+    decided. That observation is as old as the last toggle, so a pane the owner had since
+    changed from inside Claude could be offered a row that confidently named the wrong way.
+
+    The detail offers one row now. `confirm_remote_control` reads the pane between the press
+    and the question, and this modal is built from that reading: it says what was found and
+    proposes the one direction that follows. The bot does the identical thing from the same
+    shared resolver (`remote_control_target`), so the two surfaces cannot answer the same
+    reading differently -- while each still words it in its own voice (DEC-007, DEC-043).
+
+    It is still the same `ModalScreen[bool]` as the force confirm: what changed is where the
+    direction comes from, not how many answers this question has.
     """
 
     position = "REMOTE_CONTROL_MODAL"
@@ -332,22 +338,33 @@ class RemoteControlConfirmModal(ConfirmScreen):
 
     @classmethod
     def for_change(
-        cls, record: SessionRecord, desired: RemoteControlState
+        cls, record: SessionRecord, observed: RemoteControlState
     ) -> RemoteControlConfirmModal:
-        """The question for one direction, named in both the prompt and the confirm row.
+        """The question the reading implies, named in the prompt and on the confirm row.
 
         Naming the direction on the row as well as in the prompt is deliberate: the row is
-        what the owner reads while the cursor is next to it, and a generic "Yes" would make
+        what the owner reads while the cursor is next to it, and a generic "Yes" would leave
         the two directions indistinguishable at the moment of the decision.
+
+        The prompt states the reading first and the proposal second, so an owner who
+        disagrees with what was found can cancel on the strength of the sentence rather than
+        having to notice which way the button points. An unreadable pane says so, and is
+        offered *on* -- the direction that was always safe from UNKNOWN (DEC-003).
         """
-        action = "Enable" if desired is RemoteControlState.ACTIVE else "Disable"
+        desired = remote_control_target(observed)
+        action = "Turn on" if desired is RemoteControlState.ACTIVE else "Turn off"
+        found = {
+            RemoteControlState.ACTIVE: "Remote Control is on for",
+            RemoteControlState.INACTIVE: "Remote Control is off for",
+            RemoteControlState.UNKNOWN: "Remote Control could not be read for",
+        }[observed]
         effect = (
-            "Enabling lets this session be driven remotely."
+            "Turning it on lets this session be driven remotely."
             if desired is RemoteControlState.ACTIVE
-            else "Disabling returns it to local control only."
+            else "Turning it off returns it to local control only."
         )
         return cls(
-            f"{action} Claude Remote Control for {record.display.rendered}?\n{effect}",
+            f"{found} {record.display.rendered}. {action} it?\n{effect}",
             confirm_label=f"Yes, {action.casefold()} it",
         )
 

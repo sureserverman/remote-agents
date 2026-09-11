@@ -114,6 +114,10 @@ class _Everything(SessionUseCaseDouble):
         self.issued.append(command)
         return a_verified_force_stop()
 
+    async def remote_control_state(self, _session_id) -> RemoteControlState:
+        """The confirmation's reading. UNKNOWN, which DEC-003 sends to ACTIVE."""
+        return RemoteControlState.UNKNOWN
+
     async def set_remote_control(self, command):
         self.issued.append(command)
         return RemoteControlState.ACTIVE
