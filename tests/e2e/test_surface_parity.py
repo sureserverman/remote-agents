@@ -313,7 +313,9 @@ async def _probe_force(app, launcher, pilot) -> None:
 
 async def _probe_remote_control(app, launcher, pilot) -> None:
     await _open_detail(app, launcher, pilot)
-    asking = asyncio.create_task(_choose(app, pilot, "remote-control-active"))
+    # One row, named for its subject rather than for a direction: the terminal reads the pane
+    # in the confirmation and resolves the direction there, exactly as the bot does.
+    asking = asyncio.create_task(_choose(app, pilot, "remote-control"))
     await pilot.pause()
     await _settle_position(app, pilot, "REMOTE_CONTROL_MODAL")
     await pilot.press("down")

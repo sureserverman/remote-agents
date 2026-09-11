@@ -602,7 +602,11 @@ async def _drive(app: RemoteAgentsTui, pilot, step: str) -> asyncio.Task[None] |
             # captured off screen. The test joins it after the capture.
             return asyncio.create_task(app.screen.confirm_force())
         if step == "REMOTE_CONTROL_MODAL":
-            return asyncio.create_task(app.screen.confirm_remote_control(RemoteControlState.ACTIVE))
+            # No direction argument: the confirmation reads the pane itself and resolves one.
+            # `_Launcher` reads UNKNOWN, which DEC-003 sends to *on* -- so this baseline is the
+            # unreadable-pane wording, which is the case an owner meets on a pane nobody has
+            # toggled and therefore the right one to have a picture of.
+            return asyncio.create_task(app.screen.confirm_remote_control())
         elif step == "INSPECT":
             await app.screen.show_inspect()
         return None

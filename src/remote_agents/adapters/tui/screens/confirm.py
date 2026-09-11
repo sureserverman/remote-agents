@@ -352,7 +352,11 @@ class RemoteControlConfirmModal(ConfirmScreen):
         offered *on* -- the direction that was always safe from UNKNOWN (DEC-003).
         """
         desired = remote_control_target(observed)
-        action = "Turn on" if desired is RemoteControlState.ACTIVE else "Turn off"
+        # "Turn it on", not "Turn on": the phrase is interpolated into a question and onto the
+        # confirm row, and splitting the object out of it produced "Turn on it?" and "Yes, turn
+        # on it". Caught by the committed baseline rather than by an assertion -- which is the
+        # whole argument for keeping pictures of every position.
+        action = "Turn it on" if desired is RemoteControlState.ACTIVE else "Turn it off"
         found = {
             RemoteControlState.ACTIVE: "Remote Control is on for",
             RemoteControlState.INACTIVE: "Remote Control is off for",
@@ -364,8 +368,8 @@ class RemoteControlConfirmModal(ConfirmScreen):
             else "Turning it off returns it to local control only."
         )
         return cls(
-            f"{found} {record.display.rendered}. {action} it?\n{effect}",
-            confirm_label=f"Yes, {action.casefold()} it",
+            f"{found} {record.display.rendered}. {action}?\n{effect}",
+            confirm_label=f"Yes, {action.casefold()}",
         )
 
 

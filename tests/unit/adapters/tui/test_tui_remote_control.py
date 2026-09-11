@@ -167,15 +167,30 @@ async def test_the_toggle_requires_a_confirm_step() -> None:
 
 
 @pytest.mark.parametrize(
-    "reading,desired,named",
+    "reading,desired,found,asked",
     [
-        (RemoteControlState.ACTIVE, RemoteControlState.INACTIVE, "Turn off"),
-        (RemoteControlState.INACTIVE, RemoteControlState.ACTIVE, "Turn on"),
-        (RemoteControlState.UNKNOWN, RemoteControlState.ACTIVE, "Turn on"),
+        (
+            RemoteControlState.ACTIVE,
+            RemoteControlState.INACTIVE,
+            "Remote Control is on for",
+            "Turn it off?",
+        ),
+        (
+            RemoteControlState.INACTIVE,
+            RemoteControlState.ACTIVE,
+            "Remote Control is off for",
+            "Turn it on?",
+        ),
+        (
+            RemoteControlState.UNKNOWN,
+            RemoteControlState.ACTIVE,
+            "Remote Control could not be read for",
+            "Turn it on?",
+        ),
     ],
 )
 async def test_the_confirmed_direction_is_the_one_the_pane_read_implies(
-    reading, desired, named
+    reading, desired, found, asked
 ) -> None:
     """One row, and the reading taken when it is chosen decides what confirming will do.
 
@@ -207,7 +222,10 @@ async def test_the_confirmed_direction_is_the_one_the_pane_read_implies(
 
     assert launcher.reads == 1, "the confirmation reads the pane, once, per press"
     assert [command.desired_state for command in launcher.issued] == [desired]
-    assert named.casefold() in question.casefold(), question
+    # Both halves, and the exact words. Asserting only the verb passed "Turn on it?" -- the
+    # committed baseline caught that, and this is the assertion that should have.
+    assert found in question, question
+    assert asked in question, question
 
 
 async def test_confirming_issues_the_command_with_a_tui_idempotency_key() -> None:

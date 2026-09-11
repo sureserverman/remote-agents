@@ -89,6 +89,11 @@ class _Launcher(SessionUseCaseDouble):
     async def copy_attach(self, _session_id):
         return None
 
+    async def remote_control_state(self, _session_id):
+        """The confirmation's reading. UNKNOWN, which DEC-003 sends to ACTIVE."""
+
+        return RemoteControlState.UNKNOWN
+
 
 @dataclass(slots=True)
 class _Creator:
@@ -210,7 +215,7 @@ async def _drive_to_remote_control_confirm(app: RemoteAgentsTui) -> asyncio.Task
     """Same shape as the force drive, and modal for the same reason."""
     await app.show_sessions()
     await app.show_detail(str(_SESSION_ID))
-    return asyncio.create_task(app.screen.confirm_remote_control(RemoteControlState.ACTIVE))
+    return asyncio.create_task(app.screen.confirm_remote_control())
 
 
 async def _drive_to_the_conversation_list(app: RemoteAgentsTui) -> None:

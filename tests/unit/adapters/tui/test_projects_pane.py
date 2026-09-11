@@ -97,6 +97,17 @@ class _Launcher(SessionUseCaseDouble):
     async def list_sessions(self) -> tuple[SessionRecord, ...]:
         return self.records
 
+    async def remote_control_state(self, _session_id):
+        """The reading the Remote Control confirmation takes; `m` can reach it from here.
+
+        Not a render-time read, so it is not on `SessionUseCaseDouble` -- it is modelled where
+        a test drives the chord that ends in the confirmation. UNKNOWN, which DEC-003 sends
+        to ACTIVE.
+        """
+        from remote_agents.domain.remote_control import RemoteControlState
+
+        return RemoteControlState.UNKNOWN
+
 
 def _record(state: SessionState = SessionState.RUNNING) -> SessionRecord:
     """One session record. `state` exists so a test can drive a key the policy refuses."""
@@ -744,6 +755,12 @@ async def test_a_chord_that_went_nowhere_does_not_make_the_next_flow_return_keep
         )
 
 
+#: The one navigating chord that ends in a question rather than on a screen. Read from the
+#: surface rather than spelled, so a chord that grows a confirmation tomorrow is not silently
+#: left out of the branch below.
+_REMOTE_CONTROL_CHORD = "m"
+
+
 @pytest.mark.parametrize("key", sorted(CHORD_NAVIGATES))
 async def test_every_navigating_chord_marks_the_position_it_leaves(key: str) -> None:
     """The property, in place of four hand-placed calls and one test that happened to cover one.
@@ -775,6 +792,18 @@ async def test_every_navigating_chord_marks_the_position_it_leaves(key: str) -> 
         assert not pane._left_by_excursion
 
         await pilot.press(f"alt+{key}")
+        if key == _REMOTE_CONTROL_CHORD:
+            # `alt+m` lands on a confirmation now, where it used to land on a bare detail: the
+            # Remote Control row no longer names a direction, so the policy always offers it
+            # and the detail always dispatches it. Escape answers that question `False` and
+            # leaves the excursion mark alone, which is the only thing this test is about.
+            #
+            # Pressed *before* the pause, because a modal waiting to be answered is a surface
+            # that never goes idle -- pausing first hung this test for its whole timeout.
+            # And only for this key: the other chords open no modal, so an escape there would
+            # navigate back and make `left` false, which is how a blanket escape fails three
+            # of the five cases while fixing one.
+            await pilot.press("escape")
         await pilot.pause()
 
         left = app.screen is not pane

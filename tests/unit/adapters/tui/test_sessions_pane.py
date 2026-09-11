@@ -44,6 +44,7 @@ from remote_agents.domain.models import (
     SessionRecord,
     SessionState,
 )
+from remote_agents.domain.remote_control import RemoteControlState
 
 _PROJECT = CatalogProject("opaque-existing", "existing", "infra", "Registered")
 _SESSION = SessionId.parse("01234567-89ab-cdef-0123-456789abcdef")
@@ -657,14 +658,26 @@ async def test_no_trust_key_is_offered_dec_047() -> None:
     assert "trust" not in actions.lower(), actions
 
 
-async def test_m_performs_the_single_offered_direction() -> None:
-    """Where the policy offers one direction, the key performs it."""
+@pytest.mark.parametrize(
+    "observed",
+    [None, RemoteControlState.ACTIVE, RemoteControlState.INACTIVE, RemoteControlState.UNKNOWN],
+)
+async def test_m_opens_the_detail_on_the_toggle_row_whatever_was_observed(observed) -> None:
+    """The key opens the one row, and the stored observation no longer changes which.
+
+    This was two tests. `m` used to pick a *direction* from the record -- one row where the
+    observation said which way, and no row at all when it said nothing, because "a key that
+    picked one would be answering, on a live pane, a question the policy declines to answer".
+
+    That question is not declined any more; it is asked of the pane, in the confirmation,
+    after the row is chosen. So there is one row in every case and `m` always opens on it,
+    and the property worth pinning is that the stored state -- which is as old as the last
+    toggle -- has stopped being able to steer this key at all.
+    """
     from dataclasses import replace as _replace
 
-    from remote_agents.domain.remote_control import RemoteControlState
-
     opened: list[tuple[str, str | None]] = []
-    record = _replace(_record(), remote_control_state=RemoteControlState.INACTIVE)
+    record = _replace(_record(), remote_control_state=observed)
     app = SessionsPane(_context((record,)))
 
     async with app.run_test() as pilot:
@@ -677,32 +690,7 @@ async def test_m_performs_the_single_offered_direction() -> None:
         await pilot.press("m")
         await pilot.pause()
 
-    assert len(opened) == 1, opened
-    assert opened[0][1] == "remote-control-active", opened
-
-
-async def test_m_opens_the_detail_unmodified_when_the_direction_is_unknown() -> None:
-    """`remote_control_directions` offers *both* when nobody has toggled this session or the
-    observation came back UNKNOWN -- deliberately, because unknown must not be guessed at.
-
-    A key that picked one would be answering, on a live pane, a question the policy declines
-    to answer. So it opens the detail and lets the owner choose, which is the same two
-    keypresses this key exists to save everywhere else and the right number here.
-    """
-    opened: list[tuple[str, str | None]] = []
-    app = SessionsPane(_context((_record(),)))  # no remote_control_state observed
-
-    async with app.run_test() as pilot:
-        await pilot.pause()
-
-        async def capture(session_value, opening_action=None):
-            opened.append((session_value, opening_action))
-
-        app.show_detail = capture  # type: ignore[method-assign]
-        await pilot.press("m")
-        await pilot.pause()
-
-    assert opened == [(str(_SESSION), None)], opened
+    assert opened == [(str(_SESSION), "remote-control")], opened
 
 
 async def test_every_stop_action_the_policy_names_has_a_key() -> None:

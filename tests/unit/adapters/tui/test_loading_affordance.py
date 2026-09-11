@@ -259,7 +259,7 @@ _FLOWS = {
     "resume": (_walk_to_the_conversation_list, str(_REFERENCE)),
     "project-create": (_walk_to_new_project_review, "create"),
     "stop": (None, "graceful"),
-    "remote-control": (None, "remote-control-active"),
+    "remote-control": (None, "remote-control"),
 }
 
 

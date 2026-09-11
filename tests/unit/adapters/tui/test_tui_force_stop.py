@@ -437,14 +437,14 @@ async def _answer_any_open_modal(app: RemoteAgentsTui, pilot) -> None:
 # guard was a per-method opt-in. The parametrization is what makes the *class* covered, so a
 # fifth reader added later fails here rather than being discovered by whoever hits the crash.
 #
-# Each entry is name → how to call it, because the Remote Control read takes the direction the
-# detail row chose. A bare name list would have quietly dropped that one when it gained the
-# argument, which is the same "sweep with a hole" this parametrization exists to prevent.
+# Each entry is name → how to call it. It was a bare name list until the Remote Control read
+# took the direction the detail row chose, and would have quietly dropped that one; the shape
+# stayed when the argument went away again, because it is what makes a reader that grows an
+# argument tomorrow fail here rather than be dropped -- the same "sweep with a hole" this
+# parametrization exists to prevent.
 _DETAIL_READS: dict[str, Callable[[object], Awaitable[None]]] = {
     "confirm_force": lambda detail: detail.confirm_force(),
-    "confirm_remote_control": lambda detail: detail.confirm_remote_control(
-        RemoteControlState.ACTIVE
-    ),
+    "confirm_remote_control": lambda detail: detail.confirm_remote_control(),
     "show_attach": lambda detail: detail.show_attach(),
     "show_inspect": lambda detail: detail.show_inspect(),
 }

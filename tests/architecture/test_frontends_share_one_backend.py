@@ -567,8 +567,8 @@ def test_rule_two_leaves_an_unrelated_getattr_alone() -> None:
 
 def test_the_shared_use_case_set_is_read_from_its_modules() -> None:
     names = _shared_use_case_names()
-    assert len(names) == 19, (
-        f"the shared use-case modules now define {len(names)} public names, not 19. Adding one "
+    assert len(names) == 21, (
+        f"the shared use-case modules now define {len(names)} public names, not 21. Adding one "
         "is ordinary; this assertion exists so that adding one is *noticed*, because every "
         "name here is a name no adapter may define."
     )
@@ -577,6 +577,13 @@ def test_the_shared_use_case_set_is_read_from_its_modules() -> None:
     # policy both surfaces ask rather than either one deciding (DEC-029), so it belongs to
     # this set exactly as `trust_available` does.
     assert "decline_trust_available" in names
+    # The 20th and 21st, noticed the same way. The Claude pane toggle became one button whose
+    # direction is read from the pane at press time: `RemoteControlDirection` is the one thing
+    # a surface may offer, and `remote_control_target` turns a reading into the direction one
+    # press should take. Both are shared rather than per-surface for DEC-007's reason -- the
+    # bot and the terminal ask the same question a second apart, and a second copy of
+    # "UNKNOWN means propose on" is the drift this rule exists to forbid.
+    assert {"RemoteControlDirection", "remote_control_target"} <= names
 
 
 @pytest.mark.parametrize("filename", _SHARED_USE_CASE_MODULES)
