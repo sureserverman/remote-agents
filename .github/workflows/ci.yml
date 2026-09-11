@@ -113,8 +113,21 @@ jobs:
         # registry, so these trees are where a fifth provider's contract coverage appears
         # with no test edit -- omitting them by path would un-cover exactly the tests that
         # exist to cover what nobody remembered to write.
+        #
+        # `-n auto` runs the suite across the runner's cores. **Measured on a 16-core host,
+        # 2026-09-11:** this exact command took **620s serially and 104s with `-n auto`** --
+        # 4385 tests, same result, 6.0x. The suite had never been parallel, and the cost of
+        # that was paid on every run by every reader of this badge.
+        #
+        # **`tests/e2e` is deliberately NOT parallelised**, and is absent from this command
+        # anyway (see the scoping note above). Measured on the same host: serial it is
+        # 136 passed in 38s; under `-n auto` it failed 3, 3 and 6 tests across three
+        # consecutive runs. Those tests drive real tmux servers and contend for them, so the
+        # split is "everything here in parallel, `tests/e2e` serial" -- which is why this is
+        # two commands locally and one here. Recorded as a measurement so that nobody
+        # 'fixes' the inconsistency by adding `-n auto` to the e2e run.
         run: >
           uv run --locked pytest
           tests/unit tests/integration tests/contract tests/architecture tests/security
           tests/provider_contract tests/frontend_contract
-          -m 'not requires_session' -q
+          -m 'not requires_session' -q -n auto
