@@ -12,7 +12,7 @@ from dataclasses import replace
 from datetime import UTC, datetime
 
 import pytest
-from telegram.error import BadRequest
+from telegram.error import BadRequest, TelegramError
 
 from remote_agents.adapters.agents.registry import profile_trust_dialogs
 from remote_agents.adapters.telegram.trust_notifications import TrustNotifier
@@ -131,6 +131,12 @@ class _View:
 
     #: How many deletions fail outright. A different thing from a refusal, and the pass has to
     #: keep going for every other session when one does it.
+    #:
+    #: **A `TelegramError`, deliberately, and not the `BadRequest` this first used.** The text
+    #: it raised was `message to delete not found` -- which is `live_view._ALREADY_GONE`, the
+    #: one string the real `_delete` maps to *success*. So the fixture simulated an exception
+    #: that provably cannot escape the real `discard`, while reading as though it were the
+    #: ordinary failure case. What genuinely escapes is a transport error.
     raise_discards: int = 0
 
     async def amend_apart(self, bot, message_id, arguments):
@@ -145,7 +151,7 @@ class _View:
         del bot
         if self.raise_discards:
             self.raise_discards -= 1
-            raise BadRequest("message to delete not found")
+            raise TelegramError("connection reset")
         if self.refuse_discards:
             self.refuse_discards -= 1
             return False

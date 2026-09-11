@@ -381,9 +381,13 @@ class TrustNotifier:
         if await self._view.discard(self._bot, standing.message_id):
             await self._store.settle(record.session_id)
             return
+        # **Named as the likely cause, not the verified one.** `discard` answers `False` for
+        # any `BadRequest` it does not recognise, so this branch is not proof of the 48-hour
+        # window -- that is simply the only cause anyone has seen in a single-owner chat.
+        # `LiveView._delete` logs the raw error for the case where it is something else.
         _LOG.info(
-            "the folder-trust question for session %s could not be deleted (Telegram refuses "
-            "past 48 hours); amending it in place instead so it stops asking",
+            "the folder-trust question for session %s could not be deleted, most likely past "
+            "Telegram's 48-hour delete window; amending it in place instead so it stops asking",
             record.session_id,
         )
         rendered = render_trust_settled(
