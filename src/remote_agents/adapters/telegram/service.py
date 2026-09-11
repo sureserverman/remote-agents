@@ -97,6 +97,7 @@ from remote_agents.application.session_actions import (
     FORCE,
     GRACEFUL,
     REMOTE_CONTROL_LABELS,
+    RemoteControlDirection,
     StopFailure,
     available_actions,
     decline_trust_available,
@@ -393,7 +394,42 @@ _REMOTE_CONTROL_WORDS: dict[RemoteControlState, str] = {
     RemoteControlState.ACTIVE: "on",
     RemoteControlState.INACTIVE: "off",
 }
-"""How the detail's `remote` fact line reads the last observation. Anything else is `unknown`."""
+"""How the detail's `remote` fact line reads the last observation. Anything else is `unknown`.
+
+Since the button became a toggle this line is the only place the bot still *states* a
+direction, which is the right place for these words: it reports what the pane was last seen
+doing, where the button can only propose. The two are read at different moments and may
+honestly disagree — this line is as old as the last toggle, the confirmation below is as old
+as the press."""
+
+#: What the confirmation asks, and what the press will therefore be asked to do, for each
+#: reading the pane can produce. Every member of the enum appears: the screen resolves one
+#: reading into one question, and a reading with no entry would be a blank confirmation.
+#:
+#: UNKNOWN proposes *on* rather than refusing, which is the asymmetry DEC-003 has always
+#: carried and the reason a single button is safe at all. Enabling is one curated sequence
+#: sent at a pane; disabling has to open Claude's status menu and arrow through it, so a
+#: disable aimed at a pane that was not where we thought it was leaves a menu open in
+#: somebody's session. `TmuxTerminal.remote_control` refuses that direction from an
+#: unreadable pane, and this table is that refusal expressed as a question rather than as an
+#: error the owner meets after pressing.
+_REMOTE_CONTROL_QUESTIONS: dict[RemoteControlState, tuple[RemoteControlState, str, str]] = {
+    RemoteControlState.ACTIVE: (
+        RemoteControlState.INACTIVE,
+        "Remote Control is on. Turn it off?",
+        "Turn it off",
+    ),
+    RemoteControlState.INACTIVE: (
+        RemoteControlState.ACTIVE,
+        "Remote Control is off. Turn it on?",
+        "Turn it on",
+    ),
+    RemoteControlState.UNKNOWN: (
+        RemoteControlState.ACTIVE,
+        "Remote Control could not be read. Turn it on?",
+        "Turn it on",
+    ),
+}
 
 _HOST_CONNECTION_WORDS: dict[HostConnection, str] = {
     HostConnection.CONNECTED: "on",
@@ -2075,20 +2111,41 @@ class PrivateBotBoundary:
         return pane_is_attachable(observation, record)
 
     async def _remote_control_confirm_reply(self, entity_id: str) -> RenderedMessage:
-        session_value, separator, state_value = entity_id.partition("|")
-        if not separator or state_value not in {"active", "inactive"}:
+        """Read the pane, then ask the owner about the one direction that reading implies.
+
+        This screen is where the toggle stops being a toggle. The button that reached it
+        carries no direction at all — it cannot, because the state it would have to name is
+        only knowable by looking — so the reading is taken here, once, and the mutation
+        callback below carries the explicit ACTIVE or INACTIVE that `RemoteControlCommand`
+        has always wanted. DEC-003's confirmation is untouched: there is still exactly one
+        press between the owner and a live pane, and it still names what it will do.
+
+        Availability is re-asked through `remote_control_available` rather than by re-testing
+        the profile alone. The old guard let a session that had left RUNNING since the screen
+        was drawn through to a confirmation the policy would no longer offer; asking the same
+        function the button asked keeps the two from disagreeing (DEC-007).
+        """
+        session_value, separator, direction_value = entity_id.partition("|")
+        if not separator or direction_value != RemoteControlDirection.TOGGLE.value:
             return self._message("That Remote Control request is incomplete.")
+        if self.backend.sessions is None:
+            return self._message("Remote Control is unavailable.")
         record = await self._record(session_value)
-        if record is None or record.profile_id != ProfileId("claude"):
+        if record is None or not remote_control_available(record):
             return self._message("Remote Control is unavailable for this session.")
-        action = "Enable" if state_value == "active" else "Disable"
+        reading = await self.backend.sessions.remote_control_state(record.session_id)
+        desired, question, action = _REMOTE_CONTROL_QUESTIONS[reading]
         return self._message(
-            f"<b>{action} Remote Control?</b>\nThis uses only the verified Claude interaction.",
+            f"<b>{question}</b>\nThis uses only the verified Claude interaction.",
             (
                 (
                     Button(
                         action,
-                        self._callback("remote.confirm", entity_id, mutation=True),
+                        self._callback(
+                            "remote.confirm",
+                            f"{session_value}|{desired.value}",
+                            mutation=True,
+                        ),
                     ),
                 ),
                 (Button("Cancel", self._callback("session.detail", session_value)),),
@@ -2101,7 +2158,14 @@ class PrivateBotBoundary:
         if self.backend.sessions is None:
             return _reply_arguments(self._message("Remote Control is unavailable."))
         session_value, separator, state_value = entity_id.partition("|")
-        if not separator:
+        # The membership test moved down from the confirm screen, which no longer receives a
+        # direction to check: its own entity now reads `<session>|toggle`, and this one is
+        # the only place a direction still arrives from a button. Without it a malformed
+        # entity reaches `RemoteControlState(state_value)` and raises rather than answering.
+        if not separator or state_value not in {
+            RemoteControlState.ACTIVE.value,
+            RemoteControlState.INACTIVE.value,
+        }:
             return _reply_arguments(self._message("That Remote Control request is incomplete."))
         # Re-read before the claim, for the reason `_launch_reply` gives: the session this
         # button names may have ended since the screen was drawn, and spending the one-shot
