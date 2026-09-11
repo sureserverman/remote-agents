@@ -71,18 +71,32 @@ def render_trust_question(
     dialog this project reads, while saying *no* ends a session that never started and is
     available for all of them.
 
-    **One button per row.** DEC-032 gives the two-wide shape to the stop row, which is the one
-    place on this surface where two buttons sit side by side; a pair of answers drawn the same
-    way would read as a pair of stops.
+    **Both answers on one row, which supersedes DEC-032's one-answer-per-row clause** at the
+    owner's request of 2026-09-11. That clause reasoned from the stop row: DEC-032 gives the
+    two-wide shape to the stops, because on a surface with no separators the row is the only
+    grouping there is and "the actions that end a session should not look like the ones that
+    read it" — so a pair of answers drawn two-wide was held to read as a pair of stops. The
+    owner overruled it on the evidence of the message itself: these two buttons are not two
+    actions, they are the two halves of one question, and stacking them made the answer taller
+    than the question and read as a list of things to do rather than as a choice. Nothing else
+    in DEC-032 moves — the stop row keeps its own two-wide row, the navigation bar is still
+    appended at one choke point, and no stop is ever drawn on *this* message, so the collision
+    the old clause guarded against cannot arise here at all. Where both can (the session detail
+    screen) the trust row stays a row of its own, which `service._detail_reply` keeps and
+    `test_the_trust_row_never_touches_the_stop_row` pins.
+
+    A lone answer is still one row, one wide: there is nothing for it to share a row with, and
+    padding it out to two would draw a dead half.
     """
     if answerable and trust is None:
         raise ValueError("an answerable trust question needs a trust callback")
-    rows: list[tuple[Button, ...]] = []
+    answers: list[Button] = []
     if answerable and trust is not None:
         _validate_callback(trust)
-        rows.append((Button(TRUST_LABEL, trust),))
+        answers.append(Button(TRUST_LABEL, trust))
     _validate_callback(decline)
-    rows.append((Button(DECLINE_LABEL, decline),))
+    answers.append(Button(DECLINE_LABEL, decline))
+    rows: list[tuple[Button, ...]] = [tuple(answers)]
     return render_message(
         # Escaped, because a session label is the owner's own words and this message is sent
         # with `parse_mode=HTML`. Every caller of `_message` escapes; moving the wording into

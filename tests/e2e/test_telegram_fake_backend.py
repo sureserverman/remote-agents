@@ -1891,6 +1891,44 @@ async def test_the_detail_screen_offers_both_answers_to_the_trust_question() -> 
 
 
 @pytest.mark.asyncio
+async def test_the_trust_row_never_touches_the_stop_row() -> None:
+    """The half of DEC-032 that the 2026-09-11 pairing did **not** supersede.
+
+    The owner asked for the two trust answers to share a row, and that clause of DEC-032 —
+    the one that gave each answer a row of its own so a pair would not read as a pair of
+    stops — is gone. What survives is the rule underneath it: on a surface with no separators,
+    a row *is* the grouping, and the actions that end a session must not sit in the same row
+    as the ones that answer a question about starting it. An UNTRUSTED pane is forceable, so
+    this screen draws both groups, and the two-wide trust pair is now the same shape as a
+    two-wide stop row — which is exactly why the rows themselves have to stay apart.
+
+    Asserted on row *indices*, not on flattened labels: every other trust assertion in this
+    file flattens the keyboard and would pass just as happily on one merged row of four.
+    """
+    boundary, _ = _untrusted_bot()
+    chat = FakeChat()
+    anchor = await _open_detail(chat, boundary)
+
+    rows = [
+        [unpadded(button.text) for button in row]
+        for row in chat.messages[anchor].reply_markup.inline_keyboard
+    ]
+    trust_rows = [
+        index
+        for index, row in enumerate(rows)
+        if any(label == "Trust this project" or "trust" in label for label in row)
+    ]
+    stop_rows = [
+        index for index, row in enumerate(rows) if any("Force stop" in label for label in row)
+    ]
+
+    assert len(trust_rows) == 1, rows
+    assert rows[trust_rows[0]] == ["Trust this project", "Don't trust — close it"], rows
+    assert len(stop_rows) == 1, rows
+    assert trust_rows[0] != stop_rows[0], rows
+
+
+@pytest.mark.asyncio
 async def test_a_working_session_is_offered_no_trust_button_whatever_its_pane_shows() -> None:
     """The pane is evidence about a screen; the record is evidence about a *session*.
 

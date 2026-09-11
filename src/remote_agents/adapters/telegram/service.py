@@ -1853,38 +1853,45 @@ class PrivateBotBoundary:
             )
         if second:
             buttons.append(tuple(second))
+        # **The two answers share one row, and the row is still the trust row's own.** The
+        # owner asked for the pair to sit side by side on 2026-09-11, which supersedes
+        # DEC-032's clause that gave each answer a row of its own; what that clause was
+        # protecting survives as the separation below. The stop row comes next, it is two-wide
+        # when the state offers two stops, and on a surface with no separators the row is the
+        # only grouping there is -- so answering the question and ending the session must
+        # never land in the same row. `test_the_trust_row_never_touches_the_stop_row` pins it.
+        answers: list[Button] = []
         if await self._awaiting_trust(record):
-            buttons.append(
-                (
-                    Button(
-                        "Trust this project",
-                        # A mutation token: this button sends a keypress into a live pane, so
-                        # it is claimed once and never replayed, exactly like the confirmed
-                        # stop and resume buttons.
-                        self._callback("session.trust", session_value, mutation=True),
-                    ),
+            answers.append(
+                Button(
+                    "Trust this project",
+                    # A mutation token: this button sends a keypress into a live pane, so
+                    # it is claimed once and never replayed, exactly like the confirmed
+                    # stop and resume buttons.
+                    self._callback("session.trust", session_value, mutation=True),
                 )
             )
         if decline_trust_available(record):
-            # **A row of its own, one wide, and offered on a different condition from the
-            # row above it.** Saying yes means typing into the agent's dialog, so it is
-            # confined to the profiles this project can read and costs a pane capture to
-            # decide. Saying no does not: it ends a session that never started, which is
-            # reachable for codex and cursor-agent too and needs only the record. So a
-            # session whose dialog nobody parses gets exactly one of these two buttons,
-            # rather than a Trust that would refuse itself when pressed.
+            # **Offered on a different condition from the button beside it, so the row is
+            # two-wide only when both hold.** Saying yes means typing into the agent's
+            # dialog, so it is confined to the profiles this project can read and costs a
+            # pane capture to decide. Saying no does not: it ends a session that never
+            # started, which is reachable for codex and cursor-agent too and needs only the
+            # record. So a session whose dialog nobody parses gets exactly one of these two
+            # buttons -- alone in the row, one wide -- rather than a Trust that would refuse
+            # itself when pressed.
             #
             # This is the fallback rather than the primary route -- the notification is --
             # and it exists because DEC-049 abandons a message after three refusals, which
             # would otherwise leave that session with no way to be answered at all.
-            buttons.append(
-                (
-                    Button(
-                        "Don't trust — close it",
-                        self._callback("session.decline", session_value, mutation=True),
-                    ),
+            answers.append(
+                Button(
+                    "Don't trust — close it",
+                    self._callback("session.decline", session_value, mutation=True),
                 )
             )
+        if answers:
+            buttons.append(tuple(answers))
         # The stops share one row of their own. Telegram has no separator, so shape and the
         # mark are the only signals available, and the actions that end a session should not
         # look like the ones that read it — a graceful stop is one tap from discarding the

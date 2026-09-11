@@ -48,19 +48,24 @@ def _labels(message) -> list[str]:
     return [button.text for row in message.keyboard for button in row]
 
 
-def test_an_answerable_agent_gets_both_answers_each_on_its_own_row() -> None:
-    """One wide each, which is DEC-032's shape rule: the two-wide row belongs to the stops.
+def test_an_answerable_agent_gets_both_answers_side_by_side_on_one_row() -> None:
+    """Two wide, which supersedes DEC-032's one-answer-per-row clause (owner, 2026-09-11).
 
-    These are not stops and must not look like the stop row, which is the one place on this
-    surface where two buttons sit side by side.
+    This used to assert `[1, 1]`, on the reasoning that a pair of answers drawn two-wide would
+    read as a pair of stops. The owner asked for the pair to share a row anyway: the two
+    answers to one question are one choice, and stacking them made the message taller than the
+    question it asks. DEC-032's other half is untouched — the stop row keeps its own two-wide
+    row, and no stop is ever drawn on this message.
     """
     message = render_trust_question(_record(), answerable=True, trust=_TRUST, decline=_DECLINE)
 
-    assert [len(row) for row in message.keyboard] == [1, 1]
+    assert [len(row) for row in message.keyboard] == [2]
     assert _labels(message) == ["✅ Trust this project", "⛔ Don't trust — close it"]
 
 
 def test_an_agent_whose_dialog_cannot_be_read_gets_only_the_no() -> None:
+    """One answer is still one row, one wide — the pair shares a row, a lone button has none
+    to share it with."""
     message = render_trust_question(_record(profile="codex"), answerable=False, decline=_DECLINE)
 
     assert [len(row) for row in message.keyboard] == [1]
