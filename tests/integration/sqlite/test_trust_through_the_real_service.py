@@ -46,7 +46,7 @@ from remote_agents.domain.models import (
 )
 from remote_agents.domain.state_machine import InvalidTransition
 from remote_agents.domain.trust import TrustState
-from remote_agents.ports.terminal import NOT_AWAITING_TRUST, TerminalObservation
+from remote_agents.ports.terminal import NOT_AWAITING_TRUST, TerminalObservation, TrustAnswer
 
 
 class _AnsweringTerminal:
@@ -57,9 +57,16 @@ class _AnsweringTerminal:
         del session_id
         return TrustState.AWAITING
 
-    async def answer_trust(self, session_id: SessionId) -> TrustState:
+    async def answer_trust(self, session_id: SessionId) -> TrustAnswer:
+        """What the real runtime returns on the success path, and it has to stay that.
+
+        A double that returns a bare `TrustState` here keeps this file's assertions passing
+        while no longer standing in for the port -- and this file's whole point is that the
+        service is exercised through a real store rather than through a fake that omits the
+        layer holding the bug. Migrated with `TrustAnswer` (BL-053) for that reason.
+        """
         self.answered.append(session_id)
-        return TrustState.UNKNOWN
+        return TrustAnswer(pressed=True, observed=TrustState.UNKNOWN)
 
 
 def _answerable_record(profile: str) -> SessionRecord:
@@ -112,7 +119,8 @@ async def test_every_answerable_profile_is_answerable_through_the_real_service(
     result = await service.answer_trust(AnswerTrustCommand(record.session_id, f"key-{profile}"))
 
     assert terminal.answered == [record.session_id], f"{profile} never reached the terminal"
-    assert result is TrustState.UNKNOWN
+    assert result.pressed, "the terminal answered, so the service must report that it did"
+    assert result.observed is TrustState.UNKNOWN
 
 
 async def test_a_list_open_does_not_relabel_an_aged_failed_session(tmp_path: Path) -> None:

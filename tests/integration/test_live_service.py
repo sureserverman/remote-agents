@@ -1174,6 +1174,15 @@ def test_only_the_actions_that_make_the_owner_wait_get_a_pending_notice() -> Non
     # that is now readable from the action alone, with no confirmation state to consult.
     assert boundary._pending_notice("force") is None
     assert boundary._pending_notice(CONFIRMED_FORCE) is not None
+    # **Both answers to the folder-trust question wait, and both say so.** Decline has said so
+    # since it was written; trust had no entry at all until 2026-09-10, which was an asymmetry
+    # rather than a decision -- it sends the agent's own keys and then sleeps
+    # `_TRUST_ANSWER_WAIT_SECONDS` before re-reading the pane, and its token is claimed before
+    # the terminal call, so a failure that escaped spent the one-shot and left the owner a
+    # cleared spinner with no words. Added by the same change; untested until the close-out
+    # evaluator pointed out that the diff's one owner-visible addition pinned nothing.
+    assert boundary._pending_notice("session.decline") is not None
+    assert boundary._pending_notice("session.trust") is not None
 
 
 @pytest.mark.asyncio

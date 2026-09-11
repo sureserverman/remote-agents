@@ -22,6 +22,31 @@ class TerminalTargetMissing(RuntimeError):
     """
 
 
+@dataclass(frozen=True, slots=True)
+class TrustAnswer:
+    """What answering the folder-trust question actually did, as distinct from what the pane shows.
+
+    **Two facts, because the caller needs both and one cannot be derived from the other.**
+    `observed` is the pane afterwards. `pressed` is whether this call put a key into it.
+
+    The second is not a pane state and could not be one. `TrustState` has exactly two members
+    deliberately — `classify_trust_capture` gives the reason: nothing in a capture separates
+    "answered a moment ago" from "never asked", so a third member invented from an absence is
+    the failure DEC-009 names. But *did I send a key* is not read off a capture at all; the
+    terminal knows it for certain, having either called `send_keys` or not. Returning it is
+    reporting a fact, not inferring one.
+
+    **What it was before.** All three refusal paths returned bare `TrustState.UNKNOWN`, and so
+    did the success path — because answering clears the dialog, so the capture taken afterwards
+    stops matching. The values were identical, so the surface reported *Trusted. The agent can
+    continue* for a pane it had declined to touch, having already burned the one-shot token.
+    Failing closed was right; saying it worked was not.
+    """
+
+    pressed: bool
+    observed: TrustState
+
+
 #: The `detail` values a terminal adapter may set on an observation that reports no pane.
 #:
 #: They live on the port because they are the vocabulary of the boundary itself: the adapter
@@ -107,7 +132,7 @@ class TerminalPort(Protocol):
         self, session_id: SessionId, desired_state: RemoteControlState
     ) -> RemoteControlState: ...
     async def trust_state(self, session_id: SessionId) -> TrustState: ...
-    async def answer_trust(self, session_id: SessionId) -> TrustState: ...
+    async def answer_trust(self, session_id: SessionId) -> TrustAnswer: ...
     async def decline_trust(self, session_id: SessionId) -> TerminalObservation: ...
     async def inspect(self, session_id: SessionId) -> TerminalObservation | None: ...
     async def confirm_ready(

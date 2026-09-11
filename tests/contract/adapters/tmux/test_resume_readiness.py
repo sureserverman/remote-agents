@@ -10,7 +10,7 @@ from remote_agents.adapters.tmux.gateway import TmuxInventory
 from remote_agents.adapters.tmux.runtime import LaunchProfile, TmuxTerminal
 from remote_agents.domain.models import ProfileId, ProjectId, SessionId
 from remote_agents.domain.trust import TrustState
-from remote_agents.ports.terminal import NOT_AWAITING_TRUST, OWNERSHIP_LOST
+from remote_agents.ports.terminal import NOT_AWAITING_TRUST, OWNERSHIP_LOST, TerminalTargetMissing
 
 _EXECUTABLE = "/usr/bin/claude"
 
@@ -359,7 +359,8 @@ async def test_answering_yes_presses_nothing_for_a_profile_that_declares_no_dial
 
     answered = await terminal.answer_trust(session_id)
 
-    assert answered is TrustState.UNKNOWN
+    assert not answered.pressed, "no dialog is declared for this profile, so nothing is sent"
+    assert answered.observed is TrustState.UNKNOWN
     assert gateway.sent == [], "a key was typed into an agent that declares no dialog"
 
 
@@ -450,3 +451,207 @@ async def test_a_codex_pane_that_is_no_longer_asking_is_refused_too(tmp_path) ->
     assert observation.detail == NOT_AWAITING_TRUST
     assert gateway.sent == []
     assert gateway.destroyed == []
+
+
+#: codex's dialog with its cursor glyph removed -- every classifier marker present, so
+#: `classify_trust_capture` says AWAITING, and no `›` for `plan_trust_keys` to count rows
+#: from, so it fails closed. The screen a parser can *recognise* and cannot *read*.
+_CODEX_DIALOG_WITHOUT_A_CURSOR = (
+    "> You are in /home/user/dev/example\n"
+    f"  {_CODEX_BLOCKER} Working with untrusted contents comes with higher risk.\n"
+    "  1. Yes, continue\n"
+    "  2. No, quit\n"
+)
+
+
+@pytest.mark.asyncio
+async def test_a_press_that_read_nothing_is_distinguishable_from_one_that_worked(
+    tmp_path,
+) -> None:
+    """Failing closed is right; reporting it as success is not (BL-053's second finding).
+
+    `answer_trust` has three refusal paths -- no dialog declared, the dialog gone, and
+    `plan_trust_keys` failing closed on a layout it cannot read -- and every one of them
+    returned `TrustState.UNKNOWN`, which is *also* what the success path returns, because
+    answering clears the dialog and the capture taken afterwards no longer matches. So the
+    caller could not tell "I pressed the key and it worked" from "I pressed nothing at all",
+    and the bot told the owner **Trusted. The agent can continue** for a session whose pane it
+    had refused to touch -- after burning the one-shot token that would have let them retry.
+
+    The pane state is not the defect. `TrustState` has exactly two members on purpose
+    (`classify_trust_capture`: there is nothing in a capture that separates "answered a moment
+    ago" from "never asked", and inventing a third from an absence is what DEC-009 forbids).
+    What was missing is a different fact entirely -- *did this call send a key* -- which the
+    terminal knows for certain and was throwing away.
+    """
+    refusing, refusing_gateway, refusing_id = _decline_terminal(
+        tmp_path, "codex", _CODEX_DIALOG_WITHOUT_A_CURSOR
+    )
+    working, working_gateway, working_id = _decline_terminal(tmp_path, "codex", _CODEX_DIALOG)
+
+    refused = await refusing.answer_trust(refusing_id)
+    worked = await working.answer_trust(working_id)
+
+    assert refusing_gateway.sent == [], (
+        "the layout could not be read, so nothing may be typed into the pane"
+    )
+    assert working_gateway.sent == [("Enter",)], (
+        "the readable dialog rests its cursor on the affirmative, so one Enter answers it"
+    )
+    assert not refused.pressed, "no key was sent, and the answer has to say so"
+    assert worked.pressed, "a key was sent"
+    assert refused != worked, (
+        "a refusal to press and a successful press must not be the same value -- that "
+        "equality is what let the surface report a refusal as 'Trusted'"
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_pane_that_dies_after_taking_the_keys_still_reports_that_they_were_sent(
+    tmp_path,
+) -> None:
+    """The window `TrustAnswer` was built for, and which it fell through until now.
+
+    `TerminalTargetMissing` is ordinary evidence of an ended session rather than a fault, and
+    letting it unwind out of `answer_trust` threw away the one fact this type exists to carry
+    -- on the single path where the owner's press really did land. The token is claimed before
+    the terminal call, so what they got was a spent one-shot, a cleared spinner and no words.
+
+    The decline path has had a gateway that dies after its keys since it was written
+    (`_DeclineGateway.dies_after_keys`); the accept path had no equivalent. This is it.
+    """
+
+    class _DiesAfterAnswering(_DeclineGateway):
+        async def capture(self, session_id: SessionId) -> str:
+            if self.sent:
+                raise TerminalTargetMissing(f"ra-{session_id}")
+            return await super().capture(session_id)
+
+    session_id = SessionId.new()
+    project = tmp_path / "opaque-editor"
+    project.mkdir(exist_ok=True)
+    gateway = _DiesAfterAnswering(session_id, _CODEX_DIALOG, tmp_path, ProfileId("codex"))
+    terminal = TmuxTerminal(
+        gateway,
+        {ProjectId("opaque-editor"): project},
+        {ProfileId("codex"): _profile("Claude Code", (_CODEX_BLOCKER,))},
+        startup_timeout=0.2,
+        trust_dialogs=profile_trust_dialogs(),
+    )
+
+    answered = await terminal.answer_trust(session_id)
+
+    assert gateway.sent == [("Enter",)], "the dialog was readable, so the keys did go out"
+    assert answered.pressed, (
+        "the keys were sent before the pane went away; reporting otherwise loses the one fact "
+        "the owner needs, on the path where their press actually worked"
+    )
+    assert answered.observed is TrustState.UNKNOWN, "nothing can be read off a pane that is gone"
+
+
+@pytest.mark.asyncio
+async def test_a_pane_gone_before_the_keys_reports_that_nothing_was_sent(tmp_path) -> None:
+    """The other side of the same catch, which must not get the same answer.
+
+    `send-keys` against a target tmux cannot resolve delivers nothing -- a missing pane is not
+    a pane that received a keystroke -- so this reports `pressed=False`. Getting these two
+    windows the same way round would be the guess `TrustAnswer` exists to stop.
+    """
+
+    class _GoneBeforeTheKeys(_DeclineGateway):
+        async def send_keys(self, session_id: SessionId, keys: tuple[str, ...]) -> None:
+            del keys
+            raise TerminalTargetMissing(f"ra-{session_id}")
+
+    session_id = SessionId.new()
+    project = tmp_path / "opaque-editor"
+    project.mkdir(exist_ok=True)
+    gateway = _GoneBeforeTheKeys(session_id, _CODEX_DIALOG, tmp_path, ProfileId("codex"))
+    terminal = TmuxTerminal(
+        gateway,
+        {ProjectId("opaque-editor"): project},
+        {ProfileId("codex"): _profile("Claude Code", (_CODEX_BLOCKER,))},
+        startup_timeout=0.2,
+        trust_dialogs=profile_trust_dialogs(),
+    )
+
+    answered = await terminal.answer_trust(session_id)
+
+    assert gateway.sent == [], "nothing was delivered"
+    assert not answered.pressed
+    assert answered.observed is TrustState.UNKNOWN
+
+
+@pytest.mark.asyncio
+async def test_a_read_of_a_vanished_pane_answers_in_the_read_methods_own_vocabulary(
+    tmp_path,
+) -> None:
+    """`trust_state` is a read and returns a `TrustState`. Nothing may make it return the other.
+
+    This exists because it happened. `trust_state` and `answer_trust` open with the same two
+    lines, so a guard written for the second landed in the first, and `trust_state` began
+    returning `TrustAnswer(pressed=False, ...)`. Nothing failed: there is no type checker in
+    this project's dev group, and ruff's rules cannot see a wrong return type. The live effect
+    was a hidden Trust button -- `trust_available` compares `observed is TrustState.AWAITING`,
+    which a dataclass is not -- so the row disappeared by accident while looking like policy.
+
+    Asserting the type rather than only the value is the point: the old bug's *value* was
+    falsy in the right direction, and that is exactly why nothing noticed.
+    """
+
+    class _Vanished(_DeclineGateway):
+        async def capture(self, session_id: SessionId) -> str:
+            raise TerminalTargetMissing(f"ra-{session_id}")
+
+    session_id = SessionId.new()
+    project = tmp_path / "opaque-editor"
+    project.mkdir(exist_ok=True)
+    gateway = _Vanished(session_id, _CODEX_DIALOG, tmp_path, ProfileId("codex"))
+    terminal = TmuxTerminal(
+        gateway,
+        {ProjectId("opaque-editor"): project},
+        {ProfileId("codex"): _profile("Claude Code", (_CODEX_BLOCKER,))},
+        startup_timeout=0.2,
+        trust_dialogs=profile_trust_dialogs(),
+    )
+
+    state = await terminal.trust_state(session_id)
+
+    assert isinstance(state, TrustState), (
+        f"trust_state must answer in TrustState, not {type(state).__name__} -- "
+        "TerminalPort.trust_state says so and trust_available depends on it"
+    )
+    assert state is TrustState.UNKNOWN, "a pane that is gone is not a pane that is asking"
+
+
+@pytest.mark.asyncio
+async def test_a_pane_gone_before_the_first_read_reports_that_nothing_was_sent(tmp_path) -> None:
+    """The third of `answer_trust`'s windows, and the one its guard originally missed.
+
+    Its docstring claims three `try` blocks; for one revision the code had two, because this
+    one had been spliced into `trust_state` instead. The owner's cost was the same as the
+    other two windows: the token is claimed before the terminal call, so an escaping
+    exception left a spent one-shot, a cleared spinner and no words.
+    """
+
+    class _Vanished(_DeclineGateway):
+        async def capture(self, session_id: SessionId) -> str:
+            raise TerminalTargetMissing(f"ra-{session_id}")
+
+    session_id = SessionId.new()
+    project = tmp_path / "opaque-editor"
+    project.mkdir(exist_ok=True)
+    gateway = _Vanished(session_id, _CODEX_DIALOG, tmp_path, ProfileId("codex"))
+    terminal = TmuxTerminal(
+        gateway,
+        {ProjectId("opaque-editor"): project},
+        {ProfileId("codex"): _profile("Claude Code", (_CODEX_BLOCKER,))},
+        startup_timeout=0.2,
+        trust_dialogs=profile_trust_dialogs(),
+    )
+
+    answered = await terminal.answer_trust(session_id)
+
+    assert gateway.sent == [], "there was no pane to send anything to"
+    assert not answered.pressed
+    assert answered.observed is TrustState.UNKNOWN

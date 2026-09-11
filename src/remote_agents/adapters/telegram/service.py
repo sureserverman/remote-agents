@@ -308,6 +308,16 @@ _PENDING_NOTICES = {
     # `callback`'s `if pending is None: raise` costs them the screen on a failure whose token
     # has already been spent.
     "session.decline": "Closing the session without trusting it…",
+    # **The accept half, for every word of the reason above.** It sends the agent's own
+    # affirmative keys and then sleeps `_TRUST_ANSWER_WAIT_SECONDS` before re-reading the
+    # pane, so it makes the owner wait for the same *reason* as its sibling, though not for the
+    # same span: this one sleeps a fixed second, while a decline polls up to
+    # `_TRUST_DECLINE_WAIT_SECONDS` and then kills. Same shape, different bound -- and its token
+    # is claimed
+    # before the terminal call, so an escaping failure spent the one-shot and left them a
+    # cleared spinner with no words. It was absent while `session.decline` was present, which
+    # is the asymmetry rather than a decision; found by the second Tier-2 pass on this task.
+    "session.trust": "Answering the folder-trust question…",
     "launch.profile": "Launching — waiting for the agent to become ready…",
     "resume.confirm": "Resuming — waiting for the agent to become ready…",
     # The slowest action in this bot, and it had no notice. Enabling probes the daemon (10 s
@@ -2401,10 +2411,43 @@ class PrivateBotBoundary:
         exactly, and this repository's own trust fixtures are such a file. So a healthy
         RUNNING session showed a live *Trust this project* button, and pressing it sent
         movement keys and an Enter into a working agent. No marker count closes that (a
-        verbatim copy satisfies any number of them); asking the lifecycle does. The notifier
-        has always filtered this way — `trust_notifications.py` refuses any record that is not
-        `UNTRUSTED` — so this is the detail screen agreeing with its sibling rather than a new
-        rule. DEC-080.
+        verbatim copy satisfies any number of them); asking the lifecycle does. DEC-080.
+
+        **What the sibling actually shares, corrected.** This used to end by saying the
+        notifier "has always filtered this way", so that the state gate was "the detail screen
+        agreeing with its sibling rather than a new rule". That is true of **one** of the two
+        gates and was read as both. `trust_notifications.py` shares the *state* filter — its
+        pass skips any record that is not `UNTRUSTED` — and does **not** share the pane read:
+        it offers Trust on `answerable(profile_id, ...)` alone, with no capture taken at all.
+
+        **That asymmetry is correct and deliberate, not a gap to close.** This screen is
+        re-rendered on demand, so a capture taken as it draws describes the pane the owner is
+        looking at. A notification is sent once and then outlives its own read by any amount of
+        time, so a pane gate there would pin a button to an observation that was already stale
+        when it was minted — ceremony, not safety. What actually protects that press is one
+        layer down and unconditional: `TmuxRuntime.answer_trust` re-reads the pane before
+        sending anything, and since BL-053's second finding it reports honestly when it refused
+        rather than returning the same value as success (`ports.terminal.TrustAnswer`). So the
+        notification's button cannot fire a keypress into a session that is no longer asking,
+        and a press that read nothing now says so instead of claiming the folder was trusted.
+
+        **What DEC-081 does and does not change, stated in the right tense.** It *decides* that
+        a pane may **clear** `untrusted` and may no longer **set** it -- and that is a decision,
+        not code. No implementation ships with it, deliberately: the plan that recorded it
+        (2026-09-10) authored no task for the evidence change, because what it costs differs by
+        an order of magnitude between the routes and that plan is written from the decision
+        rather than before it.
+
+        So the state half of this gate is **still conjurable today**, and the bound is the only
+        thing narrowing it. `reconcile._TRUST_CORRECTABLE` is `{STARTING, RUNNING, FAILED}` and
+        `reading.awaiting_trust` is still the one-substring blocker check, so inside
+        `_LATE_DIALOG_WINDOW` -- five minutes from `created_at` -- an agent displaying any of
+        the fourteen files carrying codex's blocker can still move a working session to
+        `untrusted`, which is the state this gate consults and the state DEC-078's unconfirmed
+        kill is offered from. Past that window the reading is refused and the record stands.
+        That is a mitigation, not an elimination; BL-053 carries the residual, and an earlier
+        draft of this very paragraph asserted the hole was closed, which is the same false
+        claim about trust evidence that BL-053 is itself about.
         """
         if record.state is not SessionState.UNTRUSTED:
             return False
@@ -2457,7 +2500,8 @@ class PrivateBotBoundary:
             # a record that is no longer `untrusted`, which is exactly the stale button this
             # screen cannot help minting: the owner answers at the keyboard, the record moves
             # on, and an older copy of the question is still in the chat. Uncaught, that
-            # reached the dispatcher's re-raise — `session.trust` has no pending notice — and
+            # reached the dispatcher's re-raise — `session.trust` had no pending notice then;
+            # it has one now, added by this same change — and
             # the owner got a cleared spinner and no words at all, which reads as the button
             # being broken rather than as the question being over. Its sibling `_decline_reply`
             # has caught the equivalent from the start; this is the trust half catching up.
@@ -2467,12 +2511,55 @@ class PrivateBotBoundary:
                     "waiting. Nothing was sent to it."
                 )
             )
-        # UNKNOWN is the expected answer, not a failure: answering clears the dialog, so the
-        # capture taken afterwards no longer matches. Reporting it as an outcome would tell
-        # the owner the thing worked only when it did not.
-        if result is TrustState.AWAITING:
+        # **`pressed` first, because it is the only branch that is not about the pane.**
+        # Every refusal to type -- no dialog declared, the question already over, or a layout
+        # `plan_trust_keys` would not count rows on -- used to arrive here as the same
+        # `TrustState.UNKNOWN` the *success* path returns, since answering clears the dialog
+        # and the capture taken afterwards stops matching. So this method reported **Trusted.
+        # The agent can continue** for a pane nothing had been sent to, after the one-shot
+        # token was already spent -- and the retry that sentence invites answers "That action
+        # has already run." Failing closed is right; saying it worked is not (BL-053).
+        if not result.pressed:
+            # **Split on what the pane actually said, because the three refusals are not one
+            # story.** A single sentence here claimed the session was "still waiting" for all
+            # of them, which is true of exactly one: `plan_trust_keys` failing closed on a
+            # layout it will not count rows on. The other two -- the pane not live or no dialog
+            # declared, and the question already resolved between this button being drawn and
+            # pressed -- are cases where "still waiting" is the same kind of false statement
+            # about pane state that BL-053 is about. `observed` is carried precisely so they can
+            # be told apart; throwing it away here would reintroduce the defect one notch
+            # milder. Found by the Tier-1 review of this task.
+            if result.observed is TrustState.AWAITING:
+                # On screen, and this project will not type into a layout it cannot read. No
+                # "try again": the token is claimed above and will refuse a second press, so
+                # inviting one is the same dishonesty one layer along. The keyboard is the
+                # route that still works, and DEC-047 is why it is the one named.
+                return _reply_arguments(
+                    self._message(
+                        "That dialog could not be read, so nothing was sent to it. The session "
+                        "is still waiting — answer it at the keyboard, or close it from its "
+                        "screen."
+                    )
+                )
             return _reply_arguments(
-                self._message("The project is still waiting to be trusted. Try again.")
+                self._message(
+                    "Nothing was sent — its pane is no longer showing the question. It may "
+                    "already have been answered, or the session may no longer be live. Open "
+                    "the session to see where it stands."
+                )
+            )
+        # Past here a key was sent, so the pane state is an outcome. UNKNOWN is the expected
+        # one and not a failure: answering clears the dialog.
+        if result.observed is TrustState.AWAITING:
+            # The keys went in and the question is still up. **Not "Try again"** -- that was
+            # the same spent-token invitation the refusal branch above refuses to make, left
+            # standing here because it predates it. The detail screen re-renders and mints a
+            # fresh token, so it is the route that actually works.
+            return _reply_arguments(
+                self._message(
+                    "The keys were sent, but the question is still on screen. Open the session "
+                    "and answer it from there."
+                )
             )
         return _reply_arguments(
             self._message("Trusted. The agent can continue; relaunch if it already gave up.")

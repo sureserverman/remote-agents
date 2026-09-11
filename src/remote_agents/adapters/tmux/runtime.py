@@ -32,6 +32,7 @@ from remote_agents.ports.terminal import (
     UNKNOWN_SESSION,
     TerminalObservation,
     TerminalTargetMissing,
+    TrustAnswer,
 )
 
 _REMOTE_CONTROL_ENABLE_WAIT_SECONDS = 3
@@ -327,7 +328,9 @@ class TmuxTerminal:
         """
         # **A blocker alone decides this, and that is a known hole — not an oversight.**
         # codex's declared blocker *is* the shared question, `Do you trust the contents of this
-        # directory?`, which appears in thirteen files of this repository. So an agent
+        # directory?`, which appears in **fourteen** files of this repository as of
+        # 2026-09-10 -- thirteen before the plan that measured this, whose own acceptance
+        # document became the fourteenth. So an agent
         # displaying `profiles.py`, `trust.py`, either acceptance document or the fixtures
         # satisfies this line, and this line writes the record (`services.py`, `reconcile.py`)
         # and guards DEC-078's unconfirmed kill. `classify_trust_capture` below wants three
@@ -570,13 +573,22 @@ class TmuxTerminal:
         live-and-RUNNING session here would make the states this exists to rescue the states
         it refuses.
         """
-        read = await self._trust_capture(session_id)
+        try:
+            read = await self._trust_capture(session_id)
+        except TerminalTargetMissing:
+            # A pane that is gone is not a pane that is asking, and this is a *read*: it
+            # answers in its own vocabulary. An earlier revision returned a `TrustAnswer`
+            # here -- `answer_trust`'s guard, misplaced into this method because the two open
+            # with identical lines -- which broke `TerminalPort.trust_state` outright and,
+            # via `trust_available`'s `observed is TrustState.AWAITING`, hid the row by
+            # accident rather than by rule. Found by this stage's gate evaluator.
+            return TrustState.UNKNOWN
         if read is None:
             return TrustState.UNKNOWN
         capture, dialog = read
         return classify_trust_capture(capture, dialog)
 
-    async def answer_trust(self, session_id: SessionId) -> TrustState:
+    async def answer_trust(self, session_id: SessionId) -> TrustAnswer:
         """Answer the folder-trust question, and only when it is actually on screen.
 
         The guard is the whole safety story. The confirming keypress is meaningful to every
@@ -596,19 +608,62 @@ class TmuxTerminal:
 
         A plan of `None` is a refusal to press anything at all: a dialog this cannot read is
         left exactly as it stands, for the owner to answer by hand, rather than guessed at.
+
+        **Each of the three refusals reports `pressed=False`, and the difference is the whole
+        of BL-053's second finding.** All three used to return a bare `TrustState.UNKNOWN`,
+        which is exactly what the success path returns — answering clears the dialog, so the
+        capture taken afterwards no longer matches. Identical values for "it worked" and "I
+        touched nothing", so the bot said *Trusted. The agent can continue* over a pane it had
+        declined to type into, having already spent the one-shot token that would have let the
+        owner retry. This method always knew which had happened; it simply had nowhere to say
+        it (`ports.terminal.TrustAnswer`).
+
+        **A pane that dies mid-answer is answered, not raised.** `TerminalTargetMissing` is
+        ordinary evidence of an ended session rather than a fault -- its own docstring says so
+        -- and letting it unwind from here threw away the very fact this method had just been
+        given somewhere to report. It did so on the one path where the press may actually have
+        landed: the callback token is claimed before this call, so an escaping exception cost
+        the owner a spent token, a cleared spinner and no words at all. The three windows are
+        caught separately because they do **not** get the same answer, which is the reason
+        they are three `try` blocks rather than one.
         """
-        read = await self._trust_capture(session_id)
+        try:
+            read = await self._trust_capture(session_id)
+        except TerminalTargetMissing:
+            # Gone before anything was read: nothing was sent, and nothing is known.
+            return TrustAnswer(pressed=False, observed=TrustState.UNKNOWN)
         if read is None:
-            return TrustState.UNKNOWN
+            # No dialog declared for this profile, or the pane could not be captured.
+            return TrustAnswer(pressed=False, observed=TrustState.UNKNOWN)
         capture, dialog = read
-        if classify_trust_capture(capture, dialog) is not TrustState.AWAITING:
-            return TrustState.UNKNOWN
+        observed = classify_trust_capture(capture, dialog)
+        if observed is not TrustState.AWAITING:
+            # The question is over -- answered at the keyboard, or from the other surface.
+            return TrustAnswer(pressed=False, observed=observed)
         keys = plan_trust_keys(capture, dialog)
         if keys is None:
-            return TrustState.UNKNOWN
-        await self._gateway.send_keys(session_id, keys)
+            # On screen and unreadable. Failing closed leaves the pane exactly as it stands;
+            # `observed` stays AWAITING because that is what it is, and the owner is told the
+            # press did nothing rather than being told it succeeded.
+            return TrustAnswer(pressed=False, observed=TrustState.AWAITING)
+        try:
+            await self._gateway.send_keys(session_id, keys)
+        except TerminalTargetMissing:
+            # **`pressed=False`, because of what tmux means by this error.** The target did
+            # not exist, so `send-keys` delivered nothing -- a missing pane is not a pane that
+            # received a keystroke. Reporting `True` here would be the guess this type exists
+            # to stop anyone making.
+            return TrustAnswer(pressed=False, observed=TrustState.UNKNOWN)
         await asyncio.sleep(_TRUST_ANSWER_WAIT_SECONDS)
-        return classify_trust_capture(await self._gateway.capture(session_id), dialog)
+        try:
+            after = await self._gateway.capture(session_id)
+        except TerminalTargetMissing:
+            # **`pressed=True`, and this is the case the catch exists for.** The keys went in
+            # and the pane is gone a beat later -- an agent that took the answer and exited,
+            # or one killed meanwhile. What was sent was sent, whatever happened after, and
+            # the owner's wording already covers the rest ("relaunch if it already gave up").
+            return TrustAnswer(pressed=True, observed=TrustState.UNKNOWN)
+        return TrustAnswer(pressed=True, observed=classify_trust_capture(after, dialog))
 
     async def decline_trust(self, session_id: SessionId) -> TerminalObservation:
         """Answer the folder-trust question with *no*, and make sure the pane is gone.

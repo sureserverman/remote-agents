@@ -446,3 +446,74 @@ def test_the_trust_question_s_buttons_are_never_adopted_as_the_live_view() -> No
     from remote_agents.adapters.telegram.service import _SENT_APART_ACTIONS
 
     assert {"session.trust", "session.decline"} <= _SENT_APART_ACTIONS
+
+
+@pytest.mark.asyncio
+async def test_the_notification_gates_on_the_profile_and_the_detail_screen_on_the_pane() -> None:
+    """The two surfaces do **not** check the same thing, and that asymmetry is deliberate.
+
+    A regression pin rather than a fix: the code was already right and its docstring was not.
+    `service._awaiting_trust` claimed the state gate was "the detail screen agreeing with its
+    sibling rather than a new rule", which is true of the *state* filter -- this pass skips any
+    record that is not `UNTRUSTED` -- and was read as covering the pane read too. It does not:
+    the notification offers Trust on `answerable(profile_id, ...)` alone, with no capture taken.
+
+    **Why it must stay that way.** The detail screen is re-rendered on demand, so a capture
+    taken as it draws describes the pane the owner is looking at. A notification is sent once
+    and outlives its own read by any amount of time, so a pane gate here would bind the button
+    to an observation that was already stale when it was minted. The press is protected where it
+    can be: `answer_trust` re-reads the pane before sending anything, and since BL-053's second
+    finding it reports a refusal as a refusal instead of returning what success returns.
+
+    So this asserts both halves. If someone "fixes" the asymmetry by taking a capture here, the
+    first assertion fails and this docstring is what they read.
+    """
+
+    class _CountingSessions(_Sessions):
+        def __init__(self, record) -> None:
+            super().__init__(record)
+            self.trust_state_calls = 0
+
+        async def trust_state(self, session_id):
+            del session_id
+            self.trust_state_calls += 1
+            from remote_agents.domain.trust import TrustState
+
+            return TrustState.UNKNOWN
+
+    sessions = _CountingSessions(_record(profile="claude"))
+    view = _View()
+    await _notifier(sessions, _Store(), view).pass_once()
+
+    assert sessions.trust_state_calls == 0, (
+        "the notification takes no capture -- a read here is stale before the owner sees it"
+    )
+    offered = [
+        button.text
+        for _, arguments in view.amended
+        for row in arguments["reply_markup"].inline_keyboard
+        for button in row
+    ]
+    assert any("Trust this project" in label for label in offered), (
+        "an answerable profile is still offered the answer; the profile is this surface's gate"
+    )
+
+
+@pytest.mark.asyncio
+async def test_the_notification_still_shares_the_state_filter_it_was_credited_with() -> None:
+    """The half of the claim that *was* true, pinned so the correction does not overshoot.
+
+    Correcting "the two surfaces agree" must not turn into "the two surfaces share nothing".
+    They share the state filter, and that is the whole of what this asserts.
+
+    **It deliberately claims nothing about DEC-081.** An earlier draft of this docstring said
+    the filter "can no longer be conjured", which this test does not exercise and which is not
+    true of the code today -- DEC-081 is a recorded decision with no implementation yet, and
+    inside `reconcile._LATE_DIALOG_WINDOW` a pane may still set `untrusted`. A test docstring
+    making a claim its body never checks is the same defect one layer down, so the claim is
+    gone rather than restated.
+    """
+    view = _View()
+    await _notifier(_Sessions(_record(state=SessionState.RUNNING)), _Store(), view).pass_once()
+
+    assert view.sent == [], "a running session is not asking, so no question is sent about it"
