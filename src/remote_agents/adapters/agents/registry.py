@@ -72,6 +72,9 @@ from pathlib import Path
 
 from remote_agents.adapters.agents import claude, codex, cursor, opencode
 from remote_agents.adapters.agents.claude.hooks import PROVIDER as _CLAUDE
+from remote_agents.adapters.agents.claude.remote_control_default import (
+    ClaudeRemoteControlDefault,
+)
 from remote_agents.adapters.agents.claude.usage import ClaudeUsageReader
 from remote_agents.adapters.agents.codex.hooks import PROVIDER as _CODEX
 from remote_agents.adapters.agents.codex.usage import CodexUsageReader
@@ -429,6 +432,28 @@ class HookInstallOutcome:
     settings_path: Path
     changed: bool
     summary: str
+
+
+def claude_remote_control_default(home: Path) -> ClaudeRemoteControlDefault:
+    """Build the port that reads and writes Claude's stored Remote Control default.
+
+    **Here rather than in the composition root, because the architecture says so and the reason
+    is good.** `test_a_provider_lives_in_one_package` allows exactly one module outside a
+    provider package to import that package, and it is this one -- so a provider's file layout
+    has one importer and a fifth provider is added by editing the registry rather than by
+    editing everything that wanted something from a vertical. The composition root asks for a
+    capability; it does not learn which package implements it.
+
+    Not a `ProviderDescriptor` field, which was the other candidate. The descriptor's field set
+    is pinned (`test_descriptor_fields_are_pinned`) and a field there would have to be a
+    capability a second provider could plausibly declare -- the way `remote_control` is, since
+    any agent might ship a daemon. This is one key in one file at a path this module already
+    resolves, so a descriptor field's only possible content is the call below (DEC-070: the
+    tables stay closed, and this is not one of them).
+    """
+    return ClaudeRemoteControlDefault(
+        default_settings_path(home, provider="claude")
+    )
 
 
 def default_settings_path(

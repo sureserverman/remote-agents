@@ -177,6 +177,23 @@ class Backend:
 
     """
 
+    claude_remote_control_default: object | None = None
+    """Claude's stored Remote Control default, a `ports.remote_control_default` port.
+
+    The second capability whose subject is neither a session nor a project, and it is worth
+    saying how it differs from `host_remote_control` rather than reading as more of the same.
+    That one asks a live daemon what is true now; this one reads an intention out of a file that
+    decides what happens *next* time. So the two sit on one Settings screen as two rows, and
+    neither can answer for the other: turning Codex's daemon off says nothing about whether the
+    next `claude` pane comes up connected.
+
+    Optional for the reason the rest are, and this one's absence is ordinary rather than
+    exceptional: a composition with no Claude provider wired has no such default to offer, and
+    the row renders unavailable from `is None` (DEC-061/067). Typed `object` for the reason
+    `sessions` is -- naming the port here would pull its import into every test double that
+    builds a partial backend.
+    """
+
     state_events: object | None = None
     """The store-change source (`application.store_watch.StoreWatch`), a `ports.state_events`.
 

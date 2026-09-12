@@ -127,8 +127,15 @@ class _Settings:
     mode: int
 
 
-def _read_settings(path: Path, provider: _HookProvider) -> _Settings:
-    """Parse and validate a settings file, refusing every shape that cannot be merged into."""
+def _read_settings(path: Path, provider: _HookProvider | None = None) -> _Settings:
+    """Parse and validate a settings file, refusing every shape that cannot be merged into.
+
+    `provider=None` asks for the parse, the formatting and the mode **without** the hook-shape
+    refusals -- for an editor whose subject is one unrelated top-level key, to which a `hooks`
+    block this installer could not have merged into is none of its business. Every hook caller
+    passes a provider and is unaffected; the default exists so the shared read has one
+    implementation rather than a near-copy beside it.
+    """
     try:
         content = path.read_bytes()
     except FileNotFoundError:
@@ -151,7 +158,8 @@ def _read_settings(path: Path, provider: _HookProvider) -> _Settings:
         ) from error
     if not isinstance(document, dict):
         raise HookInstallError(f"{path} does not hold a JSON object; it has been left untouched")
-    _refuse_unmergeable_hooks(path, document, provider)
+    if provider is not None:
+        _refuse_unmergeable_hooks(path, document, provider)
     return _Settings(
         path,
         content,
@@ -872,3 +880,73 @@ def _remove_plugin(path: Path, provider: _HookProvider) -> bool:
             "hand, or fix the permission and run this again."
         ) from error
     return True
+
+
+# --- One top-level key, for a caller that is not installing hooks --------------------------
+#
+# The three functions below are this module's only public surface, and they exist because a
+# second writer to an agent's settings file arrived: the Settings screen's Remote Control
+# default, which drives `remoteControlAtStartup` in the same `~/.claude/settings.json` this
+# installer already edits. Everything that made the install safe is what that needs too -- the
+# exact-formatting round trip, the stale-read refusal, the atomic replace, the preserved mode --
+# so it reuses them rather than growing a second, thinner writer beside the careful one. Which
+# key, and what its values mean, stays with the provider (ARCH-02): these take the key as an
+# argument and have no opinion about it.
+#
+# The two writers raise `HookInstallError` for every refusal, exactly as the install paths do. A
+# caller whose port promises never to raise catches it and logs -- the refusal is the point, and
+# swallowing it here would hide "your file could not be reproduced exactly" from the one surface
+# able to say so. `read_settings_document` is the exception and never raises at all, because its
+# caller is drawing a row rather than reporting on a command.
+
+
+def set_settings_key(path: Path, key: str, value: Any) -> None:
+    """Give one top-level key a value, keeping every other byte of the file as it was."""
+    _rewrite_settings_key(path, lambda document: document.__setitem__(key, value))
+
+
+def clear_settings_key(path: Path, key: str) -> None:
+    """Remove one top-level key if it is there, keeping every other byte as it was.
+
+    Absent already is success and writes nothing: removing what is not there is not a change,
+    and a no-op write would consume the stale-read window for no reason.
+    """
+    _rewrite_settings_key(path, lambda document: document.pop(key, None))
+
+
+def read_settings_document(path: Path) -> dict[str, Any]:
+    """The whole settings file as a dict, or an empty one for every way reading can fail.
+
+    The **total** read, for a surface drawing a row rather than a command reporting a refusal:
+    absent, unreadable, non-UTF-8, malformed and not-an-object all answer `{}`. That is
+    deliberately weaker than `_read_settings`, which refuses each of those loudly because an
+    *install* that guessed would write the operator's file from a wrong picture of it. Nothing
+    here writes, so the worst an empty answer costs is a row reading its default.
+    """
+    try:
+        content = path.read_bytes()
+    except (OSError, UnicodeDecodeError):
+        # `UnicodeDecodeError` is a `ValueError`, not an `OSError`, so `except OSError` alone
+        # lets a file of raw bytes through -- the fifth instance of a class this repo swept at
+        # a Stage 2 gate, recorded in `adapters/tui/preferences.py:_read_all`, which carries
+        # the same pair for the same reason.
+        return {}
+    try:
+        document = json.loads(content)
+    except (ValueError, UnicodeDecodeError):
+        return {}
+    return document if isinstance(document, dict) else {}
+
+
+def _rewrite_settings_key(path: Path, mutate: Callable[[dict[str, Any]], None]) -> None:
+    """Read, apply one change, and replace the file -- or refuse, having written nothing."""
+    settings = _read_settings(path)
+    document = dict(settings.document)
+    mutate(document)
+    if document == settings.document and settings.content is not None:
+        # Nothing to do, and saying so costs nothing. Writing an identical file would still take
+        # the stale-read window and still touch mtime for no change at all.
+        return
+    content = settings.style.render(document)
+    _refuse_if_changed_since_it_was_read(path, settings.content)
+    _write_atomically(path, content, settings.mode)

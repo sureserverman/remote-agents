@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING
 from remote_agents.adapters.agents.catalogue import ProfileConversationCatalogue
 from remote_agents.adapters.agents.registry import (
     ProfileUsageReaders,
+    claude_remote_control_default,
     provider_descriptors,
     usage_readers,
 )
@@ -304,6 +305,15 @@ def compose_backend(
         host_remote_control=_host_remote_control(
             descriptors, store=backend_store, locks=backend_locks
         ),
+        # Built from the operator home rather than from a descriptor field, which is the one
+        # place this capability parts company with the host toggle above. Codex's is declared by
+        # its descriptor because the *daemon* is a provider capability somebody could ship a
+        # second of; Claude's default is a key in a file at a path `default_settings_path`
+        # already owns, so routing it through a descriptor field would add a table whose only
+        # possible content is the answer this line already has (DEC-070 -- the tables stay
+        # closed, and this is not one). Built through the registry, which is the only module
+        # allowed to import a provider's package (`test_a_provider_lives_in_one_package`).
+        claude_remote_control_default=claude_remote_control_default(paths.home),
         projects=_project_creator(config),
         conversations=_conversation_service(projects.paths, descriptors),
         catalogue=catalogue,

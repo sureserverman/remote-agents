@@ -511,8 +511,8 @@ def test_the_backend_capability_set_is_read_from_the_dataclass() -> None:
     case (`ports.state_events`).
     """
     fields = _backend_fields()
-    assert len(fields) == 13, (
-        f"`Backend` now declares {len(fields)} fields, not 13. That is fine — but it widens "
+    assert len(fields) == 14, (
+        f"`Backend` now declares {len(fields)} fields, not 14. That is fine — but it widens "
         "what Rule 2 forbids probing for, so confirm the new field is a capability an adapter "
         "should read as a declared field rather than discover."
     )
