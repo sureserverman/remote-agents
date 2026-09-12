@@ -61,19 +61,62 @@ class StoreWatch:
         self._listeners: list[Callable[[StoreChanged], None]] = []
         self._seen: tuple[_Fingerprint, ...] | None = None
         self._running = False
+        self._task: asyncio.Task[None] | None = None
 
     def subscribe(self, listener: object) -> Unsubscribe:
-        """Register `listener`; the returned callable detaches it and is idempotent."""
+        """Register `listener`; the returned callable detaches it and is idempotent.
+
+        **Subscribing starts the loop, and the last unsubscribe stops it.** The alternative --
+        a host calling `run()` somewhere in its startup -- is a step every composition has to
+        remember, and this project already carries a comment about a repaint interval installed
+        one line too late and a pane that sat frozen for the life of the process with no error
+        anywhere. A watcher nobody listens to has nothing to do, and one somebody listens to
+        must be running: tying the two together makes both true by construction.
+
+        It also keeps `ports.state_events.StateEvents` at one method. Lifecycle is this
+        implementation's business -- a future adapter that streams from a socket has entirely
+        different lifecycle and the same `subscribe`.
+        """
         typed: Callable[[StoreChanged], None] = listener  # type: ignore[assignment]
         self._listeners.append(typed)
+        self._ensure_running()
 
         def unsubscribe() -> None:
             # Idempotent by construction rather than by the caller remembering: the port
             # promises a second call is a no-op, and an error path may well call it twice.
             if typed in self._listeners:
                 self._listeners.remove(typed)
+            if not self._listeners:
+                self.stop()
 
         return unsubscribe
+
+    def _ensure_running(self) -> None:
+        """Start the poll loop if it is not already running and there is a loop to run it on.
+
+        A `subscribe` from outside a running loop -- a composition root wiring things up before
+        `run()` is called, which is exactly what this project's does -- cannot create a task.
+        That is not an error: it leaves the watcher idle, and the next subscribe from inside a
+        loop starts it. What it must not do is raise, because the surfaces treat a wired
+        watcher as working and a missing one as "fall back to the interval"; a third outcome
+        where wiring it *breaks startup* is the one nobody has a fallback for.
+        """
+        if self._interval <= 0:
+            # **Zero means "the caller drives me", not "poll as fast as you can".** A loop that
+            # honoured a zero interval literally would be `while True: await sleep(0)`, which
+            # is a busy spin on the event loop for as long as anything is subscribed --
+            # measured, it took the test suite from 100 s to 197 s before this branch existed,
+            # because every test that subscribed left one spinning behind it. Tests that want
+            # determinism call `poll_once` themselves; production passes a real interval.
+            return
+        if self._task is not None and not self._task.done():
+            return
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return
+        self._running = True
+        self._task = loop.create_task(self.run())
 
     async def poll_once(self) -> bool:
         """Take one reading and publish if it moved. Returns whether anything was published.
@@ -116,8 +159,16 @@ class StoreWatch:
             await asyncio.sleep(self._interval)
 
     def stop(self) -> None:
-        """Ask `run` to return after its current sleep. Idempotent."""
+        """Ask `run` to return after its current sleep, and drop the task. Idempotent.
+
+        The task is cancelled rather than only flagged: `run` sleeps for the interval between
+        polls, so a flag alone would leave it alive for up to that long after the last listener
+        went away -- and in a test, past the end of the test.
+        """
         self._running = False
+        task, self._task = self._task, None
+        if task is not None and not task.done():
+            task.cancel()
 
 
 def _fingerprint(path: Path) -> _Fingerprint:

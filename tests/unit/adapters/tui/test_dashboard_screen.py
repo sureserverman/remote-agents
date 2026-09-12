@@ -23,7 +23,6 @@ from remote_agents.adapters.tui.app import RemoteAgentsTui
 from remote_agents.adapters.tui.context import TuiContext
 from remote_agents.adapters.tui.screens.dashboard import (
     _HOST_REMOTE_CONTROL_ROW,
-    _SESSIONS_AUTO_REFRESH,
     NO_LIMITS,
     DashboardScreen,
 )
@@ -84,7 +83,11 @@ def _record(slug: str = "existing") -> SessionRecord:
 
 
 def _context(
-    records: tuple[SessionRecord, ...] = (), feed=None, limits=None, usage=None
+    records: tuple[SessionRecord, ...] = (),
+    feed=None,
+    limits=None,
+    usage=None,
+    state_events=None,
 ) -> TuiContext:
     return TuiContext(
         backend=backend_for(
@@ -95,6 +98,7 @@ def _context(
             activity_feed=feed,
             limits=limits,
             usage=usage,
+            state_events=state_events,
         ),
         profiles=(ProfileAvailability("claude", True),),
         attach_argv=lambda session_id: ("tmux", "attach-session", "-t", f"={session_id}"),
@@ -740,16 +744,53 @@ async def test_a_session_that_has_ended_stops_carrying_a_reading() -> None:
         assert app.context_window_for(_SESSION) is None
 
 
-def test_the_gauge_cadence_stays_slower_than_the_repaint() -> None:
-    """Two cadences, and the gap between them is the stage's whole performance argument.
+def test_the_gauge_cadence_is_its_own_clock() -> None:
+    """Two cadences, and the gap between them was this stage's whole performance argument.
 
-    Collapsing them would put a directory sweep and a tail read per session behind the ten-second
-    repaint -- and nothing pinned it, so the constant could be edited back to 10.0 with the suite
-    still green.
+    It used to be asserted as a ratio -- `CONTEXT_AUTO_REFRESH >= _SESSIONS_AUTO_REFRESH * 4`
+    -- because collapsing them would put a directory sweep and a tail read per session behind
+    the ten-second repaint. **That ratio stopped meaning anything on 2026-09-12.** The list
+    repaint is driven by `StoreChanged` now and its interval is a fallback, so the two numbers
+    are no longer on the same axis: comparing them would either forbid the fallback from being
+    long or pretend the repaint still has a cadence.
+
+    What the ratio was standing in for is asserted directly by the test below instead -- the
+    expensive read must not be reachable from a store change. This one keeps the other half:
+    the gauge cadence is a constant of its own and was not quietly dragged along.
     """
     from remote_agents.adapters.tui.app import CONTEXT_AUTO_REFRESH
 
-    assert CONTEXT_AUTO_REFRESH >= _SESSIONS_AUTO_REFRESH * 4
+    assert CONTEXT_AUTO_REFRESH == 60.0
+
+
+async def test_a_store_change_redraws_the_pane_without_re_reading_the_gauges() -> None:
+    """The property the ratio was a proxy for, asserted where it actually lives.
+
+    A store change can now arrive as often as the store is written, which during a burst of
+    launches is far more often than any timer. That is safe *only* because the reload it
+    triggers draws gauges from the app's cache and never refills it — a directory sweep and a
+    tail read per session behind every write would be a worse defect than the delay this
+    stage removed.
+    """
+    from backends import FakeStateEvents
+
+    reads = []
+
+    async def usage(session_id):
+        reads.append(session_id)
+        return None
+
+    events = FakeStateEvents()
+    app = RemoteAgentsTui(_context((_record(),), usage=usage, state_events=events))
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        after_mount = len(reads)
+        events.publish()
+        await pilot.pause()
+        await pilot.pause()
+
+        assert len(reads) == after_mount, "a store change must not refill the gauge cache"
 
 
 async def test_the_repaint_interval_exists_before_the_gauge_read_is_made() -> None:

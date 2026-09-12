@@ -31,7 +31,7 @@ from remote_agents.adapters.tui.context import TuiContext
 from remote_agents.adapters.tui.panes import FeedPane, LimitsPane, ProjectsPane, SessionsPane
 from remote_agents.adapters.tui.screens import ALL_SCREENS
 from remote_agents.adapters.tui.screens.sessions import (
-    _SESSIONS_AUTO_REFRESH,
+    _CHORD_HINT_REFRESH,
     CHORD_HINT,
     CHORD_KEYS,
 )
@@ -889,11 +889,15 @@ async def test_the_chord_hint_is_dim_while_nothing_is_selected_and_lit_once_some
 
     async with app.run_test(size=(120, 30)) as pilot:
         await pilot.pause()
-        await pilot.pause(_SESSIONS_AUTO_REFRESH * 1.2)
+        # The hint's **own** clock. This waited on `_SESSIONS_AUTO_REFRESH` while the two were
+        # one constant; when that one was lengthened to sixty as a fallback, this test's two
+        # sleeps went from twelve seconds each to seventy-two and took the whole suite from
+        # 100 s to 197 s -- the coupling made visible by a stopwatch rather than by reading.
+        await pilot.pause(_CHORD_HINT_REFRESH * 1.2)
         dim = chord_styles(app.screen)
 
         console.selected = SessionId.new()
-        await pilot.pause(_SESSIONS_AUTO_REFRESH * 1.2)
+        await pilot.pause(_CHORD_HINT_REFRESH * 1.2)
         lit = chord_styles(app.screen)
 
     assert dim == {"$text-disabled"}, f"the layer was not dimmed with nothing selected: {dim}"

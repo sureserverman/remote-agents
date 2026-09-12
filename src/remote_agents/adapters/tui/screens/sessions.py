@@ -53,6 +53,7 @@ from remote_agents.application.session_actions import (
 )
 from remote_agents.application.session_views import session_row_parts
 from remote_agents.domain.models import SessionId, SessionRecord
+from remote_agents.ports.state_events import Unsubscribe
 
 _LOG = logging.getLogger(__name__)
 
@@ -88,10 +89,30 @@ def remote_control_entries(record) -> tuple[tuple[str, str], ...]:
     )
 
 
-#: How often the sessions list re-reads the store while it is the screen on top. Long enough
-#: that a host is not answering a tmux readiness probe continuously, short enough that a
-#: session another process started is visible before the owner thinks to press Ctrl+R.
-_SESSIONS_AUTO_REFRESH = 10.0
+#: How often the sessions list re-reads the store while it is the screen on top, **when
+#: nothing tells it to**. Ten seconds until 2026-09-12, when it was the entire answer to "why
+#: does a new session take so long to appear": measured at `interval - phase`, uniform on
+#: (0, 10], mean ~5 s (`docs/acceptance-2026-09-11-surface-refresh.md` section 6, which also
+#: refutes `refresh_readiness` as a cause by two to three orders of magnitude).
+#:
+#: The list follows `StoreChanged` now, so this is a **fallback** rather than the mechanism:
+#: a host that wires no watcher, or a watcher whose loop dies, must leave the list updating
+#: rather than frozen. Lengthened rather than deleted for exactly that, and lengthened *to*
+#: sixty because a fallback short enough to keep doing the work would hide a broken watcher.
+_SESSIONS_AUTO_REFRESH = 60.0
+
+#: How often a console pane re-reads the *sessions pane's cursor* to decide whether its chord
+#: hint is lit. Its own constant since 2026-09-12, where it borrowed `_SESSIONS_AUTO_REFRESH`.
+#:
+#: The borrowing was argued rather than accidental -- "reading it faster would only find the
+#: same answer sooner than the thing being watched can change it" -- and that argument held
+#: exactly as long as the sessions pane changed on a ten-second tick. It follows the store
+#: now, so the watched cursor can move at any moment and a hint on the fallback's cadence
+#: would lag it by up to a minute. Kept at the number it has always effectively had.
+#:
+#: Found by measurement, not by reading: lengthening the shared constant took one test from
+#: about twenty seconds to 144, and the whole suite from 100 s to 197 s.
+_CHORD_HINT_REFRESH = 10.0
 
 
 class RowStopAction(Message):
@@ -409,13 +430,15 @@ class ChordHintRow:
     def start_chord_hint(self) -> None:
         """Take the first reading and keep it current. Called from a pane's `populate`.
 
-        Same cadence as the sessions pane's own reload, deliberately: what this watches is that
-        pane's cursor, so reading it faster would only find the same answer sooner than the
-        thing being watched can change it.
+        Ten seconds, on `_CHORD_HINT_REFRESH`. This used to borrow the sessions pane's reload
+        interval on the argument that reading faster than the watched thing can change is
+        wasted -- true while that pane was on a ten-second tick, and false since it began
+        following the store: the cursor it watches can move at any moment now, so sharing the
+        *fallback* interval would have left this hint up to a minute stale.
         """
         if not self.advertises_chords() or self._chord_timer is not None:
             return
-        self._chord_timer = self.set_interval(_SESSIONS_AUTO_REFRESH, self._chord_hint_tick)
+        self._chord_timer = self.set_interval(_CHORD_HINT_REFRESH, self._chord_hint_tick)
         self.call_after_refresh(self._chord_hint_tick)
 
     async def _chord_hint_tick(self) -> None:
@@ -893,6 +916,10 @@ class SessionsScreen(_SessionActionKeys, ChoiceScreen):
     def __init__(self) -> None:
         super().__init__()
         self._auto: Timer | None = None
+        #: The detach for this screen's store-change subscription, or None while it is not
+        #: listening. Held rather than re-derived because `Unsubscribe` is the only handle the
+        #: port hands back -- there is no "am I subscribed" to ask.
+        self._store_watch: Unsubscribe | None = None
         #: Whether a listing read is already in flight on this screen, keyed or scheduled.
         self._reading = False
         #: Which *visit* to this screen is current. Bumped every time the owner returns to it,
@@ -937,6 +964,7 @@ class SessionsScreen(_SessionActionKeys, ChoiceScreen):
         # defining one, and `populate` is the hook it leaves for exactly this.
         if self._auto is None:
             self._auto = self.set_interval(_SESSIONS_AUTO_REFRESH, self._auto_reload)
+        self._watch_the_store()
         # Seed the gauges now rather than at the first sixty-second tick. The dashboard already
         # does this in its own `populate`; without it here, the console's sessions pane -- which
         # mounts this screen as a process of its own and has no dashboard to seed it -- drew
@@ -1001,6 +1029,37 @@ class SessionsScreen(_SessionActionKeys, ChoiceScreen):
             return
         self._draw_listing(records, keep_cursor=True)
 
+    def _watch_the_store(self) -> None:
+        """Subscribe to store changes, if this host wired a watcher. Idempotent.
+
+        Idempotent because `populate` runs on every fill of this screen, not only the first --
+        the same reason the timer above is guarded. Two subscriptions would mean two reloads
+        per change, and the second would land on a list the first had already redrawn.
+
+        **The listener schedules and returns.** `StateEvents.subscribe` is synchronous by
+        contract and the watcher calls its listeners on its own polling task, so awaiting here
+        would block that loop for the length of a store read plus a readiness pass -- which is
+        the poll interval several times over, on the one task that is supposed to be noticing
+        things promptly. `call_next` hands the work to this screen's own pump instead.
+        """
+        if self._store_watch is not None:
+            return
+        events = self.tui.services.backend.state_events
+        if events is None:
+            return
+        self._store_watch = events.subscribe(lambda _change: self.app.call_next(self._auto_reload))
+
+    def _stop_watching_the_store(self) -> None:
+        """Detach, if attached. Safe to call twice -- `Unsubscribe` promises the same."""
+        if self._store_watch is None:
+            return
+        self._store_watch()
+        self._store_watch = None
+
+    def on_unmount(self) -> None:
+        """A screen that is gone must not keep a listener alive holding a reference to it."""
+        self._stop_watching_the_store()
+
     def on_screen_suspend(self) -> None:
         """Stop polling the store for a screen the owner is no longer looking at.
 
@@ -1017,9 +1076,15 @@ class SessionsScreen(_SessionActionKeys, ChoiceScreen):
         """
         if self._auto is not None:
             self._auto.pause()
+        # And stop listening, for the same reason rather than an additional one: a change
+        # arriving while a detail or a modal stands on top would start the very tmux
+        # conversation the pause exists to stop, and would do it *more* eagerly than the timer
+        # did. `on_screen_resume` re-subscribes, and the re-read it already performs is what
+        # covers anything that changed while nobody was listening.
+        self._stop_watching_the_store()
 
     def on_screen_resume(self) -> None:
-        """Resume polling, and retire any read still in flight from the previous visit.
+        """Resume polling, re-attach to the store, and retire a read from the previous visit.
 
         The bump is the fix for a stale repaint. `on_screen_suspend` pauses the *timer*, which
         stops new reads being scheduled, but it cannot recall the one already awaiting
@@ -1041,6 +1106,11 @@ class SessionsScreen(_SessionActionKeys, ChoiceScreen):
         self._visit += 1
         if self._auto is not None:
             self._auto.resume()
+        # Re-attach the half `on_screen_suspend` detached. Nothing is replayed for the gap: the
+        # `on_reveal` re-read that already runs on the way back is what covers it, and a
+        # watcher that queued its missed events would deliver a burst of redraws for one list
+        # that only ever needed re-reading once.
+        self._watch_the_store()
 
     async def _auto_reload(self) -> None:
         """The interval's re-read: quiet, cursor-preserving, and never over work in flight.

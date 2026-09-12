@@ -197,19 +197,89 @@ async def test_one_listener_raising_does_not_cost_the_others_their_event(tmp_pat
 async def test_the_loop_polls_until_it_is_stopped(tmp_path: Path) -> None:
     database, _wal = _paths(tmp_path)
     database.write_bytes(b"one")
-    watch = StoreWatch(_paths(tmp_path), interval=0)
+    watch = StoreWatch(_paths(tmp_path), interval=0.001)
     seen: list[StoreChanged] = []
-    watch.subscribe(seen.append)
+    # `subscribe` starts the loop itself at a real interval, so this test drives the thing the
+    # surfaces actually get rather than a hand-started one.
+    detach = watch.subscribe(seen.append)
+    task = watch._task
+    assert task is not None
 
-    task = asyncio.create_task(watch.run())
-    await asyncio.sleep(0)
+    for _ in range(200):
+        await asyncio.sleep(0.005)
+        if watch._seen is not None:
+            break
     database.write_bytes(b"two")
-    for _ in range(20):
-        await asyncio.sleep(0)
+    for _ in range(200):
+        await asyncio.sleep(0.005)
         if seen:
             break
-    watch.stop()
-    await asyncio.wait_for(task, timeout=5)
 
-    assert len(seen) >= 1
-    assert task.done()
+    detach()
+    await asyncio.sleep(0)
+
+    assert len(seen) >= 1, "the loop must poll on its own, not only when asked"
+    assert task.cancelled() or task.done(), "and the last unsubscribe must end it"
+
+
+async def test_subscribing_starts_the_loop_and_the_last_unsubscribe_stops_it(
+    tmp_path: Path,
+) -> None:
+    """Lifecycle tied to listeners, so no composition has to remember a start call.
+
+    This project already carries the scar the alternative leaves: a repaint interval installed
+    one line too late, and a pane that sat frozen for the life of the process with no error
+    anywhere. A watcher nobody listens to has nothing to do and one somebody listens to must be
+    running, so the two are made true by construction rather than by a startup step.
+    """
+    database, _wal = _paths(tmp_path)
+    database.write_bytes(b"one")
+    # A real interval, because this test is about the loop existing. `interval=0` means "the
+    # caller drives me" and deliberately starts nothing -- see `_ensure_running`.
+    watch = StoreWatch(_paths(tmp_path), interval=0.01)
+
+    assert watch._task is None
+
+    first = watch.subscribe(lambda _change: None)
+    assert watch._task is not None and not watch._task.done()
+
+    second = watch.subscribe(lambda _change: None)
+    running = watch._task
+    assert running is watch._task, "a second listener must not start a second loop"
+
+    first()
+    assert watch._task is running, "one listener leaving is not the last one leaving"
+
+    second()
+    await asyncio.sleep(0)
+    assert watch._task is None
+
+
+def test_subscribing_outside_a_running_loop_is_idle_rather_than_an_error(tmp_path: Path) -> None:
+    """The composition root wires this up before anything is running.
+
+    Raising there would be the one outcome nobody has a fallback for: the surfaces read a
+    wired watcher as working and a missing one as "use the interval", and a third case where
+    *wiring it breaks startup* fits neither.
+    """
+    watch = StoreWatch(_paths(tmp_path), interval=0.01)
+
+    detach = watch.subscribe(lambda _change: None)
+
+    assert watch._task is None
+    detach()
+
+
+def test_a_zero_interval_means_the_caller_drives_and_starts_nothing(tmp_path: Path) -> None:
+    """Measured, not reasoned: honouring zero literally cost the suite 97 seconds.
+
+    `run()` at a zero interval is `while True: await sleep(0)` — a busy spin for as long as
+    anything is subscribed. Every test that subscribed left one behind, and the suite went
+    from 100 s to 197 s. Zero now means the caller polls; production passes a real interval.
+    """
+    watch = StoreWatch(_paths(tmp_path), interval=0)
+
+    detach = watch.subscribe(lambda _change: None)
+
+    assert watch._task is None, "a zero interval must not start a spinning loop"
+    detach()

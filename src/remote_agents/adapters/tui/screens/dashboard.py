@@ -74,11 +74,12 @@ from remote_agents.domain.remote_control import (
     RemoteControlState,
 )
 from remote_agents.ports.agent_usage import AgentLimits, LimitsAbsence
+from remote_agents.ports.state_events import Unsubscribe
 
 _LOG = logging.getLogger(__name__)
 
 _SESSION_KEY_PREFIX = "session:"
-_SESSIONS_AUTO_REFRESH = 10.0
+_SESSIONS_AUTO_REFRESH = 60.0
 
 #: The sessions pane's one line when nothing runs — DEC-009's answer for this pane.
 _NO_SESSIONS = "No sessions are running."
@@ -759,6 +760,9 @@ class DashboardScreen(LimitsRegion, FeedRegion, ProjectsPaneScreen):
     def __init__(self) -> None:
         super().__init__()
         self._sessions_timer: Timer | None = None
+        #: The detach for this pane's store-change subscription, or None while it is not
+        #: listening. Held because `Unsubscribe` is the only handle the port returns.
+        self._store_watch: Unsubscribe | None = None
         self._reloading_sessions = False
         self._resumed_before = False
         #: The rows last drawn, so a resize re-measures the columns without a store read.
@@ -1064,6 +1068,10 @@ class DashboardScreen(LimitsRegion, FeedRegion, ProjectsPaneScreen):
         # unreached, so the ten-second repaint never started at all and the pane sat frozen at
         # its first snapshot for the life of the process, with no error anywhere.
         self._sessions_timer = self.set_interval(_SESSIONS_AUTO_REFRESH, self._auto_reload_sessions)
+        # And follow the store, which is what the interval above is now a fallback *to*. The
+        # dashboard's pane has the same problem the dedicated list had and the same fix: a row
+        # another process wrote was invisible until the next tick.
+        self._watch_the_store()
         # The gauges land on the screen the owner opens on rather than a minute later -- from
         # the records that draw already read, not from a second read of the store.
         if records:
@@ -1093,6 +1101,36 @@ class DashboardScreen(LimitsRegion, FeedRegion, ProjectsPaneScreen):
         # "No sessions are running." for up to ten seconds beside a session that
         # already existed — measured live by the Stage 4 gate evaluator.
         self.call_later(self._reload_sessions_pane)
+
+    def _watch_the_store(self) -> None:
+        """Subscribe to store changes, if this host wired a watcher. Idempotent.
+
+        The same shape as `SessionsScreen._watch_the_store`, and deliberately written here
+        rather than shared: the two screens hold different reload methods and different
+        guards, and a base-class hook would have to take the reload as a parameter, which is
+        the whole of what it would be abstracting.
+
+        The listener schedules and returns -- `StateEvents.subscribe` is synchronous by
+        contract and the watcher calls its listeners on its own polling task, so awaiting here
+        would stall that loop for a store read plus a readiness pass.
+        """
+        if self._store_watch is not None:
+            return
+        events = self.tui.services.backend.state_events
+        if events is None:
+            return
+        self._store_watch = events.subscribe(
+            lambda _change: self.app.call_next(self._auto_reload_sessions)
+        )
+
+    def _stop_watching_the_store(self) -> None:
+        if self._store_watch is None:
+            return
+        self._store_watch()
+        self._store_watch = None
+
+    def on_unmount(self) -> None:
+        self._stop_watching_the_store()
 
     async def _auto_reload_sessions(self) -> None:
         if not self.showing or self.tui.busy or self._reloading_sessions:

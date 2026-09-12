@@ -54,11 +54,17 @@ _OTHER = SessionId.parse("fedcba98-7654-3210-fedc-ba9876543210")
 class _Launcher(SessionUseCaseDouble):
     def __init__(self, records: tuple[SessionRecord, ...]) -> None:
         self.records = records
+        #: How many times this list has been filled. Counted on the *use case* rather than on
+        #: the screen because that is the cost a reload actually has -- a store read plus a
+        #: readiness pass -- and it is what "the list followed the store" has to be measured
+        #: in for the claim to mean anything.
+        self.reads = 0
 
     async def refresh_readiness(self) -> None:
         return None
 
     async def list_sessions(self) -> tuple[SessionRecord, ...]:
+        self.reads += 1
         return self.records
 
 
@@ -1706,3 +1712,121 @@ async def test_the_published_selection_equals_the_cursor_after_every_operation()
         launcher.records = (second,)
         await screen._auto_reload()
         await holds("the first session arriving on an empty pane")
+
+
+# --- The list follows the store, instead of asking every ten seconds ----------------------
+#
+# Measured before it was changed, in `docs/acceptance-2026-09-11-surface-refresh.md` section 6:
+# a row another process wrote took `interval - phase` to appear -- uniform on (0, 10], mean
+# ~5 s, worst case 10 s -- and `refresh_readiness` was refuted as a cause by two to three
+# orders of magnitude. The timer was the whole of it. These tests pin what replaced it.
+
+
+async def test_a_store_change_redraws_the_list_once(monkeypatch) -> None:
+    from backends import FakeStateEvents
+
+    events = FakeStateEvents()
+    launcher = _Launcher((_record(),))
+    app = SessionsPane(_context(state_events=events, sessions=launcher))
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        before = launcher.reads
+        events.publish()
+        await pilot.pause()
+        await pilot.pause()
+
+        assert launcher.reads == before + 1, "one change, one re-read"
+
+
+async def test_a_store_change_keeps_the_cursor_where_the_owner_left_it() -> None:
+    """The property the interval already had, and the one an event-driven reload most easily
+    loses: a redraw that walked the selection back to row 0 would open the wrong session's
+    detail on the tick the owner pressed enter."""
+    from backends import FakeStateEvents
+
+    events = FakeStateEvents()
+    records = (_record(), _record(), _record())
+    app = SessionsPane(_context(records, state_events=events))
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("down")
+        await pilot.pause()
+        chosen = app.screen.query_one("#choices", OptionList).highlighted
+
+        events.publish()
+        await pilot.pause()
+        await pilot.pause()
+
+        assert app.screen.query_one("#choices", OptionList).highlighted == chosen
+
+
+async def test_a_change_while_a_command_is_in_flight_is_dropped_not_queued() -> None:
+    """Dropped, deliberately. A change that arrived under a mutating command is about a store
+    that command is still changing, and queuing it would redraw over the result the owner is
+    waiting for -- which is the reason `_auto_reload` refuses a tick under `busy` too."""
+    from backends import FakeStateEvents
+
+    events = FakeStateEvents()
+    launcher = _Launcher((_record(),))
+    app = SessionsPane(_context(state_events=events, sessions=launcher))
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        before = launcher.reads
+        app._busy = True
+        events.publish()
+        await pilot.pause()
+        await pilot.pause()
+        during = launcher.reads
+        app._busy = False
+        await pilot.pause()
+        await pilot.pause()
+
+    assert during == before, "a change under a command must not re-read"
+    assert launcher.reads == before, "and must not be replayed when the command finishes"
+
+
+async def test_the_fallback_interval_is_a_minute_not_ten_seconds() -> None:
+    """The timer stays, and stays as a *fallback*. A watcher that dies, or a host that wires
+    none, must leave the list updating rather than frozen -- so the interval is kept and
+    lengthened, not deleted. Sixty is long enough that it is not the thing doing the work."""
+    from remote_agents.adapters.tui.screens.sessions import _SESSIONS_AUTO_REFRESH
+
+    assert _SESSIONS_AUTO_REFRESH == 60.0
+
+
+async def test_a_host_that_wires_no_watcher_still_lists_sessions() -> None:
+    """Absence is readable, which is what makes subscribing an improvement rather than a new
+    way for a list to stop updating."""
+    launcher = _Launcher((_record(),))
+    app = SessionsPane(_context(state_events=None, sessions=launcher))
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+
+        assert launcher.reads >= 1
+
+
+def test_the_chord_hint_keeps_its_own_ten_second_clock() -> None:
+    """Two timers, and they stopped being the same number on 2026-09-12.
+
+    The hint borrowed the sessions reload's interval on the argument that reading faster than
+    the watched thing can change is wasted work. That held while the sessions pane ticked
+    every ten seconds. It follows the store now, so its cursor can move at any moment and the
+    interval it kept is a *fallback* — sharing it would leave this hint up to a minute stale.
+
+    Pinned because the coupling was invisible until it was measured: lengthening the shared
+    constant took one test from about twenty seconds to 144, and the suite from 100 s to 197 s.
+    """
+    from remote_agents.adapters.tui.screens.sessions import (
+        _CHORD_HINT_REFRESH,
+        _SESSIONS_AUTO_REFRESH,
+    )
+
+    assert _CHORD_HINT_REFRESH == 10.0
+    assert _SESSIONS_AUTO_REFRESH == 60.0
+    assert _CHORD_HINT_REFRESH != _SESSIONS_AUTO_REFRESH, (
+        "one clock for two unrelated cadences is how the first of them got six times slower"
+    )

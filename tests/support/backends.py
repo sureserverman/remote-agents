@@ -70,6 +70,7 @@ def backend_for(
     usage: Callable[[SessionId], Awaitable[AgentUsage | None]] | None = _UNSET,  # type: ignore[assignment]
     limits: Callable[[], Awaitable[tuple[AgentLimits, ...]]] | None = _UNSET,  # type: ignore[assignment]
     host_remote_control: object | None = _UNSET,
+    state_events: object | None = _UNSET,
     max_label_length: int = _UNSET,  # type: ignore[assignment]
 ) -> Backend:
     """A `Backend` carrying what the caller stated and `Backend`'s own defaults for the rest.
@@ -90,6 +91,7 @@ def backend_for(
         "activity_feed": activity_feed,
         "usage": usage,
         "host_remote_control": host_remote_control,
+        "state_events": state_events,
         "limits": limits,
         "max_label_length": max_label_length,
     }
@@ -239,3 +241,45 @@ class FakeHostRemoteControl:
         if key in self.claimed:
             raise DuplicateCommandError("host remote control callback was already handled")
         self.claimed.add(key)
+
+
+class FakeStateEvents:
+    """A `ports.state_events.StateEvents` a test can publish through.
+
+    Shaped like `application.store_watch.StoreWatch` on the half a surface can observe -- a
+    synchronous `subscribe` returning an idempotent `Unsubscribe` -- and nothing else. The real
+    watcher's other half is a polling loop over file metadata, which a surface test has no
+    business driving: what a screen's behaviour turns on is *an event arrived*, not how the
+    watcher decided to send one.
+
+    `publish` is the test's handle. It calls listeners the way the real one does, synchronously
+    on the caller's stack, so a screen that awaited inside its listener would deadlock here
+    exactly as it would in production.
+    """
+
+    def __init__(self) -> None:
+        self.listeners: list[object] = []
+        #: How many listeners ever attached, which `subscribe`/`unsubscribe` symmetry is
+        #: asserted against -- a screen that subscribed twice per mount would otherwise look
+        #: identical to one that subscribed once.
+        self.subscriptions = 0
+
+    def subscribe(self, listener: object):
+        self.subscriptions += 1
+        self.listeners.append(listener)
+
+        def unsubscribe() -> None:
+            if listener in self.listeners:
+                self.listeners.remove(listener)
+
+        return unsubscribe
+
+    def publish(self, at=None) -> None:
+        """Fire one `StoreChanged` at every attached listener."""
+        from datetime import UTC, datetime
+
+        from remote_agents.ports.state_events import StoreChanged
+
+        change = StoreChanged(at=at or datetime.now(UTC))
+        for listener in tuple(self.listeners):
+            listener(change)
