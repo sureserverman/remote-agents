@@ -149,17 +149,28 @@ def build_launch_profile(
     executable: Path,
     session_id: SessionId,
     environment: dict[str, str],
+    *,
+    remote_control: bool = False,
 ) -> LaunchProfile:
-    """Resolve a reviewed definition into a fixed tmux profile for one opaque session."""
+    """Resolve a reviewed definition into a fixed tmux profile for one opaque session.
+
+    `remote_control` selects between the definition's two curated argvs. An agent with no
+    reviewed variant **ignores** it rather than refusing: the answer comes from one host-wide
+    setting read once per launch, not per agent, so launching codex while the Claude row reads
+    *on* is the ordinary case and not an error to report to the owner.
+    """
     if not executable.is_absolute():
         raise ValueError("profile executable must be absolute")
+    curated_argv = definition.launch_argv
+    if remote_control and definition.remote_control_argv is not None:
+        curated_argv = definition.remote_control_argv
     argv = tuple(
         str(executable)
         if index == 0
         else f"ra-{session_id}"
         if argument == "{managed_name}"
         else argument
-        for index, argument in enumerate(definition.launch_argv)
+        for index, argument in enumerate(curated_argv)
     )
     return LaunchProfile(
         str(executable),

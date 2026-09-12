@@ -15,7 +15,12 @@ _CURATED = {"HOME": "/home/operator", "LANG": "C.UTF-8", "PATH": "/usr/bin", "TE
 
 def _claude() -> ProfileDefinition:
     return ProfileDefinition(
-        ProfileId("claude"), "claude", ("claude",), ("--version",), ("/exit", "Enter")
+        ProfileId("claude"),
+        "claude",
+        ("claude",),
+        ("--version",),
+        ("/exit", "Enter"),
+        ("claude", "--remote-control", "{managed_name}"),
     )
 
 
@@ -100,19 +105,27 @@ def test_the_settle_each_agent_gets_is_the_one_that_was_measured_for_it() -> Non
     # Graceful keys come from the curated table `ProfileDefinition` validates against, so
     # they are part of each fixture rather than a shared constant -- codex takes a second
     # Enter that Claude does not.
-    for profile_id, executable, argv, graceful, expected in (
-        ("claude", "claude", ("claude",), ("/exit", "Enter"), 0.0),
+    for profile_id, executable, argv, graceful, variant, expected in (
+        (
+            "claude",
+            "claude",
+            ("claude",),
+            ("/exit", "Enter"),
+            ("claude", "--remote-control", "{managed_name}"),
+            0.0,
+        ),
         (
             "claude-remote",
             "claude",
             ("claude", "--remote-control", "{managed_name}"),
             ("/exit", "Enter"),
+            None,
             0.0,
         ),
-        ("codex", "codex", ("codex",), ("/exit", "Enter", "Enter"), 0.1),
+        ("codex", "codex", ("codex",), ("/exit", "Enter", "Enter"), None, 0.1),
     ):
         definition = ProfileDefinition(
-            ProfileId(profile_id), executable, argv, ("--version",), graceful
+            ProfileId(profile_id), executable, argv, ("--version",), graceful, variant
         )
 
         launched = build_launch_profile(

@@ -157,7 +157,8 @@ class TmuxTerminal:
         profiles: dict[ProfileId, LaunchProfile],
         *,
         startup_timeout: float,
-        profile_factories: dict[ProfileId, Callable[[SessionId], LaunchProfile]] | None = None,
+        profile_factories: dict[ProfileId, Callable[[SessionId, bool], LaunchProfile]]
+        | None = None,
         resume_profile_factories: (
             dict[ProfileId, Callable[[SessionId, ProviderConversationId], LaunchProfile]] | None
         ) = None,
@@ -180,6 +181,8 @@ class TmuxTerminal:
         self._gateway = gateway
         self._project_paths = project_paths
         self._profiles = profiles
+        #: Called with the session being started and whether to use the agent's
+        #: remote-control argv, so the second argv is resolved where the first one is.
         self._profile_factories = profile_factories or {}
         self._resume_profile_factories = resume_profile_factories or {}
         self._startup_timeout = startup_timeout
@@ -187,13 +190,25 @@ class TmuxTerminal:
         self._session_profiles: dict[SessionId, LaunchProfile] = {}
 
     async def launch(
-        self, session_id: SessionId, project_id: ProjectId, profile_id: ProfileId
+        self,
+        session_id: SessionId,
+        project_id: ProjectId,
+        profile_id: ProfileId,
+        *,
+        remote_control: bool = False,
     ) -> TerminalObservation:
         """Persist a resolved intent, launch it, then require observed pane liveness."""
         try:
-            profile = self._profiles.get(profile_id)
+            # A prebuilt profile holds one argv and so cannot answer a request for the
+            # other one. Skipped rather than used, because launching the plain argv here
+            # would report a live session the owner believes is connected: the pane comes
+            # up, nothing looks wrong, and the flag it was asked for is simply gone. With
+            # no factory to fall back to, the `KeyError` below refuses the launch -- the
+            # same answer this adapter already gives a profile it cannot resolve at all.
+            # Production wires `profiles={}` and resolves every launch through a factory.
+            profile = None if remote_control else self._profiles.get(profile_id)
             if profile is None:
-                profile = self._profile_factories[profile_id](session_id)
+                profile = self._profile_factories[profile_id](session_id, remote_control)
         except KeyError:
             return TerminalObservation(
                 session_id, live=False, preserved=False, detail="invalid_intent"

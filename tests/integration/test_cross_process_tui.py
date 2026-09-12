@@ -120,8 +120,12 @@ def _terminal(
     definition = next(item for item in closed_profiles() if item.profile_id == _PROFILE)
     factories = (
         {
-            _PROFILE: lambda session_id: build_launch_profile(
-                definition, executable, session_id, {"PATH": "/usr/bin"}
+            _PROFILE: lambda session_id, remote_control: build_launch_profile(
+                definition,
+                executable,
+                session_id,
+                {"PATH": "/usr/bin"},
+                remote_control=remote_control,
             )
         }
         if profiles

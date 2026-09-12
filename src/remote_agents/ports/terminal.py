@@ -117,8 +117,21 @@ class TerminalObservation:
 
 class TerminalPort(Protocol):
     async def managed_process_roots(self) -> tuple[int, ...]: ...
+    # `remote_control` asks for the agent's reviewed remote-control launch, where it has one.
+    #
+    # Defaulted to False -- the unconnected launch -- because that is the value every answer
+    # except an explicit *on* produces, and because the flag **overrides** the provider's own
+    # settings file (`docs/acceptance-2026-09-11-surface-refresh.md` section 8 part C): a
+    # caller that passed it without meaning to would contradict a setting the owner had
+    # turned off, which is the one direction this project must not be able to take. An
+    # adapter whose agent has no such variant ignores it.
     async def launch(
-        self, session_id: SessionId, project_id: ProjectId, profile_id: ProfileId
+        self,
+        session_id: SessionId,
+        project_id: ProjectId,
+        profile_id: ProfileId,
+        *,
+        remote_control: bool = False,
     ) -> TerminalObservation: ...
     async def resume(
         self,

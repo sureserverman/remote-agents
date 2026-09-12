@@ -26,12 +26,21 @@ class FakeTerminal:
         self.trust_states: list[TrustState] = []
         self.trust_answers = 0
         self.trust_declines = 0
+        #: Every launch this terminal was asked for, as (profile, remote_control) in order.
+        #: The pair rather than the flag alone: what needs asserting is that the *right*
+        #: agent got it, and a list of bare booleans cannot say which launch each came from.
+        self.launched_remote_control: list[tuple[ProfileId, bool]] = []
 
     async def managed_process_roots(self) -> tuple[int, ...]:
         return ()
 
     async def launch(
-        self, session_id: SessionId, project_id: ProjectId, profile_id: ProfileId
+        self,
+        session_id: SessionId,
+        project_id: ProjectId,
+        profile_id: ProfileId,
+        *,
+        remote_control: bool = False,
     ) -> TerminalObservation:
         """Create a live fake session without running a process.
 
@@ -39,7 +48,13 @@ class FakeTerminal:
         checks it: `SessionService.copy_attach` refuses a pane whose project or profile
         disagrees with the record. A fake that dropped these fields modelled a terminal
         whose panes have no owner, and made that refusal unreachable in tests.
+
+        `remote_control` is *recorded* rather than acted on. There is no argv here to carry
+        a flag, so the only thing a test can check is what the application asked for -- and
+        a fake that accepted the argument and dropped it would leave every assertion about
+        the launch-time read passing against a caller that never made it.
         """
+        self.launched_remote_control.append((profile_id, remote_control))
         observation = TerminalObservation(
             session_id,
             live=True,

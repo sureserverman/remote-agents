@@ -438,7 +438,9 @@ def local_context(config, connection, paths: ProductionPaths):
 
 
 def _profile_factory(definition, executable: Path, environment: dict[str, str]):
-    return lambda session_id: build_launch_profile(definition, executable, session_id, environment)
+    return lambda session_id, remote_control: build_launch_profile(
+        definition, executable, session_id, environment, remote_control=remote_control
+    )
 
 
 def _resume_profile_factory(definition, executable: Path, environment: dict[str, str]):

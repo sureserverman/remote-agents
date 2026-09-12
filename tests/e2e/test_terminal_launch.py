@@ -374,7 +374,8 @@ async def test_terminal_builds_a_profile_for_the_actual_generated_session(tmp_pa
     session_id = SessionId.new()
     created_for: list[SessionId] = []
 
-    def profile_factory(received_session_id: SessionId) -> LaunchProfile:
+    def profile_factory(received_session_id: SessionId, remote_control: bool) -> LaunchProfile:
+        del remote_control
         created_for.append(received_session_id)
         return LaunchProfile(
             sys.executable,
@@ -415,10 +416,16 @@ async def test_the_written_intent_carries_the_session_environment(tmp_path: Path
     """
     session_id = SessionId.new()
 
-    def profile_factory(received_session_id: SessionId) -> LaunchProfile:
+    def profile_factory(received_session_id: SessionId, remote_control: bool) -> LaunchProfile:
+        del remote_control
         return build_launch_profile(
             ProfileDefinition(
-                ProfileId("claude"), "claude", ("claude",), ("--version",), ("/exit", "Enter")
+                ProfileId("claude"),
+                "claude",
+                ("claude",),
+                ("--version",),
+                ("/exit", "Enter"),
+                ("claude", "--remote-control", "{managed_name}"),
             ),
             Path(sys.executable),
             received_session_id,
@@ -522,3 +529,146 @@ def make_terminal(
         startup_timeout=timeout,
     )
     return terminal, gateway
+
+
+async def test_a_launch_asks_the_factory_for_the_remote_control_variant(tmp_path: Path) -> None:
+    """The flag reaches the factory, and the argv it returns is what actually gets executed.
+
+    Asserted through the written intent rather than through the factory's return value alone,
+    because the intent document *is* the launch: the pane is started by re-executing it, so an
+    argv that reaches `LaunchProfile` and not this file never reaches the agent.
+    """
+    agent = tmp_path / "fake_agent.py"
+    agent.write_text("import time\nprint('READY', flush=True)\ntime.sleep(30)\n", encoding="utf-8")
+    session_id = SessionId.new()
+    asked: list[tuple[SessionId, bool]] = []
+
+    def profile_factory(received_session_id: SessionId, remote_control: bool) -> LaunchProfile:
+        asked.append((received_session_id, remote_control))
+        argv = [sys.executable, str(agent), f"ra-{received_session_id}"]
+        if remote_control:
+            argv.insert(2, "--remote-control")
+        return LaunchProfile(sys.executable, tuple(argv), {"PATH": os.environ["PATH"]}, "READY")
+
+    gateway = TmuxGateway(
+        f"remote-agents-test-{uuid4().hex}",
+        AsyncTmuxRunner(),
+        intent_directory=tmp_path / "intents",
+    )
+    terminal = TmuxTerminal(
+        gateway,
+        {ProjectId("opaque-editor"): tmp_path},
+        {},
+        startup_timeout=STARTUP_BUDGET,
+        profile_factories={ProfileId("fake"): profile_factory},
+    )
+    try:
+        launched = await terminal.launch(
+            session_id, ProjectId("opaque-editor"), ProfileId("fake"), remote_control=True
+        )
+
+        assert launched.live
+        assert asked == [(session_id, True)]
+        document = json.loads(
+            (tmp_path / "intents" / f"{session_id}.json").read_text(encoding="utf-8")
+        )
+        assert document["argv"] == [
+            sys.executable,
+            str(agent),
+            "--remote-control",
+            f"ra-{session_id}",
+        ]
+    finally:
+        try:
+            await gateway.destroy(session_id)
+        except RuntimeError:
+            pass
+
+
+async def test_a_launch_that_asks_for_no_remote_control_says_so_to_the_factory(
+    tmp_path: Path,
+) -> None:
+    """The default is the unconnected launch, and the factory is told which it is.
+
+    `False` is not the absence of an answer -- it is the answer the Settings row's *off* and
+    *Claude's default* both produce (acceptance section 8 part C: the flag overrides the
+    settings file, so passing it would contradict a row the owner set).
+    """
+    agent = tmp_path / "fake_agent.py"
+    agent.write_text("import time\nprint('READY', flush=True)\ntime.sleep(30)\n", encoding="utf-8")
+    session_id = SessionId.new()
+    asked: list[tuple[SessionId, bool]] = []
+
+    def profile_factory(received_session_id: SessionId, remote_control: bool) -> LaunchProfile:
+        asked.append((received_session_id, remote_control))
+        return LaunchProfile(
+            sys.executable,
+            (sys.executable, str(agent), f"ra-{received_session_id}"),
+            {"PATH": os.environ["PATH"]},
+            "READY",
+        )
+
+    gateway = TmuxGateway(
+        f"remote-agents-test-{uuid4().hex}",
+        AsyncTmuxRunner(),
+        intent_directory=tmp_path / "intents",
+    )
+    terminal = TmuxTerminal(
+        gateway,
+        {ProjectId("opaque-editor"): tmp_path},
+        {},
+        startup_timeout=STARTUP_BUDGET,
+        profile_factories={ProfileId("fake"): profile_factory},
+    )
+    try:
+        launched = await terminal.launch(
+            session_id, ProjectId("opaque-editor"), ProfileId("fake"), remote_control=False
+        )
+
+        assert launched.live
+        assert asked == [(session_id, False)]
+    finally:
+        try:
+            await gateway.destroy(session_id)
+        except RuntimeError:
+            pass
+
+
+async def test_a_remote_control_launch_refuses_a_prebuilt_profile_that_cannot_carry_the_flag(
+    tmp_path: Path,
+) -> None:
+    """A static profile has one argv, so it cannot answer a request for the other one.
+
+    Refused rather than quietly launched plain. Launching plain would report a live session
+    the owner believes is connected -- the pane comes up, nothing is wrong to look at, and the
+    flag it was asked for is simply gone. `invalid_intent` is the same answer this adapter
+    already gives for a profile it cannot resolve at all.
+
+    Production wires `profiles={}` and resolves everything through factories
+    (`composition/tui.py:143-149`), so this path is reachable only where a test hands the
+    terminal a prebuilt profile -- which is exactly where an unnoticed plain launch would be
+    mistaken for the variant.
+    """
+    session_id = SessionId.new()
+    gateway = TmuxGateway(
+        f"remote-agents-test-{uuid4().hex}",
+        AsyncTmuxRunner(),
+        intent_directory=tmp_path / "intents",
+    )
+    terminal = TmuxTerminal(
+        gateway,
+        {ProjectId("opaque-editor"): tmp_path},
+        {
+            ProfileId("fake"): LaunchProfile(
+                sys.executable, (sys.executable, "-c", "pass"), {}, "READY"
+            )
+        },
+        startup_timeout=READINESS_UNUSED,
+    )
+
+    refused = await terminal.launch(
+        session_id, ProjectId("opaque-editor"), ProfileId("fake"), remote_control=True
+    )
+
+    assert refused.live is False
+    assert refused.detail == "invalid_intent"

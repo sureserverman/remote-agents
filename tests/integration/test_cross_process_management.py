@@ -187,8 +187,12 @@ def _terminal(gateway: RecordingGateway, executable: Path) -> TmuxTerminal:
         {},
         startup_timeout=1,
         profile_factories={
-            ProfileId("claude"): lambda session_id: build_launch_profile(
-                definition, executable, session_id, {"PATH": "/usr/bin"}
+            ProfileId("claude"): lambda session_id, remote_control: build_launch_profile(
+                definition,
+                executable,
+                session_id,
+                {"PATH": "/usr/bin"},
+                remote_control=remote_control,
             )
         },
     )

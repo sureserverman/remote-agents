@@ -37,6 +37,16 @@ def test_closed_profile_catalogue_has_only_the_approved_fixed_launches() -> None
         "opencode": ("C-c",),
         "cursor-agent": ("/quit", "Enter", "Enter"),
     }
+    # The second curated argv, and which agents have one at all. `None` is the assertion
+    # that earns its place: a variant invented for an agent whose remote control nobody
+    # reviewed would be a launch flag reaching a provider on this table's authority alone.
+    assert {str(profile.profile_id): profile.remote_control_argv for profile in profiles} == {
+        "claude": ("claude", "--remote-control", "{managed_name}"),
+        "claude-remote": None,
+        "codex": None,
+        "opencode": None,
+        "cursor-agent": None,
+    }
 
 
 @pytest.mark.parametrize(
@@ -154,3 +164,108 @@ def test_every_curated_profile_has_a_label_on_the_bot() -> None:
             f"{profile_id} is curated by the domain but has no label on the bot, so it would "
             'render as a launch button captioned "Unavailable"'
         )
+
+
+@pytest.mark.parametrize(
+    ("profile_id", "launch_argv", "graceful_keys", "remote_control_argv"),
+    (
+        # Claude carries the one curated variant, so *omitting* it is as wrong as
+        # mis-spelling it: a definition that lost the flag would launch unconnected
+        # while the Settings row read *on*.
+        ("claude", ("claude",), ("/exit", "Enter"), None),
+        ("claude", ("claude",), ("/exit", "Enter"), ("claude", "--remote-control")),
+        (
+            "claude",
+            ("claude",),
+            ("/exit", "Enter"),
+            ("claude", "--remote-control", "ra-1234"),
+        ),
+        (
+            "claude",
+            ("claude",),
+            ("/exit", "Enter"),
+            ("claude", "--dangerously-skip-permissions", "{managed_name}"),
+        ),
+        # No other agent has a reviewed remote-control launch, so any variant on one
+        # is an argv nobody curated.
+        (
+            "codex",
+            ("codex",),
+            ("/exit", "Enter", "Enter"),
+            ("codex", "--remote-control", "{managed_name}"),
+        ),
+    ),
+)
+def test_profile_schema_rejects_a_remote_control_argv_nobody_curated(
+    profile_id: str,
+    launch_argv: tuple[str, ...],
+    graceful_keys: tuple[str, ...],
+    remote_control_argv: tuple[str, ...] | None,
+) -> None:
+    """Every other field is the curated one, so the variant is the only thing under test.
+
+    The neighbouring rejection test passes `("C-c",)` for graceful keys, which is wrong for
+    both profiles it names -- so it raises on the *probe and stop* branch and would keep
+    passing if the executable check were deleted. These rows are curated everywhere except
+    the field being rejected.
+    """
+    with pytest.raises(ProfileError):
+        ProfileDefinition(
+            ProfileId(profile_id),
+            launch_argv[0],
+            launch_argv,
+            ("--version",),
+            graceful_keys,
+            remote_control_argv,
+        )
+
+
+def test_a_claude_launch_carries_the_remote_control_flag_only_when_it_is_asked_for() -> None:
+    """One definition, two argvs -- and the session's own managed name in the variant.
+
+    The flag is what makes a pane readable: with `remoteControlAtStartup` on but no flag the
+    pane connects and prints no marker `classify_remote_control_capture` matches, so it still
+    reads UNKNOWN (Stage 3 acceptance section 9). Which is why this is an argv and not only a
+    settings file.
+    """
+    definition = next(
+        profile for profile in closed_profiles() if str(profile.profile_id) == "claude"
+    )
+    session_id = SessionId.new()
+
+    connected = build_launch_profile(
+        definition, Path("/tools/claude"), session_id, {"PATH": "/tools"}, remote_control=True
+    )
+    plain = build_launch_profile(
+        definition, Path("/tools/claude"), session_id, {"PATH": "/tools"}, remote_control=False
+    )
+
+    assert connected.argv == ("/tools/claude", "--remote-control", f"ra-{session_id}")
+    assert plain.argv == ("/tools/claude",)
+
+
+@pytest.mark.parametrize("profile_id", ("codex", "opencode", "cursor-agent"))
+def test_a_profile_with_no_curated_variant_ignores_the_remote_control_flag(
+    profile_id: str,
+) -> None:
+    """Asking for what an agent has no reviewed launch for gets that agent's ordinary launch.
+
+    Ignored rather than refused, deliberately. The flag is decided once per launch from a
+    host-wide setting, not per profile, so a caller that launches codex while the Claude row
+    reads *on* is the ordinary case -- not an error to propagate to the owner.
+    """
+    definition = next(
+        profile for profile in closed_profiles() if str(profile.profile_id) == profile_id
+    )
+    session_id = SessionId.new()
+
+    asked = build_launch_profile(
+        definition,
+        Path(f"/tools/{profile_id}"),
+        session_id,
+        {"PATH": "/tools"},
+        remote_control=True,
+    )
+
+    assert asked.argv == (f"/tools/{profile_id}",)
+    assert definition.remote_control_argv is None
