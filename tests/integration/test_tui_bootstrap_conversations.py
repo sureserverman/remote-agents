@@ -245,6 +245,19 @@ def test_no_further_capability_leaked_into_the_context() -> None:
         # provider registry, so a host whose providers declare no host-level toggle carries
         # a `None` both surfaces read as "unavailable" (DEC-061/067).
         "host_remote_control",
+        # Its sibling, and the pair is worth reading together because the difference is easy to
+        # miss: `host_remote_control` asks a live daemon what is true *now*, while this reads an
+        # intention out of a file that decides what happens *next* time. Both are about the
+        # machine rather than a session, which is why both are here; neither can answer for the
+        # other, which is why there are two. Unenrolling Codex's daemon says nothing about
+        # whether the next `claude` pane comes up connected, and a surface that derived one row
+        # from the other would state that falsehood.
+        #
+        # Shared rather than the local surface's own because both surfaces render it and both
+        # write it -- the Settings screen exists on the phone and in the terminal, and the value
+        # they write is a key in `claude`'s own settings file, which is a host fact and not a UI
+        # preference (so not `adapters/tui/preferences.py`'s, which DEC-053 governs).
+        "claude_remote_control_default",
         # The first capability that is a *source* rather than a use case: it answers no
         # question and carries no subject, it only says the session store moved. Shared for
         # the reason the ones above are — the fact is the same fact on whichever surface is
