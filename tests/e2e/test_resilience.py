@@ -448,7 +448,7 @@ async def test_a_second_process_stops_a_session_it_never_launched(tmp_path: Path
             {},
             startup_timeout=STARTUP_BUDGET,
             profile_factories={
-                ProfileId("fake"): lambda session_id: LaunchProfile(
+                ProfileId("fake"): lambda session_id, remote_control: LaunchProfile(
                     sys.executable,
                     (sys.executable, str(tmp_path / "fake_agent.py"), "ready"),
                     {"PATH": os.environ["PATH"]},
