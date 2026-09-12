@@ -15,6 +15,7 @@ from remote_agents.adapters.tmux.remote_control import (
     REMOTE_CONTROL_DISCONNECT_KEYS,
     REMOTE_CONTROL_DISMISS_MENU_KEYS,
     REMOTE_CONTROL_ENABLE_KEYS,
+    REMOTE_CONTROL_ENABLED_MARKER,
     REMOTE_CONTROL_OPEN_MENU_KEYS,
     classify_remote_control_capture,
     remote_control_menu_is_open,
@@ -598,13 +599,18 @@ class TmuxTerminal:
             await self._gateway.send_keys(session_id, REMOTE_CONTROL_ENABLE_KEYS)
             await asyncio.sleep(self._waits.remote_control_enable)
             capture = await self._gateway.capture(session_id)
-            if remote_control_menu_is_open(capture):
-                # `/remote-control` enables a disconnected pane and **opens the status menu**
-                # on a connected one. Landing here means the pane was already connected --
-                # which a read cannot tell in advance, because an idle connected pane prints
-                # no marker at all. Nothing was changed, so the only thing left to do is put
-                # the menu away rather than leave it sitting over the owner's work. `Escape`
-                # dismisses it without selecting anything.
+            # `/remote-control` enables a disconnected pane and **opens the status menu** on a
+            # connected one, and only the first of those prints a banner. So the absence of
+            # the banner is what asks for tidying up -- not recognising a menu.
+            #
+            # Keyed that way on purpose. `remote_control_menu_is_open` is deliberately strict
+            # because it licenses destructive keys, which means the day Claude rewords the menu
+            # it stops being recognised; an `Escape` gated on *that* would then leave the menu
+            # sitting over the owner's work, and the next thing this project sends that pane is
+            # a graceful stop's `/exit` + `Enter`, which an open menu swallows -- selecting its
+            # resting `Continue` instead of exiting. Reading the banner's absence needs no
+            # second marker to go stale, and `Escape` costs nothing at a prompt.
+            if REMOTE_CONTROL_ENABLED_MARKER not in capture:
                 await self._gateway.send_keys(session_id, REMOTE_CONTROL_DISMISS_MENU_KEYS)
                 # Settle before answering. Without this the method returns while the pane is
                 # still painting the menu away, and the *caller's* next read captures a menu
@@ -612,7 +618,9 @@ class TmuxTerminal:
                 # a prompt. Measured: three consecutive captures after an un-waited Escape all
                 # still showed the menu.
                 await asyncio.sleep(self._waits.remote_control_menu)
-                return RemoteControlState.ACTIVE
+            # Classified from the capture taken *before* the dismiss, which is the evidence of
+            # what the keys did: a menu row means the pane was already connected, the banner
+            # means it just was, and neither means we cannot say.
             return _remote_control_state(capture)
 
         # --- Disabling, which is the path that may not act on faith --------------------

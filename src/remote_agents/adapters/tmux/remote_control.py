@@ -24,6 +24,13 @@ _MENU_ROW = "Disconnect this session"
 #: tight enough that a footer landing under unrelated prose is not joined to a distant match.
 _MENU_ROW_LOOKBACK = 8
 
+#: What a pane prints when `/remote-control` actually *enabled* it, which is the one outcome
+#: of those keys that needs no tidying up afterwards. Used by the enable path to decide
+#: whether to dismiss -- see `TmuxTerminal.remote_control`, which keys its `Escape` off this
+#: string's **absence** rather than off recognising a menu, so that a menu Claude has reworded
+#: is still put away.
+REMOTE_CONTROL_ENABLED_MARKER = "/remote-control is active"
+
 
 def remote_control_menu_is_open(capture: str) -> bool:
     """Whether this capture is showing Claude's Remote Control status menu.

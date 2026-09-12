@@ -406,3 +406,47 @@ def test_the_menu_is_recognised_by_its_footer_being_last_and_its_row_being_near(
 )
 def test_anything_that_is_not_a_menu_on_screen_is_refused(capture: str) -> None:
     assert not remote_control_menu_is_open(capture)
+
+
+_REWORDED_MENU = (
+    "   Remote Control\n"
+    "   This session is available in the Claude mobile app.\n"
+    "     Disconnect this session\n"
+    "   ❯ Continue\n"
+    "   Enter to choose · Esc to go back\n"
+)
+
+
+async def test_an_enable_puts_away_a_menu_it_does_not_recognise() -> None:
+    """Fail-closed on the *keys* must not mean fail-open on the owner's screen.
+
+    The predicate that licenses the arrows is deliberately strict, so the day Claude rewords
+    the menu it stops being recognised. If the enable path keyed its `Escape` off that same
+    predicate, a reword would leave the status menu sitting over the owner's work -- and the
+    next thing this project sends that pane is a graceful stop's `/exit` + `Enter`, which the
+    open menu would swallow, selecting its resting *Continue* instead of exiting.
+
+    So the dismiss is keyed off the *enable banner's absence* rather than off recognising a
+    menu. We typed `/remote-control` ourselves and the two documented outcomes are the banner
+    or the menu; anything that is not the banner gets an `Escape`, which dismisses a menu and
+    costs nothing at a prompt. No second marker to forge, which is what the broader predicate
+    this replaced would have been.
+    """
+    runner = _ScriptedRunner(_pane(), [_NO_MENU, _REWORDED_MENU])
+
+    result = await _terminal(runner).remote_control(_SESSION, DomainRemoteControlState.ACTIVE)
+
+    assert runner.keys_typed == REMOTE_CONTROL_ENABLE_KEYS + REMOTE_CONTROL_DISMISS_MENU_KEYS
+    assert result is DomainRemoteControlState.ACTIVE, (
+        "the row is still on screen, so the pane is still connected -- say so"
+    )
+
+
+async def test_an_enable_that_produced_nothing_recognisable_still_tidies_up() -> None:
+    """Same rule, and here it is the only thing standing between a stray screen and a stop."""
+    runner = _ScriptedRunner(_pane(), [_NO_MENU, "something we have never seen\n"])
+
+    result = await _terminal(runner).remote_control(_SESSION, DomainRemoteControlState.ACTIVE)
+
+    assert runner.keys_typed == REMOTE_CONTROL_ENABLE_KEYS + REMOTE_CONTROL_DISMISS_MENU_KEYS
+    assert result is DomainRemoteControlState.UNKNOWN
