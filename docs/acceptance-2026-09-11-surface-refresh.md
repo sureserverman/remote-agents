@@ -1592,3 +1592,93 @@ panes still carry `@remote_agents_profile=claude-remote`, stamped pane-scoped. T
 read `claude`, so without the codec's legacy read `session_actions.pane_is_attachable` refuses
 each of them and `copy_attach` — the only route to a session — returns nothing, while the list
 goes on showing all three as running.
+
+## Section 11 — The 0.41.0 deploy on the owner's own host
+
+Driven from the executing session on 2026-09-12, against the real service, the real tmux
+server and the real database. The owner authorized the deploy; the phone-side checks are
+listed at the end and are theirs to press.
+
+### A. What was installed, and how
+
+`v0.41.0` was tagged at `c683b59` and installed as a **tag pin**, per DEC-057 —
+`uv tool install --managed-python --reinstall "remote-agents @
+git+file:///home/user/dev/infra/remote-agents@v0.41.0"`. The source is the local repository
+rather than GitHub because the tag is not pushed; the pin is still a tag and the installed
+wheel reports the tagged commit:
+
+```
+- remote-agents==0.40.0 (from git+https://github.com/sureserverman/remote-agents@bca2d8dc…)
++ remote-agents==0.41.0 (from git+file:///home/user/dev/infra/remote-agents@c683b597…)
+```
+
+`remote_agents.__version__` from the installed interpreter: **0.41.0**.
+
+### B. Migration 13 on the live database
+
+`systemctl --user restart remote-agents.service` → `active`. The service migrates at startup,
+so the restart is what applied it. An extra snapshot was taken immediately beforehand
+(`sessions.sqlite3.pre-0.41.0-<timestamp>.bak`) on top of the backup `open_database` writes.
+
+| Measurement | Before | After |
+|---|---|---|
+| `schema_version` | 12 | **13** |
+| Rows in `sessions` | 405 | **405** |
+| `profile_id='claude-remote' OR resume_profile_id='claude-remote'` | 220 | **0** |
+
+Per-profile after, and it reconciles exactly with before: `claude` ended 338 (112 + 217
+formerly-`claude-remote` + 9 resume rows), `claude` running 3 (the three that were
+`claude-remote`), `codex` ended 46, `codex` running 1, `cursor-agent` ended 12, `opencode`
+ended 5. Nothing was added, lost, or moved between states. **This is the Stage 4 gate's
+database check, run on the live database after the restart.**
+
+### C. The live sessions the codec's legacy read exists for
+
+Three of the four running sessions were launched under the retired id. Their records now read
+`claude`; their panes still carry `@remote_agents_profile=claude-remote`, stamped pane-scoped
+where nothing rewrites it. One of the three is **displaced into `ra-console`** under the swap
+model, so the host-following path is exercised too.
+
+Decoded with the *deployed* codec and checked against the *real* records with the deployed
+`pane_is_attachable`:
+
+| Session | Pane | Hosted by | Mark on the server | Codec decodes | Record says | Attachable |
+|---|---|---|---|---|---|---|
+| `13f0b474` | `%314` | own window | `claude-remote` | `claude` | `claude` | **True** |
+| `3a94d6bc` | `%286` | own window | `claude-remote` | `claude` | `claude` | **True** |
+| `d868396e` | `%313` | `ra-console` | `claude-remote` | `claude` | `claude` | **True** |
+| `1f11398a` | `%270` | own window | `codex` | `codex` | `codex` | **True** |
+
+The counterfactual is the point: without the translation the observed profile would read
+`claude-remote` against a record saying `claude`, `pane_is_attachable` would answer False for
+all three, and `copy_attach` — the only route to a session — would refuse them while the list
+went on showing them as running. Three of the owner's live sessions, on the one deploy that
+could have stranded them.
+
+### D. The Claude row as it stands
+
+Read through the deployed adapter, read-only:
+
+```
+settings file : /home/user/.claude/settings.json
+row reads     : provider_default        (the key is absent, which is what that means)
+governs       : {'claude'}
+```
+
+So a `claude` launch right now carries **no** flag — which is the correct behaviour for
+*Claude's default* and is the second of the three states Task 4.2 must distinguish.
+
+### E. Outstanding: the phone-side checks
+
+These need a thumb on the owner's phone and are not machine-drivable from here, because the
+thing under test is the Settings row as a control:
+
+1. `/settings` in the bot → press `📡 Claude Remote Control` until it reads **on**.
+2. Launch a `claude` session from the bot. Expect the pane banner to carry ` · /rc` and the
+   pane to print `/remote-control is active`.
+3. Press the row until it reads **off**. Launch again. Expect **no ` · /rc` at all** — the
+   measured difference of §8 part C, not merely a missing marker.
+4. On a live `claude` session, press `📡 Remote Control` and confirm the direction the
+   confirmation names; press again and confirm it names the other one.
+5. Check the `📡 Codex Remote Control` row's reading, restart the Codex daemon, and check the
+   row again — it must survive.
