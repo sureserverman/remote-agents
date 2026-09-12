@@ -231,6 +231,21 @@ def test_the_menu_predicate_needs_both_of_its_markers() -> None:
     assert not remote_control_menu_is_open("   Enter to select · Esc to continue\n")
 
 
+def test_the_menu_markers_are_never_spelled_on_one_line_of_this_module() -> None:
+    """The forgery this predicate was rewritten for, kept out by construction.
+
+    Not a substitute for the anchoring below -- a reader of *any* file could still put both
+    strings adjacent -- but this module is the one file guaranteed to be on screen whenever
+    somebody is working on this guard, which is exactly when they would be toggling panes.
+    """
+    source = (_REPO_ROOT / "src/remote_agents/adapters/tmux/remote_control.py").read_text()
+
+    assert not any(
+        "Disconnect this session" in line and "Esc to continue" in line
+        for line in source.splitlines()
+    )
+
+
 async def test_a_disable_whose_menu_never_appears_sends_no_arrows_and_says_unknown() -> None:
     """The defect, pinned. The pane shows no menu before or after the open attempt.
 
@@ -298,3 +313,96 @@ async def test_an_enable_of_a_disconnected_pane_is_unchanged() -> None:
 
     assert result is DomainRemoteControlState.ACTIVE
     assert runner.keys_typed == REMOTE_CONTROL_ENABLE_KEYS
+
+
+_ENABLED = "❯ /remote-control\n  /remote-control is active · Continue here, on your phone\n"
+
+
+async def test_a_disable_that_enabled_a_disconnected_pane_reports_what_it_actually_did() -> None:
+    """The open-menu keys **are** the enable keys, and on a disconnected pane they enable.
+
+    `REMOTE_CONTROL_OPEN_MENU_KEYS` and `REMOTE_CONTROL_ENABLE_KEYS` are the same tuple,
+    because `/remote-control` is one command whose meaning depends on the pane: it opens the
+    status menu on a connected session and turns Remote Control *on* for a disconnected one.
+    A connected-and-idle pane and a disconnected-and-idle pane print nothing and are
+    indistinguishable before the keys, so a disable aimed at the second one enables it.
+
+    That side effect cannot be prevented -- refusing to send the keys at an unreadable pane
+    is what made the toggle unable to reach *off* at all. What it must not do is **lie**. This
+    method used to answer a hardcoded UNKNOWN here, throwing away a capture that plainly said
+    `/remote-control is active`; the record then stored "nothing happened" while the session
+    had just become remotely drivable, and the surface showed the owner the wrong thing.
+
+    Reporting the truth also makes it self-correcting: the record moves to ACTIVE, the next
+    press finds the menu, and that one disables. Found by the Stage 1 gate's Tier-2 review.
+    """
+    runner = _ScriptedRunner(_pane(), [_NO_MENU, _ENABLED])
+
+    result = await _terminal(runner).remote_control(_SESSION, DomainRemoteControlState.INACTIVE)
+
+    assert result is DomainRemoteControlState.ACTIVE, (
+        "a disable that enabled the pane must say so -- UNKNOWN reads as 'nothing happened'"
+    )
+    assert runner.keys_typed == REMOTE_CONTROL_OPEN_MENU_KEYS, "and the arrows still never fly"
+
+
+# --- The markers must come from a menu, not from text that happens to contain them ---------
+#
+# The first version of this predicate was `all(marker in capture for marker in markers)` over
+# the whole capture. Both markers sit on **one line of this project's own source**, so any
+# Claude pane showing `remote_control.py` -- or this test file, or the acceptance document, or
+# a grep hit, or a diff of any of them -- satisfied it. The owner's sessions run *in this
+# repository*. A press of "turn it off" against such a pane would have found the guard
+# satisfied, sent `Up, Up, Enter` at a bare prompt, and submitted their last message.
+#
+# The real menu is a bottom-anchored widget: its footer is the last thing on the screen,
+# because it replaces Claude's input box while it is up. Text being *displayed* is followed by
+# that input box. That is the difference the predicate now reads, and it is structural rather
+# than lexical.
+
+_REPO_ROOT = Path(__file__).resolve().parents[4]
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "src/remote_agents/adapters/tmux/remote_control.py",
+        "tests/unit/adapters/tmux/test_remote_control.py",
+        "docs/acceptance-2026-09-11-surface-refresh.md",
+    ],
+)
+def test_a_pane_displaying_this_project_s_own_files_is_not_a_menu(path: str) -> None:
+    """The regression that matters, asserted against the real files rather than a fixture.
+
+    A fixture would drift away from the sources it stands for; these are the actual three
+    files that forged the markers, read from disk, so the day someone puts both strings back
+    on one line this fails.
+    """
+    assert not remote_control_menu_is_open((_REPO_ROOT / path).read_text())
+
+
+def test_the_menu_is_recognised_by_its_footer_being_last_and_its_row_being_near() -> None:
+    assert remote_control_menu_is_open(_MENU)
+    assert remote_control_menu_is_open(_MENU + "\n\n   \n"), "trailing blank lines are not content"
+
+
+@pytest.mark.parametrize(
+    "capture",
+    [
+        pytest.param(_MENU + "❯ \n  ⏵⏵ auto mode on\n", id="menu-text-with-the-prompt-below-it"),
+        pytest.param(
+            "   Enter to select · Esc to continue\n", id="footer-alone-with-no-disconnect-row"
+        ),
+        pytest.param(
+            "     Disconnect this session\n"
+            + "x\n" * 12
+            + "   Enter to select · Esc to continue\n",
+            id="row-too-far-above-the-footer",
+        ),
+        pytest.param(_NO_MENU, id="an-ordinary-prompt"),
+        pytest.param(_DISCONNECTED, id="the-disconnected-line"),
+        pytest.param("", id="nothing-at-all"),
+    ],
+)
+def test_anything_that_is_not_a_menu_on_screen_is_refused(capture: str) -> None:
+    assert not remote_control_menu_is_open(capture)

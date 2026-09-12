@@ -157,9 +157,14 @@ what DEC-003 says. What was missing was the proof that a menu was there to recei
 With the menu correctly dismissed, a connected idle pane prints **nothing** — so every read
 answers UNKNOWN, and a toggle resolving UNKNOWN to *on* could never reach *off*.
 `remote_control_reading(observed, stored)` resolves it: the fresh read wins whenever it says
-anything, and falls back to the record's last observation when the pane is silent. Wrong only
-in the direction the terminal already refuses — a stale ACTIVE proposes *off*, and *off*
-requires the menu on screen, so it answers UNKNOWN having typed nothing.
+anything, and falls back to the record's last observation when the pane is silent.
+
+> **Correction, 2026-09-12.** This paragraph first ended "*a stale ACTIVE proposes off, and
+> off requires the menu on screen, so it answers UNKNOWN having typed nothing*". That was
+> false, and both reviewers at the Stage 1 gate said so independently. The guard covers the
+> **arrows**; it does not cover the `/remote-control` that asks for the menu — and that
+> command *enables* a disconnected pane. So a stale ACTIVE proposes *off* and the press turns
+> Remote Control **on**. See section 4.
 
 ### The drill
 
@@ -177,3 +182,94 @@ INACTIVE.
 
 **mutation:** deleting the `if not remote_control_menu_is_open(capture): return UNKNOWN` guard
 turns `test_a_disable_whose_menu_never_appears_sends_no_arrows_and_says_unknown` red.
+
+---
+
+## Section 4 — What the Stage 1 gate's three reviews found
+
+Review-scope **high**: a Tier-2 deep review, a second independent adversarial pass, and a gate
+evaluator, all dispatched together on the same committed diff (`998a15c..HEAD`). The evaluator
+returned **PASS** on all five gate criteria. The two review passes each returned a Critical.
+Both were real. Both are fixed below.
+
+### Critical 1 — the guard's own source file satisfied the guard
+
+Found by the second pass. `remote_control_menu_is_open` was
+`all(marker in capture for marker in ("Disconnect this session", "Esc to continue"))` — an
+unanchored substring test over the whole capture. **Both markers sat on one line of
+`adapters/tmux/remote_control.py`.** Verified directly:
+
+```
+$ python -c "...remote_control_menu_is_open(Path(f).read_text())..."
+True   src/remote_agents/adapters/tmux/remote_control.py
+True   tests/unit/adapters/tmux/test_remote_control.py
+True   docs/acceptance-2026-09-11-surface-refresh.md
+```
+
+So any Claude pane showing this project's own source, this test, this document, a grep hit or
+a review diff read as "the menu is open". **The owner's sessions run in this repository.** A
+press of *turn it off* against such a pane would have found the guard content and sent
+`Up, Up, Enter` at a bare prompt — the exact incident of section 2, resurrected by its own fix.
+
+**Fixed by reading structure instead of vocabulary.** The menu replaces Claude's input box
+while it is up, so its footer is the last thing on screen; text being *displayed* has that
+input box printed underneath it. The footer must now be the final non-blank line, with the
+`Disconnect this session` row within eight lines of it. Pinned by a test that reads the three
+real files from disk — not a fixture, which would drift from what it stands for — plus one
+that forbids the two markers from ever sharing a line of that module again.
+
+### Critical 2 — a disable could turn Remote Control *on* and report that nothing happened
+
+Found by the Tier-2 review and, independently, by the evaluator (as Material) and the second
+pass (as Important). `REMOTE_CONTROL_OPEN_MENU_KEYS` **is** `REMOTE_CONTROL_ENABLE_KEYS` —
+`/remote-control` is one command whose meaning depends on the pane. Against a genuinely
+disconnected pane the disable path's open-menu attempt *enables* it.
+
+The reachable path: a session toggled on, then disconnected by the owner from inside Claude,
+its `Remote Control disconnected.` line since scrolled off the visible capture. The fresh read
+is UNKNOWN, `remote_control_reading` falls back to the stored ACTIVE, the confirmation says
+*"Remote Control is on. Turn it off?"*, and the press makes the session reachable from the
+phone. The method then returned a hard-coded `UNKNOWN` — **discarding a capture that plainly
+said `/remote-control is active`** — and `set_remote_control_state` *clears* the record on
+UNKNOWN. The owner was told "Remote Control: unknown" about a session that had just been
+exposed.
+
+**The side effect cannot be prevented**, and this is the part worth recording: a connected
+idle pane and a disconnected idle pane are identical on screen, and refusing to send the keys
+is precisely what left the toggle unable to reach *off* at all (section 3). **What it must not
+do is lie.** The method now classifies that capture and reports ACTIVE, which also makes it
+self-correcting — the record moves to the true state, and the next press finds the menu and
+disables.
+
+### Claims corrected rather than defended
+
+Three docstrings asserted the behaviour the reviews disproved, and two more described code
+that no longer exists. All are corrected in place, and the false ones say what they used to
+say and why they were wrong:
+
+| Where | Was |
+|---|---|
+| `session_actions.py` `remote_control_reading` | "the attempt answers UNKNOWN **having typed nothing**" — it types, and enables |
+| `session_actions.py` `remote_control_target` | "`TmuxTerminal.remote_control` has **always refused** that direction from an UNKNOWN reading" — that refusal was deleted in this same stage, deliberately |
+| `tui/screens/confirm.py` module docstring | "the direction is chosen on the session detail now" — reversed by the class 20 lines below |
+| `tui/screens/confirm.py` `HostRemoteControlConfirmModal` | "`HOST_REMOTE_CONTROL_LABELS` **is** the pane toggle's table by identity" — the alias was broken in this same stage |
+| `tui/screens/sessions.py` `action_row_remote_control` | "answers Enable, Disable, or *both* … where it offers two, the key opens the detail" — it offers one or none |
+
+The bot's `_REMOTE_CONTROL_QUESTIONS` also re-encoded the reading→direction mapping that
+`remote_control_target` owns; the button's word is derived from the direction now, as the
+terminal's already was.
+
+### Carried forward, not fixed here
+
+Two findings are real, pre-date this plan, and need a design decision rather than a patch:
+
+- **Nothing proves a pane is at an idle prompt before *any* send.** `remote_control`'s own
+  docstring says "one idle exact managed pane", but the preconditions are only *live* and
+  *profile is claude*. `/remote-control` typed mid-turn goes into the composer; typed at a
+  tool-permission dialog, the `Enter` accepts the highlighted option. `answer_trust` a few
+  methods below refuses unless its dialog is positively on screen; this path has no
+  equivalent. Fixing it means teaching the adapter to recognise Claude's idle prompt.
+- **Nothing serialises key-sending across processes.** `SessionLocks` is per-process and the
+  bot and the TUI are separate processes, so two near-simultaneous presses on one session can
+  both pass the guard against one real menu and interleave their keys. The `console_lock`
+  flock pattern would close it.

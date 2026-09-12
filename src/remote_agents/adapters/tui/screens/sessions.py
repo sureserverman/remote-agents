@@ -818,11 +818,12 @@ class _SessionActionKeys:
     async def action_row_remote_control(self) -> None:
         """Remote Control, which is the one key that cannot name its action in advance.
 
-        The direction is policy -- `remote_control_directions` answers Enable, Disable, or
-        *both* when nobody has toggled this session and the observation is unknown. Where it
-        offers one, the key performs it. Where it offers two, the key opens the detail and
-        lets the owner choose: a surface that guessed would be picking a side of a question
-        the policy deliberately declines to answer, on a live pane.
+        Still true, and for a different reason than it used to be. The policy answered *both*
+        directions while nobody had toggled a session, and this key then opened the detail
+        rather than guess which one the owner meant. `remote_control_directions` offers one
+        row or none now, so the key always opens the detail on that row -- and what it cannot
+        name in advance is what *pressing* it will do, because the direction comes from a read
+        of the pane taken inside the confirmation.
         """
         session_value = self.highlighted_session()
         if session_value is None or self.tui.busy:

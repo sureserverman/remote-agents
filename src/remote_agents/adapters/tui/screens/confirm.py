@@ -91,12 +91,16 @@ was one. Which pump a call arrives on is a property of its dynamic context, not 
 site, so no static check of call sites can decide it. The sweep still earns its place for
 workers, timers and app-level bindings; DEC-068 records the gap it leaves.
 
-**Both confirmations are modals now, and the Remote Control one changed shape to get here.**
-It used to be a three-row screen — Cancel, Enable, Disable — which is a *chooser*, not a
-confirmation: the direction was still undecided when the question was asked. The direction is
-chosen on the session detail now and this modal confirms exactly one of them, which is both
-what makes it answerable with a `bool` and what the bot has always done
-(`telegram/service.py`, `_detail_reply`).
+**Both confirmations are modals now, and the Remote Control one changed shape twice to get
+here.** It used to be a three-row screen — Cancel, Enable, Disable — which is a *chooser*, not
+a confirmation: the direction was still undecided when the question was asked. Moving the
+choice to the session detail is what made it answerable with a `bool`.
+
+The detail no longer chooses either, as of 2026-09-11. It offers one direction-free row, and
+this modal resolves the direction from a fresh read of the pane taken between the press and
+the question — see `RemoteControlConfirmModal` below. That is still one direction per
+question, so the `bool` shape is untouched; what moved is *where* the one direction comes
+from, and it is the same place the bot gets it (`telegram/service.py`, `_detail_reply`).
 """
 
 from __future__ import annotations
@@ -385,8 +389,9 @@ class HostRemoteControlConfirmModal(ConfirmScreen):
     **The title is the application's, and so is each direction's word.** `HOST_REMOTE_CONTROL_TITLE`
     names the provider on purpose: an owner who already knows the Claude pane toggle would
     otherwise read a bare title as that one and act on the wrong machine-versus-pane
-    assumption. `HOST_REMOTE_CONTROL_LABELS` **is** the pane toggle's table by identity, so
-    restating either here would recreate exactly the drift DEC-007 ended.
+    assumption. `HOST_REMOTE_CONTROL_LABELS` **was** the pane toggle's table by identity until
+    2026-09-11 and is now its own; restating either here would still recreate the drift
+    DEC-007 ended, which is why this reads from the table rather than spelling a word.
 
     **Deliberately not in `ALL_CONFIRMS`.** Every arrangement in
     `tests/unit/adapters/tui/test_confirm_modals.py` is keyed by a session-detail row and a

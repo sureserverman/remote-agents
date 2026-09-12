@@ -637,7 +637,21 @@ class TmuxTerminal:
         await asyncio.sleep(self._waits.remote_control_menu)
         capture = await self._gateway.capture(session_id)
         if not remote_control_menu_is_open(capture):
-            return RemoteControlState.UNKNOWN
+            # **Report what the pane says, not a flat UNKNOWN.** The open-menu keys *are* the
+            # enable keys -- `/remote-control` is one command whose meaning depends on the
+            # pane -- so a disable aimed at a session that was genuinely disconnected has just
+            # turned Remote Control **on**, and the capture says so in as many words. Answering
+            # UNKNOWN here threw that away, and `set_remote_control_state` *clears* the record
+            # on UNKNOWN: the owner pressed "turn it off", the session became reachable from
+            # their phone, and both the reply and the record said nothing had happened.
+            #
+            # It cannot be prevented by refusing to send the keys, because a connected idle
+            # pane and a disconnected idle pane are identical on screen, and refusing is what
+            # left the toggle unable to reach *off* at all. Reporting the truth is what makes
+            # it self-correcting instead: the record moves to ACTIVE, the surface shows the
+            # state the session is really in, and the next press finds the menu and disables.
+            # Found by the Stage 1 gate's Tier-2 review.
+            return _remote_control_state(capture)
         await self._gateway.send_keys(session_id, REMOTE_CONTROL_DISCONNECT_KEYS)
         await asyncio.sleep(self._waits.remote_control_disable)
         return _remote_control_state(await self._gateway.capture(session_id))

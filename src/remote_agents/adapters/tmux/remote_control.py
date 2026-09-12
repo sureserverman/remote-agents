@@ -12,11 +12,17 @@ Needed because `/remote-control` does two different things depending on the pane
 a disconnected session, and it *opens this menu* on a connected one. The second is a no-op
 the owner did not ask for, and leaving a menu sitting over their work is not a no-op."""
 
-#: Both must be present for the status menu to be considered on screen. Two markers rather
-#: than one because the predicate below gates a keystroke that is destructive when it misses
-#: (see `remote_control_menu_is_open`), and the cost of being wrong is asymmetric: an extra
-#: marker can only make this refuse, never make it fire at the wrong moment.
-_MENU_MARKERS = ("Disconnect this session", "Esc to continue")
+#: The menu's last line, and the row the arrows aim at. Deliberately **never adjacent in this
+#: file** -- see `remote_control_menu_is_open` for why a source file that spelled both on one
+#: line was itself enough to defeat the first version of this guard.
+_MENU_FOOTER = "Esc to continue"
+
+_MENU_ROW = "Disconnect this session"
+
+#: How far above the footer the row may sit. The real menu is a seven-line block and the row
+#: is three lines up; the allowance is loose enough to survive Claude adding an entry and
+#: tight enough that a footer landing under unrelated prose is not joined to a distant match.
+_MENU_ROW_LOOKBACK = 8
 
 
 def remote_control_menu_is_open(capture: str) -> bool:
@@ -26,13 +32,28 @@ def remote_control_menu_is_open(capture: str) -> bool:
     is `Up, Up, Enter`, which selects *Disconnect this session* from the menu -- and at a bare
     prompt is `history, history, submit`. Measured on claude 2.1.269: sent at a pane with no
     menu on it, those three keys submitted the owner's previous message and started a real
-    agent turn that began running shell commands. The disable path used to send them after a
-    fixed sleep, on the assumption that asking for the menu had produced one.
+    agent turn that began running shell commands.
+
+    **It reads structure, not vocabulary, and that is the whole of the second version.** The
+    first asked only whether both marker strings appeared anywhere in the capture -- and both
+    of them sat on one line of *this module*, so a Claude pane displaying this very file, or
+    the test beside it, or a grep hit, or a review diff, satisfied it. The owner's sessions
+    run in this repository. "Turn it off" pressed against such a pane would have found the
+    guard content and typed the arrows at a prompt: the original incident, resurrected by the
+    fix for it. Found by the Stage 1 gate's second review pass.
+
+    What distinguishes a menu from text *about* a menu is position. The menu replaces Claude's
+    input box while it is up, so its footer is the last thing on the screen; a file being
+    displayed has that input box printed underneath it. So the footer must be the final
+    non-blank line, and the row must be within `_MENU_ROW_LOOKBACK` lines of it.
 
     Fails closed, and the asymmetry is deliberate: a false negative costs one refused disable
-    that the owner can retry, and a false positive types into somebody's session.
+    the owner can retry, and a false positive types into somebody's session.
     """
-    return all(marker in capture for marker in _MENU_MARKERS)
+    lines = [line for line in capture.splitlines() if line.strip()]
+    if not lines or not lines[-1].rstrip().endswith(_MENU_FOOTER):
+        return False
+    return any(_MENU_ROW in line for line in lines[-_MENU_ROW_LOOKBACK:])
 
 
 class RemoteControlState(StrEnum):

@@ -307,10 +307,23 @@ def remote_control_reading(
     that resolved UNKNOWN to *on* could only ever turn Remote Control on. There would be no
     way to reach off at all.
 
-    Falling back is safe in the direction that matters. A stored ACTIVE that is wrong proposes
-    *off*, and off is the direction the terminal refuses from a pane it cannot read: the
-    disable path requires the status menu on screen before it sends a key, and a disconnected
-    pane does not show one, so the attempt answers UNKNOWN having typed nothing.
+    **What a wrong fallback actually costs, stated accurately.** An earlier version of this
+    paragraph said the attempt "answers UNKNOWN having typed nothing", and that was false: the
+    disable path guards the *arrows*, not the `/remote-control` that asks for the menu -- and
+    `/remote-control` is one command whose meaning depends on the pane, opening the menu on a
+    connected session and **enabling** a disconnected one. So a stored ACTIVE that is wrong
+    proposes *off*, and the press turns Remote Control **on**.
+
+    That is a real cost and it is bounded rather than hidden: the terminal classifies the
+    resulting capture and reports ACTIVE, so the record and both surfaces show the state the
+    session is really in, and the next press finds the menu and disables. The destructive half
+    -- `Up, Up, Enter` at something that is not a menu -- is what stays guarded, and it is
+    genuinely unreachable (`remote_control_menu_is_open`).
+
+    It cannot be traded away by refusing to act on an unreadable pane, which is what the
+    terminal used to do: a connected idle pane and a disconnected idle pane are identical on
+    screen, so refusing leaves the toggle unable to reach *off* at all. Both reviewers at the
+    Stage 1 gate found the false claim; the behaviour it described was never implemented.
     """
     if observed is not RemoteControlState.UNKNOWN:
         return observed
@@ -325,13 +338,19 @@ def remote_control_target(observed: RemoteControlState) -> RemoteControlState:
     each surface owns is the *wording* -- "Turn it off?" on the phone, a modal row in the
     terminal -- and that stays where the wording belongs.
 
-    UNKNOWN targets ACTIVE, which is not a guess but the one direction that was always safe
-    from an unreadable pane. Enabling sends one curated sequence; disabling has to open
-    Claude's status menu and arrow through it, so a disable aimed at a pane that was not
-    where we thought it was leaves a menu open in somebody's session.
-    `TmuxTerminal.remote_control` has always refused that direction from an UNKNOWN reading
-    (DEC-003) -- this function is that refusal expressed as a proposal, so the owner meets it
-    as a question rather than as an error after pressing.
+    UNKNOWN targets ACTIVE, which is not a guess but the direction that costs least when the
+    pane turns out to be something other than what was assumed. Enabling is one command whose
+    worst case on an already-connected pane is a menu that gets dismissed; disabling has to
+    arrow through that menu, and arrows aimed at a pane that is not showing one type into
+    somebody's work.
+
+    **The refusal that backs this lives in `TmuxTerminal.remote_control`, and it guards the
+    arrows specifically** -- not, as an earlier version of this paragraph claimed, the whole
+    disable direction. That broader refusal did exist once and was removed deliberately, in
+    the same change that made the button a single toggle: it made *off* unreachable, because
+    an idle pane reads UNKNOWN whether or not it is connected. What replaced it is a guard on
+    the destructive keys plus honest reporting of whatever the pane ends up saying, which
+    `remote_control_reading` above describes in full.
     """
     if observed is RemoteControlState.ACTIVE:
         return RemoteControlState.INACTIVE

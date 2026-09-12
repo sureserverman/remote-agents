@@ -413,13 +413,20 @@ as the press."""
 #: not be able to disagree (DEC-007) -- while how each of them says it is the surface's own
 #: (DEC-043). That split is why UNKNOWN's sentence says "could not be read" here and the
 #: terminal's modal says it differently, yet both propose *on*.
-_REMOTE_CONTROL_QUESTIONS: dict[RemoteControlState, tuple[str, str]] = {
-    RemoteControlState.ACTIVE: ("Remote Control is on. Turn it off?", "Turn it off"),
-    RemoteControlState.INACTIVE: ("Remote Control is off. Turn it on?", "Turn it on"),
-    RemoteControlState.UNKNOWN: (
-        "Remote Control could not be read. Turn it on?",
-        "Turn it on",
-    ),
+_REMOTE_CONTROL_QUESTIONS: dict[RemoteControlState, str] = {
+    RemoteControlState.ACTIVE: "Remote Control is on. Turn it off?",
+    RemoteControlState.INACTIVE: "Remote Control is off. Turn it on?",
+    RemoteControlState.UNKNOWN: "Remote Control could not be read. Turn it on?",
+}
+
+#: The button's word, derived from the direction rather than from the reading. Keyed this way
+#: on purpose: the table above is *wording* and may key off whatever it likes, but which
+#: direction a reading implies is `remote_control_target`'s to decide, and a second table that
+#: answered it per reading would be that decision written down twice (DEC-007). The terminal
+#: derives its own row label from `desired` for the same reason.
+_REMOTE_CONTROL_ACTIONS: dict[RemoteControlState, str] = {
+    RemoteControlState.ACTIVE: "Turn it on",
+    RemoteControlState.INACTIVE: "Turn it off",
 }
 
 _HOST_CONNECTION_WORDS: dict[HostConnection, str] = {
@@ -2129,7 +2136,8 @@ class PrivateBotBoundary:
             record.remote_control_state,
         )
         desired = remote_control_target(reading)
-        question, action = _REMOTE_CONTROL_QUESTIONS[reading]
+        question = _REMOTE_CONTROL_QUESTIONS[reading]
+        action = _REMOTE_CONTROL_ACTIONS[desired]
         return self._message(
             f"<b>{question}</b>\nThis uses only the verified Claude interaction.",
             (

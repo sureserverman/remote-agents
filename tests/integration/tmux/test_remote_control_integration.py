@@ -126,7 +126,14 @@ async def test_a_disable_never_sends_the_arrows_at_a_pane_showing_no_menu(monkey
 
     state = await terminal.remote_control(session_id, RemoteControlState.INACTIVE)
 
-    assert state is RemoteControlState.UNKNOWN
     assert gateway.sent == [(session_id, ("/remote-control", "Enter"))], (
         "asking for a menu is allowed; acting as though one appeared is not"
     )
+    # **And the answer is what the pane says, not a flat UNKNOWN.** This assertion read
+    # `is UNKNOWN` when it was written, which pinned a defect the gate's reviews then found:
+    # the open-menu keys *are* the enable keys, so against a genuinely disconnected pane that
+    # send turns Remote Control on -- and `set_remote_control_state` clears the record on
+    # UNKNOWN, so the owner was told nothing had happened about a session that had just become
+    # reachable from their phone. This gateway answers `/remote-control is active` throughout,
+    # which is exactly what such a pane shows afterwards.
+    assert state is RemoteControlState.ACTIVE
