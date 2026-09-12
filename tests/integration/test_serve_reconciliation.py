@@ -13,8 +13,10 @@ import pytest
 from remote_agents.adapters.sqlite.database import open_database
 from remote_agents.adapters.sqlite.session_store import SQLiteSessionStore
 from remote_agents.adapters.telegram.service import PrivateBotBoundary, build_private_bot
+from remote_agents.adapters.tmux.codec import parse_pane
 from remote_agents.application.activity import CodexApprovalWatcher
 from remote_agents.application.reconcile import ReconciliationService
+from remote_agents.application.session_actions import pane_is_attachable
 from remote_agents.composition.service import ServiceComposition, _serve_with_reconciliation
 from remote_agents.config import TelegramSecrets
 from remote_agents.domain.models import (
@@ -566,5 +568,79 @@ async def test_the_serve_loop_actually_schedules_the_trust_pass(tmp_path: Path) 
         await _serve_with_reconciliation(_SECRETS, composition, poll, 3600, trust_interval=0.01)
 
         assert notifier.passes >= 1, "the serve loop never started the trust pass"
+    finally:
+        connection.close()
+
+
+async def test_a_legacy_marked_pane_still_owns_its_migrated_record(tmp_path: Path) -> None:
+    """The deploy's survival case, end to end: pane mark -> codec -> reconcile -> ownership.
+
+    A session launched under the retired `claude-remote` id is still running when the deploy
+    lands. Migration 13 has rewritten its record to `claude`; its pane still carries
+    `@remote_agents_profile=claude-remote`, stamped pane-scoped where nothing can rewrite it.
+
+    Two assertions, and the second is the one that depends on the codec's legacy read.
+    Reconciliation matches on session id alone, so the record stays RUNNING whichever id the
+    pane reports -- that arm would pass against unfixed code. Ownership does not:
+    `pane_is_attachable` compares the observed profile with the record's, and a pane that
+    disagrees with its own record is refused by `copy_attach`. Untranslated, the owner's live
+    sessions would all still be listed and none of them reachable.
+
+    The observation is built from a real pane line through `parse_pane` rather than
+    hand-constructed, because a hand-built observation is where the translation would be
+    silently skipped -- the bug lives in the decode, so the decode has to be in the test.
+    """
+    connection = open_database(tmp_path / "sessions.sqlite3")
+    try:
+        store = SQLiteSessionStore(connection)
+        session_id = SessionId.parse("01234567-89ab-cdef-0123-456789abcdef")
+        # The record as migration 13 leaves it: launched under the retired id, now reading
+        # `claude`, and still carrying the display identity it was created with.
+        migrated = SessionRecord(
+            session_id,
+            ProjectId("proj"),
+            ProfileId("claude"),
+            SessionDisplayIdentity("proj", "claude-remote", "regular", 1),
+            SessionState.RUNNING,
+            datetime.now(UTC) - timedelta(hours=3),
+        )
+        await store.save(migrated)
+        pane = parse_pane(
+            "|".join(
+                (
+                    f"ra-{session_id}",
+                    "$1",
+                    "%3",
+                    "4242",
+                    "0",
+                    "",
+                    "2",
+                    str(session_id),
+                    "proj",
+                    "claude-remote",
+                )
+            )
+        )
+        observation = TerminalObservation(
+            pane.session_id,
+            pane.live,
+            pane.preserved,
+            project_id=pane.project_id,
+            profile_id=pane.profile_id,
+            host_session=pane.session_name,
+        )
+        terminal = StubTerminal((observation,))
+
+        async def poll(secrets: TelegramSecrets, boundary: PrivateBotBoundary) -> None:
+            return None
+
+        await _serve_with_reconciliation(_SECRETS, _composition(store, terminal), poll, 3600)
+
+        assert (await store.get(session_id)).state is SessionState.RUNNING
+        assert pane_is_attachable(observation, migrated), (
+            "the pane disagrees with the record migration 13 just wrote, so `copy_attach` "
+            "refuses it -- every session launched under the retired id would be listed as "
+            "running and be unreachable"
+        )
     finally:
         connection.close()

@@ -76,6 +76,23 @@ _SCHEMA_OPTION = "@remote_agents_schema"
 _ID_OPTION = "@remote_agents_id"
 _PROJECT_OPTION = "@remote_agents_project_id"
 _PROFILE_OPTION = "@remote_agents_profile"
+
+#: Profile ids that no longer exist, and the curated id each one is now read as.
+#:
+#: **A read, never a write.** `pane_mark_args` stamps only ids `closed_profiles()` curates, so
+#: nothing new ever lands here; this table exists for panes that were already running when the
+#: id was retired, and whose mark is stamped pane-scoped where nothing can rewrite it.
+#:
+#: `claude-remote` was `claude --remote-control {managed_name}` -- the same binary under a
+#: second id -- and Stage 4 made that flag a property of the launch instead. Migration 13
+#: rewrites the stored rows; this is the other half, because a pane outlives the deploy.
+#: Without it a legacy pane reports a profile its own migrated record no longer names, and
+#: `session_actions.pane_is_attachable` refuses it: the session stays listed as running and
+#: becomes unreachable, since `copy_attach` is the only route to it.
+#:
+#: One of exactly two places the retired id survives as a value; the other is migration 13.
+#: Both are reads of history, which is why neither is a table any surface offers.
+_RETIRED_PROFILE_IDS = {"claude-remote": "claude"}
 # Who is where, in one listing: the read the swap composer derives its whole answer from.
 # Deliberately separate from PANE_FORMAT, which is lifecycle evidence and drops the console's
 # own view — the arrangement needs exactly what that drops (a console pane is half of every
@@ -1031,7 +1048,7 @@ def parse_pane(line: str) -> ManagedPane:
         pane_owned_identity(schema, raw_id) is not None,
         session_id,
         ProjectId(project),
-        ProfileId(profile),
+        ProfileId(_RETIRED_PROFILE_IDS.get(profile, profile)),
         process_id,
         live=pane_dead == "0",
         preserved=pane_dead == "1",

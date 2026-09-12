@@ -1534,3 +1534,61 @@ from its banner. So Task 4.1's argv earns its place even on a host whose setting
   connect *here*; a host whose account default is off would show the same result for a different
   reason.
 - The drill ran against a working tree, not the released build.
+
+## Section 10 — Migration 13 against the owner's own database, and the collision it had to survive
+
+Two runs. The first is the defect the migration shipped with for about twenty minutes; the
+second is the migration as committed, run against a byte copy of the live database.
+
+### A. The collision, reproduced
+
+`sessions_resume_identity` is UNIQUE on `(resume_profile_id, resume_source_id)` for every row
+that is not ended (migration 8). While both profile ids existed, resuming one Claude
+conversation under each of them produced two distinct keys — `('claude', X)` and
+`('claude-remote', X)` — which the index accepts, and which nothing serialises against each
+other because `SessionService._resume_locked` takes its lock per *(profile, conversation)*.
+
+Renaming the second row makes both keys `('claude', X)`. Measured on a fixture holding exactly
+that pair:
+
+```
+seeded two live resumes of one conversation under the two ids -- accepted by the index
+MIGRATION FAILED: IntegrityError: UNIQUE constraint failed:
+    sessions.resume_profile_id, sessions.resume_source_id
+schema version now: (12,)
+```
+
+The whole migration rolls back and the schema stays at 12. `open_database` migrates on every
+start, so a host with that pair would have failed to start the service and kept failing —
+recovered only from the pre-migration backup. Found by inspection of the index while the
+task's own tests were green; the tests did not hold the case, and now do
+(`test_migration_thirteen_survives_one_conversation_resumed_under_both_ids`).
+
+The committed migration breaks the tie before renaming: the row under the **retired** id gives
+up its resume *binding* — not its row and not its state — so the id that still exists keeps the
+conversation and nothing is deleted. Ended rows are excluded on both sides, being outside the
+partial index and therefore unable to collide.
+
+### B. The migration against a copy of the live database
+
+Copied from `~/.local/state/remote-agents/sessions.sqlite3` on 2026-09-12 (405 sessions, schema
+12) and migrated in place on the copy. The live database was read, never written.
+
+| Measurement | Result |
+|---|---|
+| Schema version before → after | 12 → 13 |
+| Rows before / after | 405 / 405 — none added, none lost |
+| Rows changed | 220 |
+| Rows changed in a column this migration does not own | **0** |
+| `claude-remote` rows remaining (`profile_id` or `resume_profile_id`) | **0** |
+| Resume bindings cleared by the tie-break | 0 — this host has no colliding pair |
+
+The 220 are the 217 ended and 3 running sessions this host launched under the retired id. The
+third row is the Stage 4 gate's own check, proven in advance on a copy; the gate re-runs it on
+the live database after the restart.
+
+Also recorded, because it is what the *rest* of Stage 4 rests on: those 3 running sessions'
+panes still carry `@remote_agents_profile=claude-remote`, stamped pane-scoped. Their records now
+read `claude`, so without the codec's legacy read `session_actions.pane_is_attachable` refuses
+each of them and `copy_attach` — the only route to a session — returns nothing, while the list
+goes on showing all three as running.

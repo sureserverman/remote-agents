@@ -204,6 +204,63 @@ MIGRATIONS: tuple[tuple[int, str], ...] = (
         );
         """,
     ),
+    # The retired `claude-remote` profile becomes the `claude` it always was.
+    #
+    # The two ids named the same executable -- `claude` and `claude --remote-control
+    # {managed_name}` -- so this renames a launch flag that had been modelled as a second
+    # agent. Stage 4 makes the flag a property of the launch, which leaves every stored row
+    # pointing at a profile id nothing curates any more: `closed_profiles()` would not return
+    # it, so a surface rendering one of these rows has no label for it and `ProfileUsageReaders`
+    # has no reader.
+    #
+    # **Both columns, and only those two.** `profile_id` is what the session was launched as;
+    # `resume_profile_id` is what a *resumed* session's provider conversation belongs to, and a
+    # rewrite of one is invisible to a reader of the other. Every other column is left exactly
+    # as it stands -- `display_identity` included, deliberately: it carries the agent label the
+    # session was created under, which is history and not this migration's to edit. A session
+    # whose list row still reads `claude-remote` is telling the truth about what started it.
+    #
+    # The WHERE clauses are what keep it to those rows. An UPDATE without them would rewrite
+    # every session's profile to `claude`, turning codex sessions into Claude ones, and the
+    # profile columns alone cannot show that -- which is why the test compares every column of
+    # every row before and after.
+    #
+    # **The first statement exists because the rename can violate a unique index**, and the
+    # first form of this migration did. `sessions_resume_identity` is UNIQUE on
+    # `(resume_profile_id, resume_source_id)` for every non-ended row. While both ids existed,
+    # resuming one Claude conversation under each produced `('claude', X)` and
+    # `('claude-remote', X)` -- two distinct keys, accepted by the index, and not serialised
+    # against each other because `SessionService._resume_locked` locks per *(profile,
+    # conversation)*. Renaming makes both `('claude', X)`: `IntegrityError`, the whole
+    # migration rolled back, the schema left at 12. `open_database` migrates on every start,
+    # so that host's service would fail to start and keep failing.
+    #
+    # The tie-break keeps both sessions. The row under the **retired** id gives up its resume
+    # *binding* -- not its row, not its state -- so the id that still exists keeps the
+    # conversation and nothing is deleted. It is also what the index has always meant (two
+    # live panes on one conversation are impossible), applied to data the old model admitted
+    # only because it counted the two ids as different agents.
+    #
+    # Scoped to non-ended rows on both sides, because ended rows are outside the partial index
+    # and so cannot collide -- they keep the conversation they record having resumed.
+    #
+    # Safe to re-run, safe on a database that never held the retired id, and safe to arrive
+    # late: every statement is a no-op once applied, and `open_database` takes its
+    # pre-migration backup before any of it runs (`docs/database-recovery.md`).
+    (
+        13,
+        """
+        UPDATE sessions SET resume_profile_id = NULL, resume_source_id = NULL
+        WHERE resume_profile_id = 'claude-remote'
+          AND state <> 'ended'
+          AND resume_source_id IN (
+              SELECT resume_source_id FROM sessions
+              WHERE resume_profile_id = 'claude' AND state <> 'ended'
+          );
+        UPDATE sessions SET profile_id = 'claude' WHERE profile_id = 'claude-remote';
+        UPDATE sessions SET resume_profile_id = 'claude' WHERE resume_profile_id = 'claude-remote';
+        """,
+    ),
 )
 
 

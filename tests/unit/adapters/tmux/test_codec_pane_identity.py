@@ -47,8 +47,9 @@ def pane_line(
     pane: str = "%3",
     schema: str = "2",
     dead: str = "0",
+    profile: str = "claude",
 ) -> str:
-    return "|".join((host, "$1", pane, "4242", dead, "", schema, str(_SESSION), "proj", "claude"))
+    return "|".join((host, "$1", pane, "4242", dead, "", schema, str(_SESSION), "proj", profile))
 
 
 def test_the_pane_format_carries_the_pane_id_and_its_host() -> None:
@@ -137,3 +138,40 @@ def test_an_unknown_schema_is_still_refused() -> None:
 def test_a_pane_id_is_required_evidence() -> None:
     with pytest.raises(ValueError):
         parse_pane(pane_line(pane=""))
+
+
+def test_a_pane_marked_with_the_retired_profile_decodes_as_the_agent_it_always_was() -> None:
+    """A live pane outlives the deploy that retired its profile, and must stay addressable.
+
+    `claude-remote` was `claude --remote-control {managed_name}` -- the same binary, under a
+    second curated id. Stage 4 retires the id; the panes carrying
+    `@remote_agents_profile=claude-remote` are still running, and their option is stamped on
+    the pane where nothing can rewrite it.
+
+    **What breaks without this, precisely.** Not reconciliation -- that matches on session id
+    alone (`application/reconcile.reconcile`), so a legacy pane keeps its record RUNNING
+    either way. It is **ownership**: `application/session_actions.pane_is_attachable` compares
+    the observed profile against the record's, and the migration has just rewritten the record
+    to `claude`. An untranslated pane therefore disagrees with its own record, and
+    `SessionService.copy_attach` refuses it -- so after the deploy the owner cannot reach any
+    session that was launched under the retired id, while the list still shows it running.
+
+    This is one of the two places in the codebase where the retired id survives as a *value*
+    (the other is the migration that rewrites the rows). Both are reads of history.
+    """
+    pane = parse_pane(pane_line(profile="claude-remote"))
+
+    assert pane.profile_id == ProfileId("claude")
+    assert pane.session_id == _SESSION, "translating the profile must not disturb the identity"
+
+
+@pytest.mark.parametrize("profile", ("claude", "codex", "opencode", "cursor-agent"))
+def test_every_other_pane_mark_decodes_to_the_profile_it_names(profile: str) -> None:
+    """The legacy read is one id, not a rewriting pass over the field.
+
+    Asserted across the whole curated set so a translation table that grew a second entry --
+    or one that mapped everything to `claude` -- fails here rather than in production, where
+    the symptom is a codex pane answering as a Claude session.
+    """
+    assert parse_pane(pane_line(profile=profile)).profile_id == ProfileId(profile)
+
