@@ -50,6 +50,7 @@ from remote_agents.adapters.tui.screens.base import ChoiceScreen
 from remote_agents.application.commands import LaunchCommand
 from remote_agents.application.profiles import ProfileAvailability
 from remote_agents.application.project_catalog import CatalogProject
+from remote_agents.application.services import LaunchOutcome
 from remote_agents.domain.conversations import (
     ConversationCataloguePage,
     ConversationReference,
@@ -91,7 +92,7 @@ class _FakeLauncher:
     async def launch(self, command: LaunchCommand) -> _FakeRecord:
         if self.error is not None:
             raise self.error
-        return _FakeRecord(SessionId.new(), self.state)
+        return LaunchOutcome(_FakeRecord(SessionId.new(), self.state), False)
 
 
 class _FakeCreator:

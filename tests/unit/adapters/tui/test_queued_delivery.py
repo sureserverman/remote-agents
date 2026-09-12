@@ -55,7 +55,7 @@ from remote_agents.adapters.tui.context import TuiContext
 from remote_agents.adapters.tui.screens import ResumeConversationsScreen
 from remote_agents.application.profiles import ProfileAvailability
 from remote_agents.application.project_catalog import CatalogProject
-from remote_agents.application.services import ResumeOutcome
+from remote_agents.application.services import LaunchOutcome, ResumeOutcome
 from remote_agents.domain.conversations import (
     ConversationCataloguePage,
     ConversationReference,
@@ -168,7 +168,7 @@ class _RecordingLauncher(SessionUseCaseDouble):
 
     async def launch(self, _command):
         self.issued.append("launch")
-        return _record()
+        return LaunchOutcome(_record(), False)
 
     async def resume(self, _command):
         self.issued.append("resume")
@@ -187,7 +187,7 @@ class _FailingLauncher(_RecordingLauncher):
 
     async def launch(self, _command):
         self.issued.append("launch")
-        return _record(SessionState.FAILED)
+        return LaunchOutcome(_record(SessionState.FAILED), False)
 
 
 class _UnusedCreator:

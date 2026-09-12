@@ -99,7 +99,7 @@ async def test_either_terminal_can_stop_a_session_whose_pane_the_other_displaced
         launching = SessionService(SQLiteSessionStore(launching_connection), launching_terminal)
         stopping = SessionService(SQLiteSessionStore(stopping_connection), stopping_terminal)
 
-        record = await launching.launch(LaunchCommand(_PROJECT, _PROFILE, "displaced"))
+        record = (await launching.launch(LaunchCommand(_PROJECT, _PROFILE, "displaced"))).record
         assert record.state is SessionState.RUNNING
 
         # The console takes the agent's pane. Neither service is told.

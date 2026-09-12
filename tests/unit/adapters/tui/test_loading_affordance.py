@@ -41,7 +41,7 @@ from remote_agents.adapters.tui.context import TuiContext
 from remote_agents.application.profiles import ProfileAvailability
 from remote_agents.application.project_admin import CreatedProject, CreateProjectCommand
 from remote_agents.application.project_catalog import CatalogProject
-from remote_agents.application.services import ResumeOutcome
+from remote_agents.application.services import LaunchOutcome, ResumeOutcome
 from remote_agents.domain.conversations import (
     ConversationCataloguePage,
     ConversationReference,
@@ -144,7 +144,7 @@ class _Launcher(SessionUseCaseDouble):
 
     async def launch(self, _command) -> SessionRecord:
         await self._gated()
-        return _record(self.state)
+        return LaunchOutcome(_record(self.state), False)
 
     async def resume(self, _command) -> ResumeOutcome:
         await self._gated()

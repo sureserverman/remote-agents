@@ -26,6 +26,7 @@ from remote_agents.application.errors import ProjectCreationError
 from remote_agents.application.profiles import ProfileAvailability
 from remote_agents.application.project_admin import CreatedProject, CreateProjectCommand
 from remote_agents.application.project_catalog import CatalogProject
+from remote_agents.application.services import LaunchOutcome
 from remote_agents.domain.models import SessionId, SessionState
 from remote_agents.domain.projects import ProjectIdentity
 
@@ -53,7 +54,7 @@ class FakeLauncher:
 
     async def launch(self, command: LaunchCommand) -> FakeRecord:
         self.commands.append(command)
-        return FakeRecord(SessionId.new(), self.state)
+        return LaunchOutcome(FakeRecord(SessionId.new(), self.state), False)
 
 
 class FakeCreator:

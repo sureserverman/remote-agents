@@ -24,7 +24,7 @@ from remote_agents.application.conversations import ConversationService
 from remote_agents.application.notification_policy import SessionGroup
 from remote_agents.application.profiles import ProfileAvailability
 from remote_agents.application.project_catalog import CatalogProject
-from remote_agents.application.services import ResumeOutcome
+from remote_agents.application.services import LaunchOutcome, ResumeOutcome
 from remote_agents.domain.conversations import (
     ConversationCataloguePage,
     ConversationReference,
@@ -284,7 +284,7 @@ class _LaunchingLauncher(_Launcher):
     """Answers a launch, so the pending screen this test is about is actually drawn."""
 
     async def launch(self, _command):
-        return self.record
+        return LaunchOutcome(self.record, False)
 
 
 def _recording(chat: FakeChat) -> list[tuple[str, object]]:
@@ -653,7 +653,7 @@ class _OutcomeLauncher(_Launcher):
         return []
 
     async def launch(self, _command):
-        return self.record
+        return LaunchOutcome(self.record, False)
 
 
 class _RealCreator(_Creator):

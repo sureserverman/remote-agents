@@ -427,7 +427,12 @@ class TmuxTerminal:
         if remembered is not None:
             return remembered
         try:
-            return self._profile_factories[profile_id](session_id)
+            # `remote_control=False`, and it costs nothing: the only field this caller reads
+            # is `graceful_keys`, which is the agent's exit sequence and is identical on both
+            # of its curated argvs. Nothing here launches -- it is resolving how to *type an
+            # exit* into a pane some other process started, and which argv that pane came up
+            # on is not knowable from here anyway.
+            return self._profile_factories[profile_id](session_id, False)
         except KeyError:
             return None
 

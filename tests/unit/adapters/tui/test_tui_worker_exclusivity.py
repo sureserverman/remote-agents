@@ -57,7 +57,7 @@ from remote_agents.adapters.tui.screens import ResumeConversationsScreen
 from remote_agents.application.profiles import ProfileAvailability
 from remote_agents.application.project_admin import CreatedProject
 from remote_agents.application.project_catalog import CatalogProject
-from remote_agents.application.services import ResumeOutcome
+from remote_agents.application.services import LaunchOutcome, ResumeOutcome
 from remote_agents.domain.conversations import (
     ConversationCataloguePage,
     ConversationReference,
@@ -125,7 +125,7 @@ class _SlowLauncher(SessionUseCaseDouble):
         return None
 
     async def launch(self, _command):
-        return await self._record_and_wait("launch")
+        return LaunchOutcome(await self._record_and_wait("launch"), False)
 
     async def resume(self, _command):
         return ResumeOutcome(await self._record_and_wait("resume"), created=True)
