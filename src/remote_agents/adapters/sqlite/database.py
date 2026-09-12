@@ -130,15 +130,24 @@ def leased_connection(path: Path, *, busy_timeout_ms: int = 1_000) -> LeasedConn
 
 
 def watched_paths(database_path: Path) -> tuple[Path, Path]:
-    """The two files whose metadata says this store has changed.
+    """The files whose metadata says this store has changed.
 
     Named here rather than in the watcher because this module is what decides how a store is
     laid out on disk -- `_corrupt_snapshot` below moves the same trio -- and a second module
     spelling `f"{path}-wal"` would be a second opinion about that layout.
 
-    The `-shm` file is deliberately **not** watched. It is shared memory whose mtime moves on
-    reads as well as writes, so including it would publish a change every time a surface drew
-    a list, which is the redraw storm this watcher exists to avoid causing.
+    **This project does not run in WAL mode, and the first version of this docstring argued as
+    though it did.** Nothing in `src/` sets `journal_mode`, so SQLite's default stands: the
+    live database reports `delete`, there is no `-wal` beside it and there never has been. All
+    the change signal therefore rides on the database file itself, and the `-wal` entry is
+    watched for the day that changes rather than because it carries anything today -- a path
+    that is permanently absent costs one `stat` per poll and fingerprints as `None`.
+
+    The `-shm` file stays out for a reason that is likewise conditional on WAL: its mtime
+    moves on reads as well as writes, so under WAL it would publish a change every time a
+    surface drew a list. Under `delete` it does not exist either. Recorded as reasoning about
+    a mode this store does not use, rather than deleted, because it is the reason not to add
+    it if WAL is ever turned on.
     """
     return (database_path, Path(f"{database_path}-wal"))
 

@@ -1117,10 +1117,13 @@ class SessionsScreen(_SessionActionKeys, ChoiceScreen):
         self._visit += 1
         if self._auto is not None:
             self._auto.resume()
-        # Re-attach the half `on_screen_suspend` detached. Nothing is replayed for the gap: the
-        # `on_reveal` re-read that already runs on the way back is what covers it, and a
-        # watcher that queued its missed events would deliver a burst of redraws for one list
-        # that only ever needed re-reading once.
+        # Re-attach the half `on_screen_suspend` detached. **One** collapsed change may follow,
+        # and an earlier version of this comment claimed none would. `StoreWatch._seen` outlives
+        # `stop()`, so the first poll after re-subscribing compares against the reading taken
+        # before the suspension and publishes once if anything moved meanwhile. That is harmless
+        # and arguably right -- it costs one re-read the `on_reveal` pass was about to make
+        # anyway. What genuinely does not happen is a *burst*: the watcher holds one reading,
+        # not a queue, so ten changes during a detour collapse to the single event above.
         self._watch_the_store()
 
     async def _auto_reload(self) -> None:

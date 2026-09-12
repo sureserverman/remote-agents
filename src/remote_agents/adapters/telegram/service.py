@@ -706,7 +706,21 @@ class PrivateBotBoundary:
     """Whether a store change arrived inside the edit floor and still needs drawing.
 
     The difference between coalescing and throttling, and this class claimed the first while
-    doing the second. `settle_owed_redraw` is what pays it.
+    doing the second. `settle_owed_redraw` is what pays it, and `_settle_task` is what makes
+    sure something does.
+    """
+    _settle_task: asyncio.Task[None] | None = None
+    """The one-shot task that pays an owed redraw once the floor lifts.
+
+    **This is a reversal, and the argument it replaces was wrong.** The first version refused
+    to own a task at all -- "a timer here would be a second clock in a class whose whole design
+    is one screen, redrawn on demand" -- and left settling to the store-change listener. But
+    that listener runs only when the store changes, and a debt is incurred precisely when a
+    change has *just* been refused: settling was attempted once, immediately, while the floor
+    still forbade it, and a store that went quiet afterwards left the page stale for good.
+
+    A one-shot task per suppressed change is not a clock. It is the deferral the word
+    "coalesced" was always promising, and without it that word was simply untrue.
     """
     _redraw_allowed_at: float = 0.0
     """The monotonic moment the next store-driven redraw of the sessions page may go out.
@@ -1744,6 +1758,36 @@ class PrivateBotBoundary:
     #: The floor between two store-driven edits of the sessions page.
     _REDRAW_INTERVAL_SECONDS = 2.0
 
+    def _defer_settle(self, bot: Bot, delay: float) -> None:
+        """Arrange for one attempt to pay the debt once the floor lifts. At most one pending.
+
+        At most one because the debt is a single bit: a second suppressed change inside the
+        same window is the same debt, and a task per change would edit once per change the
+        moment the floor lifted -- which is the burst the floor exists to prevent.
+        """
+        pending = self._settle_task
+        if pending is not None and not pending.done():
+            return
+
+        async def pay_when_allowed() -> None:
+            try:
+                await asyncio.sleep(max(delay, 0.0))
+                await self.settle_owed_redraw(bot)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                # Nobody asked for this edit, so its failure is not the owner's to see. The
+                # debt stays owed and the next store change tries again.
+                _LOG.warning("an owed sessions redraw could not be paid", exc_info=True)
+
+        self._settle_task = asyncio.create_task(pay_when_allowed())
+
+    def cancel_pending_redraw(self) -> None:
+        """Drop any pending settle, so a stopping process leaves no task behind. Idempotent."""
+        pending, self._settle_task = self._settle_task, None
+        if pending is not None and not pending.done():
+            pending.cancel()
+
     async def settle_owed_redraw(self, bot: Bot | None = None) -> bool:
         """Draw a redraw the floor suppressed, if one is owed and the floor has lifted.
 
@@ -1751,10 +1795,10 @@ class PrivateBotBoundary:
         watching the store -- one attempt per poll, which is cheap because it is a flag test
         until there is something to do.
 
-        Deliberately not a task this object schedules for itself. A timer here would be a
-        second clock in a class whose whole design is "one screen, redrawn on demand", and it
-        would have to be cancelled on every path that stops the bot. The watcher is already
-        ticking; letting it ask is the same answer with nothing to own.
+        Called from two places, and it needs both. The store-change listener asks after a
+        refused redraw, which covers a busy store cheaply; `_defer_settle`'s one-shot task
+        covers the case that listener structurally cannot -- a store that goes quiet straight
+        after the change it refused.
         """
         if not self._redraw_owed:
             return False
@@ -1805,21 +1849,40 @@ class PrivateBotBoundary:
             # change landing inside the window with no further write behind it would leave the
             # page stale until the owner navigated away and back.
             self._redraw_owed = True
+            self._defer_settle(speaker, self._redraw_allowed_at - now)
             return False
         self._redraw_allowed_at = now + self._REDRAW_INTERVAL_SECONDS
         self._redraw_owed = False
-        rendered = await self._sessions_reply(self._sessions_page)
+        # `mark=False`: this caller already knows what it built, so it needs no mark -- and a
+        # mark set here is *shared mutable state set across an await*. Updates are serialized
+        # (`concurrent_updates(False)`), but this redraw runs on its own task, so a command
+        # handler rendering while this one reads would consume the `sessions` mark and tag its
+        # own screen with it. Found by the test below it, not by reasoning.
+        rendered = await self._sessions_reply(self._sessions_page, mark=False)
+        # **Both guards again, after the read.** Assembling this page is not quick -- a tmux
+        # capture per unready row, an account-wide limits sweep, a Remote Control read, a
+        # context read per row -- and every one of those is a suspension point. A press
+        # arriving in that window renders the screen the owner asked for and clears its own
+        # flag again, all before this resumes; an edit landing afterwards replaces their
+        # screen with a list and prunes its tokens. Checking at the top decided whether to
+        # *start*; these decide whether it is still true that we may finish.
+        if self._handling_press or not self.view.showing(self._SESSIONS_SCREEN):
+            self._redraw_owed = True
+            self._defer_settle(speaker, self._REDRAW_INTERVAL_SECONDS)
+            return False
         # `_take_drawing_screen`, not the constant. `_sessions_reply` marks, and a render that
         # passed the tag literally left that mark standing -- so the next unrelated screen the
         # owner opened consumed it, `LiveView` believed a help screen was the list, and the
         # following store change overwrote what they were reading. One producer, one consumer,
         # including here.
         await self.view.render(
-            speaker, _reply_arguments(rendered), screen=self._take_drawing_screen()
+            speaker, _reply_arguments(rendered), screen=self._SESSIONS_SCREEN
         )
         return True
 
-    async def _sessions_reply(self, page: int = 1, *, notice: str | None = None) -> RenderedMessage:
+    async def _sessions_reply(
+        self, page: int = 1, *, notice: str | None = None, mark: bool = True
+    ) -> RenderedMessage:
         """Render one page of managed sessions: grouped, two lines a row, a picker per row.
 
         This list is unbounded in a way the project list is not — every launch adds a row
@@ -1871,7 +1934,12 @@ class PrivateBotBoundary:
         # return it missed the "Nothing is running." screen entirely -- so the one page an
         # owner is most likely to have open when they launch was the one page a store change
         # could never redraw, which is the 0 -> 1 transition this whole mechanism is for.
-        self._drawing_screen = self._SESSIONS_SCREEN
+        #
+        # `mark=False` is for the caller that already knows what it built and renders it
+        # itself. The mark is shared state read after an await, so a caller that does not need
+        # one must not leave one where a concurrent render can take it.
+        if mark:
+            self._drawing_screen = self._SESSIONS_SCREEN
         if not records:
             self._sessions_page = 1
             # No body Launch. It was the way out before a permanent way out existed; the
@@ -1946,7 +2014,16 @@ class PrivateBotBoundary:
         `except` is `_usage_lines`'s trade: the gauge is a decoration on a list whose real
         content is the way into each session, and a provider that changed its file format must
         not cost the owner the list. Reads are not cached here; a page holds at most eight rows
-        and the bot draws this screen on a press, never on a timer.
+        and the bot drew this screen on a press and never on a timer.
+
+        **The second half of that sentence stopped being true on 2026-09-12** and is kept
+        because it is the premise the no-caching decision rested on. This page is now redrawn
+        when the *store* changes, so these reads are paid per write rather than per press.
+        What bounds them is not a timer either: `_REDRAW_INTERVAL_SECONDS` floors edits at one
+        per two seconds, which caps this at four provider reads a second on a page of eight
+        during a burst of launches, and at nothing at all when the store is quiet. Judged
+        worth it rather than overlooked -- but a cache belongs here the day that floor is
+        lowered or the page grows.
         """
         if self.backend.usage is None or record.state is not SessionState.RUNNING:
             return None

@@ -10,6 +10,14 @@ store handle for one operation, and watching is not one -- the obvious alternati
 which is exactly the lease that decision refuses. `stat` on two paths costs no connection, no
 lock, and nothing the writer can contend with.
 
+**Which file actually carries the signal, corrected.** This module first argued that a commit
+lands in `-wal` and may leave the database untouched for a long time. That is true of SQLite
+in WAL mode and this project does not use it: nothing in `src/` sets `journal_mode`, the live
+store reports `delete`, and no `-wal` has ever existed beside it. Every change is a write to
+the database file, which is what the fingerprints below actually see. `watched_paths` still
+names the `-wal` so the watcher stays correct if the mode is ever changed; today it is a
+permanently absent path costing one `stat`.
+
 What it publishes is deliberately thin. `StoreChanged` carries a time and nothing else,
 because file metadata genuinely cannot say *what* changed: a record naming a session id would
 be inventing one. Every subscriber re-reads, which is what they would have done on their timer
@@ -123,6 +131,11 @@ class StoreWatch:
         try:
             loop = asyncio.get_running_loop()
         except RuntimeError:
+            # Logged rather than passed over in silence. A watcher that never started looks
+            # exactly like one that works -- the surfaces just fall back to their interval,
+            # which this stage lengthened from ten seconds to sixty, so the degraded path is
+            # now *six times worse* than the behaviour it replaced. Something has to say so.
+            _LOG.debug("no running loop at subscribe; the store watch will start on the next")
             return
         self._running = True
         self._task = loop.create_task(self.run())

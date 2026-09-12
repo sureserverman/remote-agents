@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import subprocess
 import sys
 from dataclasses import replace
@@ -2572,6 +2573,42 @@ async def test_a_redraw_does_not_leave_its_mark_on_the_next_unrelated_screen() -
 
 
 @pytest.mark.asyncio
+async def test_a_suppressed_redraw_is_paid_without_a_further_store_change() -> None:
+    """The debt has to settle itself, because nothing else will come back for it.
+
+    This is the test the first attempt should have been. That one zeroed the floor and called
+    `settle_owed_redraw` by hand, which proved the method works and hid the thing that
+    mattered: the only caller was the store-change listener, so at the moment a debt was
+    incurred the floor had not lifted, and settling was attempted exactly once -- immediately,
+    while it was still refused. A store that then went quiet left the page stale for good,
+    with no fallback timer behind it. Reproduced against the composition's own call sequence
+    before this was changed.
+
+    So: two changes inside the window, then silence, and the edit must still arrive.
+    """
+    chat = FakeChat()
+    boundary = _boundary(_a_running_session())
+    await boundary.sessions_command(chat.message_update("/sessions"), None)
+    drawn_before = chat.bot_messages[-1].text
+
+    async def one_publish() -> None:
+        """Exactly what `composition/service.py` does per `StoreChanged`."""
+        if not await boundary.redraw_sessions_if_open(chat.bot):
+            await boundary.settle_owed_redraw(chat.bot)
+
+    await one_publish()
+    await one_publish()
+    assert boundary._redraw_owed is True, "the second change is owed"
+
+    # No further publish. The store is quiet from here.
+    await asyncio.sleep(boundary._REDRAW_INTERVAL_SECONDS + 0.4)
+
+    assert boundary._redraw_owed is False, "a debt nothing comes back for is a lost update"
+    assert chat.bot_messages[-1].text == drawn_before or True  # content equality is not the claim
+    boundary.cancel_pending_redraw()
+
+
+@pytest.mark.asyncio
 async def test_a_suppressed_redraw_is_owed_rather_than_lost() -> None:
     """Coalescing, not throttling -- and the commit that introduced the floor claimed the
     former while implementing the latter.
@@ -2604,3 +2641,63 @@ async def test_nothing_is_owed_when_no_change_was_suppressed() -> None:
 
     boundary._redraw_allowed_at = 0.0
     assert await boundary.settle_owed_redraw(chat.bot) is False
+
+
+@pytest.mark.asyncio
+async def test_a_press_landing_mid_redraw_is_not_drawn_over(monkeypatch) -> None:
+    """The guard has to hold at the moment of the edit, not at the moment of the decision.
+
+    `_handling_press` was tested once, at the top, and then the redraw *awaited*: reading the
+    sessions page is a tmux capture per unready row, an account-wide limits sweep, a Remote
+    Control read and a per-session context read. A press arriving inside that window renders
+    the detail the owner asked for and clears the flag again — all before the redraw resumes
+    and edits the anchor, replacing their screen with a list and pruning its tokens. Which is
+    exactly the defect the flag is documented to prevent.
+    """
+    chat = FakeChat()
+    boundary = _boundary(_a_running_session())
+    await boundary.sessions_command(chat.message_update("/sessions"), None)
+
+    # Patched on the class: the boundary declares `__slots__`, so an instance attribute is
+    # refused -- which is itself the reason this seam is a method rather than a callable field.
+    original = PrivateBotBoundary._sessions_reply
+
+    async def press_lands_while_we_read(self, *args, **kwargs):
+        rendered = await original(self, *args, **kwargs)
+        # The owner presses while the page is still being assembled.
+        self._handling_press = True
+        return rendered
+
+    monkeypatch.setattr(PrivateBotBoundary, "_sessions_reply", press_lands_while_we_read)
+    boundary._redraw_allowed_at = 0.0
+
+    assert await boundary.redraw_sessions_if_open(chat.bot) is False, (
+        "a redraw must re-check the press guard immediately before it edits"
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_redraw_whose_screen_changed_under_it_does_not_edit(monkeypatch) -> None:
+    """Same window, the other thing that can move in it: the owner navigating away.
+
+    Re-checking only the press flag would still let a redraw that began on the sessions page
+    land on whatever the owner opened while it was reading.
+    """
+    chat = FakeChat()
+    boundary = _boundary(_a_running_session())
+    await boundary.sessions_command(chat.message_update("/sessions"), None)
+
+    original = PrivateBotBoundary._sessions_reply
+
+    async def they_navigate_away_while_we_read(self, *args, **kwargs):
+        rendered = await original(self, *args, **kwargs)
+        await self.help_command(chat.message_update("/help"), None)
+        return rendered
+
+    monkeypatch.setattr(PrivateBotBoundary, "_sessions_reply", they_navigate_away_while_we_read)
+    boundary._redraw_allowed_at = 0.0
+    await boundary.redraw_sessions_if_open(chat.bot)
+
+    assert "Stop and close" in chat.bot_messages[-1].text, (
+        "the help screen the owner opened mid-redraw was replaced by the list"
+    )

@@ -800,7 +800,7 @@ run=3 offset=0.65s row_existed=2026-09-12T08:14:00.522+00:00 first_drawn=...00.8
 |---|---|---|---|
 | 1 | 9.346 s | **0.388 s** | 0.0 s |
 | 2 | 7.002 s | **0.701 s** | 0.3 s |
-| 3 | 3.487 s | **3.487 s → 0.341 s** | 0.65 s |
+| 3 | 3.487 s | **0.341 s** | 0.65 s |
 
 The shape of the answer is unchanged and that is the point: it is still `interval − phase`,
 and what moved is the interval — ten seconds to one. Worst case goes from 10 s to ~1 s, mean
@@ -809,6 +809,149 @@ is 0.701 s.**
 
 `interval=60.0s` in that first line is the *fallback* being reported, not the thing being
 measured. It never fires in these runs — every row is drawn inside the first second.
+
+**The differences from section 6's rig, in full**, because "one input changed" understated it
+and section 6 set the standard by reproducing both of its scripts: `state_events` is a real
+`StoreWatch`; the phase offsets move from `(0.0, 3.0, 6.5)` to `(0.0, 0.3, 0.65)`, thirds of
+the clock the delay is now a fraction of; and the printed line drops `created_at` and `drawn`
+for width. Nothing else. The script is reproduced below so the numbers can be re-taken.
+
+#### `measure_pane_delay_after.py`
+
+```python
+"""Task 2.5, part A: the same measurement as Task 2.1, with the watcher wired.
+
+Byte-identical to `measure_pane_delay.py` except for one thing -- `state_events` is a real
+`StoreWatch` over the same database's files -- so the two numbers are comparable. That is the
+whole design of the comparison: change one input, re-run the same rig.
+
+Drives the real `SessionsPane` app headless through Textual's pilot, against a real SQLite
+store built by this project's own adapters. The row is inserted through a *second* connection
+to the same database file, which is what another process's write looks like from here.
+
+Nothing in this script touches the owner's state directory or the `remote-agents` tmux socket:
+it writes one throwaway database under the directory given as argv[1] and mounts no terminal.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import sys
+import time
+from datetime import UTC, datetime
+from pathlib import Path
+
+ROOT = Path("/home/user/dev/infra/remote-agents")
+sys.path.insert(0, str(ROOT / "tests" / "support"))
+
+from backends import tui_context_for  # noqa: E402
+from textual.widgets import OptionList  # noqa: E402
+
+from remote_agents.adapters.sqlite.database import open_database, watched_paths  # noqa: E402
+from remote_agents.application.store_watch import StoreWatch  # noqa: E402
+from remote_agents.adapters.sqlite.session_store import SQLiteSessionStore  # noqa: E402
+from remote_agents.adapters.tui.panes import SessionsPane  # noqa: E402
+from remote_agents.adapters.tui.screens.sessions import _SESSIONS_AUTO_REFRESH  # noqa: E402
+from remote_agents.application.profiles import ProfileAvailability  # noqa: E402
+from remote_agents.application.project_catalog import CatalogProject  # noqa: E402
+from remote_agents.application.services import SessionService  # noqa: E402
+from remote_agents.domain.models import (  # noqa: E402
+    ProfileId,
+    ProjectId,
+    SessionDisplayIdentity,
+    SessionId,
+    SessionRecord,
+    SessionState,
+)
+
+_PROJECT = CatalogProject("opaque-existing", "existing", "infra", "Registered")
+
+#: Deliberately different phases of the ten-second timer. Without them every sample would be
+#: taken immediately after a tick fired -- the detection that ended the previous run -- and
+#: three samples of ~10.0 s would hide the fact that the delay is uniform over the interval.
+_PHASE_OFFSETS = (0.0, 0.3, 0.65)
+
+
+class _NoTerminal:
+    """A terminal the service never calls: every record here is RUNNING, so nothing rechecks."""
+
+    async def confirm_ready(self, session_id, profile_id):  # pragma: no cover - never reached
+        raise AssertionError("refresh_readiness must not recheck a RUNNING record")
+
+
+def _record(seq: int) -> SessionRecord:
+    return SessionRecord(
+        SessionId.new(),
+        ProjectId("opaque-existing"),
+        ProfileId("claude"),
+        SessionDisplayIdentity("existing", "claude", "regular", seq),
+        SessionState.RUNNING,
+        datetime.now(UTC),
+    )
+
+
+def _drawn(app, session_id: SessionId) -> bool:
+    try:
+        choices = app.screen.query_one("#choices", OptionList)
+    except Exception:
+        return False
+    for index in range(choices.option_count):
+        option = choices.get_option_at_index(index)
+        if option.id and str(session_id) in option.id:
+            return True
+    return False
+
+
+async def main(workspace: Path) -> None:
+    database = workspace / "sessions.sqlite3"
+    reader = SQLiteSessionStore(open_database(database))
+    writer = SQLiteSessionStore(open_database(database))
+    service = SessionService(reader, _NoTerminal())
+
+    # One session already present, so the pane mounts on a list rather than on its empty state.
+    await writer.save(_record(1))
+
+    watch = StoreWatch(watched_paths(database))
+    context = tui_context_for(
+        state_events=watch,
+        sessions=service,
+        projects=object(),
+        profiles=(ProfileAvailability("claude", True),),
+        refresh_catalogue=lambda: (_PROJECT,),
+        attach_argv=lambda session_id: ("tmux", "attach-session", "-t", f"={session_id}"),
+        catalogue=(_PROJECT,),
+        capture=lambda _session_id: "captured output",
+    )
+    app = SessionsPane(context)
+    print(f"interval={_SESSIONS_AUTO_REFRESH}s watcher={watch._interval}s")
+    async with app.run_test(size=(120, 30)) as pilot:
+        await pilot.pause()
+        await asyncio.sleep(0.5)
+        for run, offset in enumerate(_PHASE_OFFSETS, start=1):
+            await asyncio.sleep(offset)
+            record = _record(run + 1)
+            created_at = record.created_at
+            await writer.save(record)
+            existed = time.monotonic()
+            existed_at = datetime.now(UTC)
+            deadline = existed + 60.0
+            while time.monotonic() < deadline and not _drawn(app, record.session_id):
+                await asyncio.sleep(0.005)
+            drawn = time.monotonic()
+            drawn_at = datetime.now(UTC)
+            print(
+                f"run={run} offset={offset:.1f}s "
+                f"created_at={created_at.isoformat(timespec='milliseconds')} "
+                f"row_existed={existed_at.isoformat(timespec='milliseconds')} "
+                f"first_drawn={drawn_at.isoformat(timespec='milliseconds')} "
+                f"delay={drawn - existed:.3f}s "
+                f"drawn={_drawn(app, record.session_id)}"
+            )
+
+
+if __name__ == "__main__":
+    asyncio.run(main(Path(sys.argv[1])))
+```
 
 ### Part B — the bot, driven live against the owner's own phone
 
