@@ -261,7 +261,9 @@ terminal's already was.
 
 ### Carried forward, not fixed here
 
-Two findings are real, pre-date this plan, and need a design decision rather than a patch:
+Two findings are real, pre-date this plan, and need a design decision rather than a patch.
+Filed as **BL-055** and **BL-056**; both re-reviews at the gate agreed they belong in the
+backlog rather than in this stage:
 
 - **Nothing proves a pane is at an idle prompt before *any* send.** `remote_control`'s own
   docstring says "one idle exact managed pane", but the preconditions are only *live* and
