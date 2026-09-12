@@ -16,6 +16,7 @@ from remote_agents.application.commands import (
 )
 from remote_agents.application.errors import DuplicateCommandError
 from remote_agents.application.services import SessionService
+from remote_agents.domain.conversations import ProviderConversationId
 from remote_agents.domain.models import ProfileId, ProjectId, SessionId, SessionRecord, SessionState
 from remote_agents.domain.remote_control import RemoteControlDefault
 from remote_agents.domain.state_machine import LifecycleEvent, transition
@@ -890,3 +891,45 @@ async def test_a_composition_that_wires_no_stored_default_launches_unconnected()
 
     assert terminal.remote_control_asks == [(ProfileId("claude"), False)]
     assert outcome.remote_control is False
+
+
+async def test_the_shipped_fake_records_the_flag_the_application_asked_it_for() -> None:
+    """The fake that ships in the wheel, driven through the real service.
+
+    `FakeTerminal.launched_remote_control` is the only record any fake-backed test has of
+    what the launch-time read decided, and it was written by every launch and asserted by
+    nothing until the Stage 4 gate's evaluator said so. Asserted here rather than only
+    through this module's own local double, because the two prove different things: the
+    local double proves the service reads the port, and this proves the *shipped* fake
+    reports it — which is what a future fake-backed e2e will rely on.
+
+    The resume arm is the half that was actually broken. `FakeTerminal.resume` delegates to
+    `launch` for its observation, so an unconditional record filed every resume as a launch
+    that asked for nothing: an assertion of `[(claude, True)]` would have failed for a
+    reason unrelated to launching, and one of `[(claude, False)]` could have passed on an
+    entry no launch produced.
+    """
+    terminal = OwnershipAwareTerminal()
+    service = SessionService(
+        FakeStore(),
+        terminal,
+        remote_control_defaults={ProfileId("claude"): _StoredDefault(RemoteControlDefault.ON)},
+    )
+
+    await service.launch(
+        LaunchCommand(ProjectId("opaque-editor"), ProfileId("claude"), "shipped-on")
+    )
+    await service.launch(
+        LaunchCommand(ProjectId("opaque-editor"), ProfileId("codex"), "shipped-codex")
+    )
+    await terminal.resume(
+        SessionId.new(),
+        ProjectId("opaque-editor"),
+        ProfileId("claude"),
+        ProviderConversationId("conv-1"),
+    )
+
+    assert terminal.launched_remote_control == [
+        (ProfileId("claude"), True),
+        (ProfileId("codex"), False),
+    ], "the shipped fake must report one entry per launch, in order, and none for a resume"

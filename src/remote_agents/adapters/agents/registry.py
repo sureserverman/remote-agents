@@ -228,10 +228,13 @@ def provider_descriptors(
 def glyph_of(profile_id: ProfileId) -> str:
     """The mark a surface draws for one *profile*, or nothing at all.
 
-    Profiles and providers are not the same set: five curated spellings, four verticals.
-    `claude-remote` is `claude --remote-control` — the same binary under a second curated
-    name (`domain/profiles.py`) — so it must draw claude's mark, and this is the same
-    resolution `ProfileUsageReaders` performs when it files both spellings under one reader.
+    Profiles and providers need not be the same set — four curated spellings and four
+    verticals today, and the resolution below does not assume they match. `claude-remote` was
+    the fifth: `claude --remote-control` under a second curated id, which had to draw claude's
+    mark. Retired in 0.41.0, it is an id no vertical declares, so it draws nothing — which is
+    what `test_glyph_of_draws_nothing_for_the_retired_second_spelling_of_claude` pins. The
+    resolution stays as it was, because it is what a *future* second spelling would travel
+    through, and because a table of aliases kept here is the thing it exists to avoid.
 
     **Resolved through the executable the domain already curates, not through an alias table
     kept here.** A table would work today and would be a registry edit every time a vertical
@@ -259,11 +262,12 @@ def trust_dialog_of(profile_id: ProfileId) -> TrustDialog | None:
     """How this *profile*'s agent asks about folder trust, or None when it never asks.
 
     `glyph_of`'s resolution, for the other provider-discriminating value, and resolved the same
-    way for the same reason: `claude-remote` is `claude --remote-control`, the same binary
-    drawing the same dialog, so it resolves through the executable the domain already curates
-    rather than through an alias table kept here. A fifth provider that declares a dialog — and
-    any `-remote`-style spelling of it curated in `domain/profiles.py` — becomes answerable
-    without an edit anywhere but its own package (DEC-070).
+    way for the same reason: it goes through the executable the domain curates rather than
+    through an alias table kept here. `claude-remote` was the case that demanded it — the same
+    binary drawing the same dialog under a second curated id — and it is retired in 0.41.0, so
+    this now answers `None` for it like any id no vertical declares. A fifth provider that
+    declares a dialog, and any `-remote`-style spelling of it someone curates later, becomes
+    answerable without an edit anywhere but its own package (DEC-070).
 
     `None` is an answer, not a gap (DEC-009): `opencode` raises no folder-trust dialog on any
     host measured, and this is the value that keeps a Trust button off its sessions. Total, and
@@ -324,9 +328,10 @@ def profile_glyphs(descriptors: tuple[ProviderDescriptor, ...] | None = None) ->
     It exists as a named function rather than a comprehension at the composition site so
     that what a surface is handed and what a test asserts about are the same expression —
     a second copy of the fold would agree with this one on the day it was written and
-    answer to nothing afterwards. It folds over the *profiles*, not the descriptors: there
-    are five of the first and four of the second, and the fold that forgets that is one
-    where `claude-remote` silently loses its mark.
+    answer to nothing afterwards. It folds over the *profiles*, not the descriptors, and the
+    two counts are free to differ — they were five and four until `claude-remote` was retired
+    in 0.41.0, and a fold that assumes they match is one where the next second spelling
+    silently loses its mark.
     """
     # Folded from one build of the descriptors rather than one per profile: a descriptor
     # constructs its vertical's collaborators, so `glyph_of` per profile built all four of them

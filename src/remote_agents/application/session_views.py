@@ -584,19 +584,22 @@ def limit_rows(
     is in a position to make.
     """
     # Keyed by profile, which makes "one reading per profile" the contract where it used to be
-    # "one row per reading". Every registered reader files under a distinct `limits_profile` --
-    # that is exactly what the claude/claude-remote fold in `ProfileUsageReaders` guarantees --
-    # so nothing collides today. A future reader that forgot to give itself a distinct one
-    # would silently lose a row here rather than drawing a duplicate line, which is the trade.
+    # "one row per reading". Every registered reader files under a distinct `limits_profile`, so
+    # nothing collides today -- guaranteed by each reader naming the one profile its answer is
+    # labelled with rather than by the set of profiles it serves. (Until 0.41.0 that mattered
+    # most for `claude`/`claude-remote`, one account under two curated ids, which is the case
+    # `limits_profile` was introduced for.) A future reader that forgot to give itself a
+    # distinct one would silently lose a row here rather than drawing a duplicate line, which
+    # is the trade.
     entries = {str(entry.profile_id): entry for entry in limits}
     if profiles:
         # **One row per provider that publishes rate limits at all**, in the profile set's
         # order. Narrowed here on 2026-09-09, from a row per curated profile, at the owner's
         # instruction: two of the four providers publish no limits ever and say so with
-        # `NOT_REPORTED`, and `claude-remote` has no reading of its own because it is the same
-        # account as `claude`. Both produced a permanent line of screen saying nothing would
-        # ever appear there -- and in `claude-remote`'s case saying it in the words that mean
-        # *this may resolve*.
+        # `NOT_REPORTED`, and `claude-remote` -- retired in 0.41.0 -- had no reading of its own,
+        # being the same account as `claude`. Both produced a permanent line of screen saying
+        # nothing would ever appear there, and in `claude-remote`'s case saying it in the words
+        # that mean *this may resolve*.
         #
         # A rule rather than a pair, so nothing has to be re-decided: a provider that starts
         # publishing limits gets a row the day it does, and one that never will has none.

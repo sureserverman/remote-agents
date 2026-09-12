@@ -32,9 +32,10 @@ def descriptor(
     return ProviderDescriptor(
         ProfileId("claude"),
         # An eight-spoked asterisk: a star shape, so it cannot be read as a fifth state
-        # circle beside 🟢🟡🔴⚪. Shared by `claude-remote`, which is the same agent under a
-        # flag -- the registry resolves that spelling here rather than the vertical
-        # declaring a second descriptor for one provider.
+        # circle beside 🟢🟡🔴⚪. It was shared by `claude-remote` until 0.41.0 retired that
+        # spelling -- the registry resolved it through this descriptor rather than the
+        # vertical declaring a second one for a single provider, which is still how a future
+        # second spelling would reach a mark.
         glyph="✳️",
         sessions=_sessions,
         usage=ClaudeUsageReader(

@@ -15,9 +15,12 @@ class ProfileError(ValueError):
 #: it may be launched with instead -- `None` for an agent that has none.
 #:
 #: **Three columns rather than a second table**, because the third is curated on exactly the
-#: same authority as the first two: it is an argv this project executes, and DEC-002 puts
-#: every such argv in one reviewed place. A separate mapping would be a second place to
-#: remember, which is the shape `TmuxTerminal._trust_dialogs` records having gone wrong.
+#: same authority as the first two: it is an argv this project executes, and DEC-070 makes
+#: this table's `__post_init__` validation "the guarantee that no launch argv is assembled
+#: outside curated, reviewed data" -- a guarantee a second mapping would have to be given its
+#: own copy of. That would be a second place to remember, which is the shape
+#: `TmuxTerminal._trust_dialogs` records having gone wrong. (DEC-002 is cited nearby for a
+#: different rule: an installed version is diagnosis, never a launch gate.)
 #:
 #: Only `claude` carries a variant. `{managed_name}` is substituted per session by
 #: `adapters/tmux/profiles.build_launch_profile`, and is the only substitution any argv here

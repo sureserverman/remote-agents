@@ -6,11 +6,13 @@ same-named test modules in that arrangement -- it fails *collection of the whole
 the collision is invisible to every narrower run. The repo's other three colliding basenames
 are legal because one side of each pair sits under an `__init__.py`.
 
-`glyph_of` exists because the curated profile set and the descriptor set are not the same
-size: five profiles, four providers. `claude-remote` is `claude --remote-control` -- the
-same binary, curated under a second spelling (`domain/profiles.py`) -- so it must draw the
-same mark, and the registry is where that is resolved, exactly as `ProfileUsageReaders`
-resolves both spellings to one usage reader.
+`glyph_of` exists because the curated profile set and the descriptor set need not be the
+same size. They were five profiles to four providers until 0.41.0: `claude-remote` was
+`claude --remote-control` under a second curated spelling, so it had to draw the same mark,
+and the registry is where that was resolved -- through the executable the domain curates
+rather than an alias table. The id is retired and now draws nothing, but the resolution is
+what a future second spelling would travel through, so it is still what these tests are
+about.
 """
 
 from __future__ import annotations
@@ -21,7 +23,11 @@ from remote_agents.domain.profiles import closed_profiles
 
 
 def test_glyph_of_answers_every_curated_profile() -> None:
-    """All five spellings, not just the four with a descriptor of their own."""
+    """Every curated spelling, not only those with a descriptor of their own.
+
+    Derived from `closed_profiles()` rather than counted, which is why it kept passing across
+    the retirement: the count was five and is four, and the property is the same either way.
+    """
     for profile in closed_profiles():
         assert glyph_of(profile.profile_id), (
             f"{profile.profile_id} draws no mark, so a session of it is indistinguishable "

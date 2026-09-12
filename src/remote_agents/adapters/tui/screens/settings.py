@@ -11,14 +11,16 @@ provider (its rows truncate at 28 columns on an 80-column terminal, measured). S
 here as two rows of one kind, which is the shape the premise check established they are
 (`docs/acceptance-2026-09-11-surface-refresh.md` section 8, plan Stage 3).
 
-**One exception to "every `claude` session", and it is a real one until Stage 4 lands.** The
-`claude-remote` profile is `claude --remote-control {managed_name}`, and that flag forces Remote
-Control on *over* a settings file saying `false` -- measured, section 8 arm G. So a launch on that
-profile comes up connected whatever this row says, which is the one direction of wrongness that
-matters: the row reads *off* while the pane is on. The profile is retired in Stage 4 (Task 4.4) and
-the launch argv then reads this row (Task 4.2); until both land, this row's claim is about `claude`
-launches and hand-started sessions rather than about every session on the host. Found by the
-Stage 3 gate's evaluator, which was right that the docstring overstated its reach.
+**The exception this row used to carry is gone as of 0.41.0.** While the `claude-remote` profile
+existed it was `claude --remote-control {managed_name}`, and that flag forces Remote Control on
+*over* a settings file saying `false` -- measured, section 8 arm G -- so a launch on that profile
+came up connected whatever this row said. That is the one direction of wrongness that matters: the
+row reads *off* while the pane is on. Stage 4 closed it from both ends. The profile is retired
+(Task 4.4), and a `claude` launch now reads this row and carries the flag only on an explicit *on*
+(Task 4.2), so no launch this project makes can contradict it. The row's claim is every `claude`
+session on the host, including one started by hand at the keyboard, because the value it shows is
+the one Claude itself resolves at startup. The narrower claim was found by the Stage 3 gate's
+evaluator, which was right about the code as it stood then.
 
 **Every word on both rows is the application's.** `REMOTE_CONTROL_DEFAULT_TITLE` and
 `REMOTE_CONTROL_DEFAULT_LABELS` spell the Claude row, `HOST_REMOTE_CONTROL_TITLE` and

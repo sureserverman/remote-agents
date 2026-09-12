@@ -41,6 +41,7 @@ class FakeTerminal:
         profile_id: ProfileId,
         *,
         remote_control: bool = False,
+        record_launch: bool = True,
     ) -> TerminalObservation:
         """Create a live fake session without running a process.
 
@@ -53,8 +54,16 @@ class FakeTerminal:
         a flag, so the only thing a test can check is what the application asked for -- and
         a fake that accepted the argument and dropped it would leave every assertion about
         the launch-time read passing against a caller that never made it.
+
+        **`record_launch` is what separates a launch from a resume.** `resume` delegates to
+        this method for the observation, and it passes False for a flag it was never given --
+        so recording unconditionally here would file every resume as a launch that asked for
+        nothing. A test asserting `[(claude, True)]` would then fail for a reason that has
+        nothing to do with launching, and one asserting `[(claude, False)]` could pass on an
+        entry a resume supplied. Found by the Stage 4 gate's evaluator.
         """
-        self.launched_remote_control.append((profile_id, remote_control))
+        if record_launch:
+            self.launched_remote_control.append((profile_id, remote_control))
         observation = TerminalObservation(
             session_id,
             live=True,
@@ -80,7 +89,10 @@ class FakeTerminal:
     ) -> TerminalObservation:
         """Model a trusted provider selection without accepting Telegram arguments."""
         del source_id
-        return await self.launch(session_id, project_id, profile_id)
+        # Not recorded as a launch: a resume carries no remote-control flag, and filing it
+        # under `launched_remote_control` would answer a question about launches with an
+        # event that is not one.
+        return await self.launch(session_id, project_id, profile_id, record_launch=False)
 
     async def inspect(self, session_id: SessionId) -> TerminalObservation | None:
         """Return the current fake terminal observation, if it remains managed."""

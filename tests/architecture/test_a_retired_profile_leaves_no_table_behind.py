@@ -98,9 +98,6 @@ def _code_strings(tree: ast.Module) -> list[tuple[int, str]]:
         # `body` is a *list* of statements on a module, class, function or `if`, and a single
         # expression on a `lambda` or a conditional expression. Only the first kind can hold a
         # docstring, and iterating the second raises -- which it did, on the first run.
-        # `body` is a *list* of statements on a module, class, function or `if`, and a single
-        # expression on a `lambda` or a conditional expression. Only the first kind can hold a
-        # docstring, and iterating the second raises -- which it did, on the first run.
         body = getattr(node, "body", None)
         if not isinstance(body, list):
             continue
