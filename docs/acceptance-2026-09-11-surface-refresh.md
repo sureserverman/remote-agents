@@ -1708,3 +1708,55 @@ The stronger half of the same claims is machine-verified elsewhere and does not 
 report: §8 measures the flag overriding the settings file on a real pane, §9 measures one file
 driven through two independently built ports with `~/.claude/settings.json` byte-identical
 before and after, and §11 C proves the live sessions' reachability with the deployed code.
+
+## Section 12 — The clause Stage 3 could not close: both surfaces agree, with no restart
+
+Stage 3's gate carried one `[~]` item forward, and its third clause was the part §11 F's
+report did not cover: *"open the TUI Settings screen without restarting either surface: both
+rows agree with the bot."* Driven here on 2026-09-12, on the deployed 0.41.0, against the
+owner's own `~/.claude/settings.json`.
+
+A real dashboard was run in a throwaway tmux server (`-L ra-settings-drill`, torn down
+afterwards) and reached by the key the console budget does not pay for — `,` on the dashboard
+(BL-057: Settings has no console pane, only the standalone dashboard). The **live service was
+not touched**; it stayed `active` throughout.
+
+### A. The bot's write, read by an already-open TUI
+
+| Step | Claude's own file | The open TUI screen reads |
+|---|---|---|
+| Start: what the owner's phone presses left | `remoteControlAtStartup: false` | `Claude Remote Control · off` |
+| `port.write(ON)` from a separate process — what the bot's row does | `true` | (screen not yet re-entered) |
+| Same TUI process, leave Settings and re-enter — **no restart** | `true` | `Claude Remote Control · on` |
+
+That is the clause. The value the *other* surface wrote is what this one shows, in a process
+that was already running before the write happened. The row is re-read on entering the screen;
+it does **not** update while the screen merely sits open, which is the unbounded-staleness
+Minor Stage 3 recorded and did not fix — so "open the screen" in the clause is load-bearing
+rather than incidental.
+
+### B. The TUI's own write, into the file the provider reads
+
+Pressing Enter on the Claude row, three times, through the whole cycle:
+
+| Press | Status line | Row | `remoteControlAtStartup` in `~/.claude/settings.json` |
+|---|---|---|---|
+| from *on* | `Claude Remote Control is now off.` | `· off` | `false` |
+| again | `Claude Remote Control is now Claude's default.` | `· Claude's default` | **key absent** |
+| ×2 more | `Claude Remote Control is now off.` | `· off` | `false` (restored) |
+
+Two things this settles that no test could:
+
+- **`PROVIDER_DEFAULT` removes the key rather than writing a third value** — DEC-085's central
+  claim, on the owner's real file. The key is gone, not set to `null` or `"default"`.
+- **The other 15 keys survived every write.** The file carries `hooks`, `permissions`,
+  `statusLine`, `model` and eleven more; the count was 15 non-target keys before, during and
+  after, so the atomic detected-style rewrite preserved a file this project does not own.
+
+The value was returned to `false`, where the owner's own presses had left it.
+
+### C. What is still not verified, and will not be by this drill
+
+The Codex row read `on` throughout and its reading is the shipped `HostRemoteControlService`'s,
+not this stage's work. The daemon-restart survival of that reading (§11 E step 5) rests on the
+owner's report alone.

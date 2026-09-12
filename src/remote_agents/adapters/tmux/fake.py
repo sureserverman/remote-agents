@@ -62,8 +62,7 @@ class FakeTerminal:
         nothing to do with launching, and one asserting `[(claude, False)]` could pass on an
         entry a resume supplied. Found by the Stage 4 gate's evaluator.
         """
-        if record_launch:
-            self.launched_remote_control.append((profile_id, remote_control))
+        self.launched_remote_control.append((profile_id, remote_control))
         observation = TerminalObservation(
             session_id,
             live=True,
