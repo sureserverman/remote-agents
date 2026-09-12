@@ -229,7 +229,7 @@ async def test_every_handler_the_owner_can_reach_is_registered(
     await run_private_bot(SECRETS, _boundary(harness.log))
 
     handlers = harness.application.handlers
-    assert len(handlers) == 8, f"expected 8 handlers, found {len(handlers)}"
+    assert len(handlers) == 9, f"expected 9 handlers, found {len(handlers)}"
 
     commands = {
         next(iter(handler.commands)): handler.callback
@@ -239,7 +239,15 @@ async def test_every_handler_the_owner_can_reach_is_registered(
     # `/remote` is registered on every host and *listed* only where the capability is wired
     # (`owner_commands`), so an owner who types it on a bare host gets the sentence rather
     # than silence.
-    assert set(commands) == {"start", "launch", "resume", "sessions", "help", "remote"}
+    assert set(commands) == {
+        "start",
+        "launch",
+        "resume",
+        "sessions",
+        "settings",
+        "help",
+        "remote",
+    }
 
     callbacks = [h for h in handlers if isinstance(h, CallbackQueryHandler)]
     messages = [h for h in handlers if isinstance(h, MessageHandler)]
@@ -271,6 +279,7 @@ async def test_each_command_routes_to_its_own_boundary_method(
         "sessions": boundary.sessions_command,
         "help": boundary.help_command,
         "remote": boundary.remote_command,
+        "settings": boundary.settings_command,
     }
 
     callback = next(h for h in harness.application.handlers if isinstance(h, CallbackQueryHandler))
@@ -386,6 +395,7 @@ async def test_the_published_menu_is_the_one_this_composition_can_actually_serve
         "launch",
         "resume",
         "sessions",
+        "settings",
         "help",
         "remote",
     ]
@@ -459,6 +469,6 @@ async def test_the_default_boundary_is_a_wired_one(monkeypatch: pytest.MonkeyPat
 
     await run_private_bot(SECRETS)
 
-    assert harness.log.count("add_handler") == 8, "the default path wired no handlers"
+    assert harness.log.count("add_handler") == 9, "the default path wired no handlers"
     assert harness.log[-1] == "shutdown", "the default path did not complete"
     assert "initialize" in harness.log

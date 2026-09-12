@@ -744,6 +744,7 @@ def test_owner_commands_mirror_the_navigation_bar() -> None:
         "launch",
         "resume",
         "sessions",
+        "settings",
         "help",
     ]
 

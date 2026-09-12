@@ -117,6 +117,7 @@ def test_fake_journey_contract_covers_commands_recovery_and_oversized_inspection
         "launch",
         "resume",
         "sessions",
+        "settings",
         "help",
     )
     # Not "expired" — tokens have no clock (DEC-011). A token this store never minted is
