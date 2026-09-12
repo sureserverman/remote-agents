@@ -71,9 +71,18 @@ class FakeClaudeDefault:
     shape, and it records its calls in order so a test can tell a read from a write.
     """
 
-    def __init__(self, value: RemoteControlDefault = RemoteControlDefault.PROVIDER_DEFAULT) -> None:
+    def __init__(
+        self,
+        value: RemoteControlDefault = RemoteControlDefault.PROVIDER_DEFAULT,
+        *,
+        refuse: bool = False,
+    ) -> None:
         self.value = value
         self.calls: list[str] = []
+        #: Accept a write and store nothing -- what the real port does when `_detected_style`
+        #: refuses a settings file it cannot reproduce byte-for-byte. The contract forbids
+        #: raising, so a refusal is invisible except by reading back.
+        self.refuse = refuse
 
     async def read(self) -> RemoteControlDefault:
         self.calls.append("read")
@@ -81,6 +90,8 @@ class FakeClaudeDefault:
 
     async def write(self, value: RemoteControlDefault) -> None:
         self.calls.append(f"write:{value.value}")
+        if self.refuse:
+            return
         self.value = value
 
 
@@ -379,3 +390,38 @@ async def test_the_screen_closes_with_back_to_sessions_above_the_navigation_bar(
     assert rows[-1] == ["Sessions", "Launch"], rows
     assert len(rows[-2]) == 1 and "Back to sessions" in rows[-2][0], rows
     assert all(len(row) == 1 for row in rows[:-1]), f"every row is one answer wide: {rows}"
+
+
+async def test_a_refused_write_says_so_rather_than_redrawing_an_unchanged_row() -> None:
+    """A port that accepts a write and stores nothing -- the real refusal, exactly.
+
+    **The bot reported nothing at all before this.** `write` cannot raise by contract, so a
+    `~/.claude/settings.json` whose formatting `_detected_style` cannot reproduce byte-for-byte is
+    refused with one `logging.warning` in the service journal. The press then redrew a row showing
+    the unchanged value, which to the owner is a button that does not work -- and the terminal's
+    half of the same row had the same hole. Found by the Stage 3 gate's adversarial review.
+
+    The keyboard must survive the refusal: a message that replaced the screen with a bare sentence
+    would leave the owner with no way back and no way to try again.
+    """
+    claude = FakeClaudeDefault(RemoteControlDefault.ON, refuse=True)
+    bot = _bot(claude, None)
+    screen = await bot._settings_screen()
+
+    result = await _press_claude(bot, screen)
+
+    refused = next_remote_control_default(RemoteControlDefault.ON)
+    assert claude.calls == ["read", "read", f"write:{refused.value}", "read"], claude.calls
+    assert claude.value is RemoteControlDefault.ON, "the fake refused, so the state is unchanged"
+    text = str(result["text"])
+    assert "could not be changed" in text, text
+    assert REMOTE_CONTROL_DEFAULT_LABELS[RemoteControlDefault.ON] in text, (
+        "the owner is told what it still is, not only that the press failed"
+    )
+    labels = [
+        unmarked(unpadded(button.text))
+        for row in result["reply_markup"].inline_keyboard
+        for button in row
+    ]
+    unchanged = REMOTE_CONTROL_DEFAULT_LABELS[RemoteControlDefault.ON]
+    assert f"{REMOTE_CONTROL_DEFAULT_TITLE}: {unchanged}" in labels

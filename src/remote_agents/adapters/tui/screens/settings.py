@@ -3,13 +3,22 @@
 **Why this is a screen of its own rather than a line on an existing pane.** The two facts it
 carries have the *machine* as their subject, not a session and not a launch. Claude resolves
 `remoteControlAtStartup` from its own settings file at every start, so the value governs every
-`claude` session on this host including ones the owner opens by hand; Codex's enrollment is a
+`claude` session on this host, including ones the owner opens by hand; Codex's enrollment is a
 persisted daemon preference that governs every `codex` one. Neither can be hung off a session
 row without claiming to be about that session, and the limits pane -- the one region that does
 describe the host -- already carries the Codex *reading* and has no room to carry an action per
 provider (its rows truncate at 28 columns on an 80-column terminal, measured). So the two sit
 here as two rows of one kind, which is the shape the premise check established they are
 (`docs/acceptance-2026-09-11-surface-refresh.md` section 8, plan Stage 3).
+
+**One exception to "every `claude` session", and it is a real one until Stage 4 lands.** The
+`claude-remote` profile is `claude --remote-control {managed_name}`, and that flag forces Remote
+Control on *over* a settings file saying `false` -- measured, section 8 arm G. So a launch on that
+profile comes up connected whatever this row says, which is the one direction of wrongness that
+matters: the row reads *off* while the pane is on. The profile is retired in Stage 4 (Task 4.4) and
+the launch argv then reads this row (Task 4.2); until both land, this row's claim is about `claude`
+launches and hand-started sessions rather than about every session on the host. Found by the
+Stage 3 gate's evaluator, which was right that the docstring overstated its reach.
 
 **Every word on both rows is the application's.** `REMOTE_CONTROL_DEFAULT_TITLE` and
 `REMOTE_CONTROL_DEFAULT_LABELS` spell the Claude row, `HOST_REMOTE_CONTROL_TITLE` and
@@ -233,8 +242,15 @@ class SettingsScreen(ChoiceScreen):
         honest thing to draw, and it is the one thing a surface drawing its own intention would
         get wrong exactly when it mattered.
 
-        The status line then names the new value in words (DEC-062), because a row that changed
-        and a row that refused look identical to someone who has just pressed a key.
+        **A refused write is reported as a refusal, and it is detected by comparing what the file
+        now says against what the press intended.** An earlier version of this docstring claimed
+        the status line solved that on its own -- *"a row that changed and a row that refused look
+        identical to someone who has just pressed a key"* -- and it did not: the line named
+        whatever the file held, so a refused advance to `on` produced *"is now on"*, which is
+        character-for-character what a successful advance to `on` produces. The port cannot raise
+        to say so (a `HookInstallError` from an unreproducible settings file is one log line by
+        contract), so the only signal available on this side is that the re-read is not the value
+        asked for. Found by the Stage 3 gate's adversarial review.
         """
         port = self.services.backend.claude_remote_control_default
         if port is None or self.tui.busy:
@@ -244,19 +260,31 @@ class SettingsScreen(ChoiceScreen):
         async with self.holding_the_guard():
             try:
                 async with self.awaiting(f"Changing {REMOTE_CONTROL_DEFAULT_TITLE}…"):
-                    await port.write(next_remote_control_default(await port.read()))
+                    intended = next_remote_control_default(await port.read())
+                    await port.write(intended)
+                    # Read back rather than drawing `intended`. The write may have been refused,
+                    # and `PROVIDER_DEFAULT` is stored as the key's *absence*, so the file is the
+                    # only thing that knows.
                     self._claude_default = await port.read()
             except Exception as error:
                 _LOG.exception("Claude's stored Remote Control default could not be changed")
-                self.announce(f"{REMOTE_CONTROL_DEFAULT_TITLE} was not changed: {error}")
+                # Not "was not changed": the write may have landed and only the read-back failed,
+                # in which case that sentence would be the false half of a true-sounding pair.
+                self.announce(
+                    f"{REMOTE_CONTROL_DEFAULT_TITLE} could not be confirmed: {error} "
+                    "Reopen Settings to see what it says."
+                )
                 return
             if not self.showing:
                 return
             self._draw_settings_rows()
-            self.set_status(
-                f"{REMOTE_CONTROL_DEFAULT_TITLE} is now "
-                f"{remote_control_default_word(self._claude_default)}."
-            )
+            word = remote_control_default_word(self._claude_default)
+            if self._claude_default is intended:
+                self.set_status(f"{REMOTE_CONTROL_DEFAULT_TITLE} is now {word}.")
+            else:
+                self.announce(
+                    f"{REMOTE_CONTROL_DEFAULT_TITLE} could not be changed; it is still {word}."
+                )
 
     async def confirm_codex_remote_control(self) -> None:
         """Re-read the daemon, offer the direction its reading opens, and issue only on `True`.

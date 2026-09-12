@@ -102,27 +102,48 @@ def _record() -> SessionRecord:
 class FakeRemoteControlDefault:
     """A scripted `ports.remote_control_default.RemoteControlDefaultPort`.
 
-    Local to this file rather than added to `tests/support/backends.py` on purpose: the port's
-    whole contract is two methods that never raise, so there is nothing here a second test
-    would want that it could not state in four lines -- and the support module is being edited
-    by the bot's own task in the same stage.
+    Local to this file rather than in `tests/support/backends.py`, which the bot's own test file
+    also does -- two copies of one fake, recorded as a residual of this stage rather than defended.
+    It was written this way to avoid two concurrent tasks editing the support module, and the cost
+    showed up immediately: the bot's copy records ordered calls and a test asserts them, while this
+    copy had only a `reads` counter that nothing read, which is why the read-back below went
+    unasserted until the gate's adversarial review mutated it and nothing failed.
 
     It keeps the one contract a surface can observe: a write lands and the next read returns
     it. `writes` is a list rather than a count because "exactly one write per press" is the
     property, and a count cannot say which value a second write carried.
     """
 
-    def __init__(self, value: RemoteControlDefault = RemoteControlDefault.PROVIDER_DEFAULT) -> None:
+    def __init__(
+        self,
+        value: RemoteControlDefault = RemoteControlDefault.PROVIDER_DEFAULT,
+        *,
+        refuse: bool = False,
+    ) -> None:
         self.value = value
         self.writes: list[RemoteControlDefault] = []
         self.reads = 0
+        #: Ordered, like the bot's own fake. A count cannot say whether the screen read *after*
+        #: writing, and that read-back is the property this row's docstring calls load-bearing --
+        #: the gate's adversarial review replaced it with "draw the intention" and all fifteen
+        #: tests here stayed green, because nothing asserted the order.
+        self.calls: list[str] = []
+        #: A port that accepts a write and does not store it -- which is exactly what the real one
+        #: does when `_detected_style` refuses a settings file it cannot reproduce byte-for-byte.
+        #: Its contract forbids raising, so a refusal is indistinguishable from success except by
+        #: reading back.
+        self.refuse = refuse
 
     async def read(self) -> RemoteControlDefault:
         self.reads += 1
+        self.calls.append("read")
         return self.value
 
     async def write(self, value: RemoteControlDefault) -> None:
         self.writes.append(value)
+        self.calls.append(f"write:{value.value}")
+        if self.refuse:
+            return
         self.value = value
 
 
@@ -437,3 +458,168 @@ async def test_escape_returns_to_the_dashboard() -> None:
         await pilot.press("escape")
         await pilot.pause()
         assert isinstance(app.screen, DashboardScreen)
+
+
+# --- The three properties the gate's adversarial review found unasserted ---------------------
+
+
+async def test_the_press_reads_the_file_back_after_writing_it() -> None:
+    """The read-back, asserted as an *order* rather than inferred from the row's value.
+
+    **This is the test whose absence the gate found.** The row's value alone cannot tell a
+    read-back from a surface drawing its own intention: the fake stores what it is given, so both
+    implementations render the same string. Replacing the read-back with "compute the intended
+    value and draw that" left all fifteen checks in this file green.
+
+    Why it is load-bearing rather than stylistic: `write` cannot raise by contract, so a settings
+    file whose formatting cannot be reproduced is refused with nothing but a log line. A surface
+    drawing its intention would then report the value it asked for over a file that still says the
+    old one -- wrong exactly when it matters, which is the shape of defect this whole vertical is
+    careful about.
+    """
+    port = FakeRemoteControlDefault(RemoteControlDefault.PROVIDER_DEFAULT)
+    app = RemoteAgentsTui(_context(claude_default=port))
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await _open_settings(app, pilot)
+        port.calls.clear()
+        await pilot.press("enter")
+        await pilot.pause()
+
+    assert port.calls == ["read", "write:on", "read"], (
+        "the press must read to learn where it is, write the advance, then read back what the "
+        f"file now says; it did {port.calls}"
+    )
+
+
+async def test_a_refused_write_is_reported_as_a_refusal_not_as_a_change() -> None:
+    """A port that accepts a write and stores nothing -- the real one's refusal, exactly.
+
+    `_detected_style` refuses any `~/.claude/settings.json` it cannot reproduce byte-for-byte, and
+    that refusal reaches this surface as a `logging.warning` in the service journal and nothing
+    else. Before this test the status line said *"is now Claude's default"* either way, because it
+    named whatever the file held: a refused advance and a successful one were
+    character-for-character identical to the owner.
+    """
+    port = FakeRemoteControlDefault(RemoteControlDefault.OFF, refuse=True)
+    app = RemoteAgentsTui(_context(claude_default=port))
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await _open_settings(app, pilot)
+        await pilot.press("enter")
+        await pilot.pause()
+        said = [*announcements(app), status(app)]
+        drawn = _row(app, REMOTE_CONTROL_DEFAULT_TITLE)
+
+    assert port.writes == [RemoteControlDefault.PROVIDER_DEFAULT], "the write was attempted"
+    assert any("could not be changed" in line for line in said), said
+    assert not any("is now" in line for line in said), (
+        f"a refusal must not read as a change: {said}"
+    )
+    assert drawn == remote_control_default_line(RemoteControlDefault.OFF), (
+        "the row keeps showing what the file actually says"
+    )
+
+
+async def test_the_cursor_stays_on_the_row_that_was_just_pressed() -> None:
+    """Press Codex, and the next Enter must still be Codex's -- not Claude's.
+
+    **Unasserted until the gate found it**: replacing `_highlighted_row`'s whole body with
+    `return 0` left all fifteen checks green. The hazard is not theoretical. `show_choices` rests
+    on row 0 by default, `choose` routes on the row id under the cursor, and the Codex row's
+    confirmed press redraws both rows -- so a cursor that snapped back to row 0 would mean an
+    owner who pressed Enter twice on Codex changed **Claude's** setting with the second press.
+    That is the cursor-moved-under-the-press hazard DEC-052 and DEC-062 exist for, in the one
+    position where both rows mutate something.
+    """
+    control = FakeHostRemoteControl(HostConnection.DISABLED)
+    port = FakeRemoteControlDefault(RemoteControlDefault.OFF)
+    app = RemoteAgentsTui(_context(host_remote_control=control, claude_default=port))
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await _open_settings(app, pilot)
+        await pilot.press("down")
+        await pilot.pause()
+        assert app.screen.query_one("#choices", OptionList).highlighted == 1, "on the Codex row"
+
+        await pilot.press("enter")
+        await pilot.pause()
+        if isinstance(app.screen, ConfirmScreen):
+            await pilot.press("enter")
+            await pilot.pause()
+        await asyncio.sleep(0)
+        await pilot.pause()
+
+        assert app.screen.query_one("#choices", OptionList).highlighted == 1, (
+            "the cursor left the row the owner acted on, so the next Enter would change the "
+            "other provider's setting"
+        )
+    assert port.writes == [], "acting on Codex must never write Claude's setting"
+
+
+class RaisingRemoteControlDefault:
+    """A port that breaks its own never-raises contract, on whichever method a test names.
+
+    Every `except Exception` in the Settings screen exists for this: a composition wiring
+    something that is not the real adapter, or a read cancelled under it. The real port cannot
+    reach these branches, which is exactly why they were the only untested lines in the file --
+    reported as one branch by the gate's Tier-2 review, and found to be four by a
+    `git diff | grep '^+.*except '` sweep of the stage's own diff.
+    """
+
+    def __init__(self, *, on_read: bool = False, on_write: bool = False) -> None:
+        self.on_read = on_read
+        self.on_write = on_write
+        self.value = RemoteControlDefault.OFF
+
+    async def read(self) -> RemoteControlDefault:
+        if self.on_read:
+            raise RuntimeError("this port does not work")
+        return self.value
+
+    async def write(self, value: RemoteControlDefault) -> None:
+        if self.on_write:
+            raise RuntimeError("this port does not work")
+        self.value = value
+
+
+async def test_a_read_that_raises_leaves_the_screen_drawn_rather_than_crashing() -> None:
+    """The mount-time branch: what is already drawn is stale, never a traceback on the terminal.
+
+    The row falls back to *unavailable* -- which is not the same fact as a capability nobody
+    wired, and is recorded as a residual rather than defended: the alternative is a row with no
+    word in it at all, and the screen must draw something.
+    """
+    app = RemoteAgentsTui(_context(claude_default=RaisingRemoteControlDefault(on_read=True)))
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await _open_settings(app, pilot)
+        drawn = _row(app, REMOTE_CONTROL_DEFAULT_TITLE)
+        alive = isinstance(app.screen, SettingsScreen)
+
+    assert alive, "a port that raised took the screen down"
+    assert drawn, "the row drew nothing at all"
+
+
+async def test_a_write_that_raises_tells_the_owner_and_keeps_the_surface() -> None:
+    """The press branch, and the message is deliberately not "was not changed".
+
+    The write may have landed and only the read-back failed, in which case that sentence would be
+    the false half of a true-sounding pair -- so the owner is told the outcome could not be
+    *confirmed*, and where to look.
+    """
+    port = RaisingRemoteControlDefault(on_write=True)
+    app = RemoteAgentsTui(_context(claude_default=port))
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await _open_settings(app, pilot)
+        await pilot.press("enter")
+        await pilot.pause()
+        said = [*announcements(app), status(app)]
+        alive = isinstance(app.screen, SettingsScreen)
+
+    assert alive, "a port that raised took the screen down"
+    assert any("could not be confirmed" in line for line in said), said
+    assert not any("was not changed" in line for line in said), (
+        f"the write may have landed; only the read-back is known to have failed: {said}"
+    )

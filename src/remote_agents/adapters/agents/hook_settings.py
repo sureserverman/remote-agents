@@ -127,14 +127,18 @@ class _Settings:
     mode: int
 
 
-def _read_settings(path: Path, provider: _HookProvider | None = None) -> _Settings:
+def _read_settings(path: Path, provider: _HookProvider | None) -> _Settings:
     """Parse and validate a settings file, refusing every shape that cannot be merged into.
 
     `provider=None` asks for the parse, the formatting and the mode **without** the hook-shape
     refusals -- for an editor whose subject is one unrelated top-level key, to which a `hooks`
-    block this installer could not have merged into is none of its business. Every hook caller
-    passes a provider and is unaffected; the default exists so the shared read has one
-    implementation rather than a near-copy beside it.
+    block this installer could not have merged into is none of its business.
+
+    **Positional and with no default, deliberately.** It was briefly `provider=None`, which made
+    the refusals opt-*out*: a future hook caller that forgot the argument would have skipped
+    `_refuse_unmergeable_hooks` silently, and an install is the one caller that must never guess at
+    a shape it cannot merge. Requiring every caller to say which it wants costs one `None` at the
+    single site that wants neither. Raised by the Stage 3 gate's evaluator.
     """
     try:
         content = path.read_bytes()
@@ -939,14 +943,35 @@ def read_settings_document(path: Path) -> dict[str, Any]:
 
 
 def _rewrite_settings_key(path: Path, mutate: Callable[[dict[str, Any]], None]) -> None:
-    """Read, apply one change, and replace the file -- or refuse, having written nothing."""
-    settings = _read_settings(path)
+    """Read, apply one change, and replace the file -- or refuse, having written nothing.
+
+    **The no-op guard compares rendered bytes, never documents, and that is a correctness
+    requirement rather than a preference.** The first version asked
+    `document == settings.document`, and `==` on dicts compares their values with `==`, under
+    which `True == 1` and `False == 0`. So a settings file holding `"remoteControlAtStartup": 1`
+    -- a plausible hand edit -- made `set_settings_key(path, key, True)` a silent no-op: the
+    caller's reader answers by identity and still saw `1`, the next press computed the same
+    advance, and the row could never move. No exception, no log line, nothing on screen. Found by
+    the Stage 3 gate's adversarial review, reproduced, and the irony recorded because it is
+    instructive: the commit that added this function led with *"`is True`, not `== True`"* about
+    the reader forty lines away.
+
+    Bytes cannot conflate the two, and comparing them asks the question that was always meant --
+    *would this write change the file?* -- which the document comparison only approximated.
+    """
+    settings = _read_settings(path, None)
     document = dict(settings.document)
     mutate(document)
-    if document == settings.document and settings.content is not None:
-        # Nothing to do, and saying so costs nothing. Writing an identical file would still take
-        # the stale-read window and still touch mtime for no change at all.
-        return
     content = settings.style.render(document)
+    if settings.content is not None:
+        if content == settings.content:
+            # Writing identical bytes would still take the stale-read window and still touch
+            # mtime for no change at all.
+            return
+    elif not document:
+        # No file, and nothing to put in one. This is what makes `clear_settings_key`'s promise
+        # true -- removing a key from a file that does not exist must not *create* the file to
+        # record the absence, which the document comparison above let it do (it wrote `{}`).
+        return
     _refuse_if_changed_since_it_was_read(path, settings.content)
     _write_atomically(path, content, settings.mode)

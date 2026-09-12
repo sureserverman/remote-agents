@@ -150,6 +150,7 @@ from remote_agents.domain.projects import ProjectIdentity
 from remote_agents.domain.remote_control import (
     HostConnection,
     HostRemoteControlStatus,
+    RemoteControlDefault,
     RemoteControlState,
 )
 from remote_agents.domain.trust import TrustState
@@ -1225,7 +1226,7 @@ class PrivateBotBoundary:
             # of them -- so the sentence describes the screen rather than its rows.
             lines.append(
                 "<b>Settings</b> holds Remote Control for this machine, one row per provider: "
-                "whether the sessions it starts can be driven from your phone."
+                "what each provider does when it starts a session."
             )
         lines += [
             "",
@@ -2596,7 +2597,9 @@ class PrivateBotBoundary:
         # that reading is exactly what the owner needs in order to decide what to do next.
         return _reply_arguments(self._host_remote_screen(status))
 
-    async def _settings_screen(self) -> RenderedMessage:
+    async def _settings_screen(
+        self, claude_default: RemoteControlDefault | None = None
+    ) -> RenderedMessage:
         """Both providers' Remote Control on one screen, each row reading its own source.
 
         Two rows, two subjects, and a screen shared without the vocabulary being shared
@@ -2631,7 +2634,10 @@ class PrivateBotBoundary:
         if default is None:
             lines += ["", f"{escape(REMOTE_CONTROL_DEFAULT_TITLE)} is unavailable."]
         else:
-            current = await default.read()
+            # A caller that has just written takes its own read-back and hands it here, so the
+            # value compared against the press's intention and the value drawn are one read
+            # rather than two that could disagree across the await between them.
+            current = await default.read() if claude_default is None else claude_default
             rows.append(
                 (
                     Button(
@@ -2707,8 +2713,25 @@ class PrivateBotBoundary:
             message_id=message_id,
         ):
             return _reply_arguments(self._message("That action has already run."))
-        await default.write(next_remote_control_default(await default.read()))
-        return _reply_arguments(await self._settings_screen())
+        intended = next_remote_control_default(await default.read())
+        await default.write(intended)
+        # The screen re-reads, so the row below is already what the file says. What it cannot
+        # say on its own is whether that is what the press *asked for*: `write` cannot raise by
+        # contract -- a settings file whose formatting cannot be reproduced is refused with one
+        # log line -- so a refused press would otherwise redraw an unchanged row and report
+        # nothing at all, which reads as a button that does not work. The terminal's Settings
+        # screen detects it the same way, by comparing the read-back against the intention.
+        landed = await default.read()
+        screen = await self._settings_screen(landed)
+        if landed is intended:
+            return _reply_arguments(screen)
+        return _reply_arguments(
+            self._message(
+                f"{escape(REMOTE_CONTROL_DEFAULT_TITLE)} could not be changed; it is still "
+                f"<code>{escape(REMOTE_CONTROL_DEFAULT_LABELS[landed])}</code>.",
+                screen.keyboard,
+            )
+        )
 
     async def _send_pairing_code(self, query, *, token: str, message_id: int) -> None:
         """Mint one pairing code and send it once, with no keyboard under it.

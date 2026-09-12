@@ -362,3 +362,60 @@ def test_the_key_is_spelled_the_way_claude_spells_it() -> None:
     )
 
     assert REMOTE_CONTROL_AT_STARTUP_KEY == "remoteControlAtStartup"
+
+
+# --- The wedge the gate's adversarial review found ------------------------------------------
+
+
+@pytest.mark.parametrize("stored", [1, 1.0, 0, 0.0], ids=["one", "one-float", "zero", "zero-float"])
+async def test_a_numeric_value_does_not_wedge_the_control(tmp_path: Path, stored: object) -> None:
+    """A file holding `1` must not make the row impossible to move.
+
+    **The defect this pins was real, silent and permanent.** `_rewrite_settings_key`'s no-op guard
+    compared *documents*, and `==` on dicts compares values with `==`, under which `True == 1`. So
+    with `1` in the file: the reader answered `PROVIDER_DEFAULT` (it compares by identity, which is
+    right), the cycle advanced to `ON`, the writer computed `{... key: True} == {... key: 1}` →
+    `True` and returned having written nothing, with no exception and no log line. The next read
+    still said `PROVIDER_DEFAULT`. The row could never move, and the terminal's status line
+    cheerfully reported the unchanged value after every press.
+
+    `0` escaped it by luck -- `True != 0` -- which is exactly why the parametrisation covers both
+    and both float forms: the bug was in one pair of values, so a single-value test would have
+    passed on three of the four.
+    """
+    path = _settings(tmp_path, A_REAL_LOOKING_FILE | {"remoteControlAtStartup": stored})
+    port = _port(path)
+    assert await port.read() is PROVIDER_DEFAULT, "a non-boolean does not answer the question"
+
+    await port.write(ON)
+
+    assert json.loads(path.read_text())["remoteControlAtStartup"] is True
+    assert await port.read() is ON
+
+
+async def test_every_state_is_reachable_from_a_numeric_value(tmp_path: Path) -> None:
+    """The whole cycle, walked from the wedged starting point rather than from a clean file."""
+    path = _settings(tmp_path, A_REAL_LOOKING_FILE | {"remoteControlAtStartup": 1})
+    port = _port(path)
+    seen = set()
+    for value in (ON, OFF, PROVIDER_DEFAULT):
+        await port.write(value)
+        seen.add(await port.read())
+    assert seen == {ON, OFF, PROVIDER_DEFAULT}
+
+
+async def test_clearing_a_key_in_a_file_that_does_not_exist_creates_nothing(tmp_path: Path) -> None:
+    """`clear_settings_key` promised this and did the opposite: it wrote `{}`.
+
+    Removing a key from a file that is not there is not a change, so recording it by *creating*
+    the file is the one outcome that cannot be right -- and for this port it would mean a press
+    on a host where `claude` has never run leaving a settings file behind.
+    """
+    from remote_agents.adapters.agents.hook_settings import clear_settings_key
+
+    path = tmp_path / ".claude" / "settings.json"
+    path.parent.mkdir(parents=True)
+
+    clear_settings_key(path, "remoteControlAtStartup")
+
+    assert not path.exists(), f"the file was created holding {path.read_bytes()!r}"

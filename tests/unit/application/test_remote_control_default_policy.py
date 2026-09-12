@@ -8,9 +8,11 @@ account (acceptance §8), so a surface that worded it *off* would be stating the
 what the pane does.
 
 A sibling of `test_host_remote_control_policy.py`, which pins the two-direction host table
-beside it. The two tables must not overlap for the reason that one does: a label shared by
-identity between a three-state default and a two-direction toggle would make one object carry
-two truths, which is the drift `application/host_remote_control.py`'s docstring records.
+beside it. The two must stay distinct *objects*, because a three-state default aliased to a
+two-direction toggle would make one table carry two truths -- the drift
+`application/host_remote_control.py`'s docstring records. What is **not** claimed here is that
+their words never coincide: see `test_this_table_is_not_the_host_direction_table` for why the
+stronger version of that assertion could not fail, and where the real overlap lives.
 """
 
 from __future__ import annotations
@@ -99,14 +101,26 @@ def test_the_title_names_the_provider() -> None:
     assert "Claude" in REMOTE_CONTROL_DEFAULT_TITLE
 
 
-def test_this_table_does_not_overlap_the_host_toggles_one() -> None:
+def test_this_table_is_not_the_host_direction_table() -> None:
     """Three states and two directions are different vocabularies about different subjects.
 
-    Pinned the way `test_host_remote_control_policy` pins its own separation from the pane
-    toggle's: by asserting the tables are not the same object and share no label, so a later
-    edit cannot quietly alias them back together.
+    **Narrowed, because the original version of this test could not fail.** It asserted that this
+    table shares no *value* with `HOST_REMOTE_CONTROL_LABELS`, whose values are the full sentences
+    `"Remote Control on"` / `"Remote Control off"` -- strings that could never have collided with
+    `"on"` / `"off"`, and which belong to the host *screen* rather than to the Settings row. So the
+    assertion held for a reason unrelated to its name, which is the same shape as the docstring
+    fixture this stage's gate also had to fix.
+
+    What remains is the claim that is actually worth pinning and can actually break: the two are
+    distinct objects, so a later edit cannot alias a three-state table to a two-direction one and
+    have every caller silently agree. The overlap that *does* exist -- this table's `"on"`/`"off"`
+    against `_HOST_CONNECTION_WORDS`'s -- is recorded as a residual rather than asserted away: each
+    row is prefixed by its provider's title, so the words are never ambiguous on screen, and the
+    two tables live on opposite sides of the surface boundary, where no test in `application/` can
+    reach the adapter's one.
     """
     assert REMOTE_CONTROL_DEFAULT_LABELS is not HOST_REMOTE_CONTROL_LABELS
-    assert not set(REMOTE_CONTROL_DEFAULT_LABELS.values()) & set(
-        HOST_REMOTE_CONTROL_LABELS.values()
+    assert set(REMOTE_CONTROL_DEFAULT_LABELS) != set(HOST_REMOTE_CONTROL_LABELS), (
+        "one table is keyed by three stored states and the other by two directions; equal key "
+        "sets would mean one of them has been made to stand in for the other"
     )
