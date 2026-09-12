@@ -9,6 +9,14 @@ def test_unknown_capture_fails_closed_before_any_interaction_is_attempted():
     assert _remote_control_state("unrelated terminal output") is RemoteControlState.UNKNOWN
 
 
+#: What a pane prints when `/remote-control` enabled it, as the drill recorded it.
+_ENABLED_BANNER = (
+    "❯ /remote-control\n"
+    "  /remote-control is active · Continue here, on your phone, or at\n"
+    "  https://claude.ai/code/session_01example\n"
+)
+
+
 class Gateway:
     def __init__(self, session_id: SessionId) -> None:
         self.session_id = session_id
@@ -35,7 +43,11 @@ class Gateway:
 
     async def capture(self, _session_id):
         self.capture_count += 1
-        return "Claude Code" if self.capture_count == 1 else "/remote-control is active"
+        # The banner's **full phrase**, which is what a pane actually prints and what
+        # `remote_control_was_enabled` matches. The short form alone appears in the adapter's
+        # own source, so matching on it would have made a pane displaying that source look
+        # like a pane that had just been enabled.
+        return "Claude Code" if self.capture_count == 1 else _ENABLED_BANNER
 
     async def send_keys(self, session_id, keys):
         self.sent.append((session_id, keys))
@@ -77,9 +89,14 @@ async def test_disable_opens_the_remote_control_menu_before_disconnect(monkeypat
     class ActiveGateway(Gateway):
         async def capture(self, _session_id):
             self.capture_count += 1
+            # Four captures, not two. The disable path reads once to decide whether to ask for
+            # the menu, then licenses the arrows on **two consecutive** reads a settle apart --
+            # one frame is not proof, because a capture is a picture of a pane mid-repaint as
+            # readily as of a settled one. The fourth is the result.
             return {
-                1: "/remote-control is active",
+                1: _ENABLED_BANNER,
                 2: _MENU,
+                3: _MENU,
             }.get(self.capture_count, "Remote Control disconnected.")
 
     gateway = ActiveGateway(session_id)
@@ -98,7 +115,7 @@ async def test_disable_opens_the_remote_control_menu_before_disconnect(monkeypat
         (session_id, ("/remote-control", "Enter")),
         (session_id, ("Up", "Up", "Enter")),
     ]
-    assert waits == [1, 2]
+    assert waits == [1, 1, 2], "one settle to open, one between the two proofs, one to act"
 
 
 async def test_a_disable_never_sends_the_arrows_at_a_pane_showing_no_menu(monkeypatch):
@@ -114,7 +131,7 @@ async def test_a_disable_never_sends_the_arrows_at_a_pane_showing_no_menu(monkey
     class SilentGateway(Gateway):
         async def capture(self, _session_id):
             self.capture_count += 1
-            return "/remote-control is active"
+            return _ENABLED_BANNER
 
     gateway = SilentGateway(session_id)
     terminal = TmuxTerminal(gateway, {}, {}, startup_timeout=1)
@@ -127,7 +144,8 @@ async def test_a_disable_never_sends_the_arrows_at_a_pane_showing_no_menu(monkey
     state = await terminal.remote_control(session_id, RemoteControlState.INACTIVE)
 
     assert gateway.sent == [(session_id, ("/remote-control", "Enter"))], (
-        "asking for a menu is allowed; acting as though one appeared is not"
+        "asking for a menu is allowed; acting as though one appeared is not -- and no `Escape`"
+        " either, because this pane is showing the enable banner rather than a stray menu"
     )
     # **And the answer is what the pane says, not a flat UNKNOWN.** This assertion read
     # `is UNKNOWN` when it was written, which pinned a defect the gate's reviews then found:

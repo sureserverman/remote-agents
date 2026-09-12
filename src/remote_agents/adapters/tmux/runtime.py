@@ -15,10 +15,10 @@ from remote_agents.adapters.tmux.remote_control import (
     REMOTE_CONTROL_DISCONNECT_KEYS,
     REMOTE_CONTROL_DISMISS_MENU_KEYS,
     REMOTE_CONTROL_ENABLE_KEYS,
-    REMOTE_CONTROL_ENABLED_MARKER,
     REMOTE_CONTROL_OPEN_MENU_KEYS,
     classify_remote_control_capture,
     remote_control_menu_is_open,
+    remote_control_was_enabled,
 )
 from remote_agents.adapters.tmux.trust import classify_trust_capture, plan_trust_keys
 from remote_agents.domain.conversations import ProviderConversationId
@@ -610,7 +610,7 @@ class TmuxTerminal:
             # a graceful stop's `/exit` + `Enter`, which an open menu swallows -- selecting its
             # resting `Continue` instead of exiting. Reading the banner's absence needs no
             # second marker to go stale, and `Escape` costs nothing at a prompt.
-            if REMOTE_CONTROL_ENABLED_MARKER not in capture:
+            if not remote_control_was_enabled(capture):
                 await self._gateway.send_keys(session_id, REMOTE_CONTROL_DISMISS_MENU_KEYS)
                 # Settle before answering. Without this the method returns while the pane is
                 # still painting the menu away, and the *caller's* next read captures a menu
@@ -644,7 +644,25 @@ class TmuxTerminal:
         # them, not merely something read at some point.
         await asyncio.sleep(self._waits.remote_control_menu)
         capture = await self._gateway.capture(session_id)
+        # **Two consecutive reads, a settle apart.** One frame is not proof: a capture is a
+        # picture of a pane mid-repaint as readily as of a settled one, and Claude's renderer
+        # erases its dynamic region before rewriting it -- so a single frame can show the
+        # transcript's last line as the screen's last line, which is precisely the shape the
+        # anchored predicate trusts. Two reads a second apart cannot both land in that gap.
+        # Unlike the marker anchoring, this defence depends on no string at all.
+        if remote_control_menu_is_open(capture):
+            await asyncio.sleep(self._waits.remote_control_menu)
+            capture = await self._gateway.capture(session_id)
         if not remote_control_menu_is_open(capture):
+            if not remote_control_was_enabled(capture):
+                # Tidy up, exactly as the enable path does and for the same reason. A refusal
+                # that walks away can leave Claude's status menu -- one we asked for and then
+                # failed to recognise -- sitting over the owner's work, and the next thing
+                # this project sends that pane is a graceful stop's `/exit` + `Enter`, which
+                # an open menu swallows: it selects the resting `Continue`, the stop reports
+                # success, and the agent is still running.
+                await self._gateway.send_keys(session_id, REMOTE_CONTROL_DISMISS_MENU_KEYS)
+                await asyncio.sleep(self._waits.remote_control_menu)
             # **Report what the pane says, not a flat UNKNOWN.** The open-menu keys *are* the
             # enable keys -- `/remote-control` is one command whose meaning depends on the
             # pane -- so a disable aimed at a session that was genuinely disconnected has just

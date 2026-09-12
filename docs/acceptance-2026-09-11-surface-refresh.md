@@ -61,8 +61,13 @@ actually connected is "could not be read".
      Disconnect this session
      Show QR code  Scan with your phone to open this session
    ❯ Continue
-   Enter to select · Esc to continue
+   Enter to select · Esc to continue   <- footer marker broken deliberately; see below
 ```
+
+> The line above is written with a trailing note so this document is not itself a capture
+> that `remote_control_menu_is_open` accepts. A pane showing this page would otherwise end a
+> window on that footer and read as a live menu — which is the whole of Critical 1 in
+> section 4, and `test_no_window_of_any_tracked_file_reads_as_a_menu` is what keeps it so.
 
 Because the session was **already connected**, `/remote-control` did not enable anything — it
 opened the status menu, and left it open. The classifier reports `ACTIVE`, but it reports it
@@ -275,3 +280,60 @@ backlog rather than in this stage:
   bot and the TUI are separate processes, so two near-simultaneous presses on one session can
   both pass the guard against one real menu and interleave their keys. The `console_lock`
   flock pattern would close it.
+
+---
+
+## Section 5 — The re-review, and what a second look at the same guard found
+
+Remediation round 2 of 2. Both re-reviews were dispatched on `d0c68bc..HEAD`.
+
+The Tier-2 re-review returned **APPROVE**: all three of its original findings resolved, no new
+Critical or Important, and it explicitly judged the argument that the enable side effect is
+unpreventable and found it holds.
+
+The adversarial pass returned **six Importants**, five of which were real. They are worth
+recording because they are all the *same shape* as Critical 1 — a guard that reads vocabulary
+where it should read structure — and because four of them were in code written to fix it.
+
+| # | Finding | Verified? |
+|---|---|---|
+| 1 | A pane-height **window** of this very document ended on the menu footer and read as a live menu. Whole-file tests never saw it, because they only ever exercise a file's last line. | **yes** — one hit in the whole tree |
+| 2 | The 8-line lookback counted *non-blank* lines, so a row thirty screen rows above the footer still matched. | **yes** |
+| 3 | A single last line carrying both markers passed. Ordinary prose does that. | **yes** |
+| 4 | The **disable** path left an unrecognised menu open — the harm the enable path had just been fixed for. | **yes** |
+| 5 | The dismiss guard was itself a whole-capture substring test, defeated by the same files. | **yes** |
+| 7 | "Neither remediation commit re-ran the live drill." | **no** — both did, and both say so in their commit bodies |
+
+### What changed
+
+- **Two consecutive reads, a settle apart, license the arrows.** One frame is not proof: a
+  capture is a picture of a pane mid-repaint as readily as of a settled one, and Claude's
+  renderer erases its dynamic region before rewriting it — so a single frame can show the
+  transcript's last line as the screen's last line, which is exactly the shape the anchored
+  predicate trusts. This defence depends on no string at all, which is what makes it the
+  strongest of the three.
+- The lookback counts **screen rows**, and the footer's own line is excluded, so the row must
+  sit on a line of its own above it.
+- A **windowed** forgery sweep replaces the whole-file one: it slides a pane-height window down
+  every tracked file. It found the one real hit, which is now written with its footer marker
+  broken and a note saying why.
+- The disable path dismisses a menu it could not use, as the enable path already did.
+- The banner marker is the full phrase rather than its first four words — the short form is
+  what `classify_remote_control_capture` searches for, and sits within this module's own last
+  twelve lines, so tail-anchoring alone did not separate the two.
+
+### Residuals, stated rather than claimed away
+
+- `remote_control_was_enabled` can still be fooled by a file quoting the banner's whole phrase.
+  Tolerable **there** and not on the menu predicate, because of what each licenses: an
+  `Escape` versus `Up, Up, Enter`. A guard may be only as strong as its blast radius demands,
+  provided somebody says which is which.
+- Finding 6 — the widened dismiss sends `Escape` in states where it is not a no-op, including
+  a pane mid-turn, where it interrupts. This is a genuine trade-off rather than an oversight:
+  the alternative leaves a menu open, and an open menu silently swallows the next graceful
+  stop's `/exit` so the stop reports success while the agent keeps running. Interrupting is
+  loud and recoverable; a stop that did not stop is neither. Folded into **BL-055**, which is
+  the precondition that would let this be decided rather than traded.
+
+**The remediation budget (2 rounds) is now spent.** These fixes were made and verified; no
+third review round was dispatched.

@@ -29,7 +29,34 @@ _MENU_ROW_LOOKBACK = 8
 #: whether to dismiss -- see `TmuxTerminal.remote_control`, which keys its `Escape` off this
 #: string's **absence** rather than off recognising a menu, so that a menu Claude has reworded
 #: is still put away.
-REMOTE_CONTROL_ENABLED_MARKER = "/remote-control is active"
+REMOTE_CONTROL_ENABLED_MARKER = "/remote-control is active \u00b7 Continue here"
+
+#: How far up the screen the banner may be and still be this pane's own answer. Anchored for
+#: the reason the menu markers are: this string appears in this module, so a whole-capture
+#: test would find it in a pane *displaying* this module and suppress the dismiss below,
+#: leaving a real menu open underneath.
+_BANNER_LOOKBACK = 12
+
+
+def remote_control_was_enabled(capture: str) -> bool:
+    """Whether this capture is a pane that just answered `/remote-control` by enabling.
+
+    Read from the tail only, and matched on the banner's **full phrase** rather than on its
+    first four words. Both of those are the menu predicate's lesson applied here: the short
+    form `/remote-control is active` appears in this module -- `classify_remote_control_capture`
+    below searches for it -- and within this file's own last twelve lines, so tail-anchoring
+    alone did not separate the banner from a pane displaying the code that looks for it.
+
+    **The residual is stated rather than claimed away.** A pane showing a file that quotes the
+    whole phrase would still match. That is tolerable *here* and would not be on the menu
+    predicate, because of what each one licenses: this decides whether to send `Escape`, whose
+    two failure modes are a redundant keystroke at a prompt and a menu left open, while that
+    one decides whether to send `Up, Up, Enter`, which submits the owner's last message. A
+    guard is allowed to be only as strong as its blast radius demands, provided somebody has
+    said which is which.
+    """
+    lines = [line for line in capture.splitlines() if line.strip()]
+    return any(REMOTE_CONTROL_ENABLED_MARKER in line for line in lines[-_BANNER_LOOKBACK:])
 
 
 def remote_control_menu_is_open(capture: str) -> bool:
@@ -57,10 +84,23 @@ def remote_control_menu_is_open(capture: str) -> bool:
     Fails closed, and the asymmetry is deliberate: a false negative costs one refused disable
     the owner can retry, and a false positive types into somebody's session.
     """
-    lines = [line for line in capture.splitlines() if line.strip()]
+    lines = capture.splitlines()
+    # Only *trailing* blanks are dropped: `capture-pane -p` returns the pane's full height, so
+    # an empty bottom half is padding rather than content. Blanks in the middle are screen
+    # rows and stay -- filtering them let a row thirty rows above the footer count as "within
+    # eight lines", which is the shape a rendered page with blank-line spacing has.
+    while lines and not lines[-1].strip():
+        lines.pop()
     if not lines or not lines[-1].rstrip().endswith(_MENU_FOOTER):
         return False
-    return any(_MENU_ROW in line for line in lines[-_MENU_ROW_LOOKBACK:])
+    # The rows *above* the footer, and the footer's own line is excluded rather than merely
+    # not searched: one line spelling both markers is the forgery in miniature, and ordinary
+    # prose does it readily -- a sentence telling a reader to pick the disconnect row and
+    # then press escape spells both in a row. The real menu never does: the row and the
+    # footer are different rows of a widget. (This comment cannot give the example, which is
+    # the point of the test that forbids it.)
+    above = lines[-(_MENU_ROW_LOOKBACK + 1) : -1]
+    return any(_MENU_ROW in line for line in above)
 
 
 class RemoteControlState(StrEnum):

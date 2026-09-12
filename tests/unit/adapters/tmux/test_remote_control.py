@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import pathlib
 from pathlib import Path
 
 import pytest
@@ -15,6 +16,7 @@ from remote_agents.adapters.tmux.remote_control import (
     RemoteControlState,
     classify_remote_control_capture,
     remote_control_menu_is_open,
+    remote_control_was_enabled,
 )
 from remote_agents.adapters.tmux.runtime import LaunchProfile, TmuxTerminal
 from remote_agents.domain.models import ProfileId, ProjectId, SessionId
@@ -218,6 +220,30 @@ _NO_MENU = "❯ \n  ⏵⏵ auto mode on (shift+tab to cycle) · ← for agents\n
 _DISCONNECTED = "❯ /remote-control\n  ⎿  Remote Control disconnected.\n"
 
 
+def test_the_row_must_sit_on_its_own_line_above_the_footer() -> None:
+    """One line carrying both markers is the forgery in miniature, and it used to pass.
+
+    The anchoring fixed *where* a match may be; it still accepted a single last line that
+    spelled both. Prose does that readily -- "Disconnect this session, then hit Esc to
+    continue" is an ordinary sentence. The real menu never does: the row and the footer are
+    different rows of a widget.
+    """
+    assert not remote_control_menu_is_open("Disconnect this session, then hit Esc to continue\n")
+
+
+def test_the_lookback_is_measured_in_screen_rows_not_in_words() -> None:
+    """Blank lines are rows. Filtering them let a row 31 rows up be 'within eight lines'.
+
+    A rendered page with blank-line spacing is exactly that shape, so the window this was
+    meant to be was not the window it was.
+    """
+    far_apart = (
+        "     Disconnect this session\n" + "\n" * 30 + "   Enter to select · Esc to continue\n"
+    )
+
+    assert not remote_control_menu_is_open(far_apart)
+
+
 def test_the_menu_predicate_needs_both_of_its_markers() -> None:
     """Fail-closed on purpose: a missing marker means *do not send the arrows*.
 
@@ -257,9 +283,9 @@ async def test_a_disable_whose_menu_never_appears_sends_no_arrows_and_says_unkno
     result = await _terminal(runner).remote_control(_SESSION, DomainRemoteControlState.INACTIVE)
 
     assert result is DomainRemoteControlState.UNKNOWN
-    assert runner.keys_typed == REMOTE_CONTROL_OPEN_MENU_KEYS, (
-        "the arrows were sent at a pane with no menu on it -- at a prompt they submit history"
-    )
+    assert runner.keys_typed == (
+        REMOTE_CONTROL_OPEN_MENU_KEYS + REMOTE_CONTROL_DISMISS_MENU_KEYS
+    ), "the arrows were sent at a pane with no menu on it -- at a prompt they submit history"
 
 
 async def test_a_disable_whose_menu_is_already_open_does_not_ask_for_it_again() -> None:
@@ -269,9 +295,9 @@ async def test_a_disable_whose_menu_is_already_open_does_not_ask_for_it_again() 
     left the menu up, the disable sent the open keys at an open menu and dismissed it, and the
     arrows then landed on the prompt.
     """
-    # Three captures: the first sees the menu, the second re-reads it after the settle wait
-    # (the proof has to be the last thing read before the keys), the third is the result.
-    runner = _ScriptedRunner(_pane(), [_MENU, _MENU, _DISCONNECTED])
+    # Four captures: the first sees the menu; the second and third are the two consecutive
+    # proofs a settle apart (one frame is not proof); the fourth is the result.
+    runner = _ScriptedRunner(_pane(), [_MENU, _MENU, _MENU, _DISCONNECTED])
 
     result = await _terminal(runner).remote_control(_SESSION, DomainRemoteControlState.INACTIVE)
 
@@ -280,7 +306,7 @@ async def test_a_disable_whose_menu_is_already_open_does_not_ask_for_it_again() 
 
 
 async def test_a_disable_opens_the_menu_when_it_is_closed_and_then_uses_it() -> None:
-    runner = _ScriptedRunner(_pane(), [_NO_MENU, _MENU, _DISCONNECTED])
+    runner = _ScriptedRunner(_pane(), [_NO_MENU, _MENU, _MENU, _DISCONNECTED])
 
     result = await _terminal(runner).remote_control(_SESSION, DomainRemoteControlState.INACTIVE)
 
@@ -363,22 +389,49 @@ async def test_a_disable_that_enabled_a_disconnected_pane_reports_what_it_actual
 _REPO_ROOT = Path(__file__).resolve().parents[4]
 
 
-@pytest.mark.parametrize(
-    "path",
-    [
-        "src/remote_agents/adapters/tmux/remote_control.py",
-        "tests/unit/adapters/tmux/test_remote_control.py",
-        "docs/acceptance-2026-09-11-surface-refresh.md",
-    ],
-)
-def test_a_pane_displaying_this_project_s_own_files_is_not_a_menu(path: str) -> None:
-    """The regression that matters, asserted against the real files rather than a fixture.
+#: A pane's height, for the window this sweep slides. Twenty-four is the conventional default
+#: and the drill's panes run at it; the exact number matters less than that the sweep looks at
+#: *windows* rather than at whole files.
+_PANE_ROWS = 24
 
-    A fixture would drift away from the sources it stands for; these are the actual three
-    files that forged the markers, read from disk, so the day someone puts both strings back
-    on one line this fails.
+
+def _tracked_text_files() -> list[pathlib.Path]:
+    from subprocess import run
+
+    listed = run(
+        ["git", "ls-files"], cwd=_REPO_ROOT, capture_output=True, text=True, check=True
+    ).stdout.split()
+    return [_REPO_ROOT / name for name in listed]
+
+
+def test_no_window_of_any_tracked_file_reads_as_a_menu() -> None:
+    """The forgery sweep, done the way a pane actually shows a file.
+
+    Reading whole files only ever exercised each file's *last* line, which is not the threat:
+    a pane shows a **window**. This slides one pane-height window down every tracked file and
+    asserts that none of them reads as a menu on screen.
+
+    It found what the whole-file version could not -- the acceptance document's own verbatim
+    transcript of the menu, which ends a window at its footer and passed. That block is now
+    written with its footer marker broken, and this test is what keeps the next verbatim
+    transcript from quietly re-arming the guard against the repository it guards.
     """
-    assert not remote_control_menu_is_open((_REPO_ROOT / path).read_text())
+    offenders = []
+    for path in _tracked_text_files():
+        try:
+            lines = path.read_text().splitlines()
+        except (UnicodeDecodeError, OSError):
+            continue
+        for end in range(len(lines)):
+            window = "\n".join(lines[max(0, end - _PANE_ROWS + 1) : end + 1]) + "\n"
+            if remote_control_menu_is_open(window):
+                offenders.append(f"{path.relative_to(_REPO_ROOT)}:{end + 1}")
+                break
+
+    assert offenders == [], (
+        "a pane displaying these would license `Up, Up, Enter` at whatever is on screen: "
+        f"{offenders}"
+    )
 
 
 def test_the_menu_is_recognised_by_its_footer_being_last_and_its_row_being_near() -> None:
@@ -450,3 +503,57 @@ async def test_an_enable_that_produced_nothing_recognisable_still_tidies_up() ->
 
     assert runner.keys_typed == REMOTE_CONTROL_ENABLE_KEYS + REMOTE_CONTROL_DISMISS_MENU_KEYS
     assert result is DomainRemoteControlState.UNKNOWN
+
+
+async def test_the_arrows_need_the_menu_on_two_consecutive_reads() -> None:
+    """One frame is not proof. A capture is a picture of a pane mid-repaint as readily as of a
+    settled one, and Claude's renderer erases its dynamic region before rewriting it -- so a
+    single frame can show the transcript's last line as the screen's last line. Two reads a
+    settle apart cannot both land in that gap.
+
+    This is the cheapest defence against the class Critical 1 belongs to, and unlike the
+    marker anchoring it does not depend on any string at all.
+    """
+    runner = _ScriptedRunner(_pane(), [_NO_MENU, _MENU, _NO_MENU])
+
+    result = await _terminal(runner).remote_control(_SESSION, DomainRemoteControlState.INACTIVE)
+
+    assert REMOTE_CONTROL_DISCONNECT_KEYS[0] not in runner.keys_typed, (
+        "one frame showing a menu is not two"
+    )
+    assert result is DomainRemoteControlState.UNKNOWN
+
+
+async def test_a_disable_puts_away_a_menu_it_could_not_use() -> None:
+    """The enable path tidies up after itself; so must this one, and for the same reason.
+
+    A refusal that walks away leaves Claude's status menu sitting over the owner's work, and
+    the next thing this project sends that pane is a graceful stop's `/exit` + `Enter`, which
+    an open menu swallows -- selecting its resting `Continue` instead of exiting. The stop
+    would report success and the agent would still be running.
+    """
+    runner = _ScriptedRunner(_pane(), [_NO_MENU, _REWORDED_MENU])
+
+    await _terminal(runner).remote_control(_SESSION, DomainRemoteControlState.INACTIVE)
+
+    assert runner.keys_typed == REMOTE_CONTROL_OPEN_MENU_KEYS + REMOTE_CONTROL_DISMISS_MENU_KEYS
+
+
+def test_the_enable_banner_is_read_from_the_tail_not_from_anywhere_on_screen() -> None:
+    """The dismiss guard must not inherit the defect the menu guard was rewritten for.
+
+    Two things had to change together. The short form `/remote-control is active` appears in
+    this module -- `classify_remote_control_capture` searches for it -- and *within the file's
+    last twelve lines*, so tail-anchoring alone still matched a pane displaying the code that
+    looks for it. The marker is the banner's full phrase now, which that search does not
+    spell.
+
+    The residual is recorded on the function: a file quoting the whole phrase would still
+    match. Tolerable here and not on the menu predicate, because this one licenses an `Escape`
+    and that one licenses `Up, Up, Enter`.
+    """
+    source = (_REPO_ROOT / "src/remote_agents/adapters/tmux/remote_control.py").read_text()
+
+    assert "/remote-control is active" in source, "the short form is still searched for here"
+    assert not remote_control_was_enabled(source), "and must not be mistaken for the banner"
+    assert remote_control_was_enabled(_ENABLED)
