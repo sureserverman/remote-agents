@@ -33,7 +33,7 @@ from remote_agents.application.project_catalog import CatalogProject, build_cata
 from remote_agents.application.reconcile import SessionLocks
 from remote_agents.application.services import SessionService
 from remote_agents.application.store_watch import StoreWatch
-from remote_agents.domain.models import ProfileId, ProjectId, SessionId
+from remote_agents.domain.models import ProjectId, SessionId
 from remote_agents.domain.profiles import ProfileCompatibility, closed_profiles
 from remote_agents.ports.agent_activity import AgentActivity
 from remote_agents.ports.agent_usage import AgentLimits, AgentUsage, UsageQuery
@@ -306,12 +306,11 @@ def compose_backend(
             runtime.terminal,
             locks=backend_locks,
             hide_in_console=hide_in_console,
-            # Which profile the stored default governs is decided **here**, because this is
-            # the one module allowed to know both a provider's package and the domain's
-            # profile ids (DEC-070). `claude` alone: the key lives in Claude's settings file
-            # and says nothing about any other agent, and Codex's remote control is a daemon
-            # enrollment behind a different port entirely.
-            remote_control_defaults={ProfileId("claude"): claude_default},
+            # Which launches the stored default governs is **asked of the port**, not named
+            # here: a profile id outside its own provider package is what
+            # `test_a_provider_lives_in_one_package` refuses, and the answer is Claude's to
+            # give. The root's job is to connect the two, which is this line.
+            remote_control_defaults=dict.fromkeys(claude_default.profiles, claude_default),
         ),
         host_remote_control=_host_remote_control(
             descriptors, store=backend_store, locks=backend_locks

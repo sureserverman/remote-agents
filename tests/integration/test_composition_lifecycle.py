@@ -289,6 +289,44 @@ def test_compose_backend_builds_one_backend_from_the_real_helpers(composed_home,
         connection.close()
 
 
+def test_compose_backend_wires_the_stored_default_to_the_launches_it_governs(
+    composed_home, tmp_path
+):
+    """The root connects Claude's stored default to the launches it decides, and to nothing else.
+
+    Three things, each of which has a failure mode worth naming. The mapping is keyed off the
+    **port's own** `profiles` declaration, so a provider id never has to be written down
+    outside its package (`test_a_provider_lives_in_one_package` refuses that, and caught it
+    here). The key set is exactly `claude`, so a codex launch cannot pick up a flag decided by
+    a file that says nothing about codex. And it is the **same instance** the Settings rows
+    draw from, so the row the owner pressed and the launch that reads it cannot be two readers
+    of one file that disagree.
+    """
+    from remote_agents.adapters.sqlite.database import open_database
+    from remote_agents.composition.backend import compose_backend
+    from remote_agents.config import load_config
+    from remote_agents.domain.models import ProfileId
+    from remote_agents.production import ProductionPaths
+
+    paths = ProductionPaths.for_home(composed_home)
+    config = load_config(_config_file(composed_home, paths))
+    connection = open_database(tmp_path / "sessions.sqlite3")
+    try:
+        backend = compose_backend(config, connection, paths)
+
+        governed = backend.sessions._remote_control_defaults
+        assert set(governed) == backend.claude_remote_control_default.profiles, (
+            "the root must take the governed set from the port rather than naming a profile"
+        )
+        assert {str(profile) for profile in governed} == {"claude"}
+        assert governed[ProfileId("claude")] is backend.claude_remote_control_default, (
+            "the Settings row and the launch must read one instance, or a cached read can "
+            "drift from a written one"
+        )
+    finally:
+        connection.close()
+
+
 def test_compose_backend_opens_no_connection_of_its_own(composed_home, tmp_path):
     """ARCH-B2: the connection strategy is the caller's, and DEC-035 depends on it.
 

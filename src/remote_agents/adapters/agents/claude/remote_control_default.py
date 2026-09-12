@@ -41,6 +41,7 @@ from remote_agents.adapters.agents.hook_settings import (
     read_settings_document,
     set_settings_key,
 )
+from remote_agents.domain.models import ProfileId
 from remote_agents.domain.remote_control import RemoteControlDefault
 
 _LOG = logging.getLogger(__name__)
@@ -74,6 +75,20 @@ class ClaudeRemoteControlDefault:
 
     What is left here is the part that is genuinely Claude's: the key's name, the two values its
     schema accepts, and what their absence means.
+    """
+
+    profiles = frozenset({ProfileId("claude")})
+    """Which launches this stored default governs, declared by the provider that owns it.
+
+    Read by the composition root to wire `SessionService.launch`. **Declared here rather than
+    named there**, on `ClaudeUsageReader.profiles`'s precedent and for the same two reasons: a
+    profile id outside its own provider package is exactly what
+    `test_a_provider_lives_in_one_package` refuses, and the question "which agents does
+    `remoteControlAtStartup` decide for" is Claude's to answer, not the root's.
+
+    A frozenset because the answer has been plural before: while `claude-remote` existed, this
+    key governed both ids -- the same binary under two curated names. It is one now, and the
+    type is what let that change without touching the caller.
     """
 
     def __init__(self, settings_path: Path) -> None:
