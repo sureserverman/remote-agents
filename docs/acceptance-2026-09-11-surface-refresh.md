@@ -1682,3 +1682,29 @@ thing under test is the Settings row as a control:
    confirmation names; press again and confirm it names the other one.
 5. Check the `📡 Codex Remote Control` row's reading, restart the Codex daemon, and check the
    row again — it must survive.
+
+### F. The phone-side checks — reported by the owner, 2026-09-12
+
+**Attributed, not measured.** The five checks in §E need a thumb on the owner's phone and were
+performed by them, not driven from the executing session. Their report was *"yes, everything
+works as intended"*, covering all five:
+
+1. The bot's `📡 Claude Remote Control` row cycles and reaches **on**.
+2. A `claude` launch with the row *on* comes up connected — ` · /rc` in the banner and
+   `/remote-control is active` in the pane.
+3. With the row *off*, a launch carries no ` · /rc` at all.
+4. The single pane toggle flips a live session, and its confirmation names the direction the
+   pane read implies, in both directions.
+5. The `📡 Codex Remote Control` row's reading survives a daemon restart.
+
+This is the weakest evidence in this document and is labelled so deliberately. It is one
+person's summary judgement rather than a capture, it does not distinguish which of the five was
+examined most closely, and nothing here would catch a wording defect the owner read past. What
+it does establish is the thing no test can: that the host half works as a *control* — the row
+was pressed on a real phone against a real service and the launches that followed behaved as
+the row said they would.
+
+The stronger half of the same claims is machine-verified elsewhere and does not rest on this
+report: §8 measures the flag overriding the settings file on a real pane, §9 measures one file
+driven through two independently built ports with `~/.claude/settings.json` byte-identical
+before and after, and §11 C proves the live sessions' reachability with the deployed code.
