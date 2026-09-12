@@ -19,6 +19,36 @@ class RemoteControlState(StrEnum):
     UNKNOWN = "unknown"
 
 
+class RemoteControlDefault(StrEnum):
+    """Whether a provider's sessions should start with Remote Control on, for this machine.
+
+    A sibling of `RemoteControlState` and deliberately not the same type, because the two
+    answer different questions. `RemoteControlState` is *what is true of this pane or this
+    daemon right now*, read by capturing or probing. This is *what the owner has asked for
+    next time*, read from the provider's own settings file -- a stored intention, which is
+    why it has a member `RemoteControlState` has no room for.
+
+    That member is `PROVIDER_DEFAULT`, and it is a real third state rather than a missing
+    value. Claude resolves an unset `remoteControlAtStartup` against an account-level default
+    served remotely, and on this owner's account that default is **on**: measured twice, no
+    flag and no keys (`docs/acceptance-2026-09-11-surface-refresh.md` section 8). So the three
+    states are genuinely distinct outcomes --
+
+    - `ON` -- every session starts connected, because the owner said so;
+    - `OFF` -- none does, because the owner said so;
+    - `PROVIDER_DEFAULT` -- whatever the provider decides, which this project does not know
+      and must not claim to.
+
+    Collapsing the third into `OFF` is the specific error this type exists to prevent: it
+    would render *off* over a pane that is connected, which is the direction of wrongness
+    DEC-003's fail-closed rule is about -- the one an owner acts on by not acting.
+    """
+
+    ON = "on"
+    OFF = "off"
+    PROVIDER_DEFAULT = "provider_default"
+
+
 class HostConnection(StrEnum):
     """What the Codex app-server daemon reports about its remote-control enrollment.
 
