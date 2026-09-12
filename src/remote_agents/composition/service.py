@@ -16,6 +16,7 @@ from remote_agents.application.activity import CodexApprovalWatcher, drain_activ
 from remote_agents.application.reconcile import ReconciliationService
 from remote_agents.config import TelegramSecrets
 from remote_agents.ports.agent_activity import ActivityConfidence, ActivityKind, AgentActivity
+from remote_agents.ports.state_events import StoreChanged
 
 _LOG = logging.getLogger(__name__)
 
@@ -162,7 +163,10 @@ def _redraw_sessions_on_store_changes(composition: ServiceComposition):
     if events is None:
         return None
 
-    def redraw(_change) -> None:
+    def redraw(change: StoreChanged) -> None:
+        # Unread: `StoreChanged` carries a time and nothing else, because the watcher reads
+        # file metadata and cannot say what moved. The redraw re-reads the page regardless.
+        del change
         asyncio.create_task(_redraw_sessions(composition))
 
     return events.subscribe(redraw)

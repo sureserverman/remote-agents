@@ -53,7 +53,7 @@ from remote_agents.application.session_actions import (
 )
 from remote_agents.application.session_views import session_row_parts
 from remote_agents.domain.models import SessionId, SessionRecord
-from remote_agents.ports.state_events import Unsubscribe
+from remote_agents.ports.state_events import StoreChanged, Unsubscribe
 
 _LOG = logging.getLogger(__name__)
 
@@ -1047,7 +1047,18 @@ class SessionsScreen(_SessionActionKeys, ChoiceScreen):
         events = self.tui.services.backend.state_events
         if events is None:
             return
-        self._store_watch = events.subscribe(lambda _change: self.app.call_next(self._auto_reload))
+        self._store_watch = events.subscribe(self._on_store_changed)
+
+    def _on_store_changed(self, change: StoreChanged) -> None:
+        """Hand the reload to this screen's own pump and return immediately.
+
+        `change` is unread on purpose: `StoreChanged` carries only a time, because the watcher
+        reads file metadata and cannot say what moved. Named and typed rather than a lambda so
+        the parameter says what arrives -- the port held its vocabulary open for a consumer to
+        choose, and an anonymous argument would hide the choice where it is made.
+        """
+        del change
+        self.app.call_next(self._auto_reload)
 
     def _stop_watching_the_store(self) -> None:
         """Detach, if attached. Safe to call twice -- `Unsubscribe` promises the same."""

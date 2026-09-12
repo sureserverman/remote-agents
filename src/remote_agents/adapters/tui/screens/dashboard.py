@@ -74,7 +74,7 @@ from remote_agents.domain.remote_control import (
     RemoteControlState,
 )
 from remote_agents.ports.agent_usage import AgentLimits, LimitsAbsence
-from remote_agents.ports.state_events import Unsubscribe
+from remote_agents.ports.state_events import StoreChanged, Unsubscribe
 
 _LOG = logging.getLogger(__name__)
 
@@ -1119,9 +1119,19 @@ class DashboardScreen(LimitsRegion, FeedRegion, ProjectsPaneScreen):
         events = self.tui.services.backend.state_events
         if events is None:
             return
-        self._store_watch = events.subscribe(
-            lambda _change: self.app.call_next(self._auto_reload_sessions)
-        )
+        self._store_watch = events.subscribe(self._on_store_changed)
+
+    def _on_store_changed(self, change: StoreChanged) -> None:
+        """Hand the reload to this screen's own pump and return immediately.
+
+        Named and typed rather than a lambda so the parameter says what arrives: the port kept
+        its `StateChange` vocabulary open until a consumer chose one, and a listener that took
+        an anonymous argument would leave that choice invisible at exactly the place it is
+        consumed. `change` is unread on purpose -- `StoreChanged` carries only a time, because
+        the watcher reads file metadata and cannot say *what* moved, so every consumer re-reads.
+        """
+        del change
+        self.app.call_next(self._auto_reload_sessions)
 
     def _stop_watching_the_store(self) -> None:
         if self._store_watch is None:
