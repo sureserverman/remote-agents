@@ -1487,3 +1487,50 @@ async def main() -> None:
 
 asyncio.run(main())
 ```
+
+---
+
+## Section 9 — The Stage 3 gate's live artifact: one file, two readers, a real pane either way
+
+The gate's scoped integration check, run against the owner's real `~/.claude/settings.json` and
+real `claude` panes on disposable tmux sockets. It drives the **production** path — the port
+`composition/backend.py` wires, built through `registry.claude_remote_control_default` — rather
+than a fake, because what is being checked is that the written value reaches the thing that
+decides.
+
+Two port instances are built, not one. The bot and the terminal are separate processes and
+DEC-046 gives each its own `Backend`, so "one file, two readers" is only a claim about the design
+if the reader that checks is not the object that wrote.
+
+| Written through the bot's port | The terminal's port reads | A real launch is connected | Banner |
+|---|---|---|---|
+| *(start: key absent)* | `provider_default` | — | — |
+| `off` | `off` | **no** | `~/dev/infra/remote-agents` |
+| `on` | `on` | **yes** | `~/dev/infra/remote-agents · /rc` |
+
+The cycle walked against the real file: `provider_default → on → off → provider_default`, three
+presses home, all three states reached.
+
+`~/.claude/settings.json` md5 `1e039d90788e2329cfe8b0c031074c97` before and after — the drill
+restores the original bytes in a `finally`, and the key was absent before it ran.
+
+### One result worth carrying into Stage 4
+
+**The `/remote-control is active` marker did not appear in either arm.** With the setting `true`
+the pane connects and prints ` · /rc`, but not the banner line
+`REMOTE_CONTROL_ENABLED_MARKER` matches. That is consistent with section 8 part C and it sharpens
+what Stage 4's argv is for: the flag's readability contribution is *not* reproduced by the
+setting. A session launched with the setting on is connected but still reads `UNKNOWN` to
+`classify_remote_control_capture`; one launched with `--remote-control ra-<uuid>` reads ACTIVE
+from its banner. So Task 4.1's argv earns its place even on a host whose setting is already on.
+
+### What this does *not* establish
+
+- **The owner's half is not driven here.** Pressing the row on the phone, and pressing it in the
+  terminal, are a human's actions against a running service; this drives the port beneath both.
+  The gate item is recorded as partially satisfied for that reason, and the bot-press half is
+  carried to Stage 4's release checks where the service runs the built tag.
+- **One host, one account**, as section 8. The `on` arm proves the setting is sufficient to
+  connect *here*; a host whose account default is off would show the same result for a different
+  reason.
+- The drill ran against a working tree, not the released build.
