@@ -1085,10 +1085,17 @@ class DashboardScreen(LimitsRegion, FeedRegion, ProjectsPaneScreen):
     def on_screen_suspend(self) -> None:
         if self._sessions_timer is not None:
             self._sessions_timer.pause()
+        # And stop listening, which is the other half of pausing rather than an extra step:
+        # `SessionsScreen` detaches here for the reason its own comment gives, and a pane that
+        # kept its subscription would keep scheduling reloads under every pushed screen. Inert
+        # while `_auto_reload_sessions` is guarded by `showing` -- and being one guard away
+        # from the bug the sibling avoids explicitly is not a place to leave it.
+        self._stop_watching_the_store()
 
     def on_screen_resume(self) -> None:
         if self._sessions_timer is not None:
             self._sessions_timer.resume()
+        self._watch_the_store()
         # The first resume is the screen's own activation at mount, where populate() has
         # just made (or is about to make) the first fill; scheduling another read there
         # doubled every startup — measured by the flaky-store test's read budget.

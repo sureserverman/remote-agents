@@ -177,7 +177,12 @@ async def _redraw_sessions(composition: ServiceComposition) -> None:
     theirs: nobody asked for this edit, so a Telegram hiccup must not surface as an error the
     owner did not cause -- and must not take down the task that noticed the change."""
     try:
-        await composition.boundary.redraw_sessions_if_open()
+        drew = await composition.boundary.redraw_sessions_if_open()
+        if not drew:
+            # A change the edit floor suppressed is owed rather than dropped, and this is
+            # where it gets paid: the watcher is already ticking, so letting it ask costs a
+            # flag test and saves the boundary owning a timer of its own.
+            await composition.boundary.settle_owed_redraw()
     except Exception:
         _LOG.warning("the sessions page could not be redrawn after a store change", exc_info=True)
 

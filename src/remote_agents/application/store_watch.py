@@ -38,6 +38,15 @@ DEFAULT_INTERVAL_SECONDS = 1.0
 #: One file's reading: its size and modification time in nanoseconds, or `None` when it is not
 #: there. Absence is a value rather than an error, so a `-wal` appearing is itself a change --
 #: which is what a store being written for the first time looks like.
+#:
+#: **What this can miss, stated rather than left to be discovered.** Two distinct writes
+#: fingerprint identically if they land in the same mtime tick *and* leave the file the same
+#: size. On the filesystems this project runs on -- ext4 and APFS, both nanosecond -- that
+#: needs two writes within one tick, which a poll a second apart will not straddle in
+#: practice. It is a real gap in the model rather than an impossibility, and the cost if it
+#: ever happens is bounded: the surfaces keep a sixty-second fallback and the bot's page is
+#: redrawn by the next change, so a missed reading is a late list, not a wrong one. If it is
+#: ever observed, `st_ino` and `st_ctime_ns` are the next two fields to add.
 _Fingerprint = tuple[int, int] | None
 
 

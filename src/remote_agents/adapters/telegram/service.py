@@ -702,6 +702,12 @@ class PrivateBotBoundary:
     `_bar_marker` records above: `run_private_bot` builds the application with
     `concurrent_updates(False)`, so updates are handled one at a time.
     """
+    _redraw_owed: bool = False
+    """Whether a store change arrived inside the edit floor and still needs drawing.
+
+    The difference between coalescing and throttling, and this class claimed the first while
+    doing the second. `settle_owed_redraw` is what pays it.
+    """
     _redraw_allowed_at: float = 0.0
     """The monotonic moment the next store-driven redraw of the sessions page may go out.
 
@@ -1738,6 +1744,25 @@ class PrivateBotBoundary:
     #: The floor between two store-driven edits of the sessions page.
     _REDRAW_INTERVAL_SECONDS = 2.0
 
+    async def settle_owed_redraw(self, bot: Bot | None = None) -> bool:
+        """Draw a redraw the floor suppressed, if one is owed and the floor has lifted.
+
+        The other half of `redraw_sessions_if_open`'s coalescing. Called by whoever is
+        watching the store -- one attempt per poll, which is cheap because it is a flag test
+        until there is something to do.
+
+        Deliberately not a task this object schedules for itself. A timer here would be a
+        second clock in a class whose whole design is "one screen, redrawn on demand", and it
+        would have to be cancelled on every path that stops the bot. The watcher is already
+        ticking; letting it ask is the same answer with nothing to own.
+        """
+        if not self._redraw_owed:
+            return False
+        if monotonic() < self._redraw_allowed_at:
+            return False
+        self._redraw_owed = False
+        return await self.redraw_sessions_if_open(bot)
+
     def _take_drawing_screen(self) -> str | None:
         """Read the pending screen tag and clear it, so it marks exactly one render."""
         tag, self._drawing_screen = self._drawing_screen, None
@@ -1775,11 +1800,22 @@ class PrivateBotBoundary:
             return False
         now = monotonic()
         if now < self._redraw_allowed_at:
+            # Owed, not dropped. The floor may delay an edit; it may not discard one -- and
+            # this page has no fallback timer behind it the way both terminal screens do, so a
+            # change landing inside the window with no further write behind it would leave the
+            # page stale until the owner navigated away and back.
+            self._redraw_owed = True
             return False
         self._redraw_allowed_at = now + self._REDRAW_INTERVAL_SECONDS
+        self._redraw_owed = False
         rendered = await self._sessions_reply(self._sessions_page)
+        # `_take_drawing_screen`, not the constant. `_sessions_reply` marks, and a render that
+        # passed the tag literally left that mark standing -- so the next unrelated screen the
+        # owner opened consumed it, `LiveView` believed a help screen was the list, and the
+        # following store change overwrote what they were reading. One producer, one consumer,
+        # including here.
         await self.view.render(
-            speaker, _reply_arguments(rendered), screen=self._SESSIONS_SCREEN
+            speaker, _reply_arguments(rendered), screen=self._take_drawing_screen()
         )
         return True
 
@@ -1831,6 +1867,11 @@ class PrivateBotBoundary:
         # empty one needs it most -- a machine's enrollment does not stop being a fact because
         # nothing is running against it right now.
         host = await self._host_remote_block()
+        # Marked here, above the empty-list return, and not once at the bottom. Below the
+        # return it missed the "Nothing is running." screen entirely -- so the one page an
+        # owner is most likely to have open when they launch was the one page a store change
+        # could never redraw, which is the 0 -> 1 transition this whole mechanism is for.
+        self._drawing_screen = self._SESSIONS_SCREEN
         if not records:
             self._sessions_page = 1
             # No body Launch. It was the way out before a permanent way out existed; the
@@ -1846,10 +1887,6 @@ class PrivateBotBoundary:
         # it has to be a page that exists. A request past the end renders the last one, and
         # remembering the request rather than the render would send Back somewhere emptier.
         self._sessions_page = index
-        # Mark the screen this reply is building, for whichever render takes it. See
-        # `_drawing_screen`: the render sites cannot tell what they are drawing, and this is
-        # the one function that can.
-        self._drawing_screen = self._SESSIONS_SCREEN
         start = (index - 1) * self.session_page_size
         shown = records[start : start + self.session_page_size]
         sections: list[str] = []

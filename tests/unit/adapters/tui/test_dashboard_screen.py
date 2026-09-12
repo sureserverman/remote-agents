@@ -1085,3 +1085,35 @@ async def test_the_first_real_session_on_an_empty_pane_gets_a_cursor() -> None:
             "placeholder was counted as a populated pane, so its departure read as the "
             "owner's row vanishing"
         )
+
+
+async def test_the_dashboard_pane_stops_listening_while_another_screen_is_on_top() -> None:
+    """Both session lists pause on suspend, and the subscription is half of pausing.
+
+    `SessionsScreen` detaches on suspend for a reason its own comment states: a change
+    arriving while a detail or modal stands on top would start the very tmux conversation the
+    timer's pause exists to stop. This screen paused only its timer, so its subscription kept
+    firing under every pushed screen. Inert today -- `_auto_reload_sessions` is guarded by
+    `showing` -- which is exactly why it needed pinning: the guard was the only thing between
+    this and the bug the sibling went out of its way to avoid.
+    """
+    from backends import FakeStateEvents
+
+    events = FakeStateEvents()
+    app = RemoteAgentsTui(_context((_record(),), state_events=events))
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        assert events.listeners, "the pane subscribes while it is the screen on top"
+
+        await app.push_screen(
+            __import__(
+                "remote_agents.adapters.tui.screens.launch", fromlist=["ProfilesScreen"]
+            ).ProfilesScreen()
+        )
+        await pilot.pause()
+        assert events.listeners == [], "a suspended pane must not still be listening"
+
+        await pilot.press("escape")
+        await pilot.pause()
+        assert events.listeners, "and must take the subscription back on the way in"

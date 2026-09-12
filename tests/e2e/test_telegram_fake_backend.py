@@ -2528,3 +2528,79 @@ async def test_a_change_arriving_mid_press_does_not_draw_over_the_answer() -> No
     redrawn = await boundary.redraw_sessions_if_open(chat.bot)
 
     assert redrawn is False
+
+
+@pytest.mark.asyncio
+async def test_an_empty_sessions_page_is_redrawn_when_the_first_session_appears() -> None:
+    """The 0 -> 1 transition, which is the headline case the whole stage exists for.
+
+    Every other test in this section seeds a non-empty list, and that is how this stayed
+    invisible: `_sessions_reply` returns early for "Nothing is running." -- before the line
+    that marks the screen -- so the page an owner most likely has open when they launch was
+    the one page a store change could never redraw.
+    """
+    chat = FakeChat()
+    boundary = _boundary()
+    await boundary.sessions_command(chat.message_update("/sessions"), None)
+
+    assert "Nothing is running." in chat.bot_messages[-1].text, "the case under test"
+
+    assert await boundary.redraw_sessions_if_open(chat.bot) is True
+
+
+@pytest.mark.asyncio
+async def test_a_redraw_does_not_leave_its_mark_on_the_next_unrelated_screen() -> None:
+    """The mark is consumed by exactly one render, including the redraw's own.
+
+    `redraw_sessions_if_open` calls `_sessions_reply`, which marks -- so a redraw that passed
+    the tag literally rather than consuming the mark left `"sessions"` standing. The next
+    screen the owner opened then took it, `LiveView` believed a help screen was the list, and
+    the following store change overwrote what they were actually reading. Which is the exact
+    harm the three refusals are written to prevent.
+    """
+    chat = FakeChat()
+    boundary = _boundary(_a_running_session())
+    await boundary.sessions_command(chat.message_update("/sessions"), None)
+    await boundary.redraw_sessions_if_open(chat.bot)
+
+    await boundary.help_command(chat.message_update("/help"), None)
+    help_text = chat.bot_messages[-1].text
+    boundary._redraw_allowed_at = 0.0
+
+    assert await boundary.redraw_sessions_if_open(chat.bot) is False
+    assert chat.bot_messages[-1].text == help_text, "a help screen was replaced by the list"
+
+
+@pytest.mark.asyncio
+async def test_a_suppressed_redraw_is_owed_rather_than_lost() -> None:
+    """Coalescing, not throttling -- and the commit that introduced the floor claimed the
+    former while implementing the latter.
+
+    The bot has no fallback timer for this page (both terminal screens keep a sixty-second
+    one). So a change landing inside the two-second floor, with no further write behind it,
+    left the page stale until the owner navigated away and back. The floor may delay an edit;
+    it may not discard one.
+    """
+    chat = FakeChat()
+    boundary = _boundary(_a_running_session())
+    await boundary.sessions_command(chat.message_update("/sessions"), None)
+
+    assert await boundary.redraw_sessions_if_open(chat.bot) is True
+    assert await boundary.redraw_sessions_if_open(chat.bot) is False
+    assert boundary._redraw_owed is True, "the suppressed change must be remembered"
+
+    boundary._redraw_allowed_at = 0.0
+    assert await boundary.settle_owed_redraw(chat.bot) is True
+    assert boundary._redraw_owed is False
+
+
+@pytest.mark.asyncio
+async def test_nothing_is_owed_when_no_change_was_suppressed() -> None:
+    chat = FakeChat()
+    boundary = _boundary(_a_running_session())
+    await boundary.sessions_command(chat.message_update("/sessions"), None)
+
+    assert await boundary.redraw_sessions_if_open(chat.bot) is True
+
+    boundary._redraw_allowed_at = 0.0
+    assert await boundary.settle_owed_redraw(chat.bot) is False
