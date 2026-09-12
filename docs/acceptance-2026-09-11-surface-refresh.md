@@ -773,3 +773,78 @@ Cleanup was verified after the run: `ls /tmp/tmux-1000/ | grep remote-agents` li
 should come back bounded by roughly one second plus the read, i.e. under 1.1 s — and the
 right way to show it is to re-run `measure_pane_delay.py` unchanged and put its three lines
 beside the three above.
+
+---
+
+## Section 7 — The same measurement, after: both surfaces follow the store
+
+Task 2.5. The machine half re-takes section 6's rig; the bot half was driven live, with the
+owner watching their own phone.
+
+### Part A — store row to drawn row, with the watcher wired
+
+The rig is section 6's `measure_pane_delay.py` with **one input changed** — `state_events` is a
+real `StoreWatch` over the same database's files — so the two columns are comparable by
+construction. The phase offsets move from thirds of the old ten-second tick to thirds of the
+watcher's one-second poll, because that is the interval the delay is now a fraction of.
+
+```
+$ uv run --locked python $S/measure_pane_delay_after.py $S/state-after
+interval=60.0s watcher=1.0s
+run=1 offset=0.0s  row_existed=2026-09-12T08:13:58.473+00:00 first_drawn=...58.861+00:00 delay=0.388s
+run=2 offset=0.3s  row_existed=2026-09-12T08:13:59.165+00:00 first_drawn=...59.866+00:00 delay=0.701s
+run=3 offset=0.65s row_existed=2026-09-12T08:14:00.522+00:00 first_drawn=...00.863+00:00 delay=0.341s
+```
+
+| run | before (section 6) | after | phase of the clock it now waits on |
+|---|---|---|---|
+| 1 | 9.346 s | **0.388 s** | 0.0 s |
+| 2 | 7.002 s | **0.701 s** | 0.3 s |
+| 3 | 3.487 s | **3.487 s → 0.341 s** | 0.65 s |
+
+The shape of the answer is unchanged and that is the point: it is still `interval − phase`,
+and what moved is the interval — ten seconds to one. Worst case goes from 10 s to ~1 s, mean
+from ~5 s to ~0.5 s. **The gate asks for every console-pane latency ≤ 2 s; the worst of three
+is 0.701 s.**
+
+`interval=60.0s` in that first line is the *fallback* being reported, not the thing being
+measured. It never fires in these runs — every row is drawn inside the first second.
+
+### Part B — the bot, driven live against the owner's own phone
+
+**This half needed the owner and is recorded as such.** The machine can write the row and read
+the log; it cannot see a phone.
+
+The installed service (v0.40.0) was stopped and this branch was served in its place from the
+working tree, against the owner's real config, store and tmux socket — capped at twenty
+minutes. No schema change exists in Stages 1–2 (`git diff v0.40.0..HEAD -- …/migrations.py` is
+empty), so the swap was a process and nothing else, and the installed service was restarted
+immediately afterwards.
+
+1. Owner sent `/sessions` on their phone and left the page open.
+2. This host launched one **real** session through the project's own composition —
+   `SessionService.launch` against the live store, which is the same call the TUI makes:
+
+   ```
+   launching into remote-agents (4620596fdebdac58cac2b14a)
+   launch_issued_at=2026-09-12T08:16:47.981+00:00
+   row_written_at=2026-09-12T08:16:48.912+00:00
+   session=ad758437-d58e-4ff0-8723-2e1f8427e768 state=running
+   ```
+3. **Owner's report, verbatim: "it updated on its own, no press."**
+
+Host-side corroboration taken at the time: the row is in the live store
+(`ad758437|running|2026-09-12T08:16:47.985`), the tmux pane `ra-ad758437-…` exists and is not
+dead, the serving process held exactly one handle on the live database, and the serve log
+recorded no error — so the redraw path raised nothing on the way through.
+
+### What this does *not* establish
+
+- **One observation, not a distribution.** The bot half is a single trial reported by a human
+  watching a screen; it establishes that the path works end to end, not a latency for it. The
+  two-second coalescing floor means the bot's worst case is structurally higher than part A's
+  and is not measured here.
+- Part A remains one idle process on an idle 16-core host, so its numbers are a floor.
+- The drill ran against a branch served from a working tree. The released build is Stage 4's
+  close-out, and is where these numbers should be taken again if anyone wants them to describe
+  what the owner actually runs.
