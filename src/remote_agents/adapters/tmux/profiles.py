@@ -27,7 +27,6 @@ _RESUME_ARGUMENTS = {
 
 _READINESS_MARKERS = {
     "claude": "Claude Code",
-    "claude-remote": "Claude Code",
     "codex": "Codex",
     # **`Ask anything`, and deliberately not the punctuation after it.** This read
     # `Ask anything...` — three ASCII full stops — and opencode draws `Ask anything…`, one
@@ -53,7 +52,6 @@ _READINESS_MARKERS = {
 #: asked -- a pane resting on the question matches nothing here.
 _READINESS_BLOCKERS = {
     "claude": ("Accessing workspace:",),
-    "claude-remote": ("Accessing workspace:",),
     "codex": ("Do you trust the contents of this directory?",),
     "cursor-agent": ("Workspace Trust Required",),
 }
@@ -71,17 +69,17 @@ _READINESS_BLOCKERS = {
 #: deciding capture lands in that window reports a ready agent that is about to stop on a
 #: question. 0.1 s is the measured maximum plus one poll interval (0.01 s), rounded up.
 #:
-#: `claude` and `claude-remote` are 0.0 because ten launches produced **no dialog at all** on
-#: this host, which makes their gap *undefined* rather than zero. The number is a floor chosen
-#: in the absence of the race, not a measurement of it, and the acceptance document says so; a
-#: host that does raise the dialog is where to re-measure.
+#: `claude` is 0.0 because ten launches produced **no dialog at all** on this host, which makes
+#: its gap *undefined* rather than zero. The number is a floor chosen in the absence of the
+#: race, not a measurement of it, and the acceptance document says so; a host that does raise
+#: the dialog is where to re-measure. (The measurement covered `claude-remote` too, which was
+#: the same binary under a second curated id and is retired as of 0.41.0.)
 #:
 #: `opencode` and `cursor-agent` are absent rather than zero, because an unmeasured agent and
 #: an agent measured at zero are different things and the `.get` default is where the first
 #: belongs.
 _TRUST_SETTLE_SECONDS = {
     "claude": 0.0,
-    "claude-remote": 0.0,
     "codex": 0.1,
 }
 

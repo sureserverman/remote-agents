@@ -34,7 +34,6 @@ none of these formats is documented and all of them are free to change:
 | profile       | context window                      | rate-limit windows              |
 | ------------- | ----------------------------------- | ------------------------------- |
 | claude        | transcript `message.usage` per turn | none written down (see below)   |
-| claude-remote | as claude                           | as claude                       |
 | codex         | rollout `token_count.info`          | rollout `token_count`'s limits  |
 | opencode      | `opencode.db` `message.data.tokens` | none written down               |
 | cursor-agent  | nothing — see `CursorUsageReader`   | nothing                         |

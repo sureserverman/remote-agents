@@ -256,18 +256,10 @@ class ActivitySource(Enum):
     UNOBSERVED = "unobserved"
 
 
-_HOOK_EXCLUSIVE_PROFILES = frozenset({"claude", "claude-remote", "opencode"})
+_HOOK_EXCLUSIVE_PROFILES = frozenset({"claude", "opencode"})
 _HYBRID_PROFILES = frozenset({"codex"})
 _REPORTED_KINDS_BY_PROFILE: dict[str, frozenset[ActivityKind]] = {
     "claude": frozenset(
-        {
-            ActivityKind.COMPLETED,
-            ActivityKind.LIMIT_REACHED,
-            ActivityKind.OUTPUT_LIMIT,
-            ActivityKind.NEEDS_ANSWER,
-        }
-    ),
-    "claude-remote": frozenset(
         {
             ActivityKind.COMPLETED,
             ActivityKind.LIMIT_REACHED,

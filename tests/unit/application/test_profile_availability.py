@@ -29,12 +29,12 @@ class TestTheCuratedIdCheck:
 
     @pytest.mark.parametrize(
         "profile_id",
-        ["claude", "claude-remote", "codex", "opencode", "cursor-agent"],
+        ["claude", "codex", "opencode", "cursor-agent"],
     )
     def test_every_curated_profile_constructs(self, profile_id: str) -> None:
         assert ProfileAvailability(profile_id, True).profile_id == profile_id
 
-    def test_the_curated_set_is_exactly_the_five_closed_profiles(self) -> None:
+    def test_the_curated_set_is_exactly_the_four_closed_profiles(self) -> None:
         """Pinned as a set *and* by its length, so a sixth cannot arrive unnoticed.
 
         The length assertion is the load-bearing half: an equality check alone would still
@@ -46,8 +46,8 @@ class TestTheCuratedIdCheck:
         from remote_agents.domain.profiles import closed_profiles
 
         curated = {str(definition.profile_id) for definition in closed_profiles()}
-        assert len(curated) == 5
-        assert curated == {"claude", "claude-remote", "codex", "opencode", "cursor-agent"}
+        assert len(curated) == 4
+        assert curated == {"claude", "codex", "opencode", "cursor-agent"}
 
     def test_an_uncurated_identifier_is_refused(self) -> None:
         with pytest.raises(ValueError, match="launch profiles must be curated"):

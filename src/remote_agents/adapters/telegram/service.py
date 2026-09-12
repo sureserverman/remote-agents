@@ -4260,7 +4260,6 @@ def _with_remote_control(remote_control: bool) -> str:
 def _profile_name(profile_id: str) -> str:
     return {
         "claude": "Claude",
-        "claude-remote": "Claude Remote",
         "codex": "Codex",
         "opencode": "OpenCode",
         "cursor-agent": "Cursor Agent",

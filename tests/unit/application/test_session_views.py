@@ -898,7 +898,7 @@ def test_the_grid_carries_only_agents_that_report_limits_at_all() -> None:
     missing number is news.
     """
     profiles = tuple(
-        ProfileId(name) for name in ("claude", "claude-remote", "codex", "opencode", "cursor-agent")
+        ProfileId(name) for name in ("claude", "codex", "opencode", "cursor-agent")
     )
     rows = limit_rows(
         (

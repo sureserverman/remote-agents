@@ -355,7 +355,7 @@ async def test_the_limits_pane_declares_something_before_any_read() -> None:
 
 _ALL_AGENTS = tuple(
     ProfileAvailability(name, True)
-    for name in ("claude", "claude-remote", "codex", "opencode", "cursor-agent")
+    for name in ("claude", "codex", "opencode", "cursor-agent")
 )
 
 

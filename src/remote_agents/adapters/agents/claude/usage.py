@@ -57,16 +57,17 @@ class ClaudeUsageReader:
     would report a number the owner cannot reconcile with anything their screen shows.
     """
 
-    profiles = frozenset({ProfileId("claude"), ProfileId("claude-remote")})
+    profiles = frozenset({ProfileId("claude")})
 
     limits_profile = ProfileId("claude")
-    """Which of the two profiles above an account-wide answer is filed under.
+    """Which of the profiles above an account-wide answer is filed under.
 
-    `claude` and `claude-remote` are curated in `domain/profiles.py` to the same executable,
-    differing only by `--remote-control`, so they draw on one plan and one pair of rate-limit
-    windows. `profiles` is a set because either may ask; this names the one the answer is
-    labelled with, so a set membership never has to be turned into a display name by picking
-    an arbitrary element of a frozenset.
+    One profile since 0.41.0, and the pair is why this field exists at all: `claude-remote` was
+    `claude --remote-control` -- the same executable, so the two drew on one plan and one pair
+    of rate-limit windows, and an answer had to be filed under a name rather than under an
+    arbitrary element of a frozenset. `profiles` stays a set because that is the shape the
+    reader protocol asks for, and naming the label explicitly is still what keeps a set
+    membership from having to become a display name.
     """
 
     def __init__(

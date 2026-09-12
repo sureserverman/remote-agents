@@ -243,9 +243,8 @@ are separate processes and the dashboard is not one of them.
 
 **The terminal's pane carries one row per agent that publishes rate limits at all** — today
 Claude and Codex; OpenCode and Cursor publish none, ever, so they get no row rather than a
-permanent line saying nothing will appear there. `claude-remote` is the same account as
-`claude` and shares its row. Columns are keyed by window kind, so a weekly window is always
-under the weekly column and never under somebody else's five-hour one.
+permanent line saying nothing will appear there. Columns are keyed by window kind, so a weekly
+window is always under the weekly column and never under somebody else's five-hour one.
 
 A reporting agent with no figure keeps its row and says which silence it is rather than
 leaving a blank: *no reading yet* (it does publish limits and none was found — including a
@@ -304,7 +303,7 @@ The service also speaks first when a managed agent stops working: it has
 finished, it hit a usage limit, one reply hit its output length limit, or it is waiting for an
 answer. Those four are the whole vocabulary. `cursor-agent` contributes none of them — nobody has
 measured what, if anything, it publishes, so nothing observes it — while
-`claude`, `claude-remote`, `codex` and `opencode` each report for themselves. OpenCode joined
+`claude`, `codex` and `opencode` each report for themselves. OpenCode joined
 on 2026-09-06 through a generated plugin rather than a hook command, and reports two of the
 four: it has finished, and it is waiting for an answer. Its completion carries no closing
 sentence, permanently — the event it comes from has no field that could hold one. It speaks

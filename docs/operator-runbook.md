@@ -648,7 +648,7 @@ rather than folded into a blanket confirmation.
 
 The service sends unprompted messages when a managed agent stops working, one message per
 session per delivery pass, beside the live view rather than inside it. Two sources feed them and
-only one has to be installed. A managed `claude` or `claude-remote` session reports through Claude Code's own
+only one has to be installed. A managed `claude` session reports through Claude Code's own
 hooks. Codex is hybrid: its `Stop` hook reports `completed`; when Codex emits it, its
 `PermissionRequest` hook reports `needs_answer`. Its native code-mode escalation currently skips
 that hook, so the service instead watches the managed pane's content-free `Action Required` title
@@ -1506,9 +1506,8 @@ uv run --locked remote-agents tui
 ```
 
 1. Check the `Plan limits` pane before anything else: it shows one row per agent that
-   publishes rate limits — Claude and Codex on this host, with `claude-remote` sharing
-   Claude's row and the two agents that publish none absent entirely — with the window
-   columns aligned by kind. Each row shows its gauges or says which silence it is,
+   publishes rate limits — Claude and Codex on this host, the two agents that publish none
+   being absent entirely — with the window columns aligned by kind. Each row shows its gauges or says which silence it is,
    `no reading yet` or `unreadable`. The pane must never collapse to
    `No agent limits reported.` once a read has landed and any agent reported; that sentence
    belongs to the moment before the first read and to a host with no limits reader wired.

@@ -302,7 +302,7 @@ def _decline_terminal(tmp_path: Path, profile_id: str, capture: str, **flags: ob
         setattr(gateway, name, value)
     # The blocker table is what tells a non-answerable profile's dialog from its ordinary
     # output, so a codex fixture without codex's blocker is not a codex sitting on a dialog.
-    blockers = () if profile_id in {"claude", "claude-remote"} else (_CODEX_BLOCKER,)
+    blockers = () if profile_id == "claude" else (_CODEX_BLOCKER,)
     terminal = TmuxTerminal(
         gateway,
         {ProjectId("opaque-editor"): project},

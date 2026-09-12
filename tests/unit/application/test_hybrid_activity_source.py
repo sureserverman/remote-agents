@@ -22,7 +22,6 @@ def test_the_vocabulary_no_longer_carries_a_quiet_kind() -> None:
 
 def test_hooked_providers_keep_the_sources_that_describe_them() -> None:
     assert activity_source_for("claude") is ActivitySource.HOOK_EXCLUSIVE
-    assert activity_source_for("claude-remote") is ActivitySource.HOOK_EXCLUSIVE
     assert activity_source_for("codex") is ActivitySource.HYBRID
 
 

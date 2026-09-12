@@ -8,9 +8,22 @@ from remote_agents.ports.agent_activity import (
 )
 
 
-def test_claude_profiles_are_hook_exclusive() -> None:
+def test_claude_is_hook_exclusive() -> None:
     assert activity_source_for("claude") is ActivitySource.HOOK_EXCLUSIVE
-    assert activity_source_for("claude-remote") is ActivitySource.HOOK_EXCLUSIVE
+
+
+def test_the_retired_second_claude_spelling_is_unobserved_rather_than_hook_exclusive() -> None:
+    """A retired id claims no capability, and this is the safe direction to fall.
+
+    `claude-remote` was hook-exclusive while it existed, being the same binary with the same
+    hooks. Retired, it declares nothing — and `UNOBSERVED` is the right answer rather than an
+    unlucky default: a *stored* session can still name it (migration 13 rewrites the records,
+    but an old pane mark or log line can carry it), and treating such a session as
+    hook-exclusive would mean the pipeline waited for hook reports about an agent no launch
+    can produce, instead of falling back to observing the pane.
+    """
+    assert activity_source_for("claude-remote") is ActivitySource.UNOBSERVED
+    assert reported_activity_kinds_for("claude-remote") == set()
 
 
 def test_codex_is_hybrid_until_its_hook_reports() -> None:

@@ -18,21 +18,18 @@ def test_closed_profile_catalogue_has_only_the_approved_fixed_launches() -> None
 
     assert tuple(str(profile.profile_id) for profile in profiles) == (
         "claude",
-        "claude-remote",
         "codex",
         "opencode",
         "cursor-agent",
     )
     assert {profile.launch_argv for profile in profiles} == {
         ("claude",),
-        ("claude", "--remote-control", "{managed_name}"),
         ("codex",),
         ("opencode",),
         ("cursor-agent",),
     }
     assert {str(profile.profile_id): profile.graceful_keys for profile in profiles} == {
         "claude": ("/exit", "Enter"),
-        "claude-remote": ("/exit", "Enter"),
         "codex": ("/exit", "Enter", "Enter"),
         "opencode": ("C-c",),
         "cursor-agent": ("/quit", "Enter", "Enter"),
@@ -42,7 +39,6 @@ def test_closed_profile_catalogue_has_only_the_approved_fixed_launches() -> None
     # reviewed would be a launch flag reaching a provider on this table's authority alone.
     assert {str(profile.profile_id): profile.remote_control_argv for profile in profiles} == {
         "claude": ("claude", "--remote-control", "{managed_name}"),
-        "claude-remote": None,
         "codex": None,
         "opencode": None,
         "cursor-agent": None,
@@ -54,7 +50,9 @@ def test_closed_profile_catalogue_has_only_the_approved_fixed_launches() -> None
     (
         ("claude", "sh", ("sh",)),
         ("claude", "claude", ("claude", "--dangerously-skip-permissions")),
-        ("claude-remote", "claude", ("claude", "remote-control")),
+        # A retired id is refused by the same branch as an uncurated argv: nothing in the
+        # table answers for it any more, so `_EXPECTED_LAUNCHES.get` returns None.
+        ("claude-remote", "claude", ("claude", "--remote-control", "{managed_name}")),
         ("codex", "codex", ("codex", "--auto")),
     ),
 )
@@ -81,20 +79,27 @@ def test_one_unavailable_profile_does_not_disable_other_version_probes() -> None
     )
 
     by_id = {str(result.profile_id): result for result in results}
-    assert by_id["claude-remote"].available is True
+    assert by_id["claude"].available is True
     assert by_id["codex"].version == "codex 1.2.3"
     assert by_id["opencode"].available is True
     assert by_id["cursor-agent"].available is True
 
 
-def test_remote_profile_substitutes_only_the_generated_managed_name() -> None:
+def test_a_remote_control_launch_substitutes_only_the_generated_managed_name() -> None:
+    """The substitution, and that asking for the variant does not change anything else.
+
+    This used to be asserted through the `claude-remote` profile, whose ordinary argv carried
+    the flag. The profile is retired; the argv is `claude`'s remote-control variant now, and
+    the property is unchanged -- `{managed_name}` is the only substitution any curated argv
+    takes, and the readiness blockers are the agent's regardless of which argv it started on.
+    """
     definition = next(
-        profile for profile in closed_profiles() if str(profile.profile_id) == "claude-remote"
+        profile for profile in closed_profiles() if str(profile.profile_id) == "claude"
     )
     session_id = SessionId.new()
 
     runtime = build_launch_profile(
-        definition, Path("/tools/claude"), session_id, {"PATH": "/tools"}
+        definition, Path("/tools/claude"), session_id, {"PATH": "/tools"}, remote_control=True
     )
 
     assert runtime.argv == ("/tools/claude", "--remote-control", f"ra-{session_id}")
@@ -133,7 +138,6 @@ def test_profile_availability_is_not_version_pinned() -> None:
 
     by_id = {str(result.profile_id): result for result in results}
     assert by_id["claude"].status == "AVAILABLE"
-    assert by_id["claude-remote"].status == "AVAILABLE"
     assert by_id["codex"].status == "AVAILABLE"
     assert by_id["codex"].reason is None
 

@@ -100,14 +100,14 @@ def _arrange(tmp_path, monkeypatch, supervisor, *, liveness_exit_zero: bool) -> 
         "remote_agents.bootstrap.probe_profiles",
         lambda *_a, **_k: tuple(
             _compatibility(name)
-            for name in ("claude", "claude-remote", "codex", "opencode", "cursor-agent")
+            for name in ("claude", "codex", "opencode", "cursor-agent")
         ),
     )
     monkeypatch.setattr(
         "remote_agents.composition.tui.probe_profiles",
         lambda *_a, **_k: tuple(
             _compatibility(name)
-            for name in ("claude", "claude-remote", "codex", "opencode", "cursor-agent")
+            for name in ("claude", "codex", "opencode", "cursor-agent")
         ),
     )
     return invoked

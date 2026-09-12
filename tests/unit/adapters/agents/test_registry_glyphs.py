@@ -29,9 +29,19 @@ def test_glyph_of_answers_every_curated_profile() -> None:
         )
 
 
-def test_glyph_of_draws_both_spellings_of_claude_the_same() -> None:
-    """The second spelling is a flag on the same binary, not a second agent."""
-    assert glyph_of(ProfileId("claude-remote")) == glyph_of(ProfileId("claude"))
+def test_glyph_of_draws_nothing_for_the_retired_second_spelling_of_claude() -> None:
+    """It used to draw claude's mark; now it draws nothing, and both were right in turn.
+
+    `claude-remote` was `claude --remote-control` — the same binary under a second curated id
+    — so while it existed it had to draw claude's mark, resolved through the executable rather
+    than through an alias table. Retired in 0.41.0, it is simply an id no vertical declares,
+    and the honest answer is the empty string every unknown profile gets.
+
+    Worth keeping as its own case rather than folding into the unknown-profile test below: a
+    *stored* session can still name it (its record is migrated, but a pane mark or an old log
+    line can carry it), so this is the one retired id a render may actually be handed.
+    """
+    assert glyph_of(ProfileId("claude-remote")) == ""
 
 
 def test_glyph_of_is_total_and_answers_an_unknown_profile_with_nothing() -> None:

@@ -275,7 +275,6 @@ def test_compose_backend_builds_one_backend_from_the_real_helpers(composed_home,
         assert "existing" in {project.name for project in backend.catalogue}
         assert {str(profile.profile_id) for profile in backend.profiles} == {
             "claude",
-            "claude-remote",
             "codex",
             "cursor-agent",
             "opencode",

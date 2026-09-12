@@ -17,21 +17,22 @@ from __future__ import annotations
 
 
 def test_the_registry_answers_for_every_profile_whose_vertical_declares_a_dialog() -> None:
-    """Including `claude-remote`, which is a profile with no vertical of its own."""
+    """Derived from the declarations, never listed here — which is what this file is about.
+
+    It used to name `claude-remote` as well, a profile with no vertical of its own whose
+    dialog had to resolve through the executable rather than through an alias table. That id
+    is retired (0.41.0), so the set is the three verticals that declare a dialog; the
+    resolution mechanism is unchanged and is still what a future `-remote`-style spelling
+    would travel through.
+    """
     from remote_agents.adapters.agents.registry import profile_trust_dialogs
 
     dialogs = profile_trust_dialogs()
 
-    assert set(dialogs) == {"claude", "claude-remote", "codex", "cursor-agent"}, sorted(dialogs)
+    assert set(dialogs) == {"claude", "codex", "cursor-agent"}, sorted(dialogs)
     assert "opencode" not in dialogs, (
         "opencode declares no dialog and must not be answerable: a Trust button there would "
         "send arrow keys and an Enter into a live prompt with no question on it"
-    )
-    # Equal, not identical: each lookup builds its vertical's descriptor afresh, so the two
-    # spellings carry two `TrustDialog` values that must *say* the same thing.
-    assert dialogs["claude-remote"] == dialogs["claude"], (
-        "`claude --remote-control` is the same binary drawing the same dialog; resolving it "
-        "to anything else would answer one agent's question with another's row arithmetic"
     )
 
 

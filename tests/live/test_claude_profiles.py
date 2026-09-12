@@ -17,7 +17,7 @@ from remote_agents.domain.profiles import closed_profiles
 
 
 @pytest.mark.live_profile
-@pytest.mark.parametrize("profile_id", ("claude", "claude-remote"))
+@pytest.mark.parametrize("profile_id", ("claude",))
 async def test_claude_profile_live_lifecycle(
     tmp_path: Path, request: pytest.FixtureRequest, profile_id: str
 ) -> None:

@@ -120,7 +120,6 @@ def test_doctor_uses_the_private_default_config_and_reports_operational_componen
         "remote_agents.bootstrap.probe_profiles",
         lambda *_args, **_kwargs: (
             _compatibility("claude"),
-            _compatibility("claude-remote"),
             _compatibility("codex"),
             _compatibility("opencode"),
             _compatibility("cursor-agent"),
@@ -130,7 +129,6 @@ def test_doctor_uses_the_private_default_config_and_reports_operational_componen
         "remote_agents.composition.tui.probe_profiles",
         lambda *_args, **_kwargs: (
             _compatibility("claude"),
-            _compatibility("claude-remote"),
             _compatibility("codex"),
             _compatibility("opencode"),
             _compatibility("cursor-agent"),
@@ -146,7 +144,7 @@ def test_doctor_uses_the_private_default_config_and_reports_operational_componen
     # it from the absence of a complaint.
     assert report["config"]["readable"] is True
     assert report["config"]["missing"] == [] and report["config"]["unknown"] == []
-    assert [profile["status"] for profile in report["profiles"]] == ["AVAILABLE"] * 5
+    assert [profile["status"] for profile in report["profiles"]] == ["AVAILABLE"] * 4
 
 
 @pytest.mark.asyncio

@@ -24,14 +24,12 @@ class ProfileError(ValueError):
 #: takes.
 _EXPECTED_LAUNCHES: dict[str, tuple[str, tuple[str, ...], tuple[str, ...] | None]] = {
     "claude": ("claude", ("claude",), ("claude", "--remote-control", "{managed_name}")),
-    "claude-remote": ("claude", ("claude", "--remote-control", "{managed_name}"), None),
     "codex": ("codex", ("codex",), None),
     "opencode": ("opencode", ("opencode",), None),
     "cursor-agent": ("cursor-agent", ("cursor-agent",), None),
 }
 _GRACEFUL_KEYS = {
     "claude": ("/exit", "Enter"),
-    "claude-remote": ("/exit", "Enter"),
     "codex": ("/exit", "Enter", "Enter"),
     "opencode": ("C-c",),
     "cursor-agent": ("/quit", "Enter", "Enter"),
@@ -100,7 +98,14 @@ class ProfileCompatibility:
 
 
 def closed_profiles() -> tuple[ProfileDefinition, ...]:
-    """Return all and only the five reviewed profiles in stable UI order."""
+    """Return all and only the four reviewed profiles in stable UI order.
+
+    Four since 0.41.0. `claude-remote` was the fifth, and it was `claude --remote-control
+    {managed_name}` -- one launch flag modelled as an agent of its own, which put the choice in
+    every picker on both surfaces and made it a property of whichever session the owner started.
+    It is `ProfileDefinition.remote_control_argv` on `claude` now, chosen once per launch from
+    one host-wide setting rather than per session by whoever is looking at a menu.
+    """
     return tuple(
         ProfileDefinition(
             ProfileId(profile_id),

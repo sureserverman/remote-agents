@@ -17,7 +17,7 @@ local operator action.
 failing (DEC-016). The owner answers from the bot, which is where the pane is *not* visible;
 the local surface shows the word and hands over the dialog itself, because the console has the
 agent's pane on screen (DEC-047). Saying *yes* is confined to the agents whose dialog this
-project can read — `claude` and `claude-remote` — and is a keypress into that dialog. Saying
+project can read — `claude` alone today — and is a keypress into that dialog. Saying
 *no* is available for every agent, because it ends a session that never started. It takes
 effect without a confirmation step (DEC-078) — not uniquely, since Stop and close and Clean up
 are unconfirmed too (DEC-018), but it is the only ending offered from a state whose stop policy
@@ -25,8 +25,7 @@ otherwise carries force alone.
 
 | Profile | Fixed launch argv | Availability/auth/trust | Resume catalogue / selection | Readiness evidence | Fixed graceful exit |
 | --- | --- | --- | --- | --- | --- |
-| `claude` | `claude` | executable must be present; local auth/trust stays local | documented UUID filenames/project directories plus a bounded generated title or stored resume description; enabled when the catalogue is available | `Claude Code`; a workspace-trust dialog answers the launch as `untrusted` | `/exit`, Enter |
-| `claude-remote` | `claude --remote-control ra-<uuid>` | executable must be present; local auth/trust stays local | not a resume profile | `Claude Code`; a workspace-trust dialog answers the launch as `untrusted` | `/exit`, Enter |
+| `claude` | `claude`, or `claude --remote-control ra-<uuid>` when the stored Remote Control default reads *on* | executable must be present; local auth/trust stays local | documented UUID filenames/project directories plus a bounded generated title or stored resume description; enabled when the catalogue is available | `Claude Code`; a workspace-trust dialog answers the launch as `untrusted` | `/exit`, Enter |
 | `codex` | `codex` | executable must be present; local auth/trust stays local | feature-probed app-server `thread/list` with a bounded provider title or preview when supplied | `/exit` command selection and submit | `/exit`, Enter, Enter |
 | `opencode` | `opencode` | executable must be present; local auth/trust stays local | `session list --format json`; enabled only after its JSON contract succeeds | `Ask anything...` interactive UI | Ctrl-C |
 | `cursor-agent` | `cursor-agent` | executable must be present; local auth/trust stays local | disabled: `ls` is interactive and has no structured safe identifier catalogue | `/quit` command selection and submit | `/quit`, Enter, Enter |
@@ -34,7 +33,14 @@ otherwise carries force alone.
 **Claude's** Remote Control — the *pane* action — is available only for a live managed
 `claude` pane. Enable and Disable each require confirmation and use the qualified in-pane
 interaction; a stale or unclassifiable capture fails closed. No other profile has a Remote
-Control of that kind, `claude-remote` included.
+Control of that kind.
+
+The second curated spelling, `claude-remote`, is **retired as of 0.41.0**. It was
+`claude --remote-control ra-<uuid>`: one launch flag modelled as a separate agent, which put
+the choice in every picker and made it a property of whichever session the owner happened to
+start. The flag is now chosen once per launch from a host-wide setting — Claude's own
+`remoteControlAtStartup`, edited from either surface's Settings screen — and stored sessions
+that named the retired id were rewritten by migration 13.
 
 That is a statement about the pane action and not about the words "Remote Control". Codex
 publishes one too, with a different subject — the machine rather than a pane — and it is

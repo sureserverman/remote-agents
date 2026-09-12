@@ -96,9 +96,10 @@ def test_the_settle_each_agent_gets_is_the_one_that_was_measured_for_it() -> Non
     marker and its dialog follows 0.081-0.084 s later, five launches out of five, so a capture
     landing in that window reports a ready agent that is about to stop.
 
-    The two Claude profiles are 0.0 because ten launches raised no dialog on this host -- an
-    *undefined* gap, not a zero one. On a host that does ask, this is the first thing to
-    re-measure.
+    `claude` is 0.0 because ten launches raised no dialog on this host -- an *undefined* gap,
+    not a zero one. On a host that does ask, this is the first thing to re-measure. (The same
+    measurement covered `claude-remote`, the same binary under a second curated id, retired in
+    0.41.0.)
     """
     session_id = SessionId.new()
 
@@ -112,14 +113,6 @@ def test_the_settle_each_agent_gets_is_the_one_that_was_measured_for_it() -> Non
             ("claude",),
             ("/exit", "Enter"),
             ("claude", "--remote-control", "{managed_name}"),
-            0.0,
-        ),
-        (
-            "claude-remote",
-            "claude",
-            ("claude", "--remote-control", "{managed_name}"),
-            ("/exit", "Enter"),
-            None,
             0.0,
         ),
         ("codex", "codex", ("codex",), ("/exit", "Enter", "Enter"), None, 0.1),
@@ -139,7 +132,7 @@ def test_an_unmeasured_agent_is_absent_from_the_table_rather_than_zero_in_it() -
     """The table's stated rationale, enforced: a measured zero is not an unmeasured one."""
     from remote_agents.adapters.tmux.profiles import _TRUST_SETTLE_SECONDS
 
-    assert set(_TRUST_SETTLE_SECONDS) == {"claude", "claude-remote", "codex"}
+    assert set(_TRUST_SETTLE_SECONDS) == {"claude", "codex"}
     assert "opencode" not in _TRUST_SETTLE_SECONDS
     assert "cursor-agent" not in _TRUST_SETTLE_SECONDS
 
@@ -201,10 +194,8 @@ def test_a_readiness_marker_is_a_string_the_agent_actually_draws() -> None:
     from remote_agents.adapters.tmux.profiles import _READINESS_MARKERS
 
     captures = Path(__file__).resolve().parents[3] / "fixtures" / "ready_screens"
-    for profile in ("claude", "claude-remote", "codex", "cursor-agent", "opencode"):
-        # `claude-remote` is `claude --remote-control`: the same binary drawing the same
-        # banner, and the registry resolves it that way everywhere else too.
-        screen = "claude" if profile.startswith("claude") else profile
+    for profile in ("claude", "codex", "cursor-agent", "opencode"):
+        screen = profile
         drawn = (captures / f"{screen}.txt").read_text(encoding="utf-8")
         marker = _READINESS_MARKERS[profile]
 

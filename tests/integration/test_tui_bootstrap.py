@@ -72,7 +72,6 @@ def test_the_local_context_offers_the_catalogue_profiles_and_creation_service(
         assert "existing" in {project.name for project in context.backend.catalogue}
         assert {profile.profile_id for profile in context.profiles} == {
             "claude",
-            "claude-remote",
             "codex",
             "cursor-agent",
             "opencode",
@@ -191,7 +190,7 @@ def test_the_probe_note_survives_all_the_way_to_the_surface(
     try:
         context = local_context(config, connection, paths)
 
-        assert len(context.profiles) == 5, "the curated set is what the surface renders"
+        assert len(context.profiles) == 4, "the curated set is what the surface renders"
         for profile in context.profiles:
             assert profile.available is True, (
                 f"{profile.profile_id}: an installed executable is available; "
@@ -234,7 +233,7 @@ def test_both_surfaces_are_handed_the_same_profile_tuple(
         backend = compose_backend(config, connection, paths)
 
         assert context.profiles == backend.profiles
-        assert len(backend.profiles) == 5
+        assert len(backend.profiles) == 4
     finally:
         connection.close()
 
