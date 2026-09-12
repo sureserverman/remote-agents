@@ -991,3 +991,499 @@ recorded no error — so the redraw path raised nothing on the way through.
 - The drill ran against a branch served from a working tree. The released build is Stage 4's
   close-out, and is where these numbers should be taken again if anyone wants them to describe
   what the owner actually runs.
+
+---
+
+## Section 8 — The Stage 3 premise check: who turns Remote Control on
+
+The owner's instruction was *"check it before Stage 3"*, after section 2 recorded that a
+launched `claude` pane is connected without anything sending it a key. Stage 3 and Stage 4
+were written on the premise that a setting reading *"should a Claude launch enable Remote
+Control"* has two reachable states. This section establishes that it does not, names what is
+actually doing the enabling, and measures what `--remote-control <name>` contributes given it.
+
+**Host:** this workstation, tmux 3.4, `claude` **2.1.269**, Opus 5 (1M context), Claude Max.
+**Observation:** raw `tmux capture-pane`, so no code this plan changes is called. The
+indicator read is the banner's cwd line — `~/dev/infra/remote-agents · /rc` when the bridge
+autostarted, and the same line without the ` · /rc` suffix when it did not. Matched as
+`(?<![\w/])/rc\b` after a first pass matched the substring `/rc` inside this branch's own
+name and reported every arm connected.
+
+### Part A — what actually decides it
+
+`claude --help` on 2.1.269 documents `--remote-control [name]` as *"Start an interactive
+session with Remote Control enabled (optionally named)"*, and the resolver that consumes it
+is in the shipped binary. Decoded from `/home/user/.local/share/claude/versions/2.1.269`:
+
+```js
+function ji({remoteControlFlag: C, isRemoteThinClient: v}) {
+  let O = env.CLAUDE_CODE_REMOTE,
+      P = grn(),                                                   // explicit setting + source
+      R = (!v && !O && !C && P.value === undefined) ? hen() : void 0,   // the account default
+      T = !v && !O && (C || (P.value ?? R?.value ?? false));           // enabled
+```
+
+with
+
+```js
+function hen(){ if (GA()) return {value:false, source:"remote_env"};
+                let e = orgPolicy("remote_control_at_startup");
+                if (e !== undefined) return {value:e, source:"org_policy"};
+                return {value: growthbook("tengu_cobalt_harbor", false), source:"growthbook"}; }
+```
+
+Three things follow, and the arms below test each of them rather than trusting the reading:
+
+1. **The account default is what connects the pane.** `hen()` is consulted *only* when no
+   explicit `remoteControlAtStartup` setting exists, which is this machine's state — the key
+   is absent from `~/.claude/settings.json`, and `~/.claude.json` carries only counters
+   (`hasUsedRemoteControl`, `remoteControlUpsellSeenCount`). So the value comes from org
+   policy or from the GrowthBook flag `tengu_cobalt_harbor`, both **served remotely**.
+2. **The flag short-circuits the whole expression.** `C ||` is evaluated before any setting.
+3. **`CLAUDE_CODE_REMOTE` suppresses it unconditionally** — `!O &&` gates every other term.
+
+`remoteControlAtStartup` is a real user-scope setting, surfaced in `/config` as *"Enable
+Remote Control for all sessions"* with options `true | false | default`; the binary also
+carries the refusal *"repo-scoped settings cannot enable Remote Control; set it at user scope
+(/config)"*, and `grn()` reads project and local scope for a `false` **only**.
+
+### Part B — the arms
+
+| Arm | Launch | Connected |
+|---|---|---|
+| A | remote-agents `claude` profile, curated env, no flag | **yes** |
+| B | remote-agents `claude-remote` profile — `claude --remote-control ra-<uuid>` | **yes** |
+| C | control: bare `claude`, this session's env scrubbed of every `CLAUDE*` / `AI_AGENT` / `REMOTE_AGENTS` variable, no remote-agents machinery | **yes** |
+| D | arm A plus `CLAUDE_CODE_MANAGED_SETTINGS_PATH` → `{"remoteControlAtStartup": false}` | **yes** (the file is not read) |
+| E | arm A plus project scope `.claude/settings.json` → `{"remoteControlAtStartup": false}` | **no** |
+| F | arm A plus local scope `.claude/settings.local.json` → the same key | **no** |
+| G | arm E's project-scope `false` **plus** `--remote-control ra-<uuid>` | **yes** |
+| H | arm A plus `CLAUDE_CODE_REMOTE=1`, no flag, no settings file | **no** |
+
+Each arm ran on its own tmux socket, destroyed on the way out, sampled at 3–4 s, 7–10 s and
+13 s. E and F created their settings file, launched, and restored the tree before the next arm
+began: `.claude/settings.json` did not exist before or after, and `.claude/settings.local.json`
+is byte-identical (`md5 37b2454e9c9e9f436103887043d03b2d` before and after).
+
+**A vs C settles the hypothesis the plan named first.** A scrubbed, fully inherited
+environment with no remote-agents machinery in it connects exactly as the curated launch does,
+so the autostart is not a consequence of what `build_launch_profile` passes.
+
+**E, F and G settle the direction.** An off is reachable, but only through a settings file —
+and the flag overrides it. There is no argv that turns Remote Control off, and `--remote-control`
+takes a name, not a boolean: `claude --help` lists no negated form and the binary contains no
+`no-remote-control`.
+
+**D is recorded because it failed.** `CLAUDE_CODE_MANAGED_SETTINGS_PATH` is a real variable in
+the binary's env table and no managed settings file exists on this host (`/etc/claude-code/`
+is absent), so the arm was expected to disable; it did not. Why is not established here.
+
+### Part C — what the flag actually contributes, measured
+
+Arm G's pane, with the flag and against a setting saying `false`:
+
+```
+ ▐▛███▛█   Claude Code v2.1.269
+▝▜██████▀  Opus 5 (1M context) with high effort · Claude Max
+  ▝▝ ▝▝    ~/dev/infra/remote-agents · /rc
+/remote-control is active · Continue here, on your phone, or at https://claude.ai/code/session_01HxHAFaCsyE1pLsbgNgiNVW
+```
+
+Arm A's pane, autostarted by the account default, prints the `· /rc` suffix and **nothing
+else** — no fourth line.
+
+That fourth line is `REMOTE_CONTROL_ENABLED_MARKER` verbatim
+(`adapters/tmux/remote_control.py:32`). So the flag's three measured contributions are:
+
+1. **It forces enablement over a setting that says no** (arm G vs arm E).
+2. **It names the session** `ra-<uuid>` instead of the auto-generated
+   `<hostname>-…` that `--remote-control-session-name-prefix` defaults to.
+3. **It makes the state readable.** A flag-launched pane satisfies the project's own ACTIVE
+   classifier from its banner; an autostarted one satisfies none of the three markers and
+   reads `UNKNOWN` — which is precisely the reachability problem section 3 had to solve with
+   `remote_control_reading`'s stale-record fallback.
+
+### What this establishes for Stages 3 and 4
+
+- **The plan's premise is false in the direction that matters.** `claude_remote_control_at_launch`
+  was specified with default `False` meaning *today's `claude` behaviour*. Today's `claude`
+  behaviour is **connected**. A row rendering `off` while the pane is on is the defect the
+  owner asked to be checked for, and omitting the argv cannot produce an `off`.
+- **`--remote-control {managed_name}` is still worth shipping**, for contributions 2 and 3
+  rather than for 1. Stage 4's argv work stands on its own.
+- **The account default is served remotely.** `tengu_cobalt_harbor` can change without a
+  `claude` upgrade, so *"no flag"* is not a stable state to describe on a screen at all.
+
+### What this does *not* establish
+
+- **The name's visibility is unverified.** That `ra-<uuid>` is what the phone's session list
+  shows was not observed — reading it needs the mobile app, which this host cannot drive. Only
+  the argv and the pane's banner were measured.
+- **Why arm D failed is unknown**, so the claim is "this variable did not disable it here",
+  not "managed scope cannot set this setting".
+- **`CLAUDE_CODE_REMOTE=1` (arm H) is recorded, not recommended.** It is an internal variable
+  meaning *this process is a remote environment*; `hen()`'s own first branch reads it as
+  `remote_env`. Suppressing the bridge with it would also tell Claude something untrue about
+  where it is running, and what else follows from that was not measured.
+- **One host, one account.** Every arm ran against this workstation's `claude` and this
+  owner's account, so the account default observed here is this account's.
+
+### Commands, and the rig verbatim
+
+Arms A–D, then E–F, then G–H, each file run once under `uv run python`. The three scripts
+share a shape: build the launch argv and environment through the project's own
+`build_launch_profile` so the arm is faithful to a real launch, spawn it into a disposable
+tmux socket through `env -i` so the pane cannot inherit this session's environment, capture,
+and kill the server.
+
+#### `probe2.py` — arms A, B, C, D
+
+```python
+"""Premise probe v2 — four arms, full captures kept, the `/rc` token matched exactly.
+
+  A  remote-agents `claude` profile, curated environment, no flag
+  B  remote-agents `claude-remote` profile, i.e. `claude --remote-control ra-<uuid>`
+  C  control: this session's environment scrubbed of every CLAUDE*/CLAUDECODE/AI_AGENT
+     variable, no remote-agents machinery, no flag
+  D  arm A plus CLAUDE_CODE_MANAGED_SETTINGS_PATH -> {"remoteControlAtStartup": false}
+
+A vs C answers "is the auto-connect a consequence of the environment build_launch_profile
+passes". A vs B is the drill the plan asks for. D asks whether an *off* is reachable at all
+from a launch remote-agents controls, which is what decides whether a setting can be honest.
+
+Observation is raw `tmux capture-pane`: no code this plan changes is called.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import json
+import os
+import re
+import shutil
+import subprocess
+import sys
+from pathlib import Path
+
+sys.path.insert(0, "/home/user/dev/infra/remote-agents/src")
+
+from remote_agents.adapters.tmux.profiles import build_launch_profile  # noqa: E402
+from remote_agents.domain.models import ProfileId, SessionId  # noqa: E402
+from remote_agents.domain.profiles import closed_profiles  # noqa: E402
+
+PROJECT = Path("/home/user/dev/infra/remote-agents")
+OUT = Path(sys.argv[1])
+CURATED_KEYS = ("HOME", "LANG", "LC_ALL", "PATH", "TERM")
+SAMPLE_AT = (3.0, 7.0, 13.0)
+#: The status indicator, anchored so neither a branch name nor a plan filename can match it.
+RC_TOKEN = re.compile(r"(?<![\w/])/rc\b")
+
+
+def tmux(socket: str, *argv: str) -> str:
+    return subprocess.run(
+        ("tmux", "-L", socket, *argv),
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        timeout=20,
+    ).stdout
+
+
+def definition(profile_id: str):
+    return next(p for p in closed_profiles() if p.profile_id == ProfileId(profile_id))
+
+
+def curated_environment(profile_id: str, session_id: SessionId) -> tuple[tuple[str, ...], dict]:
+    profile = build_launch_profile(
+        definition(profile_id),
+        Path(shutil.which("claude") or ""),
+        session_id,
+        {k: os.environ[k] for k in CURATED_KEYS if k in os.environ},
+    )
+    return profile.argv, dict(profile.environment)
+
+
+async def arm(name: str, argv: tuple[str, ...], environment: dict, *, isolated: bool) -> dict:
+    socket = f"premise2-{name}-{os.getpid()}"
+    spawn = (
+        ("env", "-i", *(f"{k}={v}" for k, v in environment.items()), *argv) if isolated else argv
+    )
+    record: dict = {"arm": name, "argv": list(argv), "samples": []}
+    try:
+        tmux(socket, "new-session", "-d", "-x", "200", "-y", "50", "-c", str(PROJECT), "--", *spawn)
+        previous = 0.0
+        for at in SAMPLE_AT:
+            await asyncio.sleep(at - previous)
+            previous = at
+            capture = tmux(socket, "capture-pane", "-p", "-t", "0")
+            (OUT / f"{name}-at-{at:g}s.txt").write_text(capture)
+            matched = [line.strip() for line in capture.splitlines() if RC_TOKEN.search(line)]
+            record["samples"].append(
+                {
+                    "at_seconds": at,
+                    "rc_token_lines": matched,
+                    "connected": bool(matched),
+                    "connecting": any("connecting" in line for line in matched),
+                }
+            )
+    finally:
+        tmux(socket, "kill-server")
+    return record
+
+
+async def main() -> None:
+    OUT.mkdir(parents=True, exist_ok=True)
+
+    managed = OUT / "managed-settings.json"
+    managed.write_text(json.dumps({"remoteControlAtStartup": False}))
+
+    a_argv, a_env = curated_environment("claude", SessionId.new())
+    b_argv, b_env = curated_environment("claude-remote", SessionId.new())
+    d_argv, d_env = curated_environment("claude", SessionId.new())
+    d_env["CLAUDE_CODE_MANAGED_SETTINGS_PATH"] = str(managed)
+
+    control = {
+        k: v
+        for k, v in os.environ.items()
+        if not k.startswith(("CLAUDE", "REMOTE_AGENTS", "AI_AGENT", "VIRTUAL_ENV", "UV"))
+    }
+
+    results = [
+        await arm("A-no-flag-curated", a_argv, a_env, isolated=True),
+        await arm("B-flag-curated", b_argv, b_env, isolated=True),
+        await arm("C-control-scrubbed", (str(shutil.which("claude")),), control, isolated=True),
+        await arm("D-managed-off", d_argv, d_env, isolated=True),
+    ]
+    (OUT / "result.json").write_text(json.dumps(results, indent=2))
+    for record in results:
+        print(f"\n== {record['arm']}\n   argv: {' '.join(record['argv'])}")
+        for sample in record["samples"]:
+            print(
+                f"   {sample['at_seconds']:>5}s  connected={sample['connected']}"
+                f"  connecting={sample['connecting']}  {sample['rc_token_lines']}"
+            )
+
+
+asyncio.run(main())
+```
+
+#### `probe3.py` — arms E, F
+
+```python
+"""Premise probe v3 — where the off switch actually lives.
+
+Each arm launches the remote-agents `claude` profile (no flag) into the repo with one
+scope carrying `remoteControlAtStartup: false`, and reads the banner's cwd line: `· /rc`
+present means the bridge autostarted.
+
+  E  project scope   .claude/settings.json          (created, then removed)
+  F  local scope     .claude/settings.local.json    (one key added, exact bytes restored)
+
+Each arm creates its file, launches, captures, and restores before the next begins.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import json
+import os
+import re
+import shutil
+import subprocess
+import sys
+from pathlib import Path
+
+sys.path.insert(0, "/home/user/dev/infra/remote-agents/src")
+
+from remote_agents.adapters.tmux.profiles import build_launch_profile  # noqa: E402
+from remote_agents.domain.models import ProfileId, SessionId  # noqa: E402
+from remote_agents.domain.profiles import closed_profiles  # noqa: E402
+
+PROJECT = Path("/home/user/dev/infra/remote-agents")
+OUT = Path(sys.argv[1])
+RC_TOKEN = re.compile(r"(?<![\w/])/rc\b")
+SAMPLE_AT = (4.0, 10.0)
+
+
+def tmux(socket: str, *argv: str) -> str:
+    return subprocess.run(
+        ("tmux", "-L", socket, *argv),
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        timeout=20,
+    ).stdout
+
+
+def curated() -> tuple[tuple[str, ...], dict]:
+    definition = next(
+        p for p in closed_profiles() if p.profile_id == ProfileId("claude")
+    )
+    profile = build_launch_profile(
+        definition,
+        Path(shutil.which("claude") or ""),
+        SessionId.new(),
+        {k: os.environ[k] for k in ("HOME", "LANG", "LC_ALL", "PATH", "TERM") if k in os.environ},
+    )
+    return profile.argv, dict(profile.environment)
+
+
+async def arm(name: str) -> dict:
+    argv, environment = curated()
+    socket = f"premise3-{name}-{os.getpid()}"
+    record: dict = {"arm": name, "samples": []}
+    try:
+        tmux(
+            socket, "new-session", "-d", "-x", "200", "-y", "50", "-c", str(PROJECT), "--",
+            "env", "-i", *(f"{k}={v}" for k, v in environment.items()), *argv,
+        )
+        previous = 0.0
+        for at in SAMPLE_AT:
+            await asyncio.sleep(at - previous)
+            previous = at
+            capture = tmux(socket, "capture-pane", "-p", "-t", "0")
+            (OUT / f"{name}-at-{at:g}s.txt").write_text(capture)
+            matched = [line.strip() for line in capture.splitlines() if RC_TOKEN.search(line)]
+            record["samples"].append({"at_seconds": at, "connected": bool(matched), "lines": matched})
+    finally:
+        tmux(socket, "kill-server")
+    return record
+
+
+async def main() -> None:
+    OUT.mkdir(parents=True, exist_ok=True)
+    results = []
+
+    project_settings = PROJECT / ".claude" / "settings.json"
+    assert not project_settings.exists(), "refusing to clobber an existing project settings file"
+    project_settings.write_text(json.dumps({"remoteControlAtStartup": False}))
+    try:
+        results.append(await arm("E-project-scope-false"))
+    finally:
+        project_settings.unlink()
+
+    local_settings = PROJECT / ".claude" / "settings.local.json"
+    original = local_settings.read_bytes()
+    try:
+        loaded = json.loads(original)
+        loaded["remoteControlAtStartup"] = False
+        local_settings.write_text(json.dumps(loaded, indent=2))
+        results.append(await arm("F-local-scope-false"))
+    finally:
+        local_settings.write_bytes(original)
+
+    (OUT / "result3.json").write_text(json.dumps(results, indent=2))
+    for record in results:
+        print(f"\n== {record['arm']}")
+        for sample in record["samples"]:
+            print(f"   {sample['at_seconds']:>5}s  connected={sample['connected']}  {sample['lines']}")
+
+
+asyncio.run(main())
+```
+
+#### `probe4.py` — arms G, H
+
+```python
+"""Premise probe v4 — precedence, and whether an env var can suppress the bridge.
+
+  G  project scope `remoteControlAtStartup: false` **plus** `--remote-control ra-<uuid>`
+     -- does the flag win over a setting that says no?
+  H  curated environment plus `CLAUDE_CODE_REMOTE=1`, no flag, no settings file
+     -- does the variable the resolver reads first suppress the autostart?
+"""
+
+from __future__ import annotations
+
+import asyncio
+import json
+import os
+import re
+import shutil
+import subprocess
+import sys
+from pathlib import Path
+
+sys.path.insert(0, "/home/user/dev/infra/remote-agents/src")
+
+from remote_agents.adapters.tmux.profiles import build_launch_profile  # noqa: E402
+from remote_agents.domain.models import ProfileId, SessionId  # noqa: E402
+from remote_agents.domain.profiles import closed_profiles  # noqa: E402
+
+PROJECT = Path("/home/user/dev/infra/remote-agents")
+OUT = Path(sys.argv[1])
+RC_TOKEN = re.compile(r"(?<![\w/])/rc\b")
+SAMPLE_AT = (4.0, 10.0)
+
+
+def tmux(socket: str, *argv: str) -> str:
+    return subprocess.run(
+        ("tmux", "-L", socket, *argv),
+        check=False, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, timeout=20,
+    ).stdout
+
+
+def curated(profile_id: str) -> tuple[tuple[str, ...], dict]:
+    definition = next(p for p in closed_profiles() if p.profile_id == ProfileId(profile_id))
+    profile = build_launch_profile(
+        definition,
+        Path(shutil.which("claude") or ""),
+        SessionId.new(),
+        {k: os.environ[k] for k in ("HOME", "LANG", "LC_ALL", "PATH", "TERM") if k in os.environ},
+    )
+    return profile.argv, dict(profile.environment)
+
+
+async def arm(name: str, argv: tuple[str, ...], environment: dict) -> dict:
+    socket = f"premise4-{name}-{os.getpid()}"
+    record: dict = {"arm": name, "argv": list(argv), "samples": []}
+    try:
+        tmux(
+            socket, "new-session", "-d", "-x", "200", "-y", "50", "-c", str(PROJECT), "--",
+            "env", "-i", *(f"{k}={v}" for k, v in environment.items()), *argv,
+        )
+        previous = 0.0
+        for at in SAMPLE_AT:
+            await asyncio.sleep(at - previous)
+            previous = at
+            capture = tmux(socket, "capture-pane", "-p", "-t", "0")
+            (OUT / f"{name}-at-{at:g}s.txt").write_text(capture)
+            matched = [line.strip() for line in capture.splitlines() if RC_TOKEN.search(line)]
+            banner = [line.strip() for line in capture.splitlines() if line.strip()][:4]
+            record["samples"].append(
+                {"at_seconds": at, "connected": bool(matched), "lines": matched, "banner": banner}
+            )
+    finally:
+        tmux(socket, "kill-server")
+    return record
+
+
+async def main() -> None:
+    OUT.mkdir(parents=True, exist_ok=True)
+    results = []
+
+    g_argv, g_env = curated("claude-remote")
+    project_settings = PROJECT / ".claude" / "settings.json"
+    assert not project_settings.exists(), "refusing to clobber an existing project settings file"
+    project_settings.write_text(json.dumps({"remoteControlAtStartup": False}))
+    try:
+        results.append(await arm("G-project-false-plus-flag", g_argv, g_env))
+    finally:
+        project_settings.unlink()
+
+    h_argv, h_env = curated("claude")
+    h_env["CLAUDE_CODE_REMOTE"] = "1"
+    results.append(await arm("H-env-claude-code-remote", h_argv, h_env))
+
+    (OUT / "result4.json").write_text(json.dumps(results, indent=2))
+    for record in results:
+        print(f"\n== {record['arm']}\n   argv: {' '.join(record['argv'])}")
+        for sample in record["samples"]:
+            print(f"   {sample['at_seconds']:>5}s  connected={sample['connected']}  {sample['lines']}")
+            print(f"          banner: {sample['banner']}")
+
+
+asyncio.run(main())
+```
