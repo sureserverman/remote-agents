@@ -414,3 +414,68 @@ async def test_two_interstitial_resends_in_a_row_lose_neither_deferred_prune() -
     assert callbacks.resolve(first, owner_id=OWNER, chat_id=CHAT, message_id=100) is None
     assert callbacks.resolve(second, owner_id=OWNER, chat_id=CHAT, message_id=500) is None
     assert callbacks.active_count() == 0
+
+
+# --- Which screen is on the anchor -------------------------------------------------------
+#
+# Until 2026-09-12 this object knew *what arguments* it last drew and nothing about what they
+# meant. That was enough while every redraw followed a press: the presser knew which screen
+# they were on. A redraw triggered by the store has no presser, so something has to be able to
+# ask "is the sessions list what the owner is looking at right now" before editing it.
+
+
+@pytest.mark.asyncio
+async def test_a_render_remembers_which_screen_it_drew() -> None:
+    bot = _Bot()
+    view = _view()
+
+    await view.render(bot, {"text": "the sessions list"}, screen="sessions")
+
+    assert view.showing("sessions")
+    assert not view.showing("detail")
+
+
+@pytest.mark.asyncio
+async def test_a_later_screen_replaces_the_tag_rather_than_adding_to_it() -> None:
+    """The owner is on exactly one screen, which is the whole premise of this class."""
+    bot = _Bot()
+    view = _view()
+
+    await view.render(bot, {"text": "the sessions list"}, screen="sessions")
+    await view.render(bot, {"text": "one session"}, screen="detail")
+
+    assert view.showing("detail")
+    assert not view.showing("sessions"), "a detail screen must not be redrawn as a list"
+
+
+@pytest.mark.asyncio
+async def test_an_untagged_render_clears_the_tag() -> None:
+    """Untagged is the default and means "some other screen", not "keep the last answer".
+
+    Most replies pass no tag, so a tag that survived them would make the *previous* sessions
+    list look like what is on screen for as long as the owner stayed anywhere else -- and the
+    store-driven redraw would then edit a message showing something entirely different.
+    """
+    bot = _Bot()
+    view = _view()
+    await view.render(bot, {"text": "the sessions list"}, screen="sessions")
+
+    await view.render(bot, {"text": "something else"})
+
+    assert not view.showing("sessions")
+
+
+@pytest.mark.asyncio
+async def test_a_screen_that_is_not_remembered_is_not_showing_either() -> None:
+    """`remember=False` exists for a screen whose content is a secret shown once.
+
+    It already refuses to be re-sent by `move_to_bottom`; it must equally refuse to be the
+    thing a store change redraws over, for the same reason and with more urgency -- that path
+    needs no owner action at all.
+    """
+    bot = _Bot()
+    view = _view()
+
+    await view.render(bot, {"text": "a pairing code"}, screen="sessions", remember=False)
+
+    assert not view.showing("sessions")

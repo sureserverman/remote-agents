@@ -97,6 +97,10 @@ class LiveView:
         self._callbacks = callbacks
         self._anchors = anchors
         self._last_arguments: dict[str, object] | None = None
+        #: What the remembered screen *is*, where `_last_arguments` is only what it looked
+        #: like. Needed since 2026-09-12, when a redraw stopped always following a press: a
+        #: presser knows which screen they are on, and the store does not.
+        self._last_screen: str | None = None
         """What the anchor currently shows, so the screen can be moved without re-deriving it.
 
         Process-local, and that is the right scope: it exists only to redraw the screen the
@@ -149,6 +153,7 @@ class LiveView:
         *,
         retire: bool = True,
         remember: bool = True,
+        screen: str | None = None,
     ) -> int:
         """Draw `arguments` as the chat's live view, and answer which message that is.
 
@@ -175,11 +180,18 @@ class LiveView:
         if retire:
             if remember:
                 self._last_arguments = arguments
+                # Set on every remembered render, including to `None`. Untagged means "some
+                # other screen" rather than "keep the last answer": most replies pass no tag,
+                # and one that survived them would leave a stale `sessions` claim standing for
+                # as long as the owner was anywhere else -- so a store-driven redraw would
+                # edit a message showing something entirely different.
+                self._last_screen = screen
             else:
                 # Forgotten rather than left stale: keeping the *previous* screen would let
                 # `move_to_bottom` resurrect something the owner has since navigated away
                 # from, and answering None is a state this class already handles.
                 self._last_arguments = None
+                self._last_screen = None
         anchor = self._anchors.anchor(self._chat_id)
         if anchor is None:
             return await self._send(bot, arguments, retire=retire)
@@ -223,6 +235,16 @@ class LiveView:
             # shared step rather than a line inside `_retire`.
             self._owed_prunes.add(retired)
         return message_id
+
+    def showing(self, screen: str) -> bool:
+        """Whether `screen` is what the anchor is currently drawing.
+
+        Deliberately false for a screen rendered with `remember=False`. That flag marks a
+        screen whose content is shown once -- a pairing code -- and a redraw it did not ask
+        for is exactly what it exists to refuse. `move_to_bottom` already honours that; this
+        honours it with more urgency, because nothing here needs the owner to act at all.
+        """
+        return self._last_screen == screen
 
     async def move_to_bottom(self, bot) -> int | None:
         """Redraw the current screen as the newest message in the chat, and answer where.

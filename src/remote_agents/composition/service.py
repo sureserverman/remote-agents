@@ -130,13 +130,52 @@ async def _serve_with_reconciliation(
         # baseline to establish, because an untrusted session standing at start-up is exactly
         # what the owner most needs to be told about.
         periodic.append(asyncio.create_task(_watch_trust_periodically(composition, trust_interval)))
+    # Not a fourth periodic task, and the difference is the point: the three above each poll
+    # something on a clock of their own, while this *subscribes* to a watcher that already
+    # polls. Subscribing is what starts it (`StoreWatch.subscribe`), so there is no task to
+    # create here and none to cancel -- detaching stops it.
+    detach = _redraw_sessions_on_store_changes(composition)
     try:
         await serve_runner(secrets, composition.boundary)
     finally:
+        if detach is not None:
+            detach()
         for task in periodic:
             task.cancel()
         await asyncio.gather(*periodic, return_exceptions=True)
         await _close_host_remote_control(composition)
+
+
+def _redraw_sessions_on_store_changes(composition: ServiceComposition):
+    """Have the open sessions page follow the store, if this composition wired a watcher.
+
+    The listener schedules and returns. `StateEvents.subscribe` is synchronous by contract and
+    the watcher calls its listeners on its own polling task, so awaiting a Telegram edit inside
+    one would stall the watcher for a network round trip -- on the task whose whole job is
+    noticing things promptly.
+
+    A host that wired no watcher gets exactly the behaviour it had before one existed: the
+    page is drawn on a press. That is why the absence is answered with `None` rather than an
+    error -- it is a composition that opted out, not one that is broken.
+    """
+    events = composition.boundary.backend.state_events
+    if events is None:
+        return None
+
+    def redraw(_change) -> None:
+        asyncio.create_task(_redraw_sessions(composition))
+
+    return events.subscribe(redraw)
+
+
+async def _redraw_sessions(composition: ServiceComposition) -> None:
+    """One redraw attempt, with its failures swallowed the way the periodic passes swallow
+    theirs: nobody asked for this edit, so a Telegram hiccup must not surface as an error the
+    owner did not cause -- and must not take down the task that noticed the change."""
+    try:
+        await composition.boundary.redraw_sessions_if_open()
+    except Exception:
+        _LOG.warning("the sessions page could not be redrawn after a store change", exc_info=True)
 
 
 async def _close_host_remote_control(composition: ServiceComposition) -> None:

@@ -667,6 +667,53 @@ class PrivateBotBoundary:
     stronger reason: it is a rate limit on a read, so a restart forgetting it costs one extra
     registry read and nothing else.
     """
+    _bot: Bot | None = None
+    """The application's own Telegram handle, for the one edit that answers no update.
+
+    Typed `Bot` rather than `object | None`, which
+    `test_the_boundary_declares_no_untyped_backend_field` rightly refuses: that rule is about
+    a frontend reaching into anonymous slots by guesswork,
+    and this is a named handle of a type this module already imports. The two notifiers type
+    theirs loosely only because they are constructed before `telegram` is in scope for them.
+
+    Every screen this bot draws answers an update and reaches Telegram through that update's
+    bot handle. A redraw triggered by a store change answers nothing -- there is no update and
+    no press -- so it needs the application's handle, exactly as the two notifiers do, and the
+    application does not exist until `run_private_bot` initializes it. `attach_bot` is where
+    it arrives. `None` until then, which is why `redraw_sessions_if_open` answers False rather
+    than raising: a boundary nobody attached is one nothing is serving.
+    """
+    _drawing_screen: str | None = None
+    """The tag the *next* render should remember, set by the reply builder that knows it.
+
+    A render takes generic `arguments` and cannot tell a sessions list from a help screen, and
+    the three call sites that render are equally blind -- they have an update, not a subject.
+    The function that builds the list is the one thing in the process that knows what it built,
+    so it marks, and the render consumes and clears. Clearing is the load-bearing half:
+    untagged means "some other screen", so a mark left standing would make the next unrelated
+    screen claim to be the list.
+    """
+    _handling_press: bool = False
+    """True while a callback query is being handled, so a store change does not draw over it.
+
+    That press is about to render a screen of its own -- a detail, a confirmation, a stop's
+    answer -- and an edit landing underneath it would put the sessions list over something the
+    owner actually asked for. Safe as a plain flag rather than a lock for the reason
+    `_bar_marker` records above: `run_private_bot` builds the application with
+    `concurrent_updates(False)`, so updates are handled one at a time.
+    """
+    _redraw_allowed_at: float = 0.0
+    """The monotonic moment the next store-driven redraw of the sessions page may go out.
+
+    Process-local render state like the two fields around it. Telegram rate-limits edits per
+    chat, and a burst of launches writes the store several times a second -- so the watcher
+    can report changes faster than this chat may be edited. One edit per
+    `_REDRAW_INTERVAL_SECONDS` is the ceiling, and it is enforced here rather than by asking
+    Telegram and handling the refusal, because a refusal costs the edit *and* the round trip.
+
+    Deliberately **not** persisted and deliberately not a lock. A restart forgets it and
+    allows one immediate redraw, which is correct: there is no screen to protect yet.
+    """
     _sessions_page: int = 1
     """The page number the sessions list is currently drawn at, so Back can return to it.
 
@@ -834,7 +881,7 @@ class PrivateBotBoundary:
         it, and a second check here would be a branch no test could ever reach.
         """
         bot = message.get_bot()
-        await self.view.render(bot, arguments)
+        await self.view.render(bot, arguments, screen=self._take_drawing_screen())
         await self._release_attachment(bot, None)
         await self._release_pairing_code(bot)
         await self._abandon_entry(bot)
@@ -987,7 +1034,7 @@ class PrivateBotBoundary:
         Render first for the same reason a command does: if the screen cannot be drawn, the
         owner keeps what they typed and can see that nothing came of it.
         """
-        await self.view.render(bot, arguments)
+        await self.view.render(bot, arguments, screen=self._take_drawing_screen())
         self._awaiting_text.pop(self._entry_key, None)
         await self._release_attachment(bot, None)
         await self._release_pairing_code(bot)
@@ -1134,6 +1181,17 @@ class PrivateBotBoundary:
         del context
         if not self.permits(update) or update.callback_query is None:
             return
+        # Held for the whole handler, released in `finally`, so a store change arriving
+        # mid-press cannot edit the screen this press is about to draw. `_handling_press`
+        # records why a plain flag is enough here.
+        self._handling_press = True
+        try:
+            await self._handle_callback(update)
+        finally:
+            self._handling_press = False
+
+    async def _handle_callback(self, update: Update) -> None:
+        """The press itself, with `callback` holding the flag around it."""
         query = update.callback_query
         owner_id = self.owner_user_id
         chat_id = self.owner_chat_id
@@ -1299,7 +1357,13 @@ class PrivateBotBoundary:
         `LiveView` owns the edit-then-prune-then-bind order and the no-op guard; what is
         left here is telling it which bot to speak through.
         """
-        await self.view.render(query.get_bot(), arguments, retire=retire, remember=remember)
+        await self.view.render(
+            query.get_bot(),
+            arguments,
+            retire=retire,
+            remember=remember,
+            screen=self._take_drawing_screen(),
+        )
 
     async def _reply_for(
         self, action: str, entity_id: str, *, token: str = "", message_id: int = 0
@@ -1666,6 +1730,59 @@ class PrivateBotBoundary:
             )
         )
 
+    #: The tag `LiveView` remembers for the sessions list, and the only screen a store change
+    #: is allowed to redraw. A constant rather than a literal in three places because the
+    #: whole mechanism turns on the writer and the reader agreeing on one string.
+    _SESSIONS_SCREEN = "sessions"
+
+    #: The floor between two store-driven edits of the sessions page.
+    _REDRAW_INTERVAL_SECONDS = 2.0
+
+    def _take_drawing_screen(self) -> str | None:
+        """Read the pending screen tag and clear it, so it marks exactly one render."""
+        tag, self._drawing_screen = self._drawing_screen, None
+        return tag
+
+    def attach_bot(self, bot: Bot) -> None:
+        """Hand it the application's Telegram handle, which arrives long after construction."""
+        self._bot = bot
+
+    async def redraw_sessions_if_open(self, bot: Bot | None = None) -> bool:
+        """Redraw the sessions page in place, if that is what the owner is looking at.
+
+        The entry point a `StoreChanged` reaches. Answers whether it drew, so a caller can
+        say so and a test can assert the decision rather than infer it from Telegram.
+
+        **Three refusals, and each is a different screen this must not touch.** It draws only
+        when `LiveView` says the anchor is the sessions list -- a detail, a confirmation or a
+        one-time secret is not a list and must not be replaced by one. It draws at most once
+        per `_REDRAW_INTERVAL_SECONDS`, because a burst of launches writes the store faster
+        than Telegram will accept edits. And it draws nothing at all while a press is being
+        handled: that press is about to render a screen of its own, and editing underneath it
+        would put a list over an answer the owner asked for.
+
+        `_sessions_reply` is re-read rather than `_last_arguments` re-sent. Those are
+        different things and the difference is the whole point: `move_to_bottom` re-sends what
+        was drawn, which would put the *old* rows back at the bottom of the chat. This asks
+        the store what the page says now, at the page number the owner is on.
+        """
+        speaker = bot if bot is not None else self._bot
+        if speaker is None:
+            return False
+        if not self.view.showing(self._SESSIONS_SCREEN):
+            return False
+        if self._handling_press:
+            return False
+        now = monotonic()
+        if now < self._redraw_allowed_at:
+            return False
+        self._redraw_allowed_at = now + self._REDRAW_INTERVAL_SECONDS
+        rendered = await self._sessions_reply(self._sessions_page)
+        await self.view.render(
+            speaker, _reply_arguments(rendered), screen=self._SESSIONS_SCREEN
+        )
+        return True
+
     async def _sessions_reply(self, page: int = 1, *, notice: str | None = None) -> RenderedMessage:
         """Render one page of managed sessions: grouped, two lines a row, a picker per row.
 
@@ -1729,6 +1846,10 @@ class PrivateBotBoundary:
         # it has to be a page that exists. A request past the end renders the last one, and
         # remembering the request rather than the render would send Back somewhere emptier.
         self._sessions_page = index
+        # Mark the screen this reply is building, for whichever render takes it. See
+        # `_drawing_screen`: the render sites cannot tell what they are drawing, and this is
+        # the one function that can.
+        self._drawing_screen = self._SESSIONS_SCREEN
         start = (index - 1) * self.session_page_size
         shown = records[start : start + self.session_page_size]
         sections: list[str] = []
@@ -3593,6 +3714,9 @@ async def run_private_bot(
     # notification answers nothing, so it needs the application's, and the application does
     # not exist until here.
     boundary.notifier.attach(application.bot)
+    # The same handle again, to the one screen edit that answers no update: a store change
+    # redrawing the open sessions page has no press to borrow a bot from.
+    boundary.attach_bot(application.bot)
     # The same handle, for the same reason, to the pass that asks the folder-trust question:
     # it answers no update either. Guarded because a boundary built by a composition that
     # wires no trust pass -- every test that constructs one directly -- has none.

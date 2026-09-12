@@ -2409,3 +2409,122 @@ async def test_a_press_that_landed_but_left_the_question_up_does_not_invite_a_de
         f"the token is already spent, so a retry on this button cannot work: {reply['text']!r}"
     )
     assert "Open the session" in reply["text"], reply["text"]
+
+
+# --- The open sessions page follows the store --------------------------------------------
+#
+# `_sessions_reply`'s own docstring said this list is drawn on a press and "never on a timer",
+# and the Refresh button was reasoned out of existence on the same grounds. Neither argument
+# is touched here: this is not a timer and not a button. A change the *store* reports redraws
+# the page that is already open, which is the one case both of those rejected alternatives
+# were trying and failing to serve.
+
+
+def _many_sessions(count: int) -> tuple[SessionRecord, ...]:
+    return tuple(
+        replace(
+            _a_running_session(),
+            session_id=SessionId(UUID(int=index + 1)),
+            display=SessionDisplayIdentity(f"demo-{index}", "Claude", "regular", index + 1),
+        )
+        for index in range(count)
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_store_change_redraws_the_open_sessions_page() -> None:
+    chat = FakeChat()
+    boundary = _boundary(_a_running_session())
+    await boundary.sessions_command(chat.message_update("/sessions"), None)
+    before = len(chat.bot_messages)
+    anchor = chat.bot_messages[-1].message_id
+
+    redrawn = await boundary.redraw_sessions_if_open(chat.bot)
+
+    assert redrawn is True
+    assert len(chat.bot_messages) == before, "a redraw edits the screen, it does not add one"
+    assert chat.bot_messages[-1].message_id == anchor
+
+
+@pytest.mark.asyncio
+async def test_nothing_is_edited_while_another_screen_is_open() -> None:
+    """The owner reading something else must not have it replaced by a list they did not ask
+    for -- which is what a redraw that only knew *a* screen was open would do."""
+    chat = FakeChat()
+    boundary = _boundary(_a_running_session())
+    await boundary.help_command(chat.message_update("/help"), None)
+    before = chat.bot_messages[-1].text
+
+    redrawn = await boundary.redraw_sessions_if_open(chat.bot)
+
+    assert redrawn is False
+    assert chat.bot_messages[-1].text == before
+
+
+@pytest.mark.asyncio
+async def test_a_redraw_carries_the_navigation_bar_like_any_other_screen() -> None:
+    """It goes through `_message`, so DEC-032's one choke point still appends the bar once.
+
+    A redraw that built its own keyboard would be the second place the bar is decided, which
+    is exactly what that decision exists to prevent.
+    """
+    chat = FakeChat()
+    boundary = _boundary(_a_running_session())
+    await boundary.sessions_command(chat.message_update("/sessions"), None)
+
+    await boundary.redraw_sessions_if_open(chat.bot)
+
+    labels = [
+        unpadded(button.text)
+        for row in chat.bot_messages[-1].reply_markup.inline_keyboard
+        for button in row
+    ]
+    # The bar as this screen draws it, marker and all: `• Sessions` is `_message` saying which
+    # tab the owner is standing in (Telegram will not style a pressed button), and `Launch` is
+    # its sibling. A redraw that built its own keyboard would have neither.
+    assert "• Sessions" in labels, labels
+    assert "Launch" in labels, labels
+
+
+@pytest.mark.asyncio
+async def test_two_changes_in_quick_succession_produce_one_edit() -> None:
+    """Telegram rate-limits edits; this code must not be what discovers that."""
+    chat = FakeChat()
+    boundary = _boundary(_a_running_session())
+    await boundary.sessions_command(chat.message_update("/sessions"), None)
+
+    first = await boundary.redraw_sessions_if_open(chat.bot)
+    second = await boundary.redraw_sessions_if_open(chat.bot)
+
+    assert first is True
+    assert second is False, "a second change inside the window must not reach Telegram"
+
+
+@pytest.mark.asyncio
+async def test_the_page_the_owner_was_on_survives_the_redraw() -> None:
+    """Page two redrawn as page one would move the list under the owner's finger."""
+    chat = FakeChat()
+    boundary = _boundary(*_many_sessions(40))
+    await boundary.sessions_command(chat.message_update("/sessions"), None)
+    page_two = await boundary._sessions_reply(2)
+    boundary._sessions_page = 2
+
+    boundary._redraw_allowed_at = 0.0
+    redrawn = await boundary.redraw_sessions_if_open(chat.bot)
+
+    assert redrawn is True
+    assert chat.bot_messages[-1].text == page_two.text
+
+
+@pytest.mark.asyncio
+async def test_a_change_arriving_mid_press_does_not_draw_over_the_answer() -> None:
+    """The press is about to render a screen of its own; a list landing on top of it would
+    replace an answer the owner actually asked for with one they did not."""
+    chat = FakeChat()
+    boundary = _boundary(_a_running_session())
+    await boundary.sessions_command(chat.message_update("/sessions"), None)
+    boundary._handling_press = True
+
+    redrawn = await boundary.redraw_sessions_if_open(chat.bot)
+
+    assert redrawn is False
