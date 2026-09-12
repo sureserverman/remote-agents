@@ -337,3 +337,439 @@ where it should read structure — and because four of them were in code written
 
 **The remediation budget (2 rounds) is now spent.** These fixes were made and verified; no
 third review round was dispatched.
+
+---
+
+## Section 6 — How long the delay actually is, measured before anything changes it
+
+Task 2.1. Date: 2026-09-12. Host: this workstation, Python 3.12, tmux 3.4, 16 cores, idle.
+
+> **Status: the machine half RUN AND RECORDED. The bot column NOT TAKEN, and it is not
+> estimated either.**
+>
+> The plan's wording for this task asks for *"launch from the bot … and the bot's launch
+> reply"*. A reply timestamp is a thing that happens on the owner's phone, and no sweep on
+> this host can read one. It is therefore absent from the table rather than filled in with a
+> plausible number — the same split `docs/acceptance-2026-09-08-untrusted-launch.md` sets,
+> and the same reason: an unmeasured figure and a figure measured at zero are different
+> things, and a table whose whole subject is latency must not carry one dressed as the other.
+>
+> **The owner's live system was not touched.** No session was launched into
+> `tmux -L remote-agents`, no key was sent to any pane on it, and
+> `~/.local/state/remote-agents/sessions.sqlite3` was neither opened nor written. Part A
+> mounts no terminal at all; part B drives its own disposable
+> `remote-agents-test-<hex>` socket and kills the server in a `finally`.
+
+### What was measured, and why it is that quantity
+
+The owner's complaint is *"new session appears in session pane … with annoying delay"*. The
+quantity behind it is: **from the moment a session's row exists in the store, how long until
+the sessions pane draws it.** That is the interval the owner is staring at, and it is not the
+same as launch latency — a launch writes its row before it waits for the agent
+(`application/services.py:235` saves the `STARTING` record; `:249` is where it then awaits
+`TmuxTerminal.launch`), so the row is durable within milliseconds of the press whatever the
+agent does next. Everything after that instant is the surface's problem, and is what is timed
+below.
+
+Part A drives the **real** console sessions pane — `SessionsPane` / `SessionsPaneScreen`, not
+a reimplementation of it — headless under Textual's `run_test()` pilot, against a real
+`SQLiteSessionStore` opened by `adapters/sqlite/database.open_database` and a real
+`SessionService`. The new row is inserted through a **second connection to the same database
+file**, which is what the other process's write looks like from inside the pane. The pilot
+runs on real asyncio with real timers, so a wall-clock reading here means what it appears to;
+`time.monotonic()` is taken immediately after `save()` returns and again on the first poll
+that finds the row drawn in the `OptionList`.
+
+The three runs deliberately sample **different phases of the ten-second timer**. Without that
+they would all be taken an instant after a tick fired — the tick that ended the previous
+run — and three readings of ~10 s would hide the shape of the thing. The offset column is how
+long the script waited after the previous row was drawn before inserting the next one.
+
+### Result — part A: store row to drawn row, three runs
+
+| run | phase offset | store `created_at` | row existed | first drawn in the pane | **delay** |
+|---|---|---|---|---|---|
+| 1 | 0.0 s | `07:32:34.590Z` | `07:32:34.592Z` | `07:32:43.938Z` | **9.346 s** |
+| 2 | 3.0 s | `07:32:46.942Z` | `07:32:46.943Z` | `07:32:53.945Z` | **7.002 s** |
+| 3 | 6.5 s | `07:33:00.452Z` | `07:33:00.455Z` | `07:33:03.942Z` | **3.487 s** |
+
+`created_at` and *row existed* are 1–3 ms apart in every run: the record's own timestamp and
+its arrival in the store are the same instant for this purpose, and the whole delay is after
+it.
+
+**Offset plus delay is 9.346, 10.002, 9.987.** The three numbers are not three samples of a
+variable quantity — they are one constant sampled at three points. The delay is
+`interval − phase`, uniform on `(0, 10]`, mean ~5 s, worst case 10 s. Run 1 falls 0.65 s short
+of a full interval because the mount's own settle consumed that much of the first tick.
+
+### Result — part B: what `refresh_readiness()` costs, which is the other candidate
+
+Timed through the same real service and store, with a real `TmuxTerminal` over a real tmux
+server on a disposable socket. Five sessions in both regimes. The *five FAILED* regime is the
+expensive one the plan names: five records in a state `refresh_readiness` rechecks, each with
+a live pane, so each costs an `inspect` and a real `capture-pane`.
+
+| regime | sessions | tmux captures | run 1 | run 2 | run 3 |
+|---|---|---|---|---|---|
+| all RUNNING (nothing to recheck) | 5 | 0 | 0.0003 s | 0.0002 s | 0.0002 s |
+| one bare `capture-pane`, for scale | — | 1 | 0.0065 s | 0.0059 s | 0.0054 s |
+| five FAILED, all with live panes | 5 | 5 | 0.0404 s | 0.0376 s | 0.0396 s |
+
+**`refresh_readiness` is not the cause and is not close to being it.** Its worst regime here
+is 40 ms against a delay of 3.5–9.3 s — two to three orders of magnitude apart. On a store
+with nothing to recheck, which is the ordinary state of a host whose sessions are running, it
+is 0.2 ms. The per-capture cost is ~7 ms, so it would take roughly **1400 simultaneously
+FAILED sessions** before this pass alone accounted for one ten-second tick. Recording that
+ratio is the point of the second table: it lets a reader tell the two candidates apart rather
+than take this document's word for which one it was.
+
+### The traced cause
+
+**It is the timer, and only the timer.** The console's sessions pane installs
+`self.set_interval(_SESSIONS_AUTO_REFRESH, self._auto_reload)` in `populate`
+(`src/remote_agents/adapters/tui/screens/sessions.py:939`) with
+`_SESSIONS_AUTO_REFRESH = 10.0` (`:94`); the dashboard's pane does the same at
+`src/remote_agents/adapters/tui/screens/dashboard.py:1066` with its own copy of the constant
+at `:81`. `_auto_reload` (`sessions.py:1045`) is the *only* thing in the process that
+discovers a row another process wrote — every other fill is the owner asking (`reload` at
+`sessions.py:1169` behind Ctrl+R, `on_reveal`, `on_screen_resume`), and a console pane
+displaying a list nobody is navigating gets none of those. So a row written at phase *p* of
+the interval is invisible for `10 − p` seconds, which is exactly the distribution part A
+measured. The read that tick performs — `app.load_sessions` (`adapters/tui/app.py:1977`) →
+`listed_sessions` (`application/session_views.py:405`) → `refresh_readiness`
+(`session_views.py:433`, `application/services.py:310`) — takes between 0.2 ms and 40 ms of
+those seconds, so the cause is the *waiting*, not the work. **A third candidate was found and
+is worth naming because it is not a cause but an absence:** `StoreWatch`
+(`application/store_watch.py`) is composed onto the backend at
+`src/remote_agents/composition/backend.py:297` and declared at
+`src/remote_agents/application/backend.py:180` — and nothing in either surface subscribes to
+it and nothing starts its `run()` loop, which is precisely what Tasks 2.2–2.3 exist to finish.
+Until they do, the mechanism built to remove this delay is inert and the timer is the whole of
+the answer.
+
+### What this measurement does *not* establish
+
+- **The bot's launch reply was not timed**, for the reason in the Status blockquote above. The
+  bot's session list is drawn on request rather than on a timer, so the delay the owner sees
+  there has a different shape and belongs to Task 2.4; this section makes no claim about it.
+- **The launch was a store write, not a real agent.** Part A inserts a record rather than
+  starting `claude`, deliberately: the agent's own startup is time the owner is *already*
+  waiting for on purpose, and including it would have put an unrelated second or two into a
+  number that is about the surface. `services.py:235` is what licenses the substitution — the
+  row is saved before the terminal is awaited, so a real launch's row appears at the same
+  point in the sequence this script writes at.
+- **This is one process on an idle 16-core host**, headless, with no console attached and no
+  other pane competing. Those all make the measured delay a *floor*: a loaded host can only
+  add to it.
+
+### Commands, and the rig verbatim
+
+Both scripts were run from the repository root against a scratch directory outside it, and
+neither is committed — they are reproduced here in full so the numbers can be re-taken.
+
+```
+$ S=<scratch>
+$ mkdir -p $S/state-a $S/state-b
+$ uv run --locked python $S/measure_pane_delay.py $S/state-a
+interval=10.0s
+run=1 offset=0.0s created_at=2026-09-12T07:32:34.590+00:00 row_existed=2026-09-12T07:32:34.592+00:00 first_drawn=2026-09-12T07:32:43.938+00:00 delay=9.346s drawn=True
+run=2 offset=3.0s created_at=2026-09-12T07:32:46.942+00:00 row_existed=2026-09-12T07:32:46.943+00:00 first_drawn=2026-09-12T07:32:53.945+00:00 delay=7.002s drawn=True
+run=3 offset=6.5s created_at=2026-09-12T07:33:00.452+00:00 row_existed=2026-09-12T07:33:00.455+00:00 first_drawn=2026-09-12T07:33:03.942+00:00 delay=3.487s drawn=True
+
+$ uv run --locked python $S/measure_refresh_readiness.py $S/state-b
+regime=all-running run=1 sessions=5 captures=0 seconds=0.0003
+regime=all-running run=2 sessions=5 captures=0 seconds=0.0002
+regime=all-running run=3 sessions=5 captures=0 seconds=0.0002
+failed_records=5 socket=remote-agents-test-e30c65d24ac04e88b902ece0876c946c
+regime=one-capture run=1 seconds=0.0065
+regime=one-capture run=2 seconds=0.0059
+regime=one-capture run=3 seconds=0.0054
+regime=five-failed run=1 sessions=5 captures=5 seconds=0.0404
+regime=five-failed run=2 sessions=5 captures=5 seconds=0.0376
+regime=five-failed run=3 sessions=5 captures=5 seconds=0.0396
+failed_records_after=5
+socket remote-agents-test-e30c65d24ac04e88b902ece0876c946c destroyed
+```
+
+`failed_records_after=5` is the check that the repeats are repeats: `_event_for_recheck`
+answers `None` for a FAILED record whose pane is live but unready (`services.py:186-188`), so
+the pass writes nothing and every run does the same work.
+
+#### `measure_pane_delay.py`
+
+```python
+"""Task 2.1, part A: how long after a row exists in the store is it drawn in the sessions pane.
+
+Drives the real `SessionsPane` app headless through Textual's pilot, against a real SQLite
+store built by this project's own adapters. The row is inserted through a *second* connection
+to the same database file, which is what another process's write looks like from here.
+
+Nothing in this script touches the owner's state directory or the `remote-agents` tmux socket:
+it writes one throwaway database under the directory given as argv[1] and mounts no terminal.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import sys
+import time
+from datetime import UTC, datetime
+from pathlib import Path
+
+ROOT = Path("/home/user/dev/infra/remote-agents")
+sys.path.insert(0, str(ROOT / "tests" / "support"))
+
+from backends import tui_context_for  # noqa: E402
+from textual.widgets import OptionList  # noqa: E402
+
+from remote_agents.adapters.sqlite.database import open_database  # noqa: E402
+from remote_agents.adapters.sqlite.session_store import SQLiteSessionStore  # noqa: E402
+from remote_agents.adapters.tui.panes import SessionsPane  # noqa: E402
+from remote_agents.adapters.tui.screens.sessions import _SESSIONS_AUTO_REFRESH  # noqa: E402
+from remote_agents.application.profiles import ProfileAvailability  # noqa: E402
+from remote_agents.application.project_catalog import CatalogProject  # noqa: E402
+from remote_agents.application.services import SessionService  # noqa: E402
+from remote_agents.domain.models import (  # noqa: E402
+    ProfileId,
+    ProjectId,
+    SessionDisplayIdentity,
+    SessionId,
+    SessionRecord,
+    SessionState,
+)
+
+_PROJECT = CatalogProject("opaque-existing", "existing", "infra", "Registered")
+
+#: Deliberately different phases of the ten-second timer. Without them every sample would be
+#: taken immediately after a tick fired -- the detection that ended the previous run -- and
+#: three samples of ~10.0 s would hide the fact that the delay is uniform over the interval.
+_PHASE_OFFSETS = (0.0, 3.0, 6.5)
+
+
+class _NoTerminal:
+    """A terminal the service never calls: every record here is RUNNING, so nothing rechecks."""
+
+    async def confirm_ready(self, session_id, profile_id):  # pragma: no cover - never reached
+        raise AssertionError("refresh_readiness must not recheck a RUNNING record")
+
+
+def _record(seq: int) -> SessionRecord:
+    return SessionRecord(
+        SessionId.new(),
+        ProjectId("opaque-existing"),
+        ProfileId("claude"),
+        SessionDisplayIdentity("existing", "claude", "regular", seq),
+        SessionState.RUNNING,
+        datetime.now(UTC),
+    )
+
+
+def _drawn(app, session_id: SessionId) -> bool:
+    try:
+        choices = app.screen.query_one("#choices", OptionList)
+    except Exception:
+        return False
+    for index in range(choices.option_count):
+        option = choices.get_option_at_index(index)
+        if option.id and str(session_id) in option.id:
+            return True
+    return False
+
+
+async def main(workspace: Path) -> None:
+    database = workspace / "sessions.sqlite3"
+    reader = SQLiteSessionStore(open_database(database))
+    writer = SQLiteSessionStore(open_database(database))
+    service = SessionService(reader, _NoTerminal())
+
+    # One session already present, so the pane mounts on a list rather than on its empty state.
+    await writer.save(_record(1))
+
+    context = tui_context_for(
+        sessions=service,
+        projects=object(),
+        profiles=(ProfileAvailability("claude", True),),
+        refresh_catalogue=lambda: (_PROJECT,),
+        attach_argv=lambda session_id: ("tmux", "attach-session", "-t", f"={session_id}"),
+        catalogue=(_PROJECT,),
+        capture=lambda _session_id: "captured output",
+    )
+    app = SessionsPane(context)
+    print(f"interval={_SESSIONS_AUTO_REFRESH}s")
+    async with app.run_test(size=(120, 30)) as pilot:
+        await pilot.pause()
+        await asyncio.sleep(0.5)
+        for run, offset in enumerate(_PHASE_OFFSETS, start=1):
+            await asyncio.sleep(offset)
+            record = _record(run + 1)
+            created_at = record.created_at
+            await writer.save(record)
+            existed = time.monotonic()
+            existed_at = datetime.now(UTC)
+            deadline = existed + 60.0
+            while time.monotonic() < deadline and not _drawn(app, record.session_id):
+                await asyncio.sleep(0.005)
+            drawn = time.monotonic()
+            drawn_at = datetime.now(UTC)
+            print(
+                f"run={run} offset={offset:.1f}s "
+                f"created_at={created_at.isoformat(timespec='milliseconds')} "
+                f"row_existed={existed_at.isoformat(timespec='milliseconds')} "
+                f"first_drawn={drawn_at.isoformat(timespec='milliseconds')} "
+                f"delay={drawn - existed:.3f}s "
+                f"drawn={_drawn(app, record.session_id)}"
+            )
+
+
+if __name__ == "__main__":
+    asyncio.run(main(Path(sys.argv[1])))
+```
+
+#### `measure_refresh_readiness.py`
+
+```python
+"""Task 2.1, part B: what `SessionService.refresh_readiness()` itself costs.
+
+The second candidate cause. Every list open on both surfaces calls it
+(`application/session_views.listed_sessions`), and its rechecking arm runs an `inspect` and a
+`capture-pane` per FAILED or UNTRUSTED record. This times it in both regimes, through the real
+service, the real SQLite store, the real `TmuxTerminal` and a real tmux server -- on a
+disposable `remote-agents-test-<hex>` socket that is killed in the `finally`.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import os
+import subprocess
+import sys
+import time
+from datetime import UTC, datetime
+from pathlib import Path
+from uuid import uuid4
+
+from remote_agents.adapters.sqlite.database import open_database
+from remote_agents.adapters.sqlite.session_store import SQLiteSessionStore
+from remote_agents.adapters.tmux.gateway import TmuxGateway
+from remote_agents.adapters.tmux.runtime import AsyncTmuxRunner, LaunchProfile, TmuxTerminal
+from remote_agents.application.commands import LaunchCommand
+from remote_agents.application.services import SessionService
+from remote_agents.domain.models import (
+    ProfileId,
+    ProjectId,
+    SessionDisplayIdentity,
+    SessionId,
+    SessionRecord,
+    SessionState,
+)
+
+_PROJECT = ProjectId("o" * 24)
+_PROFILE = ProfileId("claude")
+_SESSIONS = 5
+
+
+class _NoTerminal:
+    async def confirm_ready(self, session_id, profile_id):  # pragma: no cover
+        raise AssertionError("a RUNNING record must not be rechecked")
+
+
+def _never_ready() -> LaunchProfile:
+    """A pane that stays live and never prints its marker, so its launch records FAILED.
+
+    FAILED with a live pane is exactly the record `refresh_readiness` pays a capture for, and
+    it is stable across repeats: `_event_for_recheck(FAILED, not-live-because-not-ready)`
+    answers None, so nothing is written and every pass does the same work.
+    """
+    shell = "/bin/sh"
+    return LaunchProfile(
+        executable=shell,
+        argv=(shell, "-c", "sleep 300"),
+        environment={"PATH": os.environ.get("PATH", "/usr/bin:/bin")},
+        readiness_marker="NEVER-READY-MARKER",
+        graceful_keys=("C-c",),
+    )
+
+
+def _running(seq: int) -> SessionRecord:
+    return SessionRecord(
+        SessionId.new(),
+        _PROJECT,
+        _PROFILE,
+        SessionDisplayIdentity("existing", "claude", "regular", seq),
+        SessionState.RUNNING,
+        datetime.now(UTC),
+    )
+
+
+async def main(workspace: Path) -> None:
+    # --- regime 1: nothing to recheck ------------------------------------------------
+    quiet_db = workspace / "quiet.sqlite3"
+    quiet = SQLiteSessionStore(open_database(quiet_db))
+    for seq in range(1, _SESSIONS + 1):
+        await quiet.save(_running(seq))
+    quiet_service = SessionService(quiet, _NoTerminal())
+    for run in range(1, 4):
+        start = time.perf_counter()
+        records = await quiet_service.refresh_readiness()
+        print(
+            f"regime=all-running run={run} sessions={len(records)} "
+            f"captures=0 seconds={time.perf_counter() - start:.4f}"
+        )
+
+    # --- regime 2: five FAILED records with live panes -------------------------------
+    socket = f"remote-agents-test-{uuid4().hex}"
+    runner = AsyncTmuxRunner()
+    busy_db = workspace / "busy.sqlite3"
+    busy = SQLiteSessionStore(open_database(busy_db))
+    gateway = TmuxGateway(socket, runner, intent_directory=workspace / "intents")
+    terminal = TmuxTerminal(
+        gateway, {_PROJECT: workspace}, {_PROFILE: _never_ready()}, startup_timeout=1
+    )
+    service = SessionService(busy, terminal)
+    try:
+        for index in range(_SESSIONS):
+            record = await service.launch(LaunchCommand(_PROJECT, _PROFILE, f"probe-{index}"))
+            assert record.state is SessionState.FAILED, record.state
+        failed = [r for r in await busy.list() if r.state is SessionState.FAILED]
+        print(f"failed_records={len(failed)} socket={socket}")
+
+        # One bare capture round-trip, for scale.
+        for run in range(1, 4):
+            start = time.perf_counter()
+            await gateway.capture(failed[0].session_id)
+            print(f"regime=one-capture run={run} seconds={time.perf_counter() - start:.4f}")
+
+        for run in range(1, 4):
+            start = time.perf_counter()
+            records = await service.refresh_readiness()
+            print(
+                f"regime=five-failed run={run} sessions={len(records)} "
+                f"captures={len(failed)} seconds={time.perf_counter() - start:.4f}"
+            )
+        still = [r for r in await busy.list() if r.state is SessionState.FAILED]
+        print(f"failed_records_after={len(still)}")
+    finally:
+        subprocess.run(
+            ["tmux", "-L", socket, "kill-server"], capture_output=True, check=False
+        )
+        Path(os.environ.get("TMUX_TMPDIR", "/tmp"), f"tmux-{os.getuid()}", socket).unlink(
+            missing_ok=True
+        )
+        print(f"socket {socket} destroyed")
+
+
+if __name__ == "__main__":
+    asyncio.run(main(Path(sys.argv[1])))
+```
+
+Cleanup was verified after the run: `ls /tmp/tmux-1000/ | grep remote-agents` lists no
+`remote-agents-test-*` socket, and the owner's own `remote-agents` server still answers
+`list-panes` with the five panes it held before this drill.
+
+### The number this leaves for Task 2.3
+
+**3.5–9.3 s measured, 0–10 s by construction, ~5 s expected.** Task 2.2's watcher polls at
+`DEFAULT_INTERVAL_SECONDS = 1.0`, so if Task 2.3 wires a subscription the same measurement
+should come back bounded by roughly one second plus the read, i.e. under 1.1 s — and the
+right way to show it is to re-run `measure_pane_delay.py` unchanged and put its three lines
+beside the three above.
