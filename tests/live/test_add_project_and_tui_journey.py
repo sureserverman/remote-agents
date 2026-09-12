@@ -103,7 +103,7 @@ async def test_a_terminal_launch_attaches_and_stops_from_a_second_connection() -
         if str(profile) not in available:
             pytest.skip(f"BLOCKED: {profile} is not available on this host")
 
-        record = await context.launcher.launch(
+        outcome = await context.launcher.launch(
             LaunchCommand(
                 ProjectId(project.opaque_id),
                 profile,
@@ -111,6 +111,7 @@ async def test_a_terminal_launch_attaches_and_stops_from_a_second_connection() -
                 "acceptance",
             )
         )
+        record = outcome.record
         assert record.state is SessionState.RUNNING
 
         assert context.attach_argv(str(record.session_id)) == attach_argv(record.session_id)

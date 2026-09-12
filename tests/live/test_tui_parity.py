@@ -112,9 +112,13 @@ class _Harness:
 
     async def start(self, label: str) -> SessionRecord:
         """Launch one throwaway session from the second writer, as the running service would."""
-        return await self.service.launch(
+        outcome = await self.service.launch(
             LaunchCommand(ProjectId(self.project.opaque_id), self.profile, _key(label), label)
         )
+        # Unwrapped here rather than at every call site: this helper's whole contract is "a
+        # record for a session that now exists", and whether the launch carried the Remote
+        # Control flag is not a parity question.
+        return outcome.record
 
     async def state_of(self, record: SessionRecord) -> SessionState:
         """What the store says about one session, read on the connection the app never uses."""

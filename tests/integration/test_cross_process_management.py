@@ -41,7 +41,9 @@ async def test_the_service_manages_a_session_the_terminal_started(database: Path
         terminal = SessionService(SQLiteSessionStore(terminal_connection), shared_panes)
         service = SessionService(SQLiteSessionStore(service_connection), shared_panes)
 
-        launched = await terminal.launch(LaunchCommand(_PROJECT, _PROFILE, "tui-1", "from tui"))
+        launched = (
+            await terminal.launch(LaunchCommand(_PROJECT, _PROFILE, "tui-1", "from tui"))
+        ).record
 
         listed = await service.list_sessions()
         assert [record.session_id for record in listed] == [launched.session_id]
@@ -71,7 +73,7 @@ async def test_an_idempotency_key_cannot_be_replayed_from_the_other_process(
         terminal = SessionService(SQLiteSessionStore(terminal_connection), panes)
         service = SessionService(SQLiteSessionStore(service_connection), panes)
 
-        await terminal.launch(LaunchCommand(_PROJECT, _PROFILE, "shared-key"))
+        (await terminal.launch(LaunchCommand(_PROJECT, _PROFILE, "shared-key"))).record
 
         with pytest.raises(DuplicateCommandError):
             (await service.launch(LaunchCommand(_PROJECT, _PROFILE, "shared-key"))).record
@@ -92,7 +94,7 @@ async def test_each_surface_allocates_its_own_sequence_from_the_shared_store(
         terminal = SessionService(SQLiteSessionStore(terminal_connection), panes)
         service = SessionService(SQLiteSessionStore(service_connection), panes)
 
-        first = await terminal.launch(LaunchCommand(_PROJECT, _PROFILE, "tui-1"))
+        first = (await terminal.launch(LaunchCommand(_PROJECT, _PROFILE, "tui-1"))).record
         second = (await service.launch(LaunchCommand(_PROJECT, _PROFILE, "bot-1"))).record
 
         assert first.display.sequence == 1
@@ -110,7 +112,7 @@ async def test_a_terminal_session_is_visible_to_a_service_started_afterwards(
     try:
         panes = FakeTerminal()
         terminal = SessionService(SQLiteSessionStore(terminal_connection), panes)
-        launched = await terminal.launch(LaunchCommand(_PROJECT, _PROFILE, "tui-1"))
+        launched = (await terminal.launch(LaunchCommand(_PROJECT, _PROFILE, "tui-1"))).record
     finally:
         terminal_connection.close()
 
@@ -216,7 +218,7 @@ async def test_a_second_terminal_can_gracefully_stop_what_the_first_launched(
             SQLiteSessionStore(service_connection), _terminal(gateway, executable)
         )
 
-        launched = await terminal.launch(LaunchCommand(_PROJECT, _PROFILE, "tui-1"))
+        launched = (await terminal.launch(LaunchCommand(_PROJECT, _PROFILE, "tui-1"))).record
         stopped = await service.graceful_stop(GracefulStopCommand(launched.session_id, _PROFILE))
 
         assert stopped.preserved, "the other surface resolved no profile and sent no keys"

@@ -24,10 +24,18 @@ def _store(tmp_path: Path) -> SQLiteTrustNotificationStore:
     return SQLiteTrustNotificationStore(open_database(tmp_path / "sessions.sqlite3"))
 
 
-def test_a_fresh_database_migrates_all_the_way_to_twelve(tmp_path: Path) -> None:
+def test_a_fresh_database_migrates_all_the_way_to_the_last_migration(tmp_path: Path) -> None:
+    """Compared against `len(MIGRATIONS)`, not against a literal.
+
+    The literal lives in exactly one place on purpose --
+    `test_agent_activity_store.test_the_migration_count_is_pinned_by_hand` -- whose docstring
+    says to bump that one and only that one. A second hand-written count here would make every
+    new migration a two-file edit and would fail for a reason that has nothing to do with
+    trust notifications, which is what it did when migration 13 landed.
+    """
     connection = open_database(tmp_path / "sessions.sqlite3")
 
-    assert current_version(connection) == 12
+    assert current_version(connection) == len(MIGRATIONS)
 
 
 def test_a_database_at_eleven_gains_the_table_without_disturbing_its_rows(
@@ -53,7 +61,7 @@ def test_a_database_at_eleven_gains_the_table_without_disturbing_its_rows(
 
     migrated = open_database(path)
 
-    assert current_version(migrated) == 12
+    assert current_version(migrated) == len(MIGRATIONS)
     assert migrated.execute("SELECT COUNT(*) FROM standing_notifications").fetchone()[0] == 1
     assert migrated.execute("SELECT COUNT(*) FROM trust_notifications").fetchone()[0] == 0
 
