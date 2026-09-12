@@ -58,6 +58,7 @@ from remote_agents.adapters.tui.screens.confirm import (
 from remote_agents.adapters.tui.screens.launch import ProjectsScreen
 from remote_agents.adapters.tui.screens.palette import NavigationCommands
 from remote_agents.adapters.tui.screens.sessions import CHORD_KEYS, CHORD_STOPS, perform_chord
+from remote_agents.adapters.tui.screens.settings import SettingsScreen
 from remote_agents.adapters.tui.theme import THEMES, VARIABLE_DEFAULTS
 from remote_agents.application.commands import (
     LaunchCommand,
@@ -1276,6 +1277,25 @@ class RemoteAgentsTui(App[AttachRequest | None]):
             return
         await self.switch_flow(SessionsScreen())
 
+    async def show_settings(self) -> None:
+        """Open -- or leave alone -- the Settings position.
+
+        **Pushed rather than switched**, unlike the three flow jumps `switch_flow` serves: those
+        are jumps *between* flows and unwind the stack so that entering the sessions view from
+        three levels into the launch wizard returns where it always did. Settings is a detour
+        from wherever the owner was, and the thing they want from escape is the position they
+        pressed the key on -- which is what a push gives and an unwind takes away.
+
+        Re-entering while it is already showing is a no-op rather than a second push, for the
+        reason `show_detail` redraws instead of pushing: a key pressed twice would otherwise
+        grow the stack by one screen every time, and the owner would need two escapes to leave
+        a position they visited once. Nothing is re-read here -- `ctrl+r` is the key that means
+        that, and this screen declares `can_refresh`.
+        """
+        if isinstance(self.screen, SettingsScreen):
+            return
+        await self.push_screen(SettingsScreen())
+
     async def show_detail(self, session_value: str, opening_action: str | None = None) -> None:
         """Open — or redraw — the detail for one session, optionally performing one action.
 
@@ -1534,9 +1554,15 @@ class RemoteAgentsTui(App[AttachRequest | None]):
         await self.push_screen_wait(HostPairingCodeModal(code))
 
     async def set_host_remote_control(
-        self, desired: RemoteControlState, screen: DashboardScreen
+        self, desired: RemoteControlState, screen: DashboardScreen | SettingsScreen
     ) -> None:
         """Flip **this machine's** host Remote Control once, for one owner press.
+
+        **Two positions reach this and neither owns the command**, which is the reason the
+        annotation names both rather than being loosened to `ChoiceScreen`: the dashboard's `h`
+        key and the Settings screen's Codex row are two entry points to one toggle, and what
+        they have in common is not "being a screen" but declaring `show_host_remote_control` --
+        the one write path each of them offers for a reading it did not read itself.
 
         The sibling above re-reads a record and re-checks a policy against it. There is no
         record here — the subject is the host — so what stands in for that mitigation is the

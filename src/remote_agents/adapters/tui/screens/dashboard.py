@@ -145,6 +145,29 @@ our own process, exactly as `p` on the sessions pane is, and DEC-041's one-root-
 still stands at one -- see `action_show_projects_pane`, which records the same distinction.
 """
 
+#: The Settings position, opened from the resting position because both of its rows are facts
+#: about this machine rather than about anything the dashboard has highlighted.
+#:
+#: **Spelled `comma` rather than `","`, and that is Textual rather than a style choice.**
+#: `Binding.make_bindings` splits a binding's key on `,` to unroll a list of keys, so a literal
+#: comma raises `InvalidBinding("Can not bind empty string")` at import --
+#: `textual/binding.py:148` on the pinned 8.2.8. `comma` is the name `_character_to_key` gives
+#: the same key, and it is what `Pilot.press` takes too.
+#:
+#: **A punctuation key on purpose.** Every free letter on this chain is one the frame advertises
+#: for something else: `a i r s c f m` are the sessions pane's row keys, named in its border
+#: title; `d`, `h` and `P` are this screen's; `o`, `p` and `slash` belong to the projects list.
+#: The rule those comments state is that a key the frame names for one subject must not quietly
+#: mean another, and the honest way to keep it with the letters spent is to stop spending
+#: letters. `,` is also what an owner expects from every other tool that has a settings screen.
+#:
+#: **Not a root binding, so `CONSOLE_BINDINGS` is untouched**, exactly as `h` and `p` record:
+#: this is a screen binding inside our own process, and DEC-041's one-root-key budget -- a key
+#: every agent on this tmux server can never receive -- still stands at one.
+#: `tests/architecture/test_the_console_key_budget_is_one_place.py` asserts that distinction for
+#: this key rather than leaving it to this comment.
+SETTINGS_KEY = "comma"
+
 #: How each reading of the daemon is put into words, and the whole of why this table exists.
 #:
 #: `ERRORED` and `UNREACHABLE` derive the same `RemoteControlState` (UNKNOWN) and open the same
@@ -727,6 +750,12 @@ class DashboardScreen(LimitsRegion, FeedRegion, ProjectsPaneScreen):
         # could pair anything -- the key exists on the screen, the availability is checked
         # when it is pressed.
         Binding(HOST_PAIR_KEY, "host_pair", f"{HOST_REMOTE_CONTROL_TITLE} pairing", show=False),
+        # Settings, reached from the resting position because its two rows are facts about this
+        # machine rather than about a highlighted row. Hidden for the reason the three above
+        # are: the footer is shared with every inherited binding, and six more entries would
+        # clip bindings the owner did not add (`InspectScreen`'s own comment records causing
+        # exactly that once).
+        Binding(SETTINGS_KEY, "settings", "Settings", show=False),
     ]
 
     #: The dashboard is the projects position, so its crumb is that position's, and the
@@ -920,6 +949,23 @@ class DashboardScreen(LimitsRegion, FeedRegion, ProjectsPaneScreen):
         """The screen handler `HostRemoteControlAction` is delivered to."""
         del message
         await self.confirm_host_remote_control()
+
+    async def action_settings(self) -> None:
+        """Open the Settings position.
+
+        **Awaited here rather than posted, and the difference from `h` two methods up is the
+        whole of DEC-068.** That key leads to a confirmation, which suspends its caller until
+        the owner answers -- and this body runs on the App's message-pump task, so suspending
+        here stops the app delivering keys at all. This one only pushes a screen: `push_screen`
+        returns once the screen is mounted and waits on nobody, exactly as `d` does for the
+        session detail. The questions on the Settings screen are raised from that screen's own
+        handler, which is where DEC-025 requires them.
+        """
+        if self.tui.busy:
+            # Mirrors every other navigation on this surface: a command in flight owns the
+            # position, and leaving it mid-flight is what the busy guard exists to refuse.
+            return
+        await self.tui.show_settings()
 
     def action_host_pair(self) -> None:
         """Hand the pairing key to this screen's own pump, for DEC-068's reason exactly."""

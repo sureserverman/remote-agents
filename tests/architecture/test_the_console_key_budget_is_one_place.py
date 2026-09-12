@@ -49,11 +49,7 @@ def _modules_with_an_argv_literal(*wanted: str) -> set[str]:
             and isinstance(node.body[0].value.value, str)
         }
         for node in ast.walk(tree):
-            if (
-                isinstance(node, ast.Constant)
-                and node.value in wanted
-                and node not in docstrings
-            ):
+            if isinstance(node, ast.Constant) and node.value in wanted and node not in docstrings:
                 found.add(str(path.relative_to(_SOURCE)))
     return found
 
@@ -239,3 +235,48 @@ def test_the_composed_console_installs_the_prefix_layer_and_no_second_root_key()
         "the fold key does not reach the console at all"
     )
     assert len(composed) == len(root) + len(prefix), "a binding is in neither key table"
+
+
+def test_the_settings_key_is_a_screen_binding_and_costs_the_root_budget_nothing() -> None:
+    """The one key Task 3.4 added, registered here deliberately -- and it raised nothing.
+
+    **The plan's file list for that task said "budget raised by one, deliberately", and that
+    expectation was wrong in a way worth recording rather than quietly satisfying.** The budget
+    this file is named for is `bind-key -n`: keys taken from every agent on the tmux server, for
+    as long as they are bound, which is why DEC-041 fixed it at one and why the count is pinned
+    above. A Settings key on `DashboardScreen` is not one of those. It is a Textual screen
+    binding inside our own process, dispatched by our own app from a pane tmux already gave the
+    keyboard to -- the same distinction `action_show_projects_pane` and `HOST_PAIR_KEY` each
+    record for `p` and `P`. Incrementing the number in this file to accommodate it would have
+    been the opposite of what the number is for: it would have reported a root key taken from
+    every agent on the host, and none was.
+
+    So what is registered deliberately is the *distinction*, asserted rather than trusted to
+    the comment that states it (DEC-010 -- assert the property, do not widen a grep). Three
+    things have to hold, and the third is the one no existing check covers: the key is bound on
+    the screen, it is absent from the root table, and it is absent from the prefix table too. A
+    key in either console table would be a key the owner's agents lose, and the prefix one is
+    the easier mistake to make because it is the table that is described as free.
+    """
+    from remote_agents.adapters.tui.screens.dashboard import SETTINGS_KEY, DashboardScreen
+    from remote_agents.adapters.tui.screens.sessions import CHORD_KEYS
+    from remote_agents.application.console import CONSOLE_BINDINGS, console_prefix_bindings
+
+    screen_keys = {binding.key for binding in DashboardScreen.BINDINGS}
+    assert SETTINGS_KEY in screen_keys, (
+        f"{SETTINGS_KEY!r} opens the Settings position, and the dashboard is where it is bound; "
+        f"the screen now binds {sorted(screen_keys)}"
+    )
+
+    console_keys = {binding.key for binding in CONSOLE_BINDINGS} | {
+        binding.key for binding in console_prefix_bindings(CHORD_KEYS)
+    }
+    assert SETTINGS_KEY not in console_keys, (
+        f"{SETTINGS_KEY!r} reached a console key table. A root binding takes that key from "
+        "every agent on this tmux server and a prefix one spends the owner's memory; this key "
+        "is a screen binding in our own process and needs neither."
+    )
+    assert f"M-{SETTINGS_KEY}" not in console_keys, (
+        f"the Settings key was also forwarded as a chord. `{SETTINGS_KEY}` acts on no session "
+        "row, so there is nothing for the Alt layer to carry it to."
+    )
