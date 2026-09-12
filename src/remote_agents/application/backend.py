@@ -177,6 +177,16 @@ class Backend:
 
     """
 
+    state_events: object | None = None
+    """The store-change source (`application.store_watch.StoreWatch`), a `ports.state_events`.
+
+    Typed `object` for the reason `sessions` is, and optional for a different one: a frontend
+    that does not subscribe is not broken, it is a frontend on its timers. Both surfaces treat
+    an absent watcher as "fall back to the interval", so a composition that wires nothing
+    behaves exactly as this project did before the watcher existed -- which is what makes the
+    subscription an improvement rather than a new way for a list to stop updating.
+    """
+
     max_label_length: int = MAX_LABEL_LENGTH
     """The host's configured bound, clamped by `config` to 1..40 and never looser than the
     domain's.

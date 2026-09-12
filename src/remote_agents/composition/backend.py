@@ -21,6 +21,7 @@ from remote_agents.adapters.projects.discovery import discover_projects
 from remote_agents.adapters.projects.registry import load_registry
 from remote_agents.adapters.projects.registry_writer import RegistryProjectRecorder
 from remote_agents.adapters.projects.workspace import FilesystemProjectWorkspace
+from remote_agents.adapters.sqlite.database import watched_paths
 from remote_agents.adapters.sqlite.session_store import SQLiteSessionStore
 from remote_agents.application.backend import Backend
 from remote_agents.application.conversations import ConversationService
@@ -30,6 +31,7 @@ from remote_agents.application.project_admin import ProjectCreationService
 from remote_agents.application.project_catalog import CatalogProject, build_catalogue
 from remote_agents.application.reconcile import SessionLocks
 from remote_agents.application.services import SessionService
+from remote_agents.application.store_watch import StoreWatch
 from remote_agents.domain.models import ProjectId, SessionId
 from remote_agents.domain.profiles import ProfileCompatibility, closed_profiles
 from remote_agents.ports.agent_activity import AgentActivity
@@ -286,7 +288,13 @@ def compose_backend(
     # independently is two drains and neither one covers the other.
     backend_store = store if store is not None else SQLiteSessionStore(connection)
     backend_locks = locks if locks is not None else SessionLocks()
+    # One watcher per process, beside the one store and the one lock set and for the same
+    # reason (DEC-046): every list in this process wants the same "the store moved" signal,
+    # and two watchers would mean two `stat` pairs per second saying the same thing at
+    # slightly different moments. It opens no connection -- that is the point of it -- so it
+    # is built here from the paths rather than from `backend_store`.
     return Backend(
+        state_events=StoreWatch(watched_paths(paths.database_path)),
         sessions=SessionService(
             backend_store,
             runtime.terminal,

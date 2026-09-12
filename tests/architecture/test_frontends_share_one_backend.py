@@ -492,7 +492,7 @@ def test_no_adapter_constructs_a_stop_command() -> None:
 
 
 def test_the_backend_capability_set_is_read_from_the_dataclass() -> None:
-    """Read, not restated — and pinned by length so a twelfth field is a decision, not drift.
+    """Read, not restated — and pinned by length so a thirteenth field is a decision, not drift.
 
     Eleven since `limits` joined `usage`. The two are deliberately separate capabilities rather
     than one: `usage` answers for a session the caller names, `limits` answers for the account
@@ -501,10 +501,18 @@ def test_the_backend_capability_set_is_read_from_the_dataclass() -> None:
     declared capabilities rather than something an adapter discovers, for the reason `capture`
     is — a host may wire no reader, and both surfaces have to be able to see that they did
     without asking whether the attribute happens to exist.
+
+    **Thirteen since `state_events` joined them, and this is the decision the count asks for.**
+    It is a declared capability for exactly the reason the paragraph above gives: a host may
+    wire no watcher, and both surfaces must be able to *see* that rather than discover it —
+    because what they do about it is fall back to their own interval, and a capability
+    discovered by `getattr` would make that fallback silent. It carries no session and answers
+    no question; it only says the store moved, which is why it is a source rather than a use
+    case (`ports.state_events`).
     """
     fields = _backend_fields()
-    assert len(fields) == 12, (
-        f"`Backend` now declares {len(fields)} fields, not 12. That is fine — but it widens "
+    assert len(fields) == 13, (
+        f"`Backend` now declares {len(fields)} fields, not 13. That is fine — but it widens "
         "what Rule 2 forbids probing for, so confirm the new field is a capability an adapter "
         "should read as a declared field rather than discover."
     )

@@ -129,6 +129,20 @@ def leased_connection(path: Path, *, busy_timeout_ms: int = 1_000) -> LeasedConn
     return LeasedConnection(opener)
 
 
+def watched_paths(database_path: Path) -> tuple[Path, Path]:
+    """The two files whose metadata says this store has changed.
+
+    Named here rather than in the watcher because this module is what decides how a store is
+    laid out on disk -- `_corrupt_snapshot` below moves the same trio -- and a second module
+    spelling `f"{path}-wal"` would be a second opinion about that layout.
+
+    The `-shm` file is deliberately **not** watched. It is shared memory whose mtime moves on
+    reads as well as writes, so including it would publish a change every time a surface drew
+    a list, which is the redraw storm this watcher exists to avoid causing.
+    """
+    return (database_path, Path(f"{database_path}-wal"))
+
+
 def open_database(
     path: Path,
     *,

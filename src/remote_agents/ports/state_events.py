@@ -8,11 +8,21 @@ only job is turning `async for` back into the callback they wanted, while the re
 nothing -- a future SSE/WebSocket adapter that genuinely streams can queue callbacks onto its
 own send loop.
 
-What a listener *receives* -- the `StateChange` vocabulary -- is deliberately undecided. No
-consumer exists yet, and the first one to arrive decides what a change notification must
-carry (a bare "something changed" ping, a session id, a full snapshot). Naming that record
-here, ahead of the consumer, would be guessing, so the listener parameter stays loosely typed
-until the first consumer pins it.
+What a listener *receives* was deliberately undecided until 2026-09-12, on the grounds that
+the first consumer to arrive should decide what a change notification must carry -- a bare
+"something changed" ping, a session id, or a full snapshot.
+
+**The first consumer arrived and chose the ping.** `application.store_watch.StoreWatch` learns
+that the store moved by `stat`-ing its files, which is what DEC-035 leaves available to
+something that is not performing an operation -- and file metadata genuinely cannot say *what*
+changed. A record carrying a session id would be inventing one. So `StoreChanged` carries a
+time and nothing else, and every subscriber re-reads, which is what they were going to do on
+their timer anyway; the event only says when it is worth doing.
+
+That is a floor rather than a ceiling. A later producer that does know more -- one reading the
+write-ahead log, or the use case itself publishing as it writes -- adds a sibling record
+beside this one; it does not widen this one into a field that is sometimes meaningful, which
+is the shape `HostRemoteControlCommand` is a separate type to avoid.
 
 Registration and teardown are synchronous, and that is a decided contract rather than an
 omission: `subscribe` records a callable and `Unsubscribe` forgets it -- neither performs
@@ -28,7 +38,21 @@ this port exists to avoid.
 from __future__ import annotations
 
 from collections.abc import Callable
+from dataclasses import dataclass
+from datetime import datetime
 from typing import Protocol, runtime_checkable
+
+
+@dataclass(frozen=True, slots=True)
+class StoreChanged:
+    """Something in the session store moved, at `at`. Deliberately says no more than that.
+
+    Frozen because it is broadcast: one record reaches every listener in the process, and a
+    mutable one would let the first consumer edit what the second receives.
+    """
+
+    at: datetime
+
 
 Unsubscribe = Callable[[], None]
 """Undoes one `subscribe` call: after it returns, that listener is never invoked again.

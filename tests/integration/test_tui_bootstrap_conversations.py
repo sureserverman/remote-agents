@@ -245,6 +245,17 @@ def test_no_further_capability_leaked_into_the_context() -> None:
         # provider registry, so a host whose providers declare no host-level toggle carries
         # a `None` both surfaces read as "unavailable" (DEC-061/067).
         "host_remote_control",
+        # The first capability that is a *source* rather than a use case: it answers no
+        # question and carries no subject, it only says the session store moved. Shared for
+        # the reason the ones above are — the fact is the same fact on whichever surface is
+        # listening, and a second watcher would mean two `stat` pairs a second saying the
+        # same thing at slightly different moments (DEC-046).
+        #
+        # Its absence is readable on purpose. A host that wires no watcher leaves both
+        # surfaces on the intervals they already had, which is what makes subscribing an
+        # improvement rather than a new way for a list to stop updating — and is why it is a
+        # declared field rather than something an adapter discovers by `getattr`.
+        "state_events",
         "max_label_length",
     }
 
