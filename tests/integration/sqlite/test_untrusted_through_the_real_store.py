@@ -26,7 +26,12 @@ class _TrustBlockedTerminal:
     """A terminal whose launch lands on a folder-trust dialog and stays there."""
 
     async def launch(
-        self, session_id: SessionId, project_id: ProjectId, profile_id: ProfileId
+        self,
+        session_id: SessionId,
+        project_id: ProjectId,
+        profile_id: ProfileId,
+        *,
+        remote_control: bool = False,
     ) -> TerminalObservation:
         del project_id, profile_id
         return TerminalObservation(session_id, live=True, preserved=False, awaiting_trust=True)
@@ -48,9 +53,11 @@ async def test_an_untrusted_launch_is_written_and_read_back_by_the_doctor_s_read
     store = _store(tmp_path)
     service = SessionService(store, _TrustBlockedTerminal())
 
-    record = await service.launch(
-        LaunchCommand(ProjectId("opaque-editor"), ProfileId("claude"), "trust-roundtrip")
-    )
+    record = (
+        await service.launch(
+            LaunchCommand(ProjectId("opaque-editor"), ProfileId("claude"), "trust-roundtrip")
+        )
+    ).record
 
     assert record.state is SessionState.UNTRUSTED
 
@@ -78,9 +85,11 @@ async def test_the_untrusted_row_survives_a_reopen_of_the_database(tmp_path) -> 
     """
     database = tmp_path / "sessions.sqlite3"
     service = SessionService(SQLiteSessionStore(open_database(database)), _TrustBlockedTerminal())
-    record = await service.launch(
-        LaunchCommand(ProjectId("opaque-editor"), ProfileId("claude"), "trust-reopen")
-    )
+    record = (
+        await service.launch(
+            LaunchCommand(ProjectId("opaque-editor"), ProfileId("claude"), "trust-reopen")
+        )
+    ).record
 
     reopened = SQLiteSessionStore(open_database(database))
     read_back = await reopened.get(record.session_id)

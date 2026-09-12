@@ -71,9 +71,9 @@ async def test_the_terminal_lists_inspects_and_reaches_a_session_it_never_launch
         # Connection A — stands in for the running service.
         terminal = FakeTerminal()
         service = SessionService(SQLiteSessionStore(service_connection), terminal)
-        launched = await service.launch(
+        launched = (await service.launch(
             LaunchCommand(ProjectId("opaque-existing"), ProfileId("claude"), "service-key")
-        )
+        )).record
 
         # Connection B — the terminal's own composition, sharing only the database file.
         context = TuiContext(
@@ -146,9 +146,9 @@ async def test_a_rename_typed_locally_is_on_disk_for_the_other_writer_to_read(
     try:
         terminal = FakeTerminal()
         service = SessionService(SQLiteSessionStore(service_connection), terminal)
-        launched = await service.launch(
+        launched = (await service.launch(
             LaunchCommand(ProjectId("opaque-existing"), ProfileId("claude"), "service-key")
-        )
+        )).record
         assert launched.display.custom_label is None, "the fixture must start with no name"
 
         context = TuiContext(
@@ -207,9 +207,9 @@ async def test_a_session_stopped_by_the_service_leaves_the_terminal_list(
     try:
         terminal = FakeTerminal()
         service = SessionService(SQLiteSessionStore(service_connection), terminal)
-        launched = await service.launch(
+        launched = (await service.launch(
             LaunchCommand(ProjectId("opaque-existing"), ProfileId("claude"), "service-key")
-        )
+        )).record
         context = TuiContext(
             backend=backend_for(
                 sessions=SessionService(SQLiteSessionStore(terminal_connection), terminal),

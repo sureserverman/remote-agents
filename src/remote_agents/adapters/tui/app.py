@@ -2087,7 +2087,7 @@ class RemoteAgentsTui(App[AttachRequest | None]):
             # rather than an `AttributeError`.
             covered = body.awaiting("Launching…") if body is not None else contextlib.nullcontext()
             async with covered:
-                record = await self._services.backend.sessions.launch(
+                outcome = await self._services.backend.sessions.launch(
                     LaunchCommand(
                         ProjectId(project.opaque_id),
                         ProfileId(profile.profile_id),
@@ -2106,6 +2106,7 @@ class RemoteAgentsTui(App[AttachRequest | None]):
             )
         finally:
             self._busy = False
+        record = outcome.record
         if record.state is SessionState.FAILED:
             return LaunchFailure(
                 status=(
@@ -2117,6 +2118,12 @@ class RemoteAgentsTui(App[AttachRequest | None]):
                     "session will run alongside it."
                 ),
             )
+        if outcome.remote_control:
+            # Said before the console takes the screen, because that is the last moment the
+            # owner is looking at this surface -- `_open_or_leave` switches the client to the
+            # session's own pane. It is the local half of the bot's launch reply: one sentence
+            # naming the flag the launch carried, and nothing when it carried none.
+            self.announce("Started with Remote Control.")
         await self._open_or_leave(str(record.session_id))
         return None
 

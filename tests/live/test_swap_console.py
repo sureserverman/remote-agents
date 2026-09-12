@@ -383,9 +383,9 @@ async def test_integration_the_record_of_a_displaced_agents_stop_is_honest(tmp_p
         store = SQLiteSessionStore(connection)
         service = SessionService(store, console.terminal, hide_in_console=console.composer.hide)
 
-        graceful = await service.launch(
+        graceful = (await service.launch(
             LaunchCommand(_PROJECT, _PROFILE, idempotency_key="graceful-displaced")
-        )
+        )).record
         await console.terminal.confirm_ready(graceful.session_id, _PROFILE)
         graceful_pane = (await console.home_panes(graceful.session_id))[0]
         await console.composer.show(graceful.session_id)
@@ -402,9 +402,9 @@ async def test_integration_the_record_of_a_displaced_agents_stop_is_honest(tmp_p
             "the console kept showing the session it had just stopped"
         )
 
-        forced = await service.launch(
+        forced = (await service.launch(
             LaunchCommand(_PROJECT, _PROFILE, idempotency_key="forced-displaced")
-        )
+        )).record
         await console.terminal.confirm_ready(forced.session_id, _PROFILE)
         forced_pane = (await console.home_panes(forced.session_id))[0]
         forced_pid = (

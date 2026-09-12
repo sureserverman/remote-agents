@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import Awaitable, Callable, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
@@ -40,9 +40,10 @@ from remote_agents.domain.models import (
     SessionRecord,
     SessionState,
 )
-from remote_agents.domain.remote_control import RemoteControlState
+from remote_agents.domain.remote_control import RemoteControlDefault, RemoteControlState
 from remote_agents.domain.state_machine import LifecycleEvent, transition
 from remote_agents.domain.trust import TrustState
+from remote_agents.ports.remote_control_default import RemoteControlDefaultPort
 from remote_agents.ports.session_store import ProjectUsage, SessionStore
 from remote_agents.ports.terminal import (
     NOT_AWAITING_TRUST,
@@ -95,6 +96,26 @@ class ResumeOutcome:
 
     record: SessionRecord
     created: bool
+
+
+@dataclass(frozen=True, slots=True)
+class LaunchOutcome:
+    """A launch's record, and whether this launch carried the Remote Control flag.
+
+    `remote_control` cannot be derived from `record`, for exactly the reason `created` above
+    cannot: a `claude` pane started connected and one started plain are both RUNNING, and the
+    record has no field that differs. So a surface reading only the record can say what
+    happened to the session but not what it asked the agent for.
+
+    It is the answer this call produced rather than a state anything stores. The value came
+    from a file the owner may edit a second later, so a surface that re-read it to word its
+    own reply could print *with Remote Control* over a launch that carried nothing -- which is
+    the shape of disagreement this whole stage exists to remove (DEC-053's rationale, applied
+    to a sentence instead of a settings file).
+    """
+
+    record: SessionRecord
+    remote_control: bool
 
 
 #: The states a fresh capture of the pane can still change the answer for, and **only** those.
@@ -198,6 +219,7 @@ class SessionService:
         *,
         locks: SessionLocks | None = None,
         hide_in_console: Callable[[SessionId], Awaitable[None]] | None = None,
+        remote_control_defaults: Mapping[ProfileId, RemoteControlDefaultPort] | None = None,
         now: Callable[[], datetime] = lambda: datetime.now(UTC),
     ) -> None:
         # Injected for the reason `ReconciliationService`'s is: the late-dialog window below is
@@ -211,8 +233,17 @@ class SessionService:
         # pane is destroyed, so the console is never asked to lose a pane standing in its own
         # window — which under the swap model is where a displayed agent lives.
         self._hide_in_console = hide_in_console
+        # Which profiles have a stored Remote Control default, and the port holding each.
+        #
+        # **A mapping supplied by the composition root, not a profile id named here.** Which
+        # agent a provider's settings file governs is provider knowledge; this module may not
+        # hold it (ARCH-02), and the root is the one place allowed to know both the profile
+        # and the adapter (DEC-070). A profile absent from the mapping is one whose launches
+        # never carry the flag -- which is the honest answer for an agent whose remote control
+        # is a different mechanism entirely, as Codex's daemon enrollment is.
+        self._remote_control_defaults = dict(remote_control_defaults or {})
 
-    async def launch(self, command: LaunchCommand) -> SessionRecord:
+    async def launch(self, command: LaunchCommand) -> LaunchOutcome:
         async with self._locks.operation():
             if not await self._store.claim_idempotency_key(command.idempotency_key):
                 raise DuplicateCommandError("launch callback was already handled")
@@ -244,10 +275,38 @@ class SessionService:
             # 4 gate review; the stop half was fixed first because that is the half production
             # actually hit, a stop being routinely slower than the window and a launch rarely.
             async with self._locks.for_session(session_id):
+                remote_control = await self._remote_control_at_launch(command.profile_id)
                 observation = await self._terminal.launch(
-                    session_id, command.project_id, command.profile_id
+                    session_id,
+                    command.project_id,
+                    command.profile_id,
+                    remote_control=remote_control,
                 )
-                return await self._store.record_event(session_id, _event_for_launch(observation))
+                return LaunchOutcome(
+                    await self._store.record_event(session_id, _event_for_launch(observation)),
+                    remote_control,
+                )
+
+    async def _remote_control_at_launch(self, profile_id: ProfileId) -> bool:
+        """Whether this launch carries the remote-control flag, read now rather than remembered.
+
+        **Read per launch, deliberately.** This service is built once and lives for the life
+        of the process, while the Settings row that writes the value is pressed whenever the
+        owner likes. A value captured at construction would take effect at the next restart,
+        which the owner would report as the toggle doing nothing.
+
+        **`is ON`, never `== ON`, and never a truthiness test.** `RemoteControlDefault` is a
+        `StrEnum`, so `== "on"` is true for a bare string and every member is truthy -- which
+        would make `PROVIDER_DEFAULT` pass the flag. That third state is not an *off*; it is
+        "whatever Claude decides", and the flag overrides the file rather than deferring to it
+        (`docs/acceptance-2026-09-11-surface-refresh.md` section 8 part C), so only an explicit
+        `ON` may produce a `True` here. This stage has already paid for one `==` where `is` was
+        required, in Stage 3's no-op guard.
+        """
+        port = self._remote_control_defaults.get(profile_id)
+        if port is None:
+            return False
+        return await port.read() is RemoteControlDefault.ON
 
     async def resume(self, command: ResumeCommand) -> ResumeOutcome:
         """Create one managed identity for a server-resolved provider conversation."""

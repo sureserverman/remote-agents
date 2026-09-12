@@ -134,9 +134,11 @@ async def test_terminal_inspection_remains_read_only_when_store_is_unavailable(
 
         observation = await terminal.inspect(session_id)
         with pytest.raises(sqlite3.OperationalError, match="unavailable"):
-            await service.launch(
-                LaunchCommand(ProjectId("opaque-editor"), ProfileId("fake"), "blocked")
-            )
+            (
+                await service.launch(
+                    LaunchCommand(ProjectId("opaque-editor"), ProfileId("fake"), "blocked")
+                )
+            ).record
 
         assert observation is not None and observation.session_id == session_id
         assert mutation_terminal.launch_calls == 0
@@ -187,7 +189,12 @@ class CountingTerminal:
         self.launch_calls = 0
 
     async def launch(
-        self, session_id: SessionId, project_id: ProjectId, profile_id: ProfileId
+        self,
+        session_id: SessionId,
+        project_id: ProjectId,
+        profile_id: ProfileId,
+        *,
+        remote_control: bool = False,
     ) -> TerminalObservation:
         self.launch_calls += 1
         return TerminalObservation(session_id, live=True, preserved=False)

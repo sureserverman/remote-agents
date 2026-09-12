@@ -226,7 +226,9 @@ async def test_a_session_launched_before_a_refresh_survives_it_intact(
         store = SQLiteSessionStore(connection)
         service = SessionService(store, FakeTerminal())
         existing_id = ProjectId(_opaque_id(dev_root / "infra" / "existing"))
-        launched = await service.launch(LaunchCommand(existing_id, ProfileId("claude"), "launch-1"))
+        launched = (
+            await service.launch(LaunchCommand(existing_id, ProfileId("claude"), "launch-1"))
+        ).record
 
         _service(dev_root, registry_path).create(CreateProjectCommand("infra", "new-project"))
         provider.refresh()

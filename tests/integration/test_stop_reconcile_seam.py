@@ -203,7 +203,7 @@ async def test_a_launch_in_flight_is_visible_to_the_reconciler_as_busy() -> None
     observed: list[bool] = []
 
     class _SlowTerminal:
-        async def launch(self, session_id, project_id, profile_id):
+        async def launch(self, session_id, project_id, profile_id, *, remote_control: bool = False):
             started.set()
             await release.wait()
             return TerminalObservation(session_id, live=True, preserved=False)

@@ -33,7 +33,7 @@ from remote_agents.application.project_catalog import CatalogProject, build_cata
 from remote_agents.application.reconcile import SessionLocks
 from remote_agents.application.services import SessionService
 from remote_agents.application.store_watch import StoreWatch
-from remote_agents.domain.models import ProjectId, SessionId
+from remote_agents.domain.models import ProfileId, ProjectId, SessionId
 from remote_agents.domain.profiles import ProfileCompatibility, closed_profiles
 from remote_agents.ports.agent_activity import AgentActivity
 from remote_agents.ports.agent_usage import AgentLimits, AgentUsage, UsageQuery
@@ -294,6 +294,11 @@ def compose_backend(
     # and two watchers would mean two `stat` pairs per second saying the same thing at
     # slightly different moments. It opens no connection -- that is the point of it -- so it
     # is built here from the paths rather than from `backend_store`.
+    # One instance, read by two callers for two different purposes: the Settings rows draw and
+    # write it, and `SessionService.launch` reads it to decide the argv. A second instance
+    # would be a second reader of the same file, which is harmless today and is exactly the
+    # shape that lets a cached read drift from a written one tomorrow.
+    claude_default = claude_remote_control_default(paths.home)
     return Backend(
         state_events=StoreWatch(watched_paths(paths.database_path)),
         sessions=SessionService(
@@ -301,6 +306,12 @@ def compose_backend(
             runtime.terminal,
             locks=backend_locks,
             hide_in_console=hide_in_console,
+            # Which profile the stored default governs is decided **here**, because this is
+            # the one module allowed to know both a provider's package and the domain's
+            # profile ids (DEC-070). `claude` alone: the key lives in Claude's settings file
+            # and says nothing about any other agent, and Codex's remote control is a daemon
+            # enrollment behind a different port entirely.
+            remote_control_defaults={ProfileId("claude"): claude_default},
         ),
         host_remote_control=_host_remote_control(
             descriptors, store=backend_store, locks=backend_locks
@@ -313,7 +324,7 @@ def compose_backend(
         # possible content is the answer this line already has (DEC-070 -- the tables stay
         # closed, and this is not one). Built through the registry, which is the only module
         # allowed to import a provider's package (`test_a_provider_lives_in_one_package`).
-        claude_remote_control_default=claude_remote_control_default(paths.home),
+        claude_remote_control_default=claude_default,
         projects=_project_creator(config),
         conversations=_conversation_service(projects.paths, descriptors),
         catalogue=catalogue,

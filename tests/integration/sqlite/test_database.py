@@ -186,9 +186,9 @@ async def test_sqlite_store_composes_with_the_async_session_service(tmp_path: Pa
     store = SQLiteSessionStore(open_database(tmp_path / "sessions.sqlite3"))
     service = SessionService(store, FakeTerminal())
 
-    record = await service.launch(
+    record = (await service.launch(
         LaunchCommand(ProjectId("opaque-editor"), ProfileId("claude"), "launch-1")
-    )
+    )).record
 
     assert record.state is SessionState.RUNNING
     assert await service.list_sessions() == (record,)

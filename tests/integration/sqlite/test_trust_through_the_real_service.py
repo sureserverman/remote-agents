@@ -148,9 +148,7 @@ async def test_a_list_open_does_not_relabel_an_aged_failed_session(tmp_path: Pat
     class _Blocked:
         async def confirm_ready(self, session_id, profile_id):
             del profile_id
-            return TerminalObservation(
-                session_id, live=True, preserved=False, awaiting_trust=True
-            )
+            return TerminalObservation(session_id, live=True, preserved=False, awaiting_trust=True)
 
     service = SessionService(store, _Blocked())
 
@@ -171,9 +169,7 @@ async def test_a_fresh_failed_session_is_still_corrected_on_a_list_open(tmp_path
     class _Blocked:
         async def confirm_ready(self, session_id, profile_id):
             del profile_id
-            return TerminalObservation(
-                session_id, live=True, preserved=False, awaiting_trust=True
-            )
+            return TerminalObservation(session_id, live=True, preserved=False, awaiting_trust=True)
 
     service = SessionService(store, _Blocked())
 
@@ -264,7 +260,12 @@ class _Terminal:
         self.declined: list[SessionId] = []
 
     async def launch(
-        self, session_id: SessionId, project_id: ProjectId, profile_id: ProfileId
+        self,
+        session_id: SessionId,
+        project_id: ProjectId,
+        profile_id: ProfileId,
+        *,
+        remote_control: bool = False,
     ) -> TerminalObservation:
         del project_id, profile_id
         return TerminalObservation(
@@ -296,7 +297,9 @@ def _service(tmp_path, terminal: _Terminal) -> SessionService:
 
 
 async def _untrusted(service: SessionService, profile: str, key: str):
-    return await service.launch(LaunchCommand(ProjectId("opaque-editor"), ProfileId(profile), key))
+    return (
+        await service.launch(LaunchCommand(ProjectId("opaque-editor"), ProfileId(profile), key))
+    ).record
 
 
 async def test_declining_ends_an_untrusted_claude_session(tmp_path) -> None:
@@ -346,9 +349,11 @@ async def test_declining_is_refused_for_a_session_that_is_actually_running(tmp_p
     """
     terminal = _Terminal(awaiting_trust=False)
     service = _service(tmp_path, terminal)
-    record = await service.launch(
-        LaunchCommand(ProjectId("opaque-editor"), ProfileId("claude"), "running-one")
-    )
+    record = (
+        await service.launch(
+            LaunchCommand(ProjectId("opaque-editor"), ProfileId("claude"), "running-one")
+        )
+    ).record
     assert record.state is SessionState.RUNNING
 
     with pytest.raises(InvalidTransition):
@@ -470,9 +475,11 @@ async def test_a_refused_decline_does_not_move_the_owner_s_console(tmp_path) -> 
         terminal,
         hide_in_console=_hide,
     )
-    record = await service.launch(
-        LaunchCommand(ProjectId("opaque-editor"), ProfileId("claude"), "refused-decline")
-    )
+    record = (
+        await service.launch(
+            LaunchCommand(ProjectId("opaque-editor"), ProfileId("claude"), "refused-decline")
+        )
+    ).record
     terminal.still_asking = False
 
     with pytest.raises(StopNotPermittedError):
@@ -494,9 +501,11 @@ async def test_a_decline_that_lands_does_stand_the_console_down(tmp_path) -> Non
         terminal,
         hide_in_console=_hide,
     )
-    record = await service.launch(
-        LaunchCommand(ProjectId("opaque-editor"), ProfileId("claude"), "landed-decline")
-    )
+    record = (
+        await service.launch(
+            LaunchCommand(ProjectId("opaque-editor"), ProfileId("claude"), "landed-decline")
+        )
+    ).record
 
     await service.decline_trust(DeclineTrustCommand(record.session_id, "landed-press"))
 

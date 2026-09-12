@@ -1537,7 +1537,7 @@ class PrivateBotBoundary:
             message_id=message_id,
         ):
             return _reply_arguments(self._message("That action has already run."))
-        record = await self.backend.sessions.launch(
+        outcome = await self.backend.sessions.launch(
             LaunchCommand(
                 ProjectId(project_id),
                 ProfileId(profile_id),
@@ -1547,8 +1547,9 @@ class PrivateBotBoundary:
                 None,
             )
         )
-        if record is None:
+        if outcome is None:
             return _reply_arguments(self._message("Session launch requested."))
+        record = outcome.record
         if record.state is SessionState.FAILED:
             return _reply_arguments(
                 self._message(
@@ -1572,7 +1573,8 @@ class PrivateBotBoundary:
             return _reply_arguments(self._trust_question(record))
         return _reply_arguments(
             self._message(
-                f"<b>Session created</b>\n{escape(record.display.rendered)}\nState: {record.state}",
+                f"<b>Session created</b>{_with_remote_control(outcome.remote_control)}\n"
+                f"{escape(record.display.rendered)}\nState: {record.state}",
                 ((Button("Inspect", self._callback("session.detail", str(record.session_id))),),),
             )
         )
@@ -4237,6 +4239,22 @@ def _resume_button_text(description: str | None, updated_at: datetime) -> str:
     """
     prefix = description[:48].rstrip() if description else "Resumable"
     return f"{prefix} · {updated_at:%Y-%m-%d %H:%M UTC}"
+
+
+def _with_remote_control(remote_control: bool) -> str:
+    """Name the flag the launch carried, and say nothing at all when it carried none.
+
+    Only an affirmative has a phrase. There is no "without Remote Control" counterpart,
+    because the absence covers three different situations the owner already understands --
+    the row reads *off*, the row reads *Claude's default*, or this agent has no such setting
+    at all -- and one sentence standing for all three would be read as a report about the
+    first.
+
+    Driven by what `SessionService.launch` actually passed, never by re-reading the setting
+    here: the owner can edit the file between the launch and the reply, and a reply that
+    disagreed with the launch is the disagreement class this stage exists to remove.
+    """
+    return " · with Remote Control" if remote_control else ""
 
 
 def _profile_name(profile_id: str) -> str:

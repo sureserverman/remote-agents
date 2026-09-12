@@ -120,7 +120,7 @@ async def test_core_fake_lifecycle(tmp_path: Path) -> None:
     project_id = ProjectId(catalogue[0].name)
     profile_id = ProfileId("claude")
 
-    launched = await service.launch(LaunchCommand(project_id, profile_id, "launch-1"))
+    launched = (await service.launch(LaunchCommand(project_id, profile_id, "launch-1"))).record
     assert launched.state is SessionState.RUNNING
     assert await service.list_sessions() == (launched,)
     assert (await service.inspect(InspectQuery(launched.session_id))).live is True

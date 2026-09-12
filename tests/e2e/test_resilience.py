@@ -159,7 +159,7 @@ async def test_restart_can_gracefully_stop_a_running_managed_session(tmp_path: P
     command = LaunchCommand(ProjectId("opaque-editor"), ProfileId("fake"), "restart-stop")
     record = None
     try:
-        record = await service.launch(command)
+        record = (await service.launch(command)).record
         assert record.state is SessionState.RUNNING
 
         restarted = TmuxTerminal(
@@ -247,9 +247,11 @@ async def test_concurrent_inspect_and_graceful_stop_preserve_one_session(tmp_pat
     store = SQLiteSessionStore(open_database(tmp_path / "sessions.sqlite3"))
     service = SessionService(store, terminal)
     try:
-        record = await service.launch(
-            LaunchCommand(ProjectId("opaque-editor"), ProfileId("fake"), "inspect-stop")
-        )
+        record = (
+            await service.launch(
+                LaunchCommand(ProjectId("opaque-editor"), ProfileId("fake"), "inspect-stop")
+            )
+        ).record
         inspected, stopped = await asyncio.gather(
             service.inspect(InspectQuery(record.session_id)),
             service.graceful_stop(GracefulStopCommand(record.session_id, record.profile_id)),
@@ -313,9 +315,11 @@ async def test_shutdown_waits_for_a_transaction_started_before_sigterm() -> None
     await runtime_task
 
     with pytest.raises(RuntimeError, match="mutations are draining"):
-        await service.launch(
-            LaunchCommand(ProjectId("opaque-editor"), ProfileId("fake"), "after-stop")
-        )
+        (
+            await service.launch(
+                LaunchCommand(ProjectId("opaque-editor"), ProfileId("fake"), "after-stop")
+            )
+        ).record
 
 
 class InMemoryStore:
@@ -359,7 +363,12 @@ class BlockingTerminal:
         self.release = asyncio.Event()
 
     async def launch(
-        self, session_id: SessionId, project_id: ProjectId, profile_id: ProfileId
+        self,
+        session_id: SessionId,
+        project_id: ProjectId,
+        profile_id: ProfileId,
+        *,
+        remote_control: bool = False,
     ) -> TerminalObservation:
         self.started.set()
         await self.release.wait()
@@ -430,7 +439,7 @@ async def test_a_second_process_stops_a_session_it_never_launched(tmp_path: Path
     command = LaunchCommand(ProjectId("opaque-editor"), ProfileId("fake"), "cross-process-stop")
     record = None
     try:
-        record = await service.launch(command)
+        record = (await service.launch(command)).record
         assert record.state is SessionState.RUNNING
 
         other_surface = TmuxTerminal(

@@ -32,6 +32,7 @@ from remote_agents.adapters.telegram.service import (
 from remote_agents.adapters.telegram.stops import CONFIRMED_FORCE
 from remote_agents.application.profiles import ProfileAvailability
 from remote_agents.application.project_catalog import CatalogProject
+from remote_agents.application.services import LaunchOutcome
 from remote_agents.application.session_actions import GRACEFUL_TIMEOUT, UNKNOWN_SESSION
 from remote_agents.bootstrap import (
     _resolve_profile_executable,
@@ -206,6 +207,47 @@ async def test_private_bot_boundary_launches_on_the_agent_press_and_drops_a_repe
     await boundary.callback(_trusted_update(callback=_Callback(profile)), None)
 
     assert len(launcher.commands) == 1, "a second press must not start a second session"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("carried", (True, False))
+async def test_the_launch_reply_names_remote_control_only_when_the_launch_carried_it(
+    carried: bool,
+) -> None:
+    """The phrase follows what the launch *did*, not what the setting currently reads.
+
+    Both arms run the identical launch and differ only in what the service reports having
+    passed -- which is the whole reason `LaunchOutcome` carries the flag rather than the
+    surface re-reading the stored default. A surface that re-read it would print the same
+    sentence in both arms here whenever the file happened to say *on*.
+
+    There is deliberately no phrase for the negative arm: an absence covers *off*, *Claude's
+    default* and an agent with no such setting at all, and one sentence standing for three
+    situations would be read as a report about the first.
+    """
+    created = _record(SessionState.RUNNING, "running", ProjectId("a" * 24))
+    launcher = _Launcher()
+    launcher.launch_result = created
+    launcher.launch_remote_control = carried
+    boundary = build_private_bot(
+        7,
+        11,
+        backend=backend_for(
+            catalogue=(CatalogProject("a" * 24, "Demo", "tests", "Registered"),), sessions=launcher
+        ),
+        profiles=(ProfileAvailability("claude", True),),
+    )
+    token = boundary.callbacks.create(
+        "launch.profile", "a" * 24 + "|claude", 7, 11, 1, mutation=True
+    )
+
+    reply = await boundary._launch_reply("a" * 24 + "|claude", token, 1)
+
+    assert "Session created" in reply["text"]
+    assert ("with Remote Control" in reply["text"]) is carried, (
+        "the reply must name the flag when the launch carried it and stay silent when it "
+        "did not -- the sentence is a report about this launch, not about the settings file"
+    )
 
 
 @pytest.mark.asyncio
@@ -712,6 +754,10 @@ class _Launcher(SessionUseCaseDouble):
         self.commands = []
         self.records = []
         self.launch_result = None
+        #: What the launch reports having *done*, beside the record it produced. Separate
+        #: from `launch_result` so the six tests that set only a record keep working: a
+        #: record is what the surface renders, and this is what it says about the launch.
+        self.launch_remote_control = False
         self.stopped: list[str] = []
         self.leave_running = False
         #: Which cause `leave_running` models. Two of them, and they are the whole of BL-008
@@ -721,7 +767,9 @@ class _Launcher(SessionUseCaseDouble):
 
     async def launch(self, command):
         self.commands.append(command)
-        return self.launch_result
+        if self.launch_result is None:
+            return None
+        return LaunchOutcome(self.launch_result, self.launch_remote_control)
 
     async def list_sessions(self):
         return self.records

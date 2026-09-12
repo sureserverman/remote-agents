@@ -170,7 +170,7 @@ async def test_the_terminal_gracefully_stops_a_session_the_service_launched(
             SQLiteSessionStore(tui_connection), _terminal(gateway, executable)
         )
 
-        launched = await service.launch(LaunchCommand(_PROJECT, _PROFILE, "service-1"))
+        launched = (await service.launch(LaunchCommand(_PROJECT, _PROFILE, "service-1"))).record
         app = _tui(tui_service)
 
         async with app.run_test() as pilot:
@@ -204,7 +204,7 @@ async def test_the_profile_is_resolved_from_the_factories_not_a_process_local_ca
         service = SessionService(SQLiteSessionStore(service_connection), launching)
         tui_service = SessionService(SQLiteSessionStore(tui_connection), stopping)
 
-        launched = await service.launch(LaunchCommand(_PROJECT, _PROFILE, "service-1"))
+        launched = (await service.launch(LaunchCommand(_PROJECT, _PROFILE, "service-1"))).record
 
         assert launched.session_id in launching._session_profiles
         assert stopping._session_profiles == {}, "the stopping terminal must not have the cache"
@@ -238,7 +238,7 @@ async def test_a_stop_with_an_unresolvable_profile_fails_closed(
             SQLiteSessionStore(tui_connection), _terminal(gateway, executable, profiles=False)
         )
 
-        launched = await service.launch(LaunchCommand(_PROJECT, _PROFILE, "service-1"))
+        launched = (await service.launch(LaunchCommand(_PROJECT, _PROFILE, "service-1"))).record
         app = _tui(tui_service)
 
         async with app.run_test() as pilot:
@@ -272,7 +272,7 @@ async def test_force_stop_from_the_terminal_also_crosses_the_process_boundary(
         tui_service = SessionService(
             SQLiteSessionStore(tui_connection), _terminal(gateway, executable)
         )
-        launched = await service.launch(LaunchCommand(_PROJECT, _PROFILE, "service-1"))
+        launched = (await service.launch(LaunchCommand(_PROJECT, _PROFILE, "service-1"))).record
 
         app = _tui(tui_service)
         async with app.run_test() as pilot:

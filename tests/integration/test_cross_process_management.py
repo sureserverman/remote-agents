@@ -74,7 +74,7 @@ async def test_an_idempotency_key_cannot_be_replayed_from_the_other_process(
         await terminal.launch(LaunchCommand(_PROJECT, _PROFILE, "shared-key"))
 
         with pytest.raises(DuplicateCommandError):
-            await service.launch(LaunchCommand(_PROJECT, _PROFILE, "shared-key"))
+            (await service.launch(LaunchCommand(_PROJECT, _PROFILE, "shared-key"))).record
 
         assert len(await service.list_sessions()) == 1
     finally:
@@ -93,7 +93,7 @@ async def test_each_surface_allocates_its_own_sequence_from_the_shared_store(
         service = SessionService(SQLiteSessionStore(service_connection), panes)
 
         first = await terminal.launch(LaunchCommand(_PROJECT, _PROFILE, "tui-1"))
-        second = await service.launch(LaunchCommand(_PROJECT, _PROFILE, "bot-1"))
+        second = (await service.launch(LaunchCommand(_PROJECT, _PROFILE, "bot-1"))).record
 
         assert first.display.sequence == 1
         assert second.display.sequence == 2

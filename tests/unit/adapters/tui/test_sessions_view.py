@@ -7,6 +7,7 @@ import dataclasses
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
+import pytest
 from backends import SessionUseCaseDouble, backend_for
 from textual.widgets import OptionList
 from tui_feedback import announcements
@@ -19,6 +20,7 @@ from remote_agents.adapters.tui.screens.launch import ProjectsScreen
 from remote_agents.adapters.tui.screens.sessions import SessionsScreen
 from remote_agents.application.profiles import ProfileAvailability
 from remote_agents.application.project_catalog import CatalogProject
+from remote_agents.application.services import LaunchOutcome
 from remote_agents.domain.models import (
     ProfileId,
     ProjectId,
@@ -1091,10 +1093,13 @@ class _TrustBlockedLauncher(_Listing):
     """A launcher whose launch lands on the agent's folder-trust dialog."""
 
     launched: int = 0
+    #: What the service reports having passed. False here: a trust-blocked launch is about
+    #: the dialog, and a test that left this true would assert two things at once.
+    remote_control: bool = False
 
     async def launch(self, _command):
         self.launched += 1
-        return _record(SessionState.UNTRUSTED)
+        return LaunchOutcome(_record(SessionState.UNTRUSTED), self.remote_control)
 
 
 async def test_a_trust_blocked_launch_opens_the_session_rather_than_reporting_a_failure() -> None:
@@ -1131,4 +1136,39 @@ async def test_a_trust_blocked_launch_opens_the_session_rather_than_reporting_a_
         "the local surface reported a trust-blocked launch as a failure. It is not one: the "
         "agent is up and asking a question, and this surface's job is to put its pane in "
         "front of the owner (DEC-047)"
+    )
+
+
+@pytest.mark.parametrize("carried", (True, False))
+async def test_the_local_surface_names_remote_control_only_when_the_launch_carried_it(
+    carried: bool,
+) -> None:
+    """The bot's launch reply has a local twin, and this is it.
+
+    Said *before* `_open_or_leave` hands the screen to the session's own pane, because that
+    is the last moment the owner is looking at this surface. Driven by the outcome the
+    service returned rather than by re-reading the stored default here: two surfaces reading
+    the same file separately is how their two sentences come to disagree.
+
+    Both arms launch identically and differ only in what the service reports, so a surface
+    that announced unconditionally -- or that re-read the setting -- fails one of them.
+    """
+    launcher = _TrustBlockedLauncher((_record(SessionState.UNTRUSTED),))
+    launcher.remote_control = carried
+    app = RemoteAgentsTui(_context(launcher))
+
+    async with app.run_test() as pilot:
+        app.selection = dataclasses.replace(
+            app.selection,
+            project=_EXISTING,
+            profile=ProfileAvailability("claude", True),
+        )
+        await app.launch()
+        await pilot.pause()
+        said = " ".join(announcements(app))
+
+    assert launcher.launched == 1, "the launch never reached the backend; the assert is vacuous"
+    assert ("with Remote Control" in said) is carried, (
+        "the local surface must name the flag when the launch carried it and stay silent "
+        "when it did not"
     )

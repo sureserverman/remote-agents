@@ -47,9 +47,9 @@ async def test_integrated_fake_journeys_use_real_sqlite_and_isolated_tmux(tmp_pa
     callbacks = CallbackStateStore()
 
     try:
-        record = await service.launch(
+        record = (await service.launch(
             LaunchCommand(ProjectId(project.opaque_id), ProfileId("claude"), "launch-path")
-        )
+        )).record
         assert inspect_capture(await _capture(gateway, record.session_id)).text.startswith("READY")
 
         stop = StopController(callbacks)
@@ -77,9 +77,9 @@ async def test_integrated_fake_journeys_use_real_sqlite_and_isolated_tmux(tmp_pa
         with pytest.raises(TerminalTargetMissing):
             await _capture(gateway, record.session_id)
 
-        command = await service.launch(
+        command = (await service.launch(
             LaunchCommand(ProjectId(project.opaque_id), ProfileId("claude"), "force-path")
-        )
+        )).record
         force = StopController(callbacks)
         # The confirmation is a second token carrying a second action, not a flag on the
         # first: a token re-offered onto the same message cannot survive that message's
@@ -155,9 +155,9 @@ async def test_stop_returns_to_list_over_real_sqlite_and_tmux(tmp_path: Path) ->
     boundary = build_private_bot(7, 11, backend=backend_for(catalogue=catalogue, sessions=service))
 
     try:
-        record = await service.launch(
+        record = (await service.launch(
             LaunchCommand(ProjectId(project.opaque_id), ProfileId("claude"), "stop-path")
-        )
+        )).record
         assert inspect_capture(await _capture(gateway, record.session_id)).text.startswith("READY")
         listed = await boundary._sessions_reply()
         assert "<b>Sessions</b> · 1  🟢 1" in listed.text, "it is on the list before the stop"
@@ -282,9 +282,9 @@ async def test_a_real_launch_reorders_the_catalogue_it_was_launched_from(tmp_pat
     assert [project.name for project in boundary.catalogue] == ["alpha", "opaque-editor"]
 
     try:
-        await service.launch(
+        (await service.launch(
             LaunchCommand(ProjectId(beta.opaque_id), ProfileId("claude"), "rank-path")
-        )
+        )).record
 
         await boundary.refresh_catalogue()
 

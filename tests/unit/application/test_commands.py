@@ -17,6 +17,7 @@ from remote_agents.application.commands import (
 from remote_agents.application.errors import DuplicateCommandError
 from remote_agents.application.services import SessionService
 from remote_agents.domain.models import ProfileId, ProjectId, SessionId, SessionRecord, SessionState
+from remote_agents.domain.remote_control import RemoteControlDefault
 from remote_agents.domain.state_machine import LifecycleEvent, transition
 from remote_agents.ports.terminal import TERMINAL_NOT_LIVE, TerminalObservation
 
@@ -71,11 +72,20 @@ class FakeTerminal:
         self.awaiting_trust = awaiting_trust
         self.launches: list[tuple[SessionId, ProjectId, ProfileId]] = []
         self.force_stop_calls = 0
+        #: (profile, remote_control) per launch, in order. The pair rather than the flag
+        #: alone: what needs asserting is that the *right* agent got it.
+        self.remote_control_asks: list[tuple[ProfileId, bool]] = []
 
     async def launch(
-        self, session_id: SessionId, project_id: ProjectId, profile_id: ProfileId
+        self,
+        session_id: SessionId,
+        project_id: ProjectId,
+        profile_id: ProfileId,
+        *,
+        remote_control: bool = False,
     ) -> TerminalObservation:
         self.launches.append((session_id, project_id, profile_id))
+        self.remote_control_asks.append((profile_id, remote_control))
         return TerminalObservation(
             session_id, live=self.live, preserved=False, awaiting_trust=self.awaiting_trust
         )
@@ -154,9 +164,11 @@ async def test_launch_uses_only_typed_ids_and_terminal_evidence_for_liveness() -
     terminal = FakeTerminal(live=False)
     service = SessionService(store, terminal)
 
-    record = await service.launch(
-        LaunchCommand(ProjectId("opaque-editor"), ProfileId("claude"), "key-1")
-    )
+    record = (
+        await service.launch(
+            LaunchCommand(ProjectId("opaque-editor"), ProfileId("claude"), "key-1")
+        )
+    ).record
 
     assert terminal.launches[0][1:] == (ProjectId("opaque-editor"), ProfileId("claude"))
     assert record.state is SessionState.FAILED
@@ -166,18 +178,18 @@ async def test_launch_uses_only_typed_ids_and_terminal_evidence_for_liveness() -
 async def test_duplicate_launch_does_not_repeat_terminal_side_effect() -> None:
     service = SessionService(FakeStore(), FakeTerminal())
     command = LaunchCommand(ProjectId("opaque-editor"), ProfileId("claude"), "same")
-    await service.launch(command)
+    (await service.launch(command)).record
 
     with pytest.raises(DuplicateCommandError):
-        await service.launch(command)
+        (await service.launch(command)).record
 
 
 async def test_refresh_readiness_recovers_only_a_failed_launch_with_readiness_evidence() -> None:
     terminal = FakeTerminal(live=False)
     service = SessionService(FakeStore(), terminal)
-    record = await service.launch(
-        LaunchCommand(ProjectId("opaque-editor"), ProfileId("claude"), "key")
-    )
+    record = (
+        await service.launch(LaunchCommand(ProjectId("opaque-editor"), ProfileId("claude"), "key"))
+    ).record
 
     terminal.live = True
     refreshed = await service.refresh_readiness()
@@ -189,9 +201,9 @@ async def test_refresh_readiness_recovers_only_a_failed_launch_with_readiness_ev
 async def test_graceful_stop_timeout_restores_running_state_for_explicit_force_stop() -> None:
     store = FakeStore()
     service = SessionService(store, FakeTerminal(graceful_preserved=False))
-    record = await service.launch(
-        LaunchCommand(ProjectId("opaque-editor"), ProfileId("codex"), "key")
-    )
+    record = (
+        await service.launch(LaunchCommand(ProjectId("opaque-editor"), ProfileId("codex"), "key"))
+    ).record
 
     observation = await service.graceful_stop(
         GracefulStopCommand(record.session_id, record.profile_id)
@@ -222,9 +234,9 @@ async def test_a_stop_that_was_never_sent_is_not_recorded_as_a_timeout() -> None
     store = FakeStore()
     terminal = FakeTerminal(graceful_preserved=False, graceful_detail="unknown_session")
     service = SessionService(store, terminal)
-    record = await service.launch(
-        LaunchCommand(ProjectId("opaque-editor"), ProfileId("codex"), "key")
-    )
+    record = (
+        await service.launch(LaunchCommand(ProjectId("opaque-editor"), ProfileId("codex"), "key"))
+    ).record
 
     observation = await service.graceful_stop(
         GracefulStopCommand(record.session_id, record.profile_id)
@@ -256,9 +268,9 @@ async def test_a_stop_reporting_an_unknown_cause_says_so_rather_than_defaulting_
     store = FakeStore()
     terminal = FakeTerminal(graceful_preserved=False, graceful_detail="something_nobody_added_yet")
     service = SessionService(store, terminal)
-    record = await service.launch(
-        LaunchCommand(ProjectId("opaque-editor"), ProfileId("codex"), "key")
-    )
+    record = (
+        await service.launch(LaunchCommand(ProjectId("opaque-editor"), ProfileId("codex"), "key"))
+    ).record
 
     with caplog.at_level(logging.WARNING):
         await service.graceful_stop(GracefulStopCommand(record.session_id, record.profile_id))
@@ -272,9 +284,9 @@ async def test_a_stop_reporting_an_unknown_cause_says_so_rather_than_defaulting_
 async def test_concurrent_force_stops_allow_only_one_terminal_side_effect() -> None:
     terminal = YieldingForceStopTerminal()
     service = SessionService(FakeStore(), terminal)
-    record = await service.launch(
-        LaunchCommand(ProjectId("opaque-editor"), ProfileId("claude"), "one")
-    )
+    record = (
+        await service.launch(LaunchCommand(ProjectId("opaque-editor"), ProfileId("claude"), "one"))
+    ).record
 
     results = await asyncio.gather(
         service.force_stop(ForceStopCommand(record.session_id)),
@@ -313,9 +325,9 @@ async def test_a_stop_the_policy_refuses_also_raises_in_the_service(provenance) 
     store = FakeStore()
     terminal = FakeTerminal()
     service = SessionService(store, terminal)
-    record = await service.launch(
-        LaunchCommand(ProjectId("opaque-editor"), ProfileId("claude"), "one")
-    )
+    record = (
+        await service.launch(LaunchCommand(ProjectId("opaque-editor"), ProfileId("claude"), "one"))
+    ).record
     store.records[record.session_id] = SessionRecord(
         record.session_id,
         record.project_id,
@@ -362,9 +374,9 @@ async def test_cleanup_is_refused_from_a_state_the_policy_never_offers_it_from(
     store = FakeStore()
     terminal = FakeTerminal()
     service = SessionService(store, terminal)
-    record = await service.launch(
-        LaunchCommand(ProjectId("opaque-editor"), ProfileId("claude"), "one")
-    )
+    record = (
+        await service.launch(LaunchCommand(ProjectId("opaque-editor"), ProfileId("claude"), "one"))
+    ).record
     store.records[record.session_id] = SessionRecord(
         record.session_id,
         record.project_id,
@@ -389,9 +401,9 @@ async def test_cleanup_still_works_from_the_state_the_policy_does_offer_it_from(
     store = FakeStore()
     terminal = FakeTerminal()
     service = SessionService(store, terminal)
-    record = await service.launch(
-        LaunchCommand(ProjectId("opaque-editor"), ProfileId("claude"), "one")
-    )
+    record = (
+        await service.launch(LaunchCommand(ProjectId("opaque-editor"), ProfileId("claude"), "one"))
+    ).record
     store.records[record.session_id] = SessionRecord(
         record.session_id,
         record.project_id,
@@ -417,9 +429,9 @@ async def test_the_service_lets_a_force_reach_an_adopted_orphan() -> None:
     store = FakeStore()
     terminal = FakeTerminal()
     service = SessionService(store, terminal)
-    record = await service.launch(
-        LaunchCommand(ProjectId("opaque-editor"), ProfileId("claude"), "one")
-    )
+    record = (
+        await service.launch(LaunchCommand(ProjectId("opaque-editor"), ProfileId("claude"), "one"))
+    ).record
     store.records[record.session_id] = SessionRecord(
         record.session_id,
         record.project_id,
@@ -448,9 +460,9 @@ async def test_the_service_still_refuses_a_force_from_a_state_with_no_transition
     store = FakeStore()
     terminal = FakeTerminal()
     service = SessionService(store, terminal)
-    record = await service.launch(
-        LaunchCommand(ProjectId("opaque-editor"), ProfileId("claude"), "one")
-    )
+    record = (
+        await service.launch(LaunchCommand(ProjectId("opaque-editor"), ProfileId("claude"), "one"))
+    ).record
     store.records[record.session_id] = SessionRecord(
         record.session_id,
         record.project_id,
@@ -475,9 +487,9 @@ async def test_copy_attach_refuses_a_pane_that_belongs_to_another_project() -> N
     store = FakeStore()
     terminal = OwnershipAwareTerminal()
     service = SessionService(store, terminal)
-    record = await service.launch(
-        LaunchCommand(ProjectId("opaque-editor"), ProfileId("claude"), "one")
-    )
+    record = (
+        await service.launch(LaunchCommand(ProjectId("opaque-editor"), ProfileId("claude"), "one"))
+    ).record
 
     assert await service.copy_attach(record.session_id) is not None
 
@@ -501,9 +513,9 @@ async def test_copy_attach_offers_a_preserved_pane_read_only() -> None:
     store = FakeStore()
     terminal = OwnershipAwareTerminal()
     service = SessionService(store, terminal)
-    record = await service.launch(
-        LaunchCommand(ProjectId("opaque-editor"), ProfileId("claude"), "one")
-    )
+    record = (
+        await service.launch(LaunchCommand(ProjectId("opaque-editor"), ProfileId("claude"), "one"))
+    ).record
     observation = await terminal.inspect(record.session_id)
     terminal._observations[record.session_id] = replace(observation, live=False, preserved=True)
 
@@ -534,9 +546,9 @@ async def test_the_fake_carries_ownership_across_a_preserving_stop() -> None:
     """
     terminal = OwnershipAwareTerminal()
     service = SessionService(FakeStore(), terminal)
-    record = await service.launch(
-        LaunchCommand(ProjectId("opaque-editor"), ProfileId("claude"), "one")
-    )
+    record = (
+        await service.launch(LaunchCommand(ProjectId("opaque-editor"), ProfileId("claude"), "one"))
+    ).record
 
     observation = await service.graceful_stop(
         GracefulStopCommand(record.session_id, record.profile_id)
@@ -561,9 +573,9 @@ async def test_copy_attach_still_refuses_a_pane_that_is_neither_live_nor_preserv
     store = FakeStore()
     terminal = OwnershipAwareTerminal()
     service = SessionService(store, terminal)
-    record = await service.launch(
-        LaunchCommand(ProjectId("opaque-editor"), ProfileId("claude"), "one")
-    )
+    record = (
+        await service.launch(LaunchCommand(ProjectId("opaque-editor"), ProfileId("claude"), "one"))
+    ).record
     observation = await terminal.inspect(record.session_id)
     terminal._observations[record.session_id] = replace(observation, live=False, preserved=False)
 
@@ -574,9 +586,9 @@ async def test_copy_attach_refuses_a_pane_running_another_profile() -> None:
     store = FakeStore()
     terminal = OwnershipAwareTerminal()
     service = SessionService(store, terminal)
-    record = await service.launch(
-        LaunchCommand(ProjectId("opaque-editor"), ProfileId("claude"), "one")
-    )
+    record = (
+        await service.launch(LaunchCommand(ProjectId("opaque-editor"), ProfileId("claude"), "one"))
+    ).record
     observation = await terminal.inspect(record.session_id)
     terminal._observations[record.session_id] = replace(observation, profile_id=ProfileId("codex"))
 
@@ -593,9 +605,11 @@ async def test_a_launch_that_lands_on_a_trust_dialog_is_recorded_untrusted() -> 
     store = FakeStore()
     service = SessionService(store, FakeTerminal(live=True, awaiting_trust=True))
 
-    record = await service.launch(
-        LaunchCommand(ProjectId("opaque-editor"), ProfileId("claude"), "trust-launch")
-    )
+    record = (
+        await service.launch(
+            LaunchCommand(ProjectId("opaque-editor"), ProfileId("claude"), "trust-launch")
+        )
+    ).record
 
     assert record.state is SessionState.UNTRUSTED
     assert store.events == [LifecycleEvent.TRUST_REQUIRED]
@@ -606,9 +620,11 @@ async def test_a_launch_whose_pane_never_came_up_is_still_a_startup_error() -> N
     store = FakeStore()
     service = SessionService(store, FakeTerminal(live=False))
 
-    record = await service.launch(
-        LaunchCommand(ProjectId("opaque-editor"), ProfileId("claude"), "dead-launch")
-    )
+    record = (
+        await service.launch(
+            LaunchCommand(ProjectId("opaque-editor"), ProfileId("claude"), "dead-launch")
+        )
+    ).record
 
     assert record.state is SessionState.FAILED
     assert store.events == [LifecycleEvent.STARTUP_ERROR]
@@ -630,9 +646,11 @@ async def test_a_recheck_never_probes_the_pane_of_a_running_session() -> None:
     store = FakeStore()
     terminal = _ProbeCountingTerminal(live=True)
     service = SessionService(store, terminal)
-    record = await service.launch(
-        LaunchCommand(ProjectId("opaque-editor"), ProfileId("claude"), "late-dialog")
-    )
+    record = (
+        await service.launch(
+            LaunchCommand(ProjectId("opaque-editor"), ProfileId("claude"), "late-dialog")
+        )
+    ).record
     assert record.state is SessionState.RUNNING
     terminal.probes = 0
 
@@ -651,9 +669,11 @@ async def test_a_recheck_clears_untrusted_once_the_dialog_is_answered_in_the_pan
     store = FakeStore()
     terminal = FakeTerminal(live=True, awaiting_trust=True)
     service = SessionService(store, terminal)
-    record = await service.launch(
-        LaunchCommand(ProjectId("opaque-editor"), ProfileId("claude"), "answered-by-hand")
-    )
+    record = (
+        await service.launch(
+            LaunchCommand(ProjectId("opaque-editor"), ProfileId("claude"), "answered-by-hand")
+        )
+    ).record
     assert record.state is SessionState.UNTRUSTED
 
     terminal.awaiting_trust = False
@@ -668,9 +688,11 @@ async def test_a_recheck_leaves_an_untrusted_record_alone_while_the_dialog_stand
     store = FakeStore()
     terminal = FakeTerminal(live=True, awaiting_trust=True)
     service = SessionService(store, terminal)
-    await service.launch(
-        LaunchCommand(ProjectId("opaque-editor"), ProfileId("claude"), "still-asking")
-    )
+    (
+        await service.launch(
+            LaunchCommand(ProjectId("opaque-editor"), ProfileId("claude"), "still-asking")
+        )
+    ).record
     before = list(store.events)
 
     await service.refresh_readiness()
@@ -690,9 +712,11 @@ async def test_a_recheck_ends_an_untrusted_session_whose_pane_is_gone() -> None:
     store = FakeStore()
     terminal = _GonePaneTerminal(live=True, awaiting_trust=True)
     service = SessionService(store, terminal)
-    record = await service.launch(
-        LaunchCommand(ProjectId("opaque-editor"), ProfileId("claude"), "died-at-the-dialog")
-    )
+    record = (
+        await service.launch(
+            LaunchCommand(ProjectId("opaque-editor"), ProfileId("claude"), "died-at-the-dialog")
+        )
+    ).record
     assert record.state is SessionState.UNTRUSTED
 
     terminal.awaiting_trust = False
@@ -712,9 +736,11 @@ async def test_a_recheck_does_not_end_an_untrusted_session_whose_agent_is_merely
     store = FakeStore()
     terminal = _SlowAgentTerminal(live=True, awaiting_trust=True)
     service = SessionService(store, terminal)
-    await service.launch(
-        LaunchCommand(ProjectId("opaque-editor"), ProfileId("claude"), "slow-but-alive")
-    )
+    (
+        await service.launch(
+            LaunchCommand(ProjectId("opaque-editor"), ProfileId("claude"), "slow-but-alive")
+        )
+    ).record
     before = list(store.events)
 
     terminal.awaiting_trust = False
@@ -722,3 +748,145 @@ async def test_a_recheck_does_not_end_an_untrusted_session_whose_agent_is_merely
 
     assert refreshed.state is SessionState.UNTRUSTED
     assert store.events == before
+
+
+class _StoredDefault:
+    """A `ports/remote_control_default` fake whose answer a test can change mid-run.
+
+    It counts reads, which is the only way to tell a value read *at launch* from one read
+    once at construction and remembered: both answer the same thing on the first launch.
+    """
+
+    def __init__(self, value: RemoteControlDefault) -> None:
+        self.value = value
+        self.reads = 0
+
+    async def read(self) -> RemoteControlDefault:
+        self.reads += 1
+        return self.value
+
+    async def write(self, value: RemoteControlDefault) -> None:
+        self.value = value
+
+
+async def test_a_governed_launch_carries_the_flag_when_the_stored_default_reads_on() -> None:
+    terminal = FakeTerminal()
+    stored = _StoredDefault(RemoteControlDefault.ON)
+    service = SessionService(
+        FakeStore(), terminal, remote_control_defaults={ProfileId("claude"): stored}
+    )
+
+    outcome = await service.launch(
+        LaunchCommand(ProjectId("opaque-editor"), ProfileId("claude"), "launch-on")
+    )
+
+    assert terminal.remote_control_asks == [(ProfileId("claude"), True)]
+    assert outcome.remote_control is True, (
+        "the outcome must report what the launch did -- a surface cannot recover it from the "
+        "record, because a connected launch and an unconnected one both answer RUNNING"
+    )
+
+
+@pytest.mark.parametrize("value", (RemoteControlDefault.OFF, RemoteControlDefault.PROVIDER_DEFAULT))
+async def test_off_and_the_provider_default_both_launch_unconnected(
+    value: RemoteControlDefault,
+) -> None:
+    """The whole reason this is not a boolean read.
+
+    `PROVIDER_DEFAULT` is not an *off* -- it is "whatever Claude decides", which this project
+    does not know. Both answers pass `False` for the same reason: the flag **overrides** the
+    settings file (`docs/acceptance-2026-09-11-surface-refresh.md` section 8 part C), so
+    passing it would force on a session the owner had either turned off or never spoken about.
+    Collapsing the third state into `ON` is the one direction that cannot be undone from here.
+    """
+    terminal = FakeTerminal()
+    service = SessionService(
+        FakeStore(),
+        terminal,
+        remote_control_defaults={ProfileId("claude"): _StoredDefault(value)},
+    )
+
+    outcome = await service.launch(
+        LaunchCommand(ProjectId("opaque-editor"), ProfileId("claude"), f"launch-{value}")
+    )
+
+    assert terminal.remote_control_asks == [(ProfileId("claude"), False)]
+    assert outcome.remote_control is False
+
+
+@pytest.mark.parametrize("profile", ("codex", "opencode", "cursor-agent"))
+async def test_an_ungoverned_agent_never_carries_the_flag_however_the_row_reads(
+    profile: str,
+) -> None:
+    """The port is *Claude's* stored default, and it answers for Claude's launches only.
+
+    A reading of `ON` says the next `claude` pane comes up connected. It says nothing about
+    codex, whose remote control is a daemon enrollment read over a socket and a different port
+    entirely -- so a codex launch that carried this flag would be naming a session the owner
+    asked this project to keep out of.
+    """
+    terminal = FakeTerminal()
+    service = SessionService(
+        FakeStore(),
+        terminal,
+        remote_control_defaults={ProfileId("claude"): _StoredDefault(RemoteControlDefault.ON)},
+    )
+
+    outcome = await service.launch(
+        LaunchCommand(ProjectId("opaque-editor"), ProfileId(profile), f"launch-{profile}")
+    )
+
+    assert terminal.remote_control_asks == [(ProfileId(profile), False)]
+    assert outcome.remote_control is False
+
+
+async def test_the_stored_default_is_read_at_every_launch_rather_than_once_at_construction() -> (
+    None
+):
+    """Changing the answer between two launches changes the second, with no re-composition.
+
+    The service is built once and lives for the life of the process, while the Settings row
+    that writes this value is pressed whenever the owner likes. A value captured at
+    construction would mean the setting took effect at the next *restart* -- which is the
+    shape of a bug the owner would report as "the toggle does nothing".
+
+    Both halves are asserted. The read count rules out a remembered first answer, and the
+    flags rule out a service that re-reads and then ignores what it read.
+    """
+    terminal = FakeTerminal()
+    stored = _StoredDefault(RemoteControlDefault.OFF)
+    service = SessionService(
+        FakeStore(), terminal, remote_control_defaults={ProfileId("claude"): stored}
+    )
+
+    first = await service.launch(
+        LaunchCommand(ProjectId("opaque-editor"), ProfileId("claude"), "launch-first")
+    )
+    stored.value = RemoteControlDefault.ON
+    second = await service.launch(
+        LaunchCommand(ProjectId("opaque-editor"), ProfileId("claude"), "launch-second")
+    )
+
+    assert (first.remote_control, second.remote_control) == (False, True)
+    assert terminal.remote_control_asks == [
+        (ProfileId("claude"), False),
+        (ProfileId("claude"), True),
+    ]
+    assert stored.reads == 2, "one read per launch, so the row takes effect on the next launch"
+
+
+async def test_a_composition_that_wires_no_stored_default_launches_unconnected() -> None:
+    """The optional port's absent branch, which has to stay reachable (DEC-061/067).
+
+    A host with no Claude provider wired has no such default to read, and the honest answer
+    is the ordinary launch -- not a refusal, and not a guess at what Claude would have done.
+    """
+    terminal = FakeTerminal()
+    service = SessionService(FakeStore(), terminal)
+
+    outcome = await service.launch(
+        LaunchCommand(ProjectId("opaque-editor"), ProfileId("claude"), "launch-unwired")
+    )
+
+    assert terminal.remote_control_asks == [(ProfileId("claude"), False)]
+    assert outcome.remote_control is False
