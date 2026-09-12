@@ -1686,8 +1686,13 @@ thing under test is the Settings row as a control:
 ### F. The phone-side checks — reported by the owner, 2026-09-12
 
 **Attributed, not measured.** The five checks in §E need a thumb on the owner's phone and were
-performed by them, not driven from the executing session. Their report was *"yes, everything
-works as intended"*, covering all five:
+performed by them, not driven from the executing session. Their report, in full, was *"yes,
+everything works as intended"*.
+
+**The five checks §E asked for, reported as passing.** The specific expectations below are
+**§E's wording, not the owner's own observations** — they are what was asked, restated here so
+a reader knows what the report covered. One summary sentence does not carry five separate
+observations, and this list must not be read as though it did:
 
 1. The bot's `📡 Claude Remote Control` row cycles and reaches **on**.
 2. A `claude` launch with the row *on* comes up connected — ` · /rc` in the banner and
