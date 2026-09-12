@@ -294,6 +294,29 @@ def remote_control_directions(
     return (RemoteControlDirection.TOGGLE,)
 
 
+def remote_control_reading(
+    observed: RemoteControlState, stored: RemoteControlState | None
+) -> RemoteControlState:
+    """What a confirmation should say this pane is, from the fresh read and the stored one.
+
+    The fresh read wins whenever it says anything, because it is a fact about the pane *now*
+    and the stored value is as old as the last toggle. The fallback exists because on claude
+    2.1.269 a pane that is connected and idle prints **nothing**: the connection is announced
+    only while the status menu is open, and only a transition leaves a line behind. So a
+    session toggled on, whose menu was then dismissed, reads UNKNOWN forever -- and a toggle
+    that resolved UNKNOWN to *on* could only ever turn Remote Control on. There would be no
+    way to reach off at all.
+
+    Falling back is safe in the direction that matters. A stored ACTIVE that is wrong proposes
+    *off*, and off is the direction the terminal refuses from a pane it cannot read: the
+    disable path requires the status menu on screen before it sends a key, and a disconnected
+    pane does not show one, so the attempt answers UNKNOWN having typed nothing.
+    """
+    if observed is not RemoteControlState.UNKNOWN:
+        return observed
+    return stored if stored is not None else RemoteControlState.UNKNOWN
+
+
 def remote_control_target(observed: RemoteControlState) -> RemoteControlState:
     """Which direction one press should take, given what the pane was *just* read to be.
 

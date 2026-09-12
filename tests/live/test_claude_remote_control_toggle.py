@@ -18,7 +18,10 @@ import pytest
 from remote_agents.adapters.tmux.gateway import TmuxGateway
 from remote_agents.adapters.tmux.profiles import build_launch_profile
 from remote_agents.adapters.tmux.runtime import AsyncTmuxRunner, TmuxTerminal
-from remote_agents.application.session_actions import remote_control_target
+from remote_agents.application.session_actions import (
+    remote_control_reading,
+    remote_control_target,
+)
 from remote_agents.domain.models import ProfileId, ProjectId, SessionId
 from remote_agents.domain.profiles import closed_profiles
 from remote_agents.domain.remote_control import RemoteControlState
@@ -73,6 +76,11 @@ async def test_claude_remote_control_toggle_on_an_exact_disposable_managed_pane(
         # UNKNOWN by scrolling the marker out of the capture; a pane that has never been
         # toggled is the same reading, is what production actually meets first, and is
         # deterministic here instead of depending on how tall the pane happens to be.
+        #
+        # And on 2.1.269 the pane is in fact **already connected** -- it connects itself at
+        # launch, printing nothing. So this press is a no-op that discovers the truth: the
+        # enable keys open the status menu instead of enabling, the terminal recognises the
+        # menu, dismisses it with Escape, and reports ACTIVE.
         assert await terminal.remote_control_state(session_id) is RemoteControlState.UNKNOWN
         first = remote_control_target(RemoteControlState.UNKNOWN)
         assert first is RemoteControlState.ACTIVE, (
@@ -84,14 +92,22 @@ async def test_claude_remote_control_toggle_on_an_exact_disposable_managed_pane(
 
         # --- Press two: the same button, the other way -------------------------------------
         #
-        # Nothing about the button changed between the two presses. What changed is what the
-        # pane says, which is the whole claim the single toggle rests on.
-        observed = await terminal.remote_control_state(session_id)
-        assert observed is RemoteControlState.ACTIVE, "the read must see the press that landed"
+        # Nothing about the button changed between the two presses. What changed is what this
+        # session is known to be -- and knowing it takes both sources, which is the finding
+        # this drill exists to hold.
+        #
+        # The pane itself still says nothing. Remote Control being on is announced only inside
+        # the status menu, and the press above dismissed that menu rather than leaving it over
+        # the owner's work; no transition line was printed, because nothing transitioned. So
+        # the bare read is UNKNOWN and `remote_control_reading` supplies what press one
+        # observed, which is what the record carries in production.
+        assert await terminal.remote_control_state(session_id) is RemoteControlState.UNKNOWN
+        observed = remote_control_reading(RemoteControlState.UNKNOWN, enabled_state)
+        assert observed is RemoteControlState.ACTIVE
         disabled_state = await terminal.remote_control(session_id, remote_control_target(observed))
         assert disabled_state is RemoteControlState.INACTIVE
 
-        # --- And the reading follows it back -----------------------------------------------
+        # --- And *this* transition does leave a line, so the bare read follows it back ------
         assert await terminal.remote_control_state(session_id) is RemoteControlState.INACTIVE
     finally:
         try:

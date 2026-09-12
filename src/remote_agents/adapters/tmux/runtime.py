@@ -13,9 +13,11 @@ from remote_agents.adapters.tmux.codec import attach_command
 from remote_agents.adapters.tmux.gateway import TmuxGateway, TmuxRunner
 from remote_agents.adapters.tmux.remote_control import (
     REMOTE_CONTROL_DISCONNECT_KEYS,
+    REMOTE_CONTROL_DISMISS_MENU_KEYS,
     REMOTE_CONTROL_ENABLE_KEYS,
     REMOTE_CONTROL_OPEN_MENU_KEYS,
     classify_remote_control_capture,
+    remote_control_menu_is_open,
 )
 from remote_agents.adapters.tmux.trust import classify_trust_capture, plan_trust_keys
 from remote_agents.domain.conversations import ProviderConversationId
@@ -588,19 +590,56 @@ class TmuxTerminal:
             or observation.profile_id != ProfileId("claude")
         ):
             return RemoteControlState.UNKNOWN
-        current = _remote_control_state(await self._gateway.capture(session_id))
+        capture = await self._gateway.capture(session_id)
+        current = _remote_control_state(capture)
         if current is desired_state:
-            return current
-        if desired_state is RemoteControlState.INACTIVE and current is RemoteControlState.UNKNOWN:
             return current
         if desired_state is RemoteControlState.ACTIVE:
             await self._gateway.send_keys(session_id, REMOTE_CONTROL_ENABLE_KEYS)
             await asyncio.sleep(self._waits.remote_control_enable)
-        else:
+            capture = await self._gateway.capture(session_id)
+            if remote_control_menu_is_open(capture):
+                # `/remote-control` enables a disconnected pane and **opens the status menu**
+                # on a connected one. Landing here means the pane was already connected --
+                # which a read cannot tell in advance, because an idle connected pane prints
+                # no marker at all. Nothing was changed, so the only thing left to do is put
+                # the menu away rather than leave it sitting over the owner's work. `Escape`
+                # dismisses it without selecting anything.
+                await self._gateway.send_keys(session_id, REMOTE_CONTROL_DISMISS_MENU_KEYS)
+                # Settle before answering. Without this the method returns while the pane is
+                # still painting the menu away, and the *caller's* next read captures a menu
+                # that is already gone -- which is how a surface ends up sending menu keys at
+                # a prompt. Measured: three consecutive captures after an un-waited Escape all
+                # still showed the menu.
+                await asyncio.sleep(self._waits.remote_control_menu)
+                return RemoteControlState.ACTIVE
+            return _remote_control_state(capture)
+
+        # --- Disabling, which is the path that may not act on faith --------------------
+        #
+        # `REMOTE_CONTROL_DISCONNECT_KEYS` is `Up, Up, Enter`. Against the open menu that
+        # selects *Disconnect this session*; against a bare prompt it is `history, history,
+        # submit`, and measured on claude 2.1.269 it submitted the owner's previous message
+        # and started an agent turn that began running shell commands. This code used to send
+        # it after a fixed sleep, having asked for a menu and never looked.
+        #
+        # So: open the menu only if one is not already up -- asking twice is what closed it,
+        # because `Enter` on the open menu selects its resting *Continue* row -- and send the
+        # arrows only from a capture that proves a menu is there. No proof, no keys.
+        if not remote_control_menu_is_open(capture):
             await self._gateway.send_keys(session_id, REMOTE_CONTROL_OPEN_MENU_KEYS)
-            await asyncio.sleep(self._waits.remote_control_menu)
-            await self._gateway.send_keys(session_id, REMOTE_CONTROL_DISCONNECT_KEYS)
-            await asyncio.sleep(self._waits.remote_control_disable)
+        # Settle and re-read in **both** branches, including the one that already saw a menu.
+        # A capture is a picture of a pane mid-repaint as readily as of a settled one, so a
+        # menu seen in the capture above may be one that has just been dismissed -- and the
+        # arrows would then land on the prompt, which is the whole thing this path exists to
+        # prevent. The proof that licenses the keys has to be the *last* thing read before
+        # them, not merely something read at some point.
+        await asyncio.sleep(self._waits.remote_control_menu)
+        capture = await self._gateway.capture(session_id)
+        if not remote_control_menu_is_open(capture):
+            return RemoteControlState.UNKNOWN
+        await self._gateway.send_keys(session_id, REMOTE_CONTROL_DISCONNECT_KEYS)
+        await asyncio.sleep(self._waits.remote_control_disable)
         return _remote_control_state(await self._gateway.capture(session_id))
 
     async def remote_control_state(self, session_id: SessionId) -> RemoteControlState:

@@ -62,14 +62,25 @@ async def test_enable_waits_for_claude_to_report_active_after_the_fixed_interact
 async def test_disable_opens_the_remote_control_menu_before_disconnect(monkeypatch):
     session_id = SessionId.new()
 
+    #: What the pane shows at each capture. Three now, where there were two: the disable path
+    #: re-reads after asking for the menu and sends `Up, Up, Enter` only if *that* capture
+    #: shows one. Measured on claude 2.1.269, those keys at a bare prompt are `history,
+    #: history, submit` -- they started a real agent turn in a disposable pane. So the proof
+    #: has to be the last thing read before them, which is what this sequence now models.
+    _MENU = (
+        "   Remote Control\n"
+        "     Disconnect this session\n"
+        "   ❯ Continue\n"
+        "   Enter to select · Esc to continue\n"
+    )
+
     class ActiveGateway(Gateway):
         async def capture(self, _session_id):
             self.capture_count += 1
-            return (
-                "/remote-control is active"
-                if self.capture_count == 1
-                else "Remote Control disconnected."
-            )
+            return {
+                1: "/remote-control is active",
+                2: _MENU,
+            }.get(self.capture_count, "Remote Control disconnected.")
 
     gateway = ActiveGateway(session_id)
     terminal = TmuxTerminal(gateway, {}, {}, startup_timeout=1)
@@ -88,3 +99,34 @@ async def test_disable_opens_the_remote_control_menu_before_disconnect(monkeypat
         (session_id, ("Up", "Up", "Enter")),
     ]
     assert waits == [1, 2]
+
+
+async def test_a_disable_never_sends_the_arrows_at_a_pane_showing_no_menu(monkeypatch):
+    """The ordering this file is about, stated as the refusal it now is.
+
+    The test above proves the arrows follow a menu. This one proves nothing follows its
+    absence -- which is the half that matters, because `Up, Up, Enter` is only a disconnect
+    while a menu is receiving it. At a prompt it recalls the owner's last message and submits
+    it, and a disposable pane driven that way started a Claude turn that ran shell commands.
+    """
+    session_id = SessionId.new()
+
+    class SilentGateway(Gateway):
+        async def capture(self, _session_id):
+            self.capture_count += 1
+            return "/remote-control is active"
+
+    gateway = SilentGateway(session_id)
+    terminal = TmuxTerminal(gateway, {}, {}, startup_timeout=1)
+
+    async def record_wait(seconds):
+        del seconds
+
+    monkeypatch.setattr("remote_agents.adapters.tmux.runtime.asyncio.sleep", record_wait)
+
+    state = await terminal.remote_control(session_id, RemoteControlState.INACTIVE)
+
+    assert state is RemoteControlState.UNKNOWN
+    assert gateway.sent == [(session_id, ("/remote-control", "Enter"))], (
+        "asking for a menu is allowed; acting as though one appeared is not"
+    )

@@ -48,6 +48,7 @@ from remote_agents.application.session_actions import (
     explain_state,
     remote_control_available,
     remote_control_directions,
+    remote_control_reading,
     remote_control_target,
 )
 from remote_agents.application.session_views import session_row_parts
@@ -2213,7 +2214,10 @@ class SessionDetailScreen(ChoiceScreen):
                     f"{explain_state(record.state, record.orphan_provenance)}"
                 )
                 return
-            observed = await self.tui.remote_control_state(record.session_id)
+            observed = remote_control_reading(
+                await self.tui.remote_control_state(record.session_id),
+                record.remote_control_state,
+            )
             desired = remote_control_target(observed)
             if not self.showing:
                 return

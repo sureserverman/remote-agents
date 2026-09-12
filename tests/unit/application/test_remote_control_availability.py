@@ -11,6 +11,8 @@ from remote_agents.application.session_actions import (
     RemoteControlDirection,
     remote_control_available,
     remote_control_directions,
+    remote_control_reading,
+    remote_control_target,
 )
 from remote_agents.domain.models import ProfileId, SessionId, SessionState
 from remote_agents.domain.remote_control import RemoteControlState
@@ -93,3 +95,45 @@ def test_no_other_profile_offers_a_direction_either(profile: str) -> None:
 def test_the_one_direction_is_named_without_naming_a_direction() -> None:
     """The label must not say `on` or `off`: which way it goes is not known until it is read."""
     assert REMOTE_CONTROL_LABELS == {RemoteControlDirection.TOGGLE: "Remote Control"}
+
+
+# --- What a confirmation should say the pane is ------------------------------------------
+#
+# A pane that is connected and idle prints nothing on claude 2.1.269: the connection is
+# announced only inside the status menu, and only a transition leaves a line behind. A toggle
+# that resolved every UNKNOWN to *on* could therefore never reach off.
+
+
+@pytest.mark.parametrize(
+    "stored",
+    [None, RemoteControlState.ACTIVE, RemoteControlState.INACTIVE, RemoteControlState.UNKNOWN],
+)
+@pytest.mark.parametrize("observed", [RemoteControlState.ACTIVE, RemoteControlState.INACTIVE])
+def test_a_pane_that_says_something_is_never_overruled_by_the_record(observed, stored) -> None:
+    """The fresh read is a fact about now; the stored one is as old as the last toggle."""
+    assert remote_control_reading(observed, stored) is observed
+
+
+@pytest.mark.parametrize(
+    "stored,expected",
+    [
+        (RemoteControlState.ACTIVE, RemoteControlState.ACTIVE),
+        (RemoteControlState.INACTIVE, RemoteControlState.INACTIVE),
+        (RemoteControlState.UNKNOWN, RemoteControlState.UNKNOWN),
+        (None, RemoteControlState.UNKNOWN),
+    ],
+)
+def test_a_silent_pane_falls_back_to_what_was_last_observed(stored, expected) -> None:
+    assert remote_control_reading(RemoteControlState.UNKNOWN, stored) is expected
+
+
+def test_the_fallback_can_only_be_wrong_in_the_direction_the_terminal_refuses() -> None:
+    """A stale ACTIVE proposes *off*, and off is what an unreadable pane already declines.
+
+    The disable path requires Claude's status menu on screen before it sends a key, and a
+    disconnected pane does not show one -- so a wrong fallback costs a refusal, never a
+    keystroke into somebody's session.
+    """
+    stale = remote_control_reading(RemoteControlState.UNKNOWN, RemoteControlState.ACTIVE)
+
+    assert remote_control_target(stale) is RemoteControlState.INACTIVE

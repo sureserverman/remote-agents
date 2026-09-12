@@ -106,6 +106,7 @@ from remote_agents.application.session_actions import (
     pane_is_attachable,
     remote_control_available,
     remote_control_directions,
+    remote_control_reading,
     remote_control_target,
     state_word,
     trust_available,
@@ -2123,7 +2124,10 @@ class PrivateBotBoundary:
         record = await self._record(session_value)
         if record is None or not remote_control_available(record):
             return self._message("Remote Control is unavailable for this session.")
-        reading = await self.backend.sessions.remote_control_state(record.session_id)
+        reading = remote_control_reading(
+            await self.backend.sessions.remote_control_state(record.session_id),
+            record.remote_control_state,
+        )
         desired = remote_control_target(reading)
         question, action = _REMOTE_CONTROL_QUESTIONS[reading]
         return self._message(

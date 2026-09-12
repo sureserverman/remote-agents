@@ -567,8 +567,8 @@ def test_rule_two_leaves_an_unrelated_getattr_alone() -> None:
 
 def test_the_shared_use_case_set_is_read_from_its_modules() -> None:
     names = _shared_use_case_names()
-    assert len(names) == 21, (
-        f"the shared use-case modules now define {len(names)} public names, not 21. Adding one "
+    assert len(names) == 22, (
+        f"the shared use-case modules now define {len(names)} public names, not 22. Adding one "
         "is ordinary; this assertion exists so that adding one is *noticed*, because every "
         "name here is a name no adapter may define."
     )
@@ -584,6 +584,12 @@ def test_the_shared_use_case_set_is_read_from_its_modules() -> None:
     # bot and the terminal ask the same question a second apart, and a second copy of
     # "UNKNOWN means propose on" is the drift this rule exists to forbid.
     assert {"RemoteControlDirection", "remote_control_target"} <= names
+    # The 22nd. A pane that is connected and idle prints nothing on claude 2.1.269, so a
+    # confirmation built on the bare read alone could only ever propose *on* -- there would be
+    # no way to reach *off* at all. `remote_control_reading` prefers the pane and falls back to
+    # the record, and it is shared for the same reason as the two above: both surfaces resolve
+    # the same two inputs and must not be able to resolve them differently.
+    assert "remote_control_reading" in names
 
 
 @pytest.mark.parametrize("filename", _SHARED_USE_CASE_MODULES)

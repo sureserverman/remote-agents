@@ -9,9 +9,12 @@ import pytest
 from remote_agents.adapters.tmux.gateway import TmuxGateway
 from remote_agents.adapters.tmux.remote_control import (
     REMOTE_CONTROL_DISCONNECT_KEYS,
+    REMOTE_CONTROL_DISMISS_MENU_KEYS,
     REMOTE_CONTROL_ENABLE_KEYS,
+    REMOTE_CONTROL_OPEN_MENU_KEYS,
     RemoteControlState,
     classify_remote_control_capture,
+    remote_control_menu_is_open,
 )
 from remote_agents.adapters.tmux.runtime import LaunchProfile, TmuxTerminal
 from remote_agents.domain.models import ProfileId, ProjectId, SessionId
@@ -155,3 +158,143 @@ async def test_a_pane_that_cannot_be_read_answers_unknown_rather_than_guessing(
         await _terminal(runner).remote_control_state(_SESSION) is DomainRemoteControlState.UNKNOWN
     )
     assert runner.keys_sent == []
+
+
+# --- Never type at a pane whose menu is not on screen -------------------------------------
+#
+# `remote_control(INACTIVE)` used to send the open-menu keys, sleep a fixed interval, and then
+# send `Up, Up, Enter` on faith. Measured on claude 2.1.269: when no menu is showing, those
+# three keys walk the prompt history and **submit** it -- a disposable pane started a real
+# Claude turn and began running shell commands, from what the owner pressed as "turn Remote
+# Control off". The curated keys are right; what was missing is the proof that they are being
+# aimed at a menu.
+
+
+class _ScriptedRunner(_Runner):
+    """A runner whose capture answer changes as the sequence progresses.
+
+    `captures` is consumed one per `capture-pane`, with the last value repeating -- which is
+    what lets a test say "the pane shows no menu, and still shows no menu after we asked for
+    one", the case that used to reach the arrows.
+    """
+
+    def __init__(self, listing: str, captures: list[str]) -> None:
+        super().__init__(listing, "")
+        self._captures = list(captures)
+
+    async def run(self, *argv: str) -> str:
+        self.calls.append(argv)
+        if "list-panes" in argv:
+            return self._listing
+        if "capture-pane" in argv:
+            return self._captures[0] if len(self._captures) == 1 else self._captures.pop(0)
+        return ""
+
+    @property
+    def keys_typed(self) -> tuple[str, ...]:
+        """Every key sent, in order, flattened.
+
+        Flat because `TmuxGateway.send_keys` issues one `send-keys` per key -- it resolves the
+        *target* once for the sequence, which is a different thing. Order-sensitive and total
+        rather than a membership test: `("Up",) in keys` passes on a run that sent the arrows
+        and on one that sent them twice, and the defect this file pins is entirely about which
+        keys followed which reading.
+        """
+        return tuple(
+            call[-1] for call in self.calls if "send-keys" in call
+        )
+
+
+_MENU = (
+    "   Remote Control\n"
+    "   This session is available in the Claude mobile app and at\n"
+    "   https://claude.ai/code/session_01LVuapCEgnwSEb4Z8J7JgZc.\n"
+    "     Disconnect this session\n"
+    "     Show QR code  Scan with your phone to open this session\n"
+    "   ❯ Continue\n"
+    "   Enter to select · Esc to continue\n"
+)
+_NO_MENU = "❯ \n  ⏵⏵ auto mode on (shift+tab to cycle) · ← for agents\n"
+_DISCONNECTED = "❯ /remote-control\n  ⎿  Remote Control disconnected.\n"
+
+
+def test_the_menu_predicate_needs_both_of_its_markers() -> None:
+    """Fail-closed on purpose: a missing marker means *do not send the arrows*.
+
+    Requiring both the row and the footer costs a disable the day Claude rewords either --
+    and that failure is a refusal, which is the direction a guard is allowed to be wrong in.
+    """
+    assert remote_control_menu_is_open(_MENU)
+    assert not remote_control_menu_is_open(_NO_MENU)
+    assert not remote_control_menu_is_open(_DISCONNECTED)
+    assert not remote_control_menu_is_open("     Disconnect this session\n")
+    assert not remote_control_menu_is_open("   Enter to select · Esc to continue\n")
+
+
+async def test_a_disable_whose_menu_never_appears_sends_no_arrows_and_says_unknown() -> None:
+    """The defect, pinned. The pane shows no menu before or after the open attempt.
+
+    What must NOT happen is `Up, Up, Enter`: at a bare prompt those keys submit the owner's
+    previous message. So the whole sequence list is asserted, and it ends at the open attempt.
+    """
+    runner = _ScriptedRunner(_pane(), [_NO_MENU, _NO_MENU])
+
+    result = await _terminal(runner).remote_control(_SESSION, DomainRemoteControlState.INACTIVE)
+
+    assert result is DomainRemoteControlState.UNKNOWN
+    assert runner.keys_typed == REMOTE_CONTROL_OPEN_MENU_KEYS, (
+        "the arrows were sent at a pane with no menu on it -- at a prompt they submit history"
+    )
+
+
+async def test_a_disable_whose_menu_is_already_open_does_not_ask_for_it_again() -> None:
+    """Asking twice is what closed it. `Enter` on the open menu selects its resting `Continue`.
+
+    That is the exact path the live drill took: enable found the pane already connected and
+    left the menu up, the disable sent the open keys at an open menu and dismissed it, and the
+    arrows then landed on the prompt.
+    """
+    # Three captures: the first sees the menu, the second re-reads it after the settle wait
+    # (the proof has to be the last thing read before the keys), the third is the result.
+    runner = _ScriptedRunner(_pane(), [_MENU, _MENU, _DISCONNECTED])
+
+    result = await _terminal(runner).remote_control(_SESSION, DomainRemoteControlState.INACTIVE)
+
+    assert result is DomainRemoteControlState.INACTIVE
+    assert runner.keys_typed == REMOTE_CONTROL_DISCONNECT_KEYS
+
+
+async def test_a_disable_opens_the_menu_when_it_is_closed_and_then_uses_it() -> None:
+    runner = _ScriptedRunner(_pane(), [_NO_MENU, _MENU, _DISCONNECTED])
+
+    result = await _terminal(runner).remote_control(_SESSION, DomainRemoteControlState.INACTIVE)
+
+    assert result is DomainRemoteControlState.INACTIVE
+    assert runner.keys_typed == REMOTE_CONTROL_OPEN_MENU_KEYS + REMOTE_CONTROL_DISCONNECT_KEYS
+
+
+async def test_an_enable_that_finds_the_menu_closes_it_rather_than_leaving_it_up() -> None:
+    """A connected pane reads UNKNOWN, so *on* is proposed and the enable keys open the menu.
+
+    Measured: `/remote-control` + Enter enables a disconnected pane, and opens the status menu
+    on a connected one. The second case is a no-op that must not cost the owner a menu sitting
+    over their work -- so it is dismissed with `Escape`, which types nothing, and reported for
+    what it is.
+    """
+    runner = _ScriptedRunner(_pane(), [_NO_MENU, _MENU])
+
+    result = await _terminal(runner).remote_control(_SESSION, DomainRemoteControlState.ACTIVE)
+
+    assert result is DomainRemoteControlState.ACTIVE
+    assert runner.keys_typed == REMOTE_CONTROL_ENABLE_KEYS + REMOTE_CONTROL_DISMISS_MENU_KEYS
+
+
+async def test_an_enable_of_a_disconnected_pane_is_unchanged() -> None:
+    """The path that always worked, pinned so the guard above cannot quietly break it."""
+    active = "❯ /remote-control\n  /remote-control is active · Continue here, on your phone\n"
+    runner = _ScriptedRunner(_pane(), [_NO_MENU, active])
+
+    result = await _terminal(runner).remote_control(_SESSION, DomainRemoteControlState.ACTIVE)
+
+    assert result is DomainRemoteControlState.ACTIVE
+    assert runner.keys_typed == REMOTE_CONTROL_ENABLE_KEYS

@@ -109,3 +109,71 @@ Three separate faults, all older than this plan:
 
 Fault 3 is the serious one: it is reachable from the owner pressing one button on the phone,
 against a real session, whenever the pane's menu is not open when the code assumes it is.
+
+---
+
+## Section 3 — The repair, and the drill passing
+
+Task 1.6, added to the plan on 2026-09-12 on the owner's decision after section 2.
+
+### What the probe established, before any code changed
+
+A second probe drove the menu by hand — open, Escape, reopen, select *Disconnect this
+session*, reopen — and captured between every step. It **corrects one of section 2's three
+claims** and sharpens the other two:
+
+| Pane state | `/remote-control` + Enter does | Capture shows |
+|---|---|---|
+| freshly launched (connected by itself) | opens the status menu | menu, incl. `Disconnect this session`, `Esc to continue` |
+| connected, menu dismissed | opens the status menu | nothing at all before the keys |
+| disconnected | **enables** it | `/remote-control is active · Continue here, on your phone…` |
+| menu open, `Up, Up, Enter` | disconnects correctly | `⎿  Remote Control disconnected.` |
+| menu open, `Escape` | dismisses it, typing nothing | prompt, empty |
+
+**Correction to section 2, fault 2.** `Disconnect this session` classifying as ACTIVE is
+*sound*, not coincidental: that menu is what `/remote-control` opens on an already-connected
+pane, and a disconnected one gets an enable instead — so the row's presence really is
+evidence of the connection. The classifier was right; the caller was not.
+
+**The curated keys were right all along.** `Up, Up, Enter` from an open menu does exactly
+what DEC-003 says. What was missing was the proof that a menu was there to receive them.
+
+### The repair
+
+1. `remote_control_menu_is_open(capture)` — requires **both** `Disconnect this session` and
+   `Esc to continue`. Fails closed: a missing marker costs one refused disable, a false
+   positive types into somebody's session.
+2. The disable path opens the menu only if one is not already up, then **settles and
+   re-reads**, and sends the arrows only if *that* capture shows the menu. No proof, no keys.
+3. The enable path recognises the menu it gets on an already-connected pane, dismisses it
+   with `Escape`, and reports ACTIVE — rather than leaving a menu over the owner's work.
+4. Every key-sending path now waits before returning. Without it the method answered while
+   the pane was still repainting, and the caller's next capture saw a menu that was already
+   gone — measured: three consecutive captures after an un-waited `Escape` all still showed
+   it, and the arrows that followed recalled `/remote-control` from history and re-submitted it.
+
+### The reachability problem the repair exposed, and its fix
+
+With the menu correctly dismissed, a connected idle pane prints **nothing** — so every read
+answers UNKNOWN, and a toggle resolving UNKNOWN to *on* could never reach *off*.
+`remote_control_reading(observed, stored)` resolves it: the fresh read wins whenever it says
+anything, and falls back to the record's last observation when the pane is silent. Wrong only
+in the direction the terminal already refuses — a stale ACTIVE proposes *off*, and *off*
+requires the menu on screen, so it answers UNKNOWN having typed nothing.
+
+### The drill
+
+```
+$ REMOTE_AGENTS_LIVE_PROFILE=claude \
+  REMOTE_AGENTS_LIVE_PROJECT=/home/user/dev/infra/remote-agents \
+  uv run --locked pytest tests/live/test_claude_remote_control_toggle.py -m live_acceptance -q
+1 passed in 9.21s
+```
+
+Three readings and two presses of the same button against one real `claude` 2.1.269 pane:
+UNKNOWN → *on* (a no-op that discovers the pane was already connected, and tidies up after
+itself) → *off* (`Remote Control disconnected.`), with the bare read following it back to
+INACTIVE.
+
+**mutation:** deleting the `if not remote_control_menu_is_open(capture): return UNKNOWN` guard
+turns `test_a_disable_whose_menu_never_appears_sends_no_arrows_and_says_unknown` red.
