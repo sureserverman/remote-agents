@@ -4,7 +4,10 @@ The one branch here is not policy but cost. `agent-event` is the command install
 operator's global agent settings, so it runs in every Claude session on the machine; routing
 it before `bootstrap` is imported is what keeps a session this service did not start from
 paying for the whole composition root to be told it has nothing to do. See
-`remote_agents.agent_event`.
+`remote_agents.agent_event`. `statusline` is the same branch for a heavier caller: the
+command wrapped around the operator's status line runs on every status-line update in
+every Claude session, so it too is routed before `bootstrap` costs anything. See
+`remote_agents.statusline`.
 
 `main` is defined at module scope, and has to be: `[project.scripts]` resolves
 `remote_agents.__main__:main`, so the generated `remote-agents` shim imports this module and
@@ -24,6 +27,10 @@ def main(argv: list[str] | None = None) -> int:
         from remote_agents.agent_event import run_agent_event
 
         return run_agent_event(arguments[1:])
+    if arguments[:1] == ["statusline"]:
+        from remote_agents.statusline import run_statusline
+
+        return run_statusline(arguments[1:])
 
     from remote_agents.bootstrap import main as run_service
 

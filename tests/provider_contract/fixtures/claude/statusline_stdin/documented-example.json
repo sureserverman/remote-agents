@@ -1,0 +1,13 @@
+{
+  "_provenance": "Documented example from https://code.claude.com/docs/en/statusline (read 2026-09-13), trimmed to the fields the hop reads; no real payload was captured. rate_limits appears only for Claude.ai Pro/Max subscribers after the first API response; resets_at is Unix epoch seconds; a window is dropped once its resets_at passes.",
+  "hook_event_name": "Status",
+  "session_id": "abc123",
+  "model": {"id": "claude-opus-5", "display_name": "Opus"},
+  "version": "2.1.90",
+  "context_window": {"used_percentage": 8, "remaining_percentage": 92},
+  "rate_limits": {
+    "five_hour": {"used_percentage": 23.5, "resets_at": 1738425600},
+    "seven_day": {"used_percentage": 41.2, "resets_at": 1738857600},
+    "spend_limit": {"used_percentage": 62.8, "resets_at": 1740787200}
+  }
+}

@@ -94,6 +94,7 @@ from remote_agents.ports.argv_text import (
 )
 from remote_agents.ports.service_supervisor import SupervisorKind
 from remote_agents.production import ProductionPaths
+from remote_agents.statusline import hop_from_stdin
 
 _LOG = logging.getLogger(__name__)
 _RECONCILE_INTERVAL_SECONDS = 60.0
@@ -158,6 +159,10 @@ def main(
     agent_event_parser.add_argument(
         "--provider", choices=("claude", "codex", "opencode"), default="claude"
     )
+    # The wrapper around the owner's status-line command; `--then` is that command.
+    statusline_parser = subcommands.add_parser("statusline")
+    statusline_parser.add_argument("--then", default=None)
+    statusline_parser.add_argument("--state-dir", type=Path)
     # `allow_abbrev=False` is load-bearing, not tidiness. argparse accepts any unambiguous
     # prefix by default, so `--bot-token` -- the obvious name, the one an operator reaches for
     # first -- was silently accepted as an abbreviation of `--bot-token-file`, which put a
@@ -209,6 +214,9 @@ def main(
         # straight to that module without importing this one, and two copies of a path that
         # promises never to raise would eventually stop agreeing about how it does that.
         return spool_from_stdin(arguments.activity_dir, provider=arguments.provider)
+    if arguments.command == "statusline":
+        # Delegated for the same reason as `agent-event`, on a path that runs far more often.
+        return hop_from_stdin(arguments.then, arguments.state_dir)
     if arguments.command == "upgrade":
         return _run_upgrade(arguments)
     if arguments.command == "install-agent-hooks":

@@ -20,10 +20,17 @@ DRIVER_ADAPTERS = frozenset({"telegram", "tui"})
 #: before the environment check that answers "not mine". Splitting it moved a composition into
 #: a second file; it did not make composition legal anywhere else.
 #:
+#: `statusline` is the third, added for the same cost argument taken further: it is the
+#: hop wrapped around the operator's status-line command, which Claude Code runs on every
+#: status-line update in every session, with a 150 ms budget end to end. It composes
+#: nothing today -- module scope is stdlib only and it reaches `production` for a default
+#: path -- and is named here so that when it does, it does so as a member and not as a
+#: precedent for the package root.
+#:
 #: ARCH-02 is about this set staying closed and enumerated, not about it having exactly one
 #: member. Adding a member is a deliberate, reviewable act; the rule it must never become is
 #: "anything at the package root may import adapters".
-COMPOSITION_ROOTS = frozenset({"bootstrap.py", "agent_event.py"})
+COMPOSITION_ROOTS = frozenset({"bootstrap.py", "agent_event.py", "statusline.py"})
 
 #: The packages allowed to wire adapters together, extending COMPOSITION_ROOTS by name.
 #: Same closed-set rule, one directory instead of one file (DEC-015).

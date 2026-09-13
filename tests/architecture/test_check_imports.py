@@ -126,19 +126,25 @@ def test_checker_resolves_and_rejects_relative_domain_to_adapter_import(tmp_path
 def test_checker_names_its_composition_roots_rather_than_allowing_the_package_root(
     tmp_path: Path,
 ) -> None:
-    """Two files may compose adapters. A third one at the same level still may not.
+    """Three files may compose adapters. A fourth one at the same level still may not.
 
     `agent_event` was split out of `bootstrap` so the installed hook command would stop
     loading the whole composition root in every Claude session on the machine, which made the
     set of composing modules two rather than one. The risk in that edit is that it reads
     afterwards as "the package root may import adapters" -- so this pins the difference:
-    membership is by name, and a new root module gains nothing from the change.
+    membership is by name, and a new root module gains nothing from the change. `statusline`
+    made it three for the same reason, taken further: it runs on every status-line update.
     """
     source_root = tmp_path / "src"
     write_module(
         source_root,
         "remote_agents/agent_event.py",
         "import remote_agents.adapters.agents.activity_spool\n",
+    )
+    write_module(
+        source_root,
+        "remote_agents/statusline.py",
+        "import remote_agents.adapters.agents.hook_settings\n",
     )
     write_module(
         source_root,
