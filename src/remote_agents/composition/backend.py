@@ -339,6 +339,7 @@ def compose_backend(
         activity_feed=activity_feed,
         usage=_usage_reader(backend_store, projects.paths, provider_usage),
         limits=_limits_reader(provider_usage),
+        close_usage_readers=provider_usage.aclose,
         max_label_length=config.max_label_length,
     )
 

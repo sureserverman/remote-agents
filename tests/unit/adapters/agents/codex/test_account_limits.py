@@ -26,7 +26,13 @@ from remote_agents.adapters.agents.codex.account_limits import CodexAccountLimit
 from remote_agents.adapters.agents.codex.usage import CodexUsageReader
 from remote_agents.adapters.agents.protocols import JsonRpcProcess, ProtocolError
 from remote_agents.domain.models import ProfileId
-from remote_agents.ports.agent_usage import AgentLimits, LimitsAbsence, UsageWindow
+from remote_agents.ports.agent_usage import (
+    AgentLimits,
+    AgentUsage,
+    LimitsAbsence,
+    UsageQuery,
+    UsageWindow,
+)
 
 FIXTURE = (
     Path(__file__).resolve().parents[4]
@@ -195,10 +201,15 @@ class FakeRollout:
 
     reading: AgentLimits
     calls: int = 0
+    queries: list[UsageQuery] = field(default_factory=list)
 
     def limits(self) -> AgentLimits:
         self.calls += 1
         return self.reading
+
+    def read(self, query: UsageQuery) -> AgentUsage | None:
+        self.queries.append(query)
+        return AgentUsage(observed_at=FILE_MOMENT)
 
 
 FILE_MOMENT = datetime(2026, 9, 13, 18, 30, tzinfo=UTC)
@@ -333,3 +344,26 @@ async def test_a_child_that_died_is_replaced_on_the_read_after_the_fallback(
     assert third.windows == (FIVE_HOUR, WEEK)
     assert client._process is not None and client._process.pid != dead_child.pid
     await reader.aclose()
+
+
+# --- Task 1.4: the descriptor's usage reader -------------------------------------------------
+
+
+def test_a_sync_limits_read_answers_from_the_rollout_file_and_says_so() -> None:
+    """A caller that cannot await cannot drive the child; it gets the file, stamped."""
+    rollout = FakeRollout(FILE_READING)
+    client = FakeClient(recorded())
+    limits = CodexAccountLimitsReader(client=client, fallback=rollout, now=lambda: NOW).limits()
+    assert limits.windows == FILE_READING.windows
+    assert limits.stale_source == ROLLOUT_STAMP
+    assert client.calls == [], "the sync path never touches the transport"
+    assert rollout.calls == 1
+
+
+def test_a_session_read_is_delegated_to_the_rollout_reader_untouched(tmp_path: Path) -> None:
+    rollout = FakeRollout(FILE_READING)
+    reader = CodexAccountLimitsReader(client=FakeClient(recorded()), fallback=rollout)
+    query = UsageQuery(ProfileId("codex"), tmp_path, NOW, None)
+    answer = reader.read(query)
+    assert rollout.queries == [query]
+    assert answer == AgentUsage(observed_at=FILE_MOMENT)

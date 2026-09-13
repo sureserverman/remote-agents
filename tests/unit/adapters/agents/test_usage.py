@@ -1671,3 +1671,42 @@ def test_a_defaulted_ceiling_is_not_credited_to_the_owner(tmp_path: Path, worksp
     assert usage is not None and usage.context is not None
     assert usage.context.limit_tokens == 1_000_000
     assert usage.context.limit_declared is False
+
+
+def test_the_default_reader_set_files_codex_under_the_account_reader() -> None:
+    """Codex's member asks the app server (Task 1.2), with the rollout file behind it."""
+    from remote_agents.adapters.agents.codex.account_limits import CodexAccountLimitsReader
+
+    codex = [
+        reader
+        for reader in ProfileUsageReaders()._readers
+        if ProfileId("codex") in reader.profiles  # type: ignore[attr-defined]
+    ]
+    assert len(codex) == 1
+    assert isinstance(codex[0], CodexAccountLimitsReader)
+
+
+async def test_closing_the_reader_set_reaches_every_reader_that_has_aclose_codex_included() -> None:
+    """`aclose()` is total over readers that own nothing, and reaches every one that does."""
+
+    class _Closable:
+        profiles = frozenset({ProfileId("codex")})
+        limits_profile = ProfileId("codex")
+        closed = 0
+
+        def limits(self) -> AgentLimits:
+            return AgentLimits(self.limits_profile, absence=LimitsAbsence.NO_READING)
+
+        async def aclose(self) -> None:
+            self.closed += 1
+
+    class _Plain:
+        profiles = frozenset({ProfileId("claude")})
+        limits_profile = ProfileId("claude")
+
+        def limits(self) -> AgentLimits:
+            return AgentLimits(self.limits_profile, absence=LimitsAbsence.NO_READING)
+
+    closable = _Closable()
+    await ProfileUsageReaders(readers=(_Plain(), closable, _Closable())).aclose()
+    assert closable.closed == 1

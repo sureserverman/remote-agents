@@ -5,12 +5,12 @@ from __future__ import annotations
 from collections.abc import Mapping
 from pathlib import Path
 
+from remote_agents.adapters.agents.codex.account_limits import CodexAccountLimitsReader
 from remote_agents.adapters.agents.codex.remote_control import CodexRemoteControl
 from remote_agents.adapters.agents.codex.sessions import (
     CodexAppServerClient,
     CodexSessionCatalogue,
 )
-from remote_agents.adapters.agents.codex.usage import CodexUsageReader
 from remote_agents.domain.models import ProfileId, ProjectId
 from remote_agents.ports.provider_descriptor import ProviderDescriptor, TrustDialog
 
@@ -31,7 +31,10 @@ def descriptor() -> ProviderDescriptor:
         ProfileId("codex"),
         glyph="🔷",
         sessions=_sessions,
-        usage=CodexUsageReader(),
+        # The account reader asks the app server for the plan's windows and keeps the rollout
+        # reader behind it for session reads and as the fallback (sub-plan 01, DEC-061 as
+        # amended). Its `codex` child is reclaimed through `Backend.close_usage_readers`.
+        usage=CodexAccountLimitsReader(),
         hooks="codex",
         remote_control=CodexRemoteControl(),
         # Measured 2026-09-09 on codex-cli 0.153.4: the dialog is up 0.22 s after launch, and

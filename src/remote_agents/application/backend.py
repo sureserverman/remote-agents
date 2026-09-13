@@ -163,6 +163,17 @@ class Backend:
     tail read, and neither frontend may block its event loop on the disk during a render.
     """
 
+    close_usage_readers: Callable[[], Awaitable[None]] | None = None
+    """Reclaim what the usage readers hold open — today, Codex's `app-server` child.
+
+    A declared capability rather than something a surface discovers, for the reason
+    `host_remote_control`'s close is reached through a field: a host may wire readers that
+    own nothing, and both surfaces must be able to see that they did. Each surface calls it
+    on its own way out — the service in the `finally` that reclaims the host control, the
+    terminal as its app unmounts — bounded there, because an unbounded await on the way out
+    is a hang that orphans the very child it was reclaiming.
+    """
+
     host_remote_control: object | None = None
     """The one host-level action (`application.host_remote_control.HostRemoteControlService`).
 

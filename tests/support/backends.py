@@ -71,6 +71,7 @@ def backend_for(
     limits: Callable[[], Awaitable[tuple[AgentLimits, ...]]] | None = _UNSET,  # type: ignore[assignment]
     host_remote_control: object | None = _UNSET,
     state_events: object | None = _UNSET,
+    close_usage_readers: Callable[[], Awaitable[None]] | None = _UNSET,  # type: ignore[assignment]
     max_label_length: int = _UNSET,  # type: ignore[assignment]
 ) -> Backend:
     """A `Backend` carrying what the caller stated and `Backend`'s own defaults for the rest.
@@ -93,6 +94,7 @@ def backend_for(
         "host_remote_control": host_remote_control,
         "state_events": state_events,
         "limits": limits,
+        "close_usage_readers": close_usage_readers,
         "max_label_length": max_label_length,
     }
     return Backend(**{name: value for name, value in stated.items() if value is not _UNSET})

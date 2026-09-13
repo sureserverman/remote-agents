@@ -76,8 +76,8 @@ from remote_agents.adapters.agents.claude.remote_control_default import (
     ClaudeRemoteControlDefault,
 )
 from remote_agents.adapters.agents.claude.usage import ClaudeUsageReader
+from remote_agents.adapters.agents.codex.account_limits import CodexAccountLimitsReader
 from remote_agents.adapters.agents.codex.hooks import PROVIDER as _CODEX
-from remote_agents.adapters.agents.codex.usage import CodexUsageReader
 from remote_agents.adapters.agents.cursor.usage import CursorUsageReader
 from remote_agents.adapters.agents.hook_settings import (
     HookInstallError,
@@ -148,7 +148,7 @@ class ProfileUsageReaders:
                 ClaudeUsageReader(
                     context_window=context_window, context_window_stated=context_window_stated
                 ),
-                CodexUsageReader(),
+                CodexAccountLimitsReader(),
                 OpenCodeUsageReader(),
                 CursorUsageReader(),
             )
@@ -253,6 +253,19 @@ class ProfileUsageReaders:
             return reader.limits_profile  # type: ignore[attr-defined]
         except AttributeError:
             return None
+
+    async def aclose(self) -> None:
+        """Reclaim whatever a reader holds open -- today, Codex's app-server child.
+
+        Total over readers that own nothing: the file readers have no `aclose`, and asking is
+        the same `getattr` `account_limits` uses to find `limits_async`. Errors propagate to
+        the caller, which is a shutdown path that bounds and swallows them once for every
+        provider helper it reclaims (`composition.service`).
+        """
+        for reader in self._readers:
+            close = getattr(reader, "aclose", None)
+            if close is not None:
+                await close()
 
     def read(self, query: UsageQuery) -> AgentUsage | None:
         reader = self._by_profile.get(query.profile_id)

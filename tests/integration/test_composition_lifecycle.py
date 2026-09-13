@@ -799,3 +799,121 @@ async def test_the_host_toggle_is_drained_by_the_same_locks_as_the_session_servi
     gate.set()
     await task
     await drain
+
+
+# --- the usage readers are closed at shutdown (sub-plan 01, Task 1.4) ------------------------
+
+
+def test_compose_backend_wires_the_codex_account_reader_and_its_close(composed_home, tmp_path):
+    """The descriptor's usage is the account reader, and the backend can let its child go."""
+    from remote_agents.adapters.agents.codex.account_limits import CodexAccountLimitsReader
+    from remote_agents.adapters.agents.registry import provider_descriptors
+    from remote_agents.adapters.sqlite.database import open_database
+    from remote_agents.composition.backend import compose_backend
+    from remote_agents.config import load_config
+    from remote_agents.domain.models import ProfileId
+    from remote_agents.production import ProductionPaths
+
+    codex = next(d for d in provider_descriptors() if d.profile_id == ProfileId("codex"))
+    assert isinstance(codex.usage, CodexAccountLimitsReader)
+
+    paths = ProductionPaths.for_home(composed_home)
+    config = load_config(_config_file(composed_home, paths))
+    connection = open_database(tmp_path / "sessions.sqlite3")
+    try:
+        backend = compose_backend(config, connection, paths)
+        assert backend.close_usage_readers is not None
+    finally:
+        connection.close()
+
+
+async def test_service_shutdown_reports_usage_closed_within_the_bounded_timeout(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """The same `finally` that reclaims the host control reclaims the usage readers' child.
+
+    Bounded for the reason that close is: an unbounded await on the way out turns
+    `systemctl stop` into a hang, and the child it was reclaiming is orphaned anyway.
+    """
+    from backends import backend_for
+
+    from remote_agents.adapters.sqlite.database import open_database
+    from remote_agents.adapters.sqlite.session_store import SQLiteSessionStore
+    from remote_agents.adapters.telegram.service import build_private_bot
+    from remote_agents.application.reconcile import ReconciliationService
+    from remote_agents.composition import service as service_module
+    from remote_agents.composition.service import ServiceComposition, _serve_with_reconciliation
+    from remote_agents.config import TelegramSecrets
+
+    events: list[str] = []
+
+    async def close() -> None:
+        events.append("usage-closed")
+
+    async def hanging_close() -> None:
+        await asyncio.sleep(3600)
+
+    async def poll(secrets, boundary) -> None:
+        events.append("polling")
+
+    class _Terminal:
+        async def managed_observations(self) -> tuple:
+            return ()
+
+    def composition(close_usage_readers):
+        boundary = build_private_bot(
+            7, 11, backend=backend_for(close_usage_readers=close_usage_readers)
+        )
+        return ServiceComposition(boundary, _Terminal(), ReconciliationService(store))
+
+    connection = open_database(tmp_path / "sessions.sqlite3")
+    try:
+        store = SQLiteSessionStore(connection)
+        secrets = TelegramSecrets("token", 7, 11)
+        await _serve_with_reconciliation(secrets, composition(close), poll, 3600)
+        assert events == ["polling", "usage-closed"]
+
+        monkeypatch.setattr(service_module, "_CLOSE_TIMEOUT_SECONDS", 0.05)
+        await asyncio.wait_for(
+            _serve_with_reconciliation(secrets, composition(hanging_close), poll, 3600),
+            timeout=5,
+        )
+    finally:
+        connection.close()
+
+
+async def test_the_tui_reports_usage_closed_when_it_unmounts(tmp_path: Path) -> None:
+    """The terminal has no `finally`; its app closes the readers as it unmounts."""
+    from backends import backend_for
+
+    from remote_agents.adapters.sqlite.database import open_database
+    from remote_agents.adapters.sqlite.session_store import SQLiteSessionStore
+    from remote_agents.adapters.tmux.fake import FakeTerminal
+    from remote_agents.adapters.tui.app import RemoteAgentsTui
+    from remote_agents.adapters.tui.context import TuiContext
+    from remote_agents.application.services import SessionService
+
+    closed: list[bool] = []
+
+    async def close() -> None:
+        closed.append(True)
+
+    connection = open_database(tmp_path / "sessions.sqlite3")
+    try:
+        context = TuiContext(
+            backend=backend_for(
+                sessions=SessionService(SQLiteSessionStore(connection), FakeTerminal()),
+                projects=object(),  # type: ignore[arg-type]
+                refresh_catalogue=lambda: (),
+                close_usage_readers=close,
+            ),
+            profiles=(),
+            attach_argv=lambda session_id: (),
+        )
+        app = RemoteAgentsTui(context)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            assert closed == [], "not closed while the surface is up"
+        assert closed == [True]
+    finally:
+        connection.close()

@@ -104,6 +104,9 @@ from remote_agents.domain.models import (
 from remote_agents.domain.remote_control import RemoteControlState
 from remote_agents.ports.agent_usage import ContextWindow
 
+#: How long the unmount close waits for the usage readers' child, on the way out.
+_CLOSE_TIMEOUT_SECONDS = 5.0
+
 _LOG = logging.getLogger(__name__)
 
 CONTEXT_AUTO_REFRESH = 60.0
@@ -526,6 +529,23 @@ class RemoteAgentsTui(App[AttachRequest | None]):
         if getattr(screen, "about_one_session", False):
             return getattr(screen, "subject_session", lambda: None)() is not None
         return self.services.console_holds_slot is not None
+
+    async def on_unmount(self) -> None:
+        """Reclaim what the backend's usage readers hold open, as this process leaves.
+
+        The terminal has no `finally` of its own -- Textual owns the loop, and the child a
+        limits read spawned belongs to that loop -- so the app's unmount is the one place the
+        close can run on the loop that started it. Bounded like the service's, for the same
+        reason: a close that hangs must not keep the pane from exiting.
+        """
+        close = self.services.backend.close_usage_readers
+        if close is None:
+            return
+        try:
+            await asyncio.wait_for(close(), timeout=_CLOSE_TIMEOUT_SECONDS)
+        except (TimeoutError, OSError):
+            # Leaving anyway; the child is reclaimed by the process exit that follows.
+            pass
 
     async def on_mount(self) -> None:
         """Start the gauge cache's own schedule, once per process.

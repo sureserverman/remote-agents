@@ -52,7 +52,10 @@ DECLARATIONS: dict[str, dict[str, tuple[Requirement, str]]] = {
     },
     "codex": {
         "sessions": (SUPPORTED, "rollout catalogue via the app-server client"),
-        "usage": (SUPPORTED, "rollout token_count records, session and account-wide"),
+        "usage": (
+            SUPPORTED,
+            "rollout token_count per session; the app server for the account, rollout fallback",
+        ),
         "hooks": (SUPPORTED, "hooks.json hook groups (codex, flagged)"),
         "remote_control": (SUPPORTED, "daemon-level toggle over the fixed argv table"),
         "activity": (CONDITIONAL, "placeholder until the vertical wires an activity source"),

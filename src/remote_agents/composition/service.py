@@ -145,6 +145,7 @@ async def _serve_with_reconciliation(
             task.cancel()
         await asyncio.gather(*periodic, return_exceptions=True)
         await _close_host_remote_control(composition)
+        await _close_usage_readers(composition)
 
 
 def _redraw_sessions_on_store_changes(composition: ServiceComposition):
@@ -217,6 +218,28 @@ async def _close_host_remote_control(composition: ServiceComposition) -> None:
         _LOG.warning("host remote control did not close within %ss", _CLOSE_TIMEOUT_SECONDS)
     except Exception:  # noqa: BLE001 -- tidying up may not turn a clean stop into a crash
         _LOG.debug("host remote control did not close cleanly", exc_info=True)
+
+
+async def _close_usage_readers(composition: ServiceComposition) -> None:
+    """Reclaim the app-server child the account-limits read may have started; never raise.
+
+    The same shape as `_close_host_remote_control`, for the same reason: Codex's account
+    reader keeps one `codex app-server` child from the first limits read onward (sub-plan 01),
+    and shutdown is where an unreclaimed child becomes a stray process. Bounded and swallowed
+    on the same grounds, and reached through the declared field rather than a probe.
+    """
+    backend = getattr(composition.boundary, "backend", None)
+    if backend is None:
+        return
+    close = backend.close_usage_readers
+    if close is None:
+        return
+    try:
+        await asyncio.wait_for(close(), timeout=_CLOSE_TIMEOUT_SECONDS)
+    except TimeoutError:
+        _LOG.warning("usage readers did not close within %ss", _CLOSE_TIMEOUT_SECONDS)
+    except Exception:  # noqa: BLE001 -- tidying up may not turn a clean stop into a crash
+        _LOG.debug("usage readers did not close cleanly", exc_info=True)
 
 
 async def _watch_trust_periodically(composition: ServiceComposition, interval: float) -> None:

@@ -51,7 +51,13 @@ from typing import Protocol
 from remote_agents.adapters.agents.codex.usage import CodexUsageReader, _window_label
 from remote_agents.adapters.agents.protocols import JsonRpcProcess, ProtocolError
 from remote_agents.domain.models import ProfileId
-from remote_agents.ports.agent_usage import AgentLimits, LimitsAbsence, UsageWindow
+from remote_agents.ports.agent_usage import (
+    AgentLimits,
+    AgentUsage,
+    LimitsAbsence,
+    UsageQuery,
+    UsageWindow,
+)
 from remote_agents.ports.agent_usage_support import _instant, _moment, _window
 
 _METHOD = "account/rateLimits/read"
@@ -78,19 +84,26 @@ class RateLimitsClient(Protocol):
     async def close(self) -> None: ...
 
 
-class RolloutLimits(Protocol):
-    """The one thing this reader needs of the file reader; `CodexUsageReader` is one."""
+class RolloutReader(Protocol):
+    """What this reader needs of the file reader; `CodexUsageReader` is one.
+
+    `limits` is the fallback; `read` is the session read this reader never reinterprets --
+    a session's context window lives in its rollout and nowhere the app server would say.
+    """
 
     def limits(self) -> AgentLimits: ...
+
+    def read(self, query: UsageQuery) -> AgentUsage | None: ...
 
 
 class CodexAccountLimitsReader:
     """Read the account's two rate-limit windows by asking Codex's app server.
 
-    The shape of the answer mirrors `CodexUsageReader.limits` so the registry can hold either
-    behind one name: `profiles`, `limits_profile`, and an `AgentLimits` filed under `codex`.
-    The read is a coroutine because the transport is a child process, which is the one
-    difference a caller can see — the registry's `account_limits()` awaits `limits_async`.
+    The descriptor's `usage` capability, wrapping the rollout reader rather than replacing
+    it: `read` delegates a session query to the file untouched, the sync `limits` answers
+    from the file stamped as such, and only `limits_async` asks the child -- the one
+    difference a caller can see, and the reason `ProfileUsageReaders.account_limits()` is a
+    coroutine. `profiles` and `limits_profile` are the rollout reader's, preserved.
     """
 
     profiles = frozenset({ProfileId("codex")})
@@ -101,7 +114,7 @@ class CodexAccountLimitsReader:
         self,
         *,
         client: RateLimitsClient | None = None,
-        fallback: RolloutLimits | None = None,
+        fallback: RolloutReader | None = None,
         now: object = None,
     ) -> None:
         self._client = client or JsonRpcProcess(("codex", "app-server"))
@@ -139,6 +152,19 @@ class CodexAccountLimitsReader:
         # threaded the whole read: this sweeps up to `_ACCOUNT_ROLLOUT_DAYS` dated directories.
         reading = await asyncio.to_thread(self._fallback.limits)
         return replace(reading, stale_source=_ROLLOUT_STAMP)
+
+    def read(self, query: UsageQuery) -> AgentUsage | None:
+        """A session's usage is the rollout's to answer; nothing here reinterprets it."""
+        return self._fallback.read(query)
+
+    def limits(self) -> AgentLimits:
+        """The sync answer: the rollout file, stamped -- a caller that cannot await cannot ask.
+
+        Kept so `ProfileUsageReaders.limits()` and the provider contract still read this
+        capability the way they read every other; the stamp is what stops a file figure
+        reached this way from rendering as though the child had just been asked (DEC-061).
+        """
+        return replace(self._fallback.limits(), stale_source=_ROLLOUT_STAMP)
 
     def _limits_from(self, response: Mapping[str, object]) -> AgentLimits:
         windows = _account_windows(_plan_bucket(response), now=self._now)

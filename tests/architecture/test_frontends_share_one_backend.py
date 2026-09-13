@@ -509,10 +509,15 @@ def test_the_backend_capability_set_is_read_from_the_dataclass() -> None:
     discovered by `getattr` would make that fallback silent. It carries no session and answers
     no question; it only says the store moved, which is why it is a source rather than a use
     case (`ports.state_events`).
+
+    **Fifteen since `close_usage_readers` joined them** (sub-plan 01, 2026-09-13). A declared
+    field for the reason the other two are: a host may wire readers that own nothing, and
+    both surfaces call the close on their way out — reached as a field that is `None`, never
+    discovered by probing the readers for an `aclose`.
     """
     fields = _backend_fields()
-    assert len(fields) == 14, (
-        f"`Backend` now declares {len(fields)} fields, not 14. That is fine — but it widens "
+    assert len(fields) == 15, (
+        f"`Backend` now declares {len(fields)} fields, not 15. That is fine — but it widens "
         "what Rule 2 forbids probing for, so confirm the new field is a capability an adapter "
         "should read as a declared field rather than discover."
     )
