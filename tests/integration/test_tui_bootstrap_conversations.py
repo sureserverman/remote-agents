@@ -269,6 +269,13 @@ def test_no_further_capability_leaked_into_the_context() -> None:
         # improvement rather than a new way for a list to stop updating — and is why it is a
         # declared field rather than something an adapter discovers by `getattr`.
         "state_events",
+        # The way out for what `usage`/`limits` hold open: Codex's account reader keeps one
+        # `codex app-server` child from the first limits read (sub-plan 01, 2026-09-13). Shared
+        # for the reason `host_remote_control` is -- the child is the process's, whichever
+        # surface owns the process -- and a declared field rather than an `aclose` probed for
+        # on the readers, so a host whose readers own nothing carries a `None` both surfaces
+        # can see. Each surface calls it on its own way out; neither renders it.
+        "close_usage_readers",
         "max_label_length",
     }
 
