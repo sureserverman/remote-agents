@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import copy
 import json
+import sys
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -22,8 +23,10 @@ from pathlib import Path
 import pytest
 
 from remote_agents.adapters.agents.codex.account_limits import CodexAccountLimitsReader
+from remote_agents.adapters.agents.codex.usage import CodexUsageReader
+from remote_agents.adapters.agents.protocols import JsonRpcProcess, ProtocolError
 from remote_agents.domain.models import ProfileId
-from remote_agents.ports.agent_usage import LimitsAbsence, UsageWindow
+from remote_agents.ports.agent_usage import AgentLimits, LimitsAbsence, UsageWindow
 
 FIXTURE = (
     Path(__file__).resolve().parents[4]
@@ -158,3 +161,175 @@ async def test_aclose_closes_the_client() -> None:
     client = FakeClient(recorded())
     await CodexAccountLimitsReader(client=client, now=lambda: NOW).aclose()
     assert client.closed == 1
+
+
+# --- Task 1.3: the rollout-file fallback, the restart, and the close ---------------------
+
+
+ROLLOUT_STAMP = "rollout file"
+
+
+@dataclass
+class FaultingClient:
+    """Raises the scripted fault on the first `n_faults` requests, then answers as `FakeClient`."""
+
+    response: dict
+    fault: BaseException
+    n_faults: int = 1
+    calls: int = 0
+    closed: int = 0
+
+    async def request(self, method: str, params: dict) -> dict:
+        self.calls += 1
+        if self.calls <= self.n_faults:
+            raise self.fault
+        return self.response
+
+    async def close(self) -> None:
+        self.closed += 1
+
+
+@dataclass
+class FakeRollout:
+    """Stands in for `CodexUsageReader.limits()`: answers one recorded reading, sync."""
+
+    reading: AgentLimits
+    calls: int = 0
+
+    def limits(self) -> AgentLimits:
+        self.calls += 1
+        return self.reading
+
+
+FILE_MOMENT = datetime(2026, 9, 13, 18, 30, tzinfo=UTC)
+FILE_READING = AgentLimits(
+    ProfileId("codex"), (UsageWindow("5h", 61.0, FIVE_HOUR.resets_at),), observed_at=FILE_MOMENT
+)
+
+
+@pytest.mark.parametrize(
+    "fault",
+    [
+        pytest.param(ProtocolError("provider protocol response timed out"), id="protocol"),
+        pytest.param(TimeoutError(), id="timeout"),
+        pytest.param(FileNotFoundError(2, "No such file", "codex"), id="no-binary"),
+        pytest.param(OSError(13, "Permission denied"), id="oserror"),
+    ],
+)
+async def test_each_transport_fault_answers_with_the_rollout_file_fallback(
+    fault: BaseException,
+) -> None:
+    """The file's reading, its own `observed_at`, and the stamp that says where it came from."""
+    rollout = FakeRollout(FILE_READING)
+    reader = CodexAccountLimitsReader(
+        client=FaultingClient(recorded(), fault), fallback=rollout, now=lambda: NOW
+    )
+    limits = await reader.limits_async()
+    assert limits.windows == FILE_READING.windows
+    assert limits.observed_at == FILE_MOMENT
+    assert limits.stale_source == ROLLOUT_STAMP
+    assert limits.absence is None
+    assert rollout.calls == 1
+
+
+async def test_a_fallback_with_nothing_is_no_reading_still_stamped_as_the_fallback(
+    tmp_path: Path,
+) -> None:
+    """The real rollout reader over an empty root: no invented window, and the stamp survives."""
+    reader = CodexAccountLimitsReader(
+        client=FaultingClient(recorded(), ProtocolError("closed")),
+        fallback=CodexUsageReader(sessions_root=tmp_path, now=lambda: NOW),
+        now=lambda: NOW,
+    )
+    limits = await reader.limits_async()
+    assert limits.windows == ()
+    assert limits.absence is LimitsAbsence.NO_READING
+    assert limits.stale_source == ROLLOUT_STAMP
+
+
+async def test_after_a_fallback_the_next_read_asks_the_rpc_again() -> None:
+    """A failure discards the child rather than the transport: the next read tries the RPC."""
+    client = FaultingClient(recorded(), ProtocolError("timed out"), n_faults=1)
+    reader = CodexAccountLimitsReader(
+        client=client, fallback=FakeRollout(FILE_READING), now=lambda: NOW
+    )
+    first = await reader.limits_async()
+    second = await reader.limits_async()
+    assert first.stale_source == ROLLOUT_STAMP
+    assert second.stale_source is None
+    assert second.windows == (FIVE_HOUR, WEEK)
+    assert client.calls == 2
+    assert client.closed == 1, "the wedged child is closed so the next read spawns a fresh one"
+
+
+def _stub_app_server(tmp_path: Path, *, answers_before_exit: int) -> tuple[str, ...]:
+    """A child speaking just enough JSON-RPC for this reader, then dying mid-request.
+
+    `initialize` is answered like any other request (an empty object), so the count includes
+    it: `answers_before_exit=2` answers `initialize` and one `account/rateLimits/read`, and
+    exits on the *next* request without answering it -- a child that goes away with a request
+    pending, which is what the client reports as "closed before responding". A child that
+    exits between reads is not this case: `JsonRpcProcess` respawns one whose exit it has
+    already seen, and no fault ever reaches the reader.
+    """
+    script = tmp_path / "stub_app_server.py"
+    script.write_text(
+        "import json, os, sys\n"
+        f"fixture = json.load(open({str(FIXTURE)!r}))\n"
+        f"budget = {answers_before_exit}\n"
+        "answered = 0\n"
+        "for line in sys.stdin:\n"
+        "    message = json.loads(line)\n"
+        "    if 'id' not in message:\n"
+        "        continue\n"
+        "    if answered >= budget:\n"
+        "        break\n"
+        "    result = fixture if message['method'] == 'account/rateLimits/read' else {}\n"
+        "    result = dict(result, pid=os.getpid())\n"
+        "    reply = {'jsonrpc': '2.0', 'id': message['id'], 'result': result}\n"
+        "    sys.stdout.write(json.dumps(reply) + '\\n')\n"
+        "    sys.stdout.flush()\n"
+        "    answered += 1\n",
+        encoding="utf-8",
+    )
+    return (sys.executable, str(script))
+
+
+async def test_aclose_closes_the_child_and_a_later_read_reopens_it(tmp_path: Path) -> None:
+    """Against the real `JsonRpcProcess`: close reclaims the child, the next read spawns anew."""
+    client = JsonRpcProcess(_stub_app_server(tmp_path, answers_before_exit=100))
+    reader = CodexAccountLimitsReader(
+        client=client, fallback=FakeRollout(FILE_READING), now=lambda: NOW
+    )
+    first = await reader.limits_async()
+    first_child = client._process
+    assert first.windows == (FIVE_HOUR, WEEK)
+    assert first_child is not None and first_child.returncode is None
+    await reader.aclose()
+    assert client._process is None
+    assert first_child.returncode is not None, "aclose reclaimed the child"
+    second = await reader.limits_async()
+    assert second.windows == (FIVE_HOUR, WEEK)
+    assert client._process is not None and client._process.pid != first_child.pid
+    await reader.aclose()
+
+
+async def test_a_child_that_died_is_replaced_on_the_read_after_the_fallback(
+    tmp_path: Path,
+) -> None:
+    """Real transport, a child dying with a request pending: fallback once, then a fresh child."""
+    client = JsonRpcProcess(_stub_app_server(tmp_path, answers_before_exit=2))
+    reader = CodexAccountLimitsReader(
+        client=client, fallback=FakeRollout(FILE_READING), now=lambda: NOW
+    )
+    first = await reader.limits_async()
+    assert first.stale_source is None
+    dead_child = client._process
+    assert dead_child is not None
+    second = await reader.limits_async()
+    assert second.stale_source == ROLLOUT_STAMP
+    third = await reader.limits_async()
+    assert third.stale_source is None
+    assert third.windows == (FIVE_HOUR, WEEK)
+    assert client._process is not None and client._process.pid != dead_child.pid
+    await reader.aclose()

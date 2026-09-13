@@ -24,6 +24,15 @@ so nothing below `tests/live` runs a real process — a test hands in a fake wit
 `request`/`close` surface. `excludeResetCreditDetails` is sent `true` because the credit
 ledger is not a rate-limit window and this reader has no use for it.
 
+**When the child cannot answer, the rollout file does, and says so.** A `ProtocolError`
+(timed out, closed, no object result), a `TimeoutError`, a `FileNotFoundError` (no `codex` on
+the path) and any other `OSError` from spawning or talking to the child all answer with
+`CodexUsageReader.limits()`'s reading stamped `stale_source="rollout file"` — DEC-061's stamp
+rule: a figure that did not come from the moment it was asked for is never rendered as though
+it had. The fallback's own `observed_at` is kept, because that is the instant the file's
+figures describe. The failed child is discarded on the spot, so the *next* read spawns a
+fresh one rather than re-asking a wedged process; the transport is restarted, never abandoned.
+
 **Absent is a first-class answer.** The response names its buckets under
 `rateLimitsByLimitId`, and `codex` is the plan's own; the top-level `rateLimits` is the same
 figures under an older shape, kept as the fallback for a server that omits the map. A
@@ -33,11 +42,14 @@ publish limits, none was read this time — and never an invented window.
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Mapping
+from contextlib import suppress
+from dataclasses import replace
 from typing import Protocol
 
-from remote_agents.adapters.agents.codex.usage import _window_label
-from remote_agents.adapters.agents.protocols import JsonRpcProcess
+from remote_agents.adapters.agents.codex.usage import CodexUsageReader, _window_label
+from remote_agents.adapters.agents.protocols import JsonRpcProcess, ProtocolError
 from remote_agents.domain.models import ProfileId
 from remote_agents.ports.agent_usage import AgentLimits, LimitsAbsence, UsageWindow
 from remote_agents.ports.agent_usage_support import _instant, _moment, _window
@@ -49,6 +61,14 @@ _PARAMS: Mapping[str, object] = {"excludeResetCreditDetails": True}
 #: per-model reserves the owner is not shown.
 _PLAN_BUCKET = "codex"
 
+#: What the fallback's reading is stamped with, in the owner's words (DEC-061).
+_ROLLOUT_STAMP = "rollout file"
+
+#: Everything the child can do short of answering. `FileNotFoundError` (no `codex` binary) is
+#: an `OSError` and is caught by the third member; it is named in the docstring rather than
+#: here because listing a subclass beside its parent would suggest the two are handled apart.
+_TRANSPORT_FAULTS = (ProtocolError, TimeoutError, OSError)
+
 
 class RateLimitsClient(Protocol):
     """The two things this reader needs of a JSON-RPC session; `JsonRpcProcess` is one."""
@@ -56,6 +76,12 @@ class RateLimitsClient(Protocol):
     async def request(self, method: str, params: Mapping[str, object]) -> Mapping[str, object]: ...
 
     async def close(self) -> None: ...
+
+
+class RolloutLimits(Protocol):
+    """The one thing this reader needs of the file reader; `CodexUsageReader` is one."""
+
+    def limits(self) -> AgentLimits: ...
 
 
 class CodexAccountLimitsReader:
@@ -71,20 +97,48 @@ class CodexAccountLimitsReader:
 
     limits_profile = ProfileId("codex")
 
-    def __init__(self, *, client: RateLimitsClient | None = None, now: object = None) -> None:
+    def __init__(
+        self,
+        *,
+        client: RateLimitsClient | None = None,
+        fallback: RolloutLimits | None = None,
+        now: object = None,
+    ) -> None:
         self._client = client or JsonRpcProcess(("codex", "app-server"))
+        self._fallback = fallback if fallback is not None else CodexUsageReader(now=now)
         self._now = now
 
     async def limits_async(self) -> AgentLimits:
         """Ask once, map the plan's bucket, and date the answer at the instant it was read.
 
-        A `ProtocolError` from the transport propagates: the registry files a reader that
-        raised as `UNREADABLE`, which is the honest word for it. The rollout-file fallback
-        and the restart-after-failure belong to the next task and land between the request
-        and `_limits_from`, so the mapping is kept separate from the asking.
+        When the child cannot answer, discard it and answer from the rollout file instead,
+        stamped. A fault from the *fallback* itself (an unreadable rollout) propagates: the
+        registry files a reader that raised as `UNREADABLE`, which is the honest word for a
+        host where neither source could be read.
         """
-        response = await self._client.request(_METHOD, _PARAMS)
+        try:
+            response = await self._client.request(_METHOD, _PARAMS)
+        except _TRANSPORT_FAULTS:
+            await self._discard_child()
+            return await self._from_rollout_file()
         return self._limits_from(response)
+
+    async def _discard_child(self) -> None:
+        """Let go of a child that failed, so the next read spawns a fresh one.
+
+        `JsonRpcProcess` reuses a child whose `returncode` is still `None`, and a child that
+        timed out is exactly that -- alive and not answering. Closing it is what makes
+        "restarted on the next read" true. Errors on the way out are swallowed: this is
+        tidying after a failure already being answered, and the fallback is the answer.
+        """
+        with suppress(*_TRANSPORT_FAULTS):
+            await self._client.close()
+
+    async def _from_rollout_file(self) -> AgentLimits:
+        # On a worker thread for the reason `composition.backend._limits_reader` gave when it
+        # threaded the whole read: this sweeps up to `_ACCOUNT_ROLLOUT_DAYS` dated directories.
+        reading = await asyncio.to_thread(self._fallback.limits)
+        return replace(reading, stale_source=_ROLLOUT_STAMP)
 
     def _limits_from(self, response: Mapping[str, object]) -> AgentLimits:
         windows = _account_windows(_plan_bucket(response), now=self._now)
