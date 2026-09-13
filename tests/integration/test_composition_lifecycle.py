@@ -873,7 +873,7 @@ async def test_service_shutdown_reports_usage_closed_within_the_bounded_timeout(
         await _serve_with_reconciliation(secrets, composition(close), poll, 3600)
         assert events == ["polling", "usage-closed"]
 
-        monkeypatch.setattr(service_module, "_CLOSE_TIMEOUT_SECONDS", 0.05)
+        monkeypatch.setattr(service_module, "CLOSE_TIMEOUT_SECONDS", 0.05)
         await asyncio.wait_for(
             _serve_with_reconciliation(secrets, composition(hanging_close), poll, 3600),
             timeout=5,
@@ -915,5 +915,47 @@ async def test_the_tui_reports_usage_closed_when_it_unmounts(tmp_path: Path) -> 
             await pilot.pause()
             assert closed == [], "not closed while the surface is up"
         assert closed == [True]
+    finally:
+        connection.close()
+
+
+async def test_the_tui_gives_up_on_a_close_that_hangs_and_still_unmounts(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """Bounded like the service's: a pane must not be kept from exiting by a wedged child."""
+    from backends import backend_for
+
+    from remote_agents.adapters.sqlite.database import open_database
+    from remote_agents.adapters.sqlite.session_store import SQLiteSessionStore
+    from remote_agents.adapters.tmux.fake import FakeTerminal
+    from remote_agents.adapters.tui import app as app_module
+    from remote_agents.adapters.tui.app import RemoteAgentsTui
+    from remote_agents.adapters.tui.context import TuiContext
+    from remote_agents.application.services import SessionService
+
+    monkeypatch.setattr(app_module, "CLOSE_TIMEOUT_SECONDS", 0.05)
+
+    async def hanging_close() -> None:
+        await asyncio.sleep(3600)
+
+    connection = open_database(tmp_path / "sessions.sqlite3")
+    try:
+        context = TuiContext(
+            backend=backend_for(
+                sessions=SessionService(SQLiteSessionStore(connection), FakeTerminal()),
+                projects=object(),  # type: ignore[arg-type]
+                refresh_catalogue=lambda: (),
+                close_usage_readers=hanging_close,
+            ),
+            profiles=(),
+            attach_argv=lambda session_id: (),
+        )
+        app = RemoteAgentsTui(context)
+
+        async def leave() -> None:
+            async with app.run_test() as pilot:
+                await pilot.pause()
+
+        await asyncio.wait_for(leave(), timeout=10)
     finally:
         connection.close()

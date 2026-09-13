@@ -34,7 +34,7 @@ none of these formats is documented and all of them are free to change:
 | profile       | context window                      | rate-limit windows              |
 | ------------- | ----------------------------------- | ------------------------------- |
 | claude        | transcript `message.usage` per turn | none written down (see below)   |
-| codex         | rollout `token_count.info`          | rollout `token_count`'s limits  |
+| codex         | rollout `token_count.info`          | app server; rollout as fallback |
 | opencode      | `opencode.db` `message.data.tokens` | none written down               |
 | cursor-agent  | nothing — see `CursorUsageReader`   | nothing                         |
 

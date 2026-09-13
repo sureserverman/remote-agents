@@ -60,6 +60,7 @@ from remote_agents.adapters.tui.screens.palette import NavigationCommands
 from remote_agents.adapters.tui.screens.sessions import CHORD_KEYS, CHORD_STOPS, perform_chord
 from remote_agents.adapters.tui.screens.settings import SettingsScreen
 from remote_agents.adapters.tui.theme import THEMES, VARIABLE_DEFAULTS
+from remote_agents.application.backend import CLOSE_TIMEOUT_SECONDS
 from remote_agents.application.commands import (
     LaunchCommand,
     RemoteControlCommand,
@@ -103,9 +104,6 @@ from remote_agents.domain.models import (
 )
 from remote_agents.domain.remote_control import RemoteControlState
 from remote_agents.ports.agent_usage import ContextWindow
-
-#: How long the unmount close waits for the usage readers' child, on the way out.
-_CLOSE_TIMEOUT_SECONDS = 5.0
 
 _LOG = logging.getLogger(__name__)
 
@@ -542,9 +540,8 @@ class RemoteAgentsTui(App[AttachRequest | None]):
         if close is None:
             return
         try:
-            await asyncio.wait_for(close(), timeout=_CLOSE_TIMEOUT_SECONDS)
-        except (TimeoutError, OSError):
-            # Leaving anyway; the child is reclaimed by the process exit that follows.
+            await asyncio.wait_for(close(), timeout=CLOSE_TIMEOUT_SECONDS)
+        except Exception:  # noqa: BLE001 -- leaving anyway; the exit that follows reclaims it
             pass
 
     async def on_mount(self) -> None:

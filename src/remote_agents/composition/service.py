@@ -13,6 +13,7 @@ from remote_agents.adapters.telegram.service import PrivateBotBoundary
 from remote_agents.adapters.telegram.trust_notifications import TrustNotifier
 from remote_agents.adapters.tmux.runtime import TmuxTerminal
 from remote_agents.application.activity import CodexApprovalWatcher, drain_activity
+from remote_agents.application.backend import CLOSE_TIMEOUT_SECONDS
 from remote_agents.application.reconcile import ReconciliationService
 from remote_agents.config import TelegramSecrets
 from remote_agents.ports.agent_activity import ActivityConfidence, ActivityKind, AgentActivity
@@ -21,7 +22,6 @@ from remote_agents.ports.state_events import StoreChanged
 _LOG = logging.getLogger(__name__)
 
 #: A shutdown courtesy, not a negotiation: past this the child is left to the OS.
-_CLOSE_TIMEOUT_SECONDS = 5.0
 _ACTIVITY_POLL_SECONDS = 30.0
 #: How often the folder-trust question is looked for. Six times the activity cadence, and the
 #: difference is what the two passes are waiting on. An activity report is news about work that
@@ -213,9 +213,9 @@ async def _close_host_remote_control(composition: ServiceComposition) -> None:
         # Bounded, because this runs in a `finally` on the way out. `aclose()` closes a
         # subprocess, and an unbounded await would make `systemctl stop` hang until
         # TimeoutStopSec, which then kills only the main process and orphans that very child.
-        await asyncio.wait_for(control.aclose(), timeout=_CLOSE_TIMEOUT_SECONDS)
+        await asyncio.wait_for(control.aclose(), timeout=CLOSE_TIMEOUT_SECONDS)
     except TimeoutError:
-        _LOG.warning("host remote control did not close within %ss", _CLOSE_TIMEOUT_SECONDS)
+        _LOG.warning("host remote control did not close within %ss", CLOSE_TIMEOUT_SECONDS)
     except Exception:  # noqa: BLE001 -- tidying up may not turn a clean stop into a crash
         _LOG.debug("host remote control did not close cleanly", exc_info=True)
 
@@ -235,9 +235,9 @@ async def _close_usage_readers(composition: ServiceComposition) -> None:
     if close is None:
         return
     try:
-        await asyncio.wait_for(close(), timeout=_CLOSE_TIMEOUT_SECONDS)
+        await asyncio.wait_for(close(), timeout=CLOSE_TIMEOUT_SECONDS)
     except TimeoutError:
-        _LOG.warning("usage readers did not close within %ss", _CLOSE_TIMEOUT_SECONDS)
+        _LOG.warning("usage readers did not close within %ss", CLOSE_TIMEOUT_SECONDS)
     except Exception:  # noqa: BLE001 -- tidying up may not turn a clean stop into a crash
         _LOG.debug("usage readers did not close cleanly", exc_info=True)
 

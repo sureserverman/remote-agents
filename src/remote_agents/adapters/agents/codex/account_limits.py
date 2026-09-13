@@ -46,6 +46,7 @@ import asyncio
 from collections.abc import Mapping
 from contextlib import suppress
 from dataclasses import replace
+from datetime import datetime, timedelta
 from typing import Protocol
 
 from remote_agents.adapters.agents.codex.usage import CodexUsageReader, _window_label
@@ -70,10 +71,28 @@ _PLAN_BUCKET = "codex"
 #: What the fallback's reading is stamped with, in the owner's words (DEC-061).
 _ROLLOUT_STAMP = "rollout file"
 
-#: Everything the child can do short of answering. `FileNotFoundError` (no `codex` binary) is
-#: an `OSError` and is caught by the third member; it is named in the docstring rather than
-#: here because listing a subclass beside its parent would suggest the two are handled apart.
-_TRANSPORT_FAULTS = (ProtocolError, TimeoutError, OSError)
+#: Everything the child can do short of answering. `FileNotFoundError` (no `codex` binary) and
+#: `TimeoutError` (the budget below, or the transport's own) are both `OSError`s on this
+#: interpreter, so the pair below is the whole set; the subclasses are named in the docstring
+#: rather than here, where listing one beside its parent would suggest they are handled apart.
+_TRANSPORT_FAULTS = (ProtocolError, OSError)
+
+#: How long one read may wait on the child, spawn and `initialize` included. Measured on the
+#: owner's host 2026-09-13: cold spawn + initialize + read 0.57-0.69 s, warm read 0.44-0.64 s,
+#: so this is many times the ordinary case and still short of a render anyone notices.
+_RPC_BUDGET_SECONDS = 5.0
+
+#: How long a failed child gets to go away before the read stops waiting for it. The client's
+#: own close already escalates to SIGKILL inside this; the bound is for a close that hangs
+#: before it gets there, and `JsonRpcProcess.close` kills the child when cancelled.
+_DISCARD_BUDGET_SECONDS = 5.0
+
+#: How long one answer stands before the child is asked again -- live or fallback alike.
+#: The bot redraws its sessions reply on every store change behind a two-second debounce
+#: (`_REDRAW_INTERVAL_SECONDS`), and each redraw draws the limits block; without this a burst
+#: of launches asked the app server every two seconds. A window moves by the turn, not by
+#: the second, and the terminal already refreshes on this cadence.
+_MEMO_SECONDS = 60.0
 
 
 class RateLimitsClient(Protocol):
@@ -103,7 +122,13 @@ class CodexAccountLimitsReader:
     it: `read` delegates a session query to the file untouched, the sync `limits` answers
     from the file stamped as such, and only `limits_async` asks the child -- the one
     difference a caller can see, and the reason `ProfileUsageReaders.account_limits()` is a
-    coroutine. `profiles` and `limits_profile` are the rollout reader's, preserved.
+    coroutine. `profiles` and `limits_profile` match the rollout reader's own values; they
+    are this class's, not read off the injected fallback.
+
+    One answer per minute (`_MEMO_SECONDS`), whichever source gave it, and every wait on the
+    child bounded (`_RPC_BUDGET_SECONDS`, `_DISCARD_BUDGET_SECONDS`): a wedged host costs
+    one bounded attempt a minute and answers from the file in between, never a read per
+    redraw on the bot's render path.
     """
 
     profiles = frozenset({ProfileId("codex")})
@@ -120,6 +145,7 @@ class CodexAccountLimitsReader:
         self._client = client or JsonRpcProcess(("codex", "app-server"))
         self._fallback = fallback if fallback is not None else CodexUsageReader(now=now)
         self._now = now
+        self._remembered: tuple[datetime, AgentLimits] | None = None
 
     async def limits_async(self) -> AgentLimits:
         """Ask once, map the plan's bucket, and date the answer at the instant it was read.
@@ -129,12 +155,22 @@ class CodexAccountLimitsReader:
         registry files a reader that raised as `UNREADABLE`, which is the honest word for a
         host where neither source could be read.
         """
+        asked_at = _moment(self._now)
+        if self._remembered is not None:
+            remembered_at, answer = self._remembered
+            if timedelta(0) <= asked_at - remembered_at < timedelta(seconds=_MEMO_SECONDS):
+                return answer
         try:
-            response = await self._client.request(_METHOD, _PARAMS)
+            response = await asyncio.wait_for(
+                self._client.request(_METHOD, _PARAMS), timeout=_RPC_BUDGET_SECONDS
+            )
         except _TRANSPORT_FAULTS:
             await self._discard_child()
-            return await self._from_rollout_file()
-        return self._limits_from(response)
+            answer = await self._from_rollout_file()
+        else:
+            answer = self._limits_from(response)
+        self._remembered = (asked_at, answer)
+        return answer
 
     async def _discard_child(self) -> None:
         """Let go of a child that failed, so the next read spawns a fresh one.
@@ -145,7 +181,7 @@ class CodexAccountLimitsReader:
         tidying after a failure already being answered, and the fallback is the answer.
         """
         with suppress(*_TRANSPORT_FAULTS):
-            await self._client.close()
+            await asyncio.wait_for(self._client.close(), timeout=_DISCARD_BUDGET_SECONDS)
 
     async def _from_rollout_file(self) -> AgentLimits:
         # On a worker thread for the reason `composition.backend._limits_reader` gave when it

@@ -13,15 +13,18 @@ want the morning after — the same lesson `test_usage.py` records for its own f
 
 from __future__ import annotations
 
+import asyncio
 import copy
 import json
 import sys
+import time
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
 
+from remote_agents.adapters.agents.codex import account_limits as account_limits_module
 from remote_agents.adapters.agents.codex.account_limits import CodexAccountLimitsReader
 from remote_agents.adapters.agents.codex.usage import CodexUsageReader
 from remote_agents.adapters.agents.protocols import JsonRpcProcess, ProtocolError
@@ -175,6 +178,19 @@ async def test_aclose_closes_the_client() -> None:
 ROLLOUT_STAMP = "rollout file"
 
 
+class Clock:
+    """A pinned `now` a test can advance, so a second read can be after the memo lapses."""
+
+    def __init__(self, at: datetime = NOW) -> None:
+        self.at = at
+
+    def __call__(self) -> datetime:
+        return self.at
+
+    def step(self, seconds: float) -> None:
+        self.at = self.at + timedelta(seconds=seconds)
+
+
 @dataclass
 class FaultingClient:
     """Raises the scripted fault on the first `n_faults` requests, then answers as `FakeClient`."""
@@ -259,12 +275,16 @@ async def test_a_fallback_with_nothing_is_no_reading_still_stamped_as_the_fallba
 
 
 async def test_after_a_fallback_the_next_read_asks_the_rpc_again() -> None:
-    """A failure discards the child rather than the transport: the next read tries the RPC."""
+    """A failure discards the child rather than the transport: the next read tries the RPC.
+
+    "Next" once the remembered answer has lapsed: a fallback reading is held for the same
+    minute a live one is, so a host whose child is wedged is not re-asked on every redraw.
+    """
+    clock = Clock()
     client = FaultingClient(recorded(), ProtocolError("timed out"), n_faults=1)
-    reader = CodexAccountLimitsReader(
-        client=client, fallback=FakeRollout(FILE_READING), now=lambda: NOW
-    )
+    reader = CodexAccountLimitsReader(client=client, fallback=FakeRollout(FILE_READING), now=clock)
     first = await reader.limits_async()
+    clock.step(61)
     second = await reader.limits_async()
     assert first.stale_source == ROLLOUT_STAMP
     assert second.stale_source is None
@@ -308,20 +328,19 @@ def _stub_app_server(tmp_path: Path, *, answers_before_exit: int) -> tuple[str, 
 
 async def test_aclose_closes_the_child_and_a_later_read_reopens_it(tmp_path: Path) -> None:
     """Against the real `JsonRpcProcess`: close reclaims the child, the next read spawns anew."""
+    clock = Clock()
     client = JsonRpcProcess(_stub_app_server(tmp_path, answers_before_exit=100))
-    reader = CodexAccountLimitsReader(
-        client=client, fallback=FakeRollout(FILE_READING), now=lambda: NOW
-    )
+    reader = CodexAccountLimitsReader(client=client, fallback=FakeRollout(FILE_READING), now=clock)
     first = await reader.limits_async()
-    first_child = client._process
+    first_pid = client.child_pid
     assert first.windows == (FIVE_HOUR, WEEK)
-    assert first_child is not None and first_child.returncode is None
+    assert first_pid is not None
     await reader.aclose()
-    assert client._process is None
-    assert first_child.returncode is not None, "aclose reclaimed the child"
+    assert client.child_pid is None, "aclose reclaimed the child"
+    clock.step(61)
     second = await reader.limits_async()
     assert second.windows == (FIVE_HOUR, WEEK)
-    assert client._process is not None and client._process.pid != first_child.pid
+    assert client.child_pid is not None and client.child_pid != first_pid
     await reader.aclose()
 
 
@@ -329,20 +348,21 @@ async def test_a_child_that_died_is_replaced_on_the_read_after_the_fallback(
     tmp_path: Path,
 ) -> None:
     """Real transport, a child dying with a request pending: fallback once, then a fresh child."""
+    clock = Clock()
     client = JsonRpcProcess(_stub_app_server(tmp_path, answers_before_exit=2))
-    reader = CodexAccountLimitsReader(
-        client=client, fallback=FakeRollout(FILE_READING), now=lambda: NOW
-    )
+    reader = CodexAccountLimitsReader(client=client, fallback=FakeRollout(FILE_READING), now=clock)
     first = await reader.limits_async()
     assert first.stale_source is None
-    dead_child = client._process
-    assert dead_child is not None
+    dead_pid = client.child_pid
+    assert dead_pid is not None
+    clock.step(61)
     second = await reader.limits_async()
     assert second.stale_source == ROLLOUT_STAMP
+    clock.step(61)
     third = await reader.limits_async()
     assert third.stale_source is None
     assert third.windows == (FIVE_HOUR, WEEK)
-    assert client._process is not None and client._process.pid != dead_child.pid
+    assert client.child_pid is not None and client.child_pid != dead_pid
     await reader.aclose()
 
 
@@ -367,3 +387,82 @@ def test_a_session_read_is_delegated_to_the_rollout_reader_untouched(tmp_path: P
     answer = reader.read(query)
     assert rollout.queries == [query]
     assert answer == AgentUsage(observed_at=FILE_MOMENT)
+
+
+# --- Stage 1 gate, round 2: one answer per minute, and every wait on the child is bounded ----
+
+
+async def test_an_answer_is_remembered_for_a_minute_then_asked_for_again() -> None:
+    """The bot redraws every two seconds under a burst; the plan's windows move by the turn."""
+    clock = Clock()
+    client = FakeClient(recorded())
+    reader = CodexAccountLimitsReader(client=client, fallback=FakeRollout(FILE_READING), now=clock)
+    first = await reader.limits_async()
+    clock.step(59)
+    second = await reader.limits_async()
+    assert len(client.calls) == 1
+    assert second == first, "the remembered answer, dated when it was read"
+    clock.step(2)
+    third = await reader.limits_async()
+    assert len(client.calls) == 2
+    assert third.observed_at == clock.at
+
+
+async def test_a_fallback_answer_is_remembered_for_the_same_minute() -> None:
+    """A wedged host is asked once a minute, not once a redraw."""
+    clock = Clock()
+    client = FaultingClient(recorded(), ProtocolError("timed out"), n_faults=5)
+    rollout = FakeRollout(FILE_READING)
+    reader = CodexAccountLimitsReader(client=client, fallback=rollout, now=clock)
+    await reader.limits_async()
+    clock.step(30)
+    again = await reader.limits_async()
+    assert again.stale_source == ROLLOUT_STAMP
+    assert client.calls == 1 and rollout.calls == 1
+
+
+@dataclass
+class HangingClient:
+    """Never answers, and never finishes closing either: the child that wedges both ways."""
+
+    closed: int = 0
+
+    async def request(self, method: str, params: dict) -> dict:
+        await asyncio.Event().wait()
+        raise AssertionError("unreachable")
+
+    async def close(self) -> None:
+        self.closed += 1
+        await asyncio.Event().wait()
+
+
+async def test_a_child_that_never_answers_costs_the_budget_then_the_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(account_limits_module, "_RPC_BUDGET_SECONDS", 0.05)
+    monkeypatch.setattr(account_limits_module, "_DISCARD_BUDGET_SECONDS", 0.05)
+    client = HangingClient()
+    reader = CodexAccountLimitsReader(client=client, fallback=FakeRollout(FILE_READING))
+    started = time.perf_counter()
+    limits = await reader.limits_async()
+    elapsed = time.perf_counter() - started
+    assert limits.stale_source == ROLLOUT_STAMP
+    assert client.closed == 1, "the wedged child is discarded"
+    assert elapsed < 1.0, f"a read must not wait on a wedged child: {elapsed:.2f}s"
+
+
+async def test_a_fallback_that_itself_raises_propagates_as_the_registry_expects() -> None:
+    """Neither source could be read: the honest word is the registry's `UNREADABLE`."""
+
+    class _Unreadable:
+        def limits(self) -> AgentLimits:
+            raise OSError(13, "Permission denied")
+
+        def read(self, query: UsageQuery) -> AgentUsage | None:
+            return None
+
+    reader = CodexAccountLimitsReader(
+        client=FaultingClient(recorded(), ProtocolError("closed")), fallback=_Unreadable()
+    )
+    with pytest.raises(OSError):
+        await reader.limits_async()

@@ -39,8 +39,26 @@ class JsonRpcProcess:
             await self._ensure_started()
             return await self._request(method, params)
 
+    @property
+    def child_pid(self) -> int | None:
+        """The running child's pid, or `None` when none is held -- for callers and tests.
+
+        Public so that "is a child alive, and is it the same one" can be asked without
+        reaching for `_process`, which is this class's to rename.
+        """
+        process = self._process
+        if process is None or process.returncode is not None:
+            return None
+        return process.pid
+
     async def close(self) -> None:
-        """Close only the adapter-owned app-server process."""
+        """Close only the adapter-owned app-server process.
+
+        Cancellation-safe: the reference is let go of before the wait, so a caller that
+        bounds this with `wait_for` and gives up mid-wait would otherwise leave a live child
+        that nothing can reclaim. A cancellation that lands during the wait kills the child
+        first and then propagates.
+        """
         async with self._lock:
             process, self._process = self._process, None
             if process is None:
@@ -49,19 +67,27 @@ class JsonRpcProcess:
                 process.stdin.close()
                 await process.stdin.wait_closed()
             try:
-                await asyncio.wait_for(process.wait(), timeout=_GRACEFUL_EXIT_SECONDS)
+                await self._reap(process)
+            except asyncio.CancelledError:
+                _kill(process)
+                raise
+
+    @staticmethod
+    async def _reap(process: asyncio.subprocess.Process) -> None:
+        try:
+            await asyncio.wait_for(process.wait(), timeout=_GRACEFUL_EXIT_SECONDS)
+        except TimeoutError:
+            process.terminate()
+            try:
+                await asyncio.wait_for(process.wait(), timeout=_TERMINATE_EXIT_SECONDS)
             except TimeoutError:
-                process.terminate()
-                try:
-                    await asyncio.wait_for(process.wait(), timeout=_TERMINATE_EXIT_SECONDS)
-                except TimeoutError:
-                    # `terminate()` is SIGTERM, which a child is free to ignore -- and this
-                    # runs in a shutdown path. An unbounded wait here turns "stop the
-                    # service" into a hang, systemd's TimeoutStopSec then kills only the
-                    # main process, and the child this function exists to reclaim is
-                    # orphaned anyway. Escalating costs one signal and removes both.
-                    process.kill()
-                    await process.wait()
+                # `terminate()` is SIGTERM, which a child is free to ignore -- and this
+                # runs in a shutdown path. An unbounded wait here turns "stop the
+                # service" into a hang, systemd's TimeoutStopSec then kills only the
+                # main process, and the child this function exists to reclaim is
+                # orphaned anyway. Escalating costs one signal and removes both.
+                process.kill()
+                await process.wait()
 
     async def _ensure_started(self) -> None:
         if self._process is not None and self._process.returncode is None:
@@ -117,3 +143,13 @@ class JsonRpcProcess:
         if self._process is None or self._process.stdout is None:
             raise ProtocolError("provider protocol is unavailable")
         return self._process
+
+
+def _kill(process: asyncio.subprocess.Process) -> None:
+    """SIGKILL a child that is still running; a child already gone is not an error here."""
+    if process.returncode is not None:
+        return
+    try:
+        process.kill()
+    except ProcessLookupError:
+        pass

@@ -48,6 +48,11 @@ from remote_agents.domain.models import MAX_LABEL_LENGTH, SessionId
 from remote_agents.ports.agent_activity import AgentActivity
 from remote_agents.ports.agent_usage import AgentLimits, AgentUsage
 
+#: How long either surface waits, on its way out, for `Backend.close_usage_readers` (and the
+#: service for its host-control close). One number for both, so the two shutdown budgets
+#: cannot drift apart: a close that hangs must not keep a pane or `systemctl stop` waiting.
+CLOSE_TIMEOUT_SECONDS = 5.0
+
 
 @dataclass(frozen=True, slots=True)
 class Backend:

@@ -1166,7 +1166,7 @@ async def test_account_limits_lets_a_bug_inside_a_reader_surface_as_the_sync_pat
 
 
 async def test_account_limits_and_the_sync_limits_answer_identically(tmp_path: Path) -> None:
-    """Two dispatches, one answer: the TUI still calls `limits()`, the bot awaits this one.
+    """Two dispatches, one answer: both surfaces await this one; `limits()` stays for the kit.
 
     Driven on the real reader set (one of them borrowing the cache, one of them failing) so
     that every clause of the sync path -- order, the per-reader label, the `UNREADABLE`
