@@ -1,0 +1,76 @@
+{
+  "_provenance": "Recorded from `codex app-server` answering `account/rateLimits/read` with `{\"excludeResetCreditDetails\": true}` on codex-cli 0.154.0, plan type plus, captured 2026-09-13 (DEC-061 amended, DEC-070). Structure and the `codex` bucket's figures are verbatim; `accountId` is synthetic per GDEC-SEC-001, chosen so any leak is recognisable in an assertion.",
+  "ordinaryUsageAllowed": true,
+  "rateLimits": {
+    "limitId": "codex",
+    "limitName": null,
+    "normalModelSlug": null,
+    "primary": {
+      "usedPercent": 100,
+      "windowDurationMins": 300,
+      "resetsAt": 1789344121
+    },
+    "secondary": {
+      "usedPercent": 78,
+      "windowDurationMins": 10080,
+      "resetsAt": 1789818498
+    },
+    "credits": {
+      "hasCredits": false,
+      "unlimited": false,
+      "balance": "0"
+    },
+    "individualLimit": null,
+    "spendControlReached": false,
+    "planType": "plus",
+    "rateLimitReachedType": null
+  },
+  "rateLimitsByLimitId": {
+    "base_model_inference": {
+      "limitId": "base_model_inference",
+      "limitName": "gpt-reserve",
+      "normalModelSlug": "gpt-5.6-luna",
+      "primary": {
+        "usedPercent": 1,
+        "windowDurationMins": 10080,
+        "resetsAt": 1789662481
+      },
+      "secondary": null,
+      "credits": null,
+      "individualLimit": null,
+      "spendControlReached": null,
+      "planType": "plus",
+      "rateLimitReachedType": null
+    },
+    "codex": {
+      "limitId": "codex",
+      "limitName": null,
+      "normalModelSlug": null,
+      "primary": {
+        "usedPercent": 100,
+        "windowDurationMins": 300,
+        "resetsAt": 1789344121
+      },
+      "secondary": {
+        "usedPercent": 78,
+        "windowDurationMins": 10080,
+        "resetsAt": 1789818498
+      },
+      "credits": {
+        "hasCredits": false,
+        "unlimited": false,
+        "balance": "0"
+      },
+      "individualLimit": null,
+      "spendControlReached": false,
+      "planType": "plus",
+      "rateLimitReachedType": null
+    }
+  },
+  "rateLimitResetCredits": {
+    "availableCount": 1,
+    "credits": null
+  },
+  "accountId": "account-not-ours-00000000-0000-0000-0000-000000000000",
+  "rateLimitUpsell": null
+}
