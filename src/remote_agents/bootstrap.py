@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING
 
 from remote_agents.adapters.agents.registry import (
     HookInstallError,
+    claude_status_line_hop_installed,
     default_settings_path,
     install_agent_hooks,
     remove_agent_hooks,
@@ -663,7 +664,23 @@ def _doctor_report(paths: ProductionPaths, config, drift: dict[str, object]) -> 
         supervisor_kind=supervisor.kind,
         liveness_meaning=supervisor.liveness_meaning,
         release=_release_state(),
+        claude_limits=_claude_limits_state(paths),
     )
+
+
+def _claude_limits_state(paths: ProductionPaths) -> str:
+    """One sentence on where the Claude figure comes from: is the status-line hop installed?
+
+    Read off the owner's Claude settings file through the installer's own recogniser
+    (`claude_status_line_hop_installed`), so this line and `install-agent-hooks --remove`
+    agree about what installed means. The not-installed sentence names the command that
+    installs it, because that is the whole action the reader can take.
+    """
+    settings_path = default_settings_path(paths.home, provider="claude")
+    installed = claude_status_line_hop_installed(settings_path)
+    if installed:
+        return "status-line hop installed"
+    return "status-line hop not installed (run remote-agents install-agent-hooks --provider claude)"
 
 
 def _telegram_credentials_are_private(paths: ProductionPaths) -> bool:

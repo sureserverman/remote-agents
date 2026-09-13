@@ -107,6 +107,7 @@ def production_doctor(
     supervisor_kind: SupervisorKind | None = None,
     liveness_meaning: LivenessMeaning | None = None,
     release: dict[str, object] | None = None,
+    claude_limits: str | None = None,
 ) -> dict[str, object]:
     """Render the installed service's non-secret dependency health report.
 
@@ -161,6 +162,15 @@ def production_doctor(
     # is means a network call, and ARCH-02 keeps this layer free of adapters. The caller gathers.
     if release is not None:
         report["release"] = release
+    # Where the Claude figure on the limits pane comes from, in one sentence: whether this
+    # project's status-line hop is wrapped into the owner's Claude settings. Reported beside
+    # `release` and outside `components`, for DEC-056's reason applied to a hop rather than
+    # an agent CLI: a host that never installed it has a pane reading "no reading yet" for
+    # Claude, which is worth naming here and not worth failing a healthy deploy over.
+    # Arrives as a sentence the root composed, because the settings file is an adapter's to
+    # read (DEC-015) and the wording is the plan's.
+    if claude_limits is not None:
+        report["claude_limits"] = claude_limits
     # Reported, deliberately not aggregated: nothing live depends on the console until the
     # console-surface plan's Stage 3 composes it, so an incapable tmux is worth naming to
     # the operator and not worth failing an otherwise healthy deploy over. The stage that

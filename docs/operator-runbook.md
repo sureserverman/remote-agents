@@ -716,7 +716,11 @@ uv run --locked remote-agents install-agent-hooks --provider opencode
 
 `--remove` takes any of them back out. For opencode that deletes the generated plugin file as
 well as its entry, and it deletes only a file carrying this project's own generated-file marker:
-anything else standing at that path is left alone.
+anything else standing at that path is left alone. For claude the same install also wraps the
+`statusLine` command in the status-line hop that feeds the limits pane, carrying the previous
+command in the wrapper's own `--then` argument; `--remove` restores it byte-for-byte, and a
+`statusLine` of another type, or a wrapper this installer did not write, is left alone and
+named in the outcome summary.
 
 For Codex, then run `/hooks` in the local Codex session and review the exact `remote-agents`
 definition before trusting it. If the command, event names, or destination are not the definition
@@ -1508,7 +1512,15 @@ uv run --locked remote-agents tui
 1. Check the `Plan limits` pane before anything else: it shows one row per agent that
    publishes rate limits — Claude and Codex on this host, the two agents that publish none
    being absent entirely — with the window columns aligned by kind. Each row shows its gauges or says which silence it is,
-   `no reading yet` or `unreadable`. The pane must never collapse to
+   `no reading yet` or `unreadable`. Codex's figure is asked of `codex app-server` and falls
+   back to the rollout file, stamped, when the child cannot answer. Claude's comes from the
+   **status-line hop**: `install-agent-hooks --provider claude` wraps the owner's Claude Code
+   `statusLine` command in `remote-agents statusline --then <previous>`, which records the
+   `rate_limits` Claude Code hands its status line to `~/.local/state/remote-agents/claude-limits.json`
+   and then runs the previous command unchanged; the pane reads that recording while it is
+   under thirty minutes old and stamps the row `status line`. Until the hop is installed the
+   Claude row reads `no reading yet`, and `remote-agents doctor` says so in its `claude_limits`
+   line (`status-line hop installed` / `not installed`) without moving `healthy`. The pane must never collapse to
    `No agent limits reported.` once a read has landed and any agent reported; that sentence
    belongs to the moment before the first read and to a host with no limits reader wired.
 1. Press Ctrl+S, which is available from any screen. Sessions lists every managed session the

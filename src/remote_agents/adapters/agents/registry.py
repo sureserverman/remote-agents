@@ -85,6 +85,7 @@ from remote_agents.adapters.agents.hook_settings import (
     HookInstallError,
     _foreign_status_line_note,
     _foreign_variant_note,
+    _holds_our_status_line,
     _HookProvider,
     _read_settings,
     _refuse_a_planted_plugin_path,
@@ -96,6 +97,7 @@ from remote_agents.adapters.agents.hook_settings import (
     _without_ours,
     _write_atomically,
     _write_plugin,
+    read_settings_document,
 )
 from remote_agents.adapters.agents.opencode.hooks import PROVIDER as _OPENCODE
 from remote_agents.adapters.agents.opencode.usage import OpenCodeUsageReader
@@ -538,6 +540,17 @@ def claude_remote_control_default(home: Path) -> ClaudeRemoteControlDefault:
     return ClaudeRemoteControlDefault(
         default_settings_path(home, provider="claude")
     )
+
+
+def claude_status_line_hop_installed(settings_path: Path) -> bool:
+    """Whether the status-line hop is wrapped into this settings file, as the installer sees it.
+
+    Asked through the installer's own recogniser and its total reader, so `doctor` and
+    `--remove` cannot disagree about what "installed" means: a wrapper in a shape the
+    installer would not unwrap is not installed here either. A file that is absent or cannot
+    be read answers no, which is the honest reading for a report and never a refusal.
+    """
+    return _holds_our_status_line(read_settings_document(settings_path))
 
 
 def default_settings_path(

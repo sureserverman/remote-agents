@@ -19,6 +19,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from remote_agents.adapters.agents.registry import default_settings_path, install_agent_hooks
 from remote_agents.adapters.supervisor.launchd import LaunchdSupervisor
 from remote_agents.adapters.supervisor.systemd import SystemdSupervisor
 from remote_agents.bootstrap import main
@@ -484,3 +485,49 @@ def test_onboarding_reports_the_platform_even_when_the_config_will_not_load(
     assert report["config"]["readable"] is False
     assert report["checked"] is False
     assert report["platform"] == {"system": "Darwin", "release": "25.6.0", "machine": "arm64"}
+
+
+_SYSTEMD = SystemdSupervisor(interpreter=Path("/opt/ra/bin/python3"), home=Path("/home/tester"))
+
+_HOP_INSTALLED = "status-line hop installed"
+_HOP_NOT_INSTALLED = (
+    "status-line hop not installed (run remote-agents install-agent-hooks --provider claude)"
+)
+
+
+@pytest.mark.parametrize(
+    ("arrangement", "expected"),
+    [
+        pytest.param("installed", _HOP_INSTALLED, id="installed"),
+        pytest.param("unwrapped", _HOP_NOT_INSTALLED, id="not-installed"),
+        pytest.param("absent", _HOP_NOT_INSTALLED, id="no-settings-file"),
+    ],
+)
+def test_doctor_reports_the_status_line_hop_and_never_moves_healthy_on_it(
+    tmp_path, monkeypatch, capsys, arrangement, expected
+) -> None:
+    """Where the Claude figure comes from is reported; an absent hop is not ill health.
+
+    DEC-056's rule for an optional agent CLI, applied to an optional hop: a host that never
+    ran `install-agent-hooks --provider claude` has a limits pane saying "no reading yet" for
+    Claude, which is a fact worth naming in the one command an operator already runs, and
+    not a fault worth failing an otherwise healthy deploy over. Read through the installer's
+    own recogniser, so `doctor` and `--remove` cannot disagree about what "installed" means.
+    """
+    _arrange(tmp_path, monkeypatch, _SYSTEMD, liveness_exit_zero=True)
+    settings = default_settings_path(tmp_path, provider="claude")
+    if arrangement != "absent":
+        settings.parent.mkdir(parents=True, exist_ok=True)
+        settings.write_text(
+            json.dumps({"statusLine": {"type": "command", "command": "statusline.sh"}}) + "\n",
+            encoding="utf-8",
+        )
+    if arrangement == "installed":
+        install_agent_hooks(settings)
+
+    assert main(["doctor", "--json"]) == 0
+
+    report = json.loads(capsys.readouterr().out)
+    assert report["claude_limits"] == expected
+    assert report["healthy"] is True
+    assert "claude_limits" not in report["components"]
