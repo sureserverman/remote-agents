@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 import os
 import sqlite3
+import threading
 from dataclasses import FrozenInstanceError
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -23,6 +24,7 @@ from remote_agents.adapters.agents.claude.usage import ClaudeUsageReader
 from remote_agents.adapters.agents.codex.usage import _ACCOUNT_ROLLOUT_DAYS, CodexUsageReader
 from remote_agents.adapters.agents.cursor.usage import CursorUsageReader
 from remote_agents.adapters.agents.opencode.usage import OpenCodeUsageReader
+from remote_agents.adapters.agents.protocols import ProtocolError
 from remote_agents.adapters.agents.registry import ProfileUsageReaders
 from remote_agents.domain.models import ProfileId
 from remote_agents.domain.profiles import closed_profiles
@@ -32,6 +34,7 @@ from remote_agents.ports.agent_usage import (
     UsageQuery,
     UsageWindow,
 )
+from remote_agents.ports.provider_errors import ProviderUnavailable
 
 LAUNCHED_AT = datetime(2026, 8, 27, 6, 0, tzinfo=UTC)
 
@@ -994,6 +997,213 @@ def test_an_unreadable_source_costs_one_entry_and_never_the_screen(tmp_path: Pat
         "say: this is the one absence that names a fault, and hiding it behind an ordinary "
         "silence is how a broken host reads as a quiet one (DEC-061)"
     )
+
+
+# --- the async dispatch beside the sync one ----------------------------------------------
+
+
+class _AsyncLimitsReader:
+    """The shape Task 1.2's RPC-backed reader takes: it answers `limits_async`, not `limits`."""
+
+    profiles = frozenset({ProfileId("codex")})
+    limits_profile = ProfileId("codex")
+
+    def __init__(self, answer: AgentLimits | Exception, log: list[str] | None = None) -> None:
+        self._answer = answer
+        self._log = [] if log is None else log
+
+    def read(self, query: UsageQuery) -> None:  # noqa: ARG002 - never reached here
+        return None
+
+    async def limits_async(self) -> AgentLimits:
+        self._log.append(f"async:{self.limits_profile}")
+        if isinstance(self._answer, Exception):
+            raise self._answer
+        return self._answer
+
+
+class _SyncLimitsReader:
+    """A file-backed reader as they all are today: `limits()` alone, and it may block."""
+
+    profiles = frozenset({ProfileId("opencode")})
+    limits_profile = ProfileId("opencode")
+
+    def __init__(self, answer: AgentLimits | Exception, log: list[str] | None = None) -> None:
+        self._answer = answer
+        self._log = [] if log is None else log
+        self.answered_on: str | None = None
+
+    def read(self, query: UsageQuery) -> None:  # noqa: ARG002 - never reached here
+        return None
+
+    def limits(self) -> AgentLimits:
+        self._log.append(f"sync:{self.limits_profile}")
+        self.answered_on = threading.current_thread().name
+        if isinstance(self._answer, Exception):
+            raise self._answer
+        return self._answer
+
+
+async def test_account_limits_awaits_async_readers_and_threads_sync_ones_in_composition_order() -> (
+    None
+):
+    """One entry per reader, in the order they were composed, whichever way each one answers.
+
+    The sync reader's `limits()` is a filesystem sweep, so it must run off the event loop the
+    caller is rendering on -- the rule `_limits_reader` already states for the whole set. The
+    async reader is awaited in place. Neither shape reorders the answer.
+    """
+    log: list[str] = []
+    first = _AsyncLimitsReader(AgentLimits(ProfileId("codex"), (UsageWindow("week", 61.0),)), log)
+    second = _SyncLimitsReader(AgentLimits(ProfileId("opencode")), log)
+    third = _AsyncLimitsReader(AgentLimits(ProfileId("cursor-agent")), log)
+    third.limits_profile = ProfileId("cursor-agent")
+
+    entries = await ProfileUsageReaders((first, second, third)).account_limits()
+
+    assert [str(entry.profile_id) for entry in entries] == ["codex", "opencode", "cursor-agent"]
+    assert entries[0].windows == (UsageWindow("week", 61.0),)
+    assert log == ["async:codex", "sync:opencode", "async:cursor-agent"]
+    assert second.answered_on is not None
+    assert second.answered_on != threading.current_thread().name, (
+        "a sync reader sweeps the disk; it must be threaded, not run on the event loop"
+    )
+
+
+async def test_account_limits_prefers_limits_async_when_a_reader_offers_both() -> None:
+    """A reader that grew an async path is awaited on it; its sync path is not threaded too."""
+
+    class _Both(_SyncLimitsReader):
+        async def limits_async(self) -> AgentLimits:
+            self._log.append("async:both")
+            return AgentLimits(ProfileId("opencode"), (UsageWindow("5h", 3.0),))
+
+    log: list[str] = []
+    both = _Both(AgentLimits(ProfileId("opencode")), log)
+
+    entries = await ProfileUsageReaders((both,)).account_limits()
+
+    assert entries == (AgentLimits(ProfileId("opencode"), (UsageWindow("5h", 3.0),)),)
+    assert log == ["async:both"]
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        OSError("the rollout directory went away mid-read"),
+        ValueError("a document whose shape changed under an upgrade"),
+        ZeroDivisionError("a window of zero width"),
+        sqlite3.OperationalError("database is locked"),
+        TimeoutError("the provider did not answer in time"),
+        ProviderUnavailable("the provider's boundary is unreachable"),
+        ProtocolError("the provider answered something it cannot mean"),
+    ],
+    ids=lambda error: type(error).__name__,
+)
+async def test_account_limits_files_an_async_reader_that_raises_as_unreadable(
+    error: Exception,
+) -> None:
+    """Exactly one `UNREADABLE` entry for the reader that failed, and its neighbours answer.
+
+    The set is the sync path's plus the two an RPC-backed reader can raise and a file-backed
+    one cannot: a timeout, and the port-level "provider would not answer" category
+    (`ProtocolError` is its adapter-side subclass). Each is a fault on this host, not a
+    provider that publishes nothing, and DEC-061 wants those two kept apart on the screen.
+    """
+    before = _SyncLimitsReader(AgentLimits(ProfileId("opencode")))
+    failing = _AsyncLimitsReader(error)
+    after = _AsyncLimitsReader(AgentLimits(ProfileId("cursor-agent")))
+    after.limits_profile = ProfileId("cursor-agent")
+
+    entries = await ProfileUsageReaders((before, failing, after)).account_limits()
+
+    assert [str(entry.profile_id) for entry in entries] == ["opencode", "codex", "cursor-agent"]
+    assert entries[1] == AgentLimits(ProfileId("codex"), absence=LimitsAbsence.UNREADABLE)
+    assert entries[0].absence is None and entries[2].absence is None
+
+
+async def test_account_limits_files_a_sync_reader_that_raises_as_unreadable_too() -> None:
+    """The threaded leg keeps the sync path's guarantee; a raise in the worker is one entry."""
+    entries = await ProfileUsageReaders(
+        (_SyncLimitsReader(OSError("the database went away mid-read")),)
+    ).account_limits()
+
+    assert entries == (AgentLimits(ProfileId("opencode"), absence=LimitsAbsence.UNREADABLE),)
+
+
+async def test_account_limits_skips_a_reader_without_a_limits_profile() -> None:
+    """The same guard as `limits()`: an unlabelled reader is skipped, not given a name."""
+
+    class _Unlabelled:
+        profiles = frozenset({ProfileId("codex")})
+
+        def read(self, query: UsageQuery) -> None:  # noqa: ARG002 - never reached here
+            return None
+
+        async def limits_async(self) -> AgentLimits:
+            raise AssertionError("an unlabelled reader must never be asked")
+
+    labelled = _AsyncLimitsReader(AgentLimits(ProfileId("codex")))
+
+    entries = await ProfileUsageReaders((_Unlabelled(), labelled)).account_limits()
+
+    assert entries == (AgentLimits(ProfileId("codex")),)
+
+
+async def test_account_limits_lets_a_bug_inside_a_reader_surface_as_the_sync_path_does() -> None:
+    """Narrowed exactly as `limits()` is: an `AttributeError` raised *inside* a reader is a bug.
+
+    The guard covers the label read alone. Widening it to the await would swallow a real
+    defect and drop the entry -- the opposite of what the `UNREADABLE` clause promises.
+    """
+
+    class _Buggy(_AsyncLimitsReader):
+        async def limits_async(self) -> AgentLimits:
+            raise AttributeError("'NoneType' object has no attribute 'windows'")
+
+    with pytest.raises(AttributeError, match="no attribute 'windows'"):
+        await ProfileUsageReaders((_Buggy(AgentLimits(ProfileId("codex"))),)).account_limits()
+
+
+async def test_account_limits_and_the_sync_limits_answer_identically(tmp_path: Path) -> None:
+    """Two dispatches, one answer: the TUI still calls `limits()`, the bot awaits this one.
+
+    Driven on the real reader set (one of them borrowing the cache, one of them failing) so
+    that every clause of the sync path -- order, the per-reader label, the `UNREADABLE`
+    entry -- is compared rather than restated.
+    """
+    cache = tmp_path / "claude-cache"
+    cache.mkdir()
+    _written_json(
+        cache / "statusline-usage-cache-d1c0b541.json",
+        {"five_hour": {"utilization": 2, "resets_at": _iso_in(hours=3)}},
+    )
+    # Claude stamps `observed_at` from its clock at read time, and the two dispatches read a
+    # few microseconds apart; frozen so the comparison is about the dispatch, not the clock.
+    frozen = datetime.now(UTC)
+    readers = ProfileUsageReaders(
+        (
+            ClaudeUsageReader(
+                sessions_root=tmp_path / "claude-projects",
+                limits_cache_root=cache,
+                now=lambda: frozen,
+            ),
+            CodexUsageReader(sessions_root=tmp_path / "codex-sessions", now=lambda: LAUNCHED_AT),
+            _SyncLimitsReader(sqlite3.OperationalError("database is locked")),
+            CursorUsageReader(),
+        )
+    )
+
+    threaded = await readers.account_limits()
+
+    assert threaded == readers.limits()
+    assert [str(entry.profile_id) for entry in threaded] == [
+        "claude",
+        "codex",
+        "opencode",
+        "cursor-agent",
+    ]
+    assert threaded[2].absence is LimitsAbsence.UNREADABLE
 
 
 # --- the account-wide limits type --------------------------------------------------------

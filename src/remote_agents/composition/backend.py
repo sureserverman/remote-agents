@@ -191,13 +191,15 @@ def _limits_reader(
     rate-limit figures in one place per host.
 
     Handed the same `ProfileUsageReaders` the session reader uses, so a host probes for
-    provider files with one set of readers rather than two (DEC-046). On a worker thread for
-    `_usage_reader`'s reason, and more so: this one sweeps every rollout in as many as
-    `_ACCOUNT_ROLLOUT_DAYS` dated directories.
+    provider files with one set of readers rather than two (DEC-046). Awaited through the
+    readers' own async dispatch rather than by threading the whole sync one: a reader that
+    answers over a connection is awaited in place, and each file-backed reader still goes to a
+    worker thread for `_usage_reader`'s reason, and more so -- one of them sweeps every rollout
+    in as many as `_ACCOUNT_ROLLOUT_DAYS` dated directories.
     """
 
     async def read() -> tuple[AgentLimits, ...]:
-        return await asyncio.to_thread(readers.limits)
+        return await readers.account_limits()
 
     return read
 

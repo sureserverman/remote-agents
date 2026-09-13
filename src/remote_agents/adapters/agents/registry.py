@@ -61,6 +61,7 @@ because the workspace is matched exactly.
 
 from __future__ import annotations
 
+import asyncio
 import os
 import shlex
 import sqlite3
@@ -104,8 +105,22 @@ from remote_agents.ports.agent_usage import (
     UsageQuery,
 )
 from remote_agents.ports.provider_descriptor import ProviderDescriptor, TrustDialog
+from remote_agents.ports.provider_errors import ProviderUnavailable
 
 ProjectPaths = Mapping[ProjectId, Path]
+
+# What a file-backed reader can raise while lifting a figure out of a provider's working files:
+# the file went away or is unreadable, a document whose shape changed under an upgrade, a number
+# that does not survive arithmetic, a database another program has locked. Named once so the two
+# limits dispatches below catch the same set, and nothing wider -- see `account_limits`.
+_FILE_FAULTS: tuple[type[BaseException], ...] = (
+    OSError,
+    ValueError,
+    ArithmeticError,
+    sqlite3.Error,
+)
+# What a reader reached over a connection can raise on top of those, and a file never can.
+_CONNECTION_FAULTS: tuple[type[BaseException], ...] = (TimeoutError, ProviderUnavailable)
 
 
 class ProfileUsageReaders:
@@ -168,30 +183,76 @@ class ProfileUsageReaders:
         """
         answers = []
         for reader in self._readers:
-            # Read inside the guard, not before it. `__init__` takes `Iterable[object]` with no
-            # protocol, so a reader without a label is reachable -- and reading it outside the
-            # try raised `AttributeError` straight through the boundary this docstring promises
-            # never raises. An unlabelled reader is skipped rather than given a fallback name,
-            # because there is no honest name to give it.
-            try:
-                profile = reader.limits_profile  # type: ignore[attr-defined]
-            except AttributeError:
-                # Narrowed to the attribute access alone. Wrapping the `limits()` call in the
-                # same guard swallowed an `AttributeError` raised *inside* a reader — a real
-                # bug — and dropped its entry, which is the opposite of what the next clause
-                # promises. `__init__` takes `Iterable[object]` with no protocol, so an
-                # unlabelled reader is reachable; it is skipped rather than given a name it
-                # does not have.
+            profile = self._limits_profile_of(reader)
+            if profile is None:
                 continue
             try:
                 answers.append(reader.limits())  # type: ignore[attr-defined]
-            except (OSError, ValueError, ArithmeticError, sqlite3.Error):
+            except _FILE_FAULTS:
                 # `UNREADABLE`, not a bare empty answer. This branch is the one absence that
                 # names a *fault* -- the provider's files are there and this process could not
                 # read them -- and rendering it the way a provider that publishes nothing
                 # renders would hide a broken host behind a legitimate silence (DEC-061).
                 answers.append(AgentLimits(profile, absence=LimitsAbsence.UNREADABLE))
         return tuple(answers)
+
+    async def account_limits(self) -> tuple[AgentLimits, ...]:
+        """`limits()`, for a caller that is already on an event loop and wants no thread of its own.
+
+        The same answer, entry for entry, and the same promises: one per reader, composition
+        order, never an exception at the caller. What differs is how each reader is asked. A
+        reader that offers `limits_async` -- the shape a provider reached over RPC takes, where
+        the read is a request on a connection rather than a sweep of a directory -- is awaited
+        in place; every other reader is the file-backed kind and its `limits()` goes to a
+        worker thread, because a filesystem sweep on the loop is what `_limits_reader` was
+        written to keep off it. Awaited one at a time rather than gathered, so the order the
+        readers were composed in is the order they answer in, with no sort afterwards.
+
+        Dispatches to the readers it was given and composes none of its own (DEC-046): the set
+        is built once by `compose_backend`, and this is only the second way of asking it.
+        """
+        answers = []
+        for reader in self._readers:
+            profile = self._limits_profile_of(reader)
+            if profile is None:
+                continue
+            try:
+                limits_async = getattr(reader, "limits_async", None)
+                if limits_async is not None:
+                    answers.append(await limits_async())
+                else:
+                    answers.append(await asyncio.to_thread(reader.limits))  # type: ignore[attr-defined]
+            except _FILE_FAULTS + _CONNECTION_FAULTS:
+                # `limits()`'s clause, with the two faults a connection can suffer and a file
+                # cannot added: a request that never came back, and a provider that would not
+                # answer or answered nonsense (`ProviderUnavailable`, the port-level category
+                # `ProtocolError` sits under). Each is this host failing to read a figure the
+                # provider keeps, so each is filed under `UNREADABLE` for the same reason as the
+                # file faults are: a broken host must not render as a quiet one (DEC-061). Still
+                # not `Exception` -- an `AttributeError` raised inside a reader is a bug, and it
+                # is meant to surface exactly as it does on the sync path.
+                answers.append(AgentLimits(profile, absence=LimitsAbsence.UNREADABLE))
+        return tuple(answers)
+
+    @staticmethod
+    def _limits_profile_of(reader: object) -> ProfileId | None:
+        """The label a reader files its account entry under, or `None` for a reader without one.
+
+        Read inside the guard, not before it. `__init__` takes `Iterable[object]` with no
+        protocol, so a reader without a label is reachable -- and reading it outside the try
+        raised `AttributeError` straight through the boundary `limits()` promises never raises.
+        An unlabelled reader is skipped rather than given a fallback name, because there is no
+        honest name to give it.
+
+        Narrowed to the attribute access alone. Wrapping the `limits()` call in the same guard
+        swallowed an `AttributeError` raised *inside* a reader -- a real bug -- and dropped its
+        entry, which is the opposite of what the `UNREADABLE` clause promises. Shared by both
+        dispatches so the two cannot disagree about which readers are asked.
+        """
+        try:
+            return reader.limits_profile  # type: ignore[attr-defined]
+        except AttributeError:
+            return None
 
     def read(self, query: UsageQuery) -> AgentUsage | None:
         reader = self._by_profile.get(query.profile_id)
