@@ -560,12 +560,213 @@ def _runs_our_command(command: str, provider: _HookProvider) -> bool:
     return not remaining or (len(remaining) == 2 and remaining[0] == _ACTIVITY_DIRECTORY_OPTION)
 
 
+# --- The status line: a third owned thing, for the one provider whose agent draws one -------
+#
+# Claude's `statusLine.command` is wrapped rather than replaced: ours runs first and hands the
+# same stdin on to whatever the operator had, named verbatim as the `--then` word. The previous
+# command therefore travels *in the settings file itself*, in the wrapper's own argv, which is
+# what DEC-051 asks of an installer that has to remember what it used to own -- here with no
+# memory file at all, and visible to the owner in the file they already edit. Removal recovers
+# it from there, or drops the key when the wrapper carries no `--then` because there was nothing
+# before it.
+#
+# Matched as parsed words for exactly the reason `_COMMAND_TAIL` is, and this tail is one word
+# different: `statusline`, the subcommand, never `agent-event`.
+_STATUS_LINE_KEY = "statusLine"
+# Distinguishes "the key is absent" from "the key is null" in the round-trip comparison.
+_ABSENT = object()
+_STATUS_LINE_TAIL = ("-m", "remote_agents", "statusline")
+_THEN_OPTION = "--then"
+
+
+def _status_line_argv(interpreter: Path, previous: str | None) -> list[str]:
+    """Spell the wrapper as argv, the form `shlex.join` renders and `shlex.split` recovers.
+
+    `previous` is the operator's command *verbatim* -- a long `sh -c '...'` chain in the real
+    file -- and becomes one word, whatever quoting it carries; `shlex.split` gives it back
+    exactly, which `_unwrapped_status_line` relies on and a test proves rather than assumes.
+    """
+    argv = [str(interpreter), *_STATUS_LINE_TAIL]
+    if previous is not None:
+        argv += [_THEN_OPTION, previous]
+    return argv
+
+
+def _with_our_status_line(document: dict[str, Any], interpreter: Path) -> dict[str, Any]:
+    """Wrap the operator's status line in ours, or add ours where there was none.
+
+    Applied to the *unwrapped* document (`_without_our_status_line` has already run), so a
+    reinstall re-wraps the same previous command with the current interpreter instead of nesting
+    a second wrapper inside the first. Two shapes are left exactly alone and named by
+    `_foreign_status_line_note` instead: an entry that is not a command with a string, and a
+    command already running our subcommand in a form this installer did not write.
+
+    Every other key of the entry rides along. The wrap edits the `command` in place, so an
+    operator's `padding` (or anything Claude adds to the object later) stays where it was.
+    """
+    current = document.get(_STATUS_LINE_KEY)
+    if current is None:
+        # Absent -- or an explicit null, which reads the same here and is what the round-trip
+        # refusal then catches: removal drops the key, and null is not the same text as no key.
+        command = shlex.join(_status_line_argv(interpreter, None))
+        return {**document, _STATUS_LINE_KEY: {"type": "command", "command": command}}
+    if not _is_command_status_line(current) or _mentions_our_status_line(current["command"]):
+        return document
+    wrapped = shlex.join(_status_line_argv(interpreter, current["command"]))
+    return {**document, _STATUS_LINE_KEY: {**current, "command": wrapped}}
+
+
+def _without_our_status_line(document: dict[str, Any]) -> dict[str, Any]:
+    """Put the operator's status line back, or drop the key if ours was the first one there.
+
+    The previous command comes out of the wrapper's own `--then` word and nowhere else. A
+    wrapper without one was written over no `statusLine` at all, so the whole key goes -- other
+    keys included, since the object did not exist before this installer wrote it.
+
+    Every level, not one: a wrapper whose `--then` word is itself a wrapper of ours is peeled
+    again, because each level is exactly a command this installer writes and there is nothing
+    of anybody else's in between. Peeling one level per run left a reinstall holding two and a
+    removal holding one, which a probe during Task 2.2 measured before this loop existed.
+    """
+    current = document.get(_STATUS_LINE_KEY)
+    if not _is_command_status_line(current):
+        return document
+    ours, previous = _unwrapped_status_line(current["command"])
+    if not ours:
+        return document
+    while previous is not None:
+        inner, beneath = _unwrapped_status_line(previous)
+        if not inner:
+            break
+        previous = beneath
+    if previous is None:
+        return {key: value for key, value in document.items() if key != _STATUS_LINE_KEY}
+    return {**document, _STATUS_LINE_KEY: {**current, "command": previous}}
+
+
+def _is_command_status_line(value: Any) -> bool:
+    """The one shape this installer knows how to wrap: type `command`, with a string command."""
+    return (
+        isinstance(value, dict)
+        and value.get("type") == "command"
+        and isinstance(value.get("command"), str)
+    )
+
+
+def _status_line_words(command: str) -> list[str] | None:
+    """The parsed words of a command running our statusline subcommand, or `None`.
+
+    `None` for a command that does not parse and for one whose second to fourth words are not
+    our tail -- so a command that merely *mentions* the subcommand in a string is no more ours
+    here than it is in `_runs_our_command`.
+    """
+    try:
+        words = shlex.split(command)
+    except ValueError:
+        return None
+    if tuple(words[1 : 1 + len(_STATUS_LINE_TAIL)]) != _STATUS_LINE_TAIL:
+        return None
+    return words
+
+
+def _unwrapped_status_line(command: str) -> tuple[bool, str | None]:
+    """Recognise a wrapper this installer wrote, and recover what it wraps.
+
+    Returns `(ours, previous)`: ours iff the words after the interpreter are our tail followed
+    by nothing, or by exactly `--then <one word>`; `previous` is that word, or `None` for a
+    wrapper written over no status line. Anything else naming our subcommand -- another flag,
+    two `--then`s, a hand-edit, a wrapper around our wrapper -- answers `(False, None)`: it is
+    somebody else's to keep, and `_foreign_status_line_note` says so.
+    """
+    words = _status_line_words(command)
+    if words is None:
+        return False, None
+    rest = words[1 + len(_STATUS_LINE_TAIL) :]
+    if not rest:
+        return True, None
+    if len(rest) == 2 and rest[0] == _THEN_OPTION:
+        return True, rest[1]
+    return False, None
+
+
+def _mentions_our_status_line(command: str) -> bool:
+    """Report a command running our statusline subcommand that this installer will not claim."""
+    return _status_line_words(command) is not None and not _unwrapped_status_line(command)[0]
+
+
+def _holds_our_status_line(document: dict[str, Any]) -> bool:
+    """Report whether our wrapper is in place, which makes the install a reinstall of it."""
+    current = document.get(_STATUS_LINE_KEY)
+    return _is_command_status_line(current) and _unwrapped_status_line(current["command"])[0]
+
+
+def _foreign_status_line_note(base: dict[str, Any]) -> str:
+    """Name a status line this installer left alone, on the pattern of `_foreign_variant_note`.
+
+    Two populations, neither touched by install or by removal. One is an entry that is not a
+    command with a string -- another type, or an object with no command in it -- which this
+    installer has no way to wrap. The other is a command already running our subcommand in a
+    form it does not recognise as its own. Leaving both alone is right; leaving the operator to
+    work out why the limits never appeared in their status line is not, so it is said.
+    """
+    current = base.get(_STATUS_LINE_KEY)
+    if current is None:
+        return ""
+    if not _is_command_status_line(current):
+        if isinstance(current, dict) and current.get("type") == "command":
+            reason = 'is of type "command" but carries no command string'
+        elif isinstance(current, dict):
+            reason = f'is not of type "command" (its type is {current.get("type")!r})'
+        else:
+            reason = 'is not an object of type "command"'
+        return (
+            f". Note: the statusLine in this file {reason}, so the limits status line was not "
+            "installed; it is left exactly as it is -- by install, and by --remove later"
+        )
+    if _mentions_our_status_line(current["command"]):
+        return (
+            ". Note: the statusLine already runs this subcommand in a form this installer does "
+            "not recognise and will not touch, so the limits status line was not installed and "
+            "it is left exactly as it is -- by install, and by --remove later"
+        )
+    return ""
+
+
+def _with_ours(
+    document: dict[str, Any], ours: str, provider: _HookProvider, status_line: Path | None
+) -> dict[str, Any]:
+    """Everything an install adds: the groups (or plugin entry), then the status line wrapper.
+
+    `status_line` is the interpreter the wrapper names, or `None` for a provider whose agent
+    draws no status line -- the installer decides which, and this module names no provider.
+    """
+    installed = _with_our_groups(document, ours, provider)
+    if status_line is None:
+        return installed
+    return _with_our_status_line(installed, status_line)
+
+
+def _without_ours(
+    document: dict[str, Any], provider: _HookProvider, ours: Path | None, status_line: bool
+) -> dict[str, Any]:
+    """Everything a removal takes back -- the exact inverse of `_with_ours`, and checked as one.
+
+    `status_line` has no default for the reason `ours` has none: a caller who forgot it would get
+    a removal that silently kept our wrapper in the operator's file.
+    """
+    base = _without_our_groups(document, provider, ours)
+    if not status_line:
+        return base
+    return _without_our_status_line(base)
+
+
 def _refuse_when_removal_would_not_restore(
     settings: _Settings,
     base: dict[str, Any],
     installed: dict[str, Any],
     provider: _HookProvider,
     ours: Path | None,
+    status_line: bool,
 ) -> None:
     """Run the removal now and refuse the install unless it lands back on the original bytes.
 
@@ -575,16 +776,32 @@ def _refuse_when_removal_would_not_restore(
     installed into, from a file that never had the key, so removal cannot know whether to
     leave it or delete it. Rather than pick and be wrong half the time, the install is
     refused; deleting the empty block by hand makes it succeed and changes nothing else.
+
+    The status line rides the same check, with the same one reachable failure: a `"statusLine":
+    null` is wrapped as if the key were absent, removal then drops the key, and null and no key
+    are different text. Named separately so the operator is told to delete the right thing.
     """
-    restored = settings.style.render(_without_our_groups(installed, provider, ours))
+    put_back = _without_ours(installed, provider, ours, status_line)
+    restored = settings.style.render(put_back)
     # On a reinstall the bytes on disk already hold our previous groups, so they are not what
     # removal must land on; the check that they were is the one the first install passed.
     faithful = (
         settings.content is None
         or _holds_our_groups(settings.document, provider, ours)
+        or (status_line and _holds_our_status_line(settings.document))
         or settings.style.render(base) == settings.content
     )
     if restored != settings.style.render(base) or not faithful:
+        if status_line and put_back.get(_STATUS_LINE_KEY, _ABSENT) != base.get(
+            _STATUS_LINE_KEY, _ABSENT
+        ):
+            raise HookInstallError(
+                f"{settings.path} has been left untouched, because removing the status line "
+                'again could not put it back exactly as it is now: "statusLine": null and no '
+                "such key at all mean the same thing but are different text, so an uninstall "
+                "cannot tell which one to leave behind. Delete the null entry and run this "
+                "again — that changes nothing else about your settings."
+            )
         container = (
             f'"{provider.plugin.key}": []'
             if provider.plugin is not None

@@ -81,6 +81,7 @@ from remote_agents.adapters.agents.codex.hooks import PROVIDER as _CODEX
 from remote_agents.adapters.agents.cursor.usage import CursorUsageReader
 from remote_agents.adapters.agents.hook_settings import (
     HookInstallError,
+    _foreign_status_line_note,
     _foreign_variant_note,
     _HookProvider,
     _read_settings,
@@ -89,8 +90,8 @@ from remote_agents.adapters.agents.hook_settings import (
     _refuse_if_changed_since_it_was_read,
     _refuse_when_removal_would_not_restore,
     _remove_plugin,
-    _with_our_groups,
-    _without_our_groups,
+    _with_ours,
+    _without_ours,
     _write_atomically,
     _write_plugin,
 )
@@ -598,6 +599,18 @@ def agent_event_command(
     return shlex.join(_agent_event_argv(executable, activity_directory, _provider(provider)))
 
 
+def _draws_a_status_line(provider: _HookProvider) -> bool:
+    """Whether this provider's settings file carries a `statusLine` this installer wraps.
+
+    Claude alone: its agent draws a status line from a command in the same settings file the
+    hooks go into, so the installer owns a third thing there (DEC-076 named two). Codex and
+    OpenCode take no status line, and nothing about theirs is touched. Decided here by name,
+    where the providers are already named, rather than by a field on `_HookProvider` -- which
+    would be the shape if a second provider ever grew one.
+    """
+    return provider.name == _CLAUDE.name
+
+
 def _plugin_path(settings_path: Path, provider: _HookProvider) -> Path:
     """Where this provider's generated file lands, derived from the settings file's own home.
 
@@ -630,15 +643,20 @@ def install_agent_hooks(
     argv = _agent_event_argv(interpreter, activity_directory, selected)
     our_plugin = _plugin_path(settings_path, selected) if selected.plugin is not None else None
     ours = our_plugin.as_uri() if our_plugin is not None else shlex.join(argv)
-    base = _without_our_groups(settings.document, selected, our_plugin)
-    installed = _with_our_groups(base, ours, selected)
-    _refuse_when_removal_would_not_restore(settings, base, installed, selected, our_plugin)
+    draws_a_status_line = _draws_a_status_line(selected)
+    base = _without_ours(settings.document, selected, our_plugin, draws_a_status_line)
+    installed = _with_ours(base, ours, selected, interpreter if draws_a_status_line else None)
+    _refuse_when_removal_would_not_restore(
+        settings, base, installed, selected, our_plugin, draws_a_status_line
+    )
     content = settings.style.render(installed)
     # Reported on both paths. Re-running the installer is exactly what an operator does when
     # they are trying to work out why every event arrives twice, and answering "already
     # current" while saying nothing about the variant that is doubling them is the least
     # helpful moment to stay quiet.
     note = _foreign_variant_note(base, selected, our_plugin)
+    if draws_a_status_line:
+        note += _foreign_status_line_note(base)
     if content == settings.content:
         # The config entry names a path and never a version, so it is byte-identical across an
         # upgrade that rewrote the plugin. Whether anything changed is therefore the plugin's
@@ -721,7 +739,9 @@ def remove_agent_hooks(settings_path: Path, *, provider: str = "claude") -> Hook
                 "in place too; repair the file and run this again, or delete both by hand."
             ) from error
         raise
-    content = settings.style.render(_without_our_groups(settings.document, selected, our_plugin))
+    content = settings.style.render(
+        _without_ours(settings.document, selected, our_plugin, _draws_a_status_line(selected))
+    )
     if content != settings.content:
         # The config write is deliberately NOT wrapped to collect the plugin on failure. The
         # entry survives a failed write, so deleting the file it names would strand it -- which

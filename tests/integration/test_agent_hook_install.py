@@ -15,6 +15,7 @@ event array pass unnoticed.
 from __future__ import annotations
 
 import json
+import shlex
 import stat
 import subprocess
 import sys
@@ -81,8 +82,11 @@ def test_install_adds_the_four_events_and_preserves_everything_unrelated(tmp_pat
     install_agent_hooks(path)
 
     document = json.loads(path.read_text(encoding="utf-8"))
-    assert {key: value for key, value in document.items() if key != "hooks"} == {
-        key: value for key, value in _LIVED_IN_SETTINGS.items() if key != "hooks"
+    # `statusLine` is the third thing this installer owns for claude (Task 2.2) and is
+    # covered byte-for-byte by its own tests below; everything else must be untouched.
+    owned = {"hooks", "statusLine"}
+    assert {key: value for key, value in document.items() if key not in owned} == {
+        key: value for key, value in _LIVED_IN_SETTINGS.items() if key not in owned
     }
     assert document["hooks"]["PostToolUse"] == _LIVED_IN_SETTINGS["hooks"]["PostToolUse"]
     assert document["hooks"]["SessionEnd"][0] == _LIVED_IN_SETTINGS["hooks"]["SessionEnd"][0]
@@ -675,3 +679,215 @@ def test_a_relative_spool_is_refused_rather_than_checked_against_the_wrong_direc
 
     assert "absolute" in str(refusal.value)
     assert path.read_bytes() == before
+
+
+# --- The status line (Task 2.2): a third owned thing, riding the same pipeline ---------------
+
+
+def _status_line_command(path: Path) -> str:
+    return json.loads(path.read_text(encoding="utf-8"))["statusLine"]["command"]
+
+
+def _wrapper(interpreter: str, previous: str | None) -> str:
+    argv = [interpreter, "-m", "remote_agents", "statusline"]
+    if previous is not None:
+        argv += ["--then", previous]
+    return shlex.join(argv)
+
+
+def test_install_wraps_the_status_line_and_leaves_every_other_key_alone(tmp_path: Path) -> None:
+    path = _settings_file(tmp_path)
+
+    install_agent_hooks(path, executable=Path("/opt/venv/bin/python3"))
+
+    document = json.loads(path.read_text(encoding="utf-8"))
+    untouched = {"hooks", "statusLine"}
+    assert {key: value for key, value in document.items() if key not in untouched} == {
+        key: value for key, value in _LIVED_IN_SETTINGS.items() if key not in untouched
+    }
+    assert document["statusLine"]["type"] == "command"
+    assert document["statusLine"]["command"] == _wrapper("/opt/venv/bin/python3", "statusline.sh")
+    assert set(document["statusLine"]) == {"type", "command"}
+
+
+def test_installing_twice_leaves_exactly_one_status_line_wrapper(tmp_path: Path) -> None:
+    path = _settings_file(tmp_path)
+
+    install_agent_hooks(path)
+    after_first = path.read_bytes()
+    repeated = install_agent_hooks(path)
+
+    assert not repeated.changed
+    assert "already current" in repeated.summary
+    assert path.read_bytes() == after_first
+    assert _status_line_command(path) == _wrapper(sys.executable, "statusline.sh")
+    assert _status_line_command(path).count("statusline") == 2  # ours, and the one it wraps
+
+
+@pytest.mark.parametrize("installs", [1, 2])
+def test_remove_restores_the_status_line_byte_for_byte(tmp_path: Path, installs: int) -> None:
+    path = _settings_file(tmp_path)
+    before = path.read_bytes()
+
+    for _ in range(installs):
+        install_agent_hooks(path)
+    assert _status_line_command(path) != "statusline.sh"
+
+    remove_agent_hooks(path)
+
+    assert path.read_bytes() == before
+
+
+def test_remove_restores_the_status_line_after_the_interpreter_moved(tmp_path: Path) -> None:
+    """A reinstall from another interpreter replaces the wrapper rather than nesting one."""
+    path = _settings_file(tmp_path)
+    before = path.read_bytes()
+
+    install_agent_hooks(path, executable=Path("/opt/venv/bin/python3"))
+    install_agent_hooks(path, executable=Path("/opt/other/bin/python3"))
+    assert _status_line_command(path) == _wrapper("/opt/other/bin/python3", "statusline.sh")
+
+    remove_agent_hooks(path)
+
+    assert path.read_bytes() == before
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        f"{sys.executable} -m remote_agents statusline --then a --then b",
+        f"{sys.executable} -m remote_agents statusline --verbose",
+        f"{sys.executable} -m remote_agents statusline --then",
+        f"{sys.executable} -m remote_agents statusline statusline.sh",
+    ],
+)
+def test_a_status_line_naming_our_command_in_a_form_we_did_not_write_is_reported_not_unwrapped(
+    tmp_path: Path, command: str
+) -> None:
+    """Mirror of `_foreign_variant_note`: a wrapper around our wrapper, or a flag we do not
+    know, is somebody else's -- reported in the summary, never unwrapped, never re-wrapped."""
+    document = {**_LIVED_IN_SETTINGS, "statusLine": {"type": "command", "command": command}}
+    path = _settings_file(tmp_path, document)
+    before = path.read_bytes()
+
+    outcome = install_agent_hooks(path)
+
+    assert outcome.changed  # the hooks still went in
+    assert "statusLine" in outcome.summary
+    assert "does not recognise" in outcome.summary
+    assert _status_line_command(path) == command
+
+    repeated = install_agent_hooks(path)
+    assert not repeated.changed
+    assert "does not recognise" in repeated.summary
+
+    remove_agent_hooks(path)
+    assert path.read_bytes() == before
+    assert _status_line_command(path) == command
+
+
+def test_a_status_line_wrapped_in_our_own_wrapper_twice_collapses_to_one(tmp_path: Path) -> None:
+    """Every level of a wrapper this installer could have written is ours to take back.
+
+    Two of ours nested -- a hand-paste, or a bug in some earlier version -- is not the
+    "wrapper around our wrapper" case above: each level is exactly a command this installer
+    writes, so there is nothing foreign to keep, and peeling one level per run would leave a
+    reinstall with two and a removal with one.
+    """
+    inner = _wrapper(sys.executable, "statusline.sh")
+    outer = _wrapper(sys.executable, inner)
+    document = {**_LIVED_IN_SETTINGS, "statusLine": {"type": "command", "command": outer}}
+    path = _settings_file(tmp_path, document)
+
+    install_agent_hooks(path)
+    assert _status_line_command(path) == inner
+
+    remove_agent_hooks(path)
+    assert _status_line_command(path) == "statusline.sh"
+
+
+def test_a_status_line_of_another_type_is_left_untouched_and_named(tmp_path: Path) -> None:
+    document = {**_LIVED_IN_SETTINGS, "statusLine": {"type": "script", "path": "x"}}
+    path = _settings_file(tmp_path, document)
+    before = path.read_bytes()
+
+    outcome = install_agent_hooks(path)
+
+    assert outcome.changed
+    assert "statusLine" in outcome.summary
+    assert 'not of type "command"' in outcome.summary
+    assert json.loads(path.read_text(encoding="utf-8"))["statusLine"] == {
+        "type": "script",
+        "path": "x",
+    }
+
+    remove_agent_hooks(path)
+    assert path.read_bytes() == before
+
+
+def test_a_file_with_no_status_line_gains_ours_without_then_and_loses_it_on_remove(
+    tmp_path: Path,
+) -> None:
+    document = {key: value for key, value in _LIVED_IN_SETTINGS.items() if key != "statusLine"}
+    path = _settings_file(tmp_path, document)
+    before = path.read_bytes()
+
+    install_agent_hooks(path, executable=Path("/opt/venv/bin/python3"))
+
+    installed = json.loads(path.read_text(encoding="utf-8"))
+    assert installed["statusLine"] == {
+        "type": "command",
+        "command": _wrapper("/opt/venv/bin/python3", None),
+    }
+    assert "--then" not in installed["statusLine"]["command"]
+
+    remove_agent_hooks(path)
+
+    assert path.read_bytes() == before
+    assert "statusLine" not in json.loads(path.read_text(encoding="utf-8"))
+
+
+def test_the_owner_style_sh_c_status_line_round_trips_through_the_wrapper(tmp_path: Path) -> None:
+    """The real file carries a long `sh -c '...'` chain; `shlex.join`/`shlex.split` must be
+    exact inverses over it, and that is proved here rather than assumed."""
+    chain = (
+        'sh -c \'if [ -x "$HOME/.claude/statusline.sh" ]; then '
+        '"$HOME/.claude/statusline.sh" "$(cat)"; else echo "it\'\\\'\'s off"; fi\''
+    )
+    document = {**_LIVED_IN_SETTINGS, "statusLine": {"type": "command", "command": chain}}
+    path = _settings_file(tmp_path, document)
+    before = path.read_bytes()
+
+    install_agent_hooks(path, executable=Path("/opt/venv/bin/python3"))
+
+    wrapped = _status_line_command(path)
+    words = shlex.split(wrapped)
+    assert words[:5] == ["/opt/venv/bin/python3", "-m", "remote_agents", "statusline", "--then"]
+    assert words[5] == chain
+    assert len(words) == 6
+
+    install_agent_hooks(path, executable=Path("/opt/venv/bin/python3"))
+    assert _status_line_command(path) == wrapped
+
+    remove_agent_hooks(path)
+
+    assert path.read_bytes() == before
+    assert _status_line_command(path) == chain
+
+
+def test_a_null_status_line_is_refused_because_removal_could_not_restore_it(
+    tmp_path: Path,
+) -> None:
+    """`"statusLine": null` and no key at all mean the same thing but are different text --
+    the same shape the empty `hooks` block presents, and the same round-trip refusal
+    catches it without a rule of its own."""
+    document = {**_LIVED_IN_SETTINGS, "statusLine": None}
+    path = _settings_file(tmp_path, document)
+    before = path.read_bytes()
+
+    with pytest.raises(HookInstallError) as refusal:
+        install_agent_hooks(path)
+
+    assert "statusLine" in str(refusal.value)
+    assert path.read_bytes() == before
+    assert list(tmp_path.iterdir()) == [path]
