@@ -1,7 +1,7 @@
-"""Claude's usage read: transcript accounting plus the borrowed status-line cache.
+"""Claude's usage read: transcript accounting plus the status-line hop's recording.
 
-The design record for the whole usage seam — what each provider publishes, the borrowed
-status-line cache's fencing, and the workspace-matching heuristic — lives in
+The design record for the whole usage seam — what each provider publishes, the status-line
+hop's recording and its fencing, and the workspace-matching heuristic — lives in
 `adapters/agents/registry.py`'s module docstring, moved there when the flat modules were
 retired.
 """
@@ -21,9 +21,9 @@ from remote_agents.ports.agent_usage import (
     UsageWindow,
 )
 from remote_agents.ports.agent_usage_support import (
-    _freshest_json,
     _instant,
     _last_json_line,
+    _loads,
     _moment,
     _newest_started_after,
     _positive_int,
@@ -33,7 +33,7 @@ from remote_agents.ports.agent_usage_support import (
 )
 
 _STALE_LIMIT_AGE = timedelta(minutes=30)
-"""How old the borrowed status-line cache may be before its numbers stop being shown.
+"""How old the hop's recording may be before its numbers stop being shown.
 
 A rate-limit window moves on its own whether or not anything reads it, so a stale copy is not
 a slightly-old truth — it is a claim about a window that may already have reset. Thirty minutes
@@ -74,13 +74,21 @@ class ClaudeUsageReader:
         self,
         *,
         sessions_root: Path | None = None,
-        limits_cache_root: Path = Path("/tmp/claude"),
+        limits_path: Path | None = None,
         context_window: int | None = None,
         context_window_stated: bool = False,
         now: object = None,
     ) -> None:
         self._sessions_root = sessions_root or Path.home() / ".claude" / "projects"
-        self._limits_cache_root = limits_cache_root
+        self._limits_path = limits_path
+        """Where this project's status-line hop records `rate_limits`, or `None` for nowhere.
+
+        Handed in by the composition root from `ProductionPaths` (DEC-046), never derived
+        here: an adapter may not import the package root, and a reader that guessed the
+        state directory would be a second answer to where it is. `None` is an honest
+        composition -- a set built without a host, as the default reader set is -- and it
+        answers `NO_READING`, never a guess.
+        """
         self._context_window = context_window
         self._context_window_stated = context_window_stated
         """The ceiling the owner declared, or `None` on a host that has stated none.
@@ -144,33 +152,47 @@ class ClaudeUsageReader:
         return AgentLimits(
             self.limits_profile,
             windows,
-            # Claude publishes limits, but only into a cache another program maintains, so an
-            # empty answer here means the cache was absent, unmatched, or past the freshness
-            # bound `_limits` discards at -- all of them "no reading yet" and none of them a
-            # statement that Claude reports nothing (DEC-061).
+            # Claude publishes limits, but only to its status-line command, so an empty answer
+            # here means the hop has not recorded one yet, the file could not be read, or the
+            # recording was past the freshness bound `_limits` discards at -- all of them "no
+            # reading yet" and none of them a statement that Claude reports nothing (DEC-061).
             absence=None if windows else LimitsAbsence.NO_READING,
             observed_at=observed,
             stale_source=stale,
         )
 
     def _limits(self) -> tuple[tuple[UsageWindow, ...], str | None, datetime | None]:
-        """Read the borrowed status-line cache, or answer with nothing at all."""
-        document, age = _freshest_json(
-            _safe_glob(self._limits_cache_root, "statusline-usage-cache-*.json"), self._now
-        )
-        if not isinstance(document, dict) or age is None or age > _STALE_LIMIT_AGE:
+        """Read what this project's status-line hop recorded, or answer with nothing at all.
+
+        The file is `{"rate_limits": <stdin's rate_limits, as received>, "recorded_at":
+        <epoch>}` -- `remote_agents.statusline` writes it, and this is its one reader. The
+        windows are in Claude Code's own stdin shape (`used_percentage`, epoch `resets_at`);
+        `spend_limit`, which a gateway may add, is not a plan window and is not read.
+        Dated by `recorded_at`, when Claude Code last drew a status line, not by this read.
+        """
+        if self._limits_path is None:
             return (), None, None
-        # The cache's own age, so the reading is dated by when the figures were written rather
-        # than by when this process happened to look at them.
-        observed = _moment(self._now) - age
+        try:
+            text = self._limits_path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            return (), None, None
+        document = _loads(text)
+        if not isinstance(document, dict):
+            return (), None, None
+        observed = _instant(document.get("recorded_at"))
+        if observed is None or _moment(self._now) - observed > _STALE_LIMIT_AGE:
+            return (), None, None
+        rate_limits = document.get("rate_limits")
+        if not isinstance(rate_limits, dict):
+            return (), None, None
         windows = []
         for key, label in (("five_hour", "5h"), ("seven_day", "week")):
-            section = document.get(key)
+            section = rate_limits.get(key)
             if not isinstance(section, dict):
                 continue
             window = _window(
                 label,
-                section.get("utilization"),
+                section.get("used_percentage"),
                 _instant(section.get("resets_at")),
                 now=self._now,
             )
@@ -178,7 +200,7 @@ class ClaudeUsageReader:
                 windows.append(window)
         if not windows:
             return (), None, None
-        return tuple(windows), "status-line cache", observed
+        return tuple(windows), "status line", observed
 
 
 def _escaped_workspace(workspace: Path) -> str:

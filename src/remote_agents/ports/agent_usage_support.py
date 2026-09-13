@@ -153,26 +153,6 @@ def _last_json_line(path: Path, matches) -> dict | None:
     return None
 
 
-def _freshest_json(paths: Iterable[Path], now: object) -> tuple[object, timedelta | None]:
-    """Read the most recently written of a set of small JSON files, with its age."""
-    best: tuple[float, Path] | None = None
-    for path in paths:
-        try:
-            modified = path.stat().st_mtime
-        except OSError:
-            continue
-        if best is None or modified > best[0]:
-            best = (modified, path)
-    if best is None:
-        return None, None
-    try:
-        document = _loads(best[1].read_text(encoding="utf-8", errors="replace"))
-    except OSError:
-        return None, None
-    age = _moment(now) - datetime.fromtimestamp(best[0], UTC)
-    return document, max(age, timedelta(0))
-
-
 def _safe_glob(directory: Path, pattern: str) -> tuple[Path, ...]:
     """List a directory this project does not own, treating every failure as empty."""
     try:
@@ -224,10 +204,10 @@ _ISO_INSTANT = re.compile(r"^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}")
 def _instant(value: object) -> datetime | None:
     """Read a reset time in either shape the two sources use, and nothing else.
 
-    Codex writes a Unix second count; the status-line cache writes an ISO-8601 string with a
-    `Z`. Both are accepted, anything else is `None`, and a naive ISO value is read as UTC —
-    which is what both producers mean, and the same interpretation `session_store` documents
-    for its own offset-less rows.
+    Codex and Claude Code's status line write a Unix second count; the usage API's JSON
+    writes an ISO-8601 string with a `Z`. Both are accepted, anything else is `None`, and a
+    naive ISO value is read as UTC — which is what both producers mean, and the same
+    interpretation `session_store` documents for its own offset-less rows.
     """
     if isinstance(value, bool):
         return None

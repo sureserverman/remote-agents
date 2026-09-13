@@ -75,6 +75,18 @@ class ProductionPaths:
         return self.state_directory / "console.lock"
 
     @property
+    def claude_limits_path(self) -> Path:
+        """Where the status-line hop records Claude's plan windows, and the reader reads them.
+
+        Under `state_directory` because it is state this project writes for itself, on the
+        owner's Claude sessions' behalf: `remote_agents.statusline` writes it atomically at
+        0600 on every status-line update, `adapters.agents.claude.usage` reads it, and this
+        property is the one place both learn the name. Not in `ensure_directories`, for
+        `preferences_path`'s reason: the directory is declared, the file is the writer's.
+        """
+        return self.state_directory / "claude-limits.json"
+
+    @property
     def preferences_path(self) -> Path:
         """The one thing the local surface remembers about itself between runs.
 

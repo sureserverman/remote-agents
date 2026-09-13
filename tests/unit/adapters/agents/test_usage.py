@@ -71,7 +71,7 @@ def _in(**offset: int) -> int:
 
 
 def _iso_in(**offset: int) -> str:
-    """A reset instant as the `...Z` ISO string the status-line cache writes.
+    """A reset instant as the `...Z` ISO string the usage API's JSON writes.
 
     Relative for the same reason `_in` is. The first version of these fixtures used the
     literals captured off the real cache — `2026-08-27T10:10:00Z` and `09:00:00Z` — and they
@@ -149,11 +149,50 @@ def workspace(tmp_path: Path) -> Path:
 # --- claude ------------------------------------------------------------------------------
 
 
-def _claude_reader(tmp_path: Path, *, cache: Path | None = None) -> ClaudeUsageReader:
+def _claude_reader(tmp_path: Path, *, limits: Path | None = None) -> ClaudeUsageReader:
     return ClaudeUsageReader(
         sessions_root=tmp_path / "claude-projects",
-        limits_cache_root=cache if cache is not None else tmp_path / "absent-cache",
+        limits_path=limits if limits is not None else tmp_path / "absent-limits.json",
     )
+
+
+STATUS_LINE_STDIN = (
+    Path(__file__).resolve().parents[3]
+    / "provider_contract"
+    / "fixtures"
+    / "claude"
+    / "statusline_stdin"
+    / "documented-example.json"
+)
+
+
+def _hop_file(
+    tmp_path: Path,
+    windows: dict | None = None,
+    *,
+    recorded_at: datetime | None = None,
+) -> Path:
+    """Write what the status-line hop writes: `rate_limits` as received plus `recorded_at`.
+
+    The windows default to the hop's own idea of "recent" -- resets a few hours out, expressed
+    as the epoch seconds Claude Code hands its status line -- and `recorded_at` to now, so a
+    test about staleness sets it and no other test can be failed by the clock.
+    """
+    if windows is None:
+        windows = {
+            "five_hour": {"used_percentage": 2, "resets_at": _epoch_in(hours=3)},
+            "seven_day": {"used_percentage": 88, "resets_at": _epoch_in(days=2)},
+        }
+    moment = recorded_at if recorded_at is not None else datetime.now(UTC)
+    return _written_json(
+        tmp_path / "claude-limits.json",
+        {"rate_limits": windows, "recorded_at": moment.timestamp()},
+    )
+
+
+def _epoch_in(**offset: int) -> int:
+    """A reset instant as the epoch seconds the status line receives; relative, as `_iso_in` is."""
+    return int((datetime.now(UTC) + timedelta(**offset)).timestamp())
 
 
 def _transcript_dir(tmp_path: Path, workspace: Path) -> Path:
@@ -242,54 +281,45 @@ def test_a_resumed_session_names_its_transcript_and_no_search_happens(
     assert usage.context.used_tokens == 2 + 759 + 11 + 787
 
 
-def test_claude_limits_come_from_the_cache_and_say_that_they_did(
+def test_claude_limits_come_from_the_hop_file_and_say_that_they_did(
     tmp_path: Path, workspace: Path
 ) -> None:
-    """Borrowed from a file this project does not own, so it is never shown as our measurement."""
-    cache = tmp_path / "claude-cache"
-    cache.mkdir()
-    _written_json(
-        cache / "statusline-usage-cache-d1c0b541.json",
-        {
-            "five_hour": {"utilization": 2, "resets_at": _iso_in(hours=3)},
-            "seven_day": {"utilization": 88, "resets_at": _iso_in(days=2)},
-        },
-    )
+    """Recorded by this project's own status-line hop, and still stamped: the figure was
+    written when Claude Code last drew a status line, not measured at this read."""
+    hop = _hop_file(tmp_path)
     transcript = _written(
         _transcript_dir(tmp_path, workspace) / "11111111-1111-4111-8111-111111111111.jsonl",
         [_claude_turn(1_000)],
     )
     _touch(transcript, LAUNCHED_AT + timedelta(minutes=5))
 
-    usage = _claude_reader(tmp_path, cache=cache).read(_query("claude", workspace))
+    usage = _claude_reader(tmp_path, limits=hop).read(_query("claude", workspace))
 
     assert usage is not None
-    assert usage.stale_source == "status-line cache"
+    assert usage.stale_source == "status line"
     assert [(window.label, window.used_percent) for window in usage.windows] == [
         ("5h", 2.0),
         ("week", 88.0),
     ]
 
 
-def test_a_stale_cache_is_discarded_rather_than_shown(tmp_path: Path, workspace: Path) -> None:
+def test_a_stale_hop_file_is_discarded_rather_than_shown(tmp_path: Path, workspace: Path) -> None:
     """A rate-limit window moves on its own, so an old copy may describe a window that reset."""
-    cache = tmp_path / "claude-cache"
-    cache.mkdir()
-    document = _written_json(
-        cache / "statusline-usage-cache-d1c0b541.json",
-        # A *future* reset on purpose: this test is about the cache file's age, and a lapsed
-        # reset would empty the windows for the other reason and let the assertion pass
-        # without exercising the staleness rule at all.
-        {"five_hour": {"utilization": 2, "resets_at": _iso_in(hours=3)}},
+    # A *future* reset on purpose: this test is about the recording's age, and a lapsed
+    # reset would empty the windows for the other reason and let the assertion pass
+    # without exercising the staleness rule at all.
+    hop = _hop_file(
+        tmp_path,
+        {"five_hour": {"used_percentage": 2, "resets_at": _epoch_in(hours=3)}},
+        recorded_at=datetime.now(UTC) - timedelta(hours=6),
     )
-    _touch(document, datetime.now(UTC) - timedelta(hours=6))
     transcript = _written(
         _transcript_dir(tmp_path, workspace) / "11111111-1111-4111-8111-111111111111.jsonl",
         [_claude_turn(1_000)],
     )
     _touch(transcript, LAUNCHED_AT + timedelta(minutes=5))
 
-    usage = _claude_reader(tmp_path, cache=cache).read(_query("claude", workspace))
+    usage = _claude_reader(tmp_path, limits=hop).read(_query("claude", workspace))
 
     assert usage is not None
     assert usage.windows == ()
@@ -785,45 +815,77 @@ def _account_rollout(
     return written
 
 
-def test_claude_account_limits_are_read_without_naming_a_session(tmp_path: Path) -> None:
-    """The whole ask: the windows are the account's, so obtaining them takes no `UsageQuery`.
+def test_claude_account_limits_are_read_from_what_the_hop_wrote(tmp_path: Path) -> None:
+    """The documented stdin, through the hop's own writer, read back by this reader.
 
-    `_limits()` already read the cache session-free; it was reachable only through `read()`,
-    which needs a session to name. Nothing about the numbers changes — only who may ask.
+    Driven through `record_limits` rather than a hand-written file so the two ends of the
+    hop cannot drift: what the hop writes is what the reader parses, by construction.
     """
-    cache = tmp_path / "claude-cache"
-    cache.mkdir()
-    _written_json(
-        cache / "statusline-usage-cache-d1c0b541.json",
-        {
-            "five_hour": {"utilization": 2, "resets_at": _iso_in(hours=3)},
-            "seven_day": {"utilization": 88, "resets_at": _iso_in(days=2)},
-        },
-    )
+    from remote_agents.statusline import record_limits
 
-    limits = _claude_reader(tmp_path, cache=cache).limits()
+    frozen = datetime(2025, 2, 1, 12, 0, tzinfo=UTC)  # inside the documented resets
+    record_limits(STATUS_LINE_STDIN.read_bytes(), tmp_path)
+    hop = tmp_path / "claude-limits.json"
+    recorded = json.loads(hop.read_text(encoding="utf-8"))
+    recorded["recorded_at"] = frozen.timestamp()
+    hop.write_text(json.dumps(recorded), encoding="utf-8")
+
+    limits = ClaudeUsageReader(
+        sessions_root=tmp_path / "claude-projects", limits_path=hop, now=lambda: frozen
+    ).limits()
 
     assert limits.profile_id == ProfileId("claude")
     assert [(window.label, window.used_percent) for window in limits.windows] == [
-        ("5h", 2.0),
-        ("week", 88.0),
+        ("5h", 23.5),
+        ("week", 41.2),
     ]
-    assert limits.stale_source == "status-line cache"
+    assert [window.resets_at for window in limits.windows] == [
+        datetime.fromtimestamp(1738425600, UTC),
+        datetime.fromtimestamp(1738857600, UTC),
+    ]
+    assert limits.observed_at == frozen, "dated when the hop recorded it, not when it was read"
+    assert limits.stale_source == "status line"
+    assert limits.absence is None
 
 
-def test_a_stale_cache_leaves_the_account_block_empty_rather_than_wrong(tmp_path: Path) -> None:
+def test_a_stale_hop_file_leaves_the_account_block_empty_rather_than_wrong(
+    tmp_path: Path,
+) -> None:
     """One minute past the bound, so the boundary is asserted rather than the region past it."""
-    cache = tmp_path / "claude-cache"
-    cache.mkdir()
-    document = _written_json(
-        cache / "statusline-usage-cache-d1c0b541.json",
-        {"five_hour": {"utilization": 2, "resets_at": _iso_in(hours=3)}},
+    hop = _hop_file(
+        tmp_path,
+        {"five_hour": {"used_percentage": 2, "resets_at": _epoch_in(hours=3)}},
+        recorded_at=datetime.now(UTC) - timedelta(minutes=31),
     )
-    _touch(document, datetime.now(UTC) - timedelta(minutes=31))
 
-    limits = _claude_reader(tmp_path, cache=cache).limits()
+    limits = _claude_reader(tmp_path, limits=hop).limits()
 
     assert limits.windows == ()
+    assert limits.absence is LimitsAbsence.NO_READING
+    assert limits.stale_source is None
+
+
+@pytest.mark.parametrize(
+    "content",
+    [
+        pytest.param(None, id="absent"),
+        pytest.param("", id="empty"),
+        pytest.param("{not json", id="malformed"),
+        pytest.param('{"rate_limits": {}, "recorded_at": "yesterday"}', id="no-instant"),
+        pytest.param('{"recorded_at": 1738425600}', id="no-windows"),
+    ],
+)
+def test_claude_limits_with_no_usable_hop_file_are_no_reading(
+    tmp_path: Path, content: str | None
+) -> None:
+    hop = tmp_path / "claude-limits.json"
+    if content is not None:
+        hop.write_text(content, encoding="utf-8")
+
+    limits = _claude_reader(tmp_path, limits=hop).limits()
+
+    assert limits.windows == ()
+    assert limits.absence is LimitsAbsence.NO_READING
     assert limits.stale_source is None
 
 
@@ -912,7 +974,7 @@ def test_each_reader_files_the_silence_it_actually_means(tmp_path: Path) -> None
     see. `NOT_REPORTED` is permanent and complete; `NO_READING` may resolve on the provider's
     next turn, and telling the owner to wait for the first is the failure DEC-061 names.
     """
-    absent_cache = tmp_path / "no-cache"
+    absent_hop = tmp_path / "no-claude-limits.json"
 
     assert OpenCodeUsageReader(database=tmp_path / "absent.db").limits().absence is (
         LimitsAbsence.NOT_REPORTED
@@ -920,9 +982,9 @@ def test_each_reader_files_the_silence_it_actually_means(tmp_path: Path) -> None
     assert CursorUsageReader().limits().absence is LimitsAbsence.NOT_REPORTED, (
         "cursor publishes no limits at all; that is permanent, not pending"
     )
-    assert _claude_reader(tmp_path, cache=absent_cache).limits().absence is (
+    assert _claude_reader(tmp_path, limits=absent_hop).limits().absence is (
         LimitsAbsence.NO_READING
-    ), "claude does publish limits; an absent cache is 'none found', not 'none published'"
+    ), "claude does publish limits; no hop file is 'none found', not 'none published'"
     assert CodexUsageReader(
         sessions_root=tmp_path / "no-codex-sessions", now=lambda: LAUNCHED_AT
     ).limits().absence is LimitsAbsence.NO_READING, (
@@ -936,13 +998,10 @@ def test_a_reader_that_answers_with_windows_names_no_absence(tmp_path: Path) -> 
     A reader that filed an absence beside real windows would put a phrase and a gauge on one
     row, which is a contradiction the grid has no way to render.
     """
-    cache = tmp_path / "claude-cache"
-    cache.mkdir()
-    _written_json(
-        cache / "statusline-usage-cache-d1c0b541.json",
-        {"five_hour": {"utilization": 2, "resets_at": _iso_in(hours=3)}},
+    hop = _hop_file(
+        tmp_path, {"five_hour": {"used_percentage": 2, "resets_at": _epoch_in(hours=3)}}
     )
-    answer = _claude_reader(tmp_path, cache=cache).limits()
+    answer = _claude_reader(tmp_path, limits=hop).limits()
 
     assert answer.windows and answer.absence is None
 
@@ -954,15 +1013,12 @@ def test_the_claude_variants_share_one_account_and_so_one_entry(tmp_path: Path) 
     `--remote-control`, so they draw on one plan and one pair of rate-limit windows. An entry
     each would render the same account twice and read as two budgets.
     """
-    cache = tmp_path / "claude-cache"
-    cache.mkdir()
-    _written_json(
-        cache / "statusline-usage-cache-d1c0b541.json",
-        {"five_hour": {"utilization": 2, "resets_at": _iso_in(hours=3)}},
+    hop = _hop_file(
+        tmp_path, {"five_hour": {"used_percentage": 2, "resets_at": _epoch_in(hours=3)}}
     )
     readers = ProfileUsageReaders(
         (
-            _claude_reader(tmp_path, cache=cache),
+            _claude_reader(tmp_path, limits=hop),
             CodexUsageReader(sessions_root=tmp_path / "codex-sessions", now=lambda: LAUNCHED_AT),
             OpenCodeUsageReader(database=tmp_path / "absent.db"),
             CursorUsageReader(),
@@ -1168,15 +1224,12 @@ async def test_account_limits_lets_a_bug_inside_a_reader_surface_as_the_sync_pat
 async def test_account_limits_and_the_sync_limits_answer_identically(tmp_path: Path) -> None:
     """Two dispatches, one answer: both surfaces await this one; `limits()` stays for the kit.
 
-    Driven on the real reader set (one of them borrowing the cache, one of them failing) so
+    Driven on the real reader set (one of them reading the hop file, one of them failing) so
     that every clause of the sync path -- order, the per-reader label, the `UNREADABLE`
     entry -- is compared rather than restated.
     """
-    cache = tmp_path / "claude-cache"
-    cache.mkdir()
-    _written_json(
-        cache / "statusline-usage-cache-d1c0b541.json",
-        {"five_hour": {"utilization": 2, "resets_at": _iso_in(hours=3)}},
+    hop = _hop_file(
+        tmp_path, {"five_hour": {"used_percentage": 2, "resets_at": _epoch_in(hours=3)}}
     )
     # Claude stamps `observed_at` from its clock at read time, and the two dispatches read a
     # few microseconds apart; frozen so the comparison is about the dispatch, not the clock.
@@ -1185,7 +1238,7 @@ async def test_account_limits_and_the_sync_limits_answer_identically(tmp_path: P
         (
             ClaudeUsageReader(
                 sessions_root=tmp_path / "claude-projects",
-                limits_cache_root=cache,
+                limits_path=hop,
                 now=lambda: frozen,
             ),
             CodexUsageReader(sessions_root=tmp_path / "codex-sessions", now=lambda: LAUNCHED_AT),
@@ -1219,12 +1272,12 @@ def test_agent_limits_names_the_account_it_answers_for() -> None:
     limits = AgentLimits(
         ProfileId("claude"),
         (UsageWindow("5h", 2.0), UsageWindow("week", 88.0)),
-        stale_source="status-line cache",
+        stale_source="status line",
     )
 
     assert limits.profile_id == ProfileId("claude")
     assert [window.label for window in limits.windows] == ["5h", "week"]
-    assert limits.stale_source == "status-line cache"
+    assert limits.stale_source == "status line"
 
 
 def test_agent_limits_reuses_the_window_type_rather_than_restating_it() -> None:
@@ -1451,14 +1504,14 @@ def test_the_provenance_fields_must_be_named() -> None:
     """Positional construction is how a field inserted mid-dataclass silently miscompiles.
 
     Measured during this stage: `observed_at` was added between `windows` and `stale_source`,
-    and one of the two callers still passing three positional arguments put the borrowed-cache
+    and one of the two callers still passing three positional arguments put the stale-source
     string into the timestamp field and left the provenance stamp `None` — so a figure this
     project cannot vouch for rendered as though it had been measured here. The payload stays
     positional because it is the answer; the two fields *about* the answer are keyword-only, so
     the next field added between them cannot shift anything.
     """
     with pytest.raises(TypeError):
-        AgentLimits(ProfileId("claude"), (UsageWindow("5h", 2.0),), "status-line cache")  # type: ignore[misc]
+        AgentLimits(ProfileId("claude"), (UsageWindow("5h", 2.0),), "status line")  # type: ignore[misc]
 
 
 def test_a_session_running_since_the_measured_worst_case_is_still_reached(
@@ -1525,16 +1578,13 @@ def test_an_unmatched_claude_session_is_unmatched_even_when_the_account_answers(
     reading carrying only account windows would instead have produced a session line with
     nothing in it.
     """
-    cache = tmp_path / "claude-cache"
-    cache.mkdir()
-    _written_json(
-        cache / "statusline-usage-cache-d1c0b541.json",
-        {"five_hour": {"utilization": 2, "resets_at": _iso_in(hours=3)}},
+    hop = _hop_file(
+        tmp_path, {"five_hour": {"used_percentage": 2, "resets_at": _epoch_in(hours=3)}}
     )
 
-    assert _claude_reader(tmp_path, cache=cache).read(_query("claude", workspace)) is None
-    # The account read is untouched by that: same cache, still answering.
-    assert _claude_reader(tmp_path, cache=cache).limits().windows != ()
+    assert _claude_reader(tmp_path, limits=hop).read(_query("claude", workspace)) is None
+    # The account read is untouched by that: same hop file, still answering.
+    assert _claude_reader(tmp_path, limits=hop).limits().windows != ()
 
 
 def test_a_matched_transcript_with_no_turn_yet_is_not_reported_as_publishing_nothing(
@@ -1548,11 +1598,8 @@ def test_a_matched_transcript_with_no_turn_yet_is_not_reported_as_publishing_not
     nothing at all -- which is what a reading carrying only account windows now does, because
     `usage_lines` no longer has a windows-shaped branch to catch it.
     """
-    cache = tmp_path / "claude-cache"
-    cache.mkdir()
-    _written_json(
-        cache / "statusline-usage-cache-d1c0b541.json",
-        {"five_hour": {"utilization": 2, "resets_at": _iso_in(hours=3)}},
+    hop = _hop_file(
+        tmp_path, {"five_hour": {"used_percentage": 2, "resets_at": _epoch_in(hours=3)}}
     )
     transcript = _written(
         _transcript_dir(tmp_path, workspace) / "11111111-1111-4111-8111-111111111111.jsonl",
@@ -1560,7 +1607,7 @@ def test_a_matched_transcript_with_no_turn_yet_is_not_reported_as_publishing_not
     )
     _touch(transcript, LAUNCHED_AT + timedelta(minutes=5))
 
-    assert _claude_reader(tmp_path, cache=cache).read(_query("claude", workspace)) is None
+    assert _claude_reader(tmp_path, limits=hop).read(_query("claude", workspace)) is None
 
 
 # --- the declared Claude ceiling ----------------------------------------------------------
@@ -1583,7 +1630,7 @@ def test_a_declared_ceiling_turns_claudes_bare_count_into_a_share(
 
     usage = ClaudeUsageReader(
         sessions_root=tmp_path / "claude-projects",
-        limits_cache_root=tmp_path / "absent-cache",
+        limits_path=tmp_path / "absent-limits.json",
         context_window=1_000_000,
         context_window_stated=True,
     ).read(_query("claude", workspace))
@@ -1663,7 +1710,7 @@ def test_a_defaulted_ceiling_is_not_credited_to_the_owner(tmp_path: Path, worksp
 
     usage = ClaudeUsageReader(
         sessions_root=tmp_path / "claude-projects",
-        limits_cache_root=tmp_path / "absent-cache",
+        limits_path=tmp_path / "absent-limits.json",
         context_window=1_000_000,
         context_window_stated=False,
     ).read(_query("claude", workspace))

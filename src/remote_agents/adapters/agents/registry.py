@@ -33,21 +33,23 @@ none of these formats is documented and all of them are free to change:
 
 | profile       | context window                      | rate-limit windows              |
 | ------------- | ----------------------------------- | ------------------------------- |
-| claude        | transcript `message.usage` per turn | none written down (see below)   |
+| claude        | transcript `message.usage` per turn | the status-line hop's recording |
 | codex         | rollout `token_count.info`          | app server; rollout as fallback |
 | opencode      | `opencode.db` `message.data.tokens` | none written down               |
 | cursor-agent  | nothing — see `CursorUsageReader`   | nothing                         |
 
 **Claude's limits are the one number that is not the session's own.** Claude Code receives
 `rate_limits` from the API and hands them to a *status line* command; it never persists them.
-The only durable copy on this host is the cache the owner's own `~/.claude/statusline.sh`
-writes to `/tmp/claude/statusline-usage-cache-<hash>.json` after calling the OAuth usage
-endpoint. Reading it is a deliberate, owner-approved coupling to a file this project does not
-own, and it is fenced accordingly: the figure is stamped `stale_source` so presentation always
-says where it came from, an unreadable or absent cache is simply no answer, and a cache older
-than `_STALE_LIMIT_AGE` is discarded rather than shown. The alternative — this service holding
-the owner's OAuth token and calling the endpoint itself — would have given the bot network
-egress and credential access it has never had, for one line on one screen.
+So this project's installer wraps the owner's status-line command in a hop of its own
+(`remote_agents.statusline`, installed by `install-agent-hooks --provider claude`), which
+records `rate_limits` as received to `ProductionPaths.claude_limits_path` and then runs the
+previous command unchanged. `ClaudeUsageReader` reads that recording and nothing else. It is
+fenced as the borrowed cache it replaces was (DEC-061, amended by sub-plan 01 of the
+2026-09-13 plan): the figure is stamped `stale_source` so presentation always says where it
+came from, an unreadable or absent recording is simply no answer, and one older than
+`_STALE_LIMIT_AGE` is discarded rather than shown. The reader is handed the path by the
+composition root and is otherwise ignorant of the host. The usage API is a second source,
+opt-in behind `limits.claude_limits_source` (sub-plan 01, Stage 3), and defaults off.
 
 **Matching a managed session to a provider conversation.** A resumed session already names its
 conversation (`UsageQuery.resume_source_id`) and every reader short-circuits on it. A fresh
@@ -282,17 +284,20 @@ def provider_descriptors(
     *,
     claude_context_window: int | None = None,
     claude_context_window_stated: bool = False,
+    claude_limits_path: Path | None = None,
 ) -> tuple[ProviderDescriptor, ...]:
     """One descriptor per provider, in stable UI order, each built by its own vertical.
 
-    The two keyword arguments thread the one owner-configurable capability through to
-    claude's builder (DEC-061 — the ceiling reaches the reader only when the owner stated
-    it).
+    The keyword arguments thread the host's facts through to claude's builder: the one
+    owner-configurable capability (DEC-061 — the ceiling reaches the reader only when the
+    owner stated it), and where the status-line hop records the plan's windows, which only
+    the composition root knows (DEC-046).
     """
     return (
         claude.descriptor(
             context_window=claude_context_window,
             context_window_stated=claude_context_window_stated,
+            limits_path=claude_limits_path,
         ),
         codex.descriptor(),
         opencode.descriptor(),

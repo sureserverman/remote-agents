@@ -16,7 +16,10 @@ def _sessions(project_paths: Mapping[ProjectId, Path]) -> ClaudeSessionCatalogue
 
 
 def descriptor(
-    *, context_window: int | None = None, context_window_stated: bool = False
+    *,
+    context_window: int | None = None,
+    context_window_stated: bool = False,
+    limits_path: Path | None = None,
 ) -> ProviderDescriptor:
     """This provider's declared capability set (ARCH-04).
 
@@ -39,7 +42,11 @@ def descriptor(
         glyph="✳️",
         sessions=_sessions,
         usage=ClaudeUsageReader(
-            context_window=context_window, context_window_stated=context_window_stated
+            context_window=context_window,
+            context_window_stated=context_window_stated,
+            # Where the status-line hop records the plan's windows; the composition root
+            # hands it down from `ProductionPaths`, and a set built without one reads nothing.
+            limits_path=limits_path,
         ),
         hooks="claude",
         # **Carried from 2.1.263, not measured** -- and the acceptance document

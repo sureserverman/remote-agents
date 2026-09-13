@@ -614,7 +614,13 @@ def test_compose_backend_hands_the_readers_the_declared_ceiling(
 
         # Against the literal as well as the config, so this cannot pass by both sides being
         # the same default.
-        assert seen == [{"context_window": _STATED_CEILING, "context_window_stated": True}]
+        assert seen == [
+            {
+                "context_window": _STATED_CEILING,
+                "context_window_stated": True,
+                "limits_path": paths.claude_limits_path,
+            }
+        ]
         assert config.claude_context_window == _STATED_CEILING
     finally:
         connection.close()
@@ -659,7 +665,13 @@ def test_an_unstated_ceiling_never_reaches_the_reader(composed_home, tmp_path, m
         compose_backend(config, connection, paths)
 
         assert config.claude_context_window_stated is False
-        assert seen == [{"context_window": None, "context_window_stated": False}]
+        assert seen == [
+            {
+                "context_window": None,
+                "context_window_stated": False,
+                "limits_path": paths.claude_limits_path,
+            }
+        ]
     finally:
         connection.close()
 
@@ -957,5 +969,46 @@ async def test_the_tui_gives_up_on_a_close_that_hangs_and_still_unmounts(
                 await pilot.pause()
 
         await asyncio.wait_for(leave(), timeout=10)
+    finally:
+        connection.close()
+
+
+async def test_compose_backend_reads_claude_limits_from_the_hop_file_under_the_state_directory(
+    composed_home, tmp_path
+):
+    """The path the reader is handed is the one the hop writes to: `ProductionPaths` says both."""
+    import json
+    import time
+
+    from remote_agents.adapters.sqlite.database import open_database
+    from remote_agents.composition.backend import compose_backend
+    from remote_agents.config import load_config
+    from remote_agents.domain.models import ProfileId
+    from remote_agents.production import ProductionPaths
+
+    paths = ProductionPaths.for_home(composed_home)
+    config = load_config(_config_file(composed_home, paths))
+    paths.ensure_directories()
+    now = time.time()
+    paths.claude_limits_path.write_text(
+        json.dumps(
+            {
+                "rate_limits": {
+                    "five_hour": {"used_percentage": 12.5, "resets_at": int(now) + 3600},
+                    "seven_day": {"used_percentage": 40, "resets_at": int(now) + 86400},
+                },
+                "recorded_at": now,
+            }
+        ),
+        encoding="utf-8",
+    )
+    connection = open_database(tmp_path / "sessions.sqlite3")
+    try:
+        backend = compose_backend(config, connection, paths)
+        assert backend.limits is not None
+        claude = next(e for e in await backend.limits() if e.profile_id == ProfileId("claude"))
+        assert [(w.label, w.used_percent) for w in claude.windows] == [("5h", 12.5), ("week", 40.0)]
+        assert claude.stale_source == "status line"
+        await backend.close_usage_readers()
     finally:
         connection.close()

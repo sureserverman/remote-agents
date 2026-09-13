@@ -271,6 +271,7 @@ def compose_backend(
             config.claude_context_window if config.claude_context_window_stated else None
         ),
         claude_context_window_stated=config.claude_context_window_stated,
+        claude_limits_path=paths.claude_limits_path,
     )
     runtime = runtime or _local_runtime(config, paths, projects.paths, descriptors)
     registered = {str(descriptor.profile_id) for descriptor in descriptors}

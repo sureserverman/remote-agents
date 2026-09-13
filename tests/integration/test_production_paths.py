@@ -138,3 +138,21 @@ def test_preferences_path_is_not_created_by_ensure_directories(tmp_path: Path) -
 
     assert paths.state_directory.is_dir()
     assert not paths.preferences_path.exists()
+
+
+def test_claude_limits_path_is_under_the_state_directory_and_named_as_the_hop_writes_it(
+    tmp_path: Path,
+) -> None:
+    """One name, learned from one place, by the writer and the reader.
+
+    The hop writes under the directory it is given and names the file itself; the reader is
+    handed the full path by the composition root. This is the seam where the two could drift.
+    """
+    from remote_agents.statusline import LIMITS_FILE_NAME
+
+    paths = ProductionPaths.for_home(tmp_path)
+
+    assert paths.claude_limits_path == paths.state_directory / LIMITS_FILE_NAME
+    assert paths.claude_limits_path.parent != paths.config_directory
+    paths.ensure_directories()
+    assert not paths.claude_limits_path.exists()

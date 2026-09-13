@@ -253,8 +253,9 @@ two are worth telling apart: the first may resolve on the agent's next turn, the
 a person. The pane shows a single sentence before its first read, and on a host that wired no
 limits reader at all. Claude's
 rate limits are the one figure that is not the session's own — Claude Code hands them to a
-status-line command and never writes them down, so they are read from the status-line cache when
-one is fresh, and the line says where they came from. A rate-limit window whose reset has already
+status-line command and never writes them down, so `install-agent-hooks --provider claude`
+wraps that command in a hop of this project's own that records them, they are read from that
+recording while it is fresh, and the line says where they came from. A rate-limit window whose reset has already
 passed is dropped rather than shown, because the window it counted against has since reopened.
 
 Every keyboard is widened to one floor, so screens do not alternate between a narrow box and a
