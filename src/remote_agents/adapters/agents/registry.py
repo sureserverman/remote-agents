@@ -22,10 +22,15 @@ The usage seam's design record, moved whole from the retired `usage.py`:
 
 Read what each provider has spent, from the working files the provider itself maintains.
 
-Nothing here asks an agent anything, starts a process, or touches the network. Every number
-below is lifted out of a file the provider was going to write regardless, which is what makes
-a usage read safe to do from inside a Telegram render: the worst case is a few kilobytes of
-tail-reading and an answer of `None`.
+Every *session* number below is lifted out of a file the provider was going to write
+regardless, which is what makes a usage read safe to do from inside a Telegram render: the
+worst case is a few kilobytes of tail-reading and an answer of `None`. Two *account* reads
+are the exceptions, each bounded and each stamped (DEC-087): Codex's windows are asked of a
+`codex app-server` child this process owns and reclaims, one answer a minute and every wait
+bounded, with the rollout file as the fallback; and, only when the owner has switched
+`limits.claude_limits_source` to `usage-api`, Claude's are asked of the usage endpoint with
+the owner's own token, five seconds bounded, with the status-line hop's recording as the
+fallback. With the default switch nothing here touches the network.
 
 **The providers publish very different amounts, and the asymmetry is the whole shape of this
 module.** Measured on this host on 2026-08-27 rather than taken from documentation, because
@@ -725,6 +730,13 @@ def install_agent_hooks(
             f"installed {len(selected.installed_events)} {selected.name} agent hooks "
             f"in {settings_path}"
         )
+        # The third thing this write owns is named when it changed: the runbook promises the
+        # wrap, and a summary that counted only the hook groups undercounted what the owner's
+        # file just gained.
+        if _draws_a_status_line(selected) and installed.get("statusLine") != base.get(
+            "statusLine"
+        ):
+            summary += " and wrapped the statusLine in the status-line hop"
     _write_atomically(settings_path, content, settings.mode)
     return HookInstallOutcome(settings_path, True, summary + note)
 

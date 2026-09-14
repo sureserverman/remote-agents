@@ -85,9 +85,10 @@ class TuiContext:
     #
     # An earlier version of this comment cited DEC-061 for that last point. DEC-061 is
     # *"Usage is read from each provider's own files; Claude's limits are borrowed and
-    # labelled as borrowed"* — provider usage files and no network egress. Its "absence is a
-    # first-class answer" paragraph is about a reading nobody reported, not about whether a
-    # capability is wired, and every other citation of it in this tree is in the usage domain.
+    # labelled as borrowed"*, since amended by DEC-087 for two bounded account reads. Its
+    # "absence is a first-class answer" paragraph is about a reading nobody reported, not
+    # about whether a capability is wired, and every other citation of it in this tree is in
+    # the usage domain.
     # The rule wanted here has no DEC; it is stated above in its own words.
     #
     # Publishing is the sessions pane's alone; reading is every other pane's. They are separate

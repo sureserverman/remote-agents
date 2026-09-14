@@ -3,7 +3,8 @@
 Extracted from the retired `hook_install.py` ahead of the provider split — shared machinery
 asked, not copied (the principle DEC-043's title records; the entry itself is about use-case
 decisions, and this extraction is the verticals plan's): what varies per
-provider is *which* file and *which* events — the `_HookProvider` values — while everything
+provider is *which* file, *which* events and, for Claude, the `statusLine` it wraps — the
+`_HookProvider` values and `_draws_a_status_line` — while everything
 here is about editing an operator's JSON settings file reversibly, whoever owns it. The
 formatting-recovery contract (`_detected_style`), the stale-read refusal and the atomic
 replace move whole; the retired installer's module docstring — the design record for

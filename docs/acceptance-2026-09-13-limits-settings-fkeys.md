@@ -28,8 +28,12 @@ ten runs each, wall time from `/usr/bin/time -f %e`:
 | The console script | `… \| /usr/bin/time -f %e .venv/bin/remote-agents statusline --state-dir <scratch> --then 'cat >/dev/null'` | 10 | 30 ms | **30 ms** | 40 ms |
 | The interpreter alone | `… \| /usr/bin/time -f %e .venv/bin/python -m remote_agents statusline --state-dir <scratch> --then 'cat >/dev/null'` | 10 | 30 ms | **30 ms** | 40 ms |
 | Baseline, `sh -c 'cat >/dev/null'` with no hop | | 10 | | 0 ms | |
+| **The shipped path** — no `--state-dir`, so the state directory is resolved through `ProductionPaths` (imports `remote_agents.production` and `config`), under a scratch `HOME` | `… \| HOME=<scratch> /usr/bin/time -f %e .venv/bin/remote-agents statusline --then 'cat >/dev/null'` | 10 | 30 ms | **40 ms** | 40 ms |
 
-The statusline hop's median through the console script is **30 ms**, a fifth of the budget.
+The statusline hop's median through the console script is **30 ms** on the light path and
+the shipped-path row above with the state directory resolved the way the installed wrapper
+resolves it (the wrapper carries no `--state-dir`; the close-out evaluator caught the first
+three rows measuring a branch the artefact does not ship) — both a fraction of the budget.
 `-X importtime` on the module (Task 2.1's record): `remote_agents.statusline` itself is about
 8 ms cumulative; the largest imports on the path are argparse's colour support and
 `dataclasses`/`inspect`, none of them this project's. The written file is 0600 and carries

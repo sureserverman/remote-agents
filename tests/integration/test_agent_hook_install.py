@@ -904,3 +904,14 @@ def test_remove_names_a_status_line_it_left_alone_too(tmp_path: Path) -> None:
     assert outcome.changed
     assert "statusLine" in outcome.summary and "script" in outcome.summary
     assert json.loads(path.read_text(encoding="utf-8"))["statusLine"] == document["statusLine"]
+
+
+def test_install_says_that_it_wrapped_the_status_line(tmp_path: Path) -> None:
+    """The summary names the third thing the write owns; an unchanged reinstall does not."""
+    path = _settings_file(tmp_path)
+
+    first = install_agent_hooks(path)
+    second = install_agent_hooks(path)
+
+    assert "wrapped the statusLine in the status-line hop" in first.summary
+    assert not second.changed and "wrapped" not in second.summary

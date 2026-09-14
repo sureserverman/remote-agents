@@ -27,5 +27,5 @@ claude_context_window = 1000000
 # additionally lets the service read the OAuth token out of ~/.claude/.credentials.json and call
 # https://api.anthropic.com/api/oauth/usage for the figures, keeping the hop as its fallback.
 # That is a credential read and an outbound call the service otherwise never makes, which is why
-# it is opt-in: set it here, or from the console's Settings row, and nowhere else.
+# it is opt-in: set it here, and nowhere else.
 claude_limits_source = "status-line"

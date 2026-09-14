@@ -514,7 +514,7 @@ _LIMIT_COMMENTS: dict[str, str] = {
         "# Code's credential file and call Anthropic's usage endpoint for the figures,\n"
         "# keeping the hop as its fallback. That is a credential read and an\n"
         "# outbound call the service otherwise never makes, which is why it is opt-in: set it\n"
-        "# here, or from the console's Settings row, and nowhere else."
+        "# here, and nowhere else."
     ),
     "claude_context_window": (
         "# The size of Claude's context window, in tokens. **This is your statement, not a\n"
@@ -675,8 +675,8 @@ def write_limits_key(path: Path, key: str, value: str | int) -> None:
 
     **Not a re-render.** `render_config` writes a fresh file for a host that has none; this
     writes one line into a file the owner may have annotated, reordered, or linked into place
-    from a dotfiles tree, and the console's Settings row is what calls it (DEC-053, narrowed:
-    `config.toml` gains a key the row writes, and no settings file). Re-rendering would honour
+    from a dotfiles tree, so that a surface can flip one switch without a hand edit (DEC-088:
+    `config.toml` gains one key a surface writes, and no settings file). Re-rendering would honour
     the schema and destroy the owner's comments, which is the wrong trade for a switch that is
     flipped from a phone. The line is located textually, inside the `[limits]` header and
     before the next one; it is replaced in place when present and appended to the section when

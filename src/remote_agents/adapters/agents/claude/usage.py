@@ -52,7 +52,7 @@ gets an answer.
 
 
 class ClaudeUsageReader:
-    """Read one Claude session's context from its transcript, and its limits from the cache.
+    """Read one Claude session's context from its transcript, its limits from the hop's recording.
 
     The transcript layout is `ClaudeSessionCatalogue`'s: `<sessions_root>/<escaped cwd>/<uuid>
     .jsonl`, with the escaping being a plain `/` → `-` of the resolved path. That function is
@@ -153,7 +153,7 @@ class ClaudeUsageReader:
         `_limits` below always read the cache without reference to a session; it was simply
         unreachable except through `read()`, which needs a `UsageQuery` to build. Promoting a
         caller rather than moving the logic is deliberate: the numbers, the staleness bound and
-        the borrowed stamp are unchanged, and `read()` still composes its own answer from the
+        the source stamp are unchanged, and `read()` still composes its own answer from the
         same method, so the two renders cannot drift.
         """
         windows, stale, observed = self._limits()
