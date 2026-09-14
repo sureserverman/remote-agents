@@ -25,7 +25,7 @@ from telegram import (
     Update,
 )
 from telegram.constants import ParseMode
-from telegram.error import TelegramError
+from telegram.error import RetryAfter, TelegramError
 from telegram.ext import (
     ApplicationBuilder,
     CallbackQueryHandler,
@@ -1808,6 +1808,52 @@ class PrivateBotBoundary:
     #: The floor between two store-driven edits of the sessions page.
     _REDRAW_INTERVAL_SECONDS = 2.0
 
+    @staticmethod
+    def _ban_seconds(error: RetryAfter) -> float:
+        """Read `retry_after` as seconds, whichever type this python-telegram-bot hands back.
+
+        It is an `int` today and the library has announced it becomes a `timedelta`
+        (`PTBDeprecationWarning`, opt-in now via `PTB_TIMEDELTA`). A float() of a timedelta
+        raises, so the version that flips would turn every flood ban into a `TypeError`
+        inside the handler that exists to absorb it -- and the retry loop would be back.
+        """
+        retry_after = error.retry_after
+        total_seconds = getattr(retry_after, "total_seconds", None)
+        return float(total_seconds()) if callable(total_seconds) else float(retry_after)
+
+    def _hold_off(self, seconds: float) -> None:
+        """Refuse the store-driven redraw for `seconds`, because Telegram said so.
+
+        Only ever extends. A shorter answer arriving while a longer hold stands is not
+        permission to speak sooner -- during an escalating flood ban the *later* replies carry
+        the smaller remainder, and taking the newest would walk the floor back down into the
+        ban that set it.
+        """
+        until = monotonic() + max(seconds, 0.0)
+        if until > self._redraw_allowed_at:
+            self._redraw_allowed_at = until
+
+    async def on_error(self, update: object, context: object) -> None:
+        """Answer an exception no handler caught, and never let one reach the poll loop.
+
+        Registered because there was no error handler at all: python-telegram-bot logged
+        "No error handlers are registered, logging exception" and every failure surfaced as a
+        raw traceback in the journal, including the flood-control ban that made the bot
+        unusable for six hours.
+
+        A `RetryAfter` reaching here came from a command or a button, not from the redraw --
+        but the ban it reports is the *chat's*, not that one call's, so the redraw is held off
+        too. Otherwise the loop keeps editing straight through a ban a press has already
+        discovered, which is the behaviour this fix exists to remove.
+        """
+        error = getattr(context, "error", None)
+        if isinstance(error, RetryAfter):
+            seconds = self._ban_seconds(error)
+            self._hold_off(seconds)
+            _LOG.warning("telegram flood control: holding sends to this chat for %ss", seconds)
+            return
+        _LOG.error("unhandled error while processing a Telegram update", exc_info=error)
+
     def _defer_settle(self, bot: Bot, delay: float) -> None:
         """Arrange for one attempt to pay the debt once the floor lifts. At most one pending.
 
@@ -1925,9 +1971,22 @@ class PrivateBotBoundary:
         # owner opened consumed it, `LiveView` believed a help screen was the list, and the
         # following store change overwrote what they were reading. One producer, one consumer,
         # including here.
-        await self.view.render(
-            speaker, _reply_arguments(rendered), screen=self._SESSIONS_SCREEN
-        )
+        try:
+            await self.view.render(
+                speaker, _reply_arguments(rendered), screen=self._SESSIONS_SCREEN
+            )
+        except RetryAfter as error:
+            # Telegram's own answer to "when may I speak again", and the only floor that
+            # matters once it has said it. `_REDRAW_INTERVAL_SECONDS` is this bot's own
+            # courtesy limit; it is not a permission, and treating it as one is what turned a
+            # ten-second cooldown into a six-hour outage on 2026-09-13: the redraw retried
+            # every two seconds for eighteen hours while Telegram answered each attempt with a
+            # larger ban, because nothing here ever read `retry_after`. The debt stays owed, so
+            # the page is redrawn once the hold lifts rather than left stale.
+            self._hold_off(self._ban_seconds(error))
+            self._redraw_owed = True
+            self._defer_settle(speaker, self._redraw_allowed_at - monotonic())
+            return False
         return True
 
     async def _sessions_reply(
@@ -3993,6 +4052,8 @@ async def run_private_bot(
     # on the call being deleted, because until it existed this comment was the whole guard.
     # A second argument rests on the same setting at `_sessions_page` above.
     application = ApplicationBuilder().token(secrets.bot_token).concurrent_updates(False).build()
+    # Before any handler, so nothing registered below can raise into the poll loop unanswered.
+    application.add_error_handler(boundary.on_error)
     application.add_handler(CommandHandler("start", boundary.start))
     application.add_handler(CommandHandler("launch", boundary.launch_command))
     application.add_handler(CommandHandler("resume", boundary.resume_command))

@@ -5,6 +5,8 @@ import subprocess
 import sys
 from dataclasses import replace
 from datetime import UTC, datetime
+from time import monotonic
+from types import SimpleNamespace
 from uuid import UUID
 
 import pytest
@@ -15,7 +17,7 @@ from stop_results import (
     a_reader_for,
     a_verified_force_stop,
 )
-from telegram.error import BadRequest
+from telegram.error import BadRequest, RetryAfter
 
 from remote_agents.adapters.agents.registry import (
     glyph_of,
@@ -2630,6 +2632,51 @@ async def test_a_suppressed_redraw_is_owed_rather_than_lost() -> None:
     boundary._redraw_allowed_at = 0.0
     assert await boundary.settle_owed_redraw(chat.bot) is True
     assert boundary._redraw_owed is False
+
+
+@pytest.mark.asyncio
+async def test_a_flood_ban_holds_the_redraw_for_as_long_as_telegram_said() -> None:
+    """`retry_after` is the floor, not the bot's own two-second courtesy.
+
+    Reproduced in production on 2026-09-13: nothing in this package ever read `retry_after`,
+    so a refused edit advanced the floor by two seconds and the redraw tried again -- for
+    eighteen hours, against a ban Telegram kept lengthening because of the retries. A
+    ten-second cooldown became a 21,000-second one and the bot was unusable throughout.
+    """
+    chat = FakeChat()
+    boundary = _boundary(_a_running_session())
+    await boundary.sessions_command(chat.message_update("/sessions"), None)
+
+    chat.bot.edit_error = RetryAfter(1800)
+    before = monotonic()
+    assert await boundary.redraw_sessions_if_open(chat.bot) is False
+
+    held_for = boundary._redraw_allowed_at - before
+    assert held_for >= 1800, (
+        f"the floor is {held_for:.1f}s after a 1800s ban; a floor shorter than the ban is the "
+        "retry loop that caused the outage"
+    )
+    assert boundary._redraw_owed is True, "the page still needs drawing once the ban lifts"
+    boundary.cancel_pending_redraw()
+
+
+@pytest.mark.asyncio
+async def test_a_shorter_ban_does_not_walk_the_floor_back_down() -> None:
+    """During an escalating ban the later replies carry the smaller remainder."""
+    boundary = _boundary(_a_running_session())
+    boundary._hold_off(1800)
+    standing = boundary._redraw_allowed_at
+    boundary._hold_off(5)
+    assert boundary._redraw_allowed_at == standing
+
+
+@pytest.mark.asyncio
+async def test_a_flood_ban_found_by_a_press_also_holds_the_redraw() -> None:
+    """The ban belongs to the chat, not to the call that discovered it."""
+    boundary = _boundary(_a_running_session())
+    before = monotonic()
+    await boundary.on_error(None, SimpleNamespace(error=RetryAfter(900)))
+    assert boundary._redraw_allowed_at - before >= 900
 
 
 @pytest.mark.asyncio
