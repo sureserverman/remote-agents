@@ -8,7 +8,12 @@ import sqlite3
 from collections.abc import Callable, Iterable, Sequence
 from pathlib import Path
 
-from remote_agents.adapters.sqlite.migrations import MIGRATIONS, apply_migrations, current_version
+from remote_agents.adapters.sqlite.migrations import (
+    MIGRATIONS,
+    UI_MIGRATIONS,
+    apply_migrations,
+    current_version,
+)
 from remote_agents.ports.private_directory import open_private_directory
 
 
@@ -150,6 +155,31 @@ def watched_paths(database_path: Path) -> tuple[Path, Path]:
     it if WAL is ever turned on.
     """
     return (database_path, Path(f"{database_path}-wal"))
+
+
+def ui_database_path(database_path: Path) -> Path:
+    """Where the surface's own bookkeeping lives, beside the store it is about.
+
+    Named here for the reason `watched_paths` is: this module decides how a store is laid out
+    on disk, and a second module spelling the sibling's name would be a second opinion about
+    that layout (DEC-011).
+
+    The two are siblings rather than one file with two halves because the watcher's signal is
+    a file's metadata. Anything sharing the domain store's bytes is indistinguishable from a
+    session change, and the bot writes on every render.
+    """
+    return database_path.with_name("ui.sqlite3")
+
+
+def open_ui_database(path: Path, *, busy_timeout_ms: int = 1_000) -> sqlite3.Connection:
+    """Open the surface store, applying its own migration list.
+
+    Deliberately the same opener as the domain store, under DEC-035 exactly as before: the
+    composition root opens it and nothing holds it between operations. A second *connection* is
+    not a second *lease* -- what that decision forbids is a handle kept across operations, and
+    the watcher still opens none.
+    """
+    return open_database(path, migrations=UI_MIGRATIONS, busy_timeout_ms=busy_timeout_ms)
 
 
 def open_database(

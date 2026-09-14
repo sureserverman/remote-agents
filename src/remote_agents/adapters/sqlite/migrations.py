@@ -264,6 +264,89 @@ MIGRATIONS: tuple[tuple[int, str], ...] = (
 )
 
 
+#: The tables a surface writes about itself, which no other process reads.
+#:
+#: They live in their own database because `StoreWatch` fingerprints a *file*, and a signal
+#: that fires when the bot mints a keyboard cannot also mean "a session changed". One open
+#: sessions page redrawing, minting and republishing its own change is what flood-banned the
+#: bot for six hours on 2026-09-13.
+#:
+#: Read by `UI_MIGRATIONS` below, by `scripts/verify-store-split.py`, and by the migration that
+#: moves existing rows — one set, three readers, so a table added here cannot be forgotten by
+#: one of them.
+UI_TABLES: tuple[str, ...] = (
+    "callback_states",
+    "chat_views",
+    "standing_notifications",
+    "trust_notifications",
+    "idempotency_claims",
+    "handoff_intents",
+)
+
+#: The UI store's own migration list, versioned independently of `MIGRATIONS`.
+#:
+#: A shared counter would have the next domain migration claim to have run against a file it
+#: never opened. The DDL is copied from the live store rather than retyped, so a moved row
+#: lands in a column definition identical to the one it left.
+UI_MIGRATIONS: tuple[tuple[int, str], ...] = (
+    (
+        1,
+        """
+        CREATE TABLE callback_states (
+            token TEXT PRIMARY KEY,
+            action TEXT NOT NULL,
+            entity_id TEXT NOT NULL,
+            owner_id INTEGER NOT NULL,
+            chat_id INTEGER NOT NULL,
+            message_id INTEGER NOT NULL,
+            mutation INTEGER NOT NULL,
+            claimed INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT NOT NULL
+        );
+        CREATE INDEX callback_states_message ON callback_states(chat_id, message_id);
+        CREATE TABLE chat_views (
+            chat_id INTEGER PRIMARY KEY,
+            message_id INTEGER NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+        CREATE TABLE standing_notifications (
+            chat_id INTEGER NOT NULL,
+            session_id TEXT NOT NULL,
+            message_id INTEGER NOT NULL,
+            token TEXT NOT NULL,
+            activities TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            PRIMARY KEY (chat_id, session_id)
+        );
+        CREATE TABLE trust_notifications (
+            session_id TEXT PRIMARY KEY,
+            chat_id INTEGER NOT NULL,
+            message_id INTEGER NOT NULL,
+            settled INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE TABLE idempotency_claims (
+            key TEXT PRIMARY KEY,
+            created_at TEXT NOT NULL
+        );
+        CREATE TABLE handoff_intents (
+            intent_id TEXT PRIMARY KEY,
+            profile_id TEXT NOT NULL,
+            project_id TEXT NOT NULL,
+            conversation_source_id TEXT NOT NULL,
+            process_pid INTEGER NOT NULL,
+            process_start_ticks INTEGER NOT NULL,
+            process_euid INTEGER NOT NULL,
+            process_name TEXT NOT NULL,
+            state TEXT NOT NULL
+        );
+        CREATE UNIQUE INDEX handoff_intents_source
+        ON handoff_intents(profile_id, conversation_source_id)
+        WHERE state IN ('requested', 'stop_sent');
+        """,
+    ),
+)
+
+
 def current_version(connection: sqlite3.Connection) -> int:
     """Return zero for an uninitialized database or its recorded schema version."""
     exists = connection.execute(
