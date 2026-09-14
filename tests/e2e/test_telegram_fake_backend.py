@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import subprocess
 import sys
+from collections.abc import Callable
 from dataclasses import replace
 from datetime import UTC, datetime
 from time import monotonic
@@ -2622,10 +2623,32 @@ async def test_a_suppressed_redraw_is_owed_rather_than_lost() -> None:
     it may not discard one.
     """
     chat = FakeChat()
-    boundary = _boundary(_a_running_session())
+    # A store the test can actually move, because the claim is about a change being *kept*
+    # across the floor. It used to call the redraw twice over an unchanging store and read
+    # the second refusal as the floor -- true then, and it stopped being the whole story when
+    # a redraw learned to refuse a page whose content is identical. Both refusals look alike
+    # from outside; only a real change tells them apart, so now there is one.
+    live = [_a_running_session()]
+
+    class _Launcher(SessionUseCaseDouble):
+        async def list_sessions(self):
+            return list(live)
+
+        async def refresh_readiness(self) -> None:
+            return None
+
+    boundary = build_private_bot(
+        7,
+        11,
+        backend=backend_for(
+            catalogue=(CatalogProject("a" * 24, "Demo", "tests", "Registered"),),
+            sessions=_Launcher(),
+        ),
+    )
     await boundary.sessions_command(chat.message_update("/sessions"), None)
 
     assert await boundary.redraw_sessions_if_open(chat.bot) is True
+    live[0] = _a_running_session(SessionState.UNTRUSTED)
     assert await boundary.redraw_sessions_if_open(chat.bot) is False
     assert boundary._redraw_owed is True, "the suppressed change must be remembered"
 
@@ -2677,6 +2700,108 @@ async def test_a_flood_ban_found_by_a_press_also_holds_the_redraw() -> None:
     before = monotonic()
     await boundary.on_error(None, SimpleNamespace(error=RetryAfter(900)))
     assert boundary._redraw_allowed_at - before >= 900
+
+
+def _counting_edits(chat: FakeChat) -> Callable[[], int]:
+    """How many `editMessageText` calls this chat has been sent, from now on.
+
+    Counted at the bot rather than read off the chat, because the claim is about *requests
+    spent*: an edit that changes nothing still costs one, and costing one is the whole defect.
+    """
+    calls = 0
+    original = chat.bot.edit_message_text
+
+    async def counting(**kwargs: object) -> None:
+        nonlocal calls
+        calls += 1
+        return await original(**kwargs)
+
+    chat.bot.edit_message_text = counting  # type: ignore[method-assign]
+    return lambda: calls
+
+
+@pytest.mark.asyncio
+async def test_a_store_change_that_changes_nothing_does_not_edit_at_all() -> None:
+    """The loop that made the bot unusable, pinned.
+
+    A redraw mints a fresh callback token per button, and those rows are written to the very
+    database file the one-second store watcher fingerprints. So an unconditional redraw
+    published the change that scheduled the next one: thirty real edits a minute to one
+    private chat, for eighteen hours, with an idle store behind it -- measured, not inferred
+    (zero session_events, zero agent_activity and zero tokens minted in the sampled bursts,
+    against 4158 tokens in a busier hour). Telegram flood-banned the bot for six hours.
+
+    Ten store changes over an unchanged store must cost exactly nothing.
+    """
+    chat = FakeChat()
+    boundary = _boundary(_a_running_session())
+    await boundary.sessions_command(chat.message_update("/sessions"), None)
+
+    assert await boundary.redraw_sessions_if_open(chat.bot) is True
+    edits = _counting_edits(chat)
+
+    for _ in range(10):
+        boundary._redraw_allowed_at = 0.0
+        assert await boundary.redraw_sessions_if_open(chat.bot) is False
+
+    assert edits() == 0, (
+        f"{edits()} edits went out for a page that says the same thing; "
+        "that is the loop Telegram banned the bot for"
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_page_the_floor_refused_is_still_drawn_when_it_really_changed() -> None:
+    """The refusal above must not swallow a real change: that would be a worse bug."""
+    chat = FakeChat()
+    live = [_a_running_session()]
+
+    class _Launcher(SessionUseCaseDouble):
+        async def list_sessions(self):
+            return list(live)
+
+        async def refresh_readiness(self) -> None:
+            return None
+
+    boundary = build_private_bot(
+        7,
+        11,
+        backend=backend_for(
+            catalogue=(CatalogProject("a" * 24, "Demo", "tests", "Registered"),),
+            sessions=_Launcher(),
+        ),
+    )
+    await boundary.sessions_command(chat.message_update("/sessions"), None)
+    assert await boundary.redraw_sessions_if_open(chat.bot) is True
+    edits = _counting_edits(chat)
+
+    live[0] = _a_running_session(SessionState.UNTRUSTED)
+    boundary._redraw_allowed_at = 0.0
+    assert await boundary.redraw_sessions_if_open(chat.bot) is True
+    assert edits() == 1
+
+
+@pytest.mark.asyncio
+async def test_an_unchanging_page_is_still_refreshed_before_its_ages_go_stale() -> None:
+    """The rows carry an age and the block below them a limits sweep.
+
+    Drawing only on change would leave a page reading "2m" an hour later, so the refusal has
+    a ceiling. This is that ceiling, not a repaint timer: a real change still draws at once.
+    """
+    chat = FakeChat()
+    boundary = _boundary(_a_running_session())
+    await boundary.sessions_command(chat.message_update("/sessions"), None)
+    assert await boundary.redraw_sessions_if_open(chat.bot) is True
+    edits = _counting_edits(chat)
+
+    boundary._redraw_allowed_at = 0.0
+    assert await boundary.redraw_sessions_if_open(chat.bot) is False
+    assert edits() == 0
+
+    boundary._last_drawn_at = monotonic() - boundary._REFRESH_INTERVAL_SECONDS - 1
+    boundary._redraw_allowed_at = 0.0
+    assert await boundary.redraw_sessions_if_open(chat.bot) is True
+    assert edits() == 1
 
 
 @pytest.mark.asyncio
