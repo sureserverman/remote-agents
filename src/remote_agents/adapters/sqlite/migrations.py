@@ -260,7 +260,7 @@ MIGRATIONS: tuple[tuple[int, str], ...] = (
         UPDATE sessions SET profile_id = 'claude' WHERE profile_id = 'claude-remote';
         UPDATE sessions SET resume_profile_id = 'claude' WHERE resume_profile_id = 'claude-remote';
         """,
-    ),
+    )
 )
 
 
@@ -279,9 +279,20 @@ UI_TABLES: tuple[str, ...] = (
     "chat_views",
     "standing_notifications",
     "trust_notifications",
-    "idempotency_claims",
-    "handoff_intents",
 )
+"""Two candidates were removed from this set during Stage 1, each for its own reason, and both
+are recorded because the plan named six.
+
+`idempotency_claims` stays in the **domain** store. It is written by `session_store.py`, not by
+any surface, and `docs/architecture.md` states that duplicate-command protection "is durable
+across processes, because every launch claims an idempotency key with a unique insert". Moving
+it would put the bot's claims in a file the console panes do not open, silently breaking that
+guarantee for every writer but one.
+
+`handoff_intents` is deliberately NOT here. A sweep of all six candidates for live code
+references found it alone at zero, with zero rows in the operator's store: the feature was
+retired in `0d908d9c refactor: retire external local session handoff` and the table outlived
+it. It is residue, not bookkeeping, so it is dropped by migration 14 rather than rehoused."""
 
 #: The UI store's own migration list, versioned independently of `MIGRATIONS`.
 #:
@@ -324,24 +335,6 @@ UI_MIGRATIONS: tuple[tuple[int, str], ...] = (
             message_id INTEGER NOT NULL,
             settled INTEGER NOT NULL DEFAULT 0
         );
-        CREATE TABLE idempotency_claims (
-            key TEXT PRIMARY KEY,
-            created_at TEXT NOT NULL
-        );
-        CREATE TABLE handoff_intents (
-            intent_id TEXT PRIMARY KEY,
-            profile_id TEXT NOT NULL,
-            project_id TEXT NOT NULL,
-            conversation_source_id TEXT NOT NULL,
-            process_pid INTEGER NOT NULL,
-            process_start_ticks INTEGER NOT NULL,
-            process_euid INTEGER NOT NULL,
-            process_name TEXT NOT NULL,
-            state TEXT NOT NULL
-        );
-        CREATE UNIQUE INDEX handoff_intents_source
-        ON handoff_intents(profile_id, conversation_source_id)
-        WHERE state IN ('requested', 'stop_sent');
         """,
     ),
 )
