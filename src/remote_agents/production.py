@@ -80,9 +80,12 @@ class ProductionPaths:
 
         Under `state_directory` because it is state this project writes for itself, on the
         owner's Claude sessions' behalf: `remote_agents.statusline` writes it atomically at
-        0600 on every status-line update, `adapters.agents.claude.usage` reads it, and this
-        property is the one place both learn the name. Not in `ensure_directories`, for
-        `preferences_path`'s reason: the directory is declared, the file is the writer's.
+        0600 on every status-line update, and `adapters.agents.claude.usage` reads it. The
+        hop spells the name itself (`statusline.LIMITS_FILE_NAME`), because it stays
+        stdlib-only at module scope and cannot import this; the two spellings are pinned equal
+        by `test_claude_limits_path_is_under_the_state_directory_and_named_as_the_hop_writes_it`.
+        Not in `ensure_directories`, for `preferences_path`'s reason: the directory is
+        declared, the file is the writer's.
         """
         return self.state_directory / "claude-limits.json"
 

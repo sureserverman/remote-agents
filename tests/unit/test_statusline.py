@@ -20,6 +20,7 @@ import os
 import stat
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -299,3 +300,71 @@ def test_the_hop_is_an_enumerated_composition_root() -> None:
     """DEC-015: the set is widened by name, never by position."""
     assert COMPOSITION_ROOTS == frozenset({"bootstrap.py", "agent_event.py", "statusline.py"})
     assert find_violations(_SOURCE_ROOT) == []
+
+
+# --- Stage 2 gate, round 2: signal deaths, abandoned temporaries, and the unexpected ------
+
+
+def test_a_previous_command_killed_by_a_signal_exits_with_the_shell_convention(
+    tmp_path: Path,
+) -> None:
+    """`sh` reports a signal death as 128+N; the hop must not hand back the raw negative."""
+    completed = _run_hop(
+        "--then", "kill -TERM $$", payload=_documented_payload(), state_directory=tmp_path
+    )
+
+    assert completed.returncode == 143
+
+
+def test_a_stale_temporary_from_a_killed_hop_is_collected_and_a_fresh_one_is_left(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Claude Code cancels an in-flight hop on a newer update; what it leaves is swept."""
+    from remote_agents.statusline import run_statusline
+
+    stale = tmp_path / ".claude-limits.json.deadbeef0000.tmp"
+    fresh = tmp_path / ".claude-limits.json.cafef00d0000.tmp"
+    stale.write_bytes(b"{")
+    fresh.write_bytes(b"{")
+    old = time.time() - 2 * 3600
+    os.utime(stale, (old, old))
+    _feed_stdin(monkeypatch, _documented_payload())
+
+    assert run_statusline(["--state-dir", str(tmp_path)]) == 0
+
+    assert not stale.exists()
+    assert fresh.exists()
+    assert (tmp_path / "claude-limits.json").is_file()
+
+
+def test_a_leftover_temporary_named_after_this_pid_cannot_block_the_write(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The temp name once carried the pid; a leftover plus pid reuse then skipped every write."""
+    from remote_agents.statusline import run_statusline
+
+    (tmp_path / f".claude-limits.json.{os.getpid()}.tmp").write_bytes(b"{")
+    _feed_stdin(monkeypatch, _documented_payload())
+
+    assert run_statusline(["--state-dir", str(tmp_path)]) == 0
+
+    assert (tmp_path / "claude-limits.json").is_file()
+
+
+def test_an_unexpected_error_while_recording_still_runs_the_previous_command(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capfd: pytest.CaptureFixture[str]
+) -> None:
+    """The contract is every failure, not every failure this module foresaw."""
+    import remote_agents.statusline as hop
+    from remote_agents.statusline import run_statusline
+
+    def _explode(payload: bytes, state_directory: Path | None) -> None:
+        raise RecursionError("pathological nesting")
+
+    monkeypatch.setattr(hop, "record_limits", _explode)
+    _feed_stdin(monkeypatch, _documented_payload())
+
+    code = run_statusline(["--state-dir", str(tmp_path), "--then", "printf rendered; exit 4"])
+
+    assert code == 4
+    assert capfd.readouterr().out == "rendered"

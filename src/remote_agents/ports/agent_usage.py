@@ -112,8 +112,9 @@ class AgentUsage:
     """Where a figure came from when it did not come from the session's own files.
 
     Set by any reader that answered from somewhere other than the source it was asked of —
-    Claude's limits, read out of the status-line cache described in `adapters.agents.claude.usage`,
-    and Codex's when its app server could not answer and the rollout file did. Presentation
+    Claude's limits, read out of the status-line hop's recording described in
+    `adapters.agents.claude.usage`, and Codex's when its app server could not answer and the
+    rollout file did. Presentation
     says so out loud, because a number whose freshness depends on a file rather than on the
     moment it was asked for must not be shown as though the service had just measured it.
     """
@@ -219,9 +220,9 @@ class AgentLimits:
     """Where these came from when they did not come from the provider's own accounting.
 
     Set for the reason `AgentUsage.stale_source` records, by whichever reader answered from a
-    source other than the one it was asked of: Claude's, whose limits are borrowed from the
-    status-line cache described in `adapters.agents.claude.usage`, and Codex's, whose reader
-    stamps the rollout file when the app server could not answer. A figure whose freshness
+    source other than the one it was asked of: Claude's, whose limits are read from the
+    status-line hop's recording described in `adapters.agents.claude.usage`, and Codex's, whose
+    reader stamps the rollout file when the app server could not answer. A figure whose freshness
     depends on a file is never rendered as though the service had just measured it.
     """
 

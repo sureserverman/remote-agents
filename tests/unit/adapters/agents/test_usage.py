@@ -1757,3 +1757,19 @@ async def test_closing_the_reader_set_reaches_every_reader_that_has_aclose_codex
     closable = _Closable()
     await ProfileUsageReaders(readers=(_Plain(), closable, _Closable())).aclose()
     assert closable.closed == 1
+
+
+@pytest.mark.parametrize(
+    ("ahead", "readable"),
+    [pytest.param(30, True, id="within-tolerance"), pytest.param(600, False, id="far-future")],
+)
+def test_claude_limits_recorded_in_the_future_are_read_only_within_a_tolerance(
+    tmp_path: Path, ahead: int, readable: bool
+) -> None:
+    """A recording from the future is a wrong clock somewhere, and would otherwise stay fresh."""
+    hop = _hop_file(tmp_path, recorded_at=datetime.now(UTC) + timedelta(seconds=ahead))
+
+    limits = _claude_reader(tmp_path, limits=hop).limits()
+
+    assert bool(limits.windows) is readable
+    assert (limits.absence is None) is readable

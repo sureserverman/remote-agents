@@ -781,10 +781,16 @@ def remove_agent_hooks(settings_path: Path, *, provider: str = "claude") -> Hook
     # entry -- and a removal that only ran when the entry was present would leave executable
     # code in the operator's configuration with nothing left that knows how to take it out.
     deleted = our_plugin is not None and _remove_plugin(our_plugin, selected)
+    # The status line this installer would not touch is named on the way out too: `--remove`
+    # is when an operator is looking, and a note that only install carried told them nothing
+    # about the entry still standing after it.
+    note = _foreign_status_line_note(settings.document) if _draws_a_status_line(selected) else ""
     if content != settings.content:
-        return HookInstallOutcome(settings_path, True, f"removed agent hooks from {settings_path}")
+        return HookInstallOutcome(
+            settings_path, True, f"removed agent hooks from {settings_path}{note}"
+        )
     if not deleted:
-        return HookInstallOutcome(settings_path, False, f"no agent hooks in {settings_path}")
+        return HookInstallOutcome(settings_path, False, f"no agent hooks in {settings_path}{note}")
     return HookInstallOutcome(
         settings_path,
         True,

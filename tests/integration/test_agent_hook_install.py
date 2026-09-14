@@ -891,3 +891,16 @@ def test_a_null_status_line_is_refused_because_removal_could_not_restore_it(
     assert "statusLine" in str(refusal.value)
     assert path.read_bytes() == before
     assert list(tmp_path.iterdir()) == [path]
+
+
+def test_remove_names_a_status_line_it_left_alone_too(tmp_path: Path) -> None:
+    """The note is owed on the way out as well: `--remove` is when an operator looks."""
+    document = {**_LIVED_IN_SETTINGS, "statusLine": {"type": "script", "path": "bar.sh"}}
+    path = _settings_file(tmp_path, document)
+    install_agent_hooks(path)
+
+    outcome = remove_agent_hooks(path)
+
+    assert outcome.changed
+    assert "statusLine" in outcome.summary and "script" in outcome.summary
+    assert json.loads(path.read_text(encoding="utf-8"))["statusLine"] == document["statusLine"]

@@ -35,6 +35,13 @@ from pathlib import Path
 #: The reading's name under the service's state directory.
 LIMITS_FILE_NAME = "claude-limits.json"
 
+#: How old an abandoned temporary must be before a later hop collects it. Claude Code cancels
+#: an in-flight hop when a newer update arrives, so a temporary between `os.open` and
+#: `os.replace` is a normal casualty, and nothing else owns this directory's litter. An hour
+#: is far past any write that is still in progress and short enough that the directory
+#: never holds more than a handful.
+_ABANDONED_AFTER_SECONDS = 3600.0
+
 
 def _rate_limits(payload: bytes) -> object | None:
     """The `rate_limits` member of the document, or `None` when there is nothing to record."""
@@ -72,8 +79,11 @@ def record_limits(payload: bytes, state_directory: Path | None) -> None:
     resolved = state_directory if state_directory is not None else _default_state_directory()
     if resolved is None:
         return
+    _collect_abandoned_temporaries(resolved)
     record = json.dumps({"rate_limits": rate_limits, "recorded_at": time.time()})
-    temporary = resolved / f".{LIMITS_FILE_NAME}.{os.getpid()}.tmp"
+    # A random suffix, never the pid: a temporary left by a killed hop plus a reused pid made
+    # `O_EXCL` refuse the next write under that pid, silently, for as long as the litter stood.
+    temporary = resolved / f".{LIMITS_FILE_NAME}.{os.urandom(6).hex()}.tmp"
     try:
         descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
     except OSError:
@@ -89,6 +99,20 @@ def record_limits(payload: bytes, state_directory: Path | None) -> None:
             pass
 
 
+def _collect_abandoned_temporaries(directory: Path) -> None:
+    """Unlink this hop's own temporaries older than the bound; every failure is ignored."""
+    cutoff = time.time() - _ABANDONED_AFTER_SECONDS
+    try:
+        for entry in directory.glob(f".{LIMITS_FILE_NAME}.*.tmp"):
+            try:
+                if entry.stat().st_mtime < cutoff:
+                    entry.unlink()
+            except OSError:
+                continue
+    except OSError:
+        return
+
+
 def hop_from_stdin(then: str | None, state_directory: Path | None) -> int:
     """Record what stdin carried, then run `then` on the same bytes and return its status.
 
@@ -101,13 +125,21 @@ def hop_from_stdin(then: str | None, state_directory: Path | None) -> int:
         # `sys.stdin` is None when the process was started with no stdin at all, a closed one
         # raises, and a read can fail. None of them is a reason to skip the owner's command.
         payload = b""
-    record_limits(payload, state_directory)
+    try:
+        record_limits(payload, state_directory)
+    except Exception:  # noqa: BLE001 -- every failure, not every failure this module foresaw
+        pass
     if then is None:
         return 0
     try:
-        return subprocess.run(["sh", "-c", then], input=payload, check=False).returncode
+        completed = subprocess.run(["sh", "-c", then], input=payload, check=False)
     except OSError:
         return 0
+    # A signal death comes back negative; `sh` reports it as 128+N, and so must this hop,
+    # since `SystemExit(-15)` becomes 241 rather than the 143 the owner's chain would have
+    # returned on its own.
+    code = completed.returncode
+    return 128 - code if code < 0 else code
 
 
 def run_statusline(argv: list[str] | None = None) -> int:

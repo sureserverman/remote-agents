@@ -624,9 +624,12 @@ def _without_our_status_line(document: dict[str, Any]) -> dict[str, Any]:
     keys included, since the object did not exist before this installer wrote it.
 
     Every level, not one: a wrapper whose `--then` word is itself a wrapper of ours is peeled
-    again, because each level is exactly a command this installer writes and there is nothing
-    of anybody else's in between. Peeling one level per run left a reinstall holding two and a
-    removal holding one, which a probe during Task 2.2 measured before this loop existed.
+    again. Peeling one level per run left a reinstall holding two and a removal holding one,
+    which a probe during Task 2.2 measured before this loop existed. "Ours" here means shaped
+    exactly as this installer writes -- the recogniser matches parsed words, as
+    `_runs_our_command` does, and cannot tell a command this installer wrote from one somebody
+    typed in the same shape; a hand-built nest of that shape is peeled with the rest, which is
+    the same accepted blindness the hook groups have always had.
     """
     current = document.get(_STATUS_LINE_KEY)
     if not _is_command_status_line(current):

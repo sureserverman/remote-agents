@@ -38,7 +38,7 @@ CONDITIONAL_CAPABILITIES = frozenset({"activity"})
 DECLARATIONS: dict[str, dict[str, tuple[Requirement, str]]] = {
     "claude": {
         "sessions": (SUPPORTED, "transcript catalogue over the workspace mapping"),
-        "usage": (SUPPORTED, "transcript accounting plus the borrowed status-line cache"),
+        "usage": (SUPPORTED, "transcript accounting plus the status-line hop's recording"),
         "hooks": (SUPPORTED, "settings.json hook groups (claude, flagless)"),
         "remote_control": (
             UNSUPPORTED,

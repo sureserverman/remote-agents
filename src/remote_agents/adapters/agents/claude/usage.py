@@ -32,6 +32,14 @@ from remote_agents.ports.agent_usage_support import (
     _window,
 )
 
+_FUTURE_TOLERANCE = timedelta(seconds=90)
+"""How far ahead of this clock a recording may be dated before it is a wrong clock, not news.
+
+A recording from the future would otherwise never age past the bound below: a host whose
+clock ran ahead when the hop wrote would show that reading as fresh for as long as the skew
+lasted. Ninety seconds is the same allowance `_START_TOLERANCE` gives a session's own clock.
+"""
+
 _STALE_LIMIT_AGE = timedelta(minutes=30)
 """How old the hop's recording may be before its numbers stop being shown.
 
@@ -180,7 +188,10 @@ class ClaudeUsageReader:
         if not isinstance(document, dict):
             return (), None, None
         observed = _instant(document.get("recorded_at"))
-        if observed is None or _moment(self._now) - observed > _STALE_LIMIT_AGE:
+        if observed is None:
+            return (), None, None
+        age = _moment(self._now) - observed
+        if age > _STALE_LIMIT_AGE or age < -_FUTURE_TOLERANCE:
             return (), None, None
         rate_limits = document.get("rate_limits")
         if not isinstance(rate_limits, dict):
