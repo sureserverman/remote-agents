@@ -29,7 +29,7 @@ from remote_agents.adapters.sqlite.database import (
     ui_database_path,
 )
 from remote_agents.adapters.sqlite.migrations import MIGRATIONS, UI_TABLES
-from remote_agents.adapters.sqlite.store_split import split_stores
+from remote_agents.adapters.sqlite.store_split import split_stores, unsplit_stores
 
 #: Everything up to but not including the drop, which Stage 2 adds as migration 14. Opening at
 #: this list is what a store predating the split looks like, and it is the only thing
@@ -230,3 +230,181 @@ def test_two_backups_in_the_same_second_do_not_collide(tmp_path: Path) -> None:
         connection.close()
 
     assert len(names) == 5
+
+
+def _drop_moved_tables(domain: Path) -> None:
+    """The state Stage 2 leaves behind: the domain store no longer carries the moved set."""
+    connection = sqlite3.connect(domain)
+    try:
+        for table in UI_TABLES:
+            connection.execute(f'DROP TABLE IF EXISTS "{table}"')
+        connection.commit()
+    finally:
+        connection.close()
+
+
+def test_migration_rollback_puts_every_row_back(tmp_path: Path) -> None:
+    """The operator's way out, swept over the whole moved set.
+
+    Written to work *after* Stage 2's drop as well as before it, because that is when it is
+    actually needed: by then the domain store has lost the tables, and putting the rows back
+    means recreating them from the same DDL the UI store was built with.
+    """
+    domain = tmp_path / "sessions.sqlite3"
+    before = _a_store_with_rows(domain)
+    split_stores(domain)
+
+    # Simulate the state Stage 2 leaves: the domain store no longer carries them.
+    stripped = sqlite3.connect(domain)
+    try:
+        for table in UI_TABLES:
+            stripped.execute(f'DROP TABLE IF EXISTS "{table}"')
+        stripped.commit()
+    finally:
+        stripped.close()
+    assert _counts(domain, UI_TABLES) == {}
+
+    unsplit_stores(domain)
+
+    assert _counts(domain, UI_TABLES) == before
+
+
+def test_migration_rollback_is_safe_to_run_twice(tmp_path: Path) -> None:
+    """An operator under pressure runs a command again when they are not sure it worked."""
+    domain = tmp_path / "sessions.sqlite3"
+    before = _a_store_with_rows(domain)
+    split_stores(domain)
+
+    unsplit_stores(domain)
+    unsplit_stores(domain)
+
+    assert _counts(domain, UI_TABLES) == before
+
+
+def test_migration_rollback_refuses_when_there_is_no_ui_store(tmp_path: Path) -> None:
+    """Answering "nothing to roll back" beats inventing empty tables in the domain store.
+
+    **The file's absence is the assertion, not the empty report.** `ATTACH DATABASE` creates the
+    path it is given, so without the guard the report is empty either way and this test passed
+    on a mutation that removed it — the discriminating consequence is that a rollback which had
+    nothing to do leaves no empty store behind for the next run to mistake for a split.
+    """
+    domain = tmp_path / "sessions.sqlite3"
+    _a_store_with_rows(domain)
+
+    report = unsplit_stores(domain)
+
+    assert report.restored == {}
+    assert not ui_database_path(domain).exists(), (
+        "a rollback with nothing to do created an empty UI store; the next split would read it "
+        "as an already-copied one"
+    )
+
+
+def test_migration_rollback_keeps_the_domain_stores_own_rows(tmp_path: Path) -> None:
+    """The rollback touches the moved set and nothing else."""
+    domain = tmp_path / "sessions.sqlite3"
+    _a_store_with_rows(domain)
+    split_stores(domain)
+
+    unsplit_stores(domain)
+
+    assert _counts(domain, ("sessions",)) == {"sessions": 1}
+
+
+def test_migration_rollback_run_twice_after_the_drop_is_still_a_no_op(tmp_path: Path) -> None:
+    """The idempotence that matters, on the path the feature exists for.
+
+    The first version of this ran twice *before* any drop, where both calls were no-ops from the
+    start — `CREATE TABLE IF NOT EXISTS` and `INSERT OR IGNORE` against a domain store that had
+    never lost anything. A regression in the recreate path could not have failed it.
+    """
+    domain = tmp_path / "sessions.sqlite3"
+    before = _a_store_with_rows(domain)
+    split_stores(domain)
+    _drop_moved_tables(domain)
+
+    unsplit_stores(domain)
+    unsplit_stores(domain)
+
+    assert _counts(domain, UI_TABLES) == before
+
+
+def test_migration_rollback_restores_the_indexes_too(tmp_path: Path) -> None:
+    """Row counts alone would pass against a table recreated without its constraints."""
+    domain = tmp_path / "sessions.sqlite3"
+    _a_store_with_rows(domain)
+    split_stores(domain)
+    _drop_moved_tables(domain)
+
+    unsplit_stores(domain)
+
+    connection = sqlite3.connect(domain)
+    try:
+        indexes = {
+            name
+            for (name,) in connection.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'index' AND sql IS NOT NULL"
+            )
+        }
+        with pytest.raises(sqlite3.IntegrityError):
+            connection.executemany(
+                "INSERT INTO callback_states VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                _ROWS["callback_states"][:1],
+            )
+    finally:
+        connection.close()
+    assert "callback_states_message" in indexes
+
+
+def test_migration_rollback_refuses_a_domain_table_whose_shape_has_drifted(
+    tmp_path: Path,
+) -> None:
+    """`CREATE TABLE IF NOT EXISTS` is a no-op against a different shape, and `SELECT *` is
+    positional — so the copy would land values in the wrong columns rather than fail."""
+    domain = tmp_path / "sessions.sqlite3"
+    _a_store_with_rows(domain)
+    split_stores(domain)
+    _drop_moved_tables(domain)
+
+    drifted = sqlite3.connect(domain)
+    try:
+        drifted.execute("CREATE TABLE chat_views (chat_id INTEGER PRIMARY KEY, something TEXT)")
+        drifted.commit()
+    finally:
+        drifted.close()
+
+    with pytest.raises(RuntimeError, match="do not match"):
+        unsplit_stores(domain)
+
+
+def test_a_failed_rollback_reports_its_own_cause_not_a_locked_detach(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`DETACH DATABASE` raises "database ui is locked" while a transaction is still open.
+
+    The failure has to land *after* an earlier table's INSERT, so a transaction is genuinely
+    open at the raise. Driving it through a drifted table did not discriminate: the drifted
+    table's own `CREATE` runs first and closes the transaction, so the detach succeeded and the
+    test passed with the fix reverted. Injected here instead, which is the only way to hold the
+    open-transaction moment steady.
+    """
+    domain = tmp_path / "sessions.sqlite3"
+    _a_store_with_rows(domain)
+    split_stores(domain)
+    _drop_moved_tables(domain)
+
+    from remote_agents.adapters.sqlite import store_split as module
+
+    real = module._refuse_drifted_table
+
+    def fail_after_the_first_insert(connection: object, table: str) -> None:
+        if table == UI_TABLES[1]:
+            raise RuntimeError("the cause an operator needs to see")
+        return real(connection, table)
+
+    monkeypatch.setattr(module, "_refuse_drifted_table", fail_after_the_first_insert)
+
+    with pytest.raises(RuntimeError) as raised:
+        unsplit_stores(domain)
+    assert "the cause an operator needs to see" in str(raised.value)

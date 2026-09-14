@@ -38,7 +38,7 @@ from pathlib import Path
 from remote_agents.adapters.sqlite.database import open_ui_database, ui_database_path
 from remote_agents.adapters.sqlite.migrations import UI_TABLES
 
-__all__ = ["SplitReport", "split_stores"]
+__all__ = ["RestoreReport", "SplitReport", "split_stores", "unsplit_stores"]
 
 
 @dataclass(frozen=True)
@@ -154,5 +154,114 @@ def split_stores(domain_path: Path) -> SplitReport:
         finally:
             connection.execute("DETACH DATABASE ui")
         return SplitReport(moved=moved, backup=backup)
+    finally:
+        connection.close()
+
+
+@dataclass(frozen=True)
+class RestoreReport:
+    """What the rollback put back, named per table for the same reason `SplitReport` is."""
+
+    restored: dict[str, int]
+
+
+#: Every `CREATE` form `sqlite_master` can hand back for a table this restore recreates.
+#: Longest first, so `CREATE UNIQUE INDEX` is matched before `CREATE INDEX` would shadow it.
+_CREATE_FORMS = ("CREATE UNIQUE INDEX", "CREATE TABLE", "CREATE INDEX", "CREATE TRIGGER")
+
+
+def _idempotent(sql: str) -> str:
+    """The same statement, safe to run against a store that already has the object.
+
+    An operator under pressure runs a restore twice, so every statement it issues has to be a
+    no-op the second time.
+    """
+    for form in _CREATE_FORMS:
+        if sql.startswith(form):
+            return sql.replace(form, f"{form} IF NOT EXISTS", 1)
+    raise RuntimeError(f"cannot make this statement idempotent: {sql[:60]!r}")
+
+
+def _refuse_drifted_table(connection: sqlite3.Connection, table: str) -> None:
+    """Refuse a domain table whose columns no longer match the UI store's.
+
+    `CREATE TABLE IF NOT EXISTS` is a no-op against a table that already exists with a different
+    shape -- left over from an older partial restore, say. The `INSERT ... SELECT *` that follows
+    matches columns by POSITION, so a drifted table either raises something obscure or, when the
+    counts happen to line up, writes each value into the wrong column. Saying so is the only
+    honest option: this function restores a schema, it does not reconcile two.
+    """
+    here = [row[1] for row in connection.execute(f'PRAGMA main.table_info("{table}")')]
+    there = [row[1] for row in connection.execute(f'PRAGMA ui.table_info("{table}")')]
+    if here != there:
+        raise RuntimeError(
+            f"{table}: the domain store's columns {here} do not match the UI store's {there}; "
+            "refusing to copy positionally into a different shape"
+        )
+
+
+def unsplit_stores(domain_path: Path) -> RestoreReport:
+    """Put the surface tables back in the domain store. The operator's way out.
+
+    **Written to work after the drop, not only before it**, because before it there is nothing
+    to undo — the domain store still has everything and rolling back is deleting one file. It is
+    once Stage 2 has dropped the tables that an operator needs this, and by then putting the rows
+    back means recreating the tables too.
+
+    **The schema comes from the UI store's own `sqlite_master`, not from a copy of the DDL
+    here.** A second spelling of those tables would be a second opinion about their shape
+    (DEC-011), and the one that drifted would be this one — it is the path nobody exercises
+    until the day it matters.
+
+    Idempotent, because an operator who is not sure a command worked runs it again.
+    """
+    ui_path = ui_database_path(domain_path)
+    if not domain_path.exists() or not ui_path.exists():
+        return RestoreReport(restored={})
+
+    connection = sqlite3.connect(domain_path)
+    try:
+        connection.execute("ATTACH DATABASE ? AS ui", (str(ui_path),))
+        try:
+            restored: dict[str, int] = {}
+            for table in UI_TABLES:
+                schema = connection.execute(
+                    "SELECT type, sql FROM ui.sqlite_master "
+                    "WHERE tbl_name = ? AND sql IS NOT NULL",
+                    (table,),
+                ).fetchall()
+                if not any(kind == "table" for kind, _ in schema):
+                    continue
+                unhandled = {kind for kind, _ in schema} - {"table", "index", "trigger"}
+                if unhandled:
+                    # Loudly, rather than skipping it. The first version filtered the execution
+                    # loop to tables and indexes, so a trigger was fetched and then silently
+                    # discarded -- a restore quietly less faithful than the docstring claimed.
+                    raise RuntimeError(
+                        f"{table}: {sorted(unhandled)} in the UI store's schema is not something "
+                        "this restore knows how to recreate"
+                    )
+                # Tables first, then indexes and triggers: neither can be created before the
+                # table it is on, and `sqlite_master` does not promise that order.
+                for kind, sql in sorted(schema, key=lambda row: row[0] != "table"):
+                    connection.execute(_idempotent(sql))
+                _refuse_drifted_table(connection, table)
+                connection.execute(
+                    f'INSERT OR IGNORE INTO main."{table}" SELECT * FROM ui."{table}"'
+                )
+                restored[table] = connection.execute(
+                    f'SELECT COUNT(*) FROM main."{table}"'
+                ).fetchone()[0]
+            connection.commit()
+        except Exception:
+            # Rolled back BEFORE the detach. `DETACH DATABASE` raises "database ui is locked"
+            # while an uncommitted transaction still touches the attached file, so without this
+            # the failure an operator sees is the detach's, and the real cause is gone. Verified
+            # as a live failure mode by the review that asked for this.
+            connection.rollback()
+            raise
+        finally:
+            connection.execute("DETACH DATABASE ui")
+        return RestoreReport(restored=restored)
     finally:
         connection.close()

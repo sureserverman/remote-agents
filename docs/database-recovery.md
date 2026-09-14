@@ -54,3 +54,50 @@ and the row under the id that still exists keeps the conversation. Nothing is de
 If you need the cleared binding back, it is in the pre-migration backup, and the restore above is
 how to read it. Such a row is otherwise indistinguishable from a session that was never resumed;
 no host has produced one to date.
+
+## Undoing the store split
+
+Since the store split, this host keeps **two** databases side by side in
+`~/.local/state/remote-agents/`:
+
+- `sessions.sqlite3` — session state, the file the change watcher fingerprints
+- `ui.sqlite3` — what the Telegram surface writes about itself: callback tokens, the live
+  view's anchor, standing and trust notifications
+
+They are separate because the watcher's signal is a file's metadata. While the bot's callback
+tokens shared `sessions.sqlite3`, minting a keyboard was indistinguishable from another process
+launching a session, so an open sessions page republished its own change and redrew about
+thirty times a minute until Telegram flood-banned the bot.
+
+**When to reach for a rollback.** Only when the surface has lost state it should have — an
+empty sessions list that should not be, buttons that resolve to nothing, notifications that
+vanished — *and* `ui.sqlite3` exists. If `ui.sqlite3` is missing entirely, the split never ran
+and there is nothing to undo.
+
+**Stop the service first.** Up to five writers share these files across four processes.
+
+    systemctl --user stop remote-agents
+
+**Put the surface tables back in the domain store:**
+
+    python3 - <<'PY'
+    from pathlib import Path
+    from remote_agents.adapters.sqlite.store_split import unsplit_stores
+    print(unsplit_stores(Path.home() / ".local/state/remote-agents/sessions.sqlite3").restored)
+    PY
+
+It prints a row count per table it restored, and is safe to run twice — run it again if you are
+not sure it worked. It recreates the tables from `ui.sqlite3`'s own schema, so it works whether
+or not the domain store still has them.
+
+**If that is not enough**, the split wrote a full snapshot of the domain store before it moved
+anything:
+
+    ls ~/.local/state/remote-agents/sessions.sqlite3.pre-split-*.bak
+
+Restore one with the ordinary restore procedure above. Note the version rule that procedure
+already carries: a backup predating a migration will read as *not ready* to a newer build.
+
+**After a rollback the bot works and the flood-ban cause returns.** Rolling back puts the
+surface's writes back in the watched file, which is what made the redraw republish its own
+change. Treat it as a way to recover state, not a place to stay.
