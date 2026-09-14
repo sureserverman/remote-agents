@@ -686,3 +686,43 @@ def test_the_shipped_example_carries_claude_limits_source_at_its_default() -> No
     assert 'claude_limits_source = "status-line"' in shipped
     assert ".credentials.json" in shipped
     assert drift["unknown"] == [] and drift["missing"] == []
+
+
+def test_write_limits_key_refuses_when_the_file_changed_since_it_was_read(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A hand-edit landing while the flip is computed is kept; the flip is refused.
+
+    The hook installer's `_refuse_if_changed_since_it_was_read` exists for this file class,
+    and the config writer had no equivalent: the concurrent edit's bytes were replaced by the
+    stale text the flip was computed against.
+    """
+    from remote_agents import config as config_module
+    from remote_agents.config import write_limits_key
+
+    path = write_config(tmp_path, example(tmp_path))
+    original = config_module._replace_limits_line
+
+    def edit_underneath(text: str, key: str, line: str) -> str:
+        concurrent = path.read_text(encoding="utf-8").replace(
+            "max_label_length = 40", "max_label_length = 99"
+        )
+        path.write_text(concurrent, encoding="utf-8")
+        return original(text, key, line)
+
+    monkeypatch.setattr(config_module, "_replace_limits_line", edit_underneath)
+
+    with pytest.raises(ConfigError, match="changed since it was read"):
+        write_limits_key(path, "claude_limits_source", "usage-api")
+
+    assert "max_label_length = 99" in path.read_text(encoding="utf-8")
+    assert "claude_limits_source" not in path.read_text(encoding="utf-8")
+    assert not list(tmp_path.glob(".config.toml.*.tmp")), "the temporary was collected"
+
+
+def test_the_selector_literal_for_claude_limits_source_is_in_the_closed_set() -> None:
+    """`limits_source.py` may not import this module, so its one literal is pinned here."""
+    from remote_agents.adapters.agents.claude.limits_source import USAGE_API
+    from remote_agents.config import CLAUDE_LIMITS_SOURCES
+
+    assert USAGE_API in CLAUDE_LIMITS_SOURCES

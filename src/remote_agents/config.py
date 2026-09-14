@@ -687,7 +687,16 @@ def write_limits_key(path: Path, key: str, value: str | int) -> None:
     a file that does not parse, and a file with no `[limits]` table. Then it refuses once more
     on its own output: the rewritten text is parsed with `tomllib` and the key read back before
     anything reaches the disk, because a writer that could corrupt the owner's config is worse
-    than one that declines to touch it.
+    than one that declines to touch it. And once more just before the replace: if the file's
+    bytes are no longer the ones this edit was computed against -- the owner saved a hand-edit
+    in the meantime -- the edit is refused rather than overwriting theirs, the check
+    `hook_settings._refuse_if_changed_since_it_was_read` makes for the settings file.
+
+    Two shapes it declines by design. A commented-out `# key = ...` line is a comment and is
+    left as it is; the active line is appended after it. A `[limits]` table holding a value
+    whose continuation lines begin with `[` at column 0 (a multi-line array or string) cannot
+    be re-scanned safely, so the flip is refused rather than risked -- a hand-written shape
+    `render_config` never produces.
 
     Atomic and owner-only, the way the credential file is written: a sibling temporary opened
     `O_CREAT | O_EXCL` at 0600, filled, fsynced, then `os.replace`d over the **resolved** target
@@ -725,7 +734,10 @@ def write_limits_key(path: Path, key: str, value: str | int) -> None:
     if read_back != value:
         raise ConfigError(f"refusing to write limits.{key}: the result does not read back")
 
-    temporary = target.parent / f".{target.name}.{os.getpid()}.tmp"
+    # A random suffix, never the pid: a temporary left by a killed process plus a reused pid
+    # made `O_EXCL` refuse the next write for as long as the litter stood, and two flips racing
+    # in one process (two threads, one pid) would collide on the same name.
+    temporary = target.parent / f".{target.name}.{os.urandom(6).hex()}.tmp"
     try:
         descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
     except OSError as error:
@@ -738,6 +750,10 @@ def write_limits_key(path: Path, key: str, value: str | int) -> None:
             mode = stat.S_IMODE(original.st_mode)
             if mode != 0o600:
                 os.fchmod(handle.fileno(), mode)
+        if target.read_bytes() != data:
+            raise ConfigError(
+                f"refusing to write limits.{key}: {path} changed since it was read; run this again"
+            )
         os.replace(temporary, target)
     except OSError as error:
         raise ConfigError(f"cannot write configuration: {error}") from error

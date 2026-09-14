@@ -19,7 +19,11 @@ from types import SimpleNamespace
 
 import pytest
 
-from remote_agents.adapters.agents.registry import default_settings_path, install_agent_hooks
+from remote_agents.adapters.agents.registry import (
+    CLAUDE_USAGE_API_DESCRIPTION,
+    default_settings_path,
+    install_agent_hooks,
+)
 from remote_agents.adapters.supervisor.launchd import LaunchdSupervisor
 from remote_agents.adapters.supervisor.systemd import SystemdSupervisor
 from remote_agents.bootstrap import main
@@ -532,7 +536,7 @@ def test_doctor_reports_the_status_line_hop_and_never_moves_healthy_on_it(
 
 
 _SOURCE_STATUS_LINE = "status line"
-_SOURCE_USAGE_API = "usage API (reads ~/.claude/.credentials.json and calls api.anthropic.com)"
+_SOURCE_USAGE_API = CLAUDE_USAGE_API_DESCRIPTION
 
 
 @pytest.mark.parametrize(

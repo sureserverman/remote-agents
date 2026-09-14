@@ -221,8 +221,9 @@ class AgentLimits:
 
     Set for the reason `AgentUsage.stale_source` records, by whichever reader answered from a
     source other than the one it was asked of: Claude's, whose limits are read from the
-    status-line hop's recording described in `adapters.agents.claude.usage`, and Codex's, whose
-    reader stamps the rollout file when the app server could not answer. A figure whose freshness
+    status-line hop's recording described in `adapters.agents.claude.usage` or, opt-in, from
+    the usage API (`adapters.agents.claude.usage_api`), and Codex's, whose reader stamps the
+    rollout file when the app server could not answer. A figure whose freshness
     depends on a file is never rendered as though the service had just measured it.
     """
 

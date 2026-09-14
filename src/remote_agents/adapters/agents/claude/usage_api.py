@@ -75,6 +75,10 @@ _TOKEN_VARIABLE = "CLAUDE_CODE_OAUTH_TOKEN"
 #: trip and still short of a render anyone notices, the same bound the Codex reader uses.
 _REQUEST_TIMEOUT_SECONDS = 5.0
 
+#: The most of a body this reader will hold: the documented response is two small window
+#: objects, so a body past this is not the usage endpoint's and is a fault, not a read.
+_MAX_BODY_BYTES = 64 * 1024
+
 #: How long one successful answer stands before the API is asked again (see the docstring).
 _MEMO_SECONDS = 60.0
 
@@ -182,6 +186,9 @@ class ClaudeUsageApiReader:
         try:
             answer = self._limits_from(self._fetch(), asked_at)
         except _Fault as fault:
+            # `from None` hides the chain from a traceback; the object itself is dropped too,
+            # so nothing that later inspects this fault can reach the transport's own text.
+            fault.__context__ = None
             _LOG.debug("%s; answering with the fallback's reading", fault)
             return self._fallback.limits()
         self._remembered = (asked_at, answer)
@@ -202,12 +209,17 @@ class ClaudeUsageApiReader:
             raise _Fault("usage API: unreachable") from None
         except OSError:
             raise _Fault("usage API: unreachable") from None
+        except http.client.HTTPException:
+            # `urlopen` wraps the request in `except OSError` but not the response's status
+            # line: a `BadStatusLine` or `LineTooLong` from a proxy or a broken server escapes
+            # raw, and is a transport fault like the rest.
+            raise _Fault("usage API: malformed body") from None
         try:
             status = getattr(response, "status", None)
             if status != 200:
                 raise _Fault(f"usage API: HTTP {status}")
             try:
-                body = response.read()
+                body = response.read(_MAX_BODY_BYTES + 1)
             except (OSError, ValueError, http.client.HTTPException):
                 # `IncompleteRead` is an `HTTPException`, not an `OSError`: a body cut short
                 # by the server is a transport fault and answers from the fallback like one.
@@ -218,6 +230,8 @@ class ClaudeUsageApiReader:
                 close()
         if not isinstance(body, bytes | bytearray):
             raise _Fault("usage API: malformed body")
+        if len(body) > _MAX_BODY_BYTES:
+            raise _Fault("usage API: oversized body")
         return bytes(body)
 
     def _token(self) -> str:

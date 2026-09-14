@@ -27,8 +27,9 @@ from remote_agents.domain.models import ProfileId
 from remote_agents.ports.agent_usage import AgentLimits, AgentUsage, UsageQuery
 
 #: The switch value that routes to the usage API; every other value is the hop. Spelled here
-#: rather than imported from `config` because an adapter may not import that module; the
-#: config's closed set and this literal are pinned equal by the composition tests.
+#: rather than imported from `config` because an adapter may not import that module; that it
+#: is a member of the config's closed set is pinned by
+#: `test_the_selector_literal_for_claude_limits_source_is_in_the_closed_set`.
 USAGE_API = "usage-api"
 
 

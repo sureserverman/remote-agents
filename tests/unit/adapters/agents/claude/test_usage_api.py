@@ -70,8 +70,8 @@ class FakeResponse:
     body: bytes
     closed: int = 0
 
-    def read(self) -> bytes:
-        return self.body
+    def read(self, amount: int | None = None) -> bytes:
+        return self.body if amount is None else self.body[:amount]
 
     def close(self) -> None:
         self.closed += 1
@@ -84,7 +84,7 @@ class TruncatedResponse:
     status: int = 200
     closed: int = 0
 
-    def read(self) -> bytes:
+    def read(self, amount: int | None = None) -> bytes:
         raise http.client.IncompleteRead(b"{")
 
     def close(self) -> None:
@@ -299,6 +299,8 @@ def faults() -> list[tuple[str, BaseException | FakeResponse]]:
         ("http 401", http_error(401, "Unauthorized " + TOKEN)),
         ("http 302 refused rather than followed", http_error(302, "Found")),
         ("incomplete read", TruncatedResponse()),
+        ("bad status line at open", http.client.BadStatusLine("HTTP/9 " + TOKEN)),
+        ("oversized body", FakeResponse(200, b"[" + b" " * (64 * 1024 + 1) + b"]")),
         ("http 500 without raising", FakeResponse(500, b'{"error": "server"}')),
         ("url error", urllib.error.URLError("name resolution failed")),
         ("url error wrapping a timeout", urllib.error.URLError(TimeoutError("timed out"))),
@@ -537,3 +539,28 @@ def test_an_environment_token_is_held_nowhere_on_the_instance_either(
     assert TOKEN not in repr(answer)
     held = {name: value for name, value in vars(api).items() if name != "_opener"}
     assert TOKEN not in repr(held), "the token is never held on the instance"
+
+
+def test_a_fault_keeps_no_reference_to_the_transport_error_it_replaced(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """`raise ... from None` hides the chain from a traceback; the object itself is dropped too."""
+    from remote_agents.adapters.agents.claude import usage_api as module
+
+    seen: list[BaseException] = []
+    original = module._LOG.debug
+
+    def spy(message: str, *args: object, **kwargs: object) -> None:
+        seen.extend(a for a in args if isinstance(a, BaseException))
+        original(message, *args, **kwargs)
+
+    write_credentials(tmp_path, credentials_document())
+    api = reader(tmp_path, opener_for(http_error(401, "Unauthorized " + TOKEN)))
+    api_module_logger = module._LOG
+    api_module_logger.debug = spy  # type: ignore[method-assign]
+    try:
+        with caplog.at_level(logging.DEBUG):
+            api.limits()
+    finally:
+        api_module_logger.debug = original  # type: ignore[method-assign]
+    assert seen and all(fault.__context__ is None for fault in seen)
