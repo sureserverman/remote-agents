@@ -36,6 +36,7 @@ from telegram.ext import (
 )
 
 from remote_agents.adapters.telegram.callbacks import CallbackStateStore
+from remote_agents.adapters.telegram.flood import FloodGate
 from remote_agents.adapters.telegram.inspection import inspect_capture
 from remote_agents.adapters.telegram.live_view import ChatViewStore, LiveView
 from remote_agents.adapters.telegram.notifications import (
@@ -629,6 +630,13 @@ class PrivateBotBoundary:
     """
     stops: StopController = field(init=False)
     view: LiveView = field(init=False)
+    flood: FloodGate = field(init=False, default_factory=FloodGate)
+    """When Telegram last said this chat may not be spoken to, shared by every sender.
+
+    On the boundary rather than inside one of them because a flood ban is the chat's state:
+    the redraw, the command handlers and the activity notifier each used to discover one
+    separately and each kept going regardless.
+    """
     notifier: ActivityNotifier = field(init=False)
     trust_notifier: TrustNotifier | None = None
     """The pass that asks an untrusted session's folder-trust question, or None where none does.
@@ -1822,13 +1830,15 @@ class PrivateBotBoundary:
         return float(total_seconds()) if callable(total_seconds) else float(retry_after)
 
     def _hold_off(self, seconds: float) -> None:
-        """Refuse the store-driven redraw for `seconds`, because Telegram said so.
+        """Refuse sends for `seconds`, because Telegram said so.
 
-        Only ever extends. A shorter answer arriving while a longer hold stands is not
-        permission to speak sooner -- during an escalating flood ban the *later* replies carry
-        the smaller remainder, and taking the newest would walk the floor back down into the
-        ban that set it.
+        Two effects, because two mechanisms have to learn it. `flood` is the chat-wide answer
+        every sender consults -- the activity notifier reads it before a pass, so a ban found
+        by a button press stops the notifier too. `_redraw_allowed_at` is the redraw's own
+        floor, pushed out so the store-driven loop cannot walk past the ban two seconds at a
+        time, which is the behaviour that turned a ten-second cooldown into six hours.
         """
+        self.flood.hold_off(seconds)
         until = monotonic() + max(seconds, 0.0)
         if until > self._redraw_allowed_at:
             self._redraw_allowed_at = until
@@ -4011,6 +4021,7 @@ def build_private_bot(
         else ActivityNotifier(
             view=bot.view,
             callbacks=bot.callbacks,
+            flood=bot.flood,
             owner_user_id=owner_user_id,
             display=bot._display_for,  # noqa: SLF001 -- the cycle this factory exists to pay
             standing=bot.standing,

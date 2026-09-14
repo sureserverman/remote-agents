@@ -38,6 +38,11 @@ _AT_THE_BASE = frozenset(
     {
         "a notification the owner pressed was not this session's current one; "
         "the standing message is kept",
+        # Added deliberately, which is what this pin exists to force. The pass now reads the
+        # chat's flood hold before spending a request instead of discovering the ban again
+        # every thirty seconds; an operator watching a silent bot needs to be able to grep
+        # why it is silent.
+        "activity notifications held: %.0fs left on the chat's flood hold",
         "an activity notification was sent without its Open session button",
         "could not ask which notified sessions have finished",
         "could not deliver an activity notification; holding it for retry",
