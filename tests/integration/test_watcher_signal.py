@@ -132,6 +132,11 @@ async def test_composition_render_publishes_nothing(
     composition, paths, connection, ui = _composition(tmp_path, monkeypatch)
     watch = StoreWatch(watched_paths(paths.database_path))
     heard: list[object] = []
+    # `subscribe` starts the real background poll at its one-second interval, and this test also
+    # calls `poll_once` by hand. That is race-free only because `poll_once` contains no `await`,
+    # so it cannot yield to the background task mid-assertion — an implementation coincidence,
+    # not a documented invariant. If `poll_once` ever gains an await (a threaded `os.stat`, say),
+    # this test starts flaking and the reason will not be obvious. Noted so it is.
     unsubscribe = watch.subscribe(heard.append)
     try:
         await watch.poll_once()
@@ -166,3 +171,82 @@ def test_the_watched_file_is_not_the_one_the_surface_writes(tmp_path: Path) -> N
     """
     domain = tmp_path / "sessions.sqlite3"
     assert ui_database_path(domain) not in set(watched_paths(domain))
+
+
+@pytest.mark.asyncio
+async def test_the_redraw_entry_point_itself_leaves_the_watched_file_alone(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The incident path, driven through the method a `StoreChanged` actually reaches.
+
+    **The other tests in this file do not reach it.** They drive `sessions_command`, which shares
+    `_sessions_reply` with `redraw_sessions_if_open` but skips its three refusal guards — so the
+    suite never put the system in the state that produced the flood: the sessions page genuinely
+    open, a real store write arriving, and the redraw minting a fresh keyboard and sending it.
+    A review caught that the plan's central evidence had this hole, and that only the manual
+    five-minute drive covered it.
+
+    So: open the page for real, change what it shows (the content guard added by the flood hotfix
+    refuses an identical redraw, and refusing would prove nothing), then call the entry point and
+    watch the watched file.
+    """
+    from fake_telegram import FakeChat
+
+    composition, paths, connection, ui = _composition(tmp_path, monkeypatch)
+    boundary = composition.boundary
+    watch = StoreWatch(watched_paths(paths.database_path))
+    try:
+        chat = FakeChat()
+        await boundary.sessions_command(chat.message_update("/sessions"), None)
+        assert boundary.view.showing("sessions"), "the page is not open; the guards would refuse"
+
+        # A real session write — the thing the watcher is supposed to report — so the redraw has
+        # something new to draw and will mint rather than refuse. Written through the store
+        # rather than as raw SQL, because the page parses `display_identity` and a hand-spelled
+        # one is a second opinion about an encoding this test has no business knowing.
+        from datetime import UTC, datetime
+        from uuid import UUID
+
+        from remote_agents.adapters.sqlite.session_store import SQLiteSessionStore
+        from remote_agents.domain.models import (
+            ProfileId,
+            ProjectId,
+            SessionDisplayIdentity,
+            SessionId,
+            SessionRecord,
+            SessionState,
+        )
+
+        await SQLiteSessionStore(connection).save(
+            SessionRecord(
+                SessionId(UUID(int=9)),
+                ProjectId("a" * 24),
+                ProfileId("claude"),
+                SessionDisplayIdentity("Demo", "Claude", "regular", 1),
+                SessionState.RUNNING,
+                datetime(2026, 9, 14, tzinfo=UTC),
+            )
+        )
+        await watch.poll_once()  # consume the change that write legitimately published
+
+        boundary._redraw_allowed_at = 0.0  # noqa: SLF001 -- the floor is not what is under test
+        minted_before = ui.execute("SELECT COUNT(*) FROM callback_states").fetchone()[0]
+        domain_before = paths.database_path.stat().st_mtime_ns
+
+        drew = await boundary.redraw_sessions_if_open(chat.bot)
+
+        minted_after = ui.execute("SELECT COUNT(*) FROM callback_states").fetchone()[0]
+        domain_after = paths.database_path.stat().st_mtime_ns
+
+        assert drew is True, "the redraw refused, so it never minted and this proved nothing"
+        assert minted_after > minted_before, "no keyboard was minted; the write at issue is absent"
+        assert domain_after == domain_before, (
+            "the redraw moved the watched file — it would republish the change that scheduled it"
+        )
+        assert await watch.poll_once() is False, (
+            "the redraw published a store change; this is the flood loop, reconstituted"
+        )
+    finally:
+        watch.stop()
+        connection.close()
+        ui.close()

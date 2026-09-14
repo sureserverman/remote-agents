@@ -284,9 +284,16 @@ hold different halves:
 `test_the_stores_are_opened_split_first` that bootstrap honours it, and
 `test_no_domain_open_bypasses_the_split` that nothing opens the domain store around it.
 
-`handoff_intents` is here as residue rather than as a move: the feature was retired in
-`0d908d9c` and left its table behind, with no code reading it and no rows in it. It is not in
-`UI_TABLES` and is not recreated anywhere.
+`handoff_intents` is here as residue rather than as a move: no code reads it and the operator's
+store holds no rows in it. Its history is worth stating precisely, because `MIGRATIONS` no longer
+tells it: the table was created by a migration added in `7ad145aa`, and when the feature was
+retired in `0d908d9c` that `CREATE TABLE` was **deleted from the already-numbered migration**
+rather than dropped by a new one. So a reader bisecting schema history through this list will
+not find where the table came from, while every store migrated before 2026-08-04 still has it.
+That edit is the practice migration 9's comment forbids, and it is recorded here rather than
+corrected because correcting it now would fork the history a second time. `DROP TABLE IF EXISTS`
+is what makes migration 14 safe either way. It is not in `UI_TABLES` and is not recreated
+anywhere.
 
 `idempotency_claims` is deliberately absent. `session_store.py` writes it, and
 `docs/architecture.md` guarantees duplicate-command protection is durable across processes; in
