@@ -21,3 +21,11 @@ activity_poll_seconds = 30
 # percentage and nothing else will say so; correct it here. Omit the key entirely and 1000000 is
 # assumed. Codex needs no equivalent: it writes its own window into its rollout.
 claude_context_window = 1000000
+
+# Where the service reads a Claude session's rate-limit windows from. The default,
+# "status-line", is this project's own status-line hop and grants nothing new. "usage-api"
+# additionally lets the service read the OAuth token out of ~/.claude/.credentials.json and call
+# https://api.anthropic.com/api/oauth/usage for the figures, keeping the hop as its fallback.
+# That is a credential read and an outbound call the service otherwise never makes, which is why
+# it is opt-in: set it here, or from the console's Settings row, and nowhere else.
+claude_limits_source = "status-line"

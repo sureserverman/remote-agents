@@ -384,3 +384,302 @@ def test_a_genuinely_unknown_key_is_still_refused_by_name(tmp_path: Path) -> Non
         load_config(write_config(tmp_path, invented))
 
     assert "activity_quiet_pols" in str(refusal.value)
+
+
+# --- the switch that says where Claude's limits come from ---------------------------------
+
+
+def limits_source_body(tmp_path: Path) -> str:
+    """A file with everything the writer must leave alone: comments, odd spacing, no final newline.
+
+    Every line but the one the writer owns is a trap: a trailing comment on a key line, a
+    tab-indented key, a comment inside the section, a header with a comment, and a file that
+    does not end in a newline. The writer's contract is to change one line and nothing else.
+    """
+    return f'''# a comment before anything
+[paths]
+dev_root = "{tmp_path}"
+registry_path = "{tmp_path}/registry.yaml"   # trailing comment
+database_path = "{tmp_path}/sessions.sqlite3"
+
+[limits]   # the section the writer edits
+max_label_length=40
+\tproject_page_size = 10
+
+# a comment inside the section
+activity_poll_seconds   =   30
+claude_limits_source = "status-line"
+# a trailing comment, and no trailing newline after the last line
+claude_context_window = 200000'''
+
+
+def everything_but(text: str, key: str) -> list[str]:
+    return [line for line in text.split("\n") if not line.lstrip().startswith(f"{key} ")]
+
+
+def test_claude_limits_source_defaults_to_the_status_line_hop(tmp_path: Path) -> None:
+    """Absent means the old boundary: the hop, no credential read, no outbound call (DEC-061)."""
+    config = load_config(write_config(tmp_path, example(tmp_path)))
+
+    assert config.claude_limits_source == "status-line"
+
+
+@pytest.mark.parametrize("value", ["status-line", "usage-api"])
+def test_claude_limits_source_loads_each_legal_value(tmp_path: Path, value: str) -> None:
+    body = example(tmp_path) + f'claude_limits_source = "{value}"\n'
+
+    assert load_config(write_config(tmp_path, body)).claude_limits_source == value
+
+
+@pytest.mark.parametrize("value", ['"api"', '"Status-Line"', '""', "1", "true"])
+def test_claude_limits_source_refuses_anything_else_by_name(tmp_path: Path, value: str) -> None:
+    """A closed set, refused by name, so a typo cannot silently fall back to either reading."""
+    body = example(tmp_path) + f"claude_limits_source = {value}\n"
+
+    with pytest.raises(ConfigError) as refusal:
+        load_config(write_config(tmp_path, body))
+
+    message = str(refusal.value)
+    assert "limits.claude_limits_source" in message
+    assert "status-line" in message and "usage-api" in message
+
+
+def test_claude_limits_source_is_exposed_as_a_closed_set(tmp_path: Path) -> None:
+    from remote_agents.config import CLAUDE_LIMITS_SOURCES, DEFAULT_CLAUDE_LIMITS_SOURCE
+
+    assert CLAUDE_LIMITS_SOURCES == ("status-line", "usage-api")
+    assert DEFAULT_CLAUDE_LIMITS_SOURCE == "status-line"
+    assert DEFAULT_CLAUDE_LIMITS_SOURCE in CLAUDE_LIMITS_SOURCES
+
+
+def test_claude_limits_source_absent_from_a_pre_0_42_file_is_not_drift(tmp_path: Path) -> None:
+    """DEC-058: a config lacking the new key is not drift and not ill health."""
+    from remote_agents.config import describe_schema_drift
+
+    drift = describe_schema_drift(write_config(tmp_path, example(tmp_path)))
+
+    assert drift["missing"] == []
+    assert drift["unknown"] == []
+    assert drift["claude_limits_source"] == "status-line"
+
+
+def test_claude_limits_source_drift_report_carries_the_effective_value(tmp_path: Path) -> None:
+    from remote_agents.config import describe_schema_drift
+
+    body = example(tmp_path) + 'claude_limits_source = "usage-api"\n'
+
+    drift = describe_schema_drift(write_config(tmp_path, body))
+
+    assert drift["unknown"] == [] and drift["missing"] == []
+    assert drift["claude_limits_source"] == "usage-api"
+
+
+def test_write_limits_key_flips_claude_limits_source_and_changes_no_other_byte(
+    tmp_path: Path,
+) -> None:
+    """One line changes; every other byte -- comments, spacing, the missing final newline -- stays.
+
+    Flipped twice, because a writer that re-renders the whole file would pass a one-way check
+    trivially (it writes what the renderer writes) and would have thrown the owner's comments
+    away doing it.
+    """
+    from remote_agents.config import write_limits_key
+
+    path = write_config(tmp_path, limits_source_body(tmp_path))
+    before = path.read_text(encoding="utf-8")
+    assert not before.endswith("\n")
+
+    write_limits_key(path, "claude_limits_source", "usage-api")
+    flipped = path.read_text(encoding="utf-8")
+    assert load_config(path).claude_limits_source == "usage-api"
+    assert everything_but(flipped, "claude_limits_source") == everything_but(
+        before, "claude_limits_source"
+    )
+    assert not flipped.endswith("\n")
+
+    write_limits_key(path, "claude_limits_source", "status-line")
+    restored = path.read_text(encoding="utf-8")
+    assert load_config(path).claude_limits_source == "status-line"
+    assert restored == before
+
+
+def test_write_limits_key_adds_claude_limits_source_when_the_file_lacks_it(
+    tmp_path: Path,
+) -> None:
+    """The deployed shape has no such line; the writer appends one to `[limits]`, nowhere else."""
+    from remote_agents.config import write_limits_key
+
+    body = limits_source_body(tmp_path).replace('claude_limits_source = "status-line"\n', "")
+    assert "claude_limits_source" not in body
+    path = write_config(tmp_path, body)
+
+    write_limits_key(path, "claude_limits_source", "usage-api")
+
+    after = path.read_text(encoding="utf-8")
+    assert load_config(path).claude_limits_source == "usage-api"
+    assert everything_but(after, "claude_limits_source") == everything_but(
+        body, "claude_limits_source"
+    )
+    assert after.count("claude_limits_source") == 1
+    assert after.index("[limits]") < after.index("claude_limits_source")
+    assert not after.endswith("\n")
+
+
+def test_write_limits_key_writes_claude_limits_source_through_a_symlink(tmp_path: Path) -> None:
+    """A symlinked config is written through, not replaced with a regular file.
+
+    An operator who keeps their config in a dotfiles tree and links it into place would
+    otherwise find the link silently severed by a Settings row.
+    """
+    from remote_agents.config import write_limits_key
+
+    real = tmp_path / "dotfiles" / "config.toml"
+    real.parent.mkdir()
+    real.write_text(limits_source_body(tmp_path), encoding="utf-8")
+    link = tmp_path / "config.toml"
+    link.symlink_to(real)
+
+    write_limits_key(link, "claude_limits_source", "usage-api")
+
+    assert link.is_symlink()
+    assert link.resolve() == real.resolve()
+    assert 'claude_limits_source = "usage-api"' in real.read_text(encoding="utf-8")
+    assert load_config(real).claude_limits_source == "usage-api"
+
+
+@pytest.mark.parametrize("mode", [0o644, 0o600, 0o640])
+def test_write_limits_key_preserves_the_mode_when_flipping_claude_limits_source(
+    tmp_path: Path, mode: int
+) -> None:
+    """The temporary is born 0600; the file keeps whatever mode the operator gave it."""
+    import stat
+
+    from remote_agents.config import write_limits_key
+
+    path = write_config(tmp_path, limits_source_body(tmp_path))
+    path.chmod(mode)
+
+    write_limits_key(path, "claude_limits_source", "usage-api")
+
+    assert stat.S_IMODE(path.stat().st_mode) == mode
+    assert [child.name for child in tmp_path.iterdir() if child.name.endswith(".tmp")] == []
+
+
+def test_write_limits_key_refuses_a_claude_limits_source_outside_the_set(tmp_path: Path) -> None:
+    from remote_agents.config import write_limits_key
+
+    path = write_config(tmp_path, limits_source_body(tmp_path))
+    before = path.read_bytes()
+
+    with pytest.raises(ConfigError) as refusal:
+        write_limits_key(path, "claude_limits_source", "api")
+
+    assert "claude_limits_source" in str(refusal.value)
+    assert path.read_bytes() == before
+
+
+def test_write_limits_key_refuses_a_key_outside_the_schema(tmp_path: Path) -> None:
+    from remote_agents.config import write_limits_key
+
+    path = write_config(tmp_path, limits_source_body(tmp_path))
+    before = path.read_bytes()
+
+    for key in ("bot_token", "activity_quiet_polls", "dev_root", "claude_limits_sources"):
+        with pytest.raises(ConfigError) as refusal:
+            write_limits_key(path, key, "status-line")
+        assert key in str(refusal.value)
+
+    assert path.read_bytes() == before
+
+
+def test_write_limits_key_refuses_a_file_it_cannot_flip_claude_limits_source_in(
+    tmp_path: Path,
+) -> None:
+    """No `[limits]` section, or no parse at all: refuse, and leave the file exactly as it was."""
+    from remote_agents.config import write_limits_key
+
+    for body in ("[paths]\nnothing = 1\n", "[limits\nbroken = \n", ""):
+        path = write_config(tmp_path, body)
+        with pytest.raises(ConfigError):
+            write_limits_key(path, "claude_limits_source", "usage-api")
+        assert path.read_text(encoding="utf-8") == body
+
+    with pytest.raises(ConfigError):
+        write_limits_key(tmp_path / "absent.toml", "claude_limits_source", "usage-api")
+    assert not (tmp_path / "absent.toml").exists()
+
+
+def test_write_limits_key_also_writes_an_integer_limit_beside_claude_limits_source(
+    tmp_path: Path,
+) -> None:
+    """The writer is keyed, not special-cased: the ceiling goes through the same one line."""
+    from remote_agents.config import write_limits_key
+
+    path = write_config(tmp_path, limits_source_body(tmp_path))
+    before = path.read_text(encoding="utf-8")
+
+    write_limits_key(path, "claude_context_window", 500_000)
+
+    after = path.read_text(encoding="utf-8")
+    assert load_config(path).claude_context_window == 500_000
+    assert everything_but(after, "claude_context_window") == everything_but(
+        before, "claude_context_window"
+    )
+
+
+def test_a_generated_config_writes_claude_limits_source_live_and_says_what_usage_api_grants(
+    tmp_path: Path,
+) -> None:
+    """Live at its default, unlike the ceiling: writing it stamps nothing on the owner.
+
+    The comment is the consent text. `usage-api` reads a credential file and makes an outbound
+    call the service otherwise never makes, and the only place a new host learns that is here.
+    """
+    from remote_agents.config import render_config
+
+    rendered = render_config(
+        dev_root=tmp_path,
+        registry_path=tmp_path / "registry.yaml",
+        database_path=tmp_path / "sessions.sqlite3",
+    )
+
+    assert 'claude_limits_source = "status-line"' in rendered
+    assert "# claude_limits_source" not in rendered
+    assert "usage-api" in rendered
+    assert ".credentials.json" in rendered
+    assert "api.anthropic.com/api/oauth/usage" in rendered
+    assert load_config(write_config(tmp_path, rendered)).claude_limits_source == "status-line"
+
+
+def test_a_generated_config_carries_the_claude_limits_source_a_caller_chose(
+    tmp_path: Path,
+) -> None:
+    from remote_agents.config import DEFAULT_LIMITS, render_config
+
+    rendered = render_config(
+        dev_root=tmp_path,
+        registry_path=tmp_path / "registry.yaml",
+        database_path=tmp_path / "sessions.sqlite3",
+        limits={**DEFAULT_LIMITS, "claude_limits_source": "usage-api"},
+    )
+
+    assert load_config(write_config(tmp_path, rendered)).claude_limits_source == "usage-api"
+
+    with pytest.raises(ConfigError):
+        render_config(
+            dev_root=tmp_path,
+            registry_path=tmp_path / "registry.yaml",
+            database_path=tmp_path / "sessions.sqlite3",
+            limits={**DEFAULT_LIMITS, "claude_limits_source": "api"},
+        )
+
+
+def test_the_shipped_example_carries_claude_limits_source_at_its_default() -> None:
+    from remote_agents.config import describe_schema_drift
+
+    shipped = Path("config/remote-agents.example.toml").read_text(encoding="utf-8")
+    drift = describe_schema_drift(Path("config/remote-agents.example.toml"))
+
+    assert 'claude_limits_source = "status-line"' in shipped
+    assert ".credentials.json" in shipped
+    assert drift["unknown"] == [] and drift["missing"] == []

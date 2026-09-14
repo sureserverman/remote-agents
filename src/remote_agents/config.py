@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import os
+import re
+import stat
 import tomllib
 from collections.abc import Mapping
 from dataclasses import KW_ONLY, dataclass, field
@@ -58,6 +60,20 @@ anything the provider writes down. This value is the owner's own statement of th
 restated here as the default and spelled out in the shipped example where they can correct it.
 """
 
+CLAUDE_LIMITS_SOURCES = ("status-line", "usage-api")
+"""Where a Claude session's rate-limit windows may be read from; a closed set, never free text.
+
+`status-line` is this project's own status-line hop, which costs the owner nothing they have not
+already granted. `usage-api` additionally lets the service read the OAuth token out of
+`~/.claude/.credentials.json` and call `https://api.anthropic.com/api/oauth/usage` for the
+figures, keeping the hop as its fallback -- a credential read and an outbound call the service
+otherwise never makes. That is why it is a switch the owner throws rather than a fallback the
+service reaches for on its own (DEC-061, amended): the default keeps the old boundary.
+"""
+
+DEFAULT_CLAUDE_LIMITS_SOURCE = "status-line"
+"""Opt-in means off until the owner says otherwise, and a file that says nothing said nothing."""
+
 
 @dataclass(frozen=True, slots=True)
 class AppConfig:
@@ -95,6 +111,17 @@ class AppConfig:
     misattribution DEC-061 forbids in the other direction when a reader invents a figure.
     """
 
+    claude_limits_source: str = DEFAULT_CLAUDE_LIMITS_SOURCE
+    """Which of `CLAUDE_LIMITS_SOURCES` the owner chose, or the default when they chose nothing.
+
+    Optional for the ceiling's second reason and not its first: it is a *permission* rather than
+    a declaration, and a host that never granted one has plainly not granted it. Requiring the
+    key would refuse every config deployed before it existed (DEC-058 says that is not drift),
+    and defaulting it to anything but the hop would grant a credential read nobody asked for.
+    No `_stated` twin, because nothing presents the default differently from a stated one: the
+    hop is the hop whether the owner wrote it down or not.
+    """
+
 
 _TOP_LEVEL_KEYS = {"paths", "limits"}
 _PATH_KEYS = {"dev_root", "registry_path", "database_path"}
@@ -103,6 +130,7 @@ _LIMIT_KEYS = {
     "project_page_size",
     "activity_poll_seconds",
     "claude_context_window",
+    "claude_limits_source",
 }
 
 _RETIRED_LIMIT_KEYS = frozenset({"activity_quiet_polls"})
@@ -128,18 +156,20 @@ counts captures now. `activity_poll_seconds` is untouched and still paces the ti
 the spool drain.
 """
 
-_OPTIONAL_LIMIT_KEYS = frozenset({"claude_context_window"})
+_OPTIONAL_LIMIT_KEYS = frozenset({"claude_context_window", "claude_limits_source"})
 """Keys the schema accepts but does not require, and the only ones in it.
 
 Every other key here is required on purpose: `_require_exact_keys` refuses a missing one so an
 operator's file cannot silently disagree with the service it configures, which is the whole
 point of an exact schema and the reason `activity_poll_seconds`' own absence test exists.
 
-This one is different in kind rather than in importance. It is a **declaration**, not a knob:
-Claude publishes no context ceiling anywhere a third party can read, so a percentage can only
-be rendered from a number the owner states. A host that has never stated one has an honest
-default; a host that has never stated a poll interval has a bug. Requiring it would also refuse
-every config already deployed, which is a schema change breaking the hosts it was written for.
+These two are different in kind rather than in importance. The ceiling is a **declaration**,
+not a knob: Claude publishes no context ceiling anywhere a third party can read, so a percentage
+can only be rendered from a number the owner states. A host that has never stated one has an
+honest default; a host that has never stated a poll interval has a bug. The source is a
+**permission**, and a host that never granted one has not granted it. Requiring either would
+also refuse every config already deployed, which is a schema change breaking the hosts it was
+written for -- and DEC-058 says a config lacking a new key is not drift.
 """
 
 _CLAUDE_CONTEXT_BOUNDS = (1_000, 20_000_000)
@@ -192,6 +222,9 @@ def describe_schema_drift(path: Path) -> dict[str, object]:
         # the shipped example and the generated comment both only reach a config being written.
         "claude_context_window": DEFAULT_CLAUDE_CONTEXT_WINDOW,
         "claude_context_window_stated": False,
+        # The effective limits source, permitted as a value for the ceiling's reason: it is
+        # drawn from `CLAUDE_LIMITS_SOURCES`, never typed free-form, or it is the default.
+        "claude_limits_source": DEFAULT_CLAUDE_LIMITS_SOURCE,
     }
     try:
         raw = tomllib.loads(path.read_text(encoding="utf-8"))
@@ -223,7 +256,9 @@ def describe_schema_drift(path: Path) -> dict[str, object]:
     try:
         # The effective figure comes from the load rather than from the raw file, so it is the
         # number the service will actually use -- bounds applied, default filled in.
-        report["claude_context_window"] = load_config(path).claude_context_window
+        loaded = load_config(path)
+        report["claude_context_window"] = loaded.claude_context_window
+        report["claude_limits_source"] = loaded.claude_limits_source
     except ConfigError as error:
         report["detail"] = str(error)
         if not unknown and not missing:
@@ -338,6 +373,9 @@ def load_config(path: Path) -> AppConfig:
         *_CLAUDE_CONTEXT_BOUNDS,
     )
     claude_context_window_stated = "claude_context_window" in limits
+    claude_limits_source = _limits_source(
+        limits.get("claude_limits_source", DEFAULT_CLAUDE_LIMITS_SOURCE)
+    )
     return AppConfig(
         dev_root,
         registry_path,
@@ -347,6 +385,7 @@ def load_config(path: Path) -> AppConfig:
         activity_poll_seconds,
         claude_context_window=claude_context_window,
         claude_context_window_stated=claude_context_window_stated,
+        claude_limits_source=claude_limits_source,
     )
 
 
@@ -429,19 +468,43 @@ def _bounded_int(value: object, name: str, minimum: int, maximum: int) -> int:
     return value
 
 
+def _limits_source(value: object) -> str:
+    """Admit one of `CLAUDE_LIMITS_SOURCES` and nothing else, naming both on refusal.
+
+    Exact, case-sensitive, no aliases: a value that is nearly `usage-api` must not be read as
+    a grant, and one that is nearly `status-line` must not silently become one either. Shared
+    by the loader, the renderer and the one-key writer so the three cannot disagree about what
+    is legal.
+    """
+    if not isinstance(value, str) or value not in CLAUDE_LIMITS_SOURCES:
+        legal = " or ".join(f'"{source}"' for source in CLAUDE_LIMITS_SOURCES)
+        raise ConfigError(f"limits.claude_limits_source must be {legal}")
+    return value
+
+
 #: What a freshly generated configuration starts at, and the values the shipped example has
 #: carried since it was written. They are here rather than in the generator's caller because
 #: the bounds that accept them are here: `_bounded_int` is what says 40 is a legal label length,
 #: and a default living somewhere else could drift outside a bound nothing would re-check until
 #: an operator's first `serve`.
-DEFAULT_LIMITS: dict[str, int] = {
+DEFAULT_LIMITS: dict[str, int | str] = {
     "max_label_length": 40,
     "project_page_size": 10,
     "activity_poll_seconds": 30,
     "claude_context_window": DEFAULT_CLAUDE_CONTEXT_WINDOW,
+    "claude_limits_source": DEFAULT_CLAUDE_LIMITS_SOURCE,
 }
 
 _LIMIT_COMMENTS: dict[str, str] = {
+    "claude_limits_source": (
+        "# Where the service reads a Claude session's rate-limit windows from. The default,\n"
+        '# "status-line", is this project\'s own status-line hop and grants nothing new.\n'
+        '# "usage-api" additionally lets the service read the OAuth token out of\n'
+        "# ~/.claude/.credentials.json and call https://api.anthropic.com/api/oauth/usage for\n"
+        "# the figures, keeping the hop as its fallback. That is a credential read and an\n"
+        "# outbound call the service otherwise never makes, which is why it is opt-in: set it\n"
+        "# here, or from the console's Settings row, and nowhere else."
+    ),
     "claude_context_window": (
         "# The size of Claude's context window, in tokens. **This is your statement, not a\n"
         "# measurement.** Claude Code publishes no context ceiling anywhere this service can\n"
@@ -479,7 +542,7 @@ def render_config(
     dev_root: Path,
     registry_path: Path,
     database_path: Path,
-    limits: dict[str, int] | None = None,
+    limits: dict[str, int | str] | None = None,
 ) -> str:
     """Render a complete configuration for one host, checked against this build's own schema.
 
@@ -522,30 +585,176 @@ def render_config(
         # of them.
         if not value.is_absolute():
             raise ConfigError(f"generated paths.{key} must be an absolute path: {value}")
+    # The same rule for the one string-valued limit: the loader refuses anything outside the
+    # closed set, so the renderer must too, or it writes a file its own loader rejects.
+    if "claude_limits_source" in values:
+        _limits_source(values["claude_limits_source"])
     rendered_paths = "\n".join(f"{key} = {_toml_string(paths[key])}" for key in sorted(paths))
     # A blank line before a commented key and nowhere else: separating every key would make the
     # file's own shape argue that each one needs reading, when only this one does.
     rendered_limits = "\n".join(
-        f"\n{_LIMIT_COMMENTS[key]}\n# {key} = {values[key]:d}"
+        f"\n{_LIMIT_COMMENTS[key]}\n# {key} = {_toml_value(values[key])}"
         if _DEFAULTED_LIMITS.get(key) == values[key]
-        else f"\n{_LIMIT_COMMENTS[key]}\n{key} = {values[key]:d}"
+        else f"\n{_LIMIT_COMMENTS[key]}\n{key} = {_toml_value(values[key])}"
         if key in _LIMIT_COMMENTS
-        else f"{key} = {values[key]:d}"
+        else f"{key} = {_toml_value(values[key])}"
         for key in sorted(values)
     )
     return f"[paths]\n{rendered_paths}\n\n[limits]\n{rendered_limits}\n"
 
 
-def _toml_string(value: Path) -> str:
-    """Render one path as a TOML basic string, escaped the way TOML v1.0.0 requires.
+def _toml_value(value: int | str) -> str:
+    """Render one limit the way its type demands: an integer bare, a string quoted and escaped.
+
+    `bool` is an `int` to `isinstance` and `True` renders as `1` under `:d`, which the loader
+    would then accept as a legal count -- the same trap `_bounded_int` closes on the way in,
+    closed here on the way out.
+    """
+    if isinstance(value, bool) or not isinstance(value, int | str):
+        raise ConfigError(
+            f"generated limits must be integers or strings, not {type(value).__name__}"
+        )
+    return f"{value:d}" if isinstance(value, int) else _toml_string(value)
+
+
+def _toml_string(value: Path | str) -> str:
+    """Render one path or string as a TOML basic string, escaped the way TOML v1.0.0 requires.
 
     Only the escapes a filesystem path can actually need: a backslash, a double quote, and the
     control characters TOML refuses to carry raw. A newline in a directory name would otherwise
     end the line and leave the rest to be parsed as a further key — the same injection the
-    systemd renderer refuses, arriving through a different format.
+    systemd renderer refuses, arriving through a different format. A plain string takes the
+    same road: the limits source is drawn from a closed set, but the escaping costs nothing and
+    a renderer that trusted its input would be one edit away from not deserving to.
     """
     text = str(value).replace("\\", "\\\\").replace('"', '\\"')
     escaped = "".join(
         character if character.isprintable() else f"\\u{ord(character):04X}" for character in text
     )
     return f'"{escaped}"'
+
+
+_LIMITS_HEADER = re.compile(r"^\s*\[\s*limits\s*\]\s*(?:#.*)?\r?\n?$")
+_ANY_HEADER = re.compile(r"^\s*\[")
+_LINE_END = re.compile(r"\r?\n$")
+
+
+def write_limits_key(path: Path, key: str, value: str | int) -> None:
+    """Rewrite one `key = value` line in `[limits]` and preserve every other byte of the file.
+
+    **Not a re-render.** `render_config` writes a fresh file for a host that has none; this
+    writes one line into a file the owner may have annotated, reordered, or linked into place
+    from a dotfiles tree, and the console's Settings row is what calls it (DEC-053, narrowed:
+    `config.toml` gains a key the row writes, and no settings file). Re-rendering would honour
+    the schema and destroy the owner's comments, which is the wrong trade for a switch that is
+    flipped from a phone. The line is located textually, inside the `[limits]` header and
+    before the next one; it is replaced in place when present and appended to the section when
+    absent, and the file's trailing newline -- or its absence -- is kept as found.
+
+    Refuses, with `ConfigError` and the file untouched: a key outside the limits schema (a
+    retired key included -- nothing writes one back), a source outside `CLAUDE_LIMITS_SOURCES`,
+    a file that does not parse, and a file with no `[limits]` table. Then it refuses once more
+    on its own output: the rewritten text is parsed with `tomllib` and the key read back before
+    anything reaches the disk, because a writer that could corrupt the owner's config is worse
+    than one that declines to touch it.
+
+    Atomic and owner-only, the way the credential file is written: a sibling temporary opened
+    `O_CREAT | O_EXCL` at 0600, filled, fsynced, then `os.replace`d over the **resolved** target
+    so a symlinked config is written through rather than replaced by a regular file. The target
+    keeps its own mode when that is not 0600 -- an operator who chose 0644 chose it. Stdlib
+    only: this is a root-layer module and may not reach for an adapter.
+    """
+    if key not in _LIMIT_KEYS:
+        raise ConfigError(f"limits.{key} is not a key this schema writes")
+    if key == "claude_limits_source":
+        rendered = _toml_value(_limits_source(value))
+    elif isinstance(value, bool) or not isinstance(value, int):
+        raise ConfigError(f"limits.{key} must be an integer")
+    else:
+        rendered = _toml_value(value)
+
+    target = Path(os.path.realpath(path))
+    try:
+        original = target.stat()
+        data = target.read_bytes()
+        text = data.decode("utf-8")
+        raw = tomllib.loads(text)
+    except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError) as error:
+        if path.exists():
+            raise ConfigError(_unreadable(path, error)) from error
+        raise ConfigError(_unreadable(path, error)) from None
+    if not isinstance(raw.get("limits"), dict):
+        raise ConfigError("limits must be a TOML table")
+
+    rewritten = _replace_limits_line(text, key, f"{key} = {rendered}")
+    try:
+        read_back = tomllib.loads(rewritten)["limits"][key]
+    except (tomllib.TOMLDecodeError, KeyError, TypeError) as error:
+        raise ConfigError(f"refusing to write limits.{key}: the result would not load") from error
+    if read_back != value:
+        raise ConfigError(f"refusing to write limits.{key}: the result does not read back")
+
+    temporary = target.parent / f".{target.name}.{os.getpid()}.tmp"
+    try:
+        descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    except OSError as error:
+        raise ConfigError(f"cannot write configuration: {error}") from error
+    try:
+        with os.fdopen(descriptor, "wb") as handle:
+            handle.write(rewritten.encode("utf-8"))
+            handle.flush()
+            os.fsync(handle.fileno())
+            mode = stat.S_IMODE(original.st_mode)
+            if mode != 0o600:
+                os.fchmod(handle.fileno(), mode)
+        os.replace(temporary, target)
+    except OSError as error:
+        raise ConfigError(f"cannot write configuration: {error}") from error
+    finally:
+        try:
+            os.unlink(temporary)
+        except FileNotFoundError:
+            pass
+
+
+def _replace_limits_line(text: str, key: str, line: str) -> str:
+    """Swap or append one key line inside `[limits]`, touching no other character.
+
+    Split on `\\n` alone rather than `str.splitlines`, which also breaks on form feeds and the
+    Unicode separators -- legal inside a TOML string, and a line split there would be a byte
+    moved. The last line is kept without a terminator when the file has none, so that is what
+    it gets back. A key on its own line keeps its own line ending; an appended one borrows the
+    terminator of the line before it and, when that line was the file's unterminated last, the
+    absence moves down with it.
+    """
+    lines = [f"{part}\n" for part in text.split("\n")]
+    lines[-1] = lines[-1][:-1]
+    if not lines[-1]:
+        lines.pop()
+    key_line = re.compile(rf"^\s*{re.escape(key)}\s*=")
+
+    start = next((index for index, item in enumerate(lines) if _LIMITS_HEADER.match(item)), None)
+    if start is None:
+        raise ConfigError("limits must be a TOML table")
+    end = next(
+        (index for index in range(start + 1, len(lines)) if _ANY_HEADER.match(lines[index])),
+        len(lines),
+    )
+    for index in range(start + 1, end):
+        if key_line.match(lines[index]):
+            ending = _LINE_END.search(lines[index])
+            lines[index] = line + (ending.group(0) if ending else "")
+            return "".join(lines)
+
+    last = next(
+        (index for index in range(end - 1, start, -1) if lines[index].strip()),
+        start,
+    )
+    ending = _LINE_END.search(lines[last])
+    terminator = ending.group(0) if ending else "\n"
+    if ending is None:
+        lines[last] = lines[last] + "\n"
+        lines.insert(last + 1, line)
+    else:
+        lines.insert(last + 1, line + terminator)
+    return "".join(lines)
