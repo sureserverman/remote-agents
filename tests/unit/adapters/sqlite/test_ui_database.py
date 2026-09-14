@@ -19,7 +19,7 @@ from remote_agents.adapters.sqlite.database import (
     open_ui_database,
     ui_database_path,
 )
-from remote_agents.adapters.sqlite.migrations import UI_MIGRATIONS, UI_TABLES
+from remote_agents.adapters.sqlite.migrations import MIGRATIONS, UI_MIGRATIONS, UI_TABLES
 
 
 def test_the_ui_store_sits_beside_the_domain_store() -> None:
@@ -79,8 +79,12 @@ def test_the_two_stores_version_independently(tmp_path: Path) -> None:
         domain.close()
         ui.close()
 
+    # Migrating one store must leave the other's counter alone. The first assertion pins the
+    # UI store's own version; this one pins that the domain store did not follow it, which is
+    # the regression a shared counter would actually produce.
     assert ui_version == len(UI_MIGRATIONS)
-    assert ui_version != domain_version or len(UI_MIGRATIONS) == domain_version
+    assert domain_version == len(MIGRATIONS)
+    assert ui_version != domain_version
 
 
 def test_opening_the_ui_store_twice_changes_nothing(tmp_path: Path) -> None:

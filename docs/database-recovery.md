@@ -57,47 +57,90 @@ no host has produced one to date.
 
 ## Undoing the store split
 
-Since the store split, this host keeps **two** databases side by side in
+> **Not yet live.** Nothing calls the split until the stage that moves each store's connection
+> onto the second database. Until then `ui.sqlite3` is never created and this section describes
+> a state your host is not in. If `ui.sqlite3` does not exist, stop here — nothing has moved.
+
+**Read this first, before running anything.** Rolling back restores the surface's state *and*
+reinstates the reason the bot was flood-banned: its own writes go back into the file the change
+watcher fingerprints, so an open sessions page republishes its own change and redraws until
+Telegram stops it. This is a way to recover state, not a place to stay. It is also only half an
+undo — see "What this does not do" below.
+
+Once the split is live, this host keeps **two** databases side by side in
 `~/.local/state/remote-agents/`:
 
-- `sessions.sqlite3` — session state, the file the change watcher fingerprints
+- `sessions.sqlite3` — session state, and the file the change watcher fingerprints
 - `ui.sqlite3` — what the Telegram surface writes about itself: callback tokens, the live
   view's anchor, standing and trust notifications
 
-They are separate because the watcher's signal is a file's metadata. While the bot's callback
-tokens shared `sessions.sqlite3`, minting a keyboard was indistinguishable from another process
-launching a session, so an open sessions page republished its own change and redrew about
-thirty times a minute until Telegram flood-banned the bot.
+**When to reach for this.** The surface has lost state it should have — an empty sessions list
+that should not be, buttons that resolve to nothing, notifications that vanished — **and**
+`ui.sqlite3` exists. A missing `ui.sqlite3` means either the split never ran, or it ran and the
+file was lost afterwards; those are different problems and only the second is a data loss. Check
+for a pre-split backup before concluding which:
 
-**When to reach for a rollback.** Only when the surface has lost state it should have — an
-empty sessions list that should not be, buttons that resolve to nothing, notifications that
-vanished — *and* `ui.sqlite3` exists. If `ui.sqlite3` is missing entirely, the split never ran
-and there is nothing to undo.
+```bash
+ls ~/.local/state/remote-agents/sessions.sqlite3.pre-split-*.bak
+```
+
+"No such file or directory" means the split never ran on this host.
 
 **Stop the service first.** Up to five writers share these files across four processes.
 
-    systemctl --user stop remote-agents
+```bash
+systemctl --user stop remote-agents.service
+```
 
 **Put the surface tables back in the domain store:**
 
-    python3 - <<'PY'
-    from pathlib import Path
-    from remote_agents.adapters.sqlite.store_split import unsplit_stores
-    print(unsplit_stores(Path.home() / ".local/state/remote-agents/sessions.sqlite3").restored)
-    PY
+```bash
+cd ~/dev/infra/remote-agents
+uv run --locked python -c "
+from pathlib import Path
+from remote_agents.adapters.sqlite.store_split import unsplit_stores
+print(unsplit_stores(Path.home() / '.local/state/remote-agents/sessions.sqlite3').restored)
+"
+```
 
-It prints a row count per table it restored, and is safe to run twice — run it again if you are
-not sure it worked. It recreates the tables from `ui.sqlite3`'s own schema, so it works whether
-or not the domain store still has them.
+It prints a dict of **rows this run put back**, per table — `{}` means it found nothing to
+restore, not that it failed. It is safe to run twice; a second run prints zeros because the rows
+are already there.
+
+**It refuses, loudly, in two cases**, rather than guessing:
+
+- *"the domain store's columns … do not match the UI store's"* — a table of that name already
+  exists in `sessions.sqlite3` with a different shape, so copying positionally would put values
+  in the wrong columns. Rename or drop that table only if you know what wrote it.
+- *"… is not something this restore knows how to recreate"* — the UI store holds a schema object
+  this procedure does not handle. Do not work around it; capture the message.
+
+**Start the service again:**
+
+```bash
+systemctl --user start remote-agents.service
+```
+
+**What this does not do.** It copies rows; it does not change where the code *writes*. Once the
+split is live the surface stores still point at `ui.sqlite3`, so after a restart the bot writes
+there again and the restored rows go stale. A durable rollback is a **code** rollback — deploy
+the build from before the split — and this procedure is how you carry the rows back to it. It
+also leaves `ui.sqlite3` in place; keep it until the restored service has passed its health
+check, then it is yours to delete.
 
 **If that is not enough**, the split wrote a full snapshot of the domain store before it moved
-anything:
+anything. Restoring one needs `--backup`, because the default path is `sessions.sqlite3.bak` and
+not the snapshot you just listed:
 
-    ls ~/.local/state/remote-agents/sessions.sqlite3.pre-split-*.bak
+```bash
+uv run --locked remote-agents restore-database \
+  --database "$HOME/.local/state/remote-agents/sessions.sqlite3" \
+  --backup "$HOME/.local/state/remote-agents/sessions.sqlite3.pre-split-<stamp>.bak"
+```
 
-Restore one with the ordinary restore procedure above. Note the version rule that procedure
-already carries: a backup predating a migration will read as *not ready* to a newer build.
-
-**After a rollback the bot works and the flood-ban cause returns.** Rolling back puts the
-surface's writes back in the watched file, which is what made the redraw republish its own
-change. Treat it as a way to recover state, not a place to stay.
+**That command refuses a healthy database on purpose**, and the case that sends you here — the
+surface lost state while session history is fine — is exactly a healthy one. It will say so and
+stop. That refusal is correct: reaching for a pre-split snapshot then would trade intact session
+history for surface rows you can get back with the restore above. Use it only when
+`sessions.sqlite3` is itself damaged, and note the version rule the procedure at the top of this
+file already carries: a snapshot predating a migration reads as *not ready* to a newer build.

@@ -110,7 +110,8 @@ def test_the_domain_store_keeps_its_own_rows(tmp_path: Path) -> None:
 
 
 def test_the_migration_is_a_no_op_the_second_time(tmp_path: Path) -> None:
-    """It runs on every process start, so it has to be safe to run when there is nothing to do."""
+    """It is meant to run on every process start, so it has to be safe when there is nothing to
+    do — even though nothing calls it until the next stage wires it in."""
     domain = tmp_path / "sessions.sqlite3"
     before = _a_store_with_rows(domain)
 
@@ -159,7 +160,7 @@ def test_a_store_that_was_never_split_and_has_no_moved_tables_is_left_alone(
 
 @pytest.mark.parametrize("table", sorted(UI_TABLES))
 def test_every_moved_table_is_reported_by_name(tmp_path: Path, table: str) -> None:
-    """The report is what the gate's verifier reads, so it names the set rather than a total."""
+    """The report is what the gate's verifier will read, so it names the set rather than a total."""
     domain = tmp_path / "sessions.sqlite3"
     before = _a_store_with_rows(domain)
 
@@ -202,8 +203,8 @@ def test_the_split_applies_no_migration_to_the_domain_store(
 def test_a_second_start_takes_no_further_backup(tmp_path: Path) -> None:
     """Stage 1 is additive, so the moved tables stay in the domain store until Stage 2.
 
-    Without this, every process start for the whole of that window wrote a fresh full-database
-    copy and nothing removed them — unbounded growth on an otherwise healthy host.
+    Without this, every process start for the whole of that window would write a fresh
+    full-database copy and nothing would remove them — unbounded growth on a healthy host.
     """
     domain = tmp_path / "sessions.sqlite3"
     _a_store_with_rows(domain)

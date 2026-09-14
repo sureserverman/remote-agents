@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Prove the store split moved every row and left the two files disjoint.
 
-The gates call this because the claims are about a **set** — every moved table, in both
+The stage gates will call this once the split is wired in — nothing invokes it at HEAD.
+It exists because the claims are about a **set** — every moved table, in both
 directions — and a check that names one table cannot fail on the other three. `UI_TABLES` is
 imported rather than restated here so the set has one definition (DEC-011); a table added to
 the migration and forgotten here would otherwise pass a verifier that never looked for it.
@@ -28,6 +29,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 from remote_agents.adapters.sqlite.migrations import UI_TABLES  # noqa: E402
 
+
 #: Tables that must never appear in the UI store.
 #:
 #: `idempotency_claims` is here for the reason this whole split is careful about it: it is the
@@ -37,13 +39,18 @@ from remote_agents.adapters.sqlite.migrations import UI_TABLES  # noqa: E402
 #: it, so the one script whose job is proving the files disjoint would not have noticed.
 #: `handoff_intents` is here for symmetry: it is dropped rather than moved, so it belongs in
 #: neither file, and a copy that resurrected it should fail something.
-_DOMAIN_TABLES = (
-    "sessions",
-    "session_events",
-    "agent_activity",
-    "idempotency_claims",
-    "handoff_intents",
-)
+def _domain_tables(domain: Path) -> set[str]:
+    """Everything the domain store holds that is not the moved set.
+
+    Derived, not listed. A hand-maintained enumeration here would be a second opinion about
+    which tables are domain-owned (DEC-011), and the half that drifted would be this one:
+    a new domain table added upstream would simply be absent from it, so a leak into the UI
+    store would pass the one script whose job is catching exactly that.
+    """
+    # `schema_version` is excluded because each file legitimately carries its own: the two
+    # stores version independently, which is the point. Deriving the set without this exclusion
+    # reported it as "leaked into the UI store" on the first run.
+    return _tables(domain) - set(UI_TABLES) - {"schema_version"}
 
 
 def _tables(path: Path) -> set[str]:
@@ -132,7 +139,7 @@ def _disjoint_claim(domain: Path, ui: Path) -> int:
     in_domain = _tables(domain)
     in_ui = _tables(ui)
     failures = [f"{t} still in the domain store" for t in sorted(set(UI_TABLES) & in_domain)]
-    failures += [f"{t} leaked into the UI store" for t in sorted(set(_DOMAIN_TABLES) & in_ui)]
+    failures += [f"{t} leaked into the UI store" for t in sorted(_domain_tables(domain) & in_ui)]
     return _report(failures, "the two stores are disjoint in both directions")
 
 

@@ -271,9 +271,9 @@ MIGRATIONS: tuple[tuple[int, str], ...] = (
 #: sessions page redrawing, minting and republishing its own change is what flood-banned the
 #: bot for six hours on 2026-09-13.
 #:
-#: Read by `UI_MIGRATIONS` below, by `scripts/verify-store-split.py`, and by the migration that
-#: moves existing rows — one set, three readers, so a table added here cannot be forgotten by
-#: one of them.
+#: Read by `UI_MIGRATIONS` below, by `scripts/verify-store-split.py`, and by `store_split`,
+#: which copies the rows — one set, three readers, so a table added here cannot be forgotten by
+#: one of them. `store_split` is deliberately not a migration; it says why.
 UI_TABLES: tuple[str, ...] = (
     "callback_states",
     "chat_views",

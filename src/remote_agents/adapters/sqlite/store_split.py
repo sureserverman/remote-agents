@@ -72,8 +72,11 @@ def _backup(connection: sqlite3.Connection, domain_path: Path) -> Path:
     stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
     unique = f"{stamp}-{os.getpid()}-{secrets.token_hex(3)}"
     destination = domain_path.with_name(f"{domain_path.name}.pre-split-{unique}.bak")
-    with sqlite3.connect(destination) as target:
+    target = sqlite3.connect(destination)
+    try:
         connection.backup(target)
+    finally:
+        target.close()
     return destination
 
 
@@ -101,7 +104,8 @@ def split_stores(domain_path: Path) -> SplitReport:
     """Copy every moved table into the UI store. Idempotent; leaves the drop to migration 14.
 
     Answers an empty report when there is nothing to do — a store already split, or one that
-    does not exist yet — because this runs on every process start.
+    does not exist yet — because it is meant to run on every process start. **Nothing calls it
+    yet:** wiring it into the composition root is the next stage's, along with the drop.
     """
     if not domain_path.exists():
         return SplitReport(moved={}, backup=None)
@@ -116,7 +120,7 @@ def split_stores(domain_path: Path) -> SplitReport:
 
         # Already landed? Then this start has nothing to do, and must not take another backup.
         # Stage 1 is additive, so `present` stays non-empty until Stage 2's drop -- without this
-        # every process start for the whole of that window wrote a fresh full-database copy and
+        # every process start, once this is wired, would otherwise write a fresh full copy and
         # nothing ever removed them. Checked against the UI store's contents rather than a flag,
         # because a flag is a second opinion about a question the rows already answer.
         if _already_copied(connection, domain_path):
@@ -132,12 +136,13 @@ def split_stores(domain_path: Path) -> SplitReport:
             for table in UI_TABLES:
                 if table not in present:
                     continue
-                connection.execute(
+                cursor = connection.execute(
                     f'INSERT OR IGNORE INTO ui."{table}" SELECT * FROM main."{table}"'
                 )
-                moved[table] = connection.execute(
-                    f'SELECT COUNT(*) FROM main."{table}"'
-                ).fetchone()[0]
+                # What THIS call copied, not the table's total. Counting the source gave a
+                # number identical whether the copy did everything or nothing, and both
+                # reports are read as proof that it worked.
+                moved[table] = cursor.rowcount if cursor.rowcount > 0 else 0
             connection.commit()
 
             # Verified before the drop is ever allowed to run, and per table: a short copy
@@ -214,6 +219,11 @@ def unsplit_stores(domain_path: Path) -> RestoreReport:
     until the day it matters.
 
     Idempotent, because an operator who is not sure a command worked runs it again.
+
+    **Raises rather than guessing**, in two cases the runbook names: a domain table whose
+    columns have drifted from the UI store's, and a schema object this does not know how to
+    recreate. Both are plausible on exactly the messy store this function exists for, so they
+    fail with a sentence rather than landing values in the wrong columns.
     """
     ui_path = ui_database_path(domain_path)
     if not domain_path.exists() or not ui_path.exists():
@@ -246,12 +256,13 @@ def unsplit_stores(domain_path: Path) -> RestoreReport:
                 for kind, sql in sorted(schema, key=lambda row: row[0] != "table"):
                     connection.execute(_idempotent(sql))
                 _refuse_drifted_table(connection, table)
-                connection.execute(
+                cursor = connection.execute(
                     f'INSERT OR IGNORE INTO main."{table}" SELECT * FROM ui."{table}"'
                 )
-                restored[table] = connection.execute(
-                    f'SELECT COUNT(*) FROM main."{table}"'
-                ).fetchone()[0]
+                # Rows this call actually put back. Reporting the domain table's total instead
+                # printed the same figure whether the rollback restored everything or nothing,
+                # while the runbook told the operator to read it as proof.
+                restored[table] = cursor.rowcount if cursor.rowcount > 0 else 0
             connection.commit()
         except Exception:
             # Rolled back BEFORE the detach. `DETACH DATABASE` raises "database ui is locked"
