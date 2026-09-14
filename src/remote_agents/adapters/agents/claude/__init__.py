@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from pathlib import Path
 
+from remote_agents.adapters.agents.claude.limits_source import ClaudeLimitsSource
 from remote_agents.adapters.agents.claude.sessions import ClaudeSessionCatalogue
 from remote_agents.adapters.agents.claude.usage import ClaudeUsageReader
+from remote_agents.adapters.agents.claude.usage_api import ClaudeUsageApiReader
 from remote_agents.domain.models import ProfileId, ProjectId
 from remote_agents.ports.provider_descriptor import ProviderDescriptor, TrustDialog
 
@@ -15,11 +17,25 @@ def _sessions(project_paths: Mapping[ProjectId, Path]) -> ClaudeSessionCatalogue
     return ClaudeSessionCatalogue(project_paths)
 
 
+def _usage(hop: ClaudeUsageReader, limits_switch: Callable[[], str] | None, home: Path | None):
+    """The hop reader alone, or the switch in front of it and the usage API behind the switch.
+
+    Without a switch -- the default reader set, a test double's composition -- the hop reader
+    is the capability, as it was before the API existed. With one, the API reader is built with
+    the hop as its fallback and the selector decides per read (DEC-061, amended: opt-in).
+    """
+    if limits_switch is None:
+        return hop
+    return ClaudeLimitsSource(limits_switch, ClaudeUsageApiReader(fallback=hop, home=home), hop)
+
+
 def descriptor(
     *,
     context_window: int | None = None,
     context_window_stated: bool = False,
     limits_path: Path | None = None,
+    limits_switch: Callable[[], str] | None = None,
+    home: Path | None = None,
 ) -> ProviderDescriptor:
     """This provider's declared capability set (ARCH-04).
 
@@ -41,12 +57,16 @@ def descriptor(
         # second spelling would reach a mark.
         glyph="✳️",
         sessions=_sessions,
-        usage=ClaudeUsageReader(
-            context_window=context_window,
-            context_window_stated=context_window_stated,
-            # Where the status-line hop records the plan's windows; the composition root
-            # hands it down from `ProductionPaths`, and a set built without one reads nothing.
-            limits_path=limits_path,
+        usage=_usage(
+            ClaudeUsageReader(
+                context_window=context_window,
+                context_window_stated=context_window_stated,
+                # Where the status-line hop records the plan's windows; the composition root
+                # hands it down from `ProductionPaths`, and a set built without one reads nothing.
+                limits_path=limits_path,
+            ),
+            limits_switch,
+            home,
         ),
         hooks="claude",
         # **Carried from 2.1.263, not measured** -- and the acceptance document

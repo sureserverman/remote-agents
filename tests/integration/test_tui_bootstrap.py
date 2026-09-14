@@ -473,3 +473,71 @@ def test_a_pane_that_fails_says_where_its_sessions_are_and_exits_nonzero(
     monkeypatch.setattr(panes, "run_pane_surface", explode)
     assert main(["pane", "feed", "--config", str(config_path)]) == 1
     assert "tmux -L remote-agents list-sessions" in capsys.readouterr().err
+
+
+def test_the_local_context_routes_claude_limits_source_by_the_switch_without_recomposing(
+    home: Path, paths: ProductionPaths, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`limits.claude_limits_source` flips between two reads and the stamp follows it.
+
+    The composed backend, a scratch home holding a synthetic credential file, a fake endpoint
+    in place of `urlopen`, and the switch written by the config writer between the reads.
+    """
+    import asyncio
+    import io
+    import json
+
+    from remote_agents.adapters.agents.claude import usage_api
+    from remote_agents.config import load_config, write_limits_key
+    from remote_agents.domain.models import ProfileId
+
+    (home / ".claude").mkdir()
+    (home / ".claude" / ".credentials.json").write_text(
+        json.dumps({"claudeAiOauth": {"accessToken": "tok-not-real-000"}}), encoding="utf-8"
+    )
+    (home / ".claude" / ".credentials.json").chmod(0o600)
+    paths.ensure_directories()
+    config_path = _config_file(home, paths)
+    config_path.write_text(
+        config_path.read_text(encoding="utf-8") + 'claude_limits_source = "usage-api"\n',
+        encoding="utf-8",
+    )
+    asked: list[str] = []
+
+    class _Response(io.BytesIO):
+        status = 200
+
+    def fake_open(request, timeout):
+        asked.append(request.get_header("Authorization") or "")
+        return _Response(
+            json.dumps(
+                {
+                    "five_hour": {"utilization": 7, "resets_at": "2099-01-01T00:00:00Z"},
+                    "seven_day": {"utilization": 41, "resets_at": "2099-01-02T00:00:00Z"},
+                }
+            ).encode("utf-8")
+        )
+
+    monkeypatch.setattr(usage_api, "_open", fake_open)
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.delenv("CLAUDE_CODE_OAUTH_TOKEN", raising=False)
+    connection = open_database(tmp_path / "sessions.sqlite3")
+    try:
+        context = local_context(load_config(config_path), connection, paths)
+
+        def claude_entry():
+            entries = asyncio.run(context.backend.limits())
+            return next(e for e in entries if e.profile_id == ProfileId("claude"))
+
+        first = claude_entry()
+        assert first.stale_source == "usage API"
+        assert [(w.label, w.used_percent) for w in first.windows] == [("5h", 7.0), ("week", 41.0)]
+        assert asked == ["Bearer tok-not-real-000"]
+
+        write_limits_key(config_path, "claude_limits_source", "status-line")
+        second = claude_entry()
+        assert second.stale_source != "usage API"
+        assert second.windows == (), "no hop file under the scratch state directory"
+        assert asked == ["Bearer tok-not-real-000"], "the API was not asked again"
+    finally:
+        connection.close()

@@ -646,8 +646,11 @@ def test_a_generated_config_writes_claude_limits_source_live_and_says_what_usage
     assert 'claude_limits_source = "status-line"' in rendered
     assert "# claude_limits_source" not in rendered
     assert "usage-api" in rendered
-    assert ".credentials.json" in rendered
-    assert "api.anthropic.com/api/oauth/usage" in rendered
+    # The rendered comment names the credential file and the endpoint by description, not by
+    # literal: the literals live in `adapters.agents.claude.usage_api` alone, and the Stage 3
+    # gate greps `src/` for them. The shipped example, under `config/`, spells them out.
+    assert "credential file" in rendered
+    assert "usage endpoint" in rendered
     assert load_config(write_config(tmp_path, rendered)).claude_limits_source == "status-line"
 
 

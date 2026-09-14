@@ -36,6 +36,7 @@ from remote_agents.composition.backend import (
     compose_backend,
     require_frontend_capabilities,
 )
+from remote_agents.config import read_claude_limits_source
 from remote_agents.domain.models import SessionId
 from remote_agents.domain.profiles import ProfileCompatibility, closed_profiles
 from remote_agents.production import ProductionPaths
@@ -310,6 +311,10 @@ def local_context(config, connection, paths: ProductionPaths):
         ),
         claude_context_window_stated=config.claude_context_window_stated,
         claude_limits_path=paths.claude_limits_path,
+        # The file the config was loaded from, not `paths.config_path`: `--config` can name
+        # another, and the switch must be read back from the one the owner is editing.
+        claude_limits_switch=partial(read_claude_limits_source, config.path or paths.config_path),
+        claude_home=paths.home,
     )
     runtime = _local_runtime(config, paths, projects.paths, descriptors)
 

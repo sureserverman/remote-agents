@@ -30,6 +30,7 @@ from remote_agents.domain.models import ProfileId
 from remote_agents.domain.profiles import closed_profiles
 from remote_agents.ports.agent_usage import (
     AgentLimits,
+    AgentUsage,
     LimitsAbsence,
     UsageQuery,
     UsageWindow,
@@ -1773,3 +1774,77 @@ def test_claude_limits_recorded_in_the_future_are_read_only_within_a_tolerance(
 
     assert bool(limits.windows) is readable
     assert (limits.absence is None) is readable
+
+
+# --- the Claude limits source: one switch, two readers (sub-plan 01, Task 3.3) --------------
+
+
+class _StampedReader:
+    """A limits reader answering one fixed stamp, counting how often it was asked."""
+
+    profiles = frozenset({ProfileId("claude")})
+    limits_profile = ProfileId("claude")
+
+    def __init__(self, stamp: str | None) -> None:
+        self.stamp = stamp
+        self.calls = 0
+        self.queries: list[UsageQuery] = []
+
+    def limits(self) -> AgentLimits:
+        self.calls += 1
+        return AgentLimits(
+            self.limits_profile, (UsageWindow("5h", 1.0),), stale_source=self.stamp
+        )
+
+    def read(self, query: UsageQuery) -> AgentUsage | None:
+        self.queries.append(query)
+        return AgentUsage(observed_at=LAUNCHED_AT)
+
+
+def _limits_source(switch):
+    from remote_agents.adapters.agents.claude.limits_source import ClaudeLimitsSource
+
+    api = _StampedReader("usage API")
+    hop = _StampedReader("status line")
+    return ClaudeLimitsSource(switch, api, hop), api, hop
+
+
+def test_claude_limits_source_routes_by_the_switch_on_every_read() -> None:
+    """The file is consulted per read, so flipping it needs no restart and no recomposition."""
+    value = ["status-line"]
+    source, api, hop = _limits_source(lambda: value[0])
+
+    assert source.limits().stale_source == "status line"
+    value[0] = "usage-api"
+    assert source.limits().stale_source == "usage API"
+    value[0] = "status-line"
+    assert source.limits().stale_source == "status line"
+    assert (api.calls, hop.calls) == (1, 2)
+
+
+def test_claude_limits_source_routes_to_the_hop_when_the_switch_cannot_be_read() -> None:
+    """A switch that raises, or answers a value outside the set, is the default: the hop."""
+
+    def broken() -> str:
+        raise OSError("config unreadable")
+
+    for switch in (broken, lambda: "something-else", lambda: ""):
+        source, api, hop = _limits_source(switch)
+        assert source.limits().stale_source == "status line"
+        assert api.calls == 0
+
+
+def test_claude_limits_source_delegates_session_reads_to_the_hop_reader(tmp_path: Path) -> None:
+    source, api, hop = _limits_source(lambda: "usage-api")
+    query = _query("claude", tmp_path)
+
+    assert source.read(query) == AgentUsage(observed_at=LAUNCHED_AT)
+    assert hop.queries == [query]
+    assert api.queries == []
+
+
+def test_claude_limits_source_is_filed_under_claude_like_the_readers_it_fronts() -> None:
+    source, _api, _hop = _limits_source(lambda: "status-line")
+
+    assert source.profiles == frozenset({ProfileId("claude")})
+    assert source.limits_profile == ProfileId("claude")

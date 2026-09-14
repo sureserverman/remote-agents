@@ -6,6 +6,7 @@ import asyncio
 import logging
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
+from functools import partial
 from hashlib import sha256
 from pathlib import Path
 from types import MappingProxyType
@@ -33,6 +34,7 @@ from remote_agents.application.project_catalog import CatalogProject, build_cata
 from remote_agents.application.reconcile import SessionLocks
 from remote_agents.application.services import SessionService
 from remote_agents.application.store_watch import StoreWatch
+from remote_agents.config import read_claude_limits_source
 from remote_agents.domain.models import ProjectId, SessionId
 from remote_agents.domain.profiles import ProfileCompatibility, closed_profiles
 from remote_agents.ports.agent_activity import AgentActivity
@@ -272,6 +274,10 @@ def compose_backend(
         ),
         claude_context_window_stated=config.claude_context_window_stated,
         claude_limits_path=paths.claude_limits_path,
+        # The file the config was loaded from, not `paths.config_path`: `--config` can name
+        # another, and the switch must be read back from the one the owner is editing.
+        claude_limits_switch=partial(read_claude_limits_source, config.path or paths.config_path),
+        claude_home=paths.home,
     )
     runtime = runtime or _local_runtime(config, paths, projects.paths, descriptors)
     registered = {str(descriptor.profile_id) for descriptor in descriptors}

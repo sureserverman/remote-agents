@@ -64,10 +64,11 @@ CLAUDE_LIMITS_SOURCES = ("status-line", "usage-api")
 """Where a Claude session's rate-limit windows may be read from; a closed set, never free text.
 
 `status-line` is this project's own status-line hop, which costs the owner nothing they have not
-already granted. `usage-api` additionally lets the service read the OAuth token out of
-`~/.claude/.credentials.json` and call `https://api.anthropic.com/api/oauth/usage` for the
-figures, keeping the hop as its fallback -- a credential read and an outbound call the service
-otherwise never makes. That is why it is a switch the owner throws rather than a fallback the
+already granted. `usage-api` additionally lets the service read the OAuth token out of Claude
+Code's credential file and call Anthropic's usage endpoint for the figures, keeping the hop as
+its fallback -- a credential read and an outbound call the service otherwise never makes. The
+file and the host are named in one module, `adapters.agents.claude.usage_api`, and nowhere else
+in the code. That is why it is a switch the owner throws rather than a fallback the
 service reaches for on its own (DEC-061, amended): the default keeps the old boundary.
 """
 
@@ -120,6 +121,15 @@ class AppConfig:
     and defaulting it to anything but the hop would grant a credential read nobody asked for.
     No `_stated` twin, because nothing presents the default differently from a stated one: the
     hop is the hop whether the owner wrote it down or not.
+    """
+
+    path: Path | None = None
+    """The file this configuration was loaded from, or `None` for one built in memory.
+
+    Carried so a composition can consult the *same* file again later without guessing which
+    one that was: `serve` and `tui` take `--config`, so the loaded file is not always
+    `ProductionPaths.config_path`. The limits selector reads `claude_limits_source` off this
+    path on every account read, which is what lets a Settings flip land without a restart.
     """
 
 
@@ -385,6 +395,7 @@ def load_config(path: Path) -> AppConfig:
         activity_poll_seconds,
         claude_context_window=claude_context_window,
         claude_context_window_stated=claude_context_window_stated,
+        path=path,
         claude_limits_source=claude_limits_source,
     )
 
@@ -499,9 +510,9 @@ _LIMIT_COMMENTS: dict[str, str] = {
     "claude_limits_source": (
         "# Where the service reads a Claude session's rate-limit windows from. The default,\n"
         '# "status-line", is this project\'s own status-line hop and grants nothing new.\n'
-        '# "usage-api" additionally lets the service read the OAuth token out of\n'
-        "# ~/.claude/.credentials.json and call https://api.anthropic.com/api/oauth/usage for\n"
-        "# the figures, keeping the hop as its fallback. That is a credential read and an\n"
+        '# "usage-api" additionally lets the service read the OAuth token out of Claude\n'
+        "# Code's credential file and call Anthropic's usage endpoint for the figures,\n"
+        "# keeping the hop as its fallback. That is a credential read and an\n"
         "# outbound call the service otherwise never makes, which is why it is opt-in: set it\n"
         "# here, or from the console's Settings row, and nowhere else."
     ),
@@ -637,6 +648,26 @@ def _toml_string(value: Path | str) -> str:
 _LIMITS_HEADER = re.compile(r"^\s*\[\s*limits\s*\]\s*(?:#.*)?\r?\n?$")
 _ANY_HEADER = re.compile(r"^\s*\[")
 _LINE_END = re.compile(r"\r?\n$")
+
+
+def read_claude_limits_source(path: Path) -> str:
+    """The switch as the file states it right now, or the default when it cannot be read.
+
+    Total on purpose, and lighter than `load_config`: the limits selector consults this on
+    every account read (once a minute per surface), and a file that is missing, malformed, or
+    states a value outside `CLAUDE_LIMITS_SOURCES` routes to the default -- the hop, which
+    grants nothing new -- rather than raising into a screen. It parses the TOML and reads one
+    key; it does not validate the rest of the file, because a wrong `dev_root` is `serve`'s
+    business and not a reason to start calling an API. `bootstrap`'s `doctor` line reads the
+    loaded config instead, where a refused file is worth reporting.
+    """
+    try:
+        raw = tomllib.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError):
+        return DEFAULT_CLAUDE_LIMITS_SOURCE
+    limits = raw.get("limits") if isinstance(raw, dict) else None
+    value = limits.get("claude_limits_source") if isinstance(limits, dict) else None
+    return value if value in CLAUDE_LIMITS_SOURCES else DEFAULT_CLAUDE_LIMITS_SOURCE
 
 
 def write_limits_key(path: Path, key: str, value: str | int) -> None:

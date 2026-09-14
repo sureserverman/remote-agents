@@ -68,7 +68,7 @@ import os
 import shlex
 import sqlite3
 import sys
-from collections.abc import Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -287,19 +287,24 @@ def provider_descriptors(
     claude_context_window: int | None = None,
     claude_context_window_stated: bool = False,
     claude_limits_path: Path | None = None,
+    claude_limits_switch: Callable[[], str] | None = None,
+    claude_home: Path | None = None,
 ) -> tuple[ProviderDescriptor, ...]:
     """One descriptor per provider, in stable UI order, each built by its own vertical.
 
     The keyword arguments thread the host's facts through to claude's builder: the one
     owner-configurable capability (DEC-061 — the ceiling reaches the reader only when the
-    owner stated it), and where the status-line hop records the plan's windows, which only
-    the composition root knows (DEC-046).
+    owner stated it), where the status-line hop records the plan's windows, the switch that
+    names Claude's limits source and the home its credential file lives under -- all of which
+    only the composition root knows (DEC-046).
     """
     return (
         claude.descriptor(
             context_window=claude_context_window,
             context_window_stated=claude_context_window_stated,
             limits_path=claude_limits_path,
+            limits_switch=claude_limits_switch,
+            home=claude_home,
         ),
         codex.descriptor(),
         opencode.descriptor(),
