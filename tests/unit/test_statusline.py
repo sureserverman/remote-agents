@@ -55,9 +55,25 @@ def _feed_stdin(monkeypatch: pytest.MonkeyPatch, payload: bytes | None) -> None:
     monkeypatch.setattr(sys, "stdin", _Stdin())
 
 
-def _run_hop(*arguments: str, payload: bytes) -> subprocess.CompletedProcess[bytes]:
+def _run_hop(
+    *arguments: str, payload: bytes, state_directory: Path
+) -> subprocess.CompletedProcess[bytes]:
+    """Drive the shipped entry point as Claude Code would, always into a scratch directory.
+
+    `state_directory` is required, not defaulted: the hop's own default is the owner's real
+    state directory, and a test that forgot `--state-dir` once wrote the documented example
+    into it -- a fake reading, under the file the live limits pane reads (2026-09-14).
+    """
     return subprocess.run(
-        [sys.executable, "-m", "remote_agents", "statusline", *arguments],
+        [
+            sys.executable,
+            "-m",
+            "remote_agents",
+            "statusline",
+            "--state-dir",
+            str(state_directory),
+            *arguments,
+        ],
         input=payload,
         capture_output=True,
         check=False,
@@ -163,10 +179,12 @@ def test_an_unwritable_state_directory_is_skipped_quietly(
 # --- the forward -------------------------------------------------------------------------
 
 
-def test_the_previous_command_runs_on_the_same_bytes_and_sets_the_exit_status() -> None:
+def test_the_previous_command_runs_on_the_same_bytes_and_sets_the_exit_status(
+    tmp_path: Path,
+) -> None:
     payload = _documented_payload()
 
-    completed = _run_hop("--then", "cat; exit 3", payload=payload)
+    completed = _run_hop("--then", "cat; exit 3", payload=payload, state_directory=tmp_path)
 
     assert completed.returncode == 3
     assert completed.stdout == payload
@@ -187,7 +205,7 @@ def test_every_failure_to_record_still_runs_the_previous_command(
     absent = tmp_path / "never-made"
 
     completed = _run_hop(
-        "--state-dir", str(absent), "--then", "printf rendered; exit 5", payload=payload
+        "--then", "printf rendered; exit 5", payload=payload, state_directory=absent
     )
 
     assert completed.returncode == 5
@@ -211,7 +229,7 @@ def test_a_process_with_no_stdin_still_runs_the_previous_command(
 
 
 def test_without_a_previous_command_it_prints_nothing_and_exits_zero(tmp_path: Path) -> None:
-    completed = _run_hop("--state-dir", str(tmp_path), payload=_documented_payload())
+    completed = _run_hop(payload=_documented_payload(), state_directory=tmp_path)
 
     assert completed.returncode == 0
     assert completed.stdout == b""
