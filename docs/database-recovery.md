@@ -128,6 +128,21 @@ the build from before the split — and this procedure is how you carry the rows
 also leaves `ui.sqlite3` in place; keep it until the restored service has passed its health
 check, then it is yours to delete.
 
+**If the surface tables were dropped before anything copied them.** Symptom: `ui.sqlite3` is
+absent or empty, the surface has lost its state, and `sessions.sqlite3` is at schema version 14.
+That means migration 14 ran on a store the split had not been run against — every command opens
+the domain store through one function that splits first, so a build carrying that guard cannot
+produce this, but a build from before it could. The rows are in the snapshot `open_database`
+takes before any migration:
+
+```bash
+ls ~/.local/state/remote-agents/sessions.sqlite3.bak
+```
+
+Restore it with `--backup` as below, then start the service; the split runs on the next open and
+carries the rows across properly. Do not simply re-run the rollback: it copies *from*
+`ui.sqlite3`, which in this state has nothing in it.
+
 **If that is not enough**, the split wrote a full snapshot of the domain store before it moved
 anything. Restoring one needs `--backup`, because the default path is `sessions.sqlite3.bak` and
 not the snapshot you just listed:

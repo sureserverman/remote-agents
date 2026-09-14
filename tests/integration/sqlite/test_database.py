@@ -145,9 +145,14 @@ def test_migration_five_adds_callback_state_tables_scoped_to_messages_not_clocks
     open_database(path, migrations=MIGRATIONS[:4]).close()
     assert current_version(sqlite3.connect(path)) == 4
 
-    connection = open_database(path)
+    # Stopped before migration 14, which moves these two tables out of the domain store. What
+    # this test is about is the SHAPE migration 5 gives them -- scoped to a message rather than
+    # to a clock -- and that claim is unchanged by where they end up; it is simply no longer
+    # inspectable through the full list. Where they end up is asserted below.
+    pre_split = [entry for entry in MIGRATIONS if entry[0] < 14]
+    connection = open_database(path, migrations=pre_split)
 
-    assert current_version(connection) == len(MIGRATIONS)
+    assert current_version(connection) == len(pre_split)
     callback_columns = [row[1] for row in connection.execute("PRAGMA table_info(callback_states)")]
     assert callback_columns == [
         "token",
@@ -165,6 +170,20 @@ def test_migration_five_adds_callback_state_tables_scoped_to_messages_not_clocks
     assert "expires_at" not in set(callback_columns) | set(view_columns)
     indexed = [row[2] for row in connection.execute("PRAGMA index_info(callback_states_message)")]
     assert indexed == ["chat_id", "message_id"]
+    connection.close()
+
+    # The other half, pinned here because this is the test that would otherwise keep passing
+    # against a domain store that still carried them: at the full list they are gone from this
+    # file, which is the whole point of the split.
+    migrated = open_database(path)
+    try:
+        remaining = {
+            name
+            for (name,) in migrated.execute("SELECT name FROM sqlite_master WHERE type='table'")
+        }
+    finally:
+        migrated.close()
+    assert not remaining & {"callback_states", "chat_views"}
 
 
 async def test_store_uses_bound_values_append_only_events_and_unique_claims(tmp_path: Path) -> None:

@@ -260,9 +260,43 @@ MIGRATIONS: tuple[tuple[int, str], ...] = (
         UPDATE sessions SET profile_id = 'claude' WHERE profile_id = 'claude-remote';
         UPDATE sessions SET resume_profile_id = 'claude' WHERE resume_profile_id = 'claude-remote';
         """,
-    )
+    ),
+    (
+        14,
+        """
+        DROP TABLE IF EXISTS callback_states;
+        DROP TABLE IF EXISTS chat_views;
+        DROP TABLE IF EXISTS standing_notifications;
+        DROP TABLE IF EXISTS trust_notifications;
+        DROP TABLE IF EXISTS handoff_intents;
+        """,
+    ),
 )
+"""Migration 14 takes the surface's bookkeeping out of the watched store.
 
+**It must never be the first thing that runs.** `open_database` applies pending migrations the
+moment it opens, so a process that opened the domain store before calling
+`store_split.split_stores` would drop these tables with their rows still in them -- and report
+success. `bootstrap._open_domain_store` is the single function every domain open goes
+through, and it calls the split first for that reason. Three tests hold it, and they
+hold different halves:
+`test_the_rows_survive_a_domain_open_that_applies_the_drop` that the order matters,
+`test_the_stores_are_opened_split_first` that bootstrap honours it, and
+`test_no_domain_open_bypasses_the_split` that nothing opens the domain store around it.
+
+`handoff_intents` is here as residue rather than as a move: the feature was retired in
+`0d908d9c` and left its table behind, with no code reading it and no rows in it. It is not in
+`UI_TABLES` and is not recreated anywhere.
+
+`idempotency_claims` is deliberately absent. `session_store.py` writes it, and
+`docs/architecture.md` guarantees duplicate-command protection is durable across processes; in
+the UI store the bot's claims would sit in a file the console panes never open.
+
+`IF EXISTS` because a database created after this lands never had them -- migrations are
+contiguous and historical ones are not edited, so 1-13 still create these tables and this takes
+them straight back out. Wasteful on a fresh file, and the only shape that keeps the history
+honest.
+"""
 
 #: The tables a surface writes about itself, which no other process reads.
 #:

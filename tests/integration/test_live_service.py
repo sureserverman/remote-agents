@@ -16,7 +16,11 @@ from telegram.error import BadRequest, TelegramError
 
 from remote_agents.adapters.agents.registry import profile_trust_dialogs
 from remote_agents.adapters.sqlite.callback_state_store import SQLiteCallbackStateStore
-from remote_agents.adapters.sqlite.database import open_database
+from remote_agents.adapters.sqlite.database import (
+    open_database,
+    open_ui_database,
+    ui_database_path,
+)
 from remote_agents.adapters.telegram.presenters import unpadded
 from remote_agents.adapters.telegram.service import (
     _BOT_DESCRIPTION,
@@ -569,7 +573,7 @@ def test_serve_command_loads_config_and_runs_the_injected_private_bot(
     )
     monkeypatch.setattr(
         "remote_agents.bootstrap._private_boundary",
-        lambda _config, _connection, _paths, _secrets: ServiceComposition(
+        lambda _config, _connection, _paths, _secrets, **_stores: ServiceComposition(
             build_private_bot(7, 11), _SilentTerminal(), _SilentReconciler()
         ),
     )
@@ -643,7 +647,7 @@ def test_serve_ranks_the_catalogue_before_the_first_screen_can_be_drawn(
     )
     monkeypatch.setattr(
         "remote_agents.bootstrap._private_boundary",
-        lambda _config, _connection, _paths, _secrets: ServiceComposition(
+        lambda _config, _connection, _paths, _secrets, **_stores: ServiceComposition(
             boundary, _SilentTerminal(), _SilentReconciler()
         ),
     )
@@ -1437,14 +1441,16 @@ async def test_a_button_drawn_before_a_restart_still_works_after_one(tmp_path) -
     anything at all.
     """
     database = tmp_path / "sessions.sqlite3"
-    connection = open_database(database)
+    connection = open_ui_database(ui_database_path(database))
     before = build_private_bot(7, 11, callbacks=SQLiteCallbackStateStore(connection))
     message = _Message()
     await before.start(_trusted_update(message=message), None)
     sessions = _button(message.replies[0], "Sessions")
     connection.close()
 
-    after = build_private_bot(7, 11, callbacks=SQLiteCallbackStateStore(open_database(database)))
+    after = build_private_bot(
+        7, 11, callbacks=SQLiteCallbackStateStore(open_ui_database(ui_database_path(database)))
+    )
     callback = _Callback(sessions)
     await after.callback(_trusted_update(callback=callback), None)
 
@@ -2122,7 +2128,6 @@ async def test_a_drained_observation_is_durable_before_it_is_delivered(tmp_path)
     the notifier's own in-memory state, not about this table).
     """
     from remote_agents.adapters.sqlite.activity_store import SQLiteActivityStore
-    from remote_agents.adapters.sqlite.database import open_database
 
     record = _running()
     boundary, bot = _notified(record)
@@ -2150,7 +2155,6 @@ async def test_a_drained_observation_is_durable_before_it_is_delivered(tmp_path)
 
 async def test_codex_permission_request_reaches_both_feed_and_notification(tmp_path) -> None:
     from remote_agents.adapters.sqlite.activity_store import SQLiteActivityStore
-    from remote_agents.adapters.sqlite.database import open_database
 
     record = _running()
     boundary, bot = _notified(record)
@@ -2343,7 +2347,6 @@ async def test_a_bot_launch_stands_the_notification_pass_down_for_that_session()
     is being asserted is that the reply *tells* it — a unit test that calls
     `note_asked_on_screen` itself passes whether or not anything ever does.
     """
-    from remote_agents.adapters.sqlite.database import open_database
     from remote_agents.adapters.sqlite.trust_notifications import SQLiteTrustNotificationStore
 
     untrusted = _record(SessionState.UNTRUSTED, "untrusted", ProjectId("a" * 24))

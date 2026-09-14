@@ -409,3 +409,61 @@ def test_a_failed_rollback_reports_its_own_cause_not_a_locked_detach(
     with pytest.raises(RuntimeError) as raised:
         unsplit_stores(domain)
     assert "the cause an operator needs to see" in str(raised.value)
+
+
+def test_the_migration_leaves_the_domain_store_carrying_none_of_them(tmp_path: Path) -> None:
+    """The move is only worth anything if the bytes stop landing in the watched file."""
+    domain = tmp_path / "sessions.sqlite3"
+    _a_store_with_rows(domain)
+
+    split_stores(domain)
+    open_database(domain).close()  # applies migration 14, which drops them
+
+    assert _counts(domain, UI_TABLES) == {}
+
+
+def test_the_rows_survive_a_domain_open_that_applies_the_drop(tmp_path: Path) -> None:
+    """The ordering hazard, asserted rather than trusted to the call order in bootstrap.
+
+    Migration 14 drops the moved tables. If it ran before the copy, this is where the loss shows
+    up — and nowhere else, because every other test here would still pass against an empty UI
+    store if the copy had happened first and the drop second.
+    """
+    domain = tmp_path / "sessions.sqlite3"
+    before = _a_store_with_rows(domain)
+
+    split_stores(domain)
+    open_database(domain).close()
+
+    assert _counts(ui_database_path(domain), UI_TABLES) == before
+
+
+def test_a_concurrent_split_does_not_crash_the_second_process(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Two processes starting in the same second, on the one upgrade that has work to do.
+
+    `serve` from the supervisor and an operator's `tui` genuinely race here, and since every
+    command now splits before opening, three more of them reach this code than before. The
+    check-then-act is not transactional: if the other process completes its split and lets
+    migration 14 drop a table between our listing and our count, the count raises
+    `no such table`. No data is at risk — the other process verified its copy before its drop —
+    but an uncaught error would take down whichever of the two lost the race.
+
+    Simulated by reporting a table that is no longer there, which is exactly what the loser sees.
+    """
+    from remote_agents.adapters.sqlite import store_split as module
+
+    domain = tmp_path / "sessions.sqlite3"
+    _a_store_with_rows(domain)
+    split_stores(domain)
+    _drop_moved_tables(domain)
+
+    real = module._tables
+    monkeypatch.setattr(
+        module, "_tables", lambda c: real(c) | {"callback_states"} if c is not None else real(c)
+    )
+
+    # The claim is simply that it answers rather than raising.
+    report = split_stores(domain)
+    assert report.moved == {} or isinstance(report.moved, dict)

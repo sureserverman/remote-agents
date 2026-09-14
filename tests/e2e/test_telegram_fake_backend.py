@@ -28,7 +28,10 @@ from remote_agents.adapters.agents.registry import (
 )
 from remote_agents.adapters.sqlite.callback_state_store import SQLiteCallbackStateStore
 from remote_agents.adapters.sqlite.chat_view_store import SQLiteChatViewStore
-from remote_agents.adapters.sqlite.database import open_database
+from remote_agents.adapters.sqlite.database import (
+    open_ui_database,
+    ui_database_path,
+)
 from remote_agents.adapters.telegram.callbacks import CallbackStateStore
 from remote_agents.adapters.telegram.inspection import inspect_capture
 from remote_agents.adapters.telegram.presenters import unpadded
@@ -1541,7 +1544,7 @@ async def test_a_notification_button_still_resolves_after_a_re_composition(tmp_p
     """
     record = _a_running_session()
     database = tmp_path / "sessions.sqlite3"
-    connection = open_database(database)
+    connection = open_ui_database(ui_database_path(database))
 
     class _Launcher(SessionUseCaseDouble):
         async def list_sessions(self):
@@ -1563,7 +1566,7 @@ async def test_a_notification_button_still_resolves_after_a_re_composition(tmp_p
     open_session = _button(chat.messages[notification], "Open session")
     connection.close()
 
-    reopened = open_database(database)
+    reopened = open_ui_database(ui_database_path(database))
     after = build_private_bot(
         7,
         11,
@@ -1603,7 +1606,7 @@ async def test_a_notification_press_does_not_make_it_the_live_view(tmp_path) -> 
         async def refresh_readiness(self) -> None:
             return None
 
-    connection = open_database(tmp_path / "sessions.sqlite3")
+    connection = open_ui_database(tmp_path / "ui.sqlite3")
     boundary = build_private_bot(
         7,
         11,

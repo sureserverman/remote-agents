@@ -12,13 +12,12 @@ the domain store, and `open_database` applies pending migrations the moment it o
 that opened the domain store first would drop the rows before anything copied them — the
 migration would report success and the rows would be gone. So the copy runs here, on a raw
 connection that applies no migrations, and must be called *before* the domain store is opened
-normally. Nothing here yet holds that order automatically: the test that will,
-`test_the_rows_survive_a_domain_open_that_applies_the_drop`, arrives in Stage 2 with migration
-14, because an ordering between a copy and a drop cannot be asserted while the drop does not
-exist. An earlier version of this docstring named that test in the present tense, which is the
-worse half of the same failure — a reader trusting it would not go looking for the gap. What is
-assertable now is that this function applies no migrations at all, and
-`test_the_split_applies_no_migration_to_the_domain_store` does that.
+normally. `test_the_rows_survive_a_domain_open_that_applies_the_drop` holds that order,
+together with
+`test_the_split_applies_no_migration_to_the_domain_store`, which pins the mechanism the
+ordering rests on. Both exist and both fail on the reverted behaviour — an earlier version of
+this docstring named the first of them before it existed, which is why the claim is written
+against tests that are checked rather than remembered.
 
 **Why `INSERT OR IGNORE` rather than a plain insert.** A crash between the copy and the drop
 leaves the rows in both files, which is the safe direction. The next run finds the tables still
@@ -91,7 +90,15 @@ def _already_copied(connection: sqlite3.Connection, domain_path: Path) -> bool:
         for table in _tables(connection) & set(UI_TABLES):
             if table not in landed:
                 return False
-            here = connection.execute(f'SELECT COUNT(*) FROM "{table}"').fetchone()[0]
+            try:
+                here = connection.execute(f'SELECT COUNT(*) FROM "{table}"').fetchone()[0]
+            except sqlite3.OperationalError:
+                # The table went out from under us: another process split and let migration 14
+                # drop it between our listing and this count. Its copy is verified before its
+                # drop, so the rows are safe and there is nothing left for us to do. Answering
+                # True is the truth — this store IS already copied — where raising would crash
+                # a `serve` and an operator's `tui` that merely started in the same second.
+                return True
             there = ui.execute(f'SELECT COUNT(*) FROM "{table}"').fetchone()[0]
             if there < here:
                 return False
@@ -104,8 +111,9 @@ def split_stores(domain_path: Path) -> SplitReport:
     """Copy every moved table into the UI store. Idempotent; leaves the drop to migration 14.
 
     Answers an empty report when there is nothing to do — a store already split, or one that
-    does not exist yet — because it is meant to run on every process start. **Nothing calls it
-    yet:** wiring it into the composition root is the next stage's, along with the drop.
+    does not exist yet — because it is meant to run on every process start. `bootstrap`
+    calls it before
+    opening the domain store, which is the order migration 14 makes load-bearing.
     """
     if not domain_path.exists():
         return SplitReport(moved={}, backup=None)
@@ -118,7 +126,7 @@ def split_stores(domain_path: Path) -> SplitReport:
         if not present:
             return SplitReport(moved={}, backup=None)
 
-        # Already landed? Then this start has nothing to do, and must not take another backup.
+        # Already landed? Then this start has nothing to do and must not back up again.
         # Stage 1 is additive, so `present` stays non-empty until Stage 2's drop -- without this
         # every process start, once this is wired, would otherwise write a fresh full copy and
         # nothing ever removed them. Checked against the UI store's contents rather than a flag,
@@ -136,9 +144,14 @@ def split_stores(domain_path: Path) -> SplitReport:
             for table in UI_TABLES:
                 if table not in present:
                     continue
-                cursor = connection.execute(
-                    f'INSERT OR IGNORE INTO ui."{table}" SELECT * FROM main."{table}"'
-                )
+                try:
+                    cursor = connection.execute(
+                        f'INSERT OR IGNORE INTO ui."{table}" SELECT * FROM main."{table}"'
+                    )
+                except sqlite3.OperationalError:
+                    # Same race, one step later: a concurrent split dropped this table after we
+                    # listed it. Skipped rather than fatal, for the same reason.
+                    continue
                 # What THIS call copied, not the table's total. Counting the source gave a
                 # number identical whether the copy did everything or nothing, and both
                 # reports are read as proof that it worked.

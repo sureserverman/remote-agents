@@ -31,8 +31,25 @@ from remote_agents.production import ProductionPaths
 
 
 def _private_boundary(
-    config, connection, paths: ProductionPaths, secrets: TelegramSecrets
+    config,
+    connection,
+    paths: ProductionPaths,
+    secrets: TelegramSecrets,
+    *,
+    ui_connection,
 ) -> ServiceComposition:
+    """Compose the Telegram surface over **two** stores.
+
+    `connection` is the domain store — sessions, their events, their activity, and the
+    idempotency claims that cross processes. `ui_connection` is what this surface writes about
+    itself: callback tokens, the live view's anchor, standing and trust notifications.
+
+    They are separate because `StoreWatch` fingerprints a file. While the four stores below held
+    the domain connection, minting a keyboard changed the watched bytes, the watcher published a
+    change, and the open sessions page redrew — republishing its own change about thirty times a
+    minute until Telegram flood-banned the bot. Keyword-only and required, because a default
+    here would silently restore exactly that.
+    """
     projects = ProjectCatalogueProvider(config.registry_path, config.dev_root)
     # **One build of the descriptors for this whole composition**, with the owner's stated
     # ceiling, threaded into everything that folds them. Built here rather than left to each
@@ -97,17 +114,17 @@ def _private_boundary(
         secrets.owner_chat_id,
         # The durable store, not the in-memory default: a restart used to void every
         # button in the chat, and only this half of the pair actually fixes that.
-        callbacks=SQLiteCallbackStateStore(connection),
+        callbacks=SQLiteCallbackStateStore(ui_connection),
         # And the durable anchor for the same reason: a restart that forgot which
         # message the live view is would send a second one and leave the first above it,
         # still holding buttons that — since Stage 1 — still resolve.
-        anchors=SQLiteChatViewStore(connection),
+        anchors=SQLiteChatViewStore(ui_connection),
         # And the durable standing notifications, which close the other half of that
         # same defect. A restart that forgot which message a session's notification is
         # sent a *second* one on the session's next report and left the first above the
         # live view — observed in the chat on 2026-08-20, when the 21:23 restart turned
         # one session's alert into one message above the menu and one below.
-        standing=SQLiteStandingNotificationStore(connection),
+        standing=SQLiteStandingNotificationStore(ui_connection),
         # The whole backend, not five of its fields taken out and handed over one at a
         # time. `catalogue` and `max_label_length` came through here too and are on it;
         # the boundary seeds its render copy of the first from `Backend.catalogue`.
@@ -131,7 +148,7 @@ def _private_boundary(
         # The durable home for the one standing trust question per session (migration 12).
         # Its absence is what a boundary without a trust pass looks like, so supplying it is
         # the whole of the wiring here.
-        trust_store=SQLiteTrustNotificationStore(connection),
+        trust_store=SQLiteTrustNotificationStore(ui_connection),
     )
     return ServiceComposition(
         boundary,

@@ -110,6 +110,17 @@ class FailingReconciler(FakeReconciler):
             raise RuntimeError("synthetic reconciliation failure")
 
 
+def _ui(paths):
+    """The surface store beside the domain one, for a test composing the boundary directly.
+
+    A helper rather than a fixture because these tests open their own domain connection at their
+    own moment; what matters is only that the two are the pair `_private_boundary` now requires.
+    """
+    from remote_agents.adapters.sqlite.database import open_ui_database, ui_database_path
+
+    return open_ui_database(ui_database_path(paths.database_path))
+
+
 def test_the_service_composition_gives_the_bot_a_durable_callback_store(
     tmp_path, monkeypatch
 ) -> None:
@@ -140,7 +151,9 @@ def test_the_service_composition_gives_the_bot_a_durable_callback_store(
     config = AppConfig(home / "dev", home / "registry.yaml", paths.database_path, 40, 10, 30)
     connection = open_database(paths.database_path, migrations=MIGRATIONS)
     try:
-        composition = _private_boundary(config, connection, paths, load_secrets())
+        composition = _private_boundary(
+            config, connection, paths, load_secrets(), ui_connection=_ui(paths)
+        )
     finally:
         connection.close()
 
@@ -186,7 +199,9 @@ def test_the_service_composition_lets_the_bot_step_the_console_aside(tmp_path, m
     config = AppConfig(home / "dev", home / "registry.yaml", paths.database_path, 40, 10, 30)
     connection = open_database(paths.database_path, migrations=MIGRATIONS)
     try:
-        composition = _private_boundary(config, connection, paths, load_secrets())
+        composition = _private_boundary(
+            config, connection, paths, load_secrets(), ui_connection=_ui(paths)
+        )
     finally:
         connection.close()
 
@@ -446,7 +461,9 @@ def test_both_compositions_wire_hide_in_console_from_their_own_composers(
     config = load_config(_config_file(composed_home, paths))
     connection = open_database(tmp_path / "sessions.sqlite3")
     try:
-        composition = _private_boundary(config, connection, paths, load_secrets())
+        composition = _private_boundary(
+            config, connection, paths, load_secrets(), ui_connection=_ui(paths)
+        )
         context = local_context(config, connection, paths)
 
         assert composition.boundary.backend.sessions._hide_in_console is not None, (  # noqa: SLF001
@@ -488,7 +505,9 @@ def test_the_reconciler_and_the_backend_share_one_lock_map(composed_home, tmp_pa
     config = load_config(_config_file(composed_home, paths))
     connection = open_database(tmp_path / "sessions.sqlite3")
     try:
-        composition = _private_boundary(config, connection, paths, load_secrets())
+        composition = _private_boundary(
+            config, connection, paths, load_secrets(), ui_connection=_ui(paths)
+        )
 
         assert composition.boundary.backend.sessions._locks is composition.reconciler._locks, (  # noqa: SLF001
             "the service and the reconciler hold different lock maps (DEC-030)"
@@ -530,7 +549,9 @@ def test_the_bot_is_offered_the_narrowed_profiles_not_the_domain_ones(
     config = load_config(_config_file(composed_home, paths))
     connection = open_database(tmp_path / "sessions.sqlite3")
     try:
-        composition = _private_boundary(config, connection, paths, load_secrets())
+        composition = _private_boundary(
+            config, connection, paths, load_secrets(), ui_connection=_ui(paths)
+        )
 
         assert composition.boundary.profiles, "the wizard was offered no profiles at all"
         for profile in composition.boundary.profiles:
