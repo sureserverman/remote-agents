@@ -108,6 +108,7 @@ def production_doctor(
     liveness_meaning: LivenessMeaning | None = None,
     release: dict[str, object] | None = None,
     claude_limits: str | None = None,
+    claude_limits_source: str | None = None,
 ) -> dict[str, object]:
     """Render the installed service's non-secret dependency health report.
 
@@ -171,6 +172,12 @@ def production_doctor(
     # read (DEC-015) and the wording is the plan's.
     if claude_limits is not None:
         report["claude_limits"] = claude_limits
+    # Which source the switch names, in a sentence that carries the setting's cost: the
+    # `usage API` reading says what it reads and where it calls, so the trust-boundary
+    # decision the owner made is legible from the report that shows it. Never aggregated,
+    # for the reason the line above is not.
+    if claude_limits_source is not None:
+        report["claude_limits_source"] = claude_limits_source
     # Reported, deliberately not aggregated: nothing live depends on the console until the
     # console-surface plan's Stage 3 composes it, so an incapable tmux is worth naming to
     # the operator and not worth failing an otherwise healthy deploy over. The stage that

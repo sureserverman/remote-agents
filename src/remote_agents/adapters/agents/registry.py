@@ -78,6 +78,7 @@ from remote_agents.adapters.agents.claude.remote_control_default import (
     ClaudeRemoteControlDefault,
 )
 from remote_agents.adapters.agents.claude.usage import ClaudeUsageReader
+from remote_agents.adapters.agents.claude.usage_api import USAGE_API_DESCRIPTION
 from remote_agents.adapters.agents.codex.account_limits import CodexAccountLimitsReader
 from remote_agents.adapters.agents.codex.hooks import PROVIDER as _CODEX
 from remote_agents.adapters.agents.cursor.usage import CursorUsageReader
@@ -545,6 +546,12 @@ def claude_remote_control_default(home: Path) -> ClaudeRemoteControlDefault:
     return ClaudeRemoteControlDefault(
         default_settings_path(home, provider="claude")
     )
+
+
+#: How `doctor` names the usage-API source, in the API module's own words. Re-exported here
+#: because only the registry may import a provider's package (ARCH-04); the root reads it
+#: off this module as it reads everything else provider-shaped.
+CLAUDE_USAGE_API_DESCRIPTION = USAGE_API_DESCRIPTION
 
 
 def claude_status_line_hop_installed(settings_path: Path) -> bool:

@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from remote_agents.adapters.agents.registry import (
+    CLAUDE_USAGE_API_DESCRIPTION,
     HookInstallError,
     claude_status_line_hop_installed,
     default_settings_path,
@@ -665,7 +666,21 @@ def _doctor_report(paths: ProductionPaths, config, drift: dict[str, object]) -> 
         liveness_meaning=supervisor.liveness_meaning,
         release=_release_state(),
         claude_limits=_claude_limits_state(paths),
+        claude_limits_source=_claude_limits_source_line(config),
     )
+
+
+def _claude_limits_source_line(config) -> str:
+    """Which source `limits.claude_limits_source` names, worded with its cost.
+
+    The `usage API` sentence is the API module's own (`CLAUDE_USAGE_API_DESCRIPTION`,
+    re-exported by the registry), so the credential file and the host it names stay spelled
+    in that one module; this line only chooses between the two readings the config's closed
+    set allows.
+    """
+    if config.claude_limits_source == "usage-api":
+        return CLAUDE_USAGE_API_DESCRIPTION
+    return "status line"
 
 
 def _claude_limits_state(paths: ProductionPaths) -> str:

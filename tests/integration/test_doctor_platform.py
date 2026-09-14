@@ -100,15 +100,13 @@ def _arrange(tmp_path, monkeypatch, supervisor, *, liveness_exit_zero: bool) -> 
     monkeypatch.setattr(
         "remote_agents.bootstrap.probe_profiles",
         lambda *_a, **_k: tuple(
-            _compatibility(name)
-            for name in ("claude", "codex", "opencode", "cursor-agent")
+            _compatibility(name) for name in ("claude", "codex", "opencode", "cursor-agent")
         ),
     )
     monkeypatch.setattr(
         "remote_agents.composition.tui.probe_profiles",
         lambda *_a, **_k: tuple(
-            _compatibility(name)
-            for name in ("claude", "codex", "opencode", "cursor-agent")
+            _compatibility(name) for name in ("claude", "codex", "opencode", "cursor-agent")
         ),
     )
     return invoked
@@ -531,3 +529,40 @@ def test_doctor_reports_the_status_line_hop_and_never_moves_healthy_on_it(
     assert report["claude_limits"] == expected
     assert report["healthy"] is True
     assert "claude_limits" not in report["components"]
+
+
+_SOURCE_STATUS_LINE = "status line"
+_SOURCE_USAGE_API = "usage API (reads ~/.claude/.credentials.json and calls api.anthropic.com)"
+
+
+@pytest.mark.parametrize(
+    ("stated", "expected"),
+    [
+        pytest.param(None, _SOURCE_STATUS_LINE, id="default"),
+        pytest.param("status-line", _SOURCE_STATUS_LINE, id="status-line"),
+        pytest.param("usage-api", _SOURCE_USAGE_API, id="usage-api"),
+    ],
+)
+def test_doctor_names_the_claude_limits_source_and_what_it_costs(
+    tmp_path, monkeypatch, capsys, stated, expected
+) -> None:
+    """The switch is a trust-boundary decision, so the report says which side it is on.
+
+    The `usage API` sentence names the credential file it reads and the host it calls in the
+    plan's own words: an operator reading `doctor` learns the cost of the setting from the
+    same line that reports it. Neither reading moves `healthy` (DEC-056's rule).
+    """
+    _arrange(tmp_path, monkeypatch, _SYSTEMD, liveness_exit_zero=True)
+    if stated is not None:
+        config = tmp_path / "config.toml"
+        config.write_text(
+            config.read_text(encoding="utf-8") + f'claude_limits_source = "{stated}"\n',
+            encoding="utf-8",
+        )
+
+    assert main(["doctor", "--json"]) == 0
+
+    report = json.loads(capsys.readouterr().out)
+    assert report["claude_limits_source"] == expected
+    assert report["healthy"] is True
+    assert "claude_limits_source" not in report["components"]

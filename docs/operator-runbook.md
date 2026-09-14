@@ -1520,7 +1520,15 @@ uv run --locked remote-agents tui
    and then runs the previous command unchanged; the pane reads that recording while it is
    under thirty minutes old and stamps the row `status line`. Until the hop is installed the
    Claude row reads `no reading yet`, and `remote-agents doctor` says so in its `claude_limits`
-   line (`status-line hop installed` / `not installed`) without moving `healthy`. The pane must never collapse to
+   line (`status-line hop installed` / `not installed`) without moving `healthy`.
+   A second Claude source is opt-in: `claude_limits_source` under `[limits]` in `config.toml`
+   is `"status-line"` by default; set it to `"usage-api"` and the service reads the OAuth token
+   out of `~/.claude/.credentials.json` and calls `https://api.anthropic.com/api/oauth/usage`
+   for the figures, stamping the row `usage API`, with the hop as its fallback on any failure.
+   That is a credential read and an outbound call the service otherwise never makes, which is
+   why it is a switch you throw and not a fallback the service reaches for; the file is
+   consulted on every read, so flipping it needs no restart. `remote-agents doctor` reports
+   the source in force in its `claude_limits_source` line, worded with that cost. The pane must never collapse to
    `No agent limits reported.` once a read has landed and any agent reported; that sentence
    belongs to the moment before the first read and to a host with no limits reader wired.
 1. Press Ctrl+S, which is available from any screen. Sessions lists every managed session the
