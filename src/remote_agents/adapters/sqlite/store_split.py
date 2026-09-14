@@ -36,6 +36,7 @@ from pathlib import Path
 
 from remote_agents.adapters.sqlite.database import open_ui_database, ui_database_path
 from remote_agents.adapters.sqlite.migrations import UI_TABLES
+from remote_agents.ports.private_directory import open_private_directory
 
 __all__ = ["RestoreReport", "SplitReport", "split_stores", "unsplit_stores"]
 
@@ -118,6 +119,15 @@ def split_stores(domain_path: Path) -> SplitReport:
     if not domain_path.exists():
         return SplitReport(moved={}, backup=None)
 
+    # The parent is vetted here rather than relied on from the caller: `_open_domain_store` runs
+    # this *before* `paths.open_database` applies its own guard, and one caller
+    # (`_print_session_history`) does not vet the directory beforehand at all — so without this,
+    # that path would read the store and write a full backup of it through an unvetted parent.
+    # Note the side effect: `open_private_directory` re-applies 0700 to the parent even when
+    # it already holds, and this runs on every process start. Harmless under `ProductionPaths`,
+    # which keeps it at 0700 anyway, but it is a write and worth not being surprised by.
+    if open_private_directory(domain_path.parent) is None:
+        raise ValueError("database directory cannot traverse a symlink")
     # Raw, not `open_database`: opening normally would apply migration 14 and drop the very
     # tables this function exists to read.
     connection = sqlite3.connect(domain_path)

@@ -6,8 +6,11 @@ watched file, the bot minting a keyboard *was* a session changing as far as the 
 tell — so an open sessions page republished its own change and redrew, about thirty times a
 minute, until Telegram flood-banned the bot for six hours.
 
-Moving the tables (Task 2.1) stops the bot writing there. Narrowing `watched_paths` is what makes
-the signal *mean* something: everything left in that file is written by another process.
+Moving the tables stops the bot writing there, and that is the whole of the production change.
+**Nothing was narrowed here** — `watched_paths` already answered the domain file and its `-wal`,
+because the UI store was given a sibling name rather than a suffix. These tests are the pin that
+did not previously exist: adding the UI path to that list, or a third file beside it, would have
+gone unnoticed by every other test.
 """
 
 from __future__ import annotations

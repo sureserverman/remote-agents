@@ -30,15 +30,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 from remote_agents.adapters.sqlite.migrations import UI_TABLES  # noqa: E402
 
 
-#: Tables that must never appear in the UI store.
-#:
-#: `idempotency_claims` is here for the reason this whole split is careful about it: it is the
-#: session store's, and `docs/architecture.md` guarantees duplicate-command protection is
-#: durable across processes. A regression that added it to `UI_TABLES` would put the bot's
-#: claims in a file the console panes never open -- and the first version of this list omitted
-#: it, so the one script whose job is proving the files disjoint would not have noticed.
-#: `handoff_intents` is here for symmetry: it is dropped rather than moved, so it belongs in
-#: neither file, and a copy that resurrected it should fail something.
 def _domain_tables(domain: Path) -> set[str]:
     """Everything the domain store holds that is not the moved set.
 
@@ -139,7 +130,12 @@ def _disjoint_claim(domain: Path, ui: Path) -> int:
     in_domain = _tables(domain)
     in_ui = _tables(ui)
     failures = [f"{t} still in the domain store" for t in sorted(set(UI_TABLES) & in_domain)]
-    failures += [f"{t} leaked into the UI store" for t in sorted(_domain_tables(domain) & in_ui)]
+    # `handoff_intents` is unioned in explicitly. It is dropped by migration 14 rather than
+    # moved, so it is in neither store — which means `_domain_tables(domain)` cannot contain it
+    # and a copy that resurrected it would have passed silently. The comment above claimed this
+    # was covered before it was.
+    never_in_ui = _domain_tables(domain) | {"handoff_intents"}
+    failures += [f"{t} leaked into the UI store" for t in sorted(never_in_ui & in_ui)]
     return _report(failures, "the two stores are disjoint in both directions")
 
 

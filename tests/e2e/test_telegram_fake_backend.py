@@ -1606,7 +1606,7 @@ async def test_a_notification_press_does_not_make_it_the_live_view(tmp_path) -> 
         async def refresh_readiness(self) -> None:
             return None
 
-    connection = open_ui_database(tmp_path / "ui.sqlite3")
+    connection = open_ui_database(ui_database_path(tmp_path / "sessions.sqlite3"))
     boundary = build_private_bot(
         7,
         11,

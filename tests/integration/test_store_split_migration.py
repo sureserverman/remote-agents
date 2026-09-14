@@ -464,6 +464,74 @@ def test_a_concurrent_split_does_not_crash_the_second_process(
         module, "_tables", lambda c: real(c) | {"callback_states"} if c is not None else real(c)
     )
 
-    # The claim is simply that it answers rather than raising.
+    # The claim is that it answers rather than raising, and `moved == {}` is that claim.
+    # `isinstance(report.moved, dict)` was here too, which is true of the declared type
+    # unconditionally — an assertion that cannot fail, sitting next to one that can.
     report = split_stores(domain)
-    assert report.moved == {} or isinstance(report.moved, dict)
+    assert report.moved == {}
+
+
+def test_a_table_vanishing_mid_copy_is_skipped_rather_than_fatal(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The *second* race guard — the one around `INSERT OR IGNORE`, not the count.
+
+    **The first version of this test was flaky by construction, and measurably so: 6 of 20
+    `PYTHONHASHSEED` values failed it.** It added a synthetic table to `UI_TABLES`, which
+    `_already_copied` also iterates — over a *set*. Whichever member Python visited first decided
+    whether the synthetic one raised (short-circuiting to "already copied") or a real one
+    answered "not yet". Neither the code nor the test chose; the interpreter's hash seed did.
+    That it was written to close a finding about a test that could not fail is the part worth
+    remembering.
+
+    So `_already_copied` is pinned to False outright here. It has its own test; what this one is
+    about is what happens *after* it, when a table listed a moment ago is gone by the time the
+    copy reaches it.
+    """
+    from remote_agents.adapters.sqlite import store_split as module
+
+    domain = tmp_path / "sessions.sqlite3"
+    _a_store_with_rows(domain)
+    open_ui_database(ui_database_path(domain)).close()
+
+    # Deterministic: the copy loop runs, and it runs over a table that is not there.
+    monkeypatch.setattr(module, "_already_copied", lambda *_a, **_k: False)
+    real = module._tables
+    monkeypatch.setattr(module, "_tables", lambda c: real(c) | {"gone_from_under_us"})
+    monkeypatch.setattr(module, "UI_TABLES", (*UI_TABLES, "gone_from_under_us"))
+
+    report = split_stores(domain)
+
+    assert "gone_from_under_us" not in report.moved
+    assert set(report.moved) == set(UI_TABLES), (
+        "the real tables must still copy; only the vanished one is skipped"
+    )
+
+
+def test_the_split_refuses_a_parent_that_traverses_a_symlink(tmp_path: Path) -> None:
+    """The guard is vetted, not just written.
+
+    `_open_domain_store` runs the split *before* `paths.open_database` applies its own directory
+    guard, and `--history` does not vet the directory beforehand at all — so on that path this is
+    the only check standing between an unvetted parent and a full copy of the store written
+    through it.
+    """
+    real = tmp_path / "real"
+    real.mkdir(mode=0o700)
+    linked = tmp_path / "linked"
+    linked.symlink_to(real, target_is_directory=True)
+
+    domain = real / "sessions.sqlite3"
+    _a_store_with_rows(domain)
+
+    with pytest.raises(ValueError, match="symlink"):
+        split_stores(linked / "sessions.sqlite3")
+
+    # **The refusal alone does not discriminate.** Without this guard `split_stores` runs on,
+    # and `open_ui_database` raises the identical message a few lines later — so a test that
+    # only caught the exception passed with the guard deleted. What the guard actually buys is
+    # that nothing is *written* through the unvetted parent first, and the backup is the write:
+    # a full copy of the store, made before the UI store is ever opened.
+    assert not list(real.glob("*.pre-split-*.bak")), (
+        "a full copy of the store was written through a symlinked parent before the refusal"
+    )

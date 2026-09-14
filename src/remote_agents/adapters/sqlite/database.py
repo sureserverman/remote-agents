@@ -179,7 +179,13 @@ def open_ui_database(path: Path, *, busy_timeout_ms: int = 1_000) -> sqlite3.Con
     not a second *lease* -- what that decision forbids is a handle kept across operations, and
     the watcher still opens none.
     """
-    return open_database(path, migrations=UI_MIGRATIONS, busy_timeout_ms=busy_timeout_ms)
+    connection = open_database(path, migrations=UI_MIGRATIONS, busy_timeout_ms=busy_timeout_ms)
+    # Owner-only, like the domain store, and for a sharper reason: this file holds live callback
+    # tokens, the owner's user id and their chat id. `ProductionPaths.open_database` narrows the
+    # domain store to 0600 explicitly; this one is opened directly and so was left at the
+    # process umask -- measured at 0644 on a drilled copy, world-readable, with the tokens in it.
+    os.chmod(path, 0o600)
+    return connection
 
 
 def open_database(

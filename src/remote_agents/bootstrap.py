@@ -404,9 +404,17 @@ def _open_both_stores(paths: ProductionPaths, wants_unit_directory: bool):
     false of `tui`, `pane` and `--history`; a review found all three.
     """
     connection = _open_domain_store(paths, include_unit_directory=wants_unit_directory)
-    # Beside the domain one. `StoreWatch` fingerprints only the domain file, so what the bot
-    # writes about itself no longer looks like a session changing.
-    return connection, open_ui_database(ui_database_path(paths.database_path))
+    try:
+        # Beside the domain one. `StoreWatch` fingerprints only the domain file, so what the bot
+        # writes about itself no longer looks like a session changing.
+        return connection, open_ui_database(ui_database_path(paths.database_path))
+    except BaseException:
+        # The domain store is already open by the time this second open can fail — a corrupt
+        # `ui.sqlite3`, a full disk, a bad UI migration. `_serve` carries a comment worrying
+        # about exactly this shape for a single connection; adding a second open reintroduced
+        # it, and nothing closed the first.
+        connection.close()
+        raise
 
 
 def _serve(arguments, serve_runner) -> int:

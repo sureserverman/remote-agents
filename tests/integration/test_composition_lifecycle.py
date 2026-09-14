@@ -110,15 +110,27 @@ class FailingReconciler(FakeReconciler):
             raise RuntimeError("synthetic reconciliation failure")
 
 
+_UI_CONNECTIONS = []
+
+
 def _ui(paths):
     """The surface store beside the domain one, for a test composing the boundary directly.
 
-    A helper rather than a fixture because these tests open their own domain connection at their
-    own moment; what matters is only that the two are the pair `_private_boundary` now requires.
+    Registered for teardown rather than left to the garbage collector: every caller's `finally`
+    closes the domain connection it opened and knew about, and this one was invisible to them.
     """
     from remote_agents.adapters.sqlite.database import open_ui_database, ui_database_path
 
-    return open_ui_database(ui_database_path(paths.database_path))
+    connection = open_ui_database(ui_database_path(paths.database_path))
+    _UI_CONNECTIONS.append(connection)
+    return connection
+
+
+@pytest.fixture(autouse=True)
+def _close_ui_connections():
+    yield
+    while _UI_CONNECTIONS:
+        _UI_CONNECTIONS.pop().close()
 
 
 def test_the_service_composition_gives_the_bot_a_durable_callback_store(

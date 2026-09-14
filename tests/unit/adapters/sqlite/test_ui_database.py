@@ -10,6 +10,7 @@ also carried what the surface writes about itself.
 
 from __future__ import annotations
 
+import stat
 from pathlib import Path
 
 import pytest
@@ -131,3 +132,43 @@ def test_a_moved_table_is_writable_in_its_new_home(tmp_path: Path, table: str) -
     finally:
         connection.close()
     assert count == 0
+
+
+def test_the_ui_store_is_owner_only(tmp_path: Path) -> None:
+    """It holds live callback tokens, the owner's user id and their chat id.
+
+    The domain store is narrowed to 0600 deliberately by `ProductionPaths.open_database`; this
+    one is opened directly and so inherited the process umask instead — measured at 0644 on a
+    drilled copy, world-readable, with the tokens in it. Asserted rather than assumed, because
+    a mode set once and never checked is a mode a later refactor silently drops.
+    """
+    path = tmp_path / "ui.sqlite3"
+    open_ui_database(path).close()
+
+    assert stat.S_IMODE(path.stat().st_mode) == 0o600
+
+
+def test_the_ui_store_the_split_creates_is_owner_only(tmp_path: Path) -> None:
+    """The *other* creation path, which is the one a real host takes on upgrade.
+
+    `split_stores` opens the UI store itself the first time it copies. A permission fix that
+    covered only the direct call would leave every upgraded host world-readable.
+    """
+    from remote_agents.adapters.sqlite.migrations import MIGRATIONS
+    from remote_agents.adapters.sqlite.store_split import split_stores
+
+    domain = tmp_path / "sessions.sqlite3"
+    pre_split = [entry for entry in MIGRATIONS if entry[0] < 14]
+    connection = open_database(domain, migrations=pre_split)
+    try:
+        connection.execute(
+            "INSERT INTO callback_states VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            ("c1_tok", "session.detail", "e1", 7, 11, 100, 0, 0, "2026-09-14T00:00:00+00:00"),
+        )
+        connection.commit()
+    finally:
+        connection.close()
+
+    split_stores(domain)
+
+    assert stat.S_IMODE(ui_database_path(domain).stat().st_mode) == 0o600

@@ -33,18 +33,39 @@ def _main_file(connection: sqlite3.Connection) -> Path:
     raise AssertionError("connection has no main database")
 
 
-def _stores_with_connections(boundary: object) -> dict[str, object]:
-    """Every collaborator on the boundary that holds a SQLite connection of its own."""
-    found = {}
-    for name in dir(boundary):
-        if name.startswith("__"):
-            continue
-        try:
-            value = getattr(boundary, name)
-        except Exception:
-            continue
-        if isinstance(getattr(value, "_connection", None), sqlite3.Connection):
-            found[name] = value
+def _stores_with_connections(boundary: object, *, depth: int = 2) -> dict[str, object]:
+    """Every store reachable from the boundary that holds a SQLite connection of its own.
+
+    **Reaches through wrappers, and the first version did not.** It looked only at direct
+    attributes, so it found `callbacks`, `anchors` and `standing` — and silently missed
+    `trust_store`, which is not a boundary field at all but lives inside the trust notifier at
+    `trust_notifier._store`. Three of four, in the test whose whole stated purpose is catching a
+    store wired to the wrong database. Rewiring `trust_store` to the domain connection would have
+    passed this file completely.
+
+    The count assertion at the call site is the other half: reaching further is a fix for the
+    store we know about, while a count that must equal `UI_TABLES` is what makes the *next*
+    invisible store fail loudly instead of by omission.
+    """
+    found: dict[str, object] = {}
+
+    def walk(obj: object, path: str, left: int) -> None:
+        if left < 0:
+            return
+        for name in dir(obj):
+            if name.startswith("__"):
+                continue
+            try:
+                value = getattr(obj, name)
+            except Exception:
+                continue
+            if isinstance(getattr(value, "_connection", None), sqlite3.Connection):
+                found.setdefault(f"{path}{name}", value)
+            elif left and not isinstance(value, str | bytes | int | float | bool | type(None)):
+                if type(value).__module__.startswith("remote_agents"):
+                    walk(value, f"{path}{name}.", left - 1)
+
+    walk(boundary, "", depth)
     return found
 
 
@@ -76,23 +97,35 @@ def test_every_surface_store_writes_to_the_ui_database(
         stores = _stores_with_connections(composition.boundary)
         assert stores, "no store on the boundary holds a connection; this swept nothing"
 
-        # **The expectation cannot come from the connection under test.** The first version of
-        # this asked each store's own connection which tables it could see and derived the
-        # expected file from that — so a store wired to the wrong database agreed with itself
-        # and the check passed. Rewiring `anchors` back to the domain connection did not fail
-        # it. The rule is now stated independently: a surface store belongs in the UI file, and
-        # the domain store is the one named exception.
-        from remote_agents.adapters.sqlite.session_store import SQLiteSessionStore
-
         domain_file = paths.database_path.resolve()
         ui_file = ui_database_path(paths.database_path).resolve()
-        misfiled = {}
+
+        # Deduplicated by identity, because one store is reachable by several routes (the live
+        # view and the notifier both hold the callback store) and a path count would say 17.
+        # What the claim is about is distinct stores.
+        by_file: dict[Path, dict[int, str]] = {}
+        stray = {}
         for name, store in stores.items():
-            expected = domain_file if isinstance(store, SQLiteSessionStore) else ui_file
             actual = _main_file(store._connection).resolve()  # noqa: SLF001
-            if actual != expected:
-                misfiled[name] = (actual.name, expected.name)
-        assert not misfiled, f"stores wired to the wrong database: {misfiled}"
+            if actual not in {domain_file, ui_file}:
+                stray[name] = actual.name
+            by_file.setdefault(actual, {}).setdefault(id(store), name)
+        assert not stray, f"stores holding a connection to neither store: {stray}"
+
+        # **One distinct store per moved table, and the equality is the whole guard.** Too few
+        # means a surface store is wired to the domain connection — the loop, still armed. Too
+        # many means something domain-owned followed the tables across. Either way this fails,
+        # which a per-store expectation derived from the store's own connection could not: the
+        # first version of this test did exactly that, and rewiring `anchors` back to the domain
+        # connection agreed with itself and passed.
+        on_ui = by_file.get(ui_file, {})
+        assert len(on_ui) == len(UI_TABLES), (
+            f"{len(on_ui)} distinct stores on the UI database for {len(UI_TABLES)} moved "
+            f"tables: {sorted(on_ui.values())}"
+        )
+
+        # And the domain side is not empty, so "everything moved" cannot pass the line above.
+        assert by_file.get(domain_file), "no store left on the domain database at all"
     finally:
         connection.close()
         ui.close()
@@ -222,7 +255,17 @@ def test_no_domain_open_bypasses_the_split() -> None:
             if name not in names:
                 continue
             # `open_ui_database` passes UI_MIGRATIONS and is a different store entirely.
-            if enclosing.get(id(node)) in {allowed, "open_ui_database"}:
+            # Qualified by module, not by bare name. A second function called
+            # `_open_domain_store` anywhere under src/ would otherwise exempt itself — the same
+            # coincidental-name gap this sweep replaced a grep to avoid.
+            # Path-relative, not just the filename: two files named `database.py` under
+            # `src/` would collide the same way the original bare-name bypass did, one level up.
+            here = (module.relative_to(root).as_posix(), enclosing.get(id(node)))
+            exempt = {
+                ("bootstrap.py", allowed),
+                ("adapters/sqlite/database.py", "open_ui_database"),
+            }
+            if here in exempt:
                 continue
             where = enclosing.get(id(node))
             offenders.append(f"{module.relative_to(root)}:{node.lineno} in {where}")
@@ -269,3 +312,41 @@ def test_the_chokepoint_carries_the_rows_out_before_the_drop(tmp_path: Path) -> 
     finally:
         ui.close()
     assert carried == 1, "the drop ran without the rows being carried out first"
+
+
+def test_a_failing_ui_open_does_not_leak_the_domain_connection(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The domain store is already open when the second open can fail.
+
+    A corrupt `ui.sqlite3`, a full disk, a bad UI migration — any of them raises after the first
+    connection exists, and before this fix nothing closed it. `_serve` carries a comment worrying
+    about precisely this shape for one connection; adding a second open put it back.
+    """
+    from remote_agents import bootstrap
+    from remote_agents.production import ProductionPaths
+
+    opened: list[sqlite3.Connection] = []
+
+    class _Paths(ProductionPaths):
+        def open_database(self, *_args, **_kwargs):
+            connection = sqlite3.connect(":memory:")
+            opened.append(connection)
+            return connection
+
+    monkeypatch.setattr(bootstrap, "split_stores", lambda *_a, **_k: None)
+    monkeypatch.setattr(
+        bootstrap, "open_ui_database", lambda *_a, **_k: (_ for _ in ()).throw(OSError("no disk"))
+    )
+
+    home = tmp_path / "home"
+    paths = _Paths.for_home(home)
+    paths.ensure_directories()
+
+    with pytest.raises(OSError):
+        bootstrap._open_both_stores(paths, False)
+
+    assert opened, "the domain store was never opened; this proved nothing"
+    for connection in opened:
+        with pytest.raises(sqlite3.ProgrammingError):
+            connection.execute("SELECT 1")
