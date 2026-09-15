@@ -47,6 +47,20 @@ _LOG = logging.getLogger(__name__)
 #: resting position, which is what makes them able to discard a half-typed value.
 _FLOW_JUMPS = frozenset({"add_project", "sessions", "resume"})
 
+#: The set withheld while the position holds work the owner has not finished. The three jumps,
+#: plus Settings.
+#:
+#: **Settings is in this set for a different reason from the three, and the difference is worth
+#: stating rather than letting the shared name imply it.** A jump unwinds the stack, so pressing
+#: one mid-commitment *discards* the work -- that is the harm the rule below exists to prevent.
+#: Settings does not: it pushes a detour and escape comes back with the typed value intact, so
+#: nothing would be lost. It is withheld anyway because a commitment screen is a position the
+#: surface has asked the owner to finish, and offering a way off it is the same class of
+#: surprise one step quieter -- the rule DEC-052/DEC-062 already apply to the keys that may
+#: carry an unconfirmed stop. `None` rather than `False` for both, so the key stays drawn and
+#: greyed rather than vanishing as the owner types.
+_WITHHELD_WHILE_COMMITTED = _FLOW_JUMPS | {"settings"}
+
 #: What a screen declares as its `empty_state` when it cannot legitimately be empty — its rows
 #: are fixed by construction, so "no rows" would be a bug rather than a state to describe.
 #:
@@ -481,7 +495,7 @@ class ChoiceScreen(Screen[None]):
             # in-flight rule below so a host without the capability hides the key outright
             # rather than greying it, which would imply it were available later.
             return False
-        if action in _FLOW_JUMPS and self.work_in_flight:
+        if action in _WITHHELD_WHILE_COMMITTED and self.work_in_flight:
             return None
         return True
 

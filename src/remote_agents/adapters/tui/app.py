@@ -55,6 +55,7 @@ from remote_agents.adapters.tui.screens.confirm import (
     HostPairingCodeModal,
     HostRemoteControlDirectionModal,
 )
+from remote_agents.adapters.tui.screens.dashboard import SETTINGS_KEY
 from remote_agents.adapters.tui.screens.launch import ProjectsScreen
 from remote_agents.adapters.tui.screens.palette import NavigationCommands
 from remote_agents.adapters.tui.screens.sessions import CHORD_KEYS, CHORD_STOPS, perform_chord
@@ -289,6 +290,20 @@ class RemoteAgentsTui(App[AttachRequest | None]):
             "ctrl+o", "resume", "resume", tooltip="Reopen a saved conversation as a new session"
         ),
         Binding("ctrl+q", "quit", "quit", tooltip="Leave the terminal surface"),
+        # Declared here rather than on `DashboardScreen`, which is where it lived until this
+        # sub-plan. On a console the dashboard is one pane of four, so binding it there gave
+        # three of the four panes no route to this screen at all (BL-057). An app binding is
+        # asked of every position, and `check_action` is what decides where it applies.
+        #
+        # **A bare printable key, and deliberately not `priority=True`.** The Alt layer below
+        # takes priority precisely so a bare letter can stay text in the projects filter; this
+        # key wants the opposite and gets it by default, since Textual gives a focused `Input`
+        # every printable key before a non-priority binding sees it. So `,` opens Settings on
+        # the rows and types a comma in the filter, which is the rule `o` on this position
+        # already lives by.
+        Binding(
+            SETTINGS_KEY, "settings", "settings", show=False, tooltip="This machine's settings"
+        ),
         # The Alt layer: every row key the sessions pane offers, available from any console
         # pane, acting on the session that pane has highlighted.
         #
@@ -1095,6 +1110,30 @@ class RemoteAgentsTui(App[AttachRequest | None]):
                 )
                 return
         await super().action_quit()
+
+    async def action_settings(self) -> None:
+        """Open the Settings position, from wherever the owner is.
+
+        **Moved here from `DashboardScreen` by sub-plan 02**, and the move is the whole of
+        BL-057's terminal half: the key was declared on one screen, and on a console that
+        screen is one pane of four. `show_settings` was already on the app -- only the binding
+        and the action were in the wrong place.
+
+        **Awaited rather than posted, which is the opposite of what the Codex row needs, and
+        DEC-068 is why the two differ.** A binding body runs on the App's message-pump task, so
+        suspending here would stop the app delivering keys at all. This one only pushes a
+        screen: `push_screen` returns once the screen is mounted and waits on nobody. The
+        questions on the Settings screen are raised from that screen's own handler, which is
+        where DEC-025 requires them -- so nothing this action does can await a modal.
+
+        The busy guard mirrors every other navigation on this surface: a command in flight owns
+        the position. The refusal on a commitment screen is not here but in
+        `ChoiceScreen.check_action`, because `run_action` consults it before dispatching and a
+        rule written in both places is two rules free to disagree.
+        """
+        if self.busy:
+            return
+        await self.show_settings()
 
     async def action_add_project(self) -> None:
         if self.offers("add_project") and not self.busy:

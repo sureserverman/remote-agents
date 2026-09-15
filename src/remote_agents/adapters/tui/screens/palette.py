@@ -30,11 +30,21 @@ NAVIGATION_COMMANDS: tuple[tuple[str, str, str], ...] = (
     ("Sessions", "Every managed session on this host", "sessions"),
     ("Resume", "Reopen a saved conversation as a new session", "resume"),
     ("Add project", "Register a new project directory", "add_project"),
+    # The fourth, and the only entry that is not a flow jump: it pushes a detour rather than
+    # unwinding to a position, so escape comes back where the owner was. It is here because
+    # `,` was bound on `DashboardScreen` alone -- on a console that is one pane of four, so
+    # three of them had no route to this screen at all (BL-057). The palette is the route that
+    # works from every position, which is exactly what a palette is for.
+    #
+    # It does not reopen the argument above. That rule is about *session actions*, and this
+    # entry takes the owner to a position which then asks for itself: the Codex row confirms
+    # from its own screen handler, and every other row is one press back.
+    ("Settings", "This machine's settings", "settings"),
 )
 
 
 class NavigationCommands(Provider):
-    """Offers the three flow jumps, each only where its own binding would also work."""
+    """Offers each navigation entry, only where its own binding would also work."""
 
     @property
     def _tui(self) -> RemoteAgentsTui:

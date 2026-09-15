@@ -830,7 +830,6 @@ class DashboardScreen(LimitsRegion, FeedRegion, ProjectsPaneScreen):
         # are: the footer is shared with every inherited binding, and six more entries would
         # clip bindings the owner did not add (`InspectScreen`'s own comment records causing
         # exactly that once).
-        Binding(SETTINGS_KEY, "settings", "Settings", show=False),
     ]
 
     #: The dashboard is the projects position, so its crumb is that position's, and the
@@ -1024,23 +1023,6 @@ class DashboardScreen(LimitsRegion, FeedRegion, ProjectsPaneScreen):
         """The screen handler `HostRemoteControlAction` is delivered to."""
         del message
         await self.confirm_host_remote_control()
-
-    async def action_settings(self) -> None:
-        """Open the Settings position.
-
-        **Awaited here rather than posted, and the difference from `h` two methods up is the
-        whole of DEC-068.** That key leads to a confirmation, which suspends its caller until
-        the owner answers -- and this body runs on the App's message-pump task, so suspending
-        here stops the app delivering keys at all. This one only pushes a screen: `push_screen`
-        returns once the screen is mounted and waits on nobody, exactly as `d` does for the
-        session detail. The questions on the Settings screen are raised from that screen's own
-        handler, which is where DEC-025 requires them.
-        """
-        if self.tui.busy:
-            # Mirrors every other navigation on this surface: a command in flight owns the
-            # position, and leaving it mid-flight is what the busy guard exists to refuse.
-            return
-        await self.tui.show_settings()
 
     def action_host_pair(self) -> None:
         """Hand the pairing key to this screen's own pump, for DEC-068's reason exactly."""

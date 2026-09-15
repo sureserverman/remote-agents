@@ -120,7 +120,7 @@ async def test_the_palette_serves_exactly_the_declared_table() -> None:
         offered = await _discovered(app)
 
     assert offered == [name for name, _help, _action in NAVIGATION_COMMANDS]
-    assert offered == ["Sessions", "Resume", "Add project"]
+    assert offered == ["Sessions", "Resume", "Add project", "Settings"]
 
 
 async def test_resume_is_not_offered_on_a_host_that_wired_no_conversation_service() -> None:
@@ -132,7 +132,7 @@ async def test_resume_is_not_offered_on_a_host_that_wired_no_conversation_servic
         offered = await _discovered(app)
 
     assert "Resume" not in offered
-    assert offered == ["Sessions", "Add project"]
+    assert offered == ["Sessions", "Add project", "Settings"]
 
 
 async def test_searching_narrows_to_matching_entries() -> None:
@@ -264,3 +264,121 @@ async def test_an_entry_is_re_checked_when_it_is_chosen_not_only_when_it_is_list
 
     assert landed == "NAME", "a stale palette entry fired against a refusing screen"
     assert survived == "typed-after-listing"
+
+
+# --- Settings: the fourth entry, and the only one that is not a flow jump --------------------
+
+
+async def test_the_palette_offers_settings() -> None:
+    """Closes the palette half of BL-057: the screen was reachable by one key on one position
+    and by nothing else, which on a console meant three of the four panes could not open it."""
+    app = RemoteAgentsTui(_context(conversations=_Conversations()))
+
+    async with app.run_test():
+        offered = await _discovered(app)
+
+    assert "Settings" in offered
+    assert offered[-1] == "Settings", "last, because it is the detour rather than a flow"
+
+
+async def test_choosing_settings_pushes_the_screen_rather_than_unwinding_to_it() -> None:
+    """A detour, not a jump. The three entries above it switch flows and unwind the stack;
+    this one pushes, so escape returns to the position the owner opened it from."""
+    from remote_agents.adapters.tui.screens.settings import SettingsScreen
+
+    app = RemoteAgentsTui(_context(conversations=_Conversations()))
+
+    async with app.run_test() as pilot:
+        await pilot.press("ctrl+s")
+        await pilot.pause()
+        depth = len(app.screen_stack)
+        opened_from = app.screen.position
+
+        await app.run_action("settings")
+        await pilot.pause()
+        assert isinstance(app.screen, SettingsScreen)
+        assert len(app.screen_stack) == depth + 1, "pushed, not switched"
+
+        await pilot.press("escape")
+        await pilot.pause()
+        assert app.screen.position == opened_from
+
+
+async def test_the_palette_withholds_settings_while_a_name_is_half_typed() -> None:
+    """Guarded like a flow jump although it does not unwind: the palette must offer exactly
+    what `check_action` answers `True` for, and nothing that is drawn-but-refused."""
+    from textual.widgets import Input
+
+    app = RemoteAgentsTui(_context(projects=_Creator(), conversations=_Conversations()))
+
+    async with app.run_test() as pilot:
+        await pilot.press("ctrl+n")
+        await pilot.pause()
+        await app.screen.choose("infra")
+        await pilot.pause()
+        app.screen.query_one("#filter", Input).value = "half-typed-name"
+        await pilot.pause()
+
+        assert app.screen.work_in_flight, "the fixture is not in the state under test"
+        assert app.check_action("settings", ()) is None, "expected drawn-but-refused"
+
+        offered = await _discovered(app)
+
+    assert "Settings" not in offered, offered
+
+
+async def test_settings_is_never_offered_behind_a_modal() -> None:
+    """A modal is one question awaiting an answer; nothing fires behind one."""
+    from remote_agents.adapters.tui.screens.confirm import ForceConfirmModal
+
+    app = RemoteAgentsTui(_context(conversations=_Conversations()))
+
+    async with app.run_test() as pilot:
+        await app.push_screen(ForceConfirmModal("Stop it?"))
+        await pilot.pause()
+
+        assert app.check_action("settings", ()) is False
+        offered = await _discovered(app)
+
+    assert offered == [], offered
+
+
+async def test_the_settings_key_opens_the_screen_from_a_position_that_is_not_the_dashboard() -> (
+    None
+):
+    """`,` was bound on `DashboardScreen` alone, so on a console the other three panes had no
+    key for it at all. It is an app binding now."""
+    from remote_agents.adapters.tui.screens.dashboard import SETTINGS_KEY
+    from remote_agents.adapters.tui.screens.settings import SettingsScreen
+
+    app = RemoteAgentsTui(_context(conversations=_Conversations()))
+
+    async with app.run_test() as pilot:
+        await pilot.press("ctrl+s")
+        await pilot.pause()
+        assert not isinstance(app.screen, SettingsScreen), "fixture: start off the dashboard"
+
+        await pilot.press(SETTINGS_KEY)
+        await pilot.pause()
+
+        assert isinstance(app.screen, SettingsScreen)
+
+
+async def test_the_settings_key_is_text_inside_the_projects_filter() -> None:
+    """A bare printable key is a key until the owner reaches for the filter, and a character
+    after -- the rule `o` already lives by on this position."""
+    from textual.widgets import Input
+
+    from remote_agents.adapters.tui.screens.dashboard import SETTINGS_KEY
+    from remote_agents.adapters.tui.screens.settings import SettingsScreen
+
+    app = RemoteAgentsTui(_context(conversations=_Conversations()))
+
+    async with app.run_test() as pilot:
+        await pilot.press("slash")
+        await pilot.pause()
+        await pilot.press(SETTINGS_KEY)
+        await pilot.pause()
+
+        assert not isinstance(app.screen, SettingsScreen), "the filter must take the key"
+        assert app.screen.query_one("#filter", Input).value == ","
