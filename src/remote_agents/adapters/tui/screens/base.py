@@ -14,8 +14,10 @@ from collections.abc import AsyncIterator, Sequence
 from typing import TYPE_CHECKING, ClassVar, Literal, cast
 
 from textual.app import ComposeResult, ScreenStackError
+from textual.binding import Binding
 from textual.containers import Vertical, VerticalScroll
 from textual.content import Content
+from textual.css.query import NoMatches
 from textual.notifications import SeverityLevel
 from textual.screen import Screen
 from textual.validation import ValidationResult, Validator
@@ -60,6 +62,9 @@ _FLOW_JUMPS = frozenset({"add_project", "sessions", "resume"})
 #: carry an unconfirmed stop. `None` rather than `False` for both, so the key stays drawn and
 #: greyed rather than vanishing as the owner types.
 _WITHHELD_WHILE_COMMITTED = _FLOW_JUMPS | {"settings"}
+
+#: The four list-movement actions `ChoiceScreen.BINDINGS` declares, by name.
+_LIST_KEY_ACTIONS = frozenset({"list_down", "list_up", "list_first", "list_last"})
 
 #: What a screen declares as its `empty_state` when it cannot legitimately be empty — its rows
 #: are fixed by construction, so "no rows" would be a bug rather than a state to describe.
@@ -280,6 +285,18 @@ class ChoiceScreen(Screen[None]):
     #: renaming a class does not silently rewrite what the owner reads.
     crumb = ""
 
+    #: The list keys of vim, less and k9s, over whichever `OptionList` holds the keyboard.
+    #: Hidden from the footer -- arrows do the same and the bar is shared with every inherited
+    #: binding -- and not priority, so inside an `Input` each stays the letter it is.
+    #: Declared on this base so that every position has them by construction rather than the
+    #: ones someone remembered; `check_action` below refuses them where an `Input` is focused.
+    BINDINGS = [
+        Binding("j", "list_down", "down", show=False),
+        Binding("k", "list_up", "up", show=False),
+        Binding("g", "list_first", "top", show=False),
+        Binding("G", "list_last", "bottom", show=False),
+    ]
+
     def __init_subclass__(cls, **kwargs: object) -> None:
         """Keep `status` a single line at the point a screen declares one.
 
@@ -481,6 +498,10 @@ class ChoiceScreen(Screen[None]):
         footer. `work_at_risk` is the companion to `work_in_flight` that lets the warning name
         what it is warning about.
         """
+        if action in _LIST_KEY_ACTIONS:
+            # A bare letter is text wherever an `Input` holds the keyboard, and there is no
+            # list to move where none is shown.
+            return False if isinstance(self.app.focused, Input) or self._list() is None else True
         if action == "back":
             # `go_back` refuses to pop the last screen, so at the resting position escape is
             # inert by construction — see `RemoteAgentsTui.go_back`.
@@ -498,6 +519,38 @@ class ChoiceScreen(Screen[None]):
         if action in _WITHHELD_WHILE_COMMITTED and self.work_in_flight:
             return None
         return True
+
+    def _list(self) -> OptionList | None:
+        """The list the vim keys move: the focused `OptionList`, else `#choices` if it is shown.
+
+        The console's limits pane focuses a list of its own and hides `#choices`, which is
+        why the focused widget is asked first; `None` where nothing is shown, so the keys are
+        refused rather than moving a cursor the owner cannot see.
+        """
+        focused = self.app.focused
+        if isinstance(focused, OptionList) and focused.display:
+            return focused
+        try:
+            choices = self.query_one("#choices", OptionList)
+        except NoMatches:
+            return None
+        return choices if choices.display else None
+
+    def action_list_down(self) -> None:
+        if (pane := self._list()) is not None:
+            pane.action_cursor_down()
+
+    def action_list_up(self) -> None:
+        if (pane := self._list()) is not None:
+            pane.action_cursor_up()
+
+    def action_list_first(self) -> None:
+        if (pane := self._list()) is not None:
+            pane.action_first()
+
+    def action_list_last(self) -> None:
+        if (pane := self._list()) is not None:
+            pane.action_last()
 
     @property
     def work_in_flight(self) -> bool:

@@ -543,7 +543,7 @@ async def test_f2_opens_the_five_row_settings_screen_from_every_surface() -> Non
 
 
 async def test_f2_on_a_name_step_with_text_typed_is_refused_and_the_text_survives() -> None:
-    """Guarded as a flow jump: `None` while work is in flight, so the key is drawn, greyed, inert."""
+    """Guarded as a flow jump: `None` while work is in flight -- drawn, greyed and inert."""
     from textual.widgets import Input
 
     from remote_agents.adapters.tui.screens.project import NameScreen
@@ -691,3 +691,300 @@ async def test_help_is_not_offered_behind_a_modal() -> None:
         await pilot.pause()
 
     assert not opened
+
+
+# --- Task 1.3: list keys and the universal three ----------------------------------------
+
+
+def _three_records() -> tuple[SessionRecord, ...]:
+    return tuple(_record(ordinal=index) for index in (1, 2, 3))
+
+
+async def test_vim_keys_move_the_sessions_cursor_and_reach_both_ends() -> None:
+    """`j`/`k` step, `g`/`G` jump -- the list keys of vim, less and k9s, on the sessions list."""
+    from textual.widgets import OptionList
+
+    app = SessionsPane(_context(_Listing(_three_records())))
+    async with app.run_test(size=(120, 30)) as pilot:
+        await pilot.pause()
+        choices = app.screen.query_one("#choices", OptionList)
+        assert choices.option_count == 3, "fixture: three rows expected"
+        assert choices.highlighted == 0
+
+        await pilot.press("j")
+        await pilot.pause()
+        assert choices.highlighted == 1, "`j` did not move down"
+
+        await pilot.press("k")
+        await pilot.pause()
+        assert choices.highlighted == 0, "`k` did not move up"
+
+        await pilot.press("G")
+        await pilot.pause()
+        assert choices.highlighted == 2, "`G` did not reach the end"
+
+        await pilot.press("g")
+        await pilot.pause()
+        assert choices.highlighted == 0, "`g` did not reach the top"
+
+
+async def test_vim_keys_never_scroll_a_disabled_limits_row_into_selection() -> None:
+    """Every limits row is disabled, so the cursor has nowhere legal to go and stays on nothing."""
+    from textual.widgets import OptionList
+
+    from remote_agents.adapters.tui.panes import LimitsPane
+
+    app = LimitsPane(_context(_Listing(())))
+    async with app.run_test(size=(120, 30)) as pilot:
+        await pilot.pause()
+        choices = app.screen.query_one("#limits-pane", OptionList)
+        assert app.focused is choices, "fixture: the limits pane does not rest on its list"
+        assert choices.option_count >= 1, "fixture: the limits pane drew no rows"
+        assert all(
+            choices.get_option_at_index(index).disabled for index in range(choices.option_count)
+        ), "fixture: expected every limits row to be disabled"
+
+        for key in ("j", "k", "G", "g", "j"):
+            await pilot.press(key)
+            await pilot.pause()
+            highlighted = choices.highlighted
+            assert highlighted is None or not choices.get_option_at_index(highlighted).disabled, (
+                f"`{key}` selected a disabled row"
+            )
+
+
+async def test_vim_key_j_is_text_inside_the_projects_filter() -> None:
+    """Bare letters are text wherever an `Input` holds the keyboard -- the projects rule."""
+    from textual.widgets import Input, OptionList
+
+    app = ProjectsPane(_context(_Listing(())))
+    async with app.run_test(size=(120, 30)) as pilot:
+        await pilot.pause()
+        await pilot.press("slash")
+        await pilot.pause()
+        choices = app.screen.query_one("#choices", OptionList)
+        before = choices.highlighted
+
+        await pilot.press("j")
+        await pilot.pause()
+
+        assert app.screen.query_one("#filter", Input).value == "j"
+        assert choices.highlighted == before, "`j` moved the list from inside the filter"
+
+
+async def test_q_key_on_the_detail_returns_to_the_list() -> None:
+    """`q` is Back on a pushed screen, as it is in less, man and every pager."""
+    from remote_agents.adapters.tui.screens.sessions import SessionsPaneScreen
+
+    app = SessionsPane(_context(_Listing(_three_records())))
+    async with app.run_test(size=(120, 30)) as pilot:
+        await pilot.pause()
+        await pilot.press("f4")
+        await pilot.pause()
+        assert isinstance(app.screen, SessionDetailScreen), "fixture: F4 did not open the detail"
+
+        await pilot.press("q")
+        await pilot.pause()
+
+        assert isinstance(app.screen, SessionsPaneScreen), (
+            f"`q` left us on {type(app.screen).__name__}"
+        )
+        assert len(app.screen_stack) == 1
+
+
+async def test_q_key_at_the_root_does_what_f10_does() -> None:
+    """At the resting position there is nothing to go back to, so `q` is quit.
+
+    Driven both ways on one app: F10 with typed work at risk warns and stays (DEC-027 -- the
+    key warns on itself), a second F10 leaves; and `q` at a root with nothing in flight leaves
+    on the first press, because `q` and F10 share `action_quit`'s arming. `q` cannot itself
+    reach the warning: typed work means an `Input` holds the keyboard, and there `q` is text.
+    """
+    from textual.widgets import Input
+
+    from remote_agents.adapters.tui.screens.project import NameScreen
+
+    app = RemoteAgentsTui(_context(_Listing(())))
+    async with app.run_test(size=(120, 30)) as pilot:
+        await pilot.pause()
+        await app.push_screen(NameScreen("infra"))
+        await pilot.pause()
+        app.screen.query_one("#filter", Input).focus()
+        await pilot.press(*"nightly")
+        await pilot.pause()
+
+        await pilot.press("f10")
+        await pilot.pause()
+        assert not app._exit, "F10 left with typed work and no warning"
+        assert any("again to leave" in text for text in announcements(app)), announcements(app)
+
+        await pilot.press("f10")
+        await pilot.pause()
+        assert app._exit, "the second F10 did not leave"
+
+    app = RemoteAgentsTui(_context(_Listing(())))
+    async with app.run_test(size=(120, 30)) as pilot:
+        await pilot.pause()
+        assert len(app.screen_stack) == 1, "fixture: not at the root"
+
+        await pilot.press("q")
+        await pilot.pause()
+
+        assert app._exit, "`q` at the root did not leave"
+
+
+async def test_q_key_is_text_inside_the_projects_filter() -> None:
+    from textual.widgets import Input
+
+    app = ProjectsPane(_context(_Listing(())))
+    async with app.run_test(size=(120, 30)) as pilot:
+        await pilot.pause()
+        await pilot.press("slash")
+        await pilot.pause()
+
+        await pilot.press("q")
+        await pilot.pause()
+
+        assert app.screen.query_one("#filter", Input).value == "q"
+        assert not app._exit, "`q` quit from inside the filter"
+
+
+class _Conversations:
+    """Enough of a conversation service for Resume to be offered, so the palette has four."""
+
+    async def capabilities(self):
+        from remote_agents.domain.conversations import ProfileResumeCapability
+
+        return (ProfileResumeCapability(ProfileId("claude"), True, True),)
+
+    async def catalogue(self, _query):
+        from remote_agents.domain.conversations import ConversationCataloguePage
+
+        return ConversationCataloguePage(
+            conversations=(), page=1, page_count=1, unavailable_reason=None
+        )
+
+
+async def test_colon_opens_the_command_palette_listing_the_four_navigation_entries() -> None:
+    """`:` is the palette, as in k9s and vim; what it lists is `NAVIGATION_COMMANDS`, all four."""
+    from textual.command import CommandPalette
+
+    from remote_agents.adapters.tui.screens.palette import NAVIGATION_COMMANDS, NavigationCommands
+
+    context = replace(
+        _context(_Listing(())),
+        backend=replace(_context(_Listing(())).backend, conversations=_Conversations()),
+    )
+    app = RemoteAgentsTui(context)
+    async with app.run_test(size=(120, 30)) as pilot:
+        await pilot.pause()
+        beneath = app.screen
+
+        await pilot.press("colon")
+        await pilot.pause()
+
+        assert isinstance(app.screen, CommandPalette), f"`:` left us on {type(app.screen).__name__}"
+        provider = NavigationCommands(beneath)
+        listed = [str(hit.text) async for hit in provider.discover()]
+        assert listed == [name for name, _help, _action in NAVIGATION_COMMANDS]
+        assert len(listed) == 4
+
+        await pilot.press("escape")
+        await pilot.pause()
+        assert not isinstance(app.screen, CommandPalette)
+
+
+async def test_colon_is_text_inside_the_projects_filter() -> None:
+    from textual.command import CommandPalette
+    from textual.widgets import Input
+
+    app = ProjectsPane(_context(_Listing(())))
+    async with app.run_test(size=(120, 30)) as pilot:
+        await pilot.pause()
+        await pilot.press("slash")
+        await pilot.pause()
+
+        await pilot.press("colon")
+        await pilot.pause()
+
+        assert app.screen.query_one("#filter", Input).value == ":"
+        assert not isinstance(app.screen, CommandPalette)
+
+
+def _f_key_actions() -> list[tuple[str, str, tuple[object, ...]]]:
+    """`(key, action name, parameters)` per table row, parsed the way Textual parses the string."""
+    parsed = []
+    for entry in FUNCTION_KEYS:
+        name, _open, rest = entry.action.partition("(")
+        parameters: tuple[object, ...] = ()
+        if rest:
+            parameters = (rest.rstrip(")").strip("'\""),)
+        parsed.append((entry.key, name, parameters))
+    return parsed
+
+
+def test_every_screen_leaves_the_f_key_row_to_the_app() -> None:
+    """No screen binds an F-key of its own, so none can shadow the app's row.
+
+    The hazard of a *missing* binding adds nothing a grep can find, so it is asserted from
+    the other side: the app binds all eleven, and every registered screen binds none.
+    """
+    from remote_agents.adapters.tui.screens import ALL_SCREENS
+
+    app_keys = set(RemoteAgentsTui._merged_bindings.key_to_bindings)
+    assert {entry.key for entry in FUNCTION_KEYS} <= app_keys, sorted(app_keys)
+
+    shadowing = {
+        screen.__name__: sorted(
+            key
+            for key in (screen._merged_bindings.key_to_bindings if screen._merged_bindings else ())
+            if key.startswith("f") and key[1:].isdigit()
+        )
+        for screen in ALL_SCREENS
+    }
+    assert not {name: keys for name, keys in shadowing.items() if keys}, shadowing
+
+
+async def test_every_screen_answers_every_f_key_or_refuses_it_with_a_sentence() -> None:
+    """Over every registered screen, each F-key is answered by `check_action` -- offered,
+    greyed or hidden, never an exception -- and a session-shaped key it offers resolves to a
+    session or to a refusal the owner is told (DEC-027: the key warns on itself).
+
+    Arranged with the visibility suite's registry, which its own exhaustiveness check keeps
+    equal to `ALL_SCREENS`.
+    """
+    from test_binding_visibility import _arrangements
+    from test_binding_visibility import _context as _visibility_context
+    from textual.screen import ModalScreen
+
+    from remote_agents.adapters.tui.screens import ALL_SCREENS
+    from remote_agents.adapters.tui.screens.base import ChoiceScreen
+
+    dropped: dict[str, list[str]] = {}
+    for screen_type in ALL_SCREENS:
+        app = RemoteAgentsTui(_visibility_context())
+        async with app.run_test(size=(100, 30)) as pilot:
+            await pilot.pause()
+            build = _arrangements()[screen_type]
+            if build is not None:
+                await app.push_screen(build())
+                await pilot.pause()
+            answers = {}
+            for key, name, parameters in _f_key_actions():
+                answer = app.check_action(name, parameters)
+                assert answer in (True, None, False), f"{screen_type.__name__} {key}: {answer!r}"
+                answers[key] = answer
+                if answer is True and name == "session_key":
+                    value, refusal = await app._resolve_session()
+                    assert value is not None or refusal.strip(), (
+                        f"{screen_type.__name__} offers {key} and would refuse it in silence"
+                    )
+            if isinstance(app.screen, ChoiceScreen) and not isinstance(app.screen, ModalScreen):
+                # A position the owner can act on offers help and quit at the very least.
+                if answers["f1"] is not True or answers["f10"] is not True:
+                    dropped[screen_type.__name__] = [k for k, a in answers.items() if a is not True]
+            if isinstance(app.screen, ModalScreen):
+                await pilot.press("escape")
+                await pilot.pause()
+
+    assert not dropped, f"these positions drop F1 or F10: {dropped}"

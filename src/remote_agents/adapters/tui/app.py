@@ -163,6 +163,16 @@ _FAILURE_TIMEOUT = 20.0
 _NOTHING_SELECTED = "No session is selected."
 
 
+#: Every key that means quit. The warning `action_quit` arms is disarmed by *any other* key,
+#: so this set is what keeps a second F10 or `q` from disarming the warning it is answering;
+#: it was `ctrl+q` alone when that was the only quit key, and F10 then disarmed itself.
+QUIT_KEYS = frozenset({"ctrl+q", "f10", "q"})
+
+#: The bare printable keys the app binds beside the F-keys. Each is a character wherever an
+#: `Input` holds the keyboard, which `check_action` answers in one place for all of them.
+_BARE_KEY_ACTIONS = frozenset({"bare_help", "back_or_quit", "bare_palette"})
+
+
 class RemoteAgentsTui(App[AttachRequest | None]):
     """Choose a project and an agent, launch it, and hand back an attach command.
 
@@ -349,6 +359,13 @@ class RemoteAgentsTui(App[AttachRequest | None]):
         # asked for an action, and F1 must stay offered inside the filter while `?` is refused
         # there. Hidden: the footer draws F1 for the same act.
         Binding("question_mark", "bare_help", "help", show=False),
+        # `q` and `:`, the two universal bare keys: `q` is Back on a pushed screen and quit at
+        # the resting position (less, man, htop), `:` is the palette (vim, k9s). Both printable,
+        # so neither is priority -- an `Input` takes them as text -- and `check_action` refuses
+        # both wherever one holds the keyboard, so the footer and the palette agree with the
+        # key. Hidden: the footer draws F10 and the palette has ctrl+p.
+        Binding("q", "back_or_quit", "back", show=False),
+        Binding("colon", "bare_palette", "palette", show=False),
     ]
 
     #: Which app-level flows this surface offers, by action name.
@@ -490,13 +507,14 @@ class RemoteAgentsTui(App[AttachRequest | None]):
             # chords are. An unknown name is an absent key rather than a dead one.
             named = session_key(str(parameters[0])) if parameters else None
             return False if named is None else self._offers_chords(screen, named.row_key)
+        if action in _BARE_KEY_ACTIONS and isinstance(self.focused, Input):
+            # A bare printable key is a character wherever an `Input` holds the keyboard --
+            # the filter, the rename box, the project name -- and the key everywhere else.
+            # Asked here rather than left to the `Input`, so the footer and the palette agree
+            # with the key: what the `Input` would eat is not offered where it would be eaten.
+            return False
         if action == "bare_help":
-            # `?` is a character wherever an `Input` holds the keyboard -- the filter, the
-            # rename box, the project name -- and the help key everywhere else. Asked here
-            # rather than left to the `Input`, so the footer and the palette agree with the
-            # key: a bare letter an `Input` would eat is not offered where it would be eaten.
-            if isinstance(self.focused, Input):
-                return False
+            # `?` is F1's act under a bare key, and the position is asked F1's question.
             action = "help"
         if action == "projects_home" and getattr(screen, "work_in_flight", False):
             # `return_to_projects` unwinds the stack the way the three flow jumps do, so it
@@ -1077,7 +1095,7 @@ class RemoteAgentsTui(App[AttachRequest | None]):
         sites is five chances to forget, and the sixth action added later would forget.
         """
         if isinstance(event, events.Paste) or (
-            isinstance(event, events.Key) and event.key != "ctrl+q"
+            isinstance(event, events.Key) and event.key not in QUIT_KEYS
         ):
             self._quit_armed = None
         await super().on_event(event)
@@ -1141,12 +1159,12 @@ class RemoteAgentsTui(App[AttachRequest | None]):
                 screen.announce(
                     (
                         f"Quitting now discards {at_risk!r}, which has not been saved. "
-                        "Press ctrl+q again to leave anyway."
+                        "Press the quit key again to leave anyway."
                     )
                     if at_risk
                     else (
                         "Quitting now discards what you have built on this screen. "
-                        "Press ctrl+q again to leave anyway."
+                        "Press the quit key again to leave anyway."
                     ),
                     severity="warning",
                 )
@@ -1408,6 +1426,29 @@ class RemoteAgentsTui(App[AttachRequest | None]):
             self.action_show_help_panel()
             return
         self.action_hide_help_panel()
+
+    async def action_back_or_quit(self) -> None:
+        """`q`: Back where there is somewhere to go back to, quit at the resting position.
+
+        Two acts under one key because that is how every pager and htop read it -- `q` leaves
+        the thing you are looking at, and at the root the thing you are looking at is the app.
+        Quit is F10's own `action_quit`, warning and arming included, so `q` at the root with
+        work at risk would warn first; in practice work at risk means an `Input` holds the
+        keyboard, and there `q` is text (`check_action` above).
+        """
+        if len(self.screen_stack) > 1:
+            await self.action_back()
+            return
+        await self.action_quit()
+
+    def action_bare_palette(self) -> None:
+        """`:`: Textual's palette under a bare key, refused inside an `Input` like `?` and `q`.
+
+        Its own action rather than `command_palette`'s, for the reason `bare_help` is not
+        `help`: `ctrl+p` shares that action and must keep working from inside the filter,
+        and `check_action` is asked about an action, never about the key that named it.
+        """
+        self.action_command_palette()
 
     def action_bare_help(self) -> None:
         """`?`: the help key where no `Input` is focused; `check_action` refuses it elsewhere."""
