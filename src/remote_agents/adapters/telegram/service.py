@@ -83,6 +83,11 @@ from remote_agents.application.host_remote_control import (
     host_remote_control_directions,
     pair_available,
 )
+from remote_agents.application.limits_source import (
+    LIMITS_SOURCE_LABELS,
+    LIMITS_SOURCE_TITLE,
+    next_limits_source,
+)
 from remote_agents.application.profiles import ProfileAvailability
 from remote_agents.application.project_admin import CreateProjectCommand
 from remote_agents.application.project_catalog import (
@@ -408,6 +413,10 @@ _INSPECT_EMOJI = "\U0001f4c4"  # 📄
 _RENAME_EMOJI = "\u270f\ufe0f"  # ✏️
 _ATTACH_EMOJI = "\U0001f4ce"  # 📎
 _REMOTE_EMOJI = "\U0001f4e1"  # 📡
+# Its own mark rather than the satellite the two Remote Control rows share: this row sits
+# between them and is not about Remote Control at all, so borrowing their emoji would group it
+# with the two settings it has nothing to do with.
+_LIMITS_EMOJI = "\U0001f4ca"  # 📊
 _BACK_TO_SESSIONS = "\u2039 Back to sessions"  # ‹ Back to sessions
 
 _REMOTE_CONTROL_WORDS: dict[RemoteControlState, str] = {
@@ -551,7 +560,14 @@ def unmarked(label: str) -> str:
     begins with one.
     """
     head, separator, rest = label.partition(" ")
-    marks = {*_ACTION_EMOJI.values(), _INSPECT_EMOJI, _RENAME_EMOJI, _ATTACH_EMOJI, _REMOTE_EMOJI}
+    marks = {
+        *_ACTION_EMOJI.values(),
+        _INSPECT_EMOJI,
+        _RENAME_EMOJI,
+        _ATTACH_EMOJI,
+        _REMOTE_EMOJI,
+        _LIMITS_EMOJI,
+    }
     return rest if separator and head in marks else label
 
 
@@ -1518,6 +1534,8 @@ class PrivateBotBoundary:
         # above, so the only press this screen owns is the one about Claude's stored default.
         if action == "settings.claude":
             return await self._settings_claude_reply(token, message_id)
+        if action == "settings.limits_source":
+            return await self._settings_limits_source_reply(token, message_id)
         # `host.remote.pair` is deliberately absent: it is handled before this dispatcher
         # runs, because its message must be *sent* rather than edited into the live view.
         if action == "session.trust":
@@ -2723,7 +2741,10 @@ class PrivateBotBoundary:
         return _reply_arguments(self._host_remote_screen(status))
 
     async def _settings_screen(
-        self, claude_default: RemoteControlDefault | None = None
+        self,
+        claude_default: RemoteControlDefault | None = None,
+        *,
+        limits_source: str | None = None,
     ) -> RenderedMessage:
         """Both providers' Remote Control on one screen, each row reading its own source.
 
@@ -2751,8 +2772,9 @@ class PrivateBotBoundary:
         lines = [
             "<b>Settings</b>",
             "",
-            "Remote Control for this machine, one row per provider. Each row is that "
-            "provider's own setting, so changing one says nothing about the other.",
+            "Remote Control for this machine, one row per provider, and where Claude's plan "
+            "limits are read from. Each row is its own setting, so changing one says nothing "
+            "about the others.",
         ]
         rows: list[tuple[Button, ...]] = []
         default = self.backend.claude_remote_control_default
@@ -2796,11 +2818,74 @@ class PrivateBotBoundary:
                     ),
                 )
             )
+        source = self.backend.claude_limits_source
+        if source is None:
+            lines += ["", f"{escape(LIMITS_SOURCE_TITLE)} is unavailable."]
+        else:
+            # The caller's read-back where it has one, for the reason the Claude row above
+            # takes one: the value compared against the press's intention and the value drawn
+            # must be one read rather than two that could disagree across the await between.
+            chosen = await source.read() if limits_source is None else limits_source
+            rows.append(
+                (
+                    Button(
+                        f"{_LIMITS_EMOJI} {LIMITS_SOURCE_TITLE}: "
+                        f"{LIMITS_SOURCE_LABELS.get(chosen, chosen)}",
+                        # `mutation=True` because the press writes, and this is the one row on
+                        # this screen whose write changes what the *service* does rather than
+                        # what a provider does -- a redelivered callback that advanced twice
+                        # would silently turn the credential-reading source back on.
+                        self._callback("settings.limits_source", "claude", mutation=True),
+                    ),
+                )
+            )
         return self._message(
             "\n".join(lines),
             tuple(rows),
             back=self._callback("sessions.open", "sessions"),
             back_label=_BACK_TO_SESSIONS,
+        )
+
+    async def _settings_limits_source_reply(self, token: str, message_id: int) -> dict[str, object]:
+        """Advance where Claude's limits come from by one press, then draw what the file says.
+
+        `_settings_claude_reply`'s shape exactly, and deliberately so: the two rows write to
+        different files owned by different programs, but what the owner can observe is one
+        behaviour -- read, advance from *this* read rather than from the value the button was
+        drawn with (a token outlives its screen, DEC-011), write, read again.
+
+        The last read is not redundant. This value has a second writer by design -- the
+        terminal's Settings screen edits the same `config.toml` -- so the only honest row after
+        a press is one that asked the file again (DEC-005's accepted multi-writer world).
+
+        Neither verb raises, which is the port's contract, so there is no failure branch. A
+        write that could not land is a forgotten choice, and the read-back reports it: the
+        refusal is detected by comparing what the file now says against what the press asked
+        for, because `write_limits_key` declines several shapes an owner can hand-edit and
+        cannot raise to say which.
+        """
+        source = self.backend.claude_limits_source
+        if source is None:
+            return _reply_arguments(self._message(f"{escape(LIMITS_SOURCE_TITLE)} is unavailable."))
+        if not self.callbacks.claim_mutation(
+            token,
+            owner_id=self.owner_user_id,
+            chat_id=self.owner_chat_id,
+            message_id=message_id,
+        ):
+            return _reply_arguments(self._message("That action has already run."))
+        intended = next_limits_source(await source.read())
+        await source.write(intended)
+        landed = await source.read()
+        screen = await self._settings_screen(limits_source=landed)
+        if landed == intended:
+            return _reply_arguments(screen)
+        return _reply_arguments(
+            self._message(
+                f"{escape(LIMITS_SOURCE_TITLE)} could not be changed; it is still "
+                f"<code>{escape(LIMITS_SOURCE_LABELS.get(landed, landed))}</code>.",
+                screen.keyboard,
+            )
         )
 
     async def _settings_claude_reply(self, token: str, message_id: int) -> dict[str, object]:

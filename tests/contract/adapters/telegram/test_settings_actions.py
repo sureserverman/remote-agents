@@ -425,3 +425,204 @@ async def test_a_refused_write_says_so_rather_than_redrawing_an_unchanged_row() 
     ]
     unchanged = REMOTE_CONTROL_DEFAULT_LABELS[RemoteControlDefault.ON]
     assert f"{REMOTE_CONTROL_DEFAULT_TITLE}: {unchanged}" in labels
+
+
+# --- The third row: where Claude's limits are read from ---------------------------------------
+
+
+class FakeLimitsSource:
+    """A scripted `ports.limits_source.LimitsSourcePort`, shaped like the port and not the
+    config writer beneath it. `refuse` is the shape that matters: `write_limits_key` declines
+    several files an owner can hand-edit and its contract forbids raising to say so."""
+
+    def __init__(self, value: str = "status-line", *, refuse: bool = False) -> None:
+        self.value = value
+        self.calls: list[str] = []
+        self.refuse = refuse
+
+    async def read(self) -> str:
+        self.calls.append("read")
+        return self.value
+
+    async def write(self, value: str) -> None:
+        self.calls.append(f"write:{value}")
+        if self.refuse:
+            return
+        self.value = value
+
+
+def _bot_with_limits_source(
+    claude: object | None, codex: object | None, source: object | None
+) -> PrivateBotBoundary:
+    bot = _bot(claude, codex)
+    bot.backend = replace(bot.backend, claude_limits_source=source)
+    return bot
+
+
+async def _press_limits_source(bot: PrivateBotBoundary, screen) -> dict[str, object]:
+    """One whole owner press of the limits-source row, token and all -- driven through the
+    registry, because the token *is* the idempotency key."""
+    from remote_agents.application.limits_source import LIMITS_SOURCE_TITLE
+
+    token = _token(screen, _row_label(screen, LIMITS_SOURCE_TITLE))
+    bot.callbacks.bind_pending(CHAT, 1)
+    state = bot.callbacks.resolve(token, owner_id=OWNER, chat_id=CHAT, message_id=1)
+    assert state is not None and state.action == "settings.limits_source"
+    return await bot._reply_for(state.action, state.entity_id, token=token, message_id=1)
+
+
+async def test_the_screen_renders_three_rows_in_order() -> None:
+    """Three rows and no more: the two terminal preferences have no business on a phone."""
+    from remote_agents.application.limits_source import LIMITS_SOURCE_TITLE
+
+    screen = await _bot_with_limits_source(
+        FakeClaudeDefault(), FakeHostRemoteControl(HostConnection.CONNECTED), FakeLimitsSource()
+    )._settings_screen()
+
+    titles = [label.split(":")[0] for label in _labels(screen) if ":" in label]
+    assert titles[:3] == [
+        REMOTE_CONTROL_DEFAULT_TITLE,
+        HOST_REMOTE_CONTROL_TITLE,
+        LIMITS_SOURCE_TITLE,
+    ], _labels(screen)
+
+
+async def test_the_limits_source_row_reads_the_value_it_currently_has() -> None:
+    from remote_agents.application.limits_source import LIMITS_SOURCE_LABELS, LIMITS_SOURCE_TITLE
+
+    source = FakeLimitsSource("usage-api")
+
+    screen = await _bot_with_limits_source(None, None, source)._settings_screen()
+
+    assert _row_label(screen, LIMITS_SOURCE_TITLE) == (
+        f"{LIMITS_SOURCE_TITLE}: {LIMITS_SOURCE_LABELS['usage-api']}"
+    )
+    assert source.calls == ["read"], "drawing the screen reads; it must not write"
+
+
+async def test_pressing_the_limits_source_row_advances_by_one_and_reads_it_back() -> None:
+    from remote_agents.application.limits_source import LIMITS_SOURCE_LABELS, LIMITS_SOURCE_TITLE
+
+    source = FakeLimitsSource("status-line")
+    bot = _bot_with_limits_source(None, None, source)
+    screen = await bot._settings_screen()
+
+    result = await _press_limits_source(bot, screen)
+
+    assert source.value == "usage-api"
+    assert source.calls == ["read", "read", "write:usage-api", "read"], source.calls
+    labels = [
+        unmarked(unpadded(button.text))
+        for row in result["reply_markup"].inline_keyboard
+        for button in row
+    ]
+    assert f"{LIMITS_SOURCE_TITLE}: {LIMITS_SOURCE_LABELS['usage-api']}" in labels
+
+
+async def test_two_presses_return_the_limits_source_to_where_it_started() -> None:
+    source = FakeLimitsSource("status-line")
+    bot = _bot_with_limits_source(None, None, source)
+
+    for _ in range(2):
+        screen = await bot._settings_screen()
+        await _press_limits_source(bot, screen)
+
+    assert source.value == "status-line"
+
+
+async def test_a_redelivered_limits_source_callback_does_not_advance_twice() -> None:
+    """`mutation=True`: the press writes, so a Telegram retry of the same callback must be
+    answered with "already run" rather than with a second step round the cycle."""
+    from remote_agents.application.limits_source import LIMITS_SOURCE_TITLE
+
+    source = FakeLimitsSource("status-line")
+    bot = _bot_with_limits_source(None, None, source)
+    screen = await bot._settings_screen()
+    token = _token(screen, _row_label(screen, LIMITS_SOURCE_TITLE))
+    bot.callbacks.bind_pending(CHAT, 1)
+    state = bot.callbacks.resolve(token, owner_id=OWNER, chat_id=CHAT, message_id=1)
+    assert state is not None
+
+    await bot._reply_for(state.action, state.entity_id, token=token, message_id=1)
+    again = await bot._reply_for(state.action, state.entity_id, token=token, message_id=1)
+
+    assert source.value == "usage-api", "the first press landed"
+    assert "already run" in str(again["text"]), again["text"]
+
+
+async def test_a_refused_limits_source_write_says_so_rather_than_redrawing_an_unchanged_row() -> (
+    None
+):
+    from remote_agents.application.limits_source import LIMITS_SOURCE_LABELS, LIMITS_SOURCE_TITLE
+
+    source = FakeLimitsSource("status-line", refuse=True)
+    bot = _bot_with_limits_source(None, None, source)
+    screen = await bot._settings_screen()
+
+    result = await _press_limits_source(bot, screen)
+
+    assert source.value == "status-line"
+    said = str(result["text"])
+    assert LIMITS_SOURCE_TITLE in said, said
+    assert "still" in said, said
+    assert LIMITS_SOURCE_LABELS["status-line"] in said, said
+
+
+async def test_a_composition_with_no_limits_source_says_so_rather_than_hiding_the_row() -> None:
+    """DEC-061/067: a vanished row leaves the owner unable to tell a capability this host
+    lacks from a feature this bot lost."""
+    from remote_agents.application.limits_source import LIMITS_SOURCE_TITLE
+
+    screen = await _bot_with_limits_source(FakeClaudeDefault(), None, None)._settings_screen()
+
+    assert LIMITS_SOURCE_TITLE not in _labels(screen)
+    assert f"{LIMITS_SOURCE_TITLE} is unavailable." in screen.text
+
+
+async def test_the_bot_settings_screen_carries_no_terminal_preference() -> None:
+    """Theme and project order are the terminal's alone -- the bot has one order by decision,
+    and a phone has no theme this project chooses.
+
+    Asserted as the absence of the rows and of the words on the screen, rather than by grepping
+    `service.py` for "theme": the plan's gate check does grep, and a source sweep for a common
+    English word goes red the day somebody writes a comment about it. What is actually meant is
+    that the screen does not offer them, so that is what is checked."""
+    from remote_agents.adapters.tui import preferences
+
+    screen = await _bot_with_limits_source(
+        FakeClaudeDefault(), FakeHostRemoteControl(HostConnection.CONNECTED), FakeLimitsSource()
+    )._settings_screen()
+
+    for word in (preferences.THEME_TITLE, preferences.PROJECT_ORDER_TITLE):
+        assert all(word not in label for label in _labels(screen)), _labels(screen)
+        assert word not in screen.text
+
+
+def test_every_button_mark_this_surface_defines_is_one_unmarked_can_take_off() -> None:
+    """The set `unmarked` knows was maintained by hand, and this task's new mark was missed.
+
+    Found the ordinary way -- the limits-source row rendered correctly and every test that
+    reads a label failed, because `_row_label` compares against a label whose mark is still
+    attached. The fix is not "add 📊 to the set": it is to stop the set being a list somebody
+    has to remember. Anything decoding a button goes through `unmarked`, so a mark it does not
+    know is a label no caller can match, and that is a property over *every* mark rather than a
+    fact about this one.
+
+    Swept from the module's own `_*_EMOJI` constants, so a seventh mark added without being
+    registered fails here rather than in whichever screen's test happens to read a label first.
+    """
+    from remote_agents.adapters.telegram import service
+
+    marks = {
+        value
+        for name, value in vars(service).items()
+        if name.endswith("_EMOJI") and isinstance(value, str)
+    }
+    marks |= set(service._ACTION_EMOJI.values())
+
+    unregistered = sorted(mark for mark in marks if unmarked(f"{mark} Label") != "Label")
+
+    assert not unregistered, (
+        "these marks are put on buttons but `unmarked` cannot take them off, so any caller "
+        f"decoding such a button matches nothing: {unregistered}"
+    )

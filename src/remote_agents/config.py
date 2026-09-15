@@ -121,6 +121,14 @@ class AppConfig:
     and defaulting it to anything but the hop would grant a credential read nobody asked for.
     No `_stated` twin, because nothing presents the default differently from a stated one: the
     hop is the hop whether the owner wrote it down or not.
+
+    **Written by the Settings row on either surface**, through `write_limits_key` and nothing
+    else (DEC-088). Sub-plan 01 built the key and its writer with no caller and scrubbed this
+    sentence rather than let the docstring promise a control that did not exist yet; sub-plan
+    02 built the row, so it goes back. The terminal draws it as
+    `settings:claude-limits-source`, the bot as the `settings.limits_source` button, and both
+    read it back from this file afterwards rather than drawing what they asked for -- two
+    surfaces are two writers (DEC-005), so the file is the only thing that knows.
     """
 
     path: Path | None = None
