@@ -57,10 +57,6 @@ no host has produced one to date.
 
 ## Undoing the store split
 
-> **Not yet live.** Nothing calls the split until the stage that moves each store's connection
-> onto the second database. Until then `ui.sqlite3` is never created and this section describes
-> a state your host is not in. If `ui.sqlite3` does not exist, stop here — nothing has moved.
-
 **Read this first, before running anything.** Rolling back restores the surface's state *and*
 reinstates the reason the bot was flood-banned: its own writes go back into the file the change
 watcher fingerprints, so an open sessions page republishes its own change and redraws until

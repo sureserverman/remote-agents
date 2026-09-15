@@ -535,3 +535,16 @@ def test_the_split_refuses_a_parent_that_traverses_a_symlink(tmp_path: Path) -> 
     assert not list(real.glob("*.pre-split-*.bak")), (
         "a full copy of the store was written through a symlinked parent before the refusal"
     )
+
+
+def test_the_pre_split_backup_is_owner_only(tmp_path: Path) -> None:
+    """It is a full copy of the domain store, callback tokens and owner ids included."""
+    import stat
+
+    domain = tmp_path / "sessions.sqlite3"
+    _a_store_with_rows(domain)
+
+    report = split_stores(domain)
+
+    assert report.backup is not None
+    assert stat.S_IMODE(report.backup.stat().st_mode) == 0o600

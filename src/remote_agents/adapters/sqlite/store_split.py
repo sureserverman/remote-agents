@@ -77,6 +77,11 @@ def _backup(connection: sqlite3.Connection, domain_path: Path) -> Path:
         connection.backup(target)
     finally:
         target.close()
+    # Owner-only, for the same reason `open_ui_database` narrows the UI store: this is a full
+    # copy of the domain database *including* the callback tokens, the owner's user id and their
+    # chat id. The 0700 state directory contains it either way; leaving the one file this diff
+    # argued deserves 0600 at the process umask would be an odd place to stop.
+    os.chmod(destination, 0o600)
     return destination
 
 
