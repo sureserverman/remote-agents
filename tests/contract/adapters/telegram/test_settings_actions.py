@@ -1,16 +1,17 @@
-"""The bot's Settings screen: two providers, two rows, and two vocabularies kept apart.
+"""The bot's Settings screen: three rows about this machine, three vocabularies kept apart.
 
 Sibling of `test_host_remote_control_actions.py` and deliberately not an extension of it. That
 one covers the screen whose whole subject is the Codex daemon; this one covers the screen where
-that daemon's reading sits beside Claude's stored default -- two facts about this machine that
-no single row could state, which is the reason DEC-071 calls them siblings rather than one
-generalised toggle.
+that daemon's reading sits beside Claude's stored default and beside where Claude's plan limits
+are read from -- three facts about this machine that no single row could state, which is the
+reason DEC-071 calls the first two siblings rather than one generalised toggle.
 
 What is pinned:
 
 * `/settings` is listed in the command menu and named in `/help`, so the screen is reachable
   without the owner knowing a word this project never told them;
-* both rows render the value they currently have, each read from its own provider -- the file
+* the two provider rows render the value they currently have, each read from its own
+  provider -- the file
   for Claude, the daemon for Codex -- and reading is a read: nothing is claimed and nothing
   acts;
 * one press of the Claude row advances the cycle by exactly one, writes that, and the screen
@@ -26,6 +27,24 @@ What is pinned:
   unset `remoteControlAtStartup` measured *connected* on this owner's account
   (`docs/acceptance-2026-09-11-surface-refresh.md` section 8);
 * the screen closes with Back to sessions above the fixed navigation bar (DEC-032).
+
+The third row arrived with sub-plan 02's Task 1.4 and is pinned below the two above it. What it
+adds to this list:
+
+* three rows in order, and only three -- the terminal's theme and project-order rows have no
+  business on a phone, asserted against the rendered labels rather than by grepping the module;
+* one press advances the cycle by exactly one and the screen that comes back has *read* the
+  result, with the advance taken from that read and never from the value the button was drawn
+  with (a token outlives its screen, DEC-011);
+* a redelivered callback does not advance twice (`mutation=True`), because this is the row
+  whose write decides whether the service reads a credential and calls out;
+* a refused write says so rather than redrawing an unchanged row -- `write_limits_key` declines
+  several files an owner can hand-edit and cannot raise to say which, so the refusal is found by
+  the read-back;
+* `/help` names the screen on a host that wired *only* this row, which it did not until the
+  gate was widened with the screen;
+* every mark this surface puts on a button is one `unmarked` can take off, swept from the
+  module's own constants rather than kept as a list somebody has to remember.
 """
 
 import re
@@ -162,7 +181,8 @@ def test_the_menu_lists_settings_on_every_host() -> None:
 
     `/remote` is listed only where a provider declared the host capability, because an entry
     whose only possible answer is "no" is worse than no entry. This screen always has an
-    answer: it carries a row per provider and states the absence of either one in words, so
+    answer: it carries a row per provider and one for the limits source, and states the
+    absence of any of them in words, so
     the menu entry is never a dead end even on a host that wired neither.
     """
     listed = [command.command for command in owner_commands(backend_for())]
@@ -626,3 +646,34 @@ def test_every_button_mark_this_surface_defines_is_one_unmarked_can_take_off() -
         "these marks are put on buttons but `unmarked` cannot take them off, so any caller "
         f"decoding such a button matches nothing: {unregistered}"
     )
+
+
+async def test_help_names_the_settings_screen_for_a_host_that_wired_only_the_limits_source() -> (
+    None
+):
+    """`/help` is where the composition describes what it can actually do, so its gate must
+    name every row the screen can draw -- and Task 1.4 added a third row without widening it.
+
+    Found by sweeping this stage's prose for stale row counts rather than by a failing test:
+    the gate read "Claude's default or the Codex daemon", so a host wiring only the limits
+    source drew the row on `/settings` and advertised nothing in `/help`. That is the exact
+    dead-end asymmetry the menu's own docstring argues against, arrived at from the other side.
+    """
+    chat = FakeChat(chat_id=CHAT, owner_id=OWNER)
+    only_limits = _bot_with_limits_source(None, None, FakeLimitsSource())
+
+    await only_limits.help_command(chat.message_update("/help"), None)
+
+    said = chat.bot_messages[0].text
+    assert "Settings" in said, said
+
+
+async def test_help_says_the_screen_holds_more_than_remote_control() -> None:
+    """The sentence names what the screen is for, and since Task 1.4 that is two subjects."""
+    chat = FakeChat(chat_id=CHAT, owner_id=OWNER)
+    bot = _bot_with_limits_source(FakeClaudeDefault(), None, FakeLimitsSource())
+
+    await bot.help_command(chat.message_update("/help"), None)
+
+    said = chat.bot_messages[0].text
+    assert "limits" in said.lower(), said

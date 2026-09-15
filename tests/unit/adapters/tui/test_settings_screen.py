@@ -1,4 +1,4 @@
-"""The terminal's Settings position: two providers' Remote Control, one row each.
+"""The terminal's Settings position: five rows in two groups.
 
 The screen exists because the premise check moved the subject. `remoteControlAtStartup` governs
 every Claude session on this machine and Codex's enrollment governs every Codex one, so neither
@@ -10,19 +10,29 @@ What this file pins, in the order the owner meets it:
 
 * **One key from the dashboard opens it**, and that key is `SETTINGS_KEY` rather than a literal
   here: a test spelling the key itself would keep passing after the binding moved.
-* **Both rows read their current value on mount**, and a capability nobody wired reads
+* **Every row reads its current value on mount**, and a capability nobody wired reads
   *unavailable* rather than vanishing (DEC-009/DEC-061). A missing row is indistinguishable
   from a surface that forgot to draw one.
 * **Every word on either row comes from `application/`** -- `REMOTE_CONTROL_DEFAULT_LABELS`,
   `REMOTE_CONTROL_DEFAULT_TITLE`, `HOST_REMOTE_CONTROL_TITLE` -- asserted against those tables
   rather than against string literals, so a surface that re-spelled one fails here instead of
-  drifting away from the bot's screen, which renders the same two rows from the same tables
-  (DEC-007).
+  drifting away from the bot's screen, which renders the first three of these rows from the
+  same tables (DEC-007).
 * **Enter on the Claude row advances exactly one state and writes exactly once**, and the
   status line then names the new value in words (DEC-062). `PROVIDER_DEFAULT` is worded as
   *Claude's default* and never as any form of off, because an unset key resolves to an
   account-level default measured to be **on** -- a row saying "off" there would state the
   opposite of what the pane does.
+* **The limits-source row is the third host row and the only one whose press changes what
+  *this service* does** -- it decides whether Claude's plan limits are read from the hop or
+  from the usage API, and so whether the owner's credential is read at all. It asks no
+  confirmation, because that consequence is spelled into the row's own label where the owner
+  reads it before pressing.
+* **The last two rows are this terminal's alone** -- its theme and its project order -- and
+  they report a failed write differently from the three above them: *"is now day, but it could
+  not be remembered"*, because for them the change is immediate and only the memory of it can
+  fail. The theme row therefore draws the theme **in force**, not the stored one; the palette
+  can leave the app on a built-in this surface will not store.
 * **Enter on the Codex row asks its confirmation from the screen handler** (DEC-025 as DEC-068
   extends it), which is asserted behaviourally: the question is raised by a real keypress and
   the app must still answer the next one. A caller that awaited the modal from the App's pump
@@ -152,7 +162,7 @@ def _context(
     claude_default: object | None = None,
     preferences_path: Path | None = None,
 ) -> TuiContext:
-    """A surface wired with whichever of the two settings capabilities a test is about.
+    """A surface wired with whichever of the settings capabilities a test is about.
 
     `replace` rather than a `backend_for` parameter: the helper mirrors `Backend`'s fields by
     hand and this stage's new field is not among them yet, so stating it here keeps this file

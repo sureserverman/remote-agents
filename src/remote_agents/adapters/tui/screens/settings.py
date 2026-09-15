@@ -39,7 +39,8 @@ evaluator, which was right about the code as it stood then.
 that same row and `tests/architecture/check_imports.py` confines each driver adapter to its own
 subtree, so a line the bot must also draw cannot live in the terminal's. `HOST_REMOTE_CONTROL_TITLE`
 and `host_remote_control_line` spell the Codex one, and the bot's `/settings` screen renders the
-same two rows from the same tables. That is DEC-007's point rather than a tidiness preference:
+first three of these rows from the same tables -- the last two are this terminal's alone.
+That is DEC-007's point rather than a tidiness preference:
 two surfaces that *agreed* about a wording would be free to stop agreeing, and this row's
 vocabulary is the one place in the project where a wrong word is acted on by not acting --
 `PROVIDER_DEFAULT` worded as any form of "off" would tell the owner their panes come up

@@ -193,10 +193,10 @@ _OWNER_COMMANDS = (
 `/settings` is here rather than beside `_HOST_REMOTE_COMMAND` below, and the asymmetry is
 deliberate. That one is offered only where a provider declared the host capability, because a
 host with no `codex` has no relay to enrol with and an entry whose only possible answer is
-"no" is worse than no entry. This screen carries a row per provider and states the absence of
-either one in words, so there is no host on which it is a dead end -- and a menu that listed a
-settings screen only sometimes would be a worse answer to "where do I change this" than one
-that always does.
+"no" is worse than no entry. This screen carries a row per provider, a row for where Claude's
+limits are read from, and states the absence of any of them in words, so there is no host on
+which it is a dead end -- and a menu that listed a settings screen only sometimes would be a
+worse answer to "where do I change this" than one that always does.
 """
 _HOST_REMOTE_COMMAND = BotCommand("remote", HOST_REMOTE_CONTROL_TITLE)
 """The one command this bot lists conditionally, named by `application` rather than here.
@@ -1246,15 +1246,23 @@ class PrivateBotBoundary:
         if (
             self.backend.claude_remote_control_default is not None
             or self.backend.host_remote_control is not None
+            or self.backend.claude_limits_source is not None
         ):
             # Conditional on a row being wired, unlike the `/settings` menu entry, and the two
             # rules are different on purpose: the menu is a door that always has something
             # behind it, while this list is where the composition describes what it can
             # actually do. Neither title is named here -- the bare host's help must stay free
             # of them -- so the sentence describes the screen rather than its rows.
+            #
+            # **The gate names every row the screen can draw, and it has to be widened with
+            # the screen.** It listed two when the screen grew a third, so a host wiring only
+            # the limits source drew that row on `/settings` and advertised no screen here --
+            # the same dead end the menu's docstring argues against, reached from the other
+            # side. Found by sweeping this stage's prose for stale row counts.
             lines.append(
-                "<b>Settings</b> holds Remote Control for this machine, one row per provider: "
-                "what each provider does when it starts a session."
+                "<b>Settings</b> holds Remote Control for this machine, one row per provider — "
+                "what each provider does when it starts a session — and where Claude's plan "
+                "limits are read from."
             )
         lines += [
             "",
@@ -2746,15 +2754,28 @@ class PrivateBotBoundary:
         *,
         limits_source: str | None = None,
     ) -> RenderedMessage:
-        """Both providers' Remote Control on one screen, each row reading its own source.
+        """Three rows about this machine, each reading its own source.
 
-        Two rows, two subjects, and a screen shared without the vocabulary being shared
+        Three rows, three subjects, and a screen shared without the vocabulary being shared
         (DEC-071 -- siblings, "not a generalisation"). Claude's row is a stored intention read
         out of the file `claude` itself consults when it starts; Codex's is a live reading of
         this machine's daemon enrollment, taken over a socket. Neither can answer for the
         other: unenrolling the daemon says nothing about whether the next `claude` pane comes
         up connected, so no row is derived from another and the words for the two never
         overlap.
+
+        **The third row is not a fourth sibling of those two, and it is here rather than on a
+        screen of its own because it is the one other thing about this machine the owner
+        changes.** It observes no provider at all: it decides what *this service* does -- which
+        source it reads Claude's plan limits from, and so whether it reads the owner's
+        credential and calls Anthropic (DEC-087/DEC-088). The "neither can answer for the
+        other" argument above is about two readings of two providers and simply does not apply
+        to it; what it shares with them is the shape of a press and nothing else.
+
+        The two rows the terminal's Settings screen also carries -- its theme and its project
+        order -- are deliberately absent. The bot has one project order by decision (DEC-053)
+        and a phone has no theme this project chooses, so neither is a setting this surface
+        has.
 
         **A row whose capability this composition did not wire becomes a sentence rather than a
         button.** Telegram has no disabled button and this file's standing rule is that a
