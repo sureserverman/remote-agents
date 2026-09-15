@@ -237,8 +237,19 @@ def test_the_composed_console_installs_the_prefix_layer_and_no_second_root_key()
     assert len(composed) == len(root) + len(prefix), "a binding is in neither key table"
 
 
-def test_the_settings_key_is_a_screen_binding_and_costs_the_root_budget_nothing() -> None:
+def test_the_settings_key_is_an_app_binding_and_costs_the_root_budget_nothing() -> None:
     """The one key Task 3.4 added, registered here deliberately -- and it raised nothing.
+
+    **It moved from the dashboard to the app on 2026-09-15 (sub-plan 02, Task 2.3) and this
+    test went red, which is worth recording because the red was about the wrong thing.** The
+    budget this file guards is tmux's, and nothing about the move touches it -- the two
+    console-table assertions below, which are the ones DEC-041 is actually about, never
+    wavered. What failed was this test's own incidental claim that the *dashboard* is where the
+    key is bound, and that claim is exactly what BL-057 called the defect: the dashboard is one
+    pane of four on a console, so three panes had no key for this screen. So the assertion now
+    names the app, and the distinction the rest of the docstring draws is unchanged -- an app
+    binding is still dispatched by our own process, from a pane tmux already gave the keyboard
+    to. A Textual binding of any scope costs `bind-key -n` nothing.
 
     **The plan's file list for that task said "budget raised by one, deliberately", and that
     expectation was wrong in a way worth recording rather than quietly satisfying.** The budget
@@ -258,14 +269,15 @@ def test_the_settings_key_is_a_screen_binding_and_costs_the_root_budget_nothing(
     key in either console table would be a key the owner's agents lose, and the prefix one is
     the easier mistake to make because it is the table that is described as free.
     """
-    from remote_agents.adapters.tui.screens.dashboard import SETTINGS_KEY, DashboardScreen
+    from remote_agents.adapters.tui.app import RemoteAgentsTui
+    from remote_agents.adapters.tui.screens.dashboard import SETTINGS_KEY
     from remote_agents.adapters.tui.screens.sessions import CHORD_KEYS
     from remote_agents.application.console import CONSOLE_BINDINGS, console_prefix_bindings
 
-    screen_keys = {binding.key for binding in DashboardScreen.BINDINGS}
-    assert SETTINGS_KEY in screen_keys, (
-        f"{SETTINGS_KEY!r} opens the Settings position, and the dashboard is where it is bound; "
-        f"the screen now binds {sorted(screen_keys)}"
+    app_keys = {binding.key for binding in RemoteAgentsTui.BINDINGS}
+    assert SETTINGS_KEY in app_keys, (
+        f"{SETTINGS_KEY!r} opens the Settings position from every pane, so the app is where it "
+        f"is bound; the app now binds {sorted(app_keys)}"
     )
 
     console_keys = {binding.key for binding in CONSOLE_BINDINGS} | {

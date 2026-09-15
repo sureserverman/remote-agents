@@ -8,8 +8,10 @@ than a convenient one (plan Stage 3, `docs/acceptance-2026-09-11-surface-refresh
 
 What this file pins, in the order the owner meets it:
 
-* **One key from the dashboard opens it**, and that key is `SETTINGS_KEY` rather than a literal
-  here: a test spelling the key itself would keep passing after the binding moved.
+* **One key opens it from every position**, and that key is `SETTINGS_KEY` rather than a
+  literal here: a test spelling the key itself would keep passing after the binding moved --
+  which it since has, from `DashboardScreen` to the app (BL-057), and this file needed no edit
+  for it.
 * **Every row reads its current value on mount**, and a capability nobody wired reads
   *unavailable* rather than vanishing (DEC-009/DEC-061). A missing row is indistinguishable
   from a surface that forgot to draw one.
