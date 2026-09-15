@@ -117,12 +117,15 @@ project order (DEC-053) and a phone has no theme this project chooses.
    21-cell title that fills the pane, so this is a wording decision for a later task rather than
    a defect.
 
-### ACTION NEEDED — the owner has not looked at `SETTINGS.svg`
+### ACTION NEEDED — the owner has not looked at `SETTINGS.svg` (BL-093)
 
 `tests/unit/adapters/tui/snapshots/SETTINGS.svg` is committed and the suite compares against it
 forever, but a baseline is only worth what the first reading of it was worth. **Nobody has yet
 opened this one and confirmed it shows what the screen should show.** Until that happens it
 pins the render that existed when it was captured, which is not the same claim.
+
+Tracked as **BL-093** so it outlives this document: the plan that produced it is closed, and an
+open item whose only home is a closed plan's acceptance record is one nobody is holding.
 
 Its text content, for the record:
 
