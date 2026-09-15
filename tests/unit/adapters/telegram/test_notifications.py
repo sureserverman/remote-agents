@@ -4,10 +4,11 @@ import logging
 from datetime import UTC, datetime, timedelta
 
 import pytest
-from telegram.error import TelegramError
+from telegram.error import RetryAfter, TelegramError
 
 from remote_agents.adapters.telegram import notifications
 from remote_agents.adapters.telegram.callbacks import CallbackStateStore
+from remote_agents.adapters.telegram.flood import FloodGate
 from remote_agents.adapters.telegram.notifications import (
     OPEN_SESSION_LABEL,
     ActivityNotifier,
@@ -242,7 +243,7 @@ class _Clock:
         self.moment += timedelta(seconds=seconds)
 
 
-def _notifier(clock: _Clock, *, callbacks=None):
+def _notifier(clock: _Clock, *, callbacks=None, flood=None):
     view = _RecordingView()
 
     async def display(_session_id: str) -> str:
@@ -254,6 +255,7 @@ def _notifier(clock: _Clock, *, callbacks=None):
         owner_user_id=7,
         display=display,
         now=clock,
+        flood=flood,
     )
     notifier.attach(_SilentBot())
     return notifier, view
@@ -1751,3 +1753,40 @@ def test_a_patch_approval_says_what_it_is_about() -> None:
     assert kind_headline(ActivityKind.NEEDS_ANSWER, "some_new_tool") == (
         "\u2753 Waiting for an answer"
     )
+
+
+@pytest.mark.asyncio
+async def test_a_held_chat_is_not_written_to_at_all() -> None:
+    """The pass reads the ban before spending a request, rather than discovering it again.
+
+    It used to retry every thirty seconds straight through a flood ban -- 245 attempts in two
+    hours were observed on 2026-09-14 -- because its own `except Exception` caught the refusal
+    and held the activity without ever asking what the refusal said.
+    """
+    clock = _Clock()
+    flood = FloodGate()
+    flood.hold_off(600)
+    notifier, view = _notifier(clock, flood=flood)
+
+    delivered = await notifier.deliver([_activity(ActivityKind.COMPLETED)])
+
+    assert delivered == 0
+    assert view.written == [], "a held chat must not be written to"
+
+
+@pytest.mark.asyncio
+async def test_a_refusal_that_says_when_to_come_back_is_recorded_on_the_shared_gate() -> None:
+    """So that every other sender waits too: the ban is the chat's, not this pass's."""
+    clock = _Clock()
+    flood = FloodGate()
+    notifier, view = _notifier(clock, flood=flood)
+
+    async def refuse(_bot: object, _arguments: dict[str, object]) -> int:
+        raise RetryAfter(900)
+
+    view.send_apart = refuse
+
+    await notifier.deliver([_activity(ActivityKind.COMPLETED)])
+
+    assert flood.held(), "the refusal named a wait and nothing recorded it"
+    assert flood.remaining() > 600

@@ -68,7 +68,7 @@ tests in `tests/architecture/`.
 `usage` before `limits` was added beside it; a count in prose next to the list it counts is a
 second copy to keep agreeing, and this one had already drifted.) It is the whole set of use cases a frontend
 may drive. Before it, `bootstrap` composed the Telegram service and the local surface
-separately — two `SessionService` instances over one SQLite file, two catalogue providers,
+separately — two `SessionService` instances over one domain SQLite file, two catalogue providers,
 two profile probes — and only one of the two halves was typed at all: `PrivateBotBoundary`
 declared its launcher `object | None` and reached into it by name, so a capability the
 composition root forgot to wire produced no error, just a row that quietly stopped being
@@ -148,7 +148,8 @@ composer.
 `bootstrap._private_boundary` and handed to both `SessionService` and
 `ReconciliationService`, which is the whole of DEC-030's fix; the `ReconciliationService`
 itself, constructed in exactly one place in `src/`; the Codex approval watcher; and the durable
-Telegram stores (callbacks, chat-view anchors, standing notifications).
+Telegram stores (callbacks, chat-view anchors, standing notifications, trust notifications),
+which since the store split live in `ui.sqlite3` rather than the domain file.
 
 `SessionService.__init__` still falls back to `locks or SessionLocks()`, so the local
 surface's service builds a lock map of its own. That is per-process by design and is not
@@ -228,10 +229,10 @@ Two consequences a reader should carry: the module is **clock-free but not side-
 caller's container), and encapsulation cannot enforce the split, so the guard is a test that
 sweeps for the *write into the container* rather than for the type of what is written.
 
-## The process model — one `serve`, three pane processes, one SQLite file
+## The process model — one `serve`, three pane processes, two SQLite files
 
-The processes that *serve* the owner all open the same database file and refuse to open any
-other: `serve`, `_run_surface` and `doctor --history` go through `_private_state_config`,
+The processes that *serve* the owner all open the same **domain** database file and refuse to
+open any other: `serve`, `_run_surface` and `doctor --history` go through `_private_state_config`,
 which raises unless `config.database_path` is exactly the private state directory's. Sharing
 the store is not a configuration accident.
 
@@ -261,6 +262,17 @@ concurrent *surface processes* the tree supports is three (the console's panes);
 no code or decision enumerates that arrangement. The reasoning is what carries either way, and
 it is DEC-035's lease: no surface holds a handle between store operations, so more writers is
 more contention and not a new hazard.
+
+**Two files, and which is which.** `sessions.sqlite3` holds session state — `sessions`,
+`session_events`, `agent_activity` and `idempotency_claims`. `ui.sqlite3` beside it holds what
+the Telegram surface writes about itself: `callback_states`, `chat_views`,
+`standing_notifications` and `trust_notifications`. The split exists because `StoreWatch`
+fingerprints a *file*: while the surface's own writes landed in the watched one, a keyboard
+being minted was indistinguishable from a session changing, so an open sessions page
+republished its own change and redrew about thirty times a minute until Telegram flood-banned
+the bot. `watched_paths` names the domain file only, so what remains in it is written by another
+process. `idempotency_claims` deliberately stayed: it is the session store's, and the
+cross-process guarantee below is the reason.
 
 What that costs, and what it does not, is set out in `docs/operator-runbook.md` under
 "Terminal and service on one database". In short: duplicate-command protection *is* durable

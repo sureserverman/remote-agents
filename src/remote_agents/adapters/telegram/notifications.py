@@ -33,7 +33,9 @@ from datetime import UTC, datetime
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.constants import ParseMode
+from telegram.error import RetryAfter
 
+from remote_agents.adapters.telegram.flood import FloodGate
 from remote_agents.adapters.telegram.live_view import LiveView
 from remote_agents.adapters.telegram.presenters import (
     MAX_TELEGRAM_TEXT_UNITS,
@@ -568,7 +570,14 @@ class ActivityNotifier:
         standing: StandingNotificationPort | None = None,
         finished: Callable[[tuple[str, ...]], Awaitable[tuple[str, ...]]] | None = None,
         now: Callable[[], datetime] = lambda: datetime.now(UTC),
+        flood: FloodGate | None = None,
     ) -> None:
+        #: The chat-wide "not yet", shared with every other sender, or a private one where a
+        #: composition wired none. Read before a pass and written when Telegram refuses: this
+        #: pass used to retry straight through a flood ban every thirty seconds, because its
+        #: own `except Exception` caught the refusal and held the activity for retry without
+        #: ever asking what the refusal said.
+        self._flood = flood if flood is not None else FloodGate()
         self._view = view
         self._callbacks = callbacks
         self._owner_user_id = owner_user_id
@@ -727,6 +736,15 @@ class ActivityNotifier:
             )
         if self._bot is None:
             return 0
+        if self._flood.held():
+            # Telegram has told this chat to wait. Holding the queue is what this pass already
+            # does with a refusal; doing it without spending the request is the whole
+            # difference, and it is the difference between waiting a ban out and extending it.
+            _LOG.debug(
+                "activity notifications held: %.0fs left on the chat's flood hold",
+                self._flood.remaining(),
+            )
+            return 0
         # Before the sends, not after. A session the owner has just stopped may also be
         # holding an observation in the queue; retiring first means its message leaves the
         # chat and `_display_for` then declines the leftover, rather than the pass amending a
@@ -747,7 +765,7 @@ class ActivityNotifier:
                 continue
             try:
                 delivered, alerted, unsaid = await self._send(group)
-            except Exception:
+            except Exception as refusal:
                 # Held whole. The record is already off disk -- the drain deletes before it
                 # returns (DEC-013 cost 3) and DEC-026 keeps this queue in memory with nothing
                 # behind it -- so an activity neither sent nor held here is gone outright.
@@ -760,6 +778,15 @@ class ActivityNotifier:
                 # whether anything else got through in the same pass, and reading that signal
                 # means attempting the other sessions instead of stopping at the first
                 # refusal. So the strike is applied after the loop, not inside it.
+                if isinstance(refusal, RetryAfter):
+                    # The one refusal that says when to come back. Recorded on the shared gate
+                    # so every sender waits it out, not just this pass.
+                    remaining = refusal.retry_after
+                    self._flood.hold_off(
+                        remaining.total_seconds()
+                        if hasattr(remaining, "total_seconds")
+                        else float(remaining)
+                    )
                 _LOG.warning("could not deliver an activity notification; holding it for retry")
                 held.extend(group.activities)
                 refused_sessions.append(group.session_id)

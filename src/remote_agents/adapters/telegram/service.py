@@ -25,7 +25,7 @@ from telegram import (
     Update,
 )
 from telegram.constants import ParseMode
-from telegram.error import TelegramError
+from telegram.error import RetryAfter, TelegramError
 from telegram.ext import (
     ApplicationBuilder,
     CallbackQueryHandler,
@@ -36,6 +36,7 @@ from telegram.ext import (
 )
 
 from remote_agents.adapters.telegram.callbacks import CallbackStateStore
+from remote_agents.adapters.telegram.flood import FloodGate
 from remote_agents.adapters.telegram.inspection import inspect_capture
 from remote_agents.adapters.telegram.live_view import ChatViewStore, LiveView
 from remote_agents.adapters.telegram.notifications import (
@@ -629,6 +630,17 @@ class PrivateBotBoundary:
     """
     stops: StopController = field(init=False)
     view: LiveView = field(init=False)
+    _last_drawn_key: tuple[object, ...] | None = field(init=False, default=None)
+    """The `_page_key` of the last sessions page actually drawn, or None before the first."""
+    _last_drawn_at: float = field(init=False, default=0.0)
+    """When that draw happened, so `_REFRESH_INTERVAL_SECONDS` can bound how stale it gets."""
+    flood: FloodGate = field(init=False, default_factory=FloodGate)
+    """When Telegram last said this chat may not be spoken to, shared by every sender.
+
+    On the boundary rather than inside one of them because a flood ban is the chat's state:
+    the redraw, the command handlers and the activity notifier each used to discover one
+    separately and each kept going regardless.
+    """
     notifier: ActivityNotifier = field(init=False)
     trust_notifier: TrustNotifier | None = None
     """The pass that asks an untrusted session's folder-trust question, or None where none does.
@@ -1808,6 +1820,85 @@ class PrivateBotBoundary:
     #: The floor between two store-driven edits of the sessions page.
     _REDRAW_INTERVAL_SECONDS = 2.0
 
+    #: How stale the page may get while nothing changes. The rows carry an age and the block
+    #: below them a limits sweep, so a page that is only ever drawn on a change would sit
+    #: showing "2m" an hour later. This is the ceiling on that, not a repaint timer: a change
+    #: still draws immediately.
+    _REFRESH_INTERVAL_SECONDS = 60.0
+
+    @staticmethod
+    def _ban_seconds(error: RetryAfter) -> float:
+        """Read `retry_after` as seconds, whichever type this python-telegram-bot hands back.
+
+        It is an `int` today and the library has announced it becomes a `timedelta`
+        (`PTBDeprecationWarning`, opt-in now via `PTB_TIMEDELTA`). A float() of a timedelta
+        raises, so the version that flips would turn every flood ban into a `TypeError`
+        inside the handler that exists to absorb it -- and the retry loop would be back.
+        """
+        retry_after = error.retry_after
+        total_seconds = getattr(retry_after, "total_seconds", None)
+        return float(total_seconds()) if callable(total_seconds) else float(retry_after)
+
+    @staticmethod
+    def _page_key(records: tuple[SessionRecord, ...], page: int) -> tuple[object, ...]:
+        """What this page is *about*, cheaply and without minting anything.
+
+        Deliberately built from the records rather than from the rendered message. Rendering
+        mints a fresh callback token per button, and those rows are written to the database
+        the store watcher fingerprints -- so asking "would this draw differ?" by drawing it
+        is what made the question self-answering: every redraw wrote, every write published a
+        change, and the change scheduled the next redraw. Thirty real edits a minute to one
+        private chat with nothing happening, until Telegram stopped the bot.
+        """
+        return (
+            page,
+            tuple(
+                (
+                    str(r.session_id),
+                    str(r.state),
+                    str(r.display),
+                    str(r.terminal_reason),
+                    str(r.remote_control_state),
+                )
+                for r in records
+            ),
+        )
+
+    def _hold_off(self, seconds: float) -> None:
+        """Refuse sends for `seconds`, because Telegram said so.
+
+        Two effects, because two mechanisms have to learn it. `flood` is the chat-wide answer
+        every sender consults -- the activity notifier reads it before a pass, so a ban found
+        by a button press stops the notifier too. `_redraw_allowed_at` is the redraw's own
+        floor, pushed out so the store-driven loop cannot walk past the ban two seconds at a
+        time, which is the behaviour that turned a ten-second cooldown into six hours.
+        """
+        self.flood.hold_off(seconds)
+        until = monotonic() + max(seconds, 0.0)
+        if until > self._redraw_allowed_at:
+            self._redraw_allowed_at = until
+
+    async def on_error(self, update: object, context: object) -> None:
+        """Answer an exception no handler caught, and never let one reach the poll loop.
+
+        Registered because there was no error handler at all: python-telegram-bot logged
+        "No error handlers are registered, logging exception" and every failure surfaced as a
+        raw traceback in the journal, including the flood-control ban that made the bot
+        unusable for six hours.
+
+        A `RetryAfter` reaching here came from a command or a button, not from the redraw --
+        but the ban it reports is the *chat's*, not that one call's, so the redraw is held off
+        too. Otherwise the loop keeps editing straight through a ban a press has already
+        discovered, which is the behaviour this fix exists to remove.
+        """
+        error = getattr(context, "error", None)
+        if isinstance(error, RetryAfter):
+            seconds = self._ban_seconds(error)
+            self._hold_off(seconds)
+            _LOG.warning("telegram flood control: holding sends to this chat for %ss", seconds)
+            return
+        _LOG.error("unhandled error while processing a Telegram update", exc_info=error)
+
     def _defer_settle(self, bot: Bot, delay: float) -> None:
         """Arrange for one attempt to pay the debt once the floor lifts. At most one pending.
 
@@ -1908,7 +1999,17 @@ class PrivateBotBoundary:
         # (`concurrent_updates(False)`), but this redraw runs on its own task, so a command
         # handler rendering while this one reads would consume the `sessions` mark and tag its
         # own screen with it. Found by the test below it, not by reasoning.
-        rendered = await self._sessions_reply(self._sessions_page, mark=False)
+        records = await self._listed_records()
+        key = self._page_key(records, self._sessions_page)
+        stale = monotonic() - self._last_drawn_at >= self._REFRESH_INTERVAL_SECONDS
+        if key == self._last_drawn_key and not stale:
+            # Nothing this page shows has changed, so drawing it would mint a new keyboard,
+            # write those tokens, and publish the very store change that scheduled this
+            # redraw. That loop is the defect: it ran at the floor for eighteen hours with an
+            # idle store behind it. Refusing here is what breaks it -- and `_redraw_owed` is
+            # left alone, because nothing is owed when there is nothing to say.
+            return False
+        rendered = await self._sessions_reply(self._sessions_page, mark=False, records=records)
         # **Both guards again, after the read.** Assembling this page is not quick -- a tmux
         # capture per unready row, an account-wide limits sweep, a Remote Control read, a
         # context read per row -- and every one of those is a suspension point. A press
@@ -1925,13 +2026,33 @@ class PrivateBotBoundary:
         # owner opened consumed it, `LiveView` believed a help screen was the list, and the
         # following store change overwrote what they were reading. One producer, one consumer,
         # including here.
-        await self.view.render(
-            speaker, _reply_arguments(rendered), screen=self._SESSIONS_SCREEN
-        )
+        try:
+            await self.view.render(
+                speaker, _reply_arguments(rendered), screen=self._SESSIONS_SCREEN
+            )
+            self._last_drawn_key = key
+            self._last_drawn_at = monotonic()
+        except RetryAfter as error:
+            # Telegram's own answer to "when may I speak again", and the only floor that
+            # matters once it has said it. `_REDRAW_INTERVAL_SECONDS` is this bot's own
+            # courtesy limit; it is not a permission, and treating it as one is what turned a
+            # ten-second cooldown into a six-hour outage on 2026-09-13: the redraw retried
+            # every two seconds for eighteen hours while Telegram answered each attempt with a
+            # larger ban, because nothing here ever read `retry_after`. The debt stays owed, so
+            # the page is redrawn once the hold lifts rather than left stale.
+            self._hold_off(self._ban_seconds(error))
+            self._redraw_owed = True
+            self._defer_settle(speaker, self._redraw_allowed_at - monotonic())
+            return False
         return True
 
     async def _sessions_reply(
-        self, page: int = 1, *, notice: str | None = None, mark: bool = True
+        self,
+        page: int = 1,
+        *,
+        notice: str | None = None,
+        mark: bool = True,
+        records: tuple[SessionRecord, ...] | None = None,
     ) -> RenderedMessage:
         """Render one page of managed sessions: grouped, two lines a row, a picker per row.
 
@@ -1965,7 +2086,9 @@ class PrivateBotBoundary:
         700 UTF-16 units against `MAX_TELEGRAM_TEXT_UNITS`, so the page size stays at eight.
         Every string here passes `escape()` and then `presenters._message` (DEC-014).
         """
-        records = await self._listed_records()
+        # Handed in by the store-driven redraw, which has already read them to decide whether
+        # this page is worth drawing at all. Every other caller reads them here as before.
+        records = await self._listed_records() if records is None else records
         counts = group_counts(records)
         legend = " · ".join(
             f"{group_emoji(group)} {count}" for group, count in counts.items() if count
@@ -3952,6 +4075,7 @@ def build_private_bot(
         else ActivityNotifier(
             view=bot.view,
             callbacks=bot.callbacks,
+            flood=bot.flood,
             owner_user_id=owner_user_id,
             display=bot._display_for,  # noqa: SLF001 -- the cycle this factory exists to pay
             standing=bot.standing,
@@ -3993,6 +4117,8 @@ async def run_private_bot(
     # on the call being deleted, because until it existed this comment was the whole guard.
     # A second argument rests on the same setting at `_sessions_page` above.
     application = ApplicationBuilder().token(secrets.bot_token).concurrent_updates(False).build()
+    # Before any handler, so nothing registered below can raise into the poll loop unanswered.
+    application.add_error_handler(boundary.on_error)
     application.add_handler(CommandHandler("start", boundary.start))
     application.add_handler(CommandHandler("launch", boundary.launch_command))
     application.add_handler(CommandHandler("resume", boundary.resume_command))
