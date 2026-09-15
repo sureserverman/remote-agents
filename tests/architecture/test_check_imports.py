@@ -194,6 +194,14 @@ def test_the_composition_packages_module_list_is_pinned() -> None:
     assert members == [
         "__init__.py",
         "backend.py",
+        # Sub-plan 02, 2026-09-15. Admitted here deliberately, which is what this list is for.
+        # It composes `config.read_claude_limits_source` and `config.write_limits_key` into the
+        # port the Settings rows drive, and it is in this package because it *must* be: the
+        # obvious home, `adapters/agents/claude/limits_source.py`, is not a driver adapter and
+        # may not import `remote_agents.config` at all. Sub-plan 01 met the same wall on the
+        # read side and answered it from a composition root too. A file path meeting an adapter
+        # is exactly what DEC-015 says belongs here and nowhere else.
+        "limits_source.py",
         "onboarding.py",
         "service.py",
         "telegram.py",

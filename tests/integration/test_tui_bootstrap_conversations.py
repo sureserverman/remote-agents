@@ -206,6 +206,14 @@ def test_no_further_capability_leaked_into_the_context() -> None:
         "preferences_path",
     }
     shared = {
+        # Added by sub-plan 02's Task 1.3, and listed here because this is where growing the
+        # set is supposed to become a decision. It is on the **backend** rather than on the
+        # surface -- unlike `preferences_path` two paragraphs up -- because both surfaces
+        # render a row for it: the terminal as `settings:claude-limits-source`, the bot as the
+        # `settings.limits_source` button. Putting it on the context would have made the
+        # phone unable to reach the one setting on that screen it has most reason to want,
+        # since it decides whether this service reads a credential and calls out.
+        "claude_limits_source",
         "sessions",
         "projects",
         "conversations",
