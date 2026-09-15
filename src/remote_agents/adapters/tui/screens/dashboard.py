@@ -462,9 +462,30 @@ class LimitsRegion:
     def show_claude_remote_control_default(self, value: RemoteControlDefault | None) -> None:
         """Draw a stored default this region did not read itself.
 
-        The mirror of `show_host_remote_control`, and named for the same reason: a caller that
-        has just written a new default and read it back pushes the fresh reading in through a
-        method the pane declares, rather than assigning an attribute it happens to know about.
+        Shaped after `show_host_remote_control` above, and **it has no production caller today**
+        -- said plainly here because the first version of this docstring claimed the parity
+        without it, and a method asserting a symmetry it does not have is worse than a method
+        with no docstring. Found by the Stage 2 gate's Tier-2 review.
+
+        The host method has a caller because the host toggle is *issued by the app*:
+        `RemoteAgentsTui.set_host_remote_control` performs the write and then hands the
+        daemon's own reading back to whichever screen asked, so pushing it in beats a second
+        round trip that could only disagree. Claude's stored default has no such path --
+        `SettingsScreen.advance_claude_remote_control_default` reads, writes and re-reads
+        entirely on its own screen, which is the shape DEC-025 wants for a row that needs no
+        confirmation, and it never reaches into this region.
+
+        **Nothing is stale as a result**, which is why this is a loose end rather than a
+        defect. Settings is *pushed* over the dashboard rather than switched to, so the only
+        way back is an escape that fires `on_reveal`, and that calls `_reload_limits` -- a real
+        re-read. The window in which this region holds an old value is exactly the window in
+        which it is covered by the screen doing the writing.
+
+        Kept rather than deleted because the sub-plan's Task 2.1 names it, and because the one
+        arrangement that would need it is coming: if a later surface ever writes this default
+        from a position that does not pass through `on_reveal`, this is the seam it pushes
+        through. If sub-plan 03's console leaves no such position, the honest change is to
+        delete this and its test rather than to keep explaining it.
         """
         self._claude_default = value
         self._draw_limits()

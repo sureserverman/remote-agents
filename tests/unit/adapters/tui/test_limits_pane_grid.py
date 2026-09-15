@@ -584,11 +584,21 @@ async def test_the_claude_row_survives_a_host_that_wired_no_limits_reader() -> N
 
 
 async def test_a_pushed_claude_row_reading_is_drawn_without_a_second_read() -> None:
-    """`show_claude_remote_control_default`, the pane's one write path from outside.
+    """`show_claude_remote_control_default` draws a pushed reading without re-reading.
 
-    Mirrors `show_host_remote_control` and exists for the same reason: a caller that has just
-    been handed a fresh reading of the change it made pushes it in, rather than reaching into
-    the attribute behind the pane's back.
+    **This method has no production caller**, and saying so here is the point: a green test
+    over dead code is worse than no test, because it reads as proof the method is wired into a
+    live flow. It is not. `show_host_remote_control`, which it is shaped after, is called by
+    `RemoteAgentsTui.set_host_remote_control` because the *app* issues that write; Claude's
+    stored default is written by `SettingsScreen` on its own screen and never reaches this
+    region. Nothing goes stale, because Settings is pushed over the dashboard and the escape
+    back fires `on_reveal`, which re-reads.
+
+    What this pins is therefore the method's contract rather than a live path -- draw the value
+    handed in, do not ask the port again -- so that if a later surface does acquire a position
+    that writes without passing through `on_reveal`, the seam it would push through already
+    behaves. `dashboard.py`'s own docstring carries the same admission and the condition under
+    which the honest change is to delete both.
     """
     port = _FakeClaudeDefault(RemoteControlDefault.OFF)
     app = RemoteAgentsTui(_context(claude_default=port))
