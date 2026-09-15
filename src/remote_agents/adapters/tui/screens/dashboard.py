@@ -790,6 +790,19 @@ class LimitsPaneScreen(LimitsRegion, ChoiceScreen):
     async def populate(self) -> None:
         self.hide_entry()
         await self._reload_limits()
+        # The same one-liner `FeedScreen.populate` carries, and the second instance of the
+        # defect its comment describes: `hide_entry` hides `#filter` and `#choices` -- composed
+        # only because `ChoiceScreen`'s machinery queries them by id -- but **hiding a widget
+        # does not move the focus off it**, so the keyboard sat on a `display: none` Input and
+        # every printable key was typed into an invisible box.
+        #
+        # Invisible until sub-plan 02 moved the Settings key to the app, at which point three
+        # of the four console panes opened Settings on `,` and this one silently ate it --
+        # measured, which is how it was found. The feed pane's copy of this line was added for
+        # the same reason wearing different clothes (Down did nothing until Tab was pressed),
+        # and no property forbade the shape, so the second instance simply waited. One does
+        # now: `test_no_screen_rests_the_keyboard_on_a_hidden_widget` sweeps `ALL_SCREENS`.
+        self.query_one("#limits-pane", OptionList).focus()
         if self._timer is None:
             self._timer = self.set_interval(self._LIMITS_AUTO_REFRESH, self._auto_reload)
 

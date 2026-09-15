@@ -996,3 +996,51 @@ async def test_which_surfaces_draw_the_chord_hint(
     assert declared is advertises, (
         f"{surface.__name__} declares advertises_chords()={declared}, not {advertises}"
     )
+
+
+@pytest.mark.parametrize("screen_type", ALL_SCREENS, ids=lambda c: c.__name__)
+async def test_no_screen_rests_the_keyboard_on_a_hidden_widget(screen_type: type[Screen]) -> None:
+    """Focus never comes to rest on something the owner cannot see.
+
+    **Hiding a widget does not move the focus off it**, and this project has now paid for that
+    twice. `FeedScreen` hid `#filter` and `#choices`, left the keyboard on the hidden `Input`,
+    and Down did nothing until the owner pressed Tab -- fixed in place with a one-line
+    `.focus()` and a comment, but nothing was left behind that could fail. `LimitsPaneScreen`
+    has the identical shape and was never fixed, so when the Settings key moved to the app it
+    reached three of the four console panes and was silently typed into an invisible box on the
+    fourth. Measured across all four panes, which is how it was found rather than reasoned.
+
+    A focused `display: none` widget is not a cosmetic fault: it consumes **every printable
+    key** before any non-priority binding sees it, so on such a screen the whole bare-letter
+    layer is dead and nothing says so. That is a property over every position rather than a
+    fact about these two, so it is asserted here rather than fixed twice and grepped for
+    (DEC-010 -- assert the property, do not widen a sweep).
+
+    The check walks up from the focused node: a widget is unreachable if it or **any
+    ancestor** is undisplayed, since hiding a container hides what it contains.
+    """
+    app = RemoteAgentsTui(_context())
+    async with app.run_test(size=(100, 30)) as pilot:
+        await pilot.pause()
+        await _arrange(app, pilot, screen_type)
+        focused = app.focused
+        hidden_by = None
+        node = focused
+        while node is not None:
+            if getattr(node, "display", True) is False:
+                hidden_by = node
+                break
+            node = node.parent
+
+    if focused is None:
+        return  # A screen that focuses nothing takes no keys away from the bindings.
+    assert hidden_by is None, (
+        f"{screen_type.__name__} rests the keyboard on {type(focused).__name__}"
+        f"(id={focused.id!r}), which is hidden"
+        + (
+            f" by {type(hidden_by).__name__}(id={hidden_by.id!r})"
+            if hidden_by is not focused
+            else ""
+        )
+        + " -- every printable key is consumed there and no bare-letter binding fires"
+    )

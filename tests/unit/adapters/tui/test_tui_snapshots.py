@@ -546,24 +546,29 @@ def _settings_context() -> TuiContext:
     """The host the SETTINGS capture is driven against: all three of its rows wired.
 
     **Why this position gets a context of its own, when every other one shares `_context`.**
-    Two of the Settings rows read capabilities the shared host deliberately does not wire, and
-    one of them is not the Settings screen's alone: the limits pane draws
-    `remote_control_default_line` too, directly above its host line. Wiring the Claude port
-    into `_context` therefore re-renders DASHBOARD, LIMITS_PANE and all four themed dashboards
-    -- measured, six files, `unavailable` becoming `Claude's default` -- which is a
-    re-baseline rather than a new one, and this task's scope is the new position.
+    One reason only, and it is narrower than the first version of this docstring claimed:
+    `claude_limits_source` is read by the Settings screen and by nothing else that is
+    baselined, so wiring it into the shared host would be arranging a capability no other
+    capture renders.
 
-    So the capability is wired *here*, where only this capture reads it. What that leaves
-    behind is a real gap rather than a tidy one, and it is recorded rather than hidden: the
-    six baselines above still photograph a dashboard whose Claude row says `unavailable`,
-    which is a picture of the fixture rather than of the product, and is the same defect the
-    comments on `_limits` and `_activities` describe having fixed twice already. Closing it
-    means re-capturing those six and reading the diff, which is its own task.
+    **The other row is not like that, and the difference cost six baselines.**
+    `claude_remote_control_default` is drawn by the limits pane too, directly above its host
+    line -- so wiring it *only* here left DASHBOARD, LIMITS_PANE and all four themed
+    dashboards photographing a row that read `unavailable` on a host where production always
+    wires it: a picture of the fixture rather than of the product, and the same defect the
+    comments on `_limits` and `_activities` describe having fixed twice before. It is wired in
+    `_context` above now and those six were re-captured, so this function no longer carries it
+    for the capture's sake; it stays named here only because this context is built by
+    `replace` over one that already supplies it.
 
-    `replace` rather than two more `backend_for` parameters: that helper mirrors `Backend`'s
-    fields by hand and neither of these is among them, so stating them here keeps this file
-    from depending on a support-module edit -- the same arrangement `test_settings_screen.py`
-    already makes for the same two fields.
+    The rule the episode leaves behind: a capability wired for one position is a capability
+    every other baseline is asserting the *absence* of. Wire it where the screens that render
+    it can see it, or a green suite means only that the fixture has not changed.
+
+    `replace` rather than the `backend_for` parameters, which do now exist -- the missing ones
+    were added on 2026-09-15, in the same change, precisely because this file could not reach
+    them. Left as it is because a field set on the frozen dataclass afterwards is the same
+    composition either way; new call sites should prefer the parameters.
     """
     context = _context()
     return replace(

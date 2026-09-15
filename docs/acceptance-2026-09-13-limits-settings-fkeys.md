@@ -139,5 +139,16 @@ Project order · recent first
 
 The fixture states differ from the live readings above on purpose: `PROVIDER_DEFAULT` is the
 state an untouched host rests in, and `usage-api` is the *long* label, chosen so the capture
-settles whether the credential-and-outbound-call warning survives the render. It does, uncut, in
-79 of the pinned 100 columns.
+settles whether the credential-and-outbound-call warning survives the render. **It does, uncut**
+— the Settings screen does not truncate, unlike the limits pane measured above, and the row is
+comfortably inside the capture's pinned width.
+
+The exact column count is deliberately not written here. A first draft said "79 of the pinned
+100 columns", which was wrong by one (the line is 80 cells) and would have gone wrong again the
+next time either the title or the label changed — the same thing this repo's snapshot module
+warns about when it refuses to write its position count in prose. What matters is the property,
+and it is derivable in one line from the source:
+
+```python
+len(f"{LIMITS_SOURCE_TITLE} · {LIMITS_SOURCE_LABELS['usage-api']}")   # < the capture's 100
+```
