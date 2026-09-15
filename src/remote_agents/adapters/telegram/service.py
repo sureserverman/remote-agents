@@ -100,6 +100,7 @@ from remote_agents.application.remote_control_default import (
     REMOTE_CONTROL_DEFAULT_LABELS,
     REMOTE_CONTROL_DEFAULT_TITLE,
     next_remote_control_default,
+    remote_control_default_line,
 )
 from remote_agents.application.resume_flow import RESUME_PAGE_SIZE, resume_capable
 from remote_agents.application.session_actions import (
@@ -2129,6 +2130,9 @@ class PrivateBotBoundary:
         # empty one needs it most -- a machine's enrollment does not stop being a fact because
         # nothing is running against it right now.
         host = await self._host_remote_block()
+        # Read beside the host's, not under it: the two subjects are independent settings, so
+        # a composition that wired one and not the other must still get the one it wired.
+        claude = await self._claude_default_block()
         # Marked here, above the empty-list return, and not once at the bottom. Below the
         # return it missed the "Nothing is running." screen entirely -- so the one page an
         # owner is most likely to have open when they launch was the one page a store change
@@ -2146,7 +2150,7 @@ class PrivateBotBoundary:
             # duplicating the one directly beneath it reads as a bug.
             return self._message(
                 f"{self._notice_line(notice)}<b>Sessions</b>{heading_counts}\n"
-                f"Nothing is running.{spent}{host}"
+                f"Nothing is running.{spent}{host}{claude}"
             )
         page_count = max(1, ceil(len(records) / self.session_page_size))
         index = min(max(page, 1), page_count)
@@ -2201,7 +2205,8 @@ class PrivateBotBoundary:
         title = "Sessions" if page_count == 1 else f"Sessions {index}/{page_count}"
         body = "\n\n".join(sections)
         return self._message(
-            f"{self._notice_line(notice)}<b>{title}</b>{heading_counts}\n\n{body}{spent}{host}",
+            f"{self._notice_line(notice)}<b>{title}</b>{heading_counts}\n\n{body}{spent}{host}"
+            f"{claude}",
             tuple(buttons),
         )
 
@@ -3103,6 +3108,50 @@ class PrivateBotBoundary:
         return (
             f"\n\n<code>{escape(HOST_REMOTE_CONTROL_TITLE)} · {self._host_reading(status)}</code>"
         )
+
+    async def _claude_default_block(self) -> str:
+        """Claude's stored Remote Control default for the sessions list, or nothing at all.
+
+        **A block of its own rather than a line inside either neighbour**, because it answers to
+        neither of them. Folded into `_limit_block` it would render *above* the Codex reading
+        and vanish whenever an agent had no window to report, which is the routine state that
+        block already returns nothing for; folded into `_host_remote_block` it would vanish
+        whenever this machine wired no Codex daemon. They are three independent capabilities
+        and the Settings screen already says so in as many words -- *each row is its own
+        setting, so changing one says nothing about the others* -- so the sessions list must not
+        be the one screen where one absence takes another's reading down with it.
+
+        **The line is rendered by `remote_control_default_line` rather than spelled here.**
+        `_host_remote_block` above re-spells its ` · ` join inline because its reading is
+        assembled from a status object this surface decodes itself; this one is not, and a
+        second spelling of a string the terminal's Settings row and the limits pane both draw
+        is precisely the drift DEC-007 exists to end. One definition, three renderers.
+
+        **An unwired port draws nothing, which is deliberately not what Settings does.** There
+        the same absence becomes *"Claude Remote Control is unavailable."*, because Settings is
+        opened to be told what this machine can do and a declared absence is the answer
+        (DEC-009/DEC-061). Nobody opens the sessions list to ask that. It is the only way to
+        reach a session at all, so a permanent line naming a provider this composition never
+        wired would be noise on the one screen that can least afford it -- and the Codex
+        reading directly above already disappears on exactly this condition, so a Claude line
+        that announced itself instead would make one block answer two ways about two absences
+        that mean the same thing.
+
+        The broad `except` is `_host_remote_block`'s trade, made for the same screen and for a
+        port that promises not to need it: `read` answers `PROVIDER_DEFAULT` for every way a
+        settings file can be unreadable rather than raising. What it cannot promise about is a
+        composition wiring something else or a read cancelled under a redraw, and neither of
+        those may cost the owner the list.
+        """
+        default = self.backend.claude_remote_control_default
+        if default is None:
+            return ""
+        try:
+            value = await default.read()
+        except Exception:
+            _LOG.debug("claude remote control default read failed", exc_info=True)
+            return ""
+        return f"\n\n<code>{escape(remote_control_default_line(value))}</code>"
 
     async def _awaiting_trust(self, record: SessionRecord) -> bool:
         """Whether to offer the trust row: `untrusted`, and the pane still asking.

@@ -6,12 +6,13 @@ import sys
 from collections.abc import Callable
 from dataclasses import replace
 from datetime import UTC, datetime
+from html import escape
 from time import monotonic
 from types import SimpleNamespace
 from uuid import UUID
 
 import pytest
-from backends import SessionUseCaseDouble, backend_for
+from backends import FakeHostRemoteControl, SessionUseCaseDouble, backend_for
 from fake_telegram import FakeChat
 from stop_results import (
     a_clean_stop,
@@ -38,8 +39,13 @@ from remote_agents.adapters.telegram.presenters import unpadded
 from remote_agents.adapters.telegram.service import PrivateBotBoundary, build_private_bot
 from remote_agents.adapters.telegram.stops import StopController
 from remote_agents.application.errors import SessionNotFoundError
+from remote_agents.application.host_remote_control import HOST_REMOTE_CONTROL_TITLE
 from remote_agents.application.profiles import ProfileAvailability
 from remote_agents.application.project_catalog import CatalogProject
+from remote_agents.application.remote_control_default import (
+    REMOTE_CONTROL_DEFAULT_TITLE,
+    remote_control_default_line,
+)
 from remote_agents.application.session_actions import pane_is_attachable
 from remote_agents.application.session_views import state_emoji, state_group
 from remote_agents.application.stops import execute_stop
@@ -52,8 +58,10 @@ from remote_agents.domain.models import (
     SessionState,
 )
 from remote_agents.domain.profiles import closed_profiles
+from remote_agents.domain.remote_control import HostConnection, RemoteControlDefault
 from remote_agents.domain.trust import TrustState
 from remote_agents.ports.agent_activity import ActivityKind, AgentActivity
+from remote_agents.ports.agent_usage import AgentLimits, UsageWindow
 from remote_agents.ports.terminal import TerminalObservation, TrustAnswer
 
 
@@ -2877,3 +2885,173 @@ async def test_a_redraw_whose_screen_changed_under_it_does_not_edit(monkeypatch)
     assert "Stop and close" in chat.bot_messages[-1].text, (
         "the help screen the owner opened mid-redraw was replaced by the list"
     )
+
+
+class _FakeClaudeDefault:
+    """A scripted `ports.remote_control_default.RemoteControlDefaultPort` for this block.
+
+    A third copy of the contract suite's fake rather than a shared import, for the reason the
+    settings journey's copy gives: `backend_for` still has no parameter for this capability and
+    this task may not edit test support. It keeps the one contract the sessions list may assume
+    -- a read answers a state and never raises -- and adds a `fail_with` arm that breaks it on
+    purpose, because the block's whole error contract is about a boundary that does.
+    """
+
+    def __init__(
+        self,
+        value: RemoteControlDefault = RemoteControlDefault.PROVIDER_DEFAULT,
+        *,
+        fail_with: Exception | None = None,
+    ) -> None:
+        self.value = value
+        self.fail_with = fail_with
+        self.reads = 0
+
+    async def read(self) -> RemoteControlDefault:
+        self.reads += 1
+        if self.fail_with is not None:
+            raise self.fail_with
+        return self.value
+
+
+async def _a_weekly_window() -> tuple[AgentLimits, ...]:
+    return (AgentLimits(ProfileId("codex"), (UsageWindow("week", 61.0),)),)
+
+
+def _limits_block_boundary(
+    *records: SessionRecord,
+    claude: object | None,
+    limits: object | None,
+    host: object | None,
+) -> PrivateBotBoundary:
+    """A sessions list wired with exactly the three capabilities this block renders.
+
+    Each is stated per test rather than defaulted, because every assertion below is about one
+    of them being present while another is absent -- a helper that quietly supplied a limits
+    reader would make "no limits and no host reading" untestable through it.
+    """
+
+    class _Launcher(SessionUseCaseDouble):
+        async def list_sessions(self):
+            return list(records)
+
+        async def refresh_readiness(self) -> None:
+            return None
+
+    boundary = build_private_bot(
+        7,
+        11,
+        backend=backend_for(
+            catalogue=(CatalogProject("a" * 24, "Demo", "tests", "Registered"),),
+            sessions=_Launcher(),
+            limits=limits,
+            host_remote_control=host,
+        ),
+    )
+    # Through `replace` rather than through `backend_for`, which has no parameter for it: this
+    # task may not edit test support, and a field set on the frozen dataclass afterwards is the
+    # same composition either way.
+    boundary.backend = replace(boundary.backend, claude_remote_control_default=claude)
+    return boundary
+
+
+@pytest.mark.parametrize("value", list(RemoteControlDefault))
+async def test_the_limits_block_carries_the_claude_default_line_for_every_state(
+    value: RemoteControlDefault,
+) -> None:
+    """Parametrised over the enum rather than over a written-out list of three.
+
+    A hand-written list is a second table of the states, which is exactly what DEC-007 forbids:
+    a fourth member would leave it passing while the screen it describes had a hole in it.
+    """
+    boundary = _limits_block_boundary(
+        _a_running_session(),
+        claude=_FakeClaudeDefault(value),
+        limits=_a_weekly_window,
+        host=FakeHostRemoteControl(HostConnection.CONNECTED),
+    )
+    chat = FakeChat()
+
+    await boundary.sessions_command(chat.message_update("/sessions"), None)
+
+    text = chat.bot_messages[0].text
+    assert f"<code>{escape(remote_control_default_line(value))}</code>" in text, text
+    assert text.index(HOST_REMOTE_CONTROL_TITLE) < text.index(REMOTE_CONTROL_DEFAULT_TITLE), (
+        "the Claude line belongs under the Codex host reading, not above it"
+    )
+    assert text.index("Plan limits") < text.index(REMOTE_CONTROL_DEFAULT_TITLE)
+
+
+async def test_the_limits_block_omits_the_claude_default_line_when_no_port_is_wired() -> None:
+    """An unwired capability draws nothing here, unlike on Settings where it says so.
+
+    The distinction is who asked. Settings is opened to be told what this machine can do, so a
+    declared absence is the answer (DEC-061). The sessions list is opened to reach a session,
+    and a permanent line about a provider this composition never wired would be noise on the
+    one screen that is the only way there -- which is why the Codex reading beside it vanishes
+    on the same condition rather than announcing itself.
+    """
+    boundary = _limits_block_boundary(
+        _a_running_session(),
+        claude=None,
+        limits=_a_weekly_window,
+        host=FakeHostRemoteControl(HostConnection.CONNECTED),
+    )
+    chat = FakeChat()
+
+    await boundary.sessions_command(chat.message_update("/sessions"), None)
+
+    text = chat.bot_messages[0].text
+    assert REMOTE_CONTROL_DEFAULT_TITLE not in text, text
+    assert HOST_REMOTE_CONTROL_TITLE in text, "the row beside it is unaffected by this absence"
+
+
+async def test_the_limits_block_carries_the_claude_default_line_with_no_limits_and_no_host() -> (
+    None
+):
+    """The line does not depend on either neighbour having anything to say.
+
+    Both branches of the sessions reply are driven, because the empty one is where this matters
+    most: a stored default does not stop being a fact because nothing is running against it.
+    """
+    for records in ((), (_a_running_session(),)):
+        boundary = _limits_block_boundary(
+            *records,
+            claude=_FakeClaudeDefault(RemoteControlDefault.ON),
+            limits=None,
+            host=None,
+        )
+        chat = FakeChat()
+
+        await boundary.sessions_command(chat.message_update("/sessions"), None)
+
+        text = chat.bot_messages[0].text
+        expected = escape(remote_control_default_line(RemoteControlDefault.ON))
+        assert f"<code>{expected}</code>" in text, text
+        assert "Plan limits" not in text
+        assert HOST_REMOTE_CONTROL_TITLE not in text
+
+
+async def test_a_limits_block_whose_claude_default_read_raises_still_lists_the_sessions() -> None:
+    """The block's error contract, which is `_host_remote_block`'s made for the same screen.
+
+    A port that broke its own no-raise contract -- a composition wiring something else, a read
+    cancelled under a redraw -- must cost the owner one line and not the list, because this
+    list is the only way to reach a session at all.
+    """
+    claude = _FakeClaudeDefault(fail_with=RuntimeError("the settings file moved"))
+    boundary = _limits_block_boundary(
+        _a_running_session(),
+        claude=claude,
+        limits=_a_weekly_window,
+        host=FakeHostRemoteControl(HostConnection.CONNECTED),
+    )
+    chat = FakeChat()
+
+    await boundary.sessions_command(chat.message_update("/sessions"), None)
+
+    text = chat.bot_messages[0].text
+    assert claude.reads == 1, "the block asked once and swallowed what came back"
+    assert REMOTE_CONTROL_DEFAULT_TITLE not in text, text
+    assert "Demo" in text, "the session rows survived a boundary that would not answer"
+    assert "Plan limits" in text

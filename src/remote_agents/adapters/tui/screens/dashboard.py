@@ -71,12 +71,18 @@ from remote_agents.application.project_catalog import CatalogProject
 # rest of this module reads unchanged. It is defined in `application/` because the settings
 # screen's Claude row says it too, and both driver adapters draw that row -- two literals
 # would make the two rows agree on the word instead of sharing it.
-from remote_agents.application.remote_control_default import UNAVAILABLE as _HOST_UNAVAILABLE
+from remote_agents.application.remote_control_default import (
+    UNAVAILABLE as _HOST_UNAVAILABLE,
+)
+from remote_agents.application.remote_control_default import (
+    remote_control_default_line,
+)
 from remote_agents.application.session_views import LimitRow, limit_rows, session_row_parts
 from remote_agents.domain.models import ProfileId, SessionRecord
 from remote_agents.domain.remote_control import (
     HostConnection,
     HostRemoteControlStatus,
+    RemoteControlDefault,
     RemoteControlState,
 )
 from remote_agents.ports.agent_usage import AgentLimits, LimitsAbsence
@@ -116,6 +122,12 @@ LIMITS_TITLE = "Plan limits"
 #: A stable id for the host toggle's line, so a redraw can tell it from an agent's row and a
 #: test can find it without counting from the bottom of a list whose length is a provider's.
 _HOST_REMOTE_CONTROL_ROW = "limits:host-remote-control"
+
+#: And a stable id for Claude's stored default, the line directly above it. Its own constant
+#: rather than a variant of that one because the two rows are two capabilities: a host can wire
+#: either without the other, so a redraw -- and a test -- has to be able to find one when the
+#: other is absent.
+_CLAUDE_REMOTE_CONTROL_ROW = "limits:claude-remote-control"
 
 HOST_REMOTE_CONTROL_KEY = "h"
 
@@ -326,13 +338,15 @@ class LimitsRegion:
         rendered twice rather than two renderers that agree today (DEC-043). What stays here is
         placement, colour and the disabled-row rule -- the surface's half.
 
-        **Two reads, and the host one is not conditional on the other.** The limits reader and
-        the host toggle are separate capabilities: a host that wired one and not the other is
-        an ordinary composition, so an early return on an absent `limits` would have taken the
-        host line off a pane that could still draw it. The redraw happens once, after both, so
-        a pane never flickers between one fact and two.
+        **Three reads, and neither of the last two is conditional on the others.** The limits
+        reader, the host toggle and Claude's stored default are separate capabilities: a host
+        that wired one and not the others is an ordinary composition, so an early return on an
+        absent `limits` would have taken both lines off a pane that could still draw them. The
+        redraw happens once, after all three, so a pane never flickers between one fact and
+        three.
         """
         await self._reload_host_remote_control()
+        await self._reload_claude_remote_control_default()
         reader = self.services.backend.limits
         if reader is not None:
             try:
@@ -419,6 +433,42 @@ class LimitsRegion:
         self._host_status = status
         self._draw_limits()
 
+    async def _reload_claude_remote_control_default(self) -> None:
+        """Re-read Claude's stored Remote Control default, or leave the last reading drawn.
+
+        The third read, and the one whose subject is an *intention* rather than an observation:
+        the host line says what the machine's daemon is doing now, this one says what the next
+        `claude` pane will come up as. Neither can answer for the other, which is why the pane
+        carries both lines and reads both capabilities.
+
+        The port promises never to raise for a read -- every way a settings file can be
+        unreadable resolves to `PROVIDER_DEFAULT` -- so the `except` here is for the shapes it
+        cannot promise about (a composition wiring something else, a cancelled read), and it
+        keeps the pane's contract rather than inventing one: what is drawn is stale, not wrong.
+        Clearing the reading on a failure would be worse than useless here, because the row it
+        would repaint says *unavailable*, which states that no Claude provider is wired at all.
+        """
+        port = self.services.backend.claude_remote_control_default
+        if port is None:
+            # A declared absence, not a failure (DEC-061). Left as `None` so the line says
+            # "unavailable" rather than keeping a reading from a capability that is gone.
+            self._claude_default = None
+            return
+        try:
+            self._claude_default = await port.read()
+        except Exception:
+            _LOG.exception("Claude's stored Remote Control default could not be read")
+
+    def show_claude_remote_control_default(self, value: RemoteControlDefault | None) -> None:
+        """Draw a stored default this region did not read itself.
+
+        The mirror of `show_host_remote_control`, and named for the same reason: a caller that
+        has just written a new default and read it back pushes the fresh reading in through a
+        method the pane declares, rather than assigning an attribute it happens to know about.
+        """
+        self._claude_default = value
+        self._draw_limits()
+
     #: The last successful read, so a resize can re-measure without a provider sweep.
     _limit_rows: tuple[LimitRow, ...] = ()
 
@@ -427,6 +477,12 @@ class LimitsRegion:
     #: is nothing this surface can honestly claim about the machine either.
     _host_status: HostRemoteControlStatus | None = None
 
+    #: The last reading of Claude's stored default. `None` is both "not read yet" and "no
+    #: capability wired", which the line renders identically and on purpose, exactly as
+    #: `_host_status` does: before the first read there is nothing this surface can honestly
+    #: claim about what the next pane will come up as either.
+    _claude_default: RemoteControlDefault | None = None
+
     def _draw_limits(self) -> None:
         """Draw the rows last read, as the grid `rows.limit_row_content` lays out.
 
@@ -434,6 +490,12 @@ class LimitsRegion:
         say, including under the empty sentence: it is a fact about this machine rather than
         about the account, so an account with nothing to report says nothing about whether the
         phone can reach this host.
+
+        Claude's stored default sits directly above it, on the same argument one step further
+        in: it is a fact about neither the account nor the machine, but about what the next
+        pane launched here will come up as. Above rather than below, so the two Remote Control
+        lines read from the intention down to the observation, and so the pane's last line goes
+        on being the one it has always been.
         """
         found = self.query("#limits-pane")
         if not found:
@@ -441,6 +503,7 @@ class LimitsRegion:
         pane = found.first(OptionList)
         pane.clear_options()
         host_line = Content(host_remote_control_line(self._host_status))
+        claude_line = Content(remote_control_default_line(self._claude_default))
         rows = self._limit_rows
         if not rows:
             # Reached only by a host that offers no agents at all -- the one state in which
@@ -454,8 +517,9 @@ class LimitsRegion:
             # that raised. The raising read leaves the last figures drawn, up in
             # `_reload_limits`; this branch is the other one.
             pane.add_option(Option(NO_LIMITS, id=_EMPTY_LIMITS_ROW, disabled=True))
+            self._add_claude_row(pane, claude_line)
             self._add_host_row(pane, host_line)
-            _fit_to_content(pane, (Content(NO_LIMITS), host_line))
+            _fit_to_content(pane, (Content(NO_LIMITS), claude_line, host_line))
             return
         width = pane.content_size.width
         if width <= 0:
@@ -466,8 +530,9 @@ class LimitsRegion:
         contents = limit_rows_content(rows, width or None)
         for index, content in enumerate(contents):
             pane.add_option(Option(content, id=f"{_LIMITS_ROW_PREFIX}{index}", disabled=True))
+        self._add_claude_row(pane, claude_line)
         self._add_host_row(pane, host_line)
-        _fit_to_content(pane, (*contents, host_line))
+        _fit_to_content(pane, (*contents, claude_line, host_line))
 
     def _add_host_row(self, pane: OptionList, line: Content) -> None:
         """The host line, disabled like every other row here.
@@ -479,6 +544,16 @@ class LimitsRegion:
         as a pane that never had anything to open.
         """
         pane.add_option(Option(line, id=_HOST_REMOTE_CONTROL_ROW, disabled=True))
+
+    def _add_claude_row(self, pane: OptionList, line: Content) -> None:
+        """Claude's stored default, disabled for the reason `_add_host_row` gives in full.
+
+        Its own method rather than an inline `add_option` because both branches of
+        `_draw_limits` draw it, and a row whose `disabled=` was stated twice is a row that can
+        end up stated two ways. Nothing here acts on Enter: this pane reports, and the settings
+        screen is where the default is changed.
+        """
+        pane.add_option(Option(line, id=_CLAUDE_REMOTE_CONTROL_ROW, disabled=True))
 
 
 class ProjectsPaneScreen(ChordHintRow, ProjectsScreen):

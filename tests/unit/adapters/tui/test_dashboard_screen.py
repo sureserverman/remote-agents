@@ -22,6 +22,7 @@ from tui_feedback import announcements
 from remote_agents.adapters.tui.app import RemoteAgentsTui
 from remote_agents.adapters.tui.context import TuiContext
 from remote_agents.adapters.tui.screens.dashboard import (
+    _CLAUDE_REMOTE_CONTROL_ROW,
     _HOST_REMOTE_CONTROL_ROW,
     NO_LIMITS,
     DashboardScreen,
@@ -301,19 +302,27 @@ def _limits_reader(*entries: AgentLimits):
     return read
 
 
-def _limit_lines(pane: OptionList) -> list[str]:
-    """The pane's rows, without the line that is not about the account.
+#: The rows at the foot of the pane that are not about the account, by id.
+#:
+#: Two of them now. This machine's Codex Remote Control is a fact about the *host*, and Claude's
+#: stored default is a fact about what the next pane launched here will come up as; neither is a
+#: plan limit, and both are asserted where they belong -- `test_tui_host_remote_control.py` and
+#: `test_limits_pane_grid.py`. A set rather than a chain of `!=` because the pane will keep
+#: gaining these faster than this file gains reasons to care about them.
+_NOT_A_LIMIT = frozenset({_HOST_REMOTE_CONTROL_ROW, _CLAUDE_REMOTE_CONTROL_ROW})
 
-    The pane draws one more row than the limits do: this machine's Codex Remote Control, which
-    is a fact about the *host* and is asserted in `test_tui_host_remote_control.py`. Filtered
-    by its row id rather than by its text, so each assertion in this file keeps saying exactly
-    what it was written to say -- and so a limits row that accidentally rendered the host
-    sentence would still be caught here rather than silently dropped.
+
+def _limit_lines(pane: OptionList) -> list[str]:
+    """The pane's rows, without the lines that are not about the account.
+
+    Filtered by row id rather than by text, so each assertion in this file keeps saying exactly
+    what it was written to say -- and so a limits row that accidentally rendered one of those
+    sentences would still be caught here rather than silently dropped.
     """
     return [
         str(pane.get_option_at_index(index).prompt)
         for index in range(pane.option_count)
-        if pane.get_option_at_index(index).id != _HOST_REMOTE_CONTROL_ROW
+        if pane.get_option_at_index(index).id not in _NOT_A_LIMIT
     ]
 
 

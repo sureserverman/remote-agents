@@ -42,11 +42,33 @@ confusing one.
 from __future__ import annotations
 
 import re
+from dataclasses import replace
 
 import pytest
+from backends import SessionUseCaseDouble, backend_for
+from textual.widgets import OptionList
 
+from remote_agents.adapters.tui.app import RemoteAgentsTui
+from remote_agents.adapters.tui.context import TuiContext
 from remote_agents.adapters.tui.rows import limit_rows_content
+from remote_agents.adapters.tui.screens.dashboard import (
+    _CLAUDE_REMOTE_CONTROL_ROW,
+    _EMPTY_LIMITS_ROW,
+    _HOST_REMOTE_CONTROL_ROW,
+    DashboardScreen,
+    LimitsPaneScreen,
+)
+from remote_agents.application.host_remote_control import HOST_REMOTE_CONTROL_TITLE
+from remote_agents.application.profiles import ProfileAvailability
+from remote_agents.application.project_catalog import CatalogProject
+from remote_agents.application.remote_control_default import (
+    REMOTE_CONTROL_DEFAULT_TITLE,
+    UNAVAILABLE,
+    remote_control_default_line,
+)
 from remote_agents.application.session_views import LimitRow, LimitWindow
+from remote_agents.domain.models import SessionRecord
+from remote_agents.domain.remote_control import RemoteControlDefault
 
 #: Wide enough that `limit_row_content` takes its one-line branch for every row here. The
 #: narrow branch is a different layout with its own contract and its own test
@@ -374,3 +396,209 @@ def test_a_row_that_says_it_has_no_reading_does_not_also_date_one() -> None:
     dated = (LimitRow("claude", (LimitWindow("5h", 34, None),), None, "3d"),)
     (line,) = [content.plain for content in limit_rows_content(dated, WIDE)]
     assert "as of 3d" in line
+
+
+# --- the Claude row: a stored intention, drawn above the machine's own ----------------------
+#
+# The pane's last two lines are not about the account at all, and they are not about the same
+# thing as each other. `Codex Remote Control` is a reading of a daemon that is running right
+# now; `Claude Remote Control` is the intention stored in a file, which decides what the *next*
+# pane comes up as. They are stacked rather than merged for that reason, and the order is the
+# assertion: the stored intention is read before the live reading, so an owner scanning up from
+# the bottom of the pane meets the machine first and what it will do next above it.
+#
+# These cases drive the real surface rather than `limit_rows_content`, because what they are
+# about is the pane's composition -- which rows it adds and in which order -- and that is not
+# a property of the grid renderer the rest of this file measures.
+
+
+class _Launcher(SessionUseCaseDouble):
+    """A host with no sessions: this pane's rows do not depend on any."""
+
+    async def refresh_readiness(self) -> None:
+        return None
+
+    async def list_sessions(self) -> tuple[SessionRecord, ...]:
+        return ()
+
+
+class _FakeClaudeDefault:
+    """The stored-default port, answering a reading or refusing to answer at all.
+
+    The real port promises never to raise -- every way a settings file can be unreadable
+    resolves to `PROVIDER_DEFAULT` -- so `fail` models the shapes it cannot promise about: a
+    composition that wired something else, a read cancelled under teardown. That is the branch
+    the pane's stale-not-wrong contract is about, and it is unreachable through the real port.
+    """
+
+    def __init__(self, value: RemoteControlDefault = RemoteControlDefault.ON) -> None:
+        self.value = value
+        self.fail = False
+        self.reads = 0
+
+    async def read(self) -> RemoteControlDefault:
+        self.reads += 1
+        if self.fail:
+            raise RuntimeError("the settings file changed shape under an upgrade")
+        return self.value
+
+
+def _context(*, claude_default: object | None = None, limits=None) -> TuiContext:
+    """A surface wired with the stored default, and with or without a limits reader.
+
+    `replace` rather than a `backend_for` parameter, for the reason `test_settings_screen.py`
+    gives: the support helper mirrors `Backend`'s fields by hand and this field is not among
+    them, so stating it here keeps this file off a support-module edit it does not own.
+    """
+    backend = backend_for(
+        sessions=_Launcher(),  # type: ignore[arg-type]
+        projects=object(),  # type: ignore[arg-type]
+        refresh_catalogue=lambda: (_CLAUDE_ROW_PROJECT,),
+        catalogue=(_CLAUDE_ROW_PROJECT,),
+        limits=limits,
+    )
+    return TuiContext(
+        backend=replace(backend, claude_remote_control_default=claude_default),
+        profiles=(ProfileAvailability("claude", True),),
+        attach_argv=lambda session_id: ("tmux", "attach-session", "-t", f"={session_id}"),
+    )
+
+
+_CLAUDE_ROW_PROJECT = CatalogProject("opaque-existing", "existing", "infra", "Registered")
+
+
+def _drawn(app: RemoteAgentsTui) -> list[tuple[str | None, str]]:
+    """Every row of the limits pane as `(id, text)`, in the order it was added.
+
+    Keyed by id as well as text because the ordering claim is structural: a row found by
+    searching for its title would still be found if the pane drew it twice, or drew it in a
+    line belonging to something else.
+    """
+    pane = app.screen.query_one("#limits-pane", OptionList)
+    return [
+        (pane.get_option_at_index(index).id, str(pane.get_option_at_index(index).prompt))
+        for index in range(pane.option_count)
+    ]
+
+
+def _claude_row_and_codex_row(app: RemoteAgentsTui) -> tuple[str, str]:
+    """The last two rows, asserted to be the two Remote Control lines in that order."""
+    rows = _drawn(app)
+    ids = [row_id for row_id, _ in rows]
+    assert ids[-2:] == [_CLAUDE_REMOTE_CONTROL_ROW, _HOST_REMOTE_CONTROL_ROW], (
+        f"the stored default must be the row directly above the machine's own, drew {ids}"
+    )
+    return rows[-2][1], rows[-1][1]
+
+
+async def test_the_claude_row_is_drawn_directly_above_the_codex_row() -> None:
+    """The dashboard's pane, which is what a bare `remote-agents tui` shows."""
+    app = RemoteAgentsTui(_context(claude_default=_FakeClaudeDefault(RemoteControlDefault.OFF)))
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        assert isinstance(app.screen, DashboardScreen)
+        claude, codex = _claude_row_and_codex_row(app)
+
+        assert claude == remote_control_default_line(RemoteControlDefault.OFF)
+        assert codex.startswith(HOST_REMOTE_CONTROL_TITLE)
+
+
+async def test_the_claude_row_sits_above_the_codex_row_on_the_console_pane_too() -> None:
+    """The console's own limits pane, which is the surface under console hosting.
+
+    Asserted separately rather than trusted to the mixin, because the two surfaces compose the
+    pane themselves and a row added in one branch of `_draw_limits` and not the other would
+    show up here and nowhere else.
+    """
+    app = RemoteAgentsTui(_context(claude_default=_FakeClaudeDefault(RemoteControlDefault.ON)))
+    async with app.run_test() as pilot:
+        await app.push_screen(LimitsPaneScreen())
+        await pilot.pause()
+        claude, _codex = _claude_row_and_codex_row(app)
+
+        assert claude == remote_control_default_line(RemoteControlDefault.ON)
+
+
+async def test_an_unwired_claude_row_says_unavailable_rather_than_going_missing() -> None:
+    """A composition with no Claude provider has declared an absence (DEC-009/DEC-061).
+
+    The row is still drawn, because a missing row is indistinguishable from a surface that
+    forgot to draw one -- and the word is the application's own, so the two rows of the
+    settings screen and this one cannot drift apart on how they spell it (DEC-007).
+    """
+    app = RemoteAgentsTui(_context(claude_default=None))
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        claude, _codex = _claude_row_and_codex_row(app)
+
+        assert claude == f"{REMOTE_CONTROL_DEFAULT_TITLE} · {UNAVAILABLE}"
+
+
+async def test_a_failing_read_leaves_the_claude_row_exactly_as_it_was_drawn() -> None:
+    """Stale, not wrong: a background read having a bad moment never blanks a drawn line.
+
+    The same contract `_reload_limits` keeps for the grid and `_reload_host_remote_control`
+    keeps for the machine's line, asserted here because a third read is a third chance to get
+    it wrong -- and the wrong version (clearing the reading on `except`) would repaint this row
+    as `unavailable`, which states that no Claude provider is wired at all.
+    """
+    port = _FakeClaudeDefault(RemoteControlDefault.OFF)
+    app = RemoteAgentsTui(_context(claude_default=port))
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        claude, _codex = _claude_row_and_codex_row(app)
+        assert claude == remote_control_default_line(RemoteControlDefault.OFF)
+
+        port.fail = True
+        await app.screen._reload_limits()
+        await pilot.pause()
+
+        claude, _codex = _claude_row_and_codex_row(app)
+        assert claude == remote_control_default_line(RemoteControlDefault.OFF), (
+            "a read that raised took the last good reading off the pane"
+        )
+
+
+async def test_the_claude_row_survives_a_host_that_wired_no_limits_reader() -> None:
+    """The third read is not conditional on the other two.
+
+    Three separate capabilities, and a host wiring one and not the others is an ordinary
+    composition rather than a broken one -- so an early return on an absent `limits` would take
+    this row off a pane that could still draw it. The empty sentence is the *other* branch of
+    `_draw_limits`, which is exactly where a row added in one branch only goes missing.
+    """
+    app = RemoteAgentsTui(
+        _context(claude_default=_FakeClaudeDefault(RemoteControlDefault.PROVIDER_DEFAULT))
+    )
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        rows = _drawn(app)
+        assert [row_id for row_id, _ in rows] == [
+            _EMPTY_LIMITS_ROW,
+            _CLAUDE_REMOTE_CONTROL_ROW,
+            _HOST_REMOTE_CONTROL_ROW,
+        ], rows
+
+        claude, _codex = _claude_row_and_codex_row(app)
+        assert claude == remote_control_default_line(RemoteControlDefault.PROVIDER_DEFAULT)
+
+
+async def test_a_pushed_claude_row_reading_is_drawn_without_a_second_read() -> None:
+    """`show_claude_remote_control_default`, the pane's one write path from outside.
+
+    Mirrors `show_host_remote_control` and exists for the same reason: a caller that has just
+    been handed a fresh reading of the change it made pushes it in, rather than reaching into
+    the attribute behind the pane's back.
+    """
+    port = _FakeClaudeDefault(RemoteControlDefault.OFF)
+    app = RemoteAgentsTui(_context(claude_default=port))
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        reads = port.reads
+
+        app.screen.show_claude_remote_control_default(RemoteControlDefault.ON)
+        await pilot.pause()
+
+        claude, _codex = _claude_row_and_codex_row(app)
+        assert claude == remote_control_default_line(RemoteControlDefault.ON)
+        assert port.reads == reads, "the pushed reading was drawn, not re-read"

@@ -34,7 +34,20 @@ from __future__ import annotations
 
 import re
 
+from backends import SessionUseCaseDouble, backend_for
+from rich.cells import cell_len
+from textual.widgets import OptionList
+
+from remote_agents.adapters.tui.app import RemoteAgentsTui
+from remote_agents.adapters.tui.context import TuiContext
 from remote_agents.adapters.tui.rows import limit_rows_content
+from remote_agents.adapters.tui.screens.dashboard import LimitsPaneScreen
+from remote_agents.application.profiles import ProfileAvailability
+from remote_agents.application.project_catalog import CatalogProject
+from remote_agents.application.remote_control_default import (
+    REMOTE_CONTROL_DEFAULT_TITLE,
+    remote_control_default_line,
+)
 from remote_agents.application.session_views import LimitRow, LimitWindow
 
 #: Narrower than two windows with countdowns need, and close to the dashboard's own right
@@ -152,4 +165,88 @@ def test_one_render_never_mixes_the_two_layouts() -> None:
         assert len(set(gauges)) == 1, (
             f"at width {width} the render mixes layouts — rows carry {gauges} windows each:\n"
             + "\n".join(lines)
+        )
+
+
+# --- the Claude row, which is not a grid row and truncates rather than stacking -------------
+#
+# The two Remote Control lines at the foot of the pane are sentences, not rows of the table
+# above them: nothing about them is columned, so `limit_row_content`'s stacked fallback does
+# not apply and cannot. What happens to them instead is the pane's own `text-wrap: nowrap;
+# text-overflow: ellipsis`, and that is worth pinning here rather than in the grid file for the
+# reason this module exists at all -- it is the file about what a line does when it does not
+# fit.
+#
+# Driven through the real surface because the truncation is the widget's, not the renderer's.
+# The width is stated the same way `NARROW` is: measured, from the pane the owner actually has.
+
+#: The limits pane's own content width at an 80-column terminal, which is where
+#: `_HOST_CONNECTION_WORDS` measured its vocabulary: 28 cells, 23 of them spent before the
+#: Codex reading begins. The Claude line is the longer of the two titles, so it is the one that
+#: runs out of pane first -- `Claude Remote Control · unavailable` is 35 cells.
+PANE_CELLS = 28
+
+
+class _Launcher(SessionUseCaseDouble):
+    async def refresh_readiness(self) -> None:
+        return None
+
+    async def list_sessions(self) -> tuple[()]:
+        return ()
+
+
+def _narrow_context() -> TuiContext:
+    """A host with no Claude provider, so the row renders its longest reading.
+
+    `unavailable` rather than a wired `on`, deliberately: it is the widest of the four things
+    this row can say, so a layout that survives it survives all of them.
+    """
+    return TuiContext(
+        backend=backend_for(
+            sessions=_Launcher(),  # type: ignore[arg-type]
+            projects=object(),  # type: ignore[arg-type]
+            refresh_catalogue=lambda: (_NARROW_PROJECT,),
+            catalogue=(_NARROW_PROJECT,),
+        ),
+        profiles=(ProfileAvailability("claude", True),),
+        attach_argv=lambda session_id: ("tmux", "attach-session", "-t", f"={session_id}"),
+    )
+
+
+_NARROW_PROJECT = CatalogProject("opaque-existing", "existing", "infra", "Registered")
+
+
+async def test_the_claude_row_truncates_with_an_ellipsis_and_never_wraps() -> None:
+    """One line, cut with an ellipsis -- not two lines, and not a line the pane cannot show.
+
+    Both halves matter and they fail differently. A *wrapped* row costs the pane a line it was
+    not sized for, and `_fit_to_content` counts one row per option -- so the continuation is
+    drawn outside the pane's height and is unreachable, because every option here is disabled
+    and no key scrolls to it. A row cut *without* an ellipsis is worse in the other direction:
+    `Claude Remote Control · una` reads as a state rather than as a sentence that was cut.
+    """
+    full = remote_control_default_line(None)
+    assert len(full) > PANE_CELLS, f"{full!r} fits {PANE_CELLS} cells, so nothing is truncated"
+
+    app = RemoteAgentsTui(_narrow_context())
+    async with app.run_test(size=(PANE_CELLS, 24)) as pilot:
+        await app.push_screen(LimitsPaneScreen())
+        await pilot.pause()
+        await pilot.pause()
+        pane = app.screen.query_one("#limits-pane", OptionList)
+        painted = [pane.render_line(row).text for row in range(pane.size.height)]
+
+        carrying = [line for line in painted if line.startswith(REMOTE_CONTROL_DEFAULT_TITLE)]
+        assert len(carrying) == 1, f"the row wrapped instead of being cut: {painted}"
+
+        (drawn,) = carrying
+        drawn = drawn.rstrip()
+        assert drawn.endswith("…"), f"cut without saying so: {drawn!r}"
+        assert full.startswith(drawn[:-1]), f"{drawn!r} is not a prefix of {full!r}"
+        assert cell_len(drawn) <= PANE_CELLS, f"{drawn!r} is {cell_len(drawn)} cells"
+
+        drawn_rows = [line for line in painted if line.strip()]
+        assert len(drawn_rows) == pane.option_count, (
+            f"the pane paints {len(drawn_rows)} lines for {pane.option_count} rows, so one of "
+            f"them wrapped: {painted}"
         )
