@@ -49,6 +49,7 @@ from remote_agents.adapters.tui.screens.sessions import (
     SessionsPaneScreen,
     SessionsScreen,
 )
+from remote_agents.adapters.tui.screens.settings import SettingsScreen
 
 #: Every screen the owner can reach, one class each. Nothing is repainted in place any more,
 #: so this registry is the whole surface.
@@ -65,6 +66,10 @@ ALL_SCREENS = (
     SessionsPaneScreen,
     LimitsPaneScreen,
     FeedScreen,
+    # Reached from every position by one key rather than from a parent, which is why it sits
+    # with the top-level positions rather than inside a flow: it is somewhere the owner goes,
+    # not a step on the way anywhere.
+    SettingsScreen,
     ProjectChooserScreen,
     ProfilesScreen,
     AreasScreen,
@@ -104,4 +109,5 @@ __all__ = [
     "SessionDetailScreen",
     "SessionsPaneScreen",
     "SessionsScreen",
+    "SettingsScreen",
 ]

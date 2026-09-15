@@ -51,6 +51,7 @@ from remote_agents.adapters.tui.screens import (
     SessionDetailScreen,
     SessionsPaneScreen,
     SessionsScreen,
+    SettingsScreen,
 )
 from remote_agents.adapters.tui.screens.launch import ProjectsScreen
 from remote_agents.application.profiles import ProfileAvailability
@@ -184,6 +185,12 @@ _DIRECT: dict[type[Screen], Callable[[], Screen]] = {
     SessionDetailScreen: lambda: SessionDetailScreen(str(_SESSION_ID)),
     RenameScreen: lambda: RenameScreen(str(_SESSION_ID)),
     InspectScreen: lambda: InspectScreen("some output"),
+    # Pushed rather than reached by its key, for the same reason the panes above are: what
+    # this file asks of a position is that escape leaves it, and that is a property of the
+    # screen rather than of the one binding that opens it. Wired to nothing on purpose --
+    # every row renders its absent capability as a reading (DEC-061), so the back path is
+    # driven against the host this file already builds.
+    SettingsScreen: SettingsScreen,
     ResumeProjectsScreen: ResumeProjectsScreen,
     ResumeProfilesScreen: lambda: ResumeProfilesScreen(_PROJECT, _CAPABLE),
     ResumeConversationsScreen: lambda: ResumeConversationsScreen(_PROJECT, "claude", _PAGE),

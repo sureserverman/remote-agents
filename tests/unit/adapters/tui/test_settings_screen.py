@@ -166,9 +166,12 @@ def _context(
 ) -> TuiContext:
     """A surface wired with whichever of the settings capabilities a test is about.
 
-    `replace` rather than a `backend_for` parameter: the helper mirrors `Backend`'s fields by
-    hand and this stage's new field is not among them yet, so stating it here keeps this file
-    from depending on a support-module edit that belongs to another task.
+    `replace` rather than a `backend_for` parameter: the helper had no parameter for this field
+    when the file was written, and editing shared support belonged to another task. It has one
+    since 2026-09-15 -- the snapshot suite could not wire the capability at all, which left six
+    committed baselines photographing a row that read *unavailable* -- so the helper now mirrors
+    every field and new call sites should use the parameter. This one is left as it is because
+    a field set on the frozen dataclass afterwards is the same composition either way.
     """
     backend = backend_for(
         sessions=_Launcher((_record(),)),  # type: ignore[arg-type]

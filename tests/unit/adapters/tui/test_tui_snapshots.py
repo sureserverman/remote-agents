@@ -79,7 +79,7 @@ from __future__ import annotations
 import asyncio
 import os
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -114,6 +114,7 @@ from remote_agents.domain.models import (
 from remote_agents.domain.remote_control import (
     HostConnection,
     HostRemoteControlStatus,
+    RemoteControlDefault,
     RemoteControlState,
 )
 from remote_agents.ports.agent_activity import (
@@ -176,6 +177,11 @@ _POSITIONS = (
     "SESSIONS_PANE",
     "LIMITS_PANE",
     "FEED",
+    # The one position reached from every other by a single key rather than from a parent.
+    # Its capture is wired to all three of its capabilities on purpose -- see
+    # `_settings_context`, which is also where the reason it needs a host of its own is -- so
+    # the baseline is a picture of the screen rather than of five rows saying "unavailable".
+    "SETTINGS",
     "PROJECT_CHOOSER",
     "PROFILES",
     "AREAS",
@@ -410,6 +416,27 @@ class _HostRemoteControl:
         )
 
 
+#: What the Settings screen's Claude Remote Control row reads. `PROVIDER_DEFAULT` rather than
+#: `ON` or `OFF`, for the reason `_Launcher.remote_control_state` answers UNKNOWN: it is the
+#: state a host nobody has touched rests in, so it is the render an owner is most likely to
+#: meet. It is also the reading whose *wording* the row's own module argues hardest about --
+#: "Claude's default", never any form of off, because an unset key resolves to an account
+#: default measured to be on -- and a baseline is the one artefact that can photograph a word.
+class _ClaudeRemoteControlDefault:
+    async def read(self) -> RemoteControlDefault:
+        return RemoteControlDefault.PROVIDER_DEFAULT
+
+
+#: What the Settings screen's limits-source row reads. `usage-api` rather than the default hop,
+#: and the choice is the same one `_limits` makes for Claude's line: this is the long label --
+#: it names the credential read and the outbound call, because neither is visible after the
+#: press -- so a capture at this file's hundred columns is what settles whether that warning
+#: survives the render at all. The short `status-line` label could not fail to fit.
+class _ClaudeLimitsSource:
+    async def read(self) -> str:
+        return "usage-api"
+
+
 def _activities() -> tuple[AgentActivity, ...]:
     return (
         AgentActivity(
@@ -484,6 +511,20 @@ def _context(
             activity_feed=_activity_reader() if activity_feed is None else activity_feed,
             limits=_limits_reader() if limits is None else limits,
             host_remote_control=_HostRemoteControl(),
+            # Wired here, not only in `_settings_context`, because the limits pane draws
+            # `remote_control_default_line` directly above its host line -- so leaving it out
+            # made DASHBOARD, LIMITS_PANE and the four themed dashboards photograph a row
+            # reading `unavailable`, which is a picture of the fixture rather than of the
+            # product. That is the defect this file's comments on `_limits`, `_activities` and
+            # `_session_usage` each record fixing before; this is its fourth instance and it
+            # arrived with the row itself (sub-plan 02, Stage 2).
+            #
+            # `PROVIDER_DEFAULT` rather than a decided state, for two reasons. It is what an
+            # untouched host rests in, so it is the reading most owners' dashboards actually
+            # show. And it is the *long* label, so the 80x24 captures record the truncation
+            # this row really has at that width (`· Claude's default` is 40 cells against a
+            # 28-cell pane) rather than hiding it behind a state that happens to fit.
+            claude_remote_control_default=_ClaudeRemoteControlDefault(),
             usage=_session_usage() if usage is None else usage,
         ),
         profiles=(
@@ -499,6 +540,46 @@ def _context(
             f"={session_id}",
         ),
     )
+
+
+def _settings_context() -> TuiContext:
+    """The host the SETTINGS capture is driven against: all three of its rows wired.
+
+    **Why this position gets a context of its own, when every other one shares `_context`.**
+    Two of the Settings rows read capabilities the shared host deliberately does not wire, and
+    one of them is not the Settings screen's alone: the limits pane draws
+    `remote_control_default_line` too, directly above its host line. Wiring the Claude port
+    into `_context` therefore re-renders DASHBOARD, LIMITS_PANE and all four themed dashboards
+    -- measured, six files, `unavailable` becoming `Claude's default` -- which is a
+    re-baseline rather than a new one, and this task's scope is the new position.
+
+    So the capability is wired *here*, where only this capture reads it. What that leaves
+    behind is a real gap rather than a tidy one, and it is recorded rather than hidden: the
+    six baselines above still photograph a dashboard whose Claude row says `unavailable`,
+    which is a picture of the fixture rather than of the product, and is the same defect the
+    comments on `_limits` and `_activities` describe having fixed twice already. Closing it
+    means re-capturing those six and reading the diff, which is its own task.
+
+    `replace` rather than two more `backend_for` parameters: that helper mirrors `Backend`'s
+    fields by hand and neither of these is among them, so stating them here keeps this file
+    from depending on a support-module edit -- the same arrangement `test_settings_screen.py`
+    already makes for the same two fields.
+    """
+    context = _context()
+    return replace(
+        context,
+        backend=replace(
+            context.backend,
+            claude_remote_control_default=_ClaudeRemoteControlDefault(),
+            claude_limits_source=_ClaudeLimitsSource(),
+        ),
+    )
+
+
+#: The positions whose capture needs a host `_context` does not build, by name. One today, and
+#: a mapping rather than a branch in the test so that the exception is declared beside the
+#: reason for it instead of hidden in the driver.
+_POSITION_CONTEXTS: dict[str, Callable[[], TuiContext]] = {"SETTINGS": _settings_context}
 
 
 async def _captured() -> str:
@@ -564,6 +645,14 @@ async def _drive(app: RemoteAgentsTui, pilot, step: str) -> asyncio.Task[None] |
             "FEED": FeedScreen,
         }
         await app.push_screen(panes[step]())
+        await pilot.pause()
+        return None
+    if step == "SETTINGS":
+        # Through the app's own entry point rather than by pushing the class, because that is
+        # what the one key on every position calls -- and `show_settings` refuses to stack a
+        # second copy, so a driver that pushed would be capturing a screen the surface itself
+        # cannot arrive at twice.
+        await app.show_settings()
         await pilot.pause()
         return None
     if step in {"PROJECT_CHOOSER", "PROFILES"}:
@@ -908,7 +997,7 @@ async def test_every_wizard_position_matches_its_baseline(step: str) -> None:
     is the one place in the suite where an unchecked claim is most expensive. The
     parametrization is the authority; a reader who wants the number counts the tuple.
     """
-    app = RemoteAgentsTui(_context())
+    app = RemoteAgentsTui(_POSITION_CONTEXTS.get(step, _context)())
     async with app.run_test(size=_SIZE) as pilot:
         # Before driving, not at capture time: the theme drives a style recompute, so it has
         # to be set early enough for the pump to have applied it by the time we export.

@@ -128,8 +128,10 @@ def _bot(claude: object | None, codex: object | None) -> PrivateBotBoundary:
     """A boundary wired with exactly the two capabilities this screen renders.
 
     `claude_remote_control_default` arrives through `replace` rather than through
-    `backend_for`, which has no parameter for it: this task may not edit test support, and a
-    field set on the frozen dataclass afterwards is the same composition either way.
+    `backend_for`. That was once because the helper had no parameter for it and editing shared
+    support belonged to another task; since 2026-09-15 it has one, and this call is simply not
+    worth rewriting -- a field set on the frozen dataclass afterwards is the same composition
+    either way. New call sites should prefer the parameter.
     """
     bot = build_private_bot(
         OWNER, CHAT, backend=backend_for(sessions=_NoSessions(), host_remote_control=codex)

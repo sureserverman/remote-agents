@@ -60,13 +60,6 @@ consequence needs to be *visible before the press*, not confirmed after it, so i
 into the row's own label. The two preference rows ask nothing and cost nothing outside this
 process, and they alone report a failure as "changed, but not remembered": for them the change
 is immediate and only the memory of it can fail.
-
-**Not in `ALL_SCREENS` yet, and that is a gap rather than a decision.** That registry is what
-`test_screen_back_paths.py`, `test_binding_visibility.py`, `test_empty_states.py` and the
-snapshot suite sweep, and each needs an arrangement or a committed baseline per member -- four
-test modules this task's scope does not include. The back path is driven here instead
-(`test_escape_returns_to_the_dashboard`); registering the screen and giving it a baseline is
-follow-up work, noted at the Stage 3 gate rather than left silent.
 """
 
 from __future__ import annotations

@@ -70,6 +70,8 @@ def backend_for(
     usage: Callable[[SessionId], Awaitable[AgentUsage | None]] | None = _UNSET,  # type: ignore[assignment]
     limits: Callable[[], Awaitable[tuple[AgentLimits, ...]]] | None = _UNSET,  # type: ignore[assignment]
     host_remote_control: object | None = _UNSET,
+    claude_remote_control_default: object | None = _UNSET,
+    claude_limits_source: object | None = _UNSET,
     state_events: object | None = _UNSET,
     close_usage_readers: Callable[[], Awaitable[None]] | None = _UNSET,  # type: ignore[assignment]
     max_label_length: int = _UNSET,  # type: ignore[assignment]
@@ -80,6 +82,16 @@ def backend_for(
     defaults are deliberately *not* restated: an unstated field is dropped before
     construction and `Backend` supplies its own, which is what keeps this helper from
     drifting the first time one of those defaults changes.
+
+    **The two Settings capabilities were missing until 2026-09-15, and the cost is the
+    argument for keeping that first sentence true.** `claude_remote_control_default` shipped
+    with no parameter here, so every test needing it reached past this helper with
+    `dataclasses.replace` on the frozen result -- and each such site grew a comment explaining
+    that editing shared support belonged to some other task. Three files carried that
+    workaround before the third one was blocked outright: the snapshot suite could not wire
+    the capability at all, so six committed baselines photographed a dashboard row reading
+    *unavailable* on a host where production always wires it. A factory that mirrors most of
+    a type is one whose callers each invent the rest.
     """
     stated = {
         "sessions": sessions,
@@ -92,6 +104,8 @@ def backend_for(
         "activity_feed": activity_feed,
         "usage": usage,
         "host_remote_control": host_remote_control,
+        "claude_remote_control_default": claude_remote_control_default,
+        "claude_limits_source": claude_limits_source,
         "state_events": state_events,
         "limits": limits,
         "close_usage_readers": close_usage_readers,

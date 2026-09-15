@@ -167,6 +167,7 @@ def _arrangements():
         SessionDetailScreen,
         SessionsPaneScreen,
         SessionsScreen,
+        SettingsScreen,
     )
     from remote_agents.domain.remote_control import RemoteControlState
 
@@ -194,6 +195,12 @@ def _arrangements():
         SessionDetailScreen: lambda: SessionDetailScreen(str(_SESSION_ID)),
         RenameScreen: lambda: RenameScreen(str(_SESSION_ID)),
         InspectScreen: lambda: InspectScreen("some output"),
+        # Pushed, though one app binding opens it from everywhere: what is asked here is what
+        # this position's footer advertises, and that is a property of the screen rather than
+        # of the key that reaches it. It declares `can_refresh` -- every row is a reading of a
+        # file or a daemon outside this process -- so it is also the newest case the Refresh
+        # sweep has to get right.
+        SettingsScreen: SettingsScreen,
         ResumeProjectsScreen: ResumeProjectsScreen,
         ResumeProfilesScreen: lambda: ResumeProfilesScreen(_PROJECT, capable),
         ResumeConversationsScreen: lambda: ResumeConversationsScreen(_PROJECT, "claude", page),
