@@ -57,6 +57,15 @@ import logging
 
 from textual.widgets import OptionList
 
+from remote_agents.adapters.tui.preferences import (
+    PROJECT_ORDER_LABELS,
+    PROJECT_ORDER_TITLE,
+    THEME_LABELS,
+    THEME_TITLE,
+    next_theme,
+    read_project_order,
+    read_theme,
+)
 from remote_agents.adapters.tui.screens.base import NEVER_EMPTY, ChoiceScreen
 from remote_agents.adapters.tui.screens.confirm import HostRemoteControlConfirmModal
 
@@ -84,11 +93,22 @@ from remote_agents.domain.remote_control import HostRemoteControlStatus, RemoteC
 
 _LOG = logging.getLogger(__name__)
 
-#: Stable ids for the two rows, so `choose` routes on what the row *is* rather than on the
+#: Stable ids for the rows, so `choose` routes on what the row *is* rather than on the
 #: position it happened to be drawn at. A row found by index is a row that acts on the wrong
 #: provider the day a third one is added.
 _CLAUDE_ROW = "settings:claude-remote-control-default"
 _CODEX_ROW = "settings:codex-remote-control"
+_THEME_ROW = "settings:theme"
+_ORDER_ROW = "settings:project-order"
+
+#: The rows this screen declares, in the order it draws them: the two host subjects first,
+#: then the two the terminal keeps for itself.
+#:
+#: A tuple rather than a count in prose, for the reason `ALL_SCREENS` gives next door -- a
+#: numeral written once is a numeral the list grows past in silence. The tests sweep this
+#: instead of counting a render, so a row added without being declared here fails rather than
+#: quietly changing what "the third row" means to every test that walks the cursor.
+SETTINGS_ROWS = (_CLAUDE_ROW, _CODEX_ROW, _THEME_ROW, _ORDER_ROW)
 
 SETTINGS_INSTRUCTION = "Press enter on a row to change it."
 """What this position is for, in the one line the status region holds.
@@ -100,41 +120,71 @@ where a row changes a fact about the machine without navigating anywhere.
 
 
 class SettingsScreen(ChoiceScreen):
-    """Two rows, each naming a provider and the state its next session will start in."""
+    """Every setting this machine has, in two groups the owner does not have to be told about.
 
-    #: Fixed by construction -- two providers, two rows, whatever either capability answers --
-    #: so there is no emptiness for an empty state to describe (DEC-009's `NEVER_EMPTY` case).
+    The first rows name a provider and the state its next session starts in; the last two name
+    what this terminal remembers about itself. The grouping is the draw order and nothing more
+    -- no headings, no separators -- because the screen is short enough that a heading would be
+    a bigger thing to read than the rows it introduced.
+    """
+
+    #: Fixed by construction -- every row is drawn whatever its capability answers -- so there
+    #: is no emptiness for an empty state to describe (DEC-009's `NEVER_EMPTY` case).
     empty_state = NEVER_EMPTY
 
     position = "SETTINGS"
     crumb = "Settings"
 
-    #: Both rows are a reading of something outside this process, so `ctrl+r` means something
-    #: here: a file the owner edited with `/config`, or a daemon that came up since the screen
-    #: was opened, is exactly what a re-read is for. Declared beside `refresh_contents` because
-    #: the footer takes this flag's word for it (`check_action`).
+    #: Every row is a reading of something outside this process -- a provider's settings file,
+    #: a daemon, or this surface's own preference file -- so `ctrl+r` means something here: a
+    #: file the owner edited with `/config`, or a daemon that came up since the screen was
+    #: opened, is exactly what a re-read is for. Declared beside `refresh_contents` because the
+    #: footer takes this flag's word for it (`check_action`).
     can_refresh = True
 
     def __init__(self) -> None:
         super().__init__()
-        #: The last reading of each row. `None` is both "not read yet" and "no capability
-        #: wired", which both rows render identically and on purpose: before the first read
-        #: there is nothing this surface can honestly claim about the machine either.
+        #: The last reading of each provider row. `None` is both "not read yet" and "no
+        #: capability wired", which the two render identically and on purpose: before the first
+        #: read there is nothing this surface can honestly claim about the machine either.
         self._claude_default: RemoteControlDefault | None = None
         self._host_status: HostRemoteControlStatus | None = None
+        #: The two terminal preferences, as last read. Plain strings rather than `None`-able
+        #: readings: `read_theme` and `read_project_order` are total and always answer one of
+        #: the values this surface knows, so there is no absence for these two rows to render.
+        self._theme = ""
+        self._project_order = ""
 
     async def populate(self) -> None:
         self.hide_entry()
         self.set_status(SETTINGS_INSTRUCTION)
-        await self._read_both_rows()
+        await self._read_every_row()
         self._draw_settings_rows()
 
     async def refresh_contents(self) -> None:
-        """`ctrl+r`: re-read both capabilities and redraw, leaving the cursor where it is."""
-        await self._read_both_rows()
+        """`ctrl+r`: re-read every row and redraw, leaving the cursor where it is."""
+        await self._read_every_row()
         self._draw_settings_rows()
 
-    async def _read_both_rows(self) -> None:
+    def _read_preferences(self) -> None:
+        """Re-read the two rows this surface owns: what is in force, and what was remembered.
+
+        **The theme row reads the theme in force, not the stored one**, and that is the whole
+        difference between these two rows and the provider rows above them. For Claude and
+        Codex the file *is* the fact -- the provider reads it at its next start, so a write
+        that did not land means nothing changed. Here the change is immediate and local: the
+        palette can put the app on a theme this file will not store, and after a refused write
+        the app is visibly in the new theme. A row drawing the stored value would then say
+        *night* on a screen painted in day, which is the one reading that is certainly wrong.
+
+        Synchronous because the file is small and `RemoteAgentsTui.__init__` already reads it
+        this way on the event loop; both reads are total and neither can raise.
+        """
+        theme = str(self.tui.theme)
+        self._theme = theme if theme in THEME_LABELS else read_theme(self.services.preferences_path)
+        self._project_order = read_project_order(self.services.preferences_path)
+
+    async def _read_every_row(self) -> None:
         """Read each capability, and let neither failure take the other row's reading down.
 
         Both ports promise never to raise for a read -- the stored default answers
@@ -162,9 +212,14 @@ class SettingsScreen(ChoiceScreen):
                 self._host_status = await control.status()
             except Exception:
                 _LOG.exception("this host's Remote Control could not be read")
+        self._read_preferences()
 
     def _draw_settings_rows(self) -> None:
-        """Draw the two rows, Claude first because it is the provider the host launches most.
+        """Draw every row, Claude first because it is the provider the host launches most.
+
+        The order is `SETTINGS_ROWS` and the tests sweep that tuple, so a row added to one and
+        not the other fails rather than silently renumbering what every cursor-walking test
+        thinks it is pressing.
 
         Enabled rows, unlike the limits pane's: here the row *is* the control, so a cursor
         resting on one and answering Enter with silence would be the broken key that pane's own
@@ -176,6 +231,12 @@ class SettingsScreen(ChoiceScreen):
             (
                 (_CLAUDE_ROW, remote_control_default_line(self._claude_default)),
                 (_CODEX_ROW, host_remote_control_line(self._host_status)),
+                (_THEME_ROW, f"{THEME_TITLE} · {THEME_LABELS.get(self._theme, self._theme)}"),
+                (
+                    _ORDER_ROW,
+                    f"{PROJECT_ORDER_TITLE} · "
+                    f"{PROJECT_ORDER_LABELS.get(self._project_order, self._project_order)}",
+                ),
             ),
             highlight=self._highlighted_row(),
         )
@@ -183,11 +244,12 @@ class SettingsScreen(ChoiceScreen):
     def _highlighted_row(self) -> int:
         """Keep the cursor on the row the owner is acting on across a redraw.
 
-        A press redraws both rows, and `show_choices` rests on row 0 by default -- so pressing
+        A press redraws every row, and `show_choices` rests on row 0 by default -- so pressing
         Enter on the Codex row once would move the cursor to the Claude row, and pressing Enter
         again would change a different provider's setting than the one the owner just changed.
-        That is the cursor-moved-under-the-press hazard DEC-052 and DEC-062 are about, in the
-        one position where both rows mutate something.
+        That is the cursor-moved-under-the-press hazard DEC-052 and DEC-062 are about, and it
+        got worse rather than better as the screen grew: this is the one position where *every*
+        row mutates something, so there is no harmless row for a sprung cursor to land on.
         """
         found = self.query("#choices")
         if not found:
@@ -208,6 +270,79 @@ class SettingsScreen(ChoiceScreen):
             return
         if key == _CODEX_ROW:
             await self.confirm_codex_remote_control()
+            return
+        if key == _THEME_ROW:
+            await self.advance_theme()
+            return
+        if key == _ORDER_ROW:
+            await self.advance_project_order()
+
+    async def advance_theme(self) -> None:
+        """One press: move to the other relay theme, and say whether it will be remembered.
+
+        **No `awaiting` cover and no port.** The two rows above ask something outside this
+        process and can be kept waiting; this one assigns a reactive and writes a small file
+        on the way out of the signal, so a spinner would be drawn and removed inside one
+        frame. The guard is still held, because a press that redraws the row must not be able
+        to interleave with the Codex row's modal.
+
+        **The change is never in doubt; only the memory of it is.** `write_theme` is total and
+        a host that wired no preferences path stores nothing at all -- so the sentence on a
+        failure is *"is now day, but it could not be remembered"* and not the Claude row's
+        *"could not be changed; it is still off"*. Saying the latter here would be false twice
+        over: the theme did change, and the owner can see that it did.
+        """
+        if self.tui.busy:
+            return
+        async with self.holding_the_guard():
+            intended = next_theme(self._theme)
+            # The assignment is the switch. `RemoteAgentsTui` subscribes to Textual's theme
+            # signal at mount and `_remember_theme` is what writes -- so this row deliberately
+            # does not call `write_theme` itself, or the palette and the row would be two
+            # writers of one preference.
+            self.tui.theme = intended
+            stored = read_theme(self.services.preferences_path)
+            self._read_preferences()
+            if not self.showing:
+                return
+            self._draw_settings_rows()
+            word = THEME_LABELS.get(intended, intended)
+            if stored == intended:
+                self.set_status(f"{THEME_TITLE} is now {word}.")
+            else:
+                self.announce(
+                    f"{THEME_TITLE} is now {word}, but it could not be remembered "
+                    "and this surface will open in the other one.",
+                    severity="warning",
+                )
+
+    async def advance_project_order(self) -> None:
+        """One press: re-sort the catalogue the other way, and say whether it will be kept.
+
+        The ordering itself belongs to the app -- `switch_project_order` holds both the chosen
+        order and the snapshot it applies to, and the projects position re-draws from that on
+        its next reveal -- so this row is a second caller of the key `o` already has, not a
+        second implementation of it. The refusal wording is `advance_theme`'s, for the same
+        reason: the list *is* re-ordered, whatever the file managed to record.
+        """
+        if self.tui.busy:
+            return
+        async with self.holding_the_guard():
+            chosen = await self.tui.switch_project_order()
+            stored = read_project_order(self.services.preferences_path)
+            self._read_preferences()
+            if not self.showing:
+                return
+            self._draw_settings_rows()
+            word = PROJECT_ORDER_LABELS.get(chosen, chosen)
+            if stored == chosen:
+                self.set_status(f"{PROJECT_ORDER_TITLE} is now {word}.")
+            else:
+                self.announce(
+                    f"{PROJECT_ORDER_TITLE} is now {word}, but it could not be remembered "
+                    "and this surface will open in the other one.",
+                    severity="warning",
+                )
 
     async def advance_claude_remote_control_default(self) -> None:
         """One press: read, advance by one, write, read back, say what it now is.
@@ -291,7 +426,7 @@ class SettingsScreen(ChoiceScreen):
         if control is None or self.tui.busy:
             return
         async with self.holding_the_guard():
-            await self._read_both_rows()
+            await self._read_every_row()
             if not self.showing:
                 return
             self._draw_settings_rows()

@@ -39,6 +39,26 @@ PROJECT_ORDERS = (RECENCY, ALPHABETICAL)
 #: order is the default).
 DEFAULT_PROJECT_ORDER = RECENCY
 
+#: What the project-order row is called on the Settings screen.
+#:
+#: Here rather than in `application/`, and that is the one asymmetry between this row and the
+#: three above it on that screen. Those name facts about the *machine* that both surfaces
+#: render, so DEC-007 puts their wording where neither surface owns it. This names a choice
+#: only the terminal can make -- the bot has one order by decision -- so `application/` would
+#: be a home for a word no second renderer will ever read.
+PROJECT_ORDER_TITLE = "Project order"
+
+#: What each order is called, in the few words a row has for it.
+#:
+#: The projects pane drew these words first, as its title hint (`Projects · recent first · o
+#: toggles order`). It now reads them from here rather than keeping its own table: two copies
+#: with identical values are what DEC-043 calls a second renderer, and the pane and the row
+#: would only have to disagree once for the owner to meet two names for one order.
+PROJECT_ORDER_LABELS = {
+    RECENCY: "recent first",
+    ALPHABETICAL: "a–z",
+}
+
 _ORDER_KEY = "project_order"
 _THEME_KEY = "theme"
 
@@ -47,6 +67,39 @@ _THEME_KEY = "theme"
 #: which `theme.py` needs -- and a test pins the two tuples equal.
 THEMES = ("relay-night", "relay-day")
 DEFAULT_THEME = "relay-night"
+
+#: What the theme row is called, and what each theme is called on it.
+#:
+#: The row says *night* and *day* rather than the registered names, because `relay-` is this
+#: project's namespace inside Textual's theme registry and not a word the owner chose. The
+#: palette still offers the full names, and the two are not in competition: the palette is
+#: where every theme Textual knows can be reached, this row is where the two the surface
+#: *remembers* are.
+THEME_TITLE = "Theme"
+THEME_LABELS = {
+    "relay-night": "night",
+    "relay-day": "day",
+}
+
+
+def next_project_order(current: str) -> str:
+    """Which order one press moves to, from whatever the file last said.
+
+    Total, and answering an unknown value with the **default** rather than raising or keeping
+    it -- the same answer `read_project_order` gives that value, so the one place an order
+    this version does not know could have survived a press is closed. Two members, so a second
+    press returns; the row needs no third state to reach every one it has.
+    """
+    index = PROJECT_ORDERS.index(current) if current in PROJECT_ORDERS else -1
+    return PROJECT_ORDERS[(index + 1) % len(PROJECT_ORDERS)]
+
+
+def next_theme(current: str) -> str:
+    """Which theme one press moves to. Total in the way `next_project_order` is, and for the
+    same reason: the palette may have left the app on a built-in this file will not store, and
+    a press from there must land somewhere this file *will*."""
+    index = THEMES.index(current) if current in THEMES else -1
+    return THEMES[(index + 1) % len(THEMES)]
 
 
 def _read_all(path: Path | None) -> dict[str, object]:

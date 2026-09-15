@@ -36,6 +36,7 @@ from __future__ import annotations
 import asyncio
 from dataclasses import replace
 from datetime import UTC, datetime
+from pathlib import Path
 
 from backends import FakeHostRemoteControl, SessionUseCaseDouble, backend_for
 from textual.widgets import OptionList
@@ -149,6 +150,7 @@ def _context(
     *,
     host_remote_control: object | None = None,
     claude_default: object | None = None,
+    preferences_path: Path | None = None,
 ) -> TuiContext:
     """A surface wired with whichever of the two settings capabilities a test is about.
 
@@ -167,6 +169,7 @@ def _context(
         backend=replace(backend, claude_remote_control_default=claude_default),
         profiles=(ProfileAvailability("claude", True),),
         attach_argv=lambda session_id: ("tmux", "attach-session", "-t", f"={session_id}"),
+        preferences_path=preferences_path,
     )
 
 
@@ -621,3 +624,140 @@ async def test_a_write_that_raises_tells_the_owner_and_keeps_the_surface() -> No
     assert not any("was not changed" in line for line in said), (
         f"the write may have landed; only the read-back is known to have failed: {said}"
     )
+
+
+# --- The two preference rows ----------------------------------------------------------------
+#
+# Found by title and reached by walking the cursor, never by index. A later task inserts the
+# Claude limits-source row *between* the provider rows and these two, and a test that pressed
+# "down down enter" would then act on a different row while staying green.
+
+
+async def _press_row(app: RemoteAgentsTui, pilot, title: str) -> None:
+    """Move the cursor onto the row naming `title` and press it."""
+    choices = app.screen.query_one("#choices", OptionList)
+    target = next(
+        index
+        for index in range(choices.option_count)
+        if title in str(choices.get_option_at_index(index).prompt)
+    )
+    while (choices.highlighted or 0) != target:
+        await pilot.press("down" if (choices.highlighted or 0) < target else "up")
+        await pilot.pause()
+    await pilot.press("enter")
+    await pilot.pause()
+
+
+async def test_the_theme_row_flips_the_app_theme_and_remembers_it(tmp_path: Path) -> None:
+    """The row is the switch; the signal the app already subscribes to is what stores it."""
+    from remote_agents.adapters.tui.preferences import THEME_LABELS, THEME_TITLE, read_theme
+
+    path = tmp_path / "preferences.json"
+    app = RemoteAgentsTui(_context(preferences_path=path))
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await _open_settings(app, pilot)
+        assert THEME_LABELS["relay-night"] in _row(app, THEME_TITLE)
+
+        await _press_row(app, pilot, THEME_TITLE)
+
+        assert app.theme == "relay-day"
+        assert read_theme(path) == "relay-day"
+        assert THEME_LABELS["relay-day"] in _row(app, THEME_TITLE)
+
+
+async def test_a_second_press_returns_the_theme_row_to_where_it_started(tmp_path: Path) -> None:
+    from remote_agents.adapters.tui.preferences import THEME_TITLE, read_theme
+
+    path = tmp_path / "preferences.json"
+    app = RemoteAgentsTui(_context(preferences_path=path))
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await _open_settings(app, pilot)
+        await _press_row(app, pilot, THEME_TITLE)
+        await _press_row(app, pilot, THEME_TITLE)
+
+        assert app.theme == "relay-night"
+        assert read_theme(path) == "relay-night"
+
+
+async def test_the_project_order_row_flips_the_file_and_the_launch_picker(tmp_path: Path) -> None:
+    """The order is app state and the list re-sorts on the next draw, so this asserts both:
+    what the file now says, and what the projects position draws when it is returned to."""
+    from remote_agents.adapters.tui.preferences import (
+        ALPHABETICAL,
+        PROJECT_ORDER_LABELS,
+        PROJECT_ORDER_TITLE,
+        read_project_order,
+    )
+
+    path = tmp_path / "preferences.json"
+    app = RemoteAgentsTui(_context(preferences_path=path))
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await _open_settings(app, pilot)
+
+        await _press_row(app, pilot, PROJECT_ORDER_TITLE)
+
+        assert read_project_order(path) == ALPHABETICAL
+        assert PROJECT_ORDER_LABELS[ALPHABETICAL] in _row(app, PROJECT_ORDER_TITLE)
+        # The picker's own title is drawn from the same table, so backing out of Settings shows
+        # the order the row just chose rather than the one the app started in.
+        await pilot.press("escape")
+        await pilot.pause()
+        assert app._project_order == ALPHABETICAL
+
+
+async def test_a_preference_row_press_leaves_the_cursor_on_the_order_row_it_pressed(
+    tmp_path: Path,
+) -> None:
+    """DEC-052/DEC-062's hazard, on the two rows that redraw the whole list: a cursor that
+    sprang back to row 0 would mean a second Enter changed a different setting."""
+    from remote_agents.adapters.tui.preferences import PROJECT_ORDER_TITLE
+
+    path = tmp_path / "preferences.json"
+    app = RemoteAgentsTui(_context(preferences_path=path))
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await _open_settings(app, pilot)
+        await _press_row(app, pilot, PROJECT_ORDER_TITLE)
+
+        choices = app.screen.query_one("#choices", OptionList)
+        resting = str(choices.get_option_at_index(choices.highlighted or 0).prompt)
+        assert PROJECT_ORDER_TITLE in resting, resting
+
+
+async def test_a_theme_the_file_refuses_to_remember_says_so_rather_than_claiming_it_stored(
+    tmp_path: Path,
+) -> None:
+    """A host with no preferences path switches exactly like one that has it and forgets
+    between runs -- so the *change* is real and only the memory of it failed, which is a
+    different sentence from the Claude row's "it is still off"."""
+    from remote_agents.adapters.tui.preferences import THEME_LABELS, THEME_TITLE
+
+    app = RemoteAgentsTui(_context(preferences_path=None))
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await _open_settings(app, pilot)
+        await _press_row(app, pilot, THEME_TITLE)
+
+        assert app.theme == "relay-day"
+        said = " ".join(announcements(app))
+        assert THEME_LABELS["relay-day"] in said, said
+        assert "remember" in said.lower(), said
+
+
+async def test_the_screen_draws_four_rows_in_the_declared_order(tmp_path: Path) -> None:
+    """The set of rows, swept from the screen's own id table rather than counted here, so this
+    keeps agreeing with the screen when a later task adds the limits-source row between them."""
+    from remote_agents.adapters.tui.screens import settings as module
+
+    path = tmp_path / "preferences.json"
+    app = RemoteAgentsTui(_context(preferences_path=path))
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await _open_settings(app, pilot)
+        choices = app.screen.query_one("#choices", OptionList)
+        drawn = [choices.get_option_at_index(i).id for i in range(choices.option_count)]
+
+        assert drawn == list(module.SETTINGS_ROWS)

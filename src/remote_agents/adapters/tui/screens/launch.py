@@ -45,7 +45,11 @@ from textual.timer import Timer
 from textual.widgets import Input, OptionList
 
 from remote_agents.adapters.tui.model import _BACK, LaunchSelection
-from remote_agents.adapters.tui.preferences import ALPHABETICAL, RECENCY
+from remote_agents.adapters.tui.preferences import (
+    ALPHABETICAL,
+    PROJECT_ORDER_LABELS,
+    RECENCY,
+)
 from remote_agents.adapters.tui.rows import project_row_content
 from remote_agents.adapters.tui.screens.base import (
     NEVER_EMPTY,
@@ -62,10 +66,12 @@ _ORDER_SENTENCE = {
 }
 
 #: The pane title's hint for each order -- `Projects · recent first · o toggles order`.
-_ORDER_TITLE = {
-    RECENCY: "recent first",
-    ALPHABETICAL: "a–z",
-}
+#:
+#: The table moved to `preferences.py` when Settings grew a row saying the same words, and this
+#: name is kept as the alias rather than replaced at its twenty-odd call sites: what the pane
+#: calls an order and what the row calls it are now one object, so DEC-043 is satisfied by
+#: identity instead of by two tables agreeing.
+_ORDER_TITLE = PROJECT_ORDER_LABELS
 
 PROJECTS_HINT = "enter choose · / filter · o order"
 """The keymap under the status on the projects positions."""

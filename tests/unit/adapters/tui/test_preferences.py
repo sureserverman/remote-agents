@@ -299,3 +299,58 @@ def test_the_preference_names_match_the_registered_themes() -> None:
     from remote_agents.adapters.tui.theme import THEMES as REGISTERED
 
     assert THEMES == RELAY_THEMES == tuple(theme.name for theme in REGISTERED)
+
+
+# The words the Settings rows say, and the cycles they walk -----------------------------------
+
+
+def test_every_order_and_theme_has_a_word_for_its_row() -> None:
+    """A value with no label is a row that renders a KeyError, so the tables are pinned to
+    the value tuples rather than spot-checked."""
+    from remote_agents.adapters.tui.preferences import (
+        PROJECT_ORDER_LABELS,
+        PROJECT_ORDERS,
+        THEME_LABELS,
+        THEMES,
+    )
+
+    assert set(PROJECT_ORDER_LABELS) == set(PROJECT_ORDERS)
+    assert set(THEME_LABELS) == set(THEMES)
+
+
+def test_the_projects_pane_title_says_what_the_settings_order_row_says() -> None:
+    """One table, two renderers. `screens/launch.py` drew these words first; a second copy
+    beside the values would be free to stop agreeing with the pane (DEC-043)."""
+    from remote_agents.adapters.tui.preferences import PROJECT_ORDER_LABELS
+    from remote_agents.adapters.tui.screens.launch import _ORDER_TITLE
+
+    assert _ORDER_TITLE is PROJECT_ORDER_LABELS
+
+
+def test_one_press_reaches_the_other_order_and_a_second_returns() -> None:
+    from remote_agents.adapters.tui.preferences import next_project_order
+
+    assert next_project_order(RECENCY) == ALPHABETICAL
+    assert next_project_order(ALPHABETICAL) == RECENCY
+
+
+def test_one_press_reaches_the_other_theme_and_a_second_returns() -> None:
+    from remote_agents.adapters.tui.preferences import next_theme
+
+    assert next_theme("relay-night") == "relay-day"
+    assert next_theme("relay-day") == "relay-night"
+
+
+def test_advancing_from_an_order_or_theme_this_surface_does_not_know_lands_on_the_default() -> None:
+    """Total like the readers beside them, and answering what a read would have answered: a
+    file carrying a later version's order is reported as the default, so a press from that
+    state must not be the one place the unknown value survives."""
+    from remote_agents.adapters.tui.preferences import (
+        DEFAULT_PROJECT_ORDER,
+        DEFAULT_THEME,
+        next_project_order,
+        next_theme,
+    )
+
+    assert next_project_order("by-size") == DEFAULT_PROJECT_ORDER
+    assert next_theme("solarized") == DEFAULT_THEME
