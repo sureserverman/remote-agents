@@ -23,7 +23,10 @@ from remote_agents.application.host_remote_control import HOST_REMOTE_CONTROL_LA
 from remote_agents.application.remote_control_default import (
     REMOTE_CONTROL_DEFAULT_LABELS,
     REMOTE_CONTROL_DEFAULT_TITLE,
+    UNAVAILABLE,
     next_remote_control_default,
+    remote_control_default_line,
+    remote_control_default_word,
 )
 from remote_agents.domain.remote_control import RemoteControlDefault
 
@@ -124,3 +127,31 @@ def test_this_table_is_not_the_host_direction_table() -> None:
         "one table is keyed by three stored states and the other by two directions; equal key "
         "sets would mean one of them has been made to stand in for the other"
     )
+
+
+@pytest.mark.parametrize("state", EVERY_STATE)
+def test_the_row_says_the_word_this_table_chose_for_the_state(state: RemoteControlDefault) -> None:
+    """The row and the outcome line are one lookup, and this is the table it reaches.
+
+    Asserted against `REMOTE_CONTROL_DEFAULT_LABELS` rather than against three literals, because
+    the property worth pinning is that the sentence the owner reads is spelled by the table above
+    it -- a row that had its own copy of the words would be free to stop agreeing with the state
+    a press just stored.
+    """
+    assert remote_control_default_word(state) == REMOTE_CONTROL_DEFAULT_LABELS[state]
+    assert (
+        remote_control_default_line(state)
+        == f"{REMOTE_CONTROL_DEFAULT_TITLE} · {REMOTE_CONTROL_DEFAULT_LABELS[state]}"
+    )
+
+
+def test_an_unwired_default_says_unavailable_rather_than_guessing_a_state() -> None:
+    """DEC-009/DEC-061: a declared absence is a reading, so the row is drawn and states it.
+
+    `None` must not borrow one of the three words: a composition with no Claude provider wired
+    has no default to offer, and a row saying `off` there would be a claim about the machine
+    that nothing measured.
+    """
+    assert remote_control_default_word(None) == UNAVAILABLE
+    assert remote_control_default_line(None) == f"{REMOTE_CONTROL_DEFAULT_TITLE} · {UNAVAILABLE}"
+    assert UNAVAILABLE not in REMOTE_CONTROL_DEFAULT_LABELS.values()

@@ -66,6 +66,12 @@ from remote_agents.application.host_remote_control import (
     pair_available,
 )
 from remote_agents.application.project_catalog import CatalogProject
+
+# The same word this pane's reading has always used, kept under its old private name so the
+# rest of this module reads unchanged. It is defined in `application/` because the settings
+# screen's Claude row says it too, and both driver adapters draw that row -- two literals
+# would make the two rows agree on the word instead of sharing it.
+from remote_agents.application.remote_control_default import UNAVAILABLE as _HOST_UNAVAILABLE
 from remote_agents.application.session_views import LimitRow, limit_rows, session_row_parts
 from remote_agents.domain.models import ProfileId, SessionRecord
 from remote_agents.domain.remote_control import (
@@ -220,12 +226,6 @@ _HOST_AMBIGUOUS_REMEDY: dict[HostConnection, str] = {
         "PATH, then press again."
     ),
 }
-
-#: What a host that wired no toggle at all reads as. A declared absence is a reading
-#: (DEC-009/DEC-061), so the line is drawn and says this rather than being left out -- a
-#: missing line is indistinguishable from a surface that forgot to draw one.
-_HOST_UNAVAILABLE = "unavailable"
-
 
 #: The sentence behind each reading, for the screens that have room for one.
 #:

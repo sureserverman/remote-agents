@@ -79,3 +79,42 @@ def next_remote_control_default(current: RemoteControlDefault) -> RemoteControlD
             f"one of {[member.value for member in RemoteControlDefault]}"
         ) from None
     return _CYCLE[(position + 1) % len(_CYCLE)]
+
+
+#: What a capability nobody wired reads as -- a host that wired no toggle at all, or a
+#: composition with no Claude provider. A declared absence is a reading (DEC-009/DEC-061), so
+#: the line is drawn and says this rather than being left out -- a missing line is
+#: indistinguishable from a surface that forgot to draw one.
+#:
+#: Public, and here rather than in either renderer, because *both* rows of the settings screen
+#: say it: the Claude row below reaches it directly, and the dashboard imports it back as
+#: `_HOST_UNAVAILABLE` for the Codex reading it draws on the limits pane. The two rows say the
+#: word by identity, and two literals that happened to match would quietly downgrade that to an
+#: agreement -- which is the drift DEC-007 exists to end, one object later.
+UNAVAILABLE = "unavailable"
+
+
+def remote_control_default_word(value: RemoteControlDefault | None) -> str:
+    """What the Claude row's state is called -- one word for the row and for the outcome line.
+
+    Split out because the two sentences that need it must not be able to disagree: the row says
+    `Claude Remote Control · on` and the status line after a press says `Claude Remote Control
+    is now on`, and a second lookup is a second chance for one of them to spell a state the
+    other does not.
+    """
+    return UNAVAILABLE if value is None else REMOTE_CONTROL_DEFAULT_LABELS[value]
+
+
+def remote_control_default_line(value: RemoteControlDefault | None) -> str:
+    """The Claude row, for a stored default or for a capability nobody wired.
+
+    Module-level and named, for the reason `host_remote_control_line` is: all four readings can
+    then be checked without driving a Textual app to reach each one, and the separator and
+    shape stay identical to the row underneath it -- two rows on one screen that formatted
+    their values differently would read as two unrelated facts.
+
+    `None` is *unavailable* rather than an omitted row or a guessed state (DEC-009/DEC-061): a
+    composition with no Claude provider wired has no default to offer, and a missing row is
+    indistinguishable from a surface that forgot to draw one.
+    """
+    return f"{REMOTE_CONTROL_DEFAULT_TITLE} · {remote_control_default_word(value)}"

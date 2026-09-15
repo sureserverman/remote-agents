@@ -22,9 +22,13 @@ session on the host, including one started by hand at the keyboard, because the 
 the one Claude itself resolves at startup. The narrower claim was found by the Stage 3 gate's
 evaluator, which was right about the code as it stood then.
 
-**Every word on both rows is the application's.** `REMOTE_CONTROL_DEFAULT_TITLE` and
-`REMOTE_CONTROL_DEFAULT_LABELS` spell the Claude row, `HOST_REMOTE_CONTROL_TITLE` and
-`host_remote_control_line` spell the Codex one, and the bot's `/settings` screen renders the
+**Every word on both rows is the application's, and so is the Claude row's renderer.**
+`REMOTE_CONTROL_DEFAULT_TITLE` and `REMOTE_CONTROL_DEFAULT_LABELS` spell the Claude row and
+`remote_control_default_line` assembles it -- all three in
+`application/remote_control_default.py`, not here, because the bot's `/settings` screen renders
+that same row and `tests/architecture/check_imports.py` confines each driver adapter to its own
+subtree, so a line the bot must also draw cannot live in the terminal's. `HOST_REMOTE_CONTROL_TITLE`
+and `host_remote_control_line` spell the Codex one, and the bot's `/settings` screen renders the
 same two rows from the same tables. That is DEC-007's point rather than a tidiness preference:
 two surfaces that *agreed* about a wording would be free to stop agreeing, and this row's
 vocabulary is the one place in the project where a wrong word is acted on by not acting --
@@ -61,19 +65,20 @@ from remote_agents.adapters.tui.screens.confirm import HostRemoteControlConfirmM
 # six words, the remedy sentences and the longer explanations. A second copy in this file would
 # be the second renderer DEC-043 exists to prevent, and the one that would drift is this one --
 # it is the screen an owner reaches exactly when the reading is one they cannot act on
-# confidently. `_HOST_UNAVAILABLE` comes across for the same reason: both rows on this screen
-# say the same word for a capability nobody wired, by identity rather than by agreement.
+# confidently. The word both rows use for a capability nobody wired is not among them: it is
+# `UNAVAILABLE` in `application/`, which the dashboard imports too, so the two rows still say it
+# by identity rather than by agreement.
 from remote_agents.adapters.tui.screens.dashboard import (
     _HOST_AMBIGUOUS_REMEDY,
     _HOST_CONNECTION_EXPLANATIONS,
-    _HOST_UNAVAILABLE,
     host_remote_control_line,
 )
 from remote_agents.application.host_remote_control import host_remote_control_directions
 from remote_agents.application.remote_control_default import (
-    REMOTE_CONTROL_DEFAULT_LABELS,
     REMOTE_CONTROL_DEFAULT_TITLE,
     next_remote_control_default,
+    remote_control_default_line,
+    remote_control_default_word,
 )
 from remote_agents.domain.remote_control import HostRemoteControlStatus, RemoteControlDefault
 
@@ -92,32 +97,6 @@ Not "choose a setting": the rows are the settings, and what the owner needs to k
 Enter *acts* here rather than opening something -- this is the only position in the surface
 where a row changes a fact about the machine without navigating anywhere.
 """
-
-
-def remote_control_default_word(value: RemoteControlDefault | None) -> str:
-    """What the Claude row's state is called -- one word for the row and for the outcome line.
-
-    Split out because the two sentences that need it must not be able to disagree: the row says
-    `Claude Remote Control · on` and the status line after a press says `Claude Remote Control
-    is now on`, and a second lookup is a second chance for one of them to spell a state the
-    other does not.
-    """
-    return _HOST_UNAVAILABLE if value is None else REMOTE_CONTROL_DEFAULT_LABELS[value]
-
-
-def remote_control_default_line(value: RemoteControlDefault | None) -> str:
-    """The Claude row, for a stored default or for a capability nobody wired.
-
-    Module-level and named, for the reason `host_remote_control_line` is: all four readings can
-    then be checked without driving a Textual app to reach each one, and the separator and
-    shape stay identical to the row underneath it -- two rows on one screen that formatted
-    their values differently would read as two unrelated facts.
-
-    `None` is *unavailable* rather than an omitted row or a guessed state (DEC-009/DEC-061): a
-    composition with no Claude provider wired has no default to offer, and a missing row is
-    indistinguishable from a surface that forgot to draw one.
-    """
-    return f"{REMOTE_CONTROL_DEFAULT_TITLE} · {remote_control_default_word(value)}"
 
 
 class SettingsScreen(ChoiceScreen):

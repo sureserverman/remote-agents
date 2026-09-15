@@ -52,16 +52,14 @@ from remote_agents.adapters.tui.screens.dashboard import (
     DashboardScreen,
     host_remote_control_line,
 )
-from remote_agents.adapters.tui.screens.settings import (
-    SettingsScreen,
-    remote_control_default_line,
-)
+from remote_agents.adapters.tui.screens.settings import SettingsScreen
 from remote_agents.application.host_remote_control import HOST_REMOTE_CONTROL_TITLE
 from remote_agents.application.profiles import ProfileAvailability
 from remote_agents.application.project_catalog import CatalogProject
 from remote_agents.application.remote_control_default import (
     REMOTE_CONTROL_DEFAULT_LABELS,
     REMOTE_CONTROL_DEFAULT_TITLE,
+    remote_control_default_line,
 )
 from remote_agents.domain.models import (
     ProfileId,
