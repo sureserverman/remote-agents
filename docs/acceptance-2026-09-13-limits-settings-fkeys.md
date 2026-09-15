@@ -47,3 +47,97 @@ subcommand, so the console-script leg ran through this checkout's own
 release sub-plan re-measures through the installed script after `remote-agents upgrade`.
 
 ---
+
+## Section 2 — Settings: five rows in the terminal, three on the bot (Sub-plan 02, Task 3.2)
+
+Measured 2026-09-15 on the owner's host, branch `settings-and-limits-pane`, against the real
+composition root — `local_context` over the owner's own `config.toml`, settings file and Codex
+daemon. No fixture, no fake port: what each row reads below is what this machine answered.
+
+### The terminal, five rows
+
+Driven through the surface itself by `tests/live/test_tui_parity.py::test_the_terminal_shows_five_settings_rows`
+(`REMOTE_AGENTS_LIVE_ACCEPTANCE=1`, run alone): press the Settings key, wait for the position,
+read the rows the screen drew.
+
+```
+Claude Remote Control · on
+Codex Remote Control · on
+Claude limits source · status line
+Theme · night
+Project order · recent first
+```
+
+The test asserts the drawn row ids equal `SettingsScreen.SETTINGS_ROWS` and that there are five
+of them. It deliberately asserts **nothing about the readings**: what each row says depends on
+this host's settings file, its daemon and its `config.toml`, and a check that pinned those would
+fail on a machine whose owner had simply changed one.
+
+**What this adds over `SETTINGS.svg`.** The committed baseline proves the screen *renders* five
+rows against hand-written fakes at a pinned size and theme. This proves the composition root
+**wires** them. A capability the root forgot would read *unavailable* in production and still
+match its baseline perfectly, because the baseline's fixture wires it by hand — which is not
+hypothetical: Stage 3 found exactly that on the dashboard's own copy of the Claude Remote
+Control row, where six committed baselines had been photographing a fixture.
+
+### The bot, three rows
+
+Rendered from the same `local_context` backend through `PrivateBotBoundary._settings_screen()`
+(no network; the screen is a pure render).
+
+```
+Settings
+
+Remote Control for this machine, one row per provider, and where Claude's plan limits are
+read from. Each row is its own setting, so changing one says nothing about the others.
+
+[ Claude Remote Control: on ]
+[ Codex Remote Control: on ]
+[ Claude limits source: status line ]
+[ ‹ Back to sessions ]
+```
+
+The three shared rows agree with the terminal's, reading the same ports through the same
+`application/` tables (DEC-007). Theme and project order are absent by decision: the bot has one
+project order (DEC-053) and a phone has no theme this project chooses.
+
+### Two asymmetries between the surfaces, both deliberate
+
+1. **An unwired capability.** On Settings, both surfaces name the absence — the terminal draws
+   `· unavailable`, the bot writes *"… is unavailable."* in the text rather than offering a dead
+   button. On the **sessions list**, the bot's Claude line simply does not appear, matching the
+   Codex line beside it: Settings is opened to be told what this machine can do, and the sessions
+   list is not. Consequence, recorded because it makes a phrase in the plan dead text: no path
+   through `service.py` renders the word *unavailable* for this row.
+2. **Row width.** The limits pane truncates. Measured against a 28-cell pane: `· on` is 26 cells
+   and `· off` 27, so both decisive states fit; `· unavailable` (35) and `· Claude's default`
+   (40) do not. On the **dashboard** the limits pane is the narrow right-hand column, so
+   `Claude's default` truncates there even at 100 columns — visible in `DASHBOARD.svg`. Only the
+   dedicated `LIMITS_PANE` screen shows it in full. Shortening the words cannot fix it: it is the
+   21-cell title that fills the pane, so this is a wording decision for a later task rather than
+   a defect.
+
+### ACTION NEEDED — the owner has not looked at `SETTINGS.svg`
+
+`tests/unit/adapters/tui/snapshots/SETTINGS.svg` is committed and the suite compares against it
+forever, but a baseline is only worth what the first reading of it was worth. **Nobody has yet
+opened this one and confirmed it shows what the screen should show.** Until that happens it
+pins the render that existed when it was captured, which is not the same claim.
+
+Its text content, for the record:
+
+```
+remote-agents        Projects › dashboard › Settings
+Press enter on a row to change it.
+Claude Remote Control · Claude's default
+Codex Remote Control · on
+Claude limits source · usage API (reads your Claude credential, calls Anthropic)
+Theme · night
+Project order · recent first
+^q quit  esc back  ^r refresh  ^n add project  ^s sessions  ^o resume ▏^p palette
+```
+
+The fixture states differ from the live readings above on purpose: `PROVIDER_DEFAULT` is the
+state an untouched host rests in, and `usage-api` is the *long* label, chosen so the capture
+settles whether the credential-and-outbound-call warning survives the render. It does, uncut, in
+79 of the pinned 100 columns.

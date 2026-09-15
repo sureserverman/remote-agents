@@ -50,6 +50,8 @@ from remote_agents.adapters.tmux.codec import attach_argv
 from remote_agents.adapters.tmux.runtime import TmuxTerminal
 from remote_agents.adapters.tui.app import RemoteAgentsTui
 from remote_agents.adapters.tui.model import _BACK, _EMPTY
+from remote_agents.adapters.tui.screens.dashboard import SETTINGS_KEY
+from remote_agents.adapters.tui.screens.settings import SETTINGS_ROWS
 from remote_agents.application.commands import ForceStopCommand, LaunchCommand
 from remote_agents.application.project_catalog import CatalogProject
 from remote_agents.application.services import SessionService
@@ -416,6 +418,65 @@ async def test_the_terminal_offers_only_resume_capable_agents_without_resuming_a
         )
         if not capable:
             assert _EMPTY in rows, "an unresumable host must say so rather than render nothing"
+    finally:
+        harness.close()
+
+
+@pytest.mark.live_acceptance
+async def test_the_terminal_shows_five_settings_rows(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Open Settings on the real surface and count what it offers.
+
+    **The one live check this sub-plan owns, and the cheapest in the file: it starts no
+    session.** Every other test here launches a real agent because what it proves is about a
+    session; this one proves something about the *machine*, and the five rows are five
+    readings of this host -- the two providers' Remote Control, where Claude's limits come
+    from, and the two preferences this terminal keeps. Nothing needs to be running for any of
+    them to be true, so nothing is started and there is nothing to retire.
+
+    **What it adds over the committed `SETTINGS.svg`.** That baseline is captured against
+    hand-written fakes at a pinned size with a pinned theme; it proves the screen *renders*
+    five rows. This proves the composition root **wires** them -- `local_context` on a real
+    host, reading the owner's real provider files through the real ports, with whatever any of
+    them happens to answer today. A row the composition forgot would read *unavailable* in
+    production and match its baseline perfectly, because the baseline's fixture wires it by
+    hand. That is exactly the gap the Stage 3 snapshot work found on the dashboard's own copy
+    of one of these rows, so it is not a hypothetical.
+
+    **Counted against the screen's own declaration, never against a literal five.** A test
+    spelling the number would have to be edited in step with the screen and would pass on a
+    screen that drew the wrong five. `SETTINGS_ROWS` is what the screen builds from, so a row
+    the composition drops is a row missing from the render and present in the tuple.
+
+    The readings themselves are deliberately not asserted. What each row says depends on this
+    host's settings file, its Codex daemon and its `config.toml`, and a live check that pinned
+    those would fail on a machine whose owner had simply changed one.
+    """
+    harness = _harness(tmp_path, monkeypatch)
+    app = harness.app
+    try:
+        async with app.run_test() as pilot:
+            await pilot.press(SETTINGS_KEY)
+            await _until(
+                pilot,
+                lambda: position(app) == "SETTINGS" and _rows(app),
+                "opened the Settings position",
+            )
+            drawn = _rows(app)
+            lines = [
+                str(app.screen.query_one("#choices", OptionList).get_option_at_index(index).prompt)
+                for index in range(len(drawn))
+            ]
+
+        assert drawn == list(SETTINGS_ROWS), (
+            f"the composed surface drew {drawn}, and the screen declares {list(SETTINGS_ROWS)}"
+        )
+        assert len(drawn) == 5, drawn
+        # Printed rather than asserted: what each row reads is this host's business, and the
+        # acceptance document quotes this output rather than a fixture's.
+        for line in lines:
+            print(f"  {line}")
     finally:
         harness.close()
 
