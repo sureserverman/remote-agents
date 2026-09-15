@@ -502,3 +502,192 @@ async def test_f12_unwinds_to_the_projects_position() -> None:
 
         assert position(app) == home, f"F12 landed on {position(app)}"
         assert len(app.screen_stack) == 1
+
+
+# --- Task 1.2: Settings and help --------------------------------------------------------
+
+
+def _surfaces() -> list[type[RemoteAgentsTui]]:
+    """The four console pane surfaces and the standalone terminal -- every process F2 runs in."""
+    from remote_agents.adapters.tui.panes import LimitsPane
+
+    return [RemoteAgentsTui, ProjectsPane, SessionsPane, LimitsPane, FeedPane]
+
+
+async def test_f2_opens_the_five_row_settings_screen_from_every_surface() -> None:
+    """One key, five processes, the same five rows -- the pane that had no route (BL-057) has F2."""
+    from textual.widgets import OptionList
+
+    from remote_agents.adapters.tui.screens.settings import SETTINGS_ROWS, SettingsScreen
+
+    for surface in _surfaces():
+        app = surface(_context(_Listing(())))
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            await pilot.press("f2")
+            await pilot.pause()
+
+            assert isinstance(app.screen, SettingsScreen), (
+                f"F2 on {surface.__name__} left us on {type(app.screen).__name__}"
+            )
+            choices = app.screen.query_one("#choices", OptionList)
+            drawn = [choices.get_option_at_index(index).id for index in range(choices.option_count)]
+            assert drawn == list(SETTINGS_ROWS), f"{surface.__name__} drew {drawn}"
+            assert len(drawn) == 5
+
+            await pilot.press("escape")
+            await pilot.pause()
+            assert not isinstance(app.screen, SettingsScreen), (
+                f"escape did not leave Settings on {surface.__name__}"
+            )
+
+
+async def test_f2_on_a_name_step_with_text_typed_is_refused_and_the_text_survives() -> None:
+    """Guarded as a flow jump: `None` while work is in flight, so the key is drawn, greyed, inert."""
+    from textual.widgets import Input
+
+    from remote_agents.adapters.tui.screens.project import NameScreen
+    from remote_agents.adapters.tui.screens.settings import SettingsScreen
+
+    app = RemoteAgentsTui(_context(_Listing(())))
+    async with app.run_test(size=(120, 30)) as pilot:
+        await pilot.pause()
+        await app.push_screen(NameScreen("infra"))
+        await pilot.pause()
+        entry = app.screen.query_one("#filter", Input)
+        entry.focus()
+        await pilot.press(*"nightly")
+        await pilot.pause()
+        assert entry.value == "nightly", "the fixture never typed anything"
+        assert app.check_action("settings", ()) is None
+
+        await pilot.press("f2")
+        await pilot.pause()
+
+        assert isinstance(app.screen, NameScreen), "F2 left the name step with text half-typed"
+        assert not isinstance(app.screen, SettingsScreen)
+        assert app.screen.query_one("#filter", Input).value == "nightly"
+
+
+async def test_f2_is_not_offered_behind_a_modal_and_does_nothing_there() -> None:
+    """A modal is one question awaiting an answer; F2 is `False` there, not `None`."""
+    from remote_agents.adapters.tui.screens.settings import SettingsScreen
+
+    app = RemoteAgentsTui(_context(_Listing(())))
+    async with app.run_test(size=(120, 30)) as pilot:
+        await pilot.pause()
+        await app.push_screen(ForceConfirmModal("Stop it?"))
+        await pilot.pause()
+
+        assert app.check_action("settings", ()) is False
+        await pilot.press("f2")
+        await pilot.pause()
+        still_asking = isinstance(app.screen, ForceConfirmModal)
+        opened = any(isinstance(screen, SettingsScreen) for screen in app.screen_stack)
+
+        await pilot.press("escape")
+        await pilot.pause()
+
+    assert still_asking, "F2 dismissed or covered the question"
+    assert not opened
+
+
+async def test_f1_opens_the_help_panel_on_the_projects_pane_and_question_mark_is_filter_text() -> (
+    None
+):
+    """F1 is never text, so it works from inside the filter; `?` is a character there.
+
+    The pane rests on its list and `/` moves the keyboard into the filter -- the same route
+    `test_the_settings_key_is_text_inside_the_projects_filter` takes for `,`.
+    """
+    from textual.widgets import HelpPanel, Input
+
+    app = ProjectsPane(_context(_Listing(())))
+    async with app.run_test(size=(120, 30)) as pilot:
+        await pilot.pause()
+        await pilot.press("slash")
+        await pilot.pause()
+        assert isinstance(app.focused, Input), "fixture: `/` did not reach the filter"
+
+        await pilot.press("question_mark")
+        await pilot.pause()
+        assert app.screen.query_one("#filter", Input).value == "?"
+        assert not app.screen.query(HelpPanel), "`?` opened help from inside the filter"
+
+        await pilot.press("f1")
+        await pilot.pause()
+        assert app.screen.query(HelpPanel), "F1 did not open the help panel"
+        assert app.screen.query_one("#filter", Input).value == "?", "F1 touched the filter text"
+
+
+async def test_question_mark_on_the_sessions_pane_opens_the_help_panel() -> None:
+    """Where no `Input` is focused the bare key is the help key, as in htop and less."""
+    from textual.widgets import HelpPanel
+
+    app = SessionsPane(_context(_Listing(())))
+    async with app.run_test(size=(120, 30)) as pilot:
+        await pilot.pause()
+
+        await pilot.press("question_mark")
+        await pilot.pause()
+
+        assert app.screen.query(HelpPanel), "`?` did not open the help panel"
+
+
+async def test_f1_pressed_again_closes_the_help_panel() -> None:
+    """A toggle, because the panel takes a third of the screen and escape is spoken for."""
+    from textual.widgets import HelpPanel
+
+    app = SessionsPane(_context(_Listing(())))
+    async with app.run_test(size=(120, 30)) as pilot:
+        await pilot.pause()
+        await pilot.press("f1")
+        await pilot.pause()
+        assert app.screen.query(HelpPanel)
+
+        await pilot.press("f1")
+        await pilot.pause()
+
+        assert not app.screen.query(HelpPanel), "the second F1 left the panel up"
+
+
+async def test_the_help_panel_lists_the_f_keys_by_the_table_s_labels() -> None:
+    """What the panel lists is the footer's set, so the labels are `FUNCTION_KEYS`' own."""
+    from textual.widgets import HelpPanel
+
+    app = SessionsPane(_context(_Listing(())))
+    async with app.run_test(size=(120, 30)) as pilot:
+        await pilot.pause()
+        await pilot.press("f1")
+        await pilot.pause()
+        assert app.screen.query(HelpPanel)
+        active = app.screen.active_bindings
+
+        for entry in FUNCTION_KEYS:
+            if entry.key not in active:
+                continue  # hidden where the position refuses it, which is the footer's rule too
+            assert active[entry.key].binding.description == entry.label, (
+                f"{entry.key} is listed as {active[entry.key].binding.description!r}"
+            )
+        assert {"f1", "f2", "f5", "f10"} <= set(active), sorted(active)
+
+
+async def test_help_is_not_offered_behind_a_modal() -> None:
+    from textual.widgets import HelpPanel
+
+    app = RemoteAgentsTui(_context(_Listing(())))
+    async with app.run_test(size=(120, 30)) as pilot:
+        await pilot.pause()
+        await app.push_screen(ForceConfirmModal("Stop it?"))
+        await pilot.pause()
+
+        assert app.check_action("help", ()) is False
+        await pilot.press("f1")
+        await pilot.press("question_mark")
+        await pilot.pause()
+        opened = bool(app.screen.query(HelpPanel))
+
+        await pilot.press("escape")
+        await pilot.pause()
+
+    assert not opened

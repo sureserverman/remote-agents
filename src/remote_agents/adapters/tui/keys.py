@@ -80,7 +80,7 @@ class FunctionKey(NamedTuple):
 
 #: The F-key row, owner-validated. F1-F10 and F12; F11 deliberately not here.
 FUNCTION_KEYS: tuple[FunctionKey, ...] = (
-    FunctionKey("f1", "show_help_panel", "help", "htop, mc"),
+    FunctionKey("f1", "help", "help", "htop, mc"),
     FunctionKey("f2", "settings", "settings", "htop Setup"),
     FunctionKey("f3", "session_key('inspect')", "inspect", "mc View"),
     FunctionKey("f4", "session_key('detail')", "detail", "mc Edit"),

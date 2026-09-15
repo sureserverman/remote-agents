@@ -14,10 +14,12 @@ from textual import events, work
 from textual.app import App, ScreenStackError
 from textual.binding import Binding
 from textual.content import Content
+from textual.css.query import NoMatches
 from textual.notifications import SeverityLevel
 from textual.screen import ModalScreen, Screen
 from textual.theme import Theme
 from textual.timer import Timer
+from textual.widgets import HelpPanel, Input
 from textual.worker import WorkerCancelled, WorkerFailed
 
 from remote_agents.adapters.tui.context import TuiContext
@@ -340,6 +342,13 @@ class RemoteAgentsTui(App[AttachRequest | None]):
         # through `action_session_key`, which awaits no modal on this pump: its stops post to
         # the screen exactly as the chords do (DEC-025, DEC-068).
         *function_key_bindings(),
+        # `?` beside F1, as htop and less have it. **Not `priority=True`**, for the reason `,`
+        # is not: it is printable, so a focused `Input` must take it as text -- and Textual
+        # hands a focused `Input` every printable key before a non-priority binding sees it.
+        # Its own action rather than `help`'s, because `check_action` cannot tell which key
+        # asked for an action, and F1 must stay offered inside the filter while `?` is refused
+        # there. Hidden: the footer draws F1 for the same act.
+        Binding("question_mark", "bare_help", "help", show=False),
     ]
 
     #: Which app-level flows this surface offers, by action name.
@@ -481,6 +490,14 @@ class RemoteAgentsTui(App[AttachRequest | None]):
             # chords are. An unknown name is an absent key rather than a dead one.
             named = session_key(str(parameters[0])) if parameters else None
             return False if named is None else self._offers_chords(screen, named.row_key)
+        if action == "bare_help":
+            # `?` is a character wherever an `Input` holds the keyboard -- the filter, the
+            # rename box, the project name -- and the help key everywhere else. Asked here
+            # rather than left to the `Input`, so the footer and the palette agree with the
+            # key: a bare letter an `Input` would eat is not offered where it would be eaten.
+            if isinstance(self.focused, Input):
+                return False
+            action = "help"
         if action == "projects_home" and getattr(screen, "work_in_flight", False):
             # `return_to_projects` unwinds the stack the way the three flow jumps do, so it
             # discards the same typed work; greyed rather than hidden, for the reason
@@ -1375,6 +1392,26 @@ class RemoteAgentsTui(App[AttachRequest | None]):
             # Inspect and rename navigate unconditionally; the stops do not.
             screen.mark_excursion()
         await perform_row_action(named.action, session_value, screen=screen)
+
+    def action_help(self) -> None:
+        """Show Textual's keys panel, or take it down again -- F1, and `?` off an `Input`.
+
+        A toggle rather than Textual's show-only action, because the panel takes a third of
+        the width and every other key that could close it is spoken for: escape is Back, and
+        at the resting position Back is inert by construction. What it lists is
+        `screen.active_bindings`, which is what the footer draws from, so the F-key labels the
+        table declares are the words this panel shows (DEC-007: one wording, both places).
+        """
+        try:
+            self.screen.query_one(HelpPanel)
+        except NoMatches:
+            self.action_show_help_panel()
+            return
+        self.action_hide_help_panel()
+
+    def action_bare_help(self) -> None:
+        """`?`: the help key where no `Input` is focused; `check_action` refuses it elsewhere."""
+        self.action_help()
 
     def action_projects_home(self) -> None:
         """Unwind to the resting position from wherever the owner is -- F12.
