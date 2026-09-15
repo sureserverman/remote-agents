@@ -21,6 +21,7 @@ from textual.timer import Timer
 from textual.worker import WorkerCancelled, WorkerFailed
 
 from remote_agents.adapters.tui.context import TuiContext
+from remote_agents.adapters.tui.keys import function_key_bindings, session_key
 from remote_agents.adapters.tui.model import (
     _BACK,
     AttachRequest,
@@ -58,7 +59,12 @@ from remote_agents.adapters.tui.screens.confirm import (
 from remote_agents.adapters.tui.screens.dashboard import SETTINGS_KEY
 from remote_agents.adapters.tui.screens.launch import ProjectsScreen
 from remote_agents.adapters.tui.screens.palette import NavigationCommands
-from remote_agents.adapters.tui.screens.sessions import CHORD_KEYS, CHORD_STOPS, perform_chord
+from remote_agents.adapters.tui.screens.sessions import (
+    CHORD_KEYS,
+    CHORD_STOPS,
+    perform_chord,
+    perform_row_action,
+)
 from remote_agents.adapters.tui.screens.settings import SettingsScreen
 from remote_agents.adapters.tui.theme import THEMES, VARIABLE_DEFAULTS
 from remote_agents.application.backend import CLOSE_TIMEOUT_SECONDS
@@ -327,6 +333,13 @@ class RemoteAgentsTui(App[AttachRequest | None]):
             Binding(f"alt+{key}", f"chord('{key}')", "session action", priority=True, show=False)
             for key in CHORD_KEYS
         ),
+        # The F-key row: one table in `keys.py`, bound here so every position is asked about
+        # it and `check_action` decides where each key applies. Priority for the reason the
+        # Alt layer is -- the key has to act from inside an `Input` -- and shown, because
+        # these are the keys the footer exists to teach. The five session-shaped ones route
+        # through `action_session_key`, which awaits no modal on this pump: its stops post to
+        # the screen exactly as the chords do (DEC-025, DEC-068).
+        *function_key_bindings(),
     ]
 
     #: Which app-level flows this surface offers, by action name.
@@ -461,6 +474,18 @@ class RemoteAgentsTui(App[AttachRequest | None]):
             return True
         if action == "chord":
             return self._offers_chords(screen, str(parameters[0]) if parameters else "")
+        if action == "session_key":
+            # The F-key inherits exactly the chord's bounds by being asked the chord's
+            # question about the row letter it stands for: refused behind a modal, refused on
+            # a commitment screen when it is a stop (DEC-052, DEC-062), offered where the
+            # chords are. An unknown name is an absent key rather than a dead one.
+            named = session_key(str(parameters[0])) if parameters else None
+            return False if named is None else self._offers_chords(screen, named.row_key)
+        if action == "projects_home" and getattr(screen, "work_in_flight", False):
+            # `return_to_projects` unwinds the stack the way the three flow jumps do, so it
+            # discards the same typed work; greyed rather than hidden, for the reason
+            # `ChoiceScreen.check_action` gives for those.
+            return None
         return screen.check_action(action, parameters)
 
     def _offers_chords(self, screen: Screen[object], key: str) -> bool:
@@ -1313,6 +1338,53 @@ class RemoteAgentsTui(App[AttachRequest | None]):
             # does not cover.
             return
         await perform_chord(key, session_value, screen=screen)
+
+    async def action_session_key(self, name: str) -> None:
+        """One session-shaped F-key: what its row letter does on a row, to the selected session.
+
+        The same body as `action_chord`, on purpose, and the same excursion-marking rules as
+        `perform_chord`: the keys that navigate mark the position they leave so the return is
+        drawn as a return, and the two stops mark nothing because they go nowhere. Written out
+        rather than routed through `perform_chord` because the chord layer is what this row
+        replaces, and the retirement should not have to reach inside this method.
+
+        **Posts rather than performs, and never awaits a modal here.** `perform_row_action`
+        hands both stops to the receiving screen's own handler (DEC-025, DEC-068), so F9's
+        question is asked on that screen's pump and F8 issues with no question at all
+        (DEC-018). DEC-027: with nothing to act on the key warns on itself and goes nowhere.
+        """
+        named = session_key(name)
+        if named is None or self.busy:
+            # An unknown name is unreachable through the derived bindings and returns rather
+            # than raises for the reason `perform_chord` gives; busy is the row keys' own
+            # refusal, one step earlier.
+            return
+        screen = self.screen
+        session_value, refusal = await self._resolve_session()
+        if session_value is None:
+            self.announce(refusal, severity="warning")
+            return
+        if self.busy or self.screen is not screen:
+            # Both facts can change across the gate's tmux read; see `action_chord`.
+            return
+        if named.action is None:
+            screen.mark_excursion()
+            await self.show_detail(session_value)
+            return
+        if named.action not in _ACTION_LABELS:
+            # Inspect and rename navigate unconditionally; the stops do not.
+            screen.mark_excursion()
+        await perform_row_action(named.action, session_value, screen=screen)
+
+    def action_projects_home(self) -> None:
+        """Unwind to the resting position from wherever the owner is -- F12.
+
+        The busy guard is `action_back`'s: a command in flight owns the position. The refusal
+        while typed work is at risk lives in `check_action`, where the flow jumps keep theirs.
+        """
+        if self.busy:
+            return
+        self.return_to_projects()
 
     async def show_sessions(self) -> None:
         screen = self.screen
