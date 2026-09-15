@@ -1335,7 +1335,13 @@ uv run --locked remote-agents
 
 ## Terminal and service on one database
 
-The terminal and the service are separate processes writing one SQLite file. The terminal refuses
+The terminal and the service are separate processes writing one SQLite file — the **domain**
+store, `sessions.sqlite3`. Since the store split there is a second file beside it, `ui.sqlite3`,
+holding what the Telegram surface writes about itself; in steady state only `serve` opens that
+one, so nothing in this section is about it. One exception, during the single upgrade that
+creates it: whichever command runs first — `tui` and `pane` included — is what creates and
+migrates `ui.sqlite3`, because every one of them splits the surface tables out before opening
+the domain store. After that first run, `serve` is its only reader. Which tables are where, and why, is DEC-090. The terminal refuses
 any `database_path` outside the private state directory exactly as `serve` does, so sharing the
 store is not a configuration accident; two consequences of it must be understood before a second
 surface is used. The structure those processes share — the layers, which of them may depend on

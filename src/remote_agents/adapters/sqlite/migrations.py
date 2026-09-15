@@ -261,6 +261,123 @@ MIGRATIONS: tuple[tuple[int, str], ...] = (
         UPDATE sessions SET resume_profile_id = 'claude' WHERE resume_profile_id = 'claude-remote';
         """,
     ),
+    (
+        14,
+        """
+        DROP TABLE IF EXISTS callback_states;
+        DROP TABLE IF EXISTS chat_views;
+        DROP TABLE IF EXISTS standing_notifications;
+        DROP TABLE IF EXISTS trust_notifications;
+        DROP TABLE IF EXISTS handoff_intents;
+        """,
+    ),
+)
+"""Migration 14 takes the surface's bookkeeping out of the watched store.
+
+**It must never be the first thing that runs.** `open_database` applies pending migrations the
+moment it opens, so a process that opened the domain store before calling
+`store_split.split_stores` would drop these tables with their rows still in them -- and report
+success. `bootstrap._open_domain_store` is the single function every domain open goes
+through, and it calls the split first for that reason. Three tests hold it, and they
+hold different halves:
+`test_the_rows_survive_a_domain_open_that_applies_the_drop` that the order matters,
+`test_the_stores_are_opened_split_first` that bootstrap honours it, and
+`test_no_domain_open_bypasses_the_split` that nothing opens the domain store around it.
+
+`handoff_intents` is here as residue rather than as a move: no code reads it and the operator's
+store holds no rows in it. Its history is worth stating precisely, because `MIGRATIONS` no longer
+tells it: the table was created by a migration added in `7ad145aa`, and when the feature was
+retired in `0d908d9c` that `CREATE TABLE` was **deleted from the already-numbered migration**
+rather than dropped by a new one. So a reader bisecting schema history through this list will
+not find where the table came from, while every store migrated before 2026-08-04 still has it.
+That edit is the practice migration 9's comment forbids, and it is recorded here rather than
+corrected because correcting it now would fork the history a second time. `DROP TABLE IF EXISTS`
+is what makes migration 14 safe either way. It is not in `UI_TABLES` and is not recreated
+anywhere.
+
+`idempotency_claims` is deliberately absent. `session_store.py` writes it, and
+`docs/architecture.md` guarantees duplicate-command protection is durable across processes; in
+the UI store the bot's claims would sit in a file the console panes never open.
+
+`IF EXISTS` because a database created after this lands never had them -- migrations are
+contiguous and historical ones are not edited, so 1-13 still create these tables and this takes
+them straight back out. Wasteful on a fresh file, and the only shape that keeps the history
+honest.
+"""
+
+#: The tables a surface writes about itself, which no other process reads.
+#:
+#: They live in their own database because `StoreWatch` fingerprints a *file*, and a signal
+#: that fires when the bot mints a keyboard cannot also mean "a session changed". One open
+#: sessions page redrawing, minting and republishing its own change is what flood-banned the
+#: bot for six hours on 2026-09-13.
+#:
+#: Read by `UI_MIGRATIONS` below, by `scripts/verify-store-split.py`, and by `store_split`,
+#: which copies the rows — one set, three readers, so a table added here cannot be forgotten by
+#: one of them. `store_split` is deliberately not a migration; it says why.
+UI_TABLES: tuple[str, ...] = (
+    "callback_states",
+    "chat_views",
+    "standing_notifications",
+    "trust_notifications",
+)
+"""Two candidates were removed from this set during Stage 1, each for its own reason, and both
+are recorded because the plan named six.
+
+`idempotency_claims` stays in the **domain** store. It is written by `session_store.py`, not by
+any surface, and `docs/architecture.md` states that duplicate-command protection "is durable
+across processes, because every launch claims an idempotency key with a unique insert". Moving
+it would put the bot's claims in a file the console panes do not open, silently breaking that
+guarantee for every writer but one.
+
+`handoff_intents` is deliberately NOT here. A sweep of all six candidates for live code
+references found it alone at zero, with zero rows in the operator's store: the feature was
+retired in `0d908d9c refactor: retire external local session handoff` and the table outlived
+it. It is residue, not bookkeeping, so it is dropped by migration 14 rather than rehoused."""
+
+#: The UI store's own migration list, versioned independently of `MIGRATIONS`.
+#:
+#: A shared counter would have the next domain migration claim to have run against a file it
+#: never opened. The DDL is copied from the live store rather than retyped, so a moved row
+#: lands in a column definition identical to the one it left.
+UI_MIGRATIONS: tuple[tuple[int, str], ...] = (
+    (
+        1,
+        """
+        CREATE TABLE callback_states (
+            token TEXT PRIMARY KEY,
+            action TEXT NOT NULL,
+            entity_id TEXT NOT NULL,
+            owner_id INTEGER NOT NULL,
+            chat_id INTEGER NOT NULL,
+            message_id INTEGER NOT NULL,
+            mutation INTEGER NOT NULL,
+            claimed INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT NOT NULL
+        );
+        CREATE INDEX callback_states_message ON callback_states(chat_id, message_id);
+        CREATE TABLE chat_views (
+            chat_id INTEGER PRIMARY KEY,
+            message_id INTEGER NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+        CREATE TABLE standing_notifications (
+            chat_id INTEGER NOT NULL,
+            session_id TEXT NOT NULL,
+            message_id INTEGER NOT NULL,
+            token TEXT NOT NULL,
+            activities TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            PRIMARY KEY (chat_id, session_id)
+        );
+        CREATE TABLE trust_notifications (
+            session_id TEXT PRIMARY KEY,
+            chat_id INTEGER NOT NULL,
+            message_id INTEGER NOT NULL,
+            settled INTEGER NOT NULL DEFAULT 0
+        );
+        """,
+    ),
 )
 
 

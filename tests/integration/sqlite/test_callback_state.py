@@ -1,7 +1,7 @@
 import threading
 
 from remote_agents.adapters.sqlite.callback_state_store import SQLiteCallbackStateStore
-from remote_agents.adapters.sqlite.database import open_database
+from remote_agents.adapters.sqlite.database import open_ui_database
 
 _OWNER = 7
 _CHAT = 11
@@ -9,12 +9,12 @@ _MESSAGE = 100
 
 
 def _store(tmp_path, **arguments) -> SQLiteCallbackStateStore:
-    return SQLiteCallbackStateStore(open_database(tmp_path / "sessions.sqlite3"), **arguments)
+    return SQLiteCallbackStateStore(open_ui_database(tmp_path / "ui.sqlite3"), **arguments)
 
 
 def test_a_token_resolves_through_a_store_that_did_not_mint_it(tmp_path) -> None:
     """A restart replaces the store object, not the database — the button must survive it."""
-    connection = open_database(tmp_path / "sessions.sqlite3")
+    connection = open_ui_database(tmp_path / "ui.sqlite3")
     token = SQLiteCallbackStateStore(connection).create(
         "sessions.open", "sessions", _OWNER, _CHAT, _MESSAGE
     )
@@ -29,7 +29,7 @@ def test_a_token_resolves_through_a_store_that_did_not_mint_it(tmp_path) -> None
 
 def test_age_is_never_a_reason_to_refuse_a_token(tmp_path) -> None:
     """The whole point of the change: four hundred days old is still a working button."""
-    connection = open_database(tmp_path / "sessions.sqlite3")
+    connection = open_ui_database(tmp_path / "ui.sqlite3")
     store = SQLiteCallbackStateStore(connection)
     token = store.create("nav.home", "home", _OWNER, _CHAT, _MESSAGE)
     with connection:
@@ -58,9 +58,9 @@ def test_a_mutation_is_claimed_once_across_two_connections_to_one_database(tmp_p
     prove only that the claim is not a Python attribute, and the claim this method actually
     makes is about the other *process* DEC-005 allows.
     """
-    path = tmp_path / "sessions.sqlite3"
-    minting = SQLiteCallbackStateStore(open_database(path))
-    competing = SQLiteCallbackStateStore(open_database(path))
+    path = tmp_path / "ui.sqlite3"
+    minting = SQLiteCallbackStateStore(open_ui_database(path))
+    competing = SQLiteCallbackStateStore(open_ui_database(path))
     token = minting.create("launch.profile", "p|claude", _OWNER, _CHAT, _MESSAGE, mutation=True)
     scope = {"owner_id": _OWNER, "chat_id": _CHAT, "message_id": _MESSAGE}
 
@@ -82,8 +82,8 @@ def test_concurrent_connections_cannot_both_claim_one_mutation(tmp_path) -> None
     Two claims both returning True is a stop or a launch serviced twice, which is the exact
     guarantee DEC-008 rests on.
     """
-    path = tmp_path / "sessions.sqlite3"
-    minting = SQLiteCallbackStateStore(open_database(path))
+    path = tmp_path / "ui.sqlite3"
+    minting = SQLiteCallbackStateStore(open_ui_database(path))
     token = minting.create("launch.profile", "p|claude", _OWNER, _CHAT, _MESSAGE, mutation=True)
     scope = {"owner_id": _OWNER, "chat_id": _CHAT, "message_id": _MESSAGE}
     claimants = 8
@@ -92,7 +92,7 @@ def test_concurrent_connections_cannot_both_claim_one_mutation(tmp_path) -> None
     guard = threading.Lock()
 
     def claim() -> None:
-        store = SQLiteCallbackStateStore(open_database(path))
+        store = SQLiteCallbackStateStore(open_ui_database(path))
         ready.wait(timeout=10)
         outcome = store.claim_mutation(token, **scope)
         with guard:
@@ -173,7 +173,7 @@ def test_an_eviction_pass_logs_once_however_many_tokens_it_discards(tmp_path, ca
     """
     limit = 10
     store = _store(tmp_path, limit=limit)
-    connection = open_database(tmp_path / "sessions.sqlite3")
+    connection = open_ui_database(tmp_path / "ui.sqlite3")
     with connection:
         connection.executemany(
             "INSERT INTO callback_states(token, action, entity_id, owner_id, chat_id, "
@@ -215,14 +215,14 @@ def test_a_moved_screen_carries_its_tokens_across_a_restart(tmp_path) -> None:
     on the moved screen dead after the next restart — the exact defect sub-plan 1 made the
     store durable to remove.
     """
-    connection = open_database(tmp_path / "sessions.sqlite3")
+    connection = open_ui_database(tmp_path / "ui.sqlite3")
     store = SQLiteCallbackStateStore(connection)
     token = store.create("sessions.open", "sessions", _OWNER, _CHAT, _MESSAGE)
 
     assert store.rebind(_CHAT, _MESSAGE, _MESSAGE + 5) == 1
     connection.close()
 
-    reopened = SQLiteCallbackStateStore(open_database(tmp_path / "sessions.sqlite3"))
+    reopened = SQLiteCallbackStateStore(open_ui_database(tmp_path / "ui.sqlite3"))
     assert reopened.resolve(token, owner_id=_OWNER, chat_id=_CHAT, message_id=_MESSAGE) is None
     assert (
         reopened.resolve(token, owner_id=_OWNER, chat_id=_CHAT, message_id=_MESSAGE + 5) is not None
@@ -241,7 +241,7 @@ def test_a_claim_survives_the_live_view_moving_below_a_notification(tmp_path) ->
     That is the *rebind working as designed* breaking the claim: tokens are moved precisely so
     the keyboard keeps resolving across the move, and the claim was the one thing that did not.
     """
-    store = SQLiteCallbackStateStore(open_database(tmp_path / "sessions.sqlite3"))
+    store = SQLiteCallbackStateStore(open_ui_database(tmp_path / "ui.sqlite3"))
     token = store.create("launch.profile", "project|claude", 7, 11, mutation=True)
     store.bind_pending(11, 100)
 
@@ -254,7 +254,7 @@ def test_a_claim_survives_the_live_view_moving_below_a_notification(tmp_path) ->
 def test_the_one_shot_still_admits_exactly_one_caller_across_a_rebind(tmp_path) -> None:
     """The claim stops re-checking the message; it does not stop being a one-shot. DEC-008's
     "a destructive action drops a repeat" is the property that must survive this change."""
-    store = SQLiteCallbackStateStore(open_database(tmp_path / "sessions.sqlite3"))
+    store = SQLiteCallbackStateStore(open_ui_database(tmp_path / "ui.sqlite3"))
     token = store.create("graceful", "session:claude", 7, 11, mutation=True)
     store.bind_pending(11, 100)
     store.rebind(11, 100, 200)
@@ -269,7 +269,7 @@ def test_a_claim_still_refuses_another_owner_or_chat(tmp_path) -> None:
     """Owner and chat stay in the claim. They never change under a rebind, so keeping them
     costs nothing and they are the half that is about authorization rather than about which
     message is currently on screen."""
-    store = SQLiteCallbackStateStore(open_database(tmp_path / "sessions.sqlite3"))
+    store = SQLiteCallbackStateStore(open_ui_database(tmp_path / "ui.sqlite3"))
     token = store.create("launch.profile", "project|claude", 7, 11, mutation=True)
     store.bind_pending(11, 100)
 

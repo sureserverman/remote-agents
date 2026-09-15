@@ -112,10 +112,15 @@ class _FakeApplication:
     updater: _FakeUpdater | None
     running: bool = False
     handlers: list[Any] = field(default_factory=list)
+    error_handlers: list[Any] = field(default_factory=list)
 
     def add_handler(self, handler: Any) -> None:
         self.log.append("add_handler")
         self.handlers.append(handler)
+
+    def add_error_handler(self, handler: Any) -> None:
+        self.log.append("add_error_handler")
+        self.error_handlers.append(handler)
 
     async def initialize(self) -> None:
         self.log.append("initialize")
@@ -472,3 +477,21 @@ async def test_the_default_boundary_is_a_wired_one(monkeypatch: pytest.MonkeyPat
     assert harness.log.count("add_handler") == 9, "the default path wired no handlers"
     assert harness.log[-1] == "shutdown", "the default path did not complete"
     assert "initialize" in harness.log
+
+
+async def test_an_error_handler_is_registered_before_any_handler_that_can_raise(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """There was none, and every failure reached the journal as a bare traceback.
+
+    python-telegram-bot said so on every one: "No error handlers are registered, logging
+    exception". Registration order is part of the claim -- a handler added after the ones it
+    covers leaves a window in which an update can raise into the poll loop unanswered.
+    """
+    harness = _harness(monkeypatch)
+    await run_private_bot(SECRETS, _boundary(harness.log))
+
+    assert "add_error_handler" in harness.log, "no error handler was registered"
+    assert harness.log.index("add_error_handler") < harness.log.index("add_handler"), (
+        "the error handler must be registered before the handlers it answers for"
+    )

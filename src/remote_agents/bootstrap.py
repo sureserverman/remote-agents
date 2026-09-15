@@ -25,7 +25,9 @@ from remote_agents.adapters.sqlite.database import (
     database_is_ready,
     leased_connection,
     open_database,
+    open_ui_database,
     restore_database,
+    ui_database_path,
 )
 from remote_agents.adapters.sqlite.migrations import MIGRATIONS
 from remote_agents.adapters.sqlite.session_store import SQLiteSessionStore
@@ -48,6 +50,7 @@ if TYPE_CHECKING:
     # reach the bot — naming them here would undo that.
     from remote_agents.adapters.tui.context import TuiContext
     from remote_agents.adapters.tui.model import AttachRequest
+from remote_agents.adapters.sqlite.store_split import split_stores
 from remote_agents.agent_event import spool_from_stdin
 from remote_agents.application.doctor import (
     credential_file_report,
@@ -370,6 +373,50 @@ def main(
     return 0
 
 
+def _open_domain_store(paths: ProductionPaths, **kwargs):
+    """Open the domain store — and split the surface tables out first, always.
+
+    **Every domain open goes through here, and that is the point.** Migration 14 drops the
+    surface's tables, and `open_database` applies pending migrations the moment it opens, so any
+    open that has not split first destroys rows nothing has copied. Worse, it destroys the split
+    itself: `split_stores` decides there is work to do by finding those tables in the domain
+    store, so once *any* path has dropped them every later call returns an empty report and does
+    nothing, silently and permanently.
+
+    That is not hypothetical — it was the shape of this code until a review found it. The split
+    lived in `_open_both_stores`, which only `serve` used, while `tui`, `pane` and `--history`
+    opened the domain store directly. An operator starting the console before the service, or a
+    pane winning the write lock first, lost the rows and disabled the split for good.
+
+    So the guard is structural rather than remembered: one function, and
+    `test_no_domain_open_bypasses_the_split` fails if a fourth call site appears.
+    """
+    split_stores(paths.database_path)
+    return paths.open_database(open_database, migrations=MIGRATIONS, **kwargs)
+
+
+def _open_both_stores(paths: ProductionPaths, wants_unit_directory: bool):
+    """Open the domain store and the surface store, in the one order that does not lose rows.
+
+    The ordering that makes this safe belongs to `_open_domain_store`, which every domain open
+    goes through — this function's own job is only to open the pair. An earlier version of this
+    docstring claimed the ordering here was "the whole of it", which was true of `serve` and
+    false of `tui`, `pane` and `--history`; a review found all three.
+    """
+    connection = _open_domain_store(paths, include_unit_directory=wants_unit_directory)
+    try:
+        # Beside the domain one. `StoreWatch` fingerprints only the domain file, so what the bot
+        # writes about itself no longer looks like a session changing.
+        return connection, open_ui_database(ui_database_path(paths.database_path))
+    except BaseException:
+        # The domain store is already open by the time this second open can fail — a corrupt
+        # `ui.sqlite3`, a full disk, a bad UI migration. `_serve` carries a comment worrying
+        # about exactly this shape for a single connection; adding a second open reintroduced
+        # it, and nothing closed the first.
+        connection.close()
+        raise
+
+
 def _serve(arguments, serve_runner) -> int:
     """Run the installed service. Extracted so `main` can guard it like every other command."""
     paths = ProductionPaths.for_home(Path.home())
@@ -377,9 +424,7 @@ def _serve(arguments, serve_runner) -> int:
     wants_unit_directory = _supervisor_for_host().kind is SupervisorKind.SYSTEMD
     paths.ensure_directories(include_unit_directory=wants_unit_directory)
     paths.require_private_environment()
-    connection = paths.open_database(
-        open_database, migrations=MIGRATIONS, include_unit_directory=wants_unit_directory
-    )
+    connection, ui_connection = _open_both_stores(paths, wants_unit_directory)
     # Resolved **once** and threaded into both consumers. The duplicate call this
     # replaces was harmless while the only source was `os.environ`, which cannot change
     # inside a running process: two reads were the same read. The private-file fallback is
@@ -394,7 +439,9 @@ def _serve(arguments, serve_runner) -> int:
         asyncio.run(
             _serve_with_reconciliation(
                 serve_secrets,
-                _private_boundary(config, connection, paths, serve_secrets),
+                _private_boundary(
+                    config, connection, paths, serve_secrets, ui_connection=ui_connection
+                ),
                 serve_runner,
                 _RECONCILE_INTERVAL_SECONDS,
                 config.activity_poll_seconds,
@@ -402,6 +449,7 @@ def _serve(arguments, serve_runner) -> int:
         )
     finally:
         connection.close()
+        ui_connection.close()
     return 0
 
 
@@ -546,9 +594,7 @@ def _run_surface(
         return 1
     wants_unit_directory = _supervisor_for_host().kind is SupervisorKind.SYSTEMD
     paths.ensure_directories(include_unit_directory=wants_unit_directory)
-    paths.open_database(
-        open_database, migrations=MIGRATIONS, include_unit_directory=wants_unit_directory
-    ).close()
+    _open_domain_store(paths, include_unit_directory=wants_unit_directory).close()
     connection = leased_connection(config.database_path)
     request = None
     try:
@@ -819,7 +865,7 @@ def _print_session_history(arguments) -> int:
     except (ConfigError, ValueError) as error:
         print(error, file=sys.stderr)
         return 1
-    connection = paths.open_database(open_database, migrations=MIGRATIONS)
+    connection = _open_domain_store(paths)
     try:
         store = SQLiteSessionStore(connection)
         record = asyncio.run(store.get(session_id))

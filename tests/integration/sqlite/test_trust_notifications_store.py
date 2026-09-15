@@ -14,14 +14,14 @@ from pathlib import Path
 
 import pytest
 
-from remote_agents.adapters.sqlite.database import open_database
-from remote_agents.adapters.sqlite.migrations import MIGRATIONS, current_version
+from remote_agents.adapters.sqlite.database import open_database, open_ui_database
+from remote_agents.adapters.sqlite.migrations import MIGRATIONS, UI_MIGRATIONS, current_version
 from remote_agents.adapters.sqlite.trust_notifications import SQLiteTrustNotificationStore
 from remote_agents.domain.models import SessionId
 
 
 def _store(tmp_path: Path) -> SQLiteTrustNotificationStore:
-    return SQLiteTrustNotificationStore(open_database(tmp_path / "sessions.sqlite3"))
+    return SQLiteTrustNotificationStore(open_ui_database(tmp_path / "ui.sqlite3"))
 
 
 def test_a_fresh_database_migrates_all_the_way_to_the_last_migration(tmp_path: Path) -> None:
@@ -32,10 +32,14 @@ def test_a_fresh_database_migrates_all_the_way_to_the_last_migration(tmp_path: P
     says to bump that one and only that one. A second hand-written count here would make every
     new migration a two-file edit and would fail for a reason that has nothing to do with
     trust notifications, which is what it did when migration 13 landed.
-    """
-    connection = open_database(tmp_path / "sessions.sqlite3")
 
-    assert current_version(connection) == len(MIGRATIONS)
+    Against `UI_MIGRATIONS` since the split: this table lives in the UI store now, and that
+    store versions on its own list. Comparing it to the domain count would assert that two
+    deliberately independent counters move together.
+    """
+    connection = open_ui_database(tmp_path / "ui.sqlite3")
+
+    assert current_version(connection) == len(UI_MIGRATIONS)
 
 
 def test_a_database_at_eleven_gains_the_table_without_disturbing_its_rows(
@@ -46,6 +50,9 @@ def test_a_database_at_eleven_gains_the_table_without_disturbing_its_rows(
     A fresh database proves the statements are valid; it does not prove they can be applied to
     a database that already holds sessions. This stops at 11, writes a row, then migrates.
     """
+    # Domain history, and it stops before migration 14. Migration 12 adding this table to a
+    # database at 11 is still a true claim about the domain list; 14 then takes it out again,
+    # and asserting the row survives *that* would be asserting the split did not happen.
     path = tmp_path / "sessions.sqlite3"
     connection = sqlite3.connect(path)
     from remote_agents.adapters.sqlite.migrations import apply_migrations
@@ -59,9 +66,9 @@ def test_a_database_at_eleven_gains_the_table_without_disturbing_its_rows(
     connection.commit()
     connection.close()
 
-    migrated = open_database(path)
+    migrated = open_database(path, migrations=[entry for entry in MIGRATIONS if entry[0] <= 13])
 
-    assert current_version(migrated) == len(MIGRATIONS)
+    assert current_version(migrated) == 13
     assert migrated.execute("SELECT COUNT(*) FROM standing_notifications").fetchone()[0] == 1
     assert migrated.execute("SELECT COUNT(*) FROM trust_notifications").fetchone()[0] == 0
 
@@ -129,14 +136,14 @@ async def test_the_unsettled_rows_are_what_a_pass_walks(tmp_path: Path) -> None:
 @pytest.mark.parametrize("settled", [False, True])
 async def test_a_row_survives_a_reopen(tmp_path: Path, settled: bool) -> None:
     """A restart is the case this table exists for, so it is asserted across a real reopen."""
-    path = tmp_path / "sessions.sqlite3"
-    store = SQLiteTrustNotificationStore(open_database(path))
+    path = tmp_path / "ui.sqlite3"
+    store = SQLiteTrustNotificationStore(open_ui_database(path))
     session = SessionId.new()
     await store.remember(session, chat_id=11, message_id=42)
     if settled:
         await store.settle(session)
 
-    reopened = SQLiteTrustNotificationStore(open_database(path))
+    reopened = SQLiteTrustNotificationStore(open_ui_database(path))
     standing = await reopened.standing_for(session)
 
     assert standing is not None
