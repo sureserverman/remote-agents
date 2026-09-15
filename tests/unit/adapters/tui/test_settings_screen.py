@@ -747,17 +747,141 @@ async def test_a_theme_the_file_refuses_to_remember_says_so_rather_than_claiming
         assert "remember" in said.lower(), said
 
 
-async def test_the_screen_draws_four_rows_in_the_declared_order(tmp_path: Path) -> None:
-    """The set of rows, swept from the screen's own id table rather than counted here, so this
-    keeps agreeing with the screen when a later task adds the limits-source row between them."""
+# --- The Claude limits-source row -------------------------------------------------------------
+
+
+class FakeLimitsSource:
+    """A scripted `ports.limits_source.LimitsSourcePort`.
+
+    `refuse` is the shape that matters: `write_limits_key` declines several files an owner can
+    produce by hand, and its contract forbids raising to say so -- so a refusal is
+    indistinguishable from success except by reading back, which is the one property this row
+    has to get right.
+    """
+
+    def __init__(self, value: str = "status-line", *, refuse: bool = False) -> None:
+        self.value = value
+        self.writes: list[str] = []
+        self.refuse = refuse
+
+    async def read(self) -> str:
+        return self.value
+
+    async def write(self, value: str) -> None:
+        self.writes.append(value)
+        if not self.refuse:
+            self.value = value
+
+
+def _with_limits_source(context: TuiContext, port: object | None) -> TuiContext:
+    return replace(context, backend=replace(context.backend, claude_limits_source=port))
+
+
+async def test_the_screen_draws_five_rows_in_the_declared_order(tmp_path: Path) -> None:
+    """The set of rows swept from the screen's own table, so the count is the declaration and
+    not a numeral in a docstring that the list grows past."""
     from remote_agents.adapters.tui.screens import settings as module
 
-    path = tmp_path / "preferences.json"
-    app = RemoteAgentsTui(_context(preferences_path=path))
+    context = _with_limits_source(
+        _context(preferences_path=tmp_path / "preferences.json"), FakeLimitsSource()
+    )
+    app = RemoteAgentsTui(context)
     async with app.run_test() as pilot:
         await pilot.pause()
         await _open_settings(app, pilot)
         choices = app.screen.query_one("#choices", OptionList)
         drawn = [choices.get_option_at_index(i).id for i in range(choices.option_count)]
 
+        assert len(module.SETTINGS_ROWS) == 5
         assert drawn == list(module.SETTINGS_ROWS)
+        assert len(set(drawn)) == 5, "every row needs a stable id of its own"
+
+
+async def test_the_limits_source_row_reads_the_hop_on_a_default_config(tmp_path: Path) -> None:
+    from remote_agents.application.limits_source import LIMITS_SOURCE_LABELS, LIMITS_SOURCE_TITLE
+
+    context = _with_limits_source(
+        _context(preferences_path=tmp_path / "preferences.json"), FakeLimitsSource()
+    )
+    app = RemoteAgentsTui(context)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await _open_settings(app, pilot)
+
+        assert _row(app, LIMITS_SOURCE_TITLE) == (
+            f"{LIMITS_SOURCE_TITLE} · {LIMITS_SOURCE_LABELS['status-line']}"
+        )
+
+
+async def test_one_press_on_the_limits_source_row_writes_the_api_and_a_second_returns(
+    tmp_path: Path,
+) -> None:
+    from remote_agents.application.limits_source import LIMITS_SOURCE_LABELS, LIMITS_SOURCE_TITLE
+
+    port = FakeLimitsSource()
+    context = _with_limits_source(_context(preferences_path=tmp_path / "preferences.json"), port)
+    app = RemoteAgentsTui(context)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await _open_settings(app, pilot)
+
+        await _press_row(app, pilot, LIMITS_SOURCE_TITLE)
+        assert port.writes == ["usage-api"]
+        assert LIMITS_SOURCE_LABELS["usage-api"] in _row(app, LIMITS_SOURCE_TITLE)
+
+        await _press_row(app, pilot, LIMITS_SOURCE_TITLE)
+        assert port.writes == ["usage-api", "status-line"]
+        assert _row(app, LIMITS_SOURCE_TITLE).endswith(LIMITS_SOURCE_LABELS["status-line"])
+
+
+async def test_a_refused_limits_source_write_reads_as_a_refusal(tmp_path: Path) -> None:
+    """The port cannot raise to say it declined, so the row compares the read-back against
+    what the press intended -- the same detection the Claude row makes, for the same reason."""
+    from remote_agents.application.limits_source import LIMITS_SOURCE_LABELS, LIMITS_SOURCE_TITLE
+
+    port = FakeLimitsSource(refuse=True)
+    context = _with_limits_source(_context(preferences_path=tmp_path / "preferences.json"), port)
+    app = RemoteAgentsTui(context)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await _open_settings(app, pilot)
+
+        await _press_row(app, pilot, LIMITS_SOURCE_TITLE)
+
+        assert port.writes == ["usage-api"]
+        assert LIMITS_SOURCE_LABELS["status-line"] in _row(app, LIMITS_SOURCE_TITLE)
+        said = " ".join(announcements(app))
+        assert LIMITS_SOURCE_TITLE in said, said
+        assert "still" in said.lower(), said
+
+
+async def test_an_unwired_limits_source_row_says_unavailable_and_its_press_does_nothing(
+    tmp_path: Path,
+) -> None:
+    """DEC-009/DEC-061: a composition with no Claude provider has no such choice to offer, and
+    a vanished row is indistinguishable from a surface that forgot to draw one."""
+    from remote_agents.application.limits_source import LIMITS_SOURCE_TITLE
+    from remote_agents.application.remote_control_default import UNAVAILABLE
+
+    context = _with_limits_source(_context(preferences_path=tmp_path / "preferences.json"), None)
+    app = RemoteAgentsTui(context)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await _open_settings(app, pilot)
+
+        assert _row(app, LIMITS_SOURCE_TITLE).endswith(UNAVAILABLE)
+        await _press_row(app, pilot, LIMITS_SOURCE_TITLE)
+        assert _row(app, LIMITS_SOURCE_TITLE).endswith(UNAVAILABLE)
+
+
+def test_the_limits_source_is_read_as_a_declared_backend_field_not_probed() -> None:
+    """Rule 2, asserted on the field rather than left to the architecture sweep: absence is a
+    field that is `None`, and a host that wired nothing must be distinguishable from an object
+    that never had a `write`."""
+    from dataclasses import fields
+
+    from remote_agents.application.backend import Backend
+
+    declared = {field.name for field in fields(Backend)}
+    assert "claude_limits_source" in declared
+    assert Backend(sessions=object(), projects=object()).claude_limits_source is None

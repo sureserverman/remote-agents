@@ -1,6 +1,16 @@
-"""Settings: one row per provider for whether its sessions start remote-controlled.
+"""Settings: what this machine does, and what this terminal remembers.
 
-**Why this is a screen of its own rather than a line on an existing pane.** The two facts it
+Five rows in two groups. The first three have the **machine** as their subject -- whether each
+provider's next session starts remote-controlled, and where Claude's account limits are read
+from -- and the last two have this **terminal** as theirs: its theme and the order it lists
+projects in. Nothing here is about a session or a launch, which is what makes it a screen and
+not a line on one of the panes.
+
+The groups are the draw order and nothing else. No headings and no separators: the screen is
+short enough that a heading would be a bigger thing to read than the rows it introduced, and
+the subjects are legible from the row titles -- three name a provider, two name the surface.
+
+**Why this is a screen of its own rather than a line on an existing pane.** The first facts it
 carries have the *machine* as their subject, not a session and not a launch. Claude resolves
 `remoteControlAtStartup` from its own settings file at every start, so the value governs every
 `claude` session on this host, including ones the owner opens by hand; Codex's enrollment is a
@@ -22,7 +32,7 @@ session on the host, including one started by hand at the keyboard, because the 
 the one Claude itself resolves at startup. The narrower claim was found by the Stage 3 gate's
 evaluator, which was right about the code as it stood then.
 
-**Every word on both rows is the application's, and so is the Claude row's renderer.**
+**Every word on every row is the application's, and so is the Claude row's renderer.**
 `REMOTE_CONTROL_DEFAULT_TITLE` and `REMOTE_CONTROL_DEFAULT_LABELS` spell the Claude row and
 `remote_control_default_line` assembles it -- all three in
 `application/remote_control_default.py`, not here, because the bot's `/settings` screen renders
@@ -35,13 +45,20 @@ vocabulary is the one place in the project where a wrong word is acted on by not
 `PROVIDER_DEFAULT` worded as any form of "off" would tell the owner their panes come up
 disconnected when the measured behaviour is that they come up connected.
 
-**The two rows are deliberately not symmetrical in what a press costs.** The Claude row writes
+**The rows are deliberately not symmetrical in what a press costs, and each argues its own
+case where it is declared.** The Claude row writes
 a key into a file and the next `claude` start reads it: reversible, three presses back to where
 it began, so it asks nothing. The Codex row changes a daemon this machine is enrolled with, so
 it confirms -- and its confirmation is raised from `choose`, a screen handler on this screen's
 own message pump, never from a binding body (DEC-025 as DEC-068 extends it). An `await` on a
 modal from the App's pump stops the surface answering anything at all, quit included, with the
-modal drawn correctly because the modal is the last thing it manages to draw.
+modal drawn correctly because the modal is the last thing it manages to draw. The limits-source
+row is the one that most looks like it should confirm and deliberately does not -- turning it to
+the API makes this service read the owner's Claude credential and call Anthropic -- because that
+consequence needs to be *visible before the press*, not confirmed after it, so it is spelled
+into the row's own label. The two preference rows ask nothing and cost nothing outside this
+process, and they alone report a failure as "changed, but not remembered": for them the change
+is immediate and only the memory of it can fail.
 
 **Not in `ALL_SCREENS` yet, and that is a gap rather than a decision.** That registry is what
 `test_screen_back_paths.py`, `test_binding_visibility.py`, `test_empty_states.py` and the
@@ -83,8 +100,14 @@ from remote_agents.adapters.tui.screens.dashboard import (
     host_remote_control_line,
 )
 from remote_agents.application.host_remote_control import host_remote_control_directions
+from remote_agents.application.limits_source import (
+    LIMITS_SOURCE_LABELS,
+    LIMITS_SOURCE_TITLE,
+    next_limits_source,
+)
 from remote_agents.application.remote_control_default import (
     REMOTE_CONTROL_DEFAULT_TITLE,
+    UNAVAILABLE,
     next_remote_control_default,
     remote_control_default_line,
     remote_control_default_word,
@@ -98,17 +121,41 @@ _LOG = logging.getLogger(__name__)
 #: provider the day a third one is added.
 _CLAUDE_ROW = "settings:claude-remote-control-default"
 _CODEX_ROW = "settings:codex-remote-control"
+_LIMITS_SOURCE_ROW = "settings:claude-limits-source"
 _THEME_ROW = "settings:theme"
 _ORDER_ROW = "settings:project-order"
 
-#: The rows this screen declares, in the order it draws them: the two host subjects first,
+#: The rows this screen declares, in the order it draws them: the three host subjects first,
 #: then the two the terminal keeps for itself.
 #:
 #: A tuple rather than a count in prose, for the reason `ALL_SCREENS` gives next door -- a
 #: numeral written once is a numeral the list grows past in silence. The tests sweep this
 #: instead of counting a render, so a row added without being declared here fails rather than
 #: quietly changing what "the third row" means to every test that walks the cursor.
-SETTINGS_ROWS = (_CLAUDE_ROW, _CODEX_ROW, _THEME_ROW, _ORDER_ROW)
+SETTINGS_ROWS = (_CLAUDE_ROW, _CODEX_ROW, _LIMITS_SOURCE_ROW, _THEME_ROW, _ORDER_ROW)
+
+
+def _limits_source_line(value: str | None) -> str:
+    """The limits-source row, for a stored choice or for a host that has none to make.
+
+    Private and here rather than in `application/` beside its labels, which is the one place
+    this row parts company with the Claude row above it. That line is assembled in
+    `application/` because the **bot draws the same line**; this one is not, because the bot's
+    `/settings` renders this choice as a *button* carrying its own label and emoji, never as a
+    ` · ` row. Putting the assembly in `application/` would be a shared renderer with one
+    caller -- a promise of agreement between surfaces that do not in fact draw the same thing.
+    What they do share, and what DEC-007 actually asks for, is the words: both reach
+    `LIMITS_SOURCE_TITLE` and `LIMITS_SOURCE_LABELS`.
+
+    `None` is *unavailable* rather than the default's word, and the distinction is load-bearing
+    on this row more than on any other: a host with no Claude provider cannot choose, and
+    rendering that as *status line* would tell the owner their limits come from a hop that is
+    not running.
+    """
+    if value is None:
+        return f"{LIMITS_SOURCE_TITLE} · {UNAVAILABLE}"
+    return f"{LIMITS_SOURCE_TITLE} · {LIMITS_SOURCE_LABELS.get(value, value)}"
+
 
 SETTINGS_INSTRUCTION = "Press enter on a row to change it."
 """What this position is for, in the one line the status region holds.
@@ -149,6 +196,10 @@ class SettingsScreen(ChoiceScreen):
         #: read there is nothing this surface can honestly claim about the machine either.
         self._claude_default: RemoteControlDefault | None = None
         self._host_status: HostRemoteControlStatus | None = None
+        #: The stored limits source, or `None` for a composition that wired no Claude provider.
+        #: `None` rather than the default string, because "this host cannot choose" and "this
+        #: host chose the hop" are different answers and the row must not render them alike.
+        self._limits_source: str | None = None
         #: The two terminal preferences, as last read. Plain strings rather than `None`-able
         #: readings: `read_theme` and `read_project_order` are total and always answer one of
         #: the values this surface knows, so there is no absence for these two rows to render.
@@ -212,6 +263,16 @@ class SettingsScreen(ChoiceScreen):
                 self._host_status = await control.status()
             except Exception:
                 _LOG.exception("this host's Remote Control could not be read")
+        source = self.services.backend.claude_limits_source
+        if source is None:
+            # A declared absence, not a failure (DEC-061). Left as `None` so the row says
+            # "unavailable" rather than keeping a reading from a capability that is gone.
+            self._limits_source = None
+        else:
+            try:
+                self._limits_source = await source.read()
+            except Exception:
+                _LOG.exception("the Claude limits source could not be read")
         self._read_preferences()
 
     def _draw_settings_rows(self) -> None:
@@ -231,6 +292,7 @@ class SettingsScreen(ChoiceScreen):
             (
                 (_CLAUDE_ROW, remote_control_default_line(self._claude_default)),
                 (_CODEX_ROW, host_remote_control_line(self._host_status)),
+                (_LIMITS_SOURCE_ROW, _limits_source_line(self._limits_source)),
                 (_THEME_ROW, f"{THEME_TITLE} · {THEME_LABELS.get(self._theme, self._theme)}"),
                 (
                     _ORDER_ROW,
@@ -271,11 +333,67 @@ class SettingsScreen(ChoiceScreen):
         if key == _CODEX_ROW:
             await self.confirm_codex_remote_control()
             return
+        if key == _LIMITS_SOURCE_ROW:
+            await self.advance_limits_source()
+            return
         if key == _THEME_ROW:
             await self.advance_theme()
             return
         if key == _ORDER_ROW:
             await self.advance_project_order()
+
+    async def advance_limits_source(self) -> None:
+        """One press: read, advance by one, write, read back, say what it now is.
+
+        **The Claude row's shape exactly**, and that is the point rather than an economy: the
+        two rows write to different files owned by different programs, but what the owner can
+        observe is identical -- one press moves one step, a second returns, and the row after a
+        press is drawn from what the file now says rather than from what the press intended.
+
+        **No confirmation, and this is the row where that was worth arguing.** Turning it to
+        the API makes the service read the owner's Claude credential and call Anthropic, which
+        is the most consequential thing any row on this screen does. It still asks nothing,
+        because a confirmation exists to stop an owner changing something they cannot put back,
+        and this is one press back. What the consequence needs is to be *visible*, not to be
+        confirmed -- so it is spelled into the label itself (`LIMITS_SOURCE_LABELS`), where the
+        owner reads it before pressing rather than in a modal after.
+
+        **A refused write is reported as a refusal, detected by the read-back.** `write` cannot
+        raise to say it declined -- and `write_limits_key` declines more shapes than any other
+        writer here, every one of them something an owner can produce by hand-editing their own
+        `config.toml` -- so the only signal on this side is that the re-read is not what was
+        asked for.
+        """
+        port = self.services.backend.claude_limits_source
+        if port is None or self.tui.busy:
+            # A dead-end press is worse than an absent row: the row says "unavailable" and the
+            # key does nothing, rather than reporting a change nothing could have made.
+            return
+        async with self.holding_the_guard():
+            try:
+                async with self.awaiting(f"Changing {LIMITS_SOURCE_TITLE}…"):
+                    intended = next_limits_source(await port.read())
+                    await port.write(intended)
+                    # Read back rather than drawing `intended`: the write may have been
+                    # refused, and the file is the only thing that knows.
+                    self._limits_source = await port.read()
+            except Exception as error:
+                _LOG.exception("the Claude limits source could not be changed")
+                # Not "was not changed": the write may have landed and only the read-back
+                # failed, which would make that sentence the false half of a true-sounding pair.
+                self.announce(
+                    f"{LIMITS_SOURCE_TITLE} could not be confirmed: {error} "
+                    "Reopen Settings to see what it says."
+                )
+                return
+            if not self.showing:
+                return
+            self._draw_settings_rows()
+            word = LIMITS_SOURCE_LABELS.get(self._limits_source, self._limits_source)
+            if self._limits_source == intended:
+                self.set_status(f"{LIMITS_SOURCE_TITLE} is now {word}.")
+            else:
+                self.announce(f"{LIMITS_SOURCE_TITLE} could not be changed; it is still {word}.")
 
     async def advance_theme(self) -> None:
         """One press: move to the other relay theme, and say whether it will be remembered.

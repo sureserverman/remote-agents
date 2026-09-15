@@ -34,6 +34,7 @@ from remote_agents.application.project_catalog import CatalogProject, build_cata
 from remote_agents.application.reconcile import SessionLocks
 from remote_agents.application.services import SessionService
 from remote_agents.application.store_watch import StoreWatch
+from remote_agents.composition.limits_source import ConfigLimitsSource
 from remote_agents.config import read_claude_limits_source
 from remote_agents.domain.models import ProjectId, SessionId
 from remote_agents.domain.profiles import ProfileCompatibility, closed_profiles
@@ -333,6 +334,11 @@ def compose_backend(
         # closed, and this is not one). Built through the registry, which is the only module
         # allowed to import a provider's package (`test_a_provider_lives_in_one_package`).
         claude_remote_control_default=claude_default,
+        # The same file the switch above is read from, so the Settings row writes where the
+        # selector looks. `config.path` rather than `paths.config_path` for the reason the
+        # read side gives: `--config` can name another file, and a row that wrote the default
+        # path would flip a switch the running process never consults.
+        claude_limits_source=ConfigLimitsSource(config.path or paths.config_path),
         projects=_project_creator(config),
         conversations=_conversation_service(projects.paths, descriptors),
         catalogue=catalogue,

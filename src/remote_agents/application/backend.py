@@ -210,6 +210,22 @@ class Backend:
     builds a partial backend.
     """
 
+    claude_limits_source: object | None = None
+    """Where Claude's account-wide limits are read from, a `ports.limits_source` port.
+
+    The third capability whose subject is the machine rather than a session, and the first
+    whose subject is *this project's own behaviour*: the two above it report and change what a
+    provider does, while this one decides whether the service reads the owner's Claude
+    credential and calls Anthropic on a timer (DEC-087/DEC-088). That is why its value lives in
+    the operator's `config.toml` rather than beside the theme in the preference file, and why
+    the row that renders it says what the second option costs.
+
+    Optional for the reason the rest are, and its absence is ordinary: a composition that wired
+    no Claude provider has no such choice to offer, and the row renders unavailable from `is
+    None` (DEC-061/067). Typed `object` for the reason `sessions` is -- naming the port here
+    would pull its import into every test double that builds a partial backend.
+    """
+
     state_events: object | None = None
     """The store-change source (`application.store_watch.StoreWatch`), a `ports.state_events`.
 

@@ -514,10 +514,18 @@ def test_the_backend_capability_set_is_read_from_the_dataclass() -> None:
     field for the reason the other two are: a host may wire readers that own nothing, and
     both surfaces call the close on their way out — reached as a field that is `None`, never
     discovered by probing the readers for an `aclose`.
+
+    **Sixteen since `claude_limits_source` joined them** (sub-plan 02, 2026-09-15), and this
+    one is the decision the count asks for. It is a declared capability because both surfaces
+    render a Settings row for it and a host that wired no Claude provider must be able to say
+    *unavailable* rather than draw a row whose press does nothing. Read as a field that is
+    `None`, never discovered by asking whether the object has a `write` — which matters more
+    here than elsewhere, since the thing behind it decides whether this service reads a
+    credential and calls out (DEC-087/DEC-088).
     """
     fields = _backend_fields()
-    assert len(fields) == 15, (
-        f"`Backend` now declares {len(fields)} fields, not 15. That is fine — but it widens "
+    assert len(fields) == 16, (
+        f"`Backend` now declares {len(fields)} fields, not 16. That is fine — but it widens "
         "what Rule 2 forbids probing for, so confirm the new field is a capability an adapter "
         "should read as a declared field rather than discover."
     )
