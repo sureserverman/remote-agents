@@ -478,7 +478,7 @@ entries fit and six do not. So it draws `F1`, `F7` and `F10` beside Escape and t
 
 **`F10` is the one exception, and only inside the console.** A surface pane hosted by the
 console is not a standalone app: quitting it closes the pane outright — the surface panes carry
-no `remain-on-exit` — and the console runs a third short until something restarts it. So under
+no `remain-on-exit` — and the console runs a pane short until something restarts it. So under
 console hosting the footer withholds `quit`. **The key still works and `F1` still lists it**;
 what changes is that the console stops advertising, in a fixed line the owner reads at a glance,
 an act that costs them a pane. Outside the console — `remote-agents tui` in an ordinary terminal

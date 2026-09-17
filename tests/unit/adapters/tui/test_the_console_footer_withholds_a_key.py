@@ -1,7 +1,7 @@
 """What the footer advertises depends on where the surface is hosted -- BL-097.
 
 `F10` is `quit`. In a bare terminal that means "leave the app" and the footer is right to say
-so. In a **console surface pane** it means "destroy a third of the console": the surface panes
+so. In a **console surface pane** it means "destroy the pane the owner is reading": those panes
 carry no `remain-on-exit`, so the pane closes outright and tmux reflows the layout over the
 gap. The owner pressed it on 2026-09-17, lost the sessions pane, and ran degraded for twenty
 minutes.

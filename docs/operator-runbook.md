@@ -1177,12 +1177,22 @@ Four facts that are easy to get wrong when a key appears not to work:
   `F3 F4 F6 F8 F9`. The sessions pane does not — its border title already lists the same acts
   as bare letters — and the limits pane draws no hint row at all.
 - **Under console hosting the footer withholds `F10`, and only there.** A console surface pane
-  carries no `remain-on-exit`, so quitting it closes the pane and the console runs a third short
+  carries no `remain-on-exit`, so quitting it closes the pane and the console runs a pane short
   until a surface start re-runs `ensure()`. The key remains bound and `F1` still lists it — this
   is de-advertisement, not removal — but the footer stops offering, in a line the owner reads at
   a glance, the one act on it that costs a pane. Outside the console the footer draws `F10` as
   before. Opened as BL-097 after the owner pressed it on 2026-09-17 and the sessions pane
   vanished.
+- **That does not cover the position you are in most often, and BL-097 stays open for it.**
+  While an agent is *displayed* in the left slot, `F10` is taken by the tmux **root** binding and
+  forwarded: the active pane carries no console slot mark and no curated agent reserves `F10`
+  (only OpenCode reserves anything, and only `F2`), so the forwarding script's third branch
+  delivers it **to the sessions pane** — which quits, exactly as if you had pressed it there.
+  **No footer is on screen to have been withheld.** So from inside a displayed agent the hazard
+  is unmitigated, and the footer change helps only when you are looking at a surface pane's own
+  footer. Closing that route means refusing the key in the forwarding script's third branch,
+  which is a separate change; it is the one mitigation that needs neither BL-039 resolved nor a
+  console rebuild.
 
 ### Upgrading from 0.41.0: what each old key became
 

@@ -129,8 +129,11 @@ FUNCTION_KEYS: tuple[FunctionKey, ...] = (
 #: owner the thing they are looking at". Off a console, `quit` leaves the app and the terminal
 #: comes back. In a console surface pane it ends *that pane's* process, and the panes carry no
 #: `remain-on-exit`: tmux closes the pane and reflows the layout over the gap, so a footer entry
-#: the owner read as "leave" silently destroys a third of the console (BL-097, hit on
-#: 2026-09-17; the console ran two panes short for twenty minutes).
+#: the owner read as "leave" silently destroys the pane they were reading (BL-097, hit on
+#: 2026-09-17; the console ran a pane short for twenty minutes). No count is written here on
+#: purpose -- `ConsolePaneSlot`'s own docstring records that prose restating the size of the
+#: thing it describes is a second declaration nothing keeps true, and it said "three" while
+#: carrying four members for exactly that reason.
 #:
 #: **De-advertisement, not removal.** The key stays bound, it still quits, and F1's panel still
 #: lists it -- `BindingsTable` renders `active_bindings` without filtering on `show`, which is

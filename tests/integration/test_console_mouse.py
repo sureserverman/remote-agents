@@ -48,14 +48,31 @@ async def test_the_console_server_reads_mouse_on_and_an_untouched_server_does_no
 ) -> None:
     """Two servers, one built by us and one not: the difference is the whole claim.
 
-    Asserting only that our server has `mouse on` would pass just as well if the option were
-    a tmux default or set by the owner's `~/.tmux.conf` -- which is exactly the confusion
-    that made this defect hard to see on the owner's host, where a hand-written config was
-    supplying it. The untouched server is the control that rules both out.
+    **Both servers are started with `-f /dev/null`, and that is what makes the claim
+    unconditional.** tmux reads its configuration once, at *server* start, so a throwaway
+    session opened with `-f /dev/null` fixes the whole server to tmux's compiled defaults --
+    and `create_console`'s own `new-session` then joins that existing server rather than
+    starting a configured one. Nothing in `~/.tmux.conf`, or in any file tmux would otherwise
+    read, can reach either side of the comparison.
+
+    *This replaced a weaker version worth recording, because its docstring claimed more than
+    it did.* It said the control ruled out the owner's `~/.tmux.conf` supplying `mouse on`.
+    It could not: that file's guard is `#{m:*/remote-agents,#{socket_path}}`, a **suffix**
+    match, and these sockets are named `remote-agents-test-<uuid>`, so the guard matched
+    neither server. The test was therefore never exposed to the confound it named -- and
+    would have gone red for an unrelated reason the day somebody loosened that guard to a
+    substring, coupling the suite to a file outside the repo. `-f /dev/null` makes the
+    control mean what the docstring says: with no configuration anywhere, `on` on our socket
+    and `off` on the other is this write and nothing else.
     """
     ours, theirs = _socket(), _socket()
     runner = AsyncTmuxRunner()
     try:
+        # The server, fixed to compiled defaults before the gateway touches it. `create_console`
+        # issues a plain `new-session`, which joins this server rather than starting one.
+        await runner.run(
+            "tmux", "-L", ours, "-f", "/dev/null", "new-session", "-d", "-s", "pin", "sleep", "30"
+        )
         gateway = TmuxGateway(ours, runner, intent_directory=tmp_path / "intents")
         await gateway.create_console(("sh", "-c", "sleep 30"), tmp_path)
         await gateway.write_console_server_option("mouse", "on")
@@ -64,12 +81,14 @@ async def test_the_console_server_reads_mouse_on_and_an_untouched_server_does_no
             await runner.run("tmux", "-L", ours, "show-options", "-g", "-v", "mouse")
         ).strip() == "on", "the console's own server did not take the option"
 
-        await runner.run("tmux", "-L", theirs, "new-session", "-d", "-s", "t", "sleep", "30")
+        await runner.run(
+            "tmux", "-L", theirs, "-f", "/dev/null", "new-session", "-d", "-s", "t", "sleep", "30"
+        )
         assert (
             await runner.run("tmux", "-L", theirs, "show-options", "-g", "-v", "mouse")
         ).strip() == "off", (
-            "a server this project never built came up with mouse on -- the write is not "
-            "scoped to our socket, or something outside this test is setting it"
+            "a server this project never built, started with no configuration at all, came "
+            "up with mouse on -- so the write is not scoped to our socket"
         )
     finally:
         await _kill(ours)
