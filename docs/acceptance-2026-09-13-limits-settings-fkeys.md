@@ -364,15 +364,36 @@ presser cannot see.
 
 ## Section 4 — The deploy (Sub-plan 04, Task 1.4)
 
-**This section is a skeleton. Every capture slot below is unfilled.** Task 1.4 runs the real
-deploy on the owner's host and pastes the real output into these blocks; nothing here may be
-written from reasoning, from a test run, or from what a previous version printed. A slot that
-cannot be filled is recorded as *not obtained* with the reason, not quietly dropped.
+**Filled 2026-09-17** on the owner's host. Every block below is real output, pasted as it
+printed; nothing is written from reasoning or from a previous version. Where a claim could not be
+driven from here it is recorded as *not obtained* with the reason rather than dropped.
 
-The deploy sequence Task 1.4 runs, in order: `remote-agents upgrade --version v0.42.0`;
-`remote-agents install-agent-hooks --provider claude` (the status-line hop — the owner's consent
-belongs in the capture); `systemctl --user restart remote-agents`; then the four console panes
-respawned by process, because a shipped feature can be invisible until the service restarts.
+The deploy sequence Task 1.4 ran, in order: `remote-agents upgrade --version v0.42.0`;
+`remote-agents install-agent-hooks --provider claude` (the status-line hop); `systemctl --user
+restart remote-agents`; then the four console panes respawned by process, because a shipped
+feature can be invisible until the service restarts.
+
+**The owner's consent for the hop, recorded as this task requires.** The hop edits
+`~/.claude/settings.json`, which is outside this repo, so it was not installed unasked. The owner
+was shown what it does (records only `rate_limits` plus `recorded_at` to
+`~/.local/state/remote-agents/claude-limits.json` at `0600`, then runs their existing command on
+the same bytes), what it changes, its measured cost (**~0.03 s** against their existing status
+line's ~0.16 s, on a redraw already debounced at 300 ms), and that `--remove` restores their
+command. They answered: **"install the hop"**.
+
+**What the wrap did to their settings, verified rather than asserted.** Their previous command —
+the planning plugin's `sh -c '…statusline-chain.sh…'` resolver — was preserved verbatim as the
+wrapper's `--then` word. Recovering it with `shlex.split` returns the original **exactly**:
+`recovered == original: True`, both 317 characters. Comparing the file before and after, the only
+top-level keys that changed are `hooks` and `statusLine`, and the set of hook event names is
+identical either side (`Notification`, `PostToolUse`, `SessionEnd`, `Stop`, `StopFailure`) — the
+three remote-agents hooks were already installed and were re-confirmed, not added.
+
+**An incidental repair.** `~/.local/state/remote-agents/` held
+`.claude-limits.json.3541474.tmp`, 248 bytes, dated 2026-09-13 — litter from sub-plan 01's
+testing, and an artifact of the pid-suffixed temporary name that the shipped code replaced with a
+random suffix precisely because a reused pid made `O_EXCL` refuse later writes. The hop's own
+`_collect_abandoned_temporaries` swept it on first run; the directory now holds no `.tmp` files.
 
 ### 4.1 — `remote-agents doctor`: the version, the hop, the limits source
 
@@ -380,9 +401,35 @@ The one live artifact the Stage 1 gate names. It must show the installed release
 status-line hop installed (before the deploy this host answered *"status-line hop not installed"*,
 which is why sub-plan 01's first gate box is `[~]`), and the Claude limits source.
 
+**Before the hop was installed** — `upgrade` had already landed `0.42.0`, and the report named
+its own missing piece, which is the state sub-plan 01 predicted:
+
 ```
-PENDING — filled by Task 1.4
+'release': {'installed': '0.42.0', 'latest': 'v0.42.0', 'newer_available': False}
+'claude_limits': 'status-line hop not installed (run remote-agents install-agent-hooks --provider claude)'
+'claude_limits_source': 'status line'
 ```
+
+**After:**
+
+```
+'release': {'installed': '0.42.0', 'latest': 'v0.42.0', 'newer_available': False, 'reason': None}
+'claude_limits': 'status-line hop installed'
+'claude_limits_source': 'status line'
+'config': {... 'claude_limits_source': 'status-line' ...}
+```
+
+Asserted as values rather than read: version `0.42.0` **PASS**, hop installed **PASS**, limits
+source `status line` **PASS**, exit 0.
+
+**A defect in this task's own check, found by running it.** The authored test was
+`remote-agents doctor | grep -c '0.42.0\|status-line hop installed\|Claude limits source'` = 3.
+It returned **1** with all three facts true, for two independent reasons: `doctor` prints its
+report as a **single line**, so `grep -c` — which counts matching *lines* — has a ceiling of 1;
+and the literal `Claude limits source` never occurs, the key being `claude_limits_source`. The
+check was amended in the plan under the amendment protocol to split on commas and match the three
+facts individually, which returns **3**, and was proved non-vacuous by a mutant substituting wrong
+literals (`0.41.0`, `status-line hop NOT installed`, `borrowed cache`) that returns **0**.
 
 ### 4.2 — The limits pane: Codex's two windows and Claude's row
 
@@ -390,8 +437,54 @@ Codex's two windows within one refresh, Claude's within one Claude turn, with th
 Control row drawn under the Codex one. This is also where sub-plan 01's first gate box is settled:
 the Claude entry must read `status line` rather than `NO_READING` once the hop is installed.
 
+**The owner's own limits pane**, captured from the running console (`tmux -L remote-agents
+capture-pane -p -t %3`) on the deployed build, after the respawn:
+
 ```
-PENDING — filled by Task 1.4
+ claude  5h ███░░░░░ 28% ↻ 1h  wk █░░░░░░░  7% ↻ 6d
+ codex   5h ██░░░░░░ 18% ↻ 1h  wk █████░░░ 60% ↻ 3d
+ Claude Remote Control · on
+ Codex Remote Control · on
+```
+
+Both providers carry **two windows each**, and the Claude Remote Control row is drawn under the
+Codex limits row, as specified. Neither Remote Control line is truncated here — sub-plan 02's
+handoff flagged `· Claude's default` (40 cells) and `· unavailable` (35) as overflowing a 28-cell
+pane; this pane is 83 cells wide and the wired `· on` reading is short, so that hazard is not
+exercised by this capture and remains open as sub-plan 02 recorded it.
+
+**Sub-plan 01's first gate box, settled.** The master's `[~]` box asks for a Codex entry with two
+windows and `stale_source=None` and a Claude entry stamped `status line`. Driven through the real
+composition on this host, post-deploy:
+
+```
+AgentLimits(profile_id=ProfileId(value='claude'),
+  windows=(UsageWindow(label='5h',   used_percent=28.000000000000004, resets_at=2026-09-17 22:00 UTC),
+           UsageWindow(label='week', used_percent=7.000000000000001,  resets_at=2026-09-24 09:00 UTC)),
+  observed_at=2026-09-17 20:37:35 UTC, absence=None, stale_source='status line')
+
+AgentLimits(profile_id=ProfileId(value='codex'),
+  windows=(UsageWindow(label='5h',   used_percent=18.0, resets_at=2026-09-17 21:59:27 UTC),
+           UsageWindow(label='week', used_percent=60.0, resets_at=2026-09-21 14:21:20 UTC)),
+  observed_at=2026-09-17 20:37:40 UTC, absence=None, stale_source=None)
+
+AgentLimits(profile_id=ProfileId(value='opencode'),     windows=(), absence=NOT_REPORTED)
+AgentLimits(profile_id=ProfileId(value='cursor-agent'), windows=(), absence=NOT_REPORTED)
+```
+
+Codex: two windows, `stale_source=None` — the live RPC, not the rollout fallback. Claude: two
+windows, `stale_source='status line'` — the hop, not the retired `/tmp/claude` cache. **The
+`[~]` box is ticked from this run.**
+
+**The reading the hop actually wrote**, at `~/.local/state/remote-agents/claude-limits.json`,
+mode `0600`. Note what is *absent*: the document Claude Code sends also carries a session id, a
+model id and a working directory, and none of them is stored — DEC-013's boundary holding in
+practice rather than in prose.
+
+```json
+{"rate_limits": {"five_hour": {"used_percentage": 28.000000000000004, "resets_at": 1789682400},
+                 "seven_day": {"used_percentage": 7.000000000000001,  "resets_at": 1790240400}},
+ "recorded_at": 1789677398.0377867}
 ```
 
 ### 4.3 — `F2` from a displayed agent opens Settings, on the deployed build
@@ -399,9 +492,50 @@ PENDING — filled by Task 1.4
 §3 case 3 proved this on a disposable console built by the composer, on the branch. This slot
 proves it again on the installed `v0.42.0` against the owner's own console.
 
+**The claim splits in two, and only one half was driven against the owner's own panes. Both are
+recorded for what they are.**
+
+**(a) `F2` opens Settings on the owner's live console — driven here.** `F2` was sent to the real
+sessions pane (`%1`, a process respawned from the deployed build) and the five-row screen opened:
+
 ```
-PENDING — filled by Task 1.4
+ ⭘                     remote-agents  Sessions › Settings
+ Press enter on a row to change it.
+
+▊ Claude Remote Control · on                                                      ▎
+▊ Codex Remote Control · on                                                       ▎
+▊ Claude limits source · status line                                              ▎
+▊ Theme · night                                                                   ▎
+▊ Project order · recent first                                                    ▎
+
+ esc back  f1 help  f10 quit                                           ▏^p palette
 ```
+
+Five rows, as sub-plan 02's `SETTINGS_ROWS` declares. The third row reads **`Claude limits source
+· status line`** — the hop confirmed a third time, now through the UI a person actually looks at.
+`Escape` returned the pane to its sessions list, and the limits pane was unaffected; both were
+re-captured to confirm it.
+
+**(b) `F2` *from a displayed agent* — not driven against the owner's console, and why.** That
+route needs an agent pane occupying a console slot. At deploy time the owner's agent panes sat in
+their own windows (`@4 claude`, `@0 codex`) rather than swapped into a slot, so the route was not
+reachable without rearranging their live console — and one of those panes is very likely the
+session performing this deploy, which must not be sent keys. **Not obtained, by choice, with the
+reason recorded.**
+
+It was instead driven on the disposable console the composer builds, on the deployed commit,
+which is the same artifact §3 used and the one BL-041 explains the need for:
+
+```
+REMOTE_AGENTS_LIVE_ACCEPTANCE=1 uv run --locked pytest \
+  tests/live/test_three_pane_console.py -k function_keys -q
+1 passed, 10 deselected in 26.63s
+```
+
+Matching sub-plan 03's recorded 26.5 s. That test asserts all three of §3's cases, including `F2`
+from a displayed agent reaching the sessions pane and `F2` into an OpenCode-marked pane. **So the
+forwarding half is proved on the shipped code, not on the owner's own arrangement of it**, and
+the distinction is left visible here rather than collapsed into a single tick.
 
 ### ACTION NEEDED — the owner has not seen the bot's Settings or the Claude limits line on their phone
 
