@@ -57,7 +57,12 @@ with `SETTINGS` in `_POSITIONS`. It closed BL-057 and BL-058 and recorded DEC-09
 **Evidence: §2**, which is a live reading rather than a fixture — the real composition root over
 this machine's own `config.toml`, settings file and Codex daemon — and which also records the two
 deliberate asymmetries between the surfaces, the limits pane's truncation arithmetic, and the
-open `ACTION NEEDED` on `SETTINGS.svg` that became BL-093 so it would outlive the closed plan.
+`ACTION NEEDED` on `SETTINGS.svg` that became BL-093 so it would outlive the closed plan —
+**now resolved 2026-09-17**: the baseline was rendered, read against `SETTINGS_ROWS` and against
+the live console, judged correct, and BL-093 removed from the backlog. *(This sentence said
+"the open `ACTION NEEDED`" until that reading — §0 going stale against a later section for the
+second time, which is the hazard the as-of note above names. It is cheap to fix and easy to miss,
+and that is the whole point of writing it down twice.)*
 
 **Sub-plan 03 — The F-key console.** Closed 2026-09-17 on the same branch, 23 commits
 `bf5e5c0..4259dc5` from base `886829f`, every task `[x]` and all three stage gates green. It
@@ -196,15 +201,44 @@ project order (DEC-053) and a phone has no theme this project chooses.
    21-cell title that fills the pane, so this is a wording decision for a later task rather than
    a defect.
 
-### ACTION NEEDED — the owner has not looked at `SETTINGS.svg` (BL-093)
+### RESOLVED 2026-09-17 — `SETTINGS.svg` has now been read (BL-093)
 
 `tests/unit/adapters/tui/snapshots/SETTINGS.svg` is committed and the suite compares against it
-forever, but a baseline is only worth what the first reading of it was worth. **Nobody has yet
-opened this one and confirmed it shows what the screen should show.** Until that happens it
-pins the render that existed when it was captured, which is not the same claim.
+forever, but a baseline is only worth what the first reading of it was worth, and **nobody had
+opened this one.** It has now been rendered and read, and the render was sent to the owner so the
+reading is not this session's alone.
 
-Tracked as **BL-093** so it outlives this document: the plan that produced it is closed, and an
-open item whose only home is a closed plan's acceptance record is one nobody is holding.
+**Verdict: it shows what the Settings screen should show.** Checked against
+`SETTINGS_ROWS` and against the live deployed console rather than against expectation:
+
+- **Five rows, in the declared order**, each `Title · value`: `Claude Remote Control · Claude's
+  default`, `Codex Remote Control · on`, `Claude limits source · usage API (reads your Claude
+  credential, calls Anthropic)`, `Theme · night`, `Project order · recent first`.
+- **The selection rests on row 1**, drawn bold on a highlight — so the capture proves the screen
+  opens with a row selected rather than with nothing focused, which is the property
+  `test_no_screen_rests_the_keyboard_on_a_hidden_widget` exists to protect.
+- **The limits-source row carries its full parenthetical** — *reads your Claude credential, calls
+  Anthropic*. That is `CLAUDE_USAGE_API_DESCRIPTION`, and it is the one row whose value names a
+  cost the owner is consenting to, so a baseline that had silently truncated it would have been
+  the worst single thing this file could pin. It is intact at 78 cells, untruncated.
+- **Instruction line** `Press enter on a row to change it.`, and the footer offers
+  `esc back · f1 help · f7 add project · f10 quit · ^p palette`.
+
+**Two things checked because they looked wrong, and are not.** `f7 add project` on a *Settings*
+footer seems out of place, but F7 is one of the three global flow-jumps `switch_flow` handles —
+it leaves Settings and starts the add-project flow, so it does do something here, which is
+exactly the rule the footer follows. (The owner's console **pane** shows `esc / f1 / f10` instead;
+that is a host-capability difference between the full TUI and a surface pane, not a disagreement.)
+And the breadcrumb's lowercase `dashboard` in `Projects › dashboard › Settings` is
+`DashboardScreen.crumb` itself — it appears in all twenty-plus snapshots, so it is a project-wide
+convention rather than anything this baseline introduced.
+
+**One property this capture does not exercise, stated so the next reader does not assume it
+does:** the limits-source row is the longest thing either surface draws, and the capture is taken
+wide enough that nothing truncates. Narrow-terminal behaviour for that row is untested here, and
+is the same wording problem §2's second asymmetry describes for the limits pane.
+
+*This resolves **BL-093**, which is removed from the backlog.*
 
 Its text content, for the record:
 
