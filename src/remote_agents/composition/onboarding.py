@@ -302,6 +302,7 @@ def _report_on_the_onboarded_host(paths: ProductionPaths, *, installed_daemon: b
         if isinstance(carried, dict) and not carried.get(key, True):
             mine.append(f"{section} ({key} is false)")
 
+    _say_what_the_hop_would_add(report)
     if mine:
         print(f"onboarding did not complete: {', '.join(sorted(mine))}", file=sys.stderr)
         return 1
@@ -312,6 +313,37 @@ def _report_on_the_onboarded_host(paths: ProductionPaths, *, installed_daemon: b
         print(f"onboarding complete. Still to do, and not part of onboarding: {', '.join(theirs)}")
         print("  These are yours to finish; `remote-agents doctor` reports them at any time.")
     return 0
+
+
+def _say_what_the_hop_would_add(report: dict[str, object]) -> None:
+    """Name the status-line hop, in words, when the host has not got it (BL-099).
+
+    **Read off `report["claude_limits"]` rather than probed again.** `_doctor_report` has
+    carried that reading since the hop shipped, and it is the same string
+    `install-agent-hooks --remove` agrees with, so there is one answer and one place it is
+    decided. A second predicate here would be a second thing to keep true.
+
+    **Why onboarding says anything at all.** `install_agent_hooks` has exactly one caller in
+    `src/` — its own CLI command. Onboarding does not call it, `upgrade` does not, and
+    `scripts/install.sh` does not. So a fresh host finishes here looking entirely healthy while
+    the Claude limits row reads as *absent* — which is DEC-061's "absent is a first-class
+    answer" behaving exactly as designed, and therefore **indistinguishable from a provider
+    that genuinely publishes nothing**. The operator has no way to tell a host that cannot
+    report limits from one that has nothing to report, and the only artifact that says
+    otherwise is `doctor`, which nothing prompts them to run.
+
+    Silent once installed. A notice that prints either way teaches the reader to skip it, and
+    the whole value here is that this line appears exactly when there is something to do.
+    """
+    state = report.get("claude_limits")
+    if not isinstance(state, str) or "not installed" not in state:
+        return
+    print("Claude limits are not readable on this host yet, and onboarding did not change that.")
+    print("  remote-agents install-agent-hooks --provider claude")
+    print(
+        "  Until then the Claude row reads as absent, which looks the same as a provider that "
+        "publishes nothing."
+    )
 
 
 def _prepared_dev_root(dev_root: Path) -> str:
