@@ -69,7 +69,11 @@ class LiveConsole:
             self.gateway, {_PROJECT: home}, {_PROFILE: probe_profile()}, startup_timeout=15
         )
         self.composer = ConsoleComposer(
-            self.gateway, ("sleep", "600"), home, projects_command=("true",)
+            self.gateway,
+            ("sleep", "600"),
+            home,
+            projects_command=("true",),
+            reserved_keys={},
         )
         self.home = home
 

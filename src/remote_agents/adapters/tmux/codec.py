@@ -384,8 +384,8 @@ _BINDABLE_KEY_CHARACTERS = frozenset(
 #: has to still be right when the key is pressed.
 #:
 #: One name does: the guard compares the pressing client's session against
-#: `CONSOLE_SESSION_NAME`, so renaming `ra-console` makes every chord on this route inert. That
-#: is the deliberate trade for failing closed — see `_forward_to_sessions_command`.
+#: `CONSOLE_SESSION_NAME`, so renaming `ra-console` makes every key on this route inert. That
+#: is the deliberate trade for failing closed — see `_forward_function_key_command`.
 #:
 #: `$TMUX` is inherited by `run-shell`'s child, so the bare `tmux` here reaches the same server
 #: without the socket being spelled again. Measured on tmux 3.4 rather than read off the manual,
@@ -418,36 +418,6 @@ def _console_only_command(command: tuple[str, ...]) -> tuple[str, ...]:
     extra process between tmux and our program buys nothing.
     """
     return ("sh", "-c", f"{_PRESSED_FROM_THE_CONSOLE} exec {shlex.join(command)}")
-
-
-def _forward_to_sessions_command(key: str) -> tuple[str, ...]:
-    """The `sh -c` argv that forwards one key to the console's sessions pane.
-
-    **The first clause is a guard, not a nicety, and it is what makes this binding obey
-    DEC-073(3).** A tmux key table belongs to the *server*, not to a session, and managed agents
-    are attached on this same socket (`attach_argv`) — so without it `prefix` + the chord fires
-    from **any** client on the server, including a plain `remote-agents attach ra-<uuid>` with no
-    console pane on screen at all. That was reproduced before this line existed: the chord
-    delivered an unconfirmed graceful stop (DEC-018) to the sessions pane's cursor, on a row the
-    owner could not see, from a terminal that is not part of the console.
-
-    The read-side gate cannot cover this route. That gate runs inside the *pressing* process,
-    and on the prefix route the presser is tmux. So the same question — is this one of the
-    console's own surfaces? — is asked here instead, of the client that pressed the key.
-
-    `key` is interpolated into a shell string, which is safe **only** because
-    `console_binding_args` validates it as `[C-|M-]?[A-Za-z0-9]+` *before* calling this. That
-    ordering is load-bearing: weakening or moving that check is a shell-injection change, not a
-    refactor.
-    """
-    script = (
-        f"{_PRESSED_FROM_THE_CONSOLE} "
-        f'pane=$(tmux list-panes -a -F "#{{pane_id}}" '
-        f'-f "#{{==:#{{{CONSOLE_SLOT_OPTION}}},{ConsolePaneSlot.SESSIONS.value}}}" '
-        f"| head -n 1); "
-        f'test -n "$pane" && tmux send-keys -t "$pane" {key}'
-    )
-    return ("sh", "-c", script)
 
 
 #: A function key, as tmux spells it. F1-F12 and nothing else.
@@ -509,8 +479,8 @@ def _forward_function_key_command(
     3. **otherwise** — the sessions pane, found by its slot mark.
 
     **Branch 3 refuses ambiguity rather than picking a winner**, which is where this parts
-    company with `_forward_to_sessions_command`'s `head -n 1`. That one is a prefix key; this is
-    a root key, and the key it delivers can be an unconfirmed stop (DEC-018) — so two panes
+    company with the retired prefix layer's `head -n 1`. That one was a prefix key; this is a
+    root key, and the key it delivers can be an unconfirmed stop (DEC-018) — so two panes
     carrying the sessions mark deliver nothing at all. `grep -c .` rather than `wc -l`: an empty
     result still prints one line through `printf`, and BSD `wc` pads its output, so counting
     non-empty lines is both the correct arithmetic and the portable one.
@@ -567,8 +537,8 @@ def console_binding_args(
     the key is validated here rather than trusted, and why the *set* is declared in one place in
     the application layer rather than accumulated. `-T prefix` costs an agent nothing, because
     tmux takes the prefix in the client; it costs something else instead, which
-    `_forward_to_sessions_command` carries: a key table is the *server's*, so a prefix binding
-    fires from every client on it unless the script asks who pressed it.
+    `_PRESSED_FROM_THE_CONSOLE` carries: a key table is the *server's*, so a binding in either
+    table fires from every client on it unless the script asks who pressed it.
 
     A `SHOW_PROJECTS` binding with nothing to run is refused rather than installed as a key
     that quietly does nothing — which is not hypothetical: the composer's projects command
@@ -590,10 +560,10 @@ def console_binding_args(
 
     **A value *is* interpolated now, and the paragraph this replaces said the opposite.**
     `SHOW_PROJECTS` still takes a fixed tuple built from `sys.executable`, so nothing
-    owner-controlled reaches it. `FORWARD_TO_SESSIONS` builds its own command by interpolating
-    `key` into a shell string (`_forward_to_sessions_command`), which is the "future binding
-    built from a value" the old paragraph warned about — it arrived in the same change that
-    left the warning standing.
+    owner-controlled reaches it. `FORWARD_FUNCTION_KEY` builds its own command by interpolating
+    `key` — and every reserving profile's name — into a shell string
+    (`_forward_function_key_command`), which is the "future binding built from a value" the old
+    paragraph warned about.
 
     It is safe, and it is safe for one reason worth naming precisely: the alphanumeric
     validation immediately below runs **before** the action branch, so by the time the script is
@@ -639,15 +609,6 @@ def console_binding_args(
                     f"a profile name reaching the forwarding script is unsafe: {name!r}"
                 )
         command = _forward_function_key_command(key, reserved_keys)
-    elif action is ConsoleBindingAction.FORWARD_TO_SESSIONS:
-        if table is not ConsoleKeyTable.PREFIX:
-            # The forwarding keys are affordable *because* they are prefix keys — eight of them
-            # in the root table would take eight keys from every agent on this server, against a
-            # budget DEC-041 fixed at one. Refused here rather than left to a caller's care.
-            raise ValueError("a forwarding chord may only be bound in the prefix table")
-        if command:
-            raise ValueError("the forwarding binding builds its own command")
-        command = _forward_to_sessions_command(key)
     elif action is ConsoleBindingAction.SHOW_PROJECTS:
         if not command:
             raise ValueError("the projects binding needs the command that returns the surface")

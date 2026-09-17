@@ -11,7 +11,7 @@ vocabulary is panes now: split them, mark them with what they are, exchange one 
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
@@ -71,14 +71,17 @@ class ConsoleKeyTable(Enum):
 class ConsoleBindingAction(Enum):
     """What one console binding does — a closed set, not a description.
 
-    Root *and* prefix: `SHOW_PROJECTS` and `FORWARD_FUNCTION_KEY` are root-only,
-    `FORWARD_TO_SESSIONS` and `TOGGLE_PANES` prefix-only, and each is refused in the other
-    table where it is built. Which table a binding goes in is `ConsoleKeyTable`, not this.
+    Root *and* prefix: `SHOW_PROJECTS` and `FORWARD_FUNCTION_KEY` are root-only and
+    `TOGGLE_PANES` is prefix-only, each refused in the other table where it is built. Which
+    table a binding goes in is `ConsoleKeyTable`, not this.
 
     A binding's action decides tmux argv, so it is chosen from here rather than passed as
     free text (DEC-001).
 
-    **Four members, and a fifth was removed.** A `FOCUS_NEXT_PANE` action bound a second root key
+    **Three members, and two were removed.** `FORWARD_TO_SESSIONS` bound one prefix key per
+    Alt chord and retired with that layer: it existed because a chord typed inside a displayed
+    agent reached the agent instead of the console, and a root function key does not have that
+    problem. The other: A `FOCUS_NEXT_PANE` action bound a second root key
     to `select-pane -t :.+`, on the premise that a displayed agent consumes the prefix key
     along with everything else the owner types. That premise is false — tmux intercepts the
     prefix in the *client*, before any key reaches the pane, so `prefix + o` already cycles
@@ -109,31 +112,6 @@ class ConsoleBindingAction(Enum):
 
     The reservation reaches this action from the provider's own descriptor through the registry
     (DEC-070); the codec never holds a list of its own.
-    """
-
-    FORWARD_TO_SESSIONS = "forward_to_sessions"
-    """Resend this key to the console's sessions pane, wherever it currently is.
-
-    The prefix table's action, and the answer to the one place a pane-local binding cannot
-    reach: a displayed agent owns the left pane's keyboard, so a key typed there goes to the
-    agent. `prefix` + the same key costs the agent nothing — DEC-041's own finding is that tmux
-    intercepts the prefix in the *client*, before any key reaches the pane — and lands on the
-    pane that already handles the bare row keys.
-
-    Resolved at press time by the pane's slot mark rather than by a pane id captured at install:
-    the sessions pane can be rebuilt while the binding stands, and a stale id would forward the
-    key into whatever now holds that number. tmux does the lookup itself, filtering
-    `list-panes -a` on that mark, so no *pane id* of ours has to be right when the key lands.
-
-    **One name does have to be right, and it is the price of failing closed.** A tmux key table
-    belongs to the server, and managed agents attach to that same server — so the binding also
-    asks the pressing client which session it is attached to, and does nothing unless that is
-    the console (DEC-073(3)). Renaming the console session therefore makes every chord on this
-    route inert rather than making it fire from the wrong place.
-
-    The mark's own name is spelled once, in the codec that writes it — see
-    `test_the_mark_vocabulary_has_one_home.py`, which caught this docstring spelling it a second
-    time, which is exactly the drift it exists for.
     """
 
     SHOW_PROJECTS = "show_projects"
@@ -268,6 +246,8 @@ class ConsolePort(Protocol):
         action: ConsoleBindingAction,
         command: tuple[str, ...] = (),
         table: ConsoleKeyTable = ConsoleKeyTable.ROOT,
+        *,
+        reserved_keys: Mapping[str, frozenset[str]] | None = None,
     ) -> None: ...
 
     async def console_zoomed_pane(self) -> str | None: ...

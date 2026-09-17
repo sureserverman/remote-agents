@@ -208,6 +208,9 @@ def _fold_script(root: Path) -> Path:
         "    Path(sys.argv[2]),\n"
         '    projects_command=("true",),\n'
         "    arrangement_lock=Path(sys.argv[3]),\n"
+        # Stated, not defaulted: a composer that forwards function keys refuses to be built
+        # without knowing which keys the agents already bind, and this subprocess has none.
+        "    reserved_keys={},\n"
         ")\n"
         "asyncio.run(composer.toggle_panes())\n",
         encoding="utf-8",
@@ -291,6 +294,7 @@ async def console_with_surfaces(tmp_path):
             )
             for slot in ConsolePaneSlot
         },
+        reserved_keys={},
     )
     try:
         assert await composer.ensure() is True

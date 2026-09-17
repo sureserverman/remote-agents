@@ -198,97 +198,24 @@ def test_anything_that_is_not_a_session_decodes_to_no_selection(raw: str) -> Non
     assert decode_selection(raw) is None
 
 
-def test_a_prefix_binding_forwards_the_key_to_the_pane_carrying_the_sessions_mark() -> None:
-    """The argv one forwarding chord installs, and the two escapes it depends on.
+def test_the_root_table_still_installs_a_key_that_runs_our_own_program() -> None:
+    """The one assertion worth keeping from the retired prefix layer's tests.
 
-    **`-T prefix`, never `-n`.** That is the difference between a key that costs every agent on
-    this server nothing and eight keys that cost them everything (DEC-041).
+    Those three covered `FORWARD_TO_SESSIONS`, which retired with the Alt chords it carried:
+    it bound one prefix key per chord so a chord typed inside a displayed agent could still
+    reach the console, and a root function key does not have that problem. Their guard,
+    table-refusal and derives-its-own-command properties all have counterparts in the
+    `function_key` tests above, asserted against the action that replaced it.
 
-    **The pane is resolved at press time, by tmux, from the slot mark.** A pane id captured at
-    install would forward the key into whatever holds that number once the pane is rebuilt; the
-    mark travels with the pane and outlives it (DEC-038). No *pane id* of ours has to still be
-    right when the key is pressed — one *name* does, and the guard asserted below is why.
-
-    The `##{...}` is not a typo and is the whole reason this is asserted at argv level:
-    `run-shell` expands its string as a tmux **format** before `/bin/sh` sees it, so the doubling
-    is what carries the lookup's own `#{...}` through to the *inner* tmux. Measured on tmux 3.4
-    together with the delivery itself — the emitted argv resolves the marked pane and the key
-    arrives in it.
+    What was left over is this: `SHOW_PROJECTS` is still a root binding, and it is the one
+    action that runs *our program* rather than tmux against tmux. Kept because nothing else in
+    this file asserts that the root table installs anything at all.
     """
-    argv = console_binding_args(
-        "M-s", ConsoleBindingAction.FORWARD_TO_SESSIONS, table=ConsoleKeyTable.PREFIX
-    )
+    argv = console_binding_args("F12", ConsoleBindingAction.SHOW_PROJECTS, ("true",))
 
-    assert argv[:4] == ("bind-key", "-T", "prefix", "M-s"), (
-        f"a forwarding chord must go in the prefix table, not the root one: {argv}"
-    )
-    assert argv[4] == "run-shell"
-    script = argv[5]
-    assert "-n" not in argv, "a forwarding chord in the root table would cost every agent a key"
-    assert "##{pane_id}" in script, "the inner tmux will not see a pane-id format to expand"
-    assert f"##{{{CONSOLE_SLOT_OPTION}}}" in script, "the lookup does not read the slot mark"
-    assert "sessions" in script, "the lookup does not name the sessions slot"
-    # The key the binding forwards must be the key it is bound to. Asserted on the `send-keys`
-    # clause rather than on the string's tail, which carries shlex's own closing quote.
-    assert 'send-keys -t "$pane" M-s' in script, f"the key forwarded is not the one bound: {script}"
-
-    # **The guard, pinned here because this is the suite CI actually runs.** `tests/live` is not
-    # in `ci.yml`'s list and is skipped locally without an opt-in flag, so before this assertion
-    # the whole protection could be deleted and every gating test stayed green.
-    #
-    # What it protects: a tmux key table belongs to the *server*, and managed agents attach on
-    # that same server, so without this clause the chord fired from any client on the socket --
-    # an owner in a plain `remote-agents attach` sending an unconfirmed stop (DEC-018) to a row
-    # they could not see. Reproduced on a real server before it was closed; DEC-073(3).
-    #
-    # **The whole clause, not its parts.** Two substring assertions were the first attempt and
-    # both survived an inverted guard: `!= "ra-console"` still contains `= "ra-console"`, and
-    # `|| true` in place of `|| exit 0` was asserted by nothing at all. Either mutant keeps CI
-    # green while the chord fires from *every* client except the console, or from all of them —
-    # which is the DEC-018 hole this fence exists for, reopened by a test that only checks the
-    # fence is mentioned.
-    guard = (
-        f'test "$(tmux display-message -p "##{{client_session}}")" = "{CONSOLE_SESSION_NAME}" '
-        f"|| exit 0;"
-    )
-    assert guard in script, (
-        "the forwarding chord does not refuse a client attached to anything but the console, "
-        f"so it fires from any client on this server (DEC-073(3)): {script}"
-    )
-
-
-def test_a_forwarding_chord_is_refused_in_the_root_table() -> None:
-    """Refused where it is built, rather than left to a caller's care.
-
-    The eight chords are affordable *because* they are prefix keys. A caller that asked for one
-    in the root table would be spending eight keys from a budget of one — silently, since the
-    argv is otherwise identical and every test of the chord layer would still pass.
-    """
-    with pytest.raises(ValueError, match="prefix table"):
-        console_binding_args(
-            "M-s", ConsoleBindingAction.FORWARD_TO_SESSIONS, table=ConsoleKeyTable.ROOT
-        )
-
-    # A *third* table needs no runtime check any more: `ConsoleKeyTable` is a closed set, so
-    # there is no third value to pass. That check existed while `table` was a bare string and
-    # went away with the string — the enum earning its place, not a weakening. The root binding
-    # still builds, unaffected by any of this.
-    assert console_binding_args(
-        "F12", ConsoleBindingAction.SHOW_PROJECTS, ("true",), table=ConsoleKeyTable.ROOT
-    )[:3] == ("bind-key", "-n", "F12")
-
-
-def test_a_forwarding_chord_builds_its_own_command() -> None:
-    """It takes no command, because the one it needs is derived from the key it is bound to.
-
-    `SHOW_PROJECTS` runs *our program* and so must be handed it; this runs tmux against tmux and
-    can build itself. A caller passing one would be supplying a command that could disagree with
-    the key — which is exactly the drift the derivation exists to prevent.
-    """
-    with pytest.raises(ValueError, match="builds its own command"):
-        console_binding_args(
-            "M-s", ConsoleBindingAction.FORWARD_TO_SESSIONS, ("true",), table=ConsoleKeyTable.PREFIX
-        )
+    assert argv[:3] == ("bind-key", "-n", "F12")
+    assert argv[3] == "run-shell"
+    assert "true" in argv[4]
 
 
 def test_the_panes_key_runs_our_own_program_from_the_prefix_table() -> None:
@@ -638,9 +565,6 @@ def test_no_console_binding_script_carries_a_raw_control_character() -> None:
     built = {
         "F2": console_binding_args(
             "F2", ConsoleBindingAction.FORWARD_FUNCTION_KEY, reserved_keys=_RESERVED
-        ),
-        "M-s": console_binding_args(
-            "M-s", ConsoleBindingAction.FORWARD_TO_SESSIONS, table=ConsoleKeyTable.PREFIX
         ),
         "F12": console_binding_args("F12", ConsoleBindingAction.SHOW_PROJECTS, ("true",)),
         "z": console_binding_args(

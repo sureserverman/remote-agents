@@ -26,11 +26,7 @@ from remote_agents.adapters.tmux.profiles import (
 )
 from remote_agents.adapters.tmux.runtime import AsyncTmuxRunner, TmuxTerminal
 from remote_agents.adapters.tui import FRONTEND
-from remote_agents.application.console import (
-    CONSOLE_BINDINGS,
-    RecoveryReport,
-    console_prefix_bindings,
-)
+from remote_agents.application.console import CONSOLE_BINDINGS, RecoveryReport
 from remote_agents.composition.backend import (
     ProjectCatalogueProvider,
     compose_backend,
@@ -209,7 +205,7 @@ def _console_composer(gateway=None, home: Path | None = None):
     # (`test_the_composition_root_does_not_load_the_terminal_library`). This function only runs
     # under console hosting, where Textual is loaded anyway. Same shape as `local_context`'s own
     # deferred `hosting_mode` import, for the same reason.
-    from remote_agents.adapters.tui.screens.sessions import _FORWARDED_ROW_KEYS
+    from remote_agents.adapters.agents.registry import reserved_keys_by_profile
     from remote_agents.application.console import ConsoleComposer, console_panes_binding
     from remote_agents.ports.console import ConsolePaneSlot
 
@@ -219,21 +215,18 @@ def _console_composer(gateway=None, home: Path | None = None):
         home if home is not None else Path.home(),
         projects_command=_projects_command(),
         panes_command=_panes_command(),
-        # Root keys plus the prefix layer. **Joined here and nowhere else**, because the two
-        # halves live on opposite sides of a layer boundary: the argument for what a prefix
-        # binding is belongs to `application/console.py`, and the forwarded letters are derived
-        # from the TUI's own row-key table. The composition root is the one place allowed to
+        # The root row plus the fold key. **Joined here and nowhere else**, because the two live
+        # on opposite sides of a layer boundary: the root set and the argument for its size
+        # belong to `application/console.py`, and folding the column is a convenience declared
+        # apart from the budget on purpose. The composition root is the one place allowed to
         # know both (the same split `attach_to`'s injected `switch_argv` makes).
-        # Plus the fold key, which is a third declaration on purpose: the root budget is
-        # `CONSOLE_BINDINGS`, the forwards are derived from the TUI's row keys, and folding
-        # the column is neither. It is joined here because this is the one place allowed to
-        # know all three.
-        #
-        # **The prefix forwards are inert as of Stage 1** and Stage 2 deletes them: the Alt
-        # bindings they delivered to are gone, and the F-key root set replaces them.
-        bindings=CONSOLE_BINDINGS
-        + console_prefix_bindings(_FORWARDED_ROW_KEYS)
-        + (console_panes_binding(),),
+        bindings=CONSOLE_BINDINGS + (console_panes_binding(),),
+        # Which keys each curated agent already binds, folded from the providers' own
+        # descriptors (DEC-070). Supplied here rather than defaulted in the composer, because a
+        # console that forwards function keys and does not know the reservations takes
+        # OpenCode's F2 from the owner without a word -- `ConsoleComposer` refuses to be built
+        # that way rather than trusting this line to be remembered.
+        reserved_keys=reserved_keys_by_profile(),
         arrangement_lock=ProductionPaths.for_home(
             home if home is not None else Path.home()
         ).console_lock_path,

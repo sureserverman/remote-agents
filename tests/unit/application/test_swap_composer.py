@@ -133,7 +133,9 @@ class RecordingConsole:
 def composer(console: RecordingConsole) -> ConsoleComposer:
     from pathlib import Path
 
-    return ConsoleComposer(console, ("dashboard",), Path("/tmp"), projects_command=("projects",))
+    return ConsoleComposer(
+        console, ("dashboard",), Path("/tmp"), projects_command=("projects",), reserved_keys={}
+    )
 
 
 def _hosts(console: RecordingConsole) -> dict[str, str]:

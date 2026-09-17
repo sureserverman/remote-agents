@@ -26,7 +26,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -169,75 +169,91 @@ class ConsoleBinding:
     """
 
 
-#: The console's whole **root** key budget: one key.
+#: The console's **root** key set: the function-key row, minus the one the terminal keeps.
 #:
-#: Not its whole key budget any more — the console also takes eight prefix keys
-#: (`console_prefix_bindings`), which cost a different currency and are argued for separately.
-#: The two are kept apart deliberately: this number is the one DEC-041 fixed, and it is the one
-#: a reader must not see grow.
+#: **Supersedes DEC-041**, which fixed this budget at one key and required the argument for its
+#: size to be the decision. The budget is now eleven, and the argument is here rather than in a
+#: commit message.
 #:
-#: The size is the decision, and this set got smaller at the Stage 2 gate rather than larger.
-#: It held a second key, F11, for cycling pane focus, argued on the premise that "the
-#: displayed agent consumes the prefix key along with everything else the owner types". That
-#: premise is false, and the gate evaluator proved it before this code did: tmux intercepts
-#: the prefix **in the client**, before any key reaches the pane, so `prefix + o` already
-#: cycles the console's panes at no cost to any agent. The repo already contained the
-#: contradiction — the README tells the owner to detach with `Ctrl-b d` from inside this very
-#: console. A key that buys one keystroke over an existing chord is not worth taking from
-#: every agent on the server forever, so it is not taken.
+#: *What changed the arithmetic.* DEC-041 costed a root key as "a key every agent on this
+#: server can never receive", which is true and is why one was all it would spend. The premise
+#: it could not check at the time was whether the agents want these keys at all. They were
+#: checked, on 2026-09-13: Claude Code binds no function key, Codex binds none, Cursor CLI
+#: binds none (`cursor-agent --help` on 2026.09.10 names none and its config carries none), and
+#: OpenCode binds exactly one, F2. So ten of these eleven keys cost every curated agent
+#: nothing, because none of them was ever going to receive them — and the eleventh is not taken
+#: either: `FORWARD_FUNCTION_KEY` passes a reserved key *through* to the pane whose provider
+#: declared it (DEC-070), so OpenCode still gets its F2.
+#:
+#: *What is still paid.* An agent this project does not curate may bind a function key, and
+#: this set takes it. That is a real cost and it is the one being accepted: the row is the
+#: owner's whole control surface from inside a displayed agent, which is the position DEC-040
+#: puts them in most often, and there is no prefix-free key left that buys it.
+#:
+#: **F11 is absent by construction**, here and in the TUI's own table. It is the terminal's
+#: full-screen toggle almost everywhere, and an owner pressing it would have no way to tell
+#: which side swallowed it.
+#:
+#: **The eight prefix forwards are gone with the Alt layer they served.** They existed because
+#: a chord typed inside a displayed agent reached the agent; a root key does not have that
+#: problem, which is the whole reason the row is worth its cost.
+
+#: The cost argument every forward in the row carries, stated once because it *is* the same
+#: argument for each of them.
+#:
+#: Deliberately says nothing about what any individual key does, and that is a layer boundary
+#: rather than brevity: the console's job is to deliver a key to the right pane, and what the
+#: key means once it lands is the surface's business (`adapters/tui/keys.py`). Ten copies of a
+#: sentence naming ten acts would be this module holding a second, drifting opinion about a
+#: table it does not own.
+_FORWARD_COST = (
+    "One of the function-key row, bound at the root so it reaches the owner inside a displayed "
+    "agent -- the one position DEC-040 puts them in where no pane-local binding can be pressed. "
+    "It costs the curated agents nothing: none of the four binds this key, and the one "
+    "reservation that exists (OpenCode's F2) is passed through to its own pane rather than "
+    "taken. What it does cost is an uncurated agent that binds a function key, which is the "
+    "price accepted when DEC-041's budget was superseded."
+)
+
+#: The ten keys the console forwards. F11 is not among them and F12 is the exchange below.
+#:
+#: **Spelled out rather than generated from a range**, for two reasons that both come down to
+#: what a reader can see. `test_the_key_budget_is_declared_in_one_place` sweeps this module for
+#: each key as a literal, so that a second budget cannot be assembled anywhere else — and a
+#: comprehension declares nothing it can find. More importantly, F11's absence is the decision
+#: here, and `range(1, 11)` states it as an off-by-one that the next author will read as a
+#: mistake and "fix".
+_FORWARDED_FUNCTION_KEYS: tuple[str, ...] = (
+    "F1",
+    "F2",
+    "F3",
+    "F4",
+    "F5",
+    "F6",
+    "F7",
+    "F8",
+    "F9",
+    "F10",
+    # F11 is the terminal's. See the set's own note above.
+)
+
 CONSOLE_BINDINGS: tuple[ConsoleBinding, ...] = (
     ConsoleBinding(
         JUMP_HOME_KEY,
         ConsoleBindingAction.SHOW_PROJECTS,
         "The route back from a displayed agent, and the one console operation tmux cannot "
         "perform by itself: bringing the surface home is an exchange chosen from our own "
-        "pane marks, so the key has to run our program. That much forces a binding; it does "
-        "not force a *root* binding, and the choice is deliberate rather than necessary. A "
-        "prefix binding would cost no agent anything and work identically for an owner who "
-        "knows their prefix. This is root because the way back is the one thing that must "
-        "not require remembering configuration: under the swap model an agent fills the pane "
-        "the owner was working in, which is exactly when a console looks stuck. One key, on "
-        "one server, stated as the cost it is. Inherited from the tab model, where it meant "
-        "select-window 0 — under the swap model that selects the window the owner is already "
-        "on, so the key survives and its action does not.",
+        "pane marks, so the key has to run our program. It is the one member of this row "
+        "that is not a forward, and it keeps that shape now the rest of the row exists: F12 "
+        "means *go home to the projects list* on both sides of the boundary -- the console "
+        "exchanges the pane, and off a console the surface's own F12 returns to projects "
+        "within the process. The owner presses one key and gets one idea either way.",
+    ),
+    *(
+        ConsoleBinding(key, ConsoleBindingAction.FORWARD_FUNCTION_KEY, _FORWARD_COST)
+        for key in _FORWARDED_FUNCTION_KEYS
     ),
 )
-
-
-def console_prefix_bindings(keys: Sequence[str]) -> tuple[ConsoleBinding, ...]:
-    """The Alt layer, made reachable from inside a displayed agent — one prefix key per chord.
-
-    **Eight keys, and they cost no agent anything**, which is why there can be eight of them
-    beside a root budget of one. DEC-041 fixed that budget after establishing the fact this
-    relies on: tmux intercepts the prefix in the *client*, so a `-T prefix` binding is invisible
-    to every pane. The root set is untouched and its test still pins it at length 1.
-
-    The gap they close is DEC-040's. When an agent is exchanged into the left pane it owns that
-    pane's keyboard, so a chord typed there reaches the agent rather than the console — the one
-    position from which the layer is unreachable. `prefix` then the same chord goes to the
-    sessions pane, which handles the bare row key it forwards.
-
-    **A function taking the keys, rather than a tuple built from them, and the reason is a layer
-    boundary.** The chord vocabulary is the TUI's — it is derived from the row-key table in
-    `adapters/tui/screens/sessions.py` — and this module is application policy, which may not
-    import an adapter. Importing it here is both an architecture violation and a genuine import
-    cycle (`adapters/tui/context.py` imports this module). So the *policy* of what a prefix
-    binding is, and the argument for it, lives here; the *vocabulary* stays where it is derived;
-    and the composition root, which is the one place allowed to know both, joins them. That is
-    the same split `attach_to`'s injected `switch_argv` already makes for the same reason.
-    """
-    return tuple(
-        ConsoleBinding(
-            f"M-{key}",
-            ConsoleBindingAction.FORWARD_TO_SESSIONS,
-            "One of the session chords, reachable from inside a displayed agent. Costs no agent "
-            "a keystroke — tmux takes the prefix in the client — and costs the owner only the "
-            "prefix they already press to detach. Without it the layer has exactly one blind "
-            "spot, and it is the position DEC-040 puts the owner in most often.",
-            table=ConsoleKeyTable.PREFIX,
-        )
-        for key in keys
-    )
 
 
 def console_panes_binding() -> ConsoleBinding:
@@ -350,6 +366,7 @@ class ConsoleComposer:
         panes_command: tuple[str, ...] = (),
         pane_commands: Mapping[ConsolePaneSlot, tuple[str, ...]] | None = None,
         bindings: tuple[ConsoleBinding, ...] = CONSOLE_BINDINGS,
+        reserved_keys: Mapping[str, frozenset[str]] | None = None,
         arrangement_lock: Path | None = None,
     ) -> None:
         self._console = console
@@ -385,6 +402,25 @@ class ConsoleComposer:
                 "a console that binds the fold key needs the command that folds its panes"
             )
         self._panes_command = panes_command
+        # Which keys each provider's agent already binds, so a forward hands one over instead
+        # of taking it (DEC-070: the declaration is the provider's, this only carries it).
+        #
+        # **Required the moment a forward is bound, and refused rather than defaulted**, which
+        # is the same trap `projects_command` and `panes_command` each paid for once. The
+        # default here would be `{}` -- a perfectly valid mapping meaning "no agent reserves
+        # anything" -- so a composition root that forgot to pass it would build a console that
+        # comes up, installs every key, and quietly steals OpenCode's F2 from the owner. No
+        # exception, no log line, and the only symptom is a key doing the wrong thing in one
+        # agent. This task's own Tier-1 review predicted exactly that, so the omission is made
+        # loud where it is visible instead of silent where it is not.
+        if reserved_keys is None and any(
+            binding.action is ConsoleBindingAction.FORWARD_FUNCTION_KEY for binding in bindings
+        ):
+            raise ValueError(
+                "a console that forwards function keys needs the reservations to pass through; "
+                "pass reserved_keys={} only to state that no provider reserves one"
+            )
+        self._reserved_keys = dict(reserved_keys or {})
         # One command per pane. Absent, `ensure` builds the **one-pane** console it always
         # built, running `dashboard_command` — which is still a real shape (a bare terminal
         # running the combined dashboard) and is what every caller that predates the layout
@@ -450,7 +486,11 @@ class ConsoleComposer:
             }.get(binding.action, ())
             try:
                 await self._console.install_console_binding(
-                    binding.key, binding.action, command, binding.table
+                    binding.key,
+                    binding.action,
+                    command,
+                    binding.table,
+                    reserved_keys=self._reserved_keys,
                 )
             except Exception:
                 _LOG.exception(

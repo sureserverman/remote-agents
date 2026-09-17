@@ -65,6 +65,7 @@ async def test_the_composer_journey_holds_on_real_tmux(tmp_path: Path) -> None:
         # for real in `test_three_pane_console.py` — what this file is about is the
         # composer's journey over them.
         pane_commands={slot: ("sleep", "600") for slot in ConsolePaneSlot},
+        reserved_keys={},
     )
     base = ("tmux", "-L", socket)
     try:

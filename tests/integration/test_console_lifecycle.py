@@ -133,7 +133,11 @@ async def test_opening_a_session_exchanges_it_into_the_consoles_left_pane() -> N
         )
     )
     composer = ConsoleComposer(
-        console, ("remote-agents", "tui"), Path("/tmp"), projects_command=("true",)
+        console,
+        ("remote-agents", "tui"),
+        Path("/tmp"),
+        projects_command=("true",),
+        reserved_keys={},
     )
     launcher = _Launcher([_record(SessionState.RUNNING)])
     app = RemoteAgentsTui(_context(launcher, composer))
@@ -163,7 +167,11 @@ async def test_a_reload_notices_the_session_the_other_writer_stopped() -> None:
         )
     )
     composer = ConsoleComposer(
-        console, ("remote-agents", "tui"), Path("/tmp"), projects_command=("true",)
+        console,
+        ("remote-agents", "tui"),
+        Path("/tmp"),
+        projects_command=("true",),
+        reserved_keys={},
     )
     launcher = _Launcher([_record(SessionState.ENDED)])
     app = RemoteAgentsTui(_context(launcher, composer))
@@ -198,7 +206,11 @@ async def test_a_reload_leaves_a_trust_blocked_agent_on_screen() -> None:
         )
     )
     composer = ConsoleComposer(
-        console, ("remote-agents", "tui"), Path("/tmp"), projects_command=("true",)
+        console,
+        ("remote-agents", "tui"),
+        Path("/tmp"),
+        projects_command=("true",),
+        reserved_keys={},
     )
     launcher = _Launcher([_record(SessionState.UNTRUSTED)])
     app = RemoteAgentsTui(_context(launcher, composer))

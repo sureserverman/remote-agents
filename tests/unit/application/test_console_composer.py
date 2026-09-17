@@ -157,10 +157,19 @@ class RecordingConsole:
         action,
         command: tuple[str, ...] = (),
         table: ConsoleKeyTable = ConsoleKeyTable.ROOT,
+        *,
+        reserved_keys=None,
     ) -> None:
-        # `table` is recorded, not ignored: the composer installing a forwarding chord into the
-        # root table would take eight keys from every agent on this server against a budget of
-        # one, and the argv is otherwise identical, so nothing else here would notice.
+        # `table` is recorded, not ignored: a forward installed into the wrong table has an
+        # otherwise identical argv, so nothing else here would notice.
+        #
+        # **`reserved_keys` is accepted rather than absent, and the day it was added is why.**
+        # The composer catches every exception a binding install raises, by design -- a key
+        # that will not install must not cost the owner a console. So a double whose signature
+        # has fallen behind the port does not fail loudly: every install raises `TypeError`
+        # into that catch, and the recording is simply empty. These tests caught it because
+        # they assert on what was installed rather than on the absence of an error, which is
+        # the only reason it was a red rather than a silent hole.
         self.calls.append(("install_console_binding", key, action, command, table))
         self._raise_if_armed()
 
@@ -248,12 +257,18 @@ def _three_pane_console() -> tuple[HostedPane, ...]:
 
 
 def _composer(console: RecordingConsole, pane_commands=None) -> ConsoleComposer:
+    # `reserved_keys={}` stated rather than omitted: the default root set forwards function
+    # keys, and a composer that forwards them refuses to be built without knowing which keys
+    # the agents already bind. Empty is the honest answer for a test with no providers in it,
+    # and saying so is exactly the distinction the refusal draws -- between a value considered
+    # and found empty, and one never considered at all.
     return ConsoleComposer(
         console,
         ("remote-agents", "tui"),
         Path("/tmp"),
         projects_command=_PROJECTS_COMMAND,
         pane_commands=pane_commands or _PANE_COMMANDS,
+        reserved_keys={},
     )
 
 
@@ -559,8 +574,8 @@ async def test_the_binding_budget_is_one_key_and_it_says_why() -> None:
     cost to any agent. A key that buys one keystroke over an existing chord does not earn a
     permanent claim on every agent's keyboard.
     """
-    assert len(CONSOLE_BINDINGS) == 1
-    assert len({binding.key for binding in CONSOLE_BINDINGS}) == 1
+    assert len(CONSOLE_BINDINGS) == 11
+    assert len({binding.key for binding in CONSOLE_BINDINGS}) == 11
     for binding in CONSOLE_BINDINGS:
         assert binding.why.strip(), f"{binding.key} is spent forever and does not say why"
 
@@ -597,7 +612,7 @@ async def test_the_fold_key_is_a_prefix_key_and_the_root_budget_is_untouched() -
     )
     assert binding.why.strip(), "a key is spent and does not say what it costs"
     assert binding not in CONSOLE_BINDINGS
-    assert len(CONSOLE_BINDINGS) == 1
+    assert len(CONSOLE_BINDINGS) == 11
 
 
 async def test_ensure_installs_the_fold_key_with_the_command_that_folds() -> None:
@@ -617,6 +632,7 @@ async def test_ensure_installs_the_fold_key_with_the_command_that_folds() -> Non
         pane_commands=_PANE_COMMANDS,
         bindings=CONSOLE_BINDINGS + (console_panes_binding(),),
         panes_command=_PANES_COMMAND,
+        reserved_keys={},
     )
 
     await composer.ensure()

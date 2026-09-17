@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import sys
-from collections.abc import Iterator, Sequence
+from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
@@ -930,10 +930,17 @@ class TmuxGateway:
         action: ConsoleBindingAction,
         command: tuple[str, ...] = (),
         table: ConsoleKeyTable = ConsoleKeyTable.ROOT,
+        *,
+        reserved_keys: Mapping[str, frozenset[str]] | None = None,
     ) -> None:
-        """Install one console binding, on this socket only; the codec validates key and table."""
+        """Install one console binding, on this socket only; the codec validates key and table.
+
+        `reserved_keys` reaches the codec untouched: a function-key forward builds its script
+        from it, and every other action ignores it.
+        """
         await self._runner.run(
-            *self._base_argv(), *console_binding_args(key, action, command, table)
+            *self._base_argv(),
+            *console_binding_args(key, action, command, table, reserved_keys=reserved_keys),
         )
 
     def _base_argv(self) -> tuple[str, str, str]:

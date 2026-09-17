@@ -108,7 +108,7 @@ class RecordingConsole:
         raise AssertionError("an existing console must not be recreated")
 
     async def install_console_binding(
-        self, key: str, action, command=(), table=ConsoleKeyTable.ROOT
+        self, key: str, action, command=(), table=ConsoleKeyTable.ROOT, *, reserved_keys=None
     ) -> None:
         return None
 
@@ -151,7 +151,9 @@ class RecordingConsole:
 
 
 def composer(console: RecordingConsole) -> ConsoleComposer:
-    return ConsoleComposer(console, ("dashboard",), Path("/tmp"), projects_command=("projects",))
+    return ConsoleComposer(
+        console, ("dashboard",), Path("/tmp"), projects_command=("projects",), reserved_keys={}
+    )
 
 
 def _at_rest(console: RecordingConsole) -> bool:

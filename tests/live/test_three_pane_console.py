@@ -140,6 +140,7 @@ async def test_the_console_comes_up_whole_and_its_keys_reach_every_pane(
         # render is the second test below, and every one of their behaviours is pinned
         # headless in tests/unit/adapters/tui.
         pane_commands={slot: ("sleep", "600") for slot in ConsolePaneSlot},
+        reserved_keys={},
     )
     try:
         assert await composer.ensure() is True
@@ -274,10 +275,12 @@ async def test_the_projects_key_brings_the_surface_back_from_a_displayed_agent(
                 "from remote_agents.application.console import ConsoleComposer;"
                 "from pathlib import Path;"
                 f"c=ConsoleComposer(TmuxGateway('{console_socket}',AsyncTmuxRunner()),"
-                f"('sleep','600'),Path('{tmp_path}'),projects_command=('true',));"
+                f"('sleep','600'),Path('{tmp_path}'),projects_command=('true',),"
+                "reserved_keys={});"
                 "asyncio.run(c.show_projects())",
             ),
             pane_commands={slot: ("sleep", "600") for slot in ConsolePaneSlot},
+            reserved_keys={},
         )
         assert await composer.ensure() is True
         surface = next(
@@ -383,6 +386,7 @@ async def test_each_pane_surface_renders_its_own_content_in_the_console(
             )
             for slot in ConsolePaneSlot
         },
+        reserved_keys={},
     )
     try:
         assert await composer.ensure() is True
@@ -468,6 +472,7 @@ async def test_the_owner_journey_through_the_three_pane_console(tmp_path: Path) 
             )
             for slot in ConsolePaneSlot
         },
+        reserved_keys={},
     )
     try:
         assert await composer.ensure() is True
@@ -694,6 +699,7 @@ async def test_a_console_killed_while_displaying_names_the_session_it_stranded(
             tmp_path,
             projects_command=("true",),
             pane_commands={slot: ("sleep", "600") for slot in ConsolePaneSlot},
+            reserved_keys={},
         )
 
     try:
@@ -880,6 +886,7 @@ async def test_the_sessions_cursor_survives_resize_and_tick(tmp_path: Path) -> N
             )
             for slot in ConsolePaneSlot
         },
+        reserved_keys={},
     )
     try:
         assert await composer.ensure() is True
@@ -960,6 +967,7 @@ async def test_the_published_selection_follows_the_cursor_over_real_tmux(tmp_pat
         home,
         projects_command=("true",),
         pane_commands={slot: ("sleep", "600") for slot in ConsolePaneSlot},
+        reserved_keys={},
     )
 
     async def read_option_from_another_process() -> str:
@@ -1024,6 +1032,7 @@ async def test_the_selection_dies_with_the_console_that_published_it(tmp_path: P
             home,
             projects_command=("true",),
             pane_commands={slot: ("sleep", "600") for slot in ConsolePaneSlot},
+            reserved_keys={},
         )
 
     try:
@@ -1081,6 +1090,7 @@ async def test_the_read_side_gate_answers_a_real_console_and_a_real_exchange(
         home,
         projects_command=("true",),
         pane_commands={slot: ("sleep", "600") for slot in ConsolePaneSlot},
+        reserved_keys={},
     )
 
     try:
