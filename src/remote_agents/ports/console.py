@@ -366,3 +366,15 @@ class ConsolePort(Protocol):
     async def write_console_option(self, name: str, value: str) -> None:
         """Write one console window option. Raises; the composer owns the log line."""
         ...
+
+    async def write_console_server_option(self, name: str, value: str) -> None:
+        """Write one **global session** option on our own tmux server. Raises; composer logs.
+
+        Separate from `write_console_option` rather than a flag on it, because the two differ
+        in more than scope: that one writes `@`-namespaced user options against the console
+        *window*, this one writes tmux's own options against the whole server, and the
+        adapter guards them by different rules (a namespace prefix there, an allowlist here).
+        One method taking a scope argument would have to carry both guards and pick between
+        them, which is the shape that lets a caller reach the wrong one.
+        """
+        ...

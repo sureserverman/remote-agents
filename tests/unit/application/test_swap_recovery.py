@@ -101,6 +101,10 @@ class RecordingConsole:
     # the double has to answer it. Written without these, the repair tests passed vacuously:
     # the missing attribute raised, `ensure` swallowed it per DEC-036, and "nothing was
     # marked" looked like the correct answer for the case that should mark.
+    async def write_console_server_option(self, name: str, value: str) -> None:
+        """The server option `ensure` sets (BL-098). This double records nothing else either."""
+        return None
+
     async def console_exists(self) -> bool:
         return True
 

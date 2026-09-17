@@ -73,6 +73,10 @@ class RecordingConsole:
     async def pane_arrangement(self) -> tuple[HostedPane, ...]:
         return self.arrangement
 
+    async def write_console_server_option(self, name: str, value: str) -> None:
+        """The server option `ensure` sets (BL-098). This double records nothing else either."""
+        return None
+
     async def console_exists(self) -> bool:
         return True
 

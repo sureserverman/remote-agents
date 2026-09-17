@@ -17,6 +17,7 @@ from remote_agents.adapters.tmux.codec import (
     console_option_args,
     console_pane_geometry_args,
     console_resize_pane_args,
+    console_server_option_args,
     console_slot_mark_args,
     console_target,
     console_zoom_args,
@@ -603,6 +604,15 @@ class TmuxGateway:
     async def write_console_option(self, name: str, value: str) -> None:
         """Record one window option. Raises; the composer owns the log line (DEC-036)."""
         await self._runner.run(*self._base_argv(), *console_option_args(name, value))
+
+    async def write_console_server_option(self, name: str, value: str) -> None:
+        """Set one global session option on our server. Raises; the composer logs (DEC-036).
+
+        `_base_argv()` is what confines this to our socket, and it is the only thing that
+        does — `console_server_option_args` deliberately builds no target, because a target
+        would be a second, weaker answer to a question this already answers absolutely.
+        """
+        await self._runner.run(*self._base_argv(), *console_server_option_args(name, value))
 
     async def rejoin_console_pane(
         self,

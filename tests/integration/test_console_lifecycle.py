@@ -58,6 +58,10 @@ class RecordingConsole:
         self.panes = list(panes)
         self.calls: list[tuple] = []
 
+    async def write_console_server_option(self, name: str, value: str) -> None:
+        """Record the server option the composer sets (BL-098); a double, not a tmux call."""
+        self.calls.append(("write_console_server_option", name, value))
+
     async def console_exists(self) -> bool:
         return True
 

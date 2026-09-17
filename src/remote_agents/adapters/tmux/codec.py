@@ -798,6 +798,47 @@ def console_option_args(name: str, value: str | None) -> tuple[str, ...]:
     return ("set-option", "-w", "-t", console_target(), name, value)
 
 
+#: The tmux **server** options this project may set, by name. An allowlist rather than a
+#: prefix rule because these are tmux's own names: `@` protects `console_option_args` above,
+#: and there is no syntax that distinguishes a server option we own from one we do not.
+#:
+#: `mouse` earns its place (BL-098). With tmux's default `off`, tmux enables terminal mouse
+#: reporting only for the **active** pane's application -- and the console's resting state is
+#: an agent displayed in the left slot. An agent that does not ask for mouse (codex reports
+#: `mouse_any_flag=0`) therefore means tmux never asks the terminal to report mouse at all,
+#: so clicking a surface pane does nothing. Measured on the owner's host 2026-09-17: the
+#: three surface panes report `mouse_any_flag=1` -- they want it -- and the active agent
+#: pane `0`.
+#:
+#: The accepted cost, recorded because it is real and is why tmux does not default to it:
+#: native terminal text selection then needs Shift held, and the wheel enters copy-mode in
+#: panes that do not request mouse. It is accepted on **this project's own socket only**.
+_OWNED_SERVER_OPTIONS = frozenset({"mouse"})
+
+
+def console_server_option_args(name: str, value: str) -> tuple[str, ...]:
+    """Return the argv suffix setting one **global session** option on our own server.
+
+    `-g`, not `-w` or `-p`: `mouse` is a session option, and the console and the `ra-<uuid>`
+    sessions an agent launch creates share one server. Setting it globally is what makes the
+    behaviour the same whichever of them the owner is looking at.
+
+    **No target.** Every command this adapter builds already runs through
+    `("tmux", "-L", <our socket>)`, so the write cannot reach another server -- which is the
+    property `test_console_mouse.py` proves against a real one rather than asserting here.
+
+    The allowlist refusal keeps `set -g` from becoming a general escape hatch: it is the
+    widest write in this codec, and a later caller reaching for it to set `prefix` or
+    `default-shell` would be reconfiguring a server the owner did not ask us to touch.
+    """
+    if name not in _OWNED_SERVER_OPTIONS:
+        raise ValueError(
+            f"{name} is not a server option this project owns; "
+            f"owned: {', '.join(sorted(_OWNED_SERVER_OPTIONS))}"
+        )
+    return ("set-option", "-g", name, value)
+
+
 def console_slot_mark_args(
     pane_id: str, slot: ConsolePaneSlot = ConsolePaneSlot.PROJECTS
 ) -> tuple[str, ...]:

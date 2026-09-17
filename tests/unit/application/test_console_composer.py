@@ -218,6 +218,17 @@ class RecordingConsole:
         self._raise_if_armed()
         self.options[name] = value
 
+    async def write_console_server_option(self, name: str, value: str) -> None:
+        """The server option `ensure` sets (BL-098). Recorded, and armed like its sibling.
+
+        Armed deliberately: `ensure` wraps this call in its own try/except so a tmux that
+        refuses it costs the mouse and not the console, and a double that could never raise
+        would leave that branch unexercised.
+        """
+        self.calls.append(("write_console_server_option", name, value))
+        self._raise_if_armed()
+        self.options[name] = value
+
     async def display_message(self, text: str) -> None:
         self.calls.append(("display_message", text))
         self._raise_if_armed()
@@ -1233,3 +1244,52 @@ async def test_a_show_whose_unzoom_fails_leaves_the_record_saying_folded() -> No
     assert console.options["@remote_agents_panes_hidden"] == "1", (
         "the window is still folded, so the record must still say folded"
     )
+
+
+async def test_ensure_turns_the_mouse_on_and_survives_a_server_that_refuses() -> None:
+    """`ensure` sets the mouse, and a refusal costs the mouse rather than the console (BL-098).
+
+    Two claims in one test because they are one decision. The call has to *happen* — the
+    integration test proves the gateway's argv reaches a real tmux, and nothing else proves
+    the composer ever asks. And it has to happen **outside the answer `ensure` returns**,
+    beside the bindings loop and for that loop's stated reason: a key that will not install
+    costs the owner that key, not the console, and a mouse setting is the same shape. A
+    version that let this raise would turn a cosmetic tmux refusal into "the console could
+    not be prepared", which `_enter_console` reads as a reason not to attach at all.
+
+    Asserted on the recorded call rather than on `options`, because what is being checked is
+    that the composer *asked* — a double that stored the value without recording the call
+    would satisfy an `options["mouse"] == "on"` assertion while `ensure` had never run it.
+
+    The refusing double overrides the one method rather than using `RecordingConsole(error=)`,
+    which arms *every* call: that would make `console_exists` raise, `ensure` return False,
+    and the test pass for the wrong reason entirely.
+    """
+
+    class RefusesTheMouse(RecordingConsole):
+        async def write_console_server_option(self, name: str, value: str) -> None:
+            self.calls.append(("write_console_server_option", name, value))
+            raise RuntimeError("tmux refused the option")
+
+    def _composer(console: RecordingConsole) -> ConsoleComposer:
+        return ConsoleComposer(
+            console,
+            ("remote-agents", "tui"),
+            Path("/tmp"),
+            projects_command=_PROJECTS_COMMAND,
+            pane_commands=_PANE_COMMANDS,
+            reserved_keys={},
+        )
+
+    console = RecordingConsole()
+    assert await _composer(console).ensure() is True
+    assert ("write_console_server_option", "mouse", "on") in console.calls, (
+        "ensure did not turn the mouse on; a console whose active pane is an agent that does "
+        "not request mouse then never has it reported at all"
+    )
+
+    refusing = RefusesTheMouse()
+    assert await _composer(refusing).ensure() is True, (
+        "a tmux that refused the mouse option cost the owner the whole console"
+    )
+    assert ("write_console_server_option", "mouse", "on") in refusing.calls

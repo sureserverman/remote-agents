@@ -498,6 +498,21 @@ class ConsoleComposer:
                     "the console key %s could not be installed; the console stands without it",
                     binding.key,
                 )
+        # The mouse, here and **outside the answer** for exactly the reason the bindings are:
+        # a setting that will not apply costs the owner the mouse, it does not cost them the
+        # console. Idempotent, so it reaches a console built before this existed on the next
+        # start rather than only a freshly created one -- which is the whole point, since the
+        # consoles that need it most are the long-lived ones (BL-098).
+        #
+        # Why the console sets it at all, when tmux's default is `off`: with `off`, tmux
+        # enables terminal mouse reporting only for the **active** pane's application, and
+        # this console's resting state is an agent displayed in the left slot. An agent that
+        # does not ask for mouse means tmux never asks the terminal to report it, so clicking
+        # a surface pane does nothing at all. The three surfaces do ask for it.
+        try:
+            await self._console.write_console_server_option("mouse", "on")
+        except Exception:
+            _LOG.exception("the console mouse setting could not be applied; clicks may not land")
         return True
 
     async def _build_panes(self) -> tuple[str, ...]:
