@@ -746,8 +746,8 @@ class _SessionActionKeys:
 
         DEC-040's exchange, run backwards. It writes no record and touches no lifecycle, so it
         needs none of the re-read-and-re-check machinery every other key here routes through --
-        and DEC-041's root-key budget is untouched, because this is a screen binding inside our
-        own process rather than a tmux root key. `CONSOLE_BINDINGS` is not edited.
+        and the root-key budget is untouched, because this is a screen binding inside our own
+        process rather than a tmux root key. `CONSOLE_BINDINGS` is not edited.
 
         A failure is reported as what it is. The console degrading is not the session going
         wrong, and saying so in lifecycle terms would send the owner looking at an agent that

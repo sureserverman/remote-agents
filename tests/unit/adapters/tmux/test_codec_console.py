@@ -221,9 +221,10 @@ def test_the_root_table_still_installs_a_key_that_runs_our_own_program() -> None
 def test_the_panes_key_runs_our_own_program_from_the_prefix_table() -> None:
     """Folding the column is our program's job, and the key that runs it is free.
 
-    **`-T prefix`, and refused anywhere else** (the test below). The root budget is one key
-    (DEC-041) and it is already spent on the way back from a displayed agent; a fold is a
-    convenience, and a convenience does not take a key from every agent on this server.
+    **`-T prefix`, and refused anywhere else** (the test below). Every root key is argued for
+    one at a time against what it takes from the owner's agents (DEC-093, which supersedes
+    DEC-041's budget of one); a fold is a convenience, and a convenience does not earn a key
+    every agent on this server can never receive.
 
     **It runs our program rather than tmux's own `resize-pane -Z`** for the reason the option
     exists at all: the fold is eight measured resizes plus a zoom plus a window option that

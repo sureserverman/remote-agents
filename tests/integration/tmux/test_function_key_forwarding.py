@@ -92,9 +92,11 @@ class _Server:
             self.tmux("set-option", "-p", "-t", pane, _PROFILE_OPTION, profile)
 
     def install(self, key: str) -> None:
-        self.tmux(*console_binding_args(
-            key, ConsoleBindingAction.FORWARD_FUNCTION_KEY, reserved_keys=_RESERVED
-        ))
+        self.tmux(
+            *console_binding_args(
+                key, ConsoleBindingAction.FORWARD_FUNCTION_KEY, reserved_keys=_RESERVED
+            )
+        )
 
     def attach(self, session: str = CONSOLE_SESSION_NAME) -> int:
         """A real client on a real pty — the only thing that makes a root binding fire."""

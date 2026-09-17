@@ -159,8 +159,8 @@ widget; that was a Critical at review, and
 bindings ever disagree.
 
 **Not a root binding, so `CONSOLE_BINDINGS` is untouched.** This is a screen binding inside
-our own process, exactly as `p` on the sessions pane is, and DEC-041's one-root-key budget
-still stands at one -- see `action_show_projects_pane`, which records the same distinction.
+our own process, exactly as `p` on the sessions pane is, and the root-key budget (DEC-093) is
+unaffected -- see `action_show_projects_pane`, which records the same distinction.
 """
 
 #: The Settings position, opened from the resting position because both of its rows are facts
@@ -180,8 +180,8 @@ still stands at one -- see `action_show_projects_pane`, which records the same d
 #: letters. `,` is also what an owner expects from every other tool that has a settings screen.
 #:
 #: **Not a root binding, so `CONSOLE_BINDINGS` is untouched**, exactly as `h` and `p` record:
-#: this is a screen binding inside our own process, and DEC-041's one-root-key budget -- a key
-#: every agent on this tmux server can never receive -- still stands at one.
+#: this is a screen binding inside our own process, and the root-key budget -- keys every agent
+#: on this tmux server can never receive -- is unaffected by it (DEC-093).
 #: `tests/architecture/test_the_console_key_budget_is_one_place.py` asserts that distinction for
 #: this key rather than leaving it to this comment.
 SETTINGS_KEY = "comma"

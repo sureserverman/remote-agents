@@ -61,7 +61,8 @@ class ConsoleKeyTable(Enum):
 
     ROOT = "root"
     """`bind-key -n`: no prefix. A key every agent on this server can never receive, for as
-    long as it is bound — the budget DEC-041 fixes at one."""
+    long as it is bound — the budget DEC-093 sets at eleven, the function-key row minus F11,
+    and which DEC-041 held at one before the agents were asked which keys they bind."""
 
     PREFIX = "prefix"
     """`bind-key -T prefix`: costs an agent nothing, because tmux intercepts the prefix in the

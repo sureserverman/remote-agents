@@ -316,8 +316,9 @@ def test_the_settings_key_is_an_app_binding_and_costs_the_root_budget_nothing() 
     **The plan's file list for that task said "budget raised by one, deliberately", and that
     expectation was wrong in a way worth recording rather than quietly satisfying.** The budget
     this file is named for is `bind-key -n`: keys taken from every agent on the tmux server, for
-    as long as they are bound, which is why DEC-041 fixed it at one and why the count is pinned
-    above. A Settings key on `DashboardScreen` is not one of those. It is a Textual screen
+    as long as they are bound, which is why DEC-041 fixed it at one, why DEC-093 could raise
+    it only by asking the agents first, and why the count is pinned above. A Settings key on
+    `DashboardScreen` is not one of those. It is a Textual screen
     binding inside our own process, dispatched by our own app from a pane tmux already gave the
     keyboard to -- the same distinction `action_show_projects_pane` and `HOST_PAIR_KEY` each
     record for `p` and `P`. Incrementing the number in this file to accommodate it would have

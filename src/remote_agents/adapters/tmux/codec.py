@@ -590,10 +590,10 @@ def console_binding_args(
     if action is ConsoleBindingAction.FORWARD_FUNCTION_KEY:
         if table is not ConsoleKeyTable.ROOT:
             # The mirror of the retired prefix forward's refusal, and for the opposite
-            # reason: a chord
-            # is affordable *because* it is a prefix key, and an F-key is only useful because it
-            # is a root one. Behind a prefix it could never reach a displayed agent, which is
-            # the single position this layer exists to serve.
+            # reason: a prefix key was affordable *because* tmux takes the prefix in the
+            # client, and an F-key is only useful because it is a root one. Behind a prefix
+            # it could never reach a displayed agent, which is the single position this
+            # layer exists to serve.
             raise ValueError("a function-key forward may only be bound in the root table")
         if command:
             raise ValueError("the function-key binding builds its own command")

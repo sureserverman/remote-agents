@@ -598,8 +598,9 @@ async def test_the_projects_binding_carries_our_own_command() -> None:
 async def test_the_fold_key_is_a_prefix_key_and_the_root_budget_is_untouched() -> None:
     """The fold takes a key, and it takes it from the table that costs an agent nothing.
 
-    `CONSOLE_BINDINGS` is the number DEC-041 fixed and the one a reader must not see grow, so
-    the fold key is deliberately *not* in it: it is a separate declaration, in the prefix
+    `CONSOLE_BINDINGS` is the root set a reader must not see grow without an argument per key
+    (DEC-093, which supersedes DEC-041's budget of one), so the fold key is deliberately *not*
+    in it: it is a separate declaration, in the prefix
     table, argued for on its own terms. A fold is a convenience — the console works without
     it — and a convenience does not earn a key every agent on this server can never receive.
     """

@@ -66,7 +66,7 @@ class TuiContext:
     #
     # An exchange, so it writes no record and touches no lifecycle (DEC-040), and it is a
     # screen binding inside our own process rather than a tmux root key, so `CONSOLE_BINDINGS`
-    # is untouched and DEC-041's one-root-key budget still stands at one.
+    # is untouched and the root-key budget (DEC-093, eleven) is unaffected.
     console_show_projects: Callable[[], Awaitable[None]] | None = None
     # What the console's start-only repair did and could not do, carried to the surface
     # rather than printed. The composition root runs `settle()` before Textual starts, so a
