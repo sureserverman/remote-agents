@@ -236,7 +236,7 @@ def test_the_terminal_delivers_each_key_under_the_name_the_table_binds() -> None
     assert delivered["f11"] == "f11"
 
 
-def test_every_binding_built_from_the_table_is_priority_and_shown() -> None:
+def test_every_binding_built_from_the_table_is_priority_and_drawn_as_declared() -> None:
     bindings = function_key_bindings()
     assert len(bindings) == len(FUNCTION_KEYS)
     for entry, binding in zip(FUNCTION_KEYS, bindings, strict=True):
@@ -245,7 +245,10 @@ def test_every_binding_built_from_the_table_is_priority_and_shown() -> None:
         assert binding.action == entry.action
         assert binding.description == entry.label
         assert binding.priority is True, f"{entry.key} is not a priority binding"
-        assert binding.show is True, f"{entry.key} is hidden from the footer"
+        assert binding.show is entry.footer, (
+            f"{entry.key} is drawn in the footer as {binding.show}, not as the table's "
+            f"{entry.footer}"
+        )
 
 
 def test_the_app_binds_every_table_key_as_built() -> None:
@@ -255,7 +258,7 @@ def test_the_app_binds_every_table_key_as_built() -> None:
         assert entry.key in declared, f"{entry.key} is not bound on the app"
         assert declared[entry.key].action == entry.action
         assert declared[entry.key].priority is True
-        assert declared[entry.key].show is True
+        assert declared[entry.key].show is entry.footer
     stray = sorted(
         key
         for key in declared

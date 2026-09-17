@@ -80,30 +80,44 @@ class FunctionKey(NamedTuple):
     """One row of the F-key table.
 
     `key` is Textual's name for the key; `action` is the action string the binding runs,
-    exactly as `Binding` takes it; `label` is what the footer draws beside the key, lower-case
-    like every other footer entry on this surface; `borrowed_from` names the convention the
-    owner already knows the key by, which is what the help text will say.
+    exactly as `Binding` takes it; `label` is the words drawn beside the key, lower-case like
+    every other entry on this surface; `borrowed_from` names the convention the owner already
+    knows the key by, which is what the help text will say.
+
+    **`footer` is not about whether the key exists -- every one of them is bound, on every
+    position that answers for it.** It is about a fixed-width line that cannot hold eleven
+    entries: `Footer` draws `active_bindings` in order and *clips*, so a row that advertises
+    more than it can draw tells the owner about keys it then hides mid-word. Measured on
+    `InspectScreen` at 80 columns, which carries two bindings of its own: five app entries fit
+    and six do not.
+
+    So the footer carries the acts with no other advertisement on screen, and F1's help panel
+    is the complete list -- `BindingsTable` renders `active_bindings` without filtering on
+    `show`, so every key here is in it, which is what the key is borrowed from htop *for*. The
+    five session-shaped keys are left out because the pane's own hint row names them, and F2,
+    F5 and F12 because `,`, `ctrl+r` and the palette already do.
     """
 
     key: str
     action: str
     label: str
     borrowed_from: str
+    footer: bool
 
 
 #: The F-key row, owner-validated. F1-F10 and F12; F11 deliberately not here.
 FUNCTION_KEYS: tuple[FunctionKey, ...] = (
-    FunctionKey("f1", "help", "help", "htop, mc"),
-    FunctionKey("f2", "settings", "settings", "htop Setup"),
-    FunctionKey("f3", "session_key('inspect')", "inspect", "mc View"),
-    FunctionKey("f4", "session_key('detail')", "detail", "mc Edit"),
-    FunctionKey("f5", "refresh", "refresh", "browsers, k9s"),
-    FunctionKey("f6", "session_key('rename')", "rename", "mc RenMov"),
-    FunctionKey("f7", "add_project", "add project", "mc Mkdir"),
-    FunctionKey("f8", "session_key('graceful')", "stop", "mc Delete"),
-    FunctionKey("f9", "session_key('force')", "force", "htop Kill"),
-    FunctionKey("f10", "quit", "quit", "htop, mc"),
-    FunctionKey("f12", "projects_home", "projects", "existing root key"),
+    FunctionKey("f1", "help", "help", "htop, mc", footer=True),
+    FunctionKey("f2", "settings", "settings", "htop Setup", footer=False),
+    FunctionKey("f3", "session_key('inspect')", "inspect", "mc View", footer=False),
+    FunctionKey("f4", "session_key('detail')", "detail", "mc Edit", footer=False),
+    FunctionKey("f5", "refresh", "refresh", "browsers, k9s", footer=False),
+    FunctionKey("f6", "session_key('rename')", "rename", "mc RenMov", footer=False),
+    FunctionKey("f7", "add_project", "add project", "mc Mkdir", footer=True),
+    FunctionKey("f8", "session_key('graceful')", "stop", "mc Delete", footer=False),
+    FunctionKey("f9", "session_key('force')", "force", "htop Kill", footer=False),
+    FunctionKey("f10", "quit", "quit", "htop, mc", footer=True),
+    FunctionKey("f12", "projects_home", "projects", "existing root key", footer=False),
 )
 
 
@@ -121,14 +135,15 @@ SESSION_KEY_HINT = " ".join(
 
 
 def function_key_bindings() -> list[Binding]:
-    """The table as app bindings: every one `priority=True` and shown in the footer.
+    """The table as app bindings: every one `priority=True`, shown where the table says.
 
-    Priority for the reason the Alt layer is: Textual checks priority bindings from the App
-    down before the focused widget sees the key, so an F-key acts from inside the projects
-    filter or a rename box rather than being swallowed by the `Input`. Whether it *may* act
-    there is `check_action`'s answer, not this table's.
+    Priority for the reason the retired Alt layer was: Textual checks priority bindings from
+    the App down before the focused widget sees the key, so an F-key acts from inside the
+    projects filter or a rename box rather than being swallowed by the `Input`. Whether it
+    *may* act there is `check_action`'s answer, not this table's; whether the footer draws it
+    is `footer`'s, argued at `FunctionKey`.
     """
     return [
-        Binding(entry.key, entry.action, entry.label, priority=True, show=True)
+        Binding(entry.key, entry.action, entry.label, priority=True, show=entry.footer)
         for entry in FUNCTION_KEYS
     ]

@@ -294,13 +294,18 @@ class RemoteAgentsTui(App[AttachRequest | None]):
     # Lower-case descriptions: the footer reads `esc back · ^r refresh …` as one quiet line.
     BINDINGS = [
         Binding("escape", "back", "back", tooltip="Return to the position you came from"),
+        # `show=False` on both, and it is the F-key row that made them redundant rather than
+        # wrong: F5 and F10 name the same two acts, the footer is one clipping line, and an
+        # act drawn twice there costs a whole entry. Both keys still work, and F1's help panel
+        # lists them -- it renders `active_bindings` without filtering on `show`.
         Binding(
             "ctrl+r",
             "refresh",
             "refresh",
+            show=False,
             tooltip="Re-read what this screen shows, without leaving it",
         ),
-        Binding("ctrl+q", "quit", "quit", tooltip="Leave the terminal surface"),
+        Binding("ctrl+q", "quit", "quit", show=False, tooltip="Leave the terminal surface"),
         # **`ctrl+n`, `ctrl+s` and `ctrl+o` are gone**, and only one of the three is replaced by
         # a key. Add project is F7. Sessions and Resume have no F-key at all: the owner's key
         # map spends the row on what acts on a *session*, and the two flows that start one are

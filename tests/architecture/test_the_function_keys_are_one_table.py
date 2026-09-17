@@ -96,19 +96,32 @@ def test_every_table_key_has_exactly_one_binding_and_no_alt_binding_survives() -
     assert {binding.key for binding in RemoteAgentsTui.BINDINGS} == allowed
 
 
-def test_every_function_key_is_priority_and_shown() -> None:
+def test_every_function_key_is_priority_and_something_teaches_it() -> None:
     """Priority is what lets the layer work while an `Input` holds the keyboard.
 
     Textual checks `priority=True` bindings from the App down before the focused widget sees
     the key (`App._check_bindings`), which is the mechanism the whole row needs: F8 in the
-    projects filter is a stop, not a character. Shown, unlike the chords that came before:
-    these are the keys the footer exists to teach, and there is no modifier to guess at.
+    projects filter is a stop, not a character.
+
+    **Shown is the table's call, and the property asserted here is that nothing is silent.**
+    The footer is one clipping line and cannot hold eleven entries, so a key it does not draw
+    must be advertised somewhere the owner can reach: F1's help panel lists every active
+    binding regardless of `show`, and the session-shaped keys are named again on each pane's
+    own hint row. What must never happen is a key that is bound, drawn nowhere, and reachable
+    only by knowing it is there -- which for this layer is impossible by construction, because
+    F1 is itself in the footer.
     """
+    shown = {entry.key for entry in FUNCTION_KEYS if entry.footer}
     for binding in _function_key_bindings():
         assert binding.priority, (
             f"{binding.key} is not a priority binding, so a focused Input eats it"
         )
-        assert binding.show, f"{binding.key} is hidden, so nothing teaches the owner it exists"
+        assert binding.show is (binding.key in shown)
+
+    assert "f1" in shown, (
+        "F1 is the door to the help panel that lists every key the footer cannot draw, so it "
+        "is the one entry the footer may never drop"
+    )
 
 
 def test_each_session_shaped_key_names_the_layer_s_one_action() -> None:
