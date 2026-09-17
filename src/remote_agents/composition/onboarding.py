@@ -16,6 +16,11 @@ from collections.abc import Callable, Mapping
 from pathlib import Path
 
 from remote_agents import __version__
+from remote_agents.adapters.agents.hook_settings import HookInstallError
+from remote_agents.adapters.agents.registry import (
+    claude_status_line_hop_installed,
+    default_settings_path,
+)
 from remote_agents.adapters.supervisor.installer import (
     DaemonInstallError,
     install_daemon,
@@ -179,6 +184,10 @@ def _onboard(arguments) -> int:
             # absent. Unless onboarding says it here, that reads as a fault.
             print("note: on macOS this service runs only while you are logged in at the screen")
         _wait_for_the_service(supervisor)
+    # Before the report, so the report reflects whatever was just decided: an accepted offer
+    # makes `claude_limits` read "installed", and `_say_what_the_hop_would_add` then stays quiet
+    # rather than telling the operator to run a command they have this second agreed to.
+    _offer_the_status_line_hop(home, interactive=interactive, assume_yes=bool(arguments.yes))
     return _report_on_the_onboarded_host(paths, installed_daemon=bool(arguments.install_daemon))
 
 
@@ -313,6 +322,120 @@ def _report_on_the_onboarded_host(paths: ProductionPaths, *, installed_daemon: b
         print(f"onboarding complete. Still to do, and not part of onboarding: {', '.join(theirs)}")
         print("  These are yours to finish; `remote-agents doctor` reports them at any time.")
     return 0
+
+
+def _offer_the_status_line_hop(
+    home: Path,
+    *,
+    interactive: bool,
+    assume_yes: bool,
+    confirm: Callable[[str], bool] | None = None,
+    install: Callable[..., object] | None = None,
+) -> bool:
+    """Offer to install the Claude agent hooks, and install them only on an explicit yes.
+
+    Returns whether it installed. The caller discards it — the report that follows re-reads the
+    real state — so it is here for a test to assert against rather than for control flow.
+
+    **The prompt names everything the yes writes, and that is the whole point of the function.**
+    A Tier-1 review caught the first version describing only the status-line wrap while the call
+    installs the wrap **and** three event-hook groups (`Stop`, `StopFailure`, `Notification`,
+    from `adapters.agents.claude.hooks.INSTALLED_EVENTS`) that fire in **every** Claude session
+    on the host, not only sessions this project manages. The gate's predicate
+    (`claude_status_line_hop_installed`, which answers only about the wrap) is deliberately
+    narrower than the gate's effect, so the prose has to close that gap — an operator who says
+    yes to a rate-limit question and silently gains three always-on hooks has not consented to
+    what happened, and reversibility does not cure it because they have no reason to reverse
+    something they do not know is there.
+
+    **Three gates, and each exists for a different reason.**
+
+    *Not interactive* → do nothing, ask nothing. `scripts/install.sh` pipes into `bash`, so an
+    installer run is **always** this path; there is nobody to refuse, and the project's own rule
+    from the credential resolver is that a missing terminal is a refusal naming what to supply,
+    never a prompt into a closed pipe.
+
+    *`--yes`* → do nothing, ask nothing. This is a deliberate asymmetry with the dependency
+    preflight, which `--yes` legitimately answers. `--yes` exists so an unattended run does not
+    **block**; reading it as consent here would let `curl | bash` rewrite an operator's
+    `~/.claude/settings.json` with nobody present. **Suppressing a question is not answering
+    it**, and this is the one step in onboarding that writes a file onboarding does not own.
+
+    *Already installed* → do nothing, ask nothing. Re-offering something the host has is how a
+    prompt gets trained into reflexive assent.
+
+    **Why an offer at all**, when `install-agent-hooks` has existed the whole time: it has had
+    exactly one caller, its own CLI command, so a host that never ran it finishes onboarding
+    looking healthy while the Claude limits row reads as *absent* — honest under DEC-061 and
+    indistinguishable from a provider that publishes nothing (BL-099).
+
+    `confirm` and `install` are injected so the gates can be tested without a terminal and
+    without writing anybody's settings file; production passes neither.
+    """
+    # Both default to the production collaborators, resolved here rather than in the signature
+    # because `_ask_to_confirm` is defined further down this module and would be an undefined
+    # name at import time. The `install_agent_hooks` import below is deferred for symmetry
+    # only -- this module already imports from that same adapter at the top, so the deferral
+    # saves nothing and is not claimed to.
+    #
+    # No coverage pragma: a call with `interactive=False` runs both of these
+    # and then returns without prompting or writing, so the production wiring is cheap to
+    # exercise -- and an earlier version excluded it from coverage *and* from every test, which
+    # would have let a rename of `_ask_to_confirm` fail only on an operator's terminal.
+    if confirm is None:
+        confirm = _ask_to_confirm
+    if install is None:
+        from remote_agents.adapters.agents.registry import install_agent_hooks
+
+        install = install_agent_hooks
+    if not interactive or assume_yes:
+        return False
+    settings_path = default_settings_path(home, provider="claude")
+    if claude_status_line_hop_installed(settings_path):
+        return False
+    # **ASCII only, deliberately.** These lines print before any handler this function owns,
+    # and `UnicodeEncodeError` is a `ValueError` -- so on a host whose stdout resolves to ASCII
+    # (`LC_ALL=C` with no `C.UTF-8`, a locale-less ssh invocation) a bullet or an em dash here
+    # would be caught by `bootstrap`'s onboard branch and turn the whole command into `return 1`,
+    # **after the daemon has already been registered** and without the closing report ever
+    # running. Reproduced before it was fixed. That profile -- a bare fresh machine -- is exactly
+    # the one BL-099 is about, so this is the last place to spend a character on typography.
+    print("Claude's own rate-limit windows are not readable on this host yet.")
+    print(f"  Installing the agent hooks would write two things into {settings_path}:")
+    print("    - the status-line hop: it wraps your existing status line, records only the")
+    print("      limit windows, and hands the same input on to whatever you had;")
+    print("    - three event hooks, Stop / StopFailure / Notification, which fire in")
+    print("      EVERY Claude session on this host, not only ones this project started,")
+    print("      and are how the bot learns an agent has finished or is waiting.")
+    print("  Both are reversible: `remote-agents install-agent-hooks --provider claude --remove`.")
+    if confirm("Install them now?") is not True:
+        return False
+    try:
+        outcome = install(settings_path, provider="claude")
+    except HookInstallError as error:
+        # Not a `ValueError`, so nothing above catches it: `bootstrap`'s onboard branch handles
+        # `(ConfigError, ValueError)` and `main` has no outer handler. Uncaught, this escaped as
+        # a traceback and `_report_on_the_onboarded_host` never ran -- so an operator lost the
+        # closing report telling them what state their host was in, on a run that may already
+        # have registered the daemon. The likeliest trigger is not exotic: a host with no
+        # `~/.claude` at all, where the recogniser answers "not installed" by design, the offer
+        # is made, and the installer then refuses to create a configuration directory.
+        print(f"  the hooks were not installed: {error}", file=sys.stderr)
+        print("  onboarding continues; nothing else was affected.", file=sys.stderr)
+        return False
+    # The installer's own summary, not a sentence of ours. It carries the foreign-variant and
+    # foreign-status-line notes, whose own comment calls answering without them "the least
+    # helpful moment to stay quiet" -- exactly the warning that an operator already carrying
+    # another wrapper needs, and exactly the population most likely to have one. It also says
+    # "already current" when nothing changed, which a hardcoded success line would misreport.
+    print(f"  {outcome.summary}")
+    # `outcome.changed` directly, not `getattr(..., True)`. The project owns both sides of this
+    # call, so a missing attribute is a bug to surface rather than a condition to absorb -- and
+    # the absorbing version would have silently claimed an install on every "already current"
+    # no-op the day the field was renamed, with the test double still carrying the old name.
+    if outcome.changed:
+        print("  the Claude limits row will read `status line` from the next turn.")
+    return True
 
 
 def _say_what_the_hop_would_add(report: dict[str, object]) -> None:
