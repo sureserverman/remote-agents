@@ -19,9 +19,11 @@ place, instead of being reachable only by grepping module docstrings for a decis
 | Layer | Directory | May import from |
 | --- | --- | --- |
 | `domain` | `domain/` (8 modules) | `domain` only |
-| `ports` | `ports/` (14 modules) | `domain`, `ports` |
-| `application` | `application/` (23 modules) | `application`, `domain`, `ports` |
-| `adapters` | `adapters/` (60 modules, six families) | `domain`, `ports`, and its own family |
+| `ports` | `ports/` (26 modules) | `domain`, `ports` |
+| `application` | `application/` (29 modules) | `application`, `domain`, `ports` |
+| `adapters` | `adapters/` (90 modules, seven families) | `domain`, `ports`, and its own family |
+
+**Counted, not remembered** — `find src/remote_agents/<layer> -name '*.py' -not -path '*__pycache__*' | wc -l`, including each package's `__init__.py`, which is the convention the `domain` row has always used. Three of these four rows were stale when this note was added (2026-09-17): `ports` read 14 against 26, `application` 23 against 29, and `adapters` 60 against 90 and "six families" against seven. They are the same drift ARCH-B1 confesses to twice below, so the rule stated there binds here as well: **derive a count from the artifact before trusting it, and prefer a command to a number.**
 
 `tests/architecture/check_imports.py` parses every module under `src/` with `ast`, resolves
 relative imports to absolute names, assigns each module a layer from its path, and reports
@@ -34,9 +36,11 @@ reports zero violations.
 Two exceptions are written into the checker, and both are narrow:
 
 - **Driver adapters may also import `application` and `config`.** `DRIVER_ADAPTERS` is
-  `{"telegram", "tui"}`. The other four adapter families — `agents`, `projects`, `sqlite`,
-  `tmux` — may not; they see `domain`, `ports` and themselves. An adapter family may never
-  import another adapter family, driver or not.
+  `{"telegram", "tui"}`. The other five adapter families — `agents`, `projects`, `sqlite`,
+  `supervisor`, `tmux` — may not; they see `domain`, `ports` and themselves. An adapter family
+  may never import another adapter family, driver or not. (`supervisor`, which holds
+  `installer.py`, `launchd.py` and `systemd.py`, was missing from this enumeration until
+  2026-09-17 — the same drift as the module counts above, in the list rather than in a number.)
 - **The modules that may compose adapters are enumerated by name.**
   `COMPOSITION_ROOTS = {"bootstrap.py", "agent_event.py"}` — a closed set, not a position.
   A module at the package root that is *not* in that set — `__init__.py`, `__main__.py`,
@@ -70,8 +74,12 @@ tests in `tests/architecture/`.
 `usage` before `limits` was added beside it; a count in prose next to the list it counts is a
 second copy to keep agreeing, and this one had already drifted. **It then drifted a second
 time, the same way**: it read "eleven" and listed eleven while the type had grown to sixteen,
-because five fields were added over three sub-plans and each one changed the type without
-changing the prose. Derive both halves from the type before trusting either —
+because five fields were added over four plans — `close_usage_readers`, `host_remote_control`,
+`claude_remote_control_default` and `claude_limits_source` from the three sub-plans of the
+2026-09-13 master, and `state_events` from `2026-09-14-store-split-watcher-signal-plan.md`
+(DEC-090), which is a different plan that happens to sit in the same decision-number range — and
+each one changed the type without changing the prose. Derive both halves from the type before
+trusting either —
 `python3 -c "import ast; ..."` over `backend.py`'s `Backend` body is what produced this list,
 and a sweep of `grep -n 'field' docs/architecture.md` is what found the count.) It is the whole
 set of use cases a frontend may drive. Before it, `bootstrap` composed the Telegram service and
@@ -89,23 +97,38 @@ ARCH-02 violation the checker fails on (DEC-015), and the mistake is not hypothe
 `bootstrap.LocalRuntime` used to be typed against a Telegram wizard type and hand it to the
 local surface, which converted it back.
 
-**Three fields are typed `object | None` today, deliberately and temporarily.** `sessions`,
-`projects` and `conversations` name their real types only in their docstrings
+**Seven fields are typed `object | None` today, deliberately and temporarily** — `sessions`,
+`projects`, `conversations`, `host_remote_control`, `claude_remote_control_default`,
+`claude_limits_source` and `state_events`. They name their real types only in their docstrings
 (`application.services.SessionService`, `application.project_admin.ProjectCreationService`,
-the conversation service); naming them in the annotations would be correct and would pull the
-whole port graph into every module that reads a `Backend`, including both frontends' test
-doubles. The field docstrings say this is for one release. Read `Backend` as documented rather
-than as annotated on those three.
+the conversation service, and for the four later ones a port protocol each); naming them in the
+annotations would be correct and would pull the whole port graph into every module that reads a
+`Backend`, including both frontends' test doubles. The field docstrings say this is for one
+release. Read `Backend` as documented rather than as annotated on those seven.
+
+*This said "Three" and named the first three until 2026-09-17.* The four newer ones each carry
+a docstring reading *"Typed `object` for the reason `sessions` is"* — the same deliberate and
+temporary case, so the omission was drift rather than scoping, and it renewed the "for one
+release" promise silently every time a field was added. Derive the set instead of counting it:
+`ast.unparse` the annotation of each `Backend` field and take those containing `object`.
 
 **Optionality is a record of what a process wired, not a licence to skip wiring.** The bot's
 boundary has always answered "that is unavailable" rather than failing to start — at thirteen
 guarded entry points. **Take the number as inherited rather than as checked**: it is stated in
 `backend.py:66` and `context.py:80`, no test asserts it, and it is not reproducible from any
-mechanical partition of the guards -- two readers tried. What *is* reproducible is twenty:
-`grep -c 'backend\.[a-z_]* is None' src/remote_agents/adapters/telegram/service.py` returns 20
-lines, in 20 distinct functions, handlers and internal predicates together. This document said
-"nineteen" for one commit, which was simply a miscount. The figure `backend.py` and `TuiContext` both record — so the type has
-to be able to represent a host that wired nothing. The
+mechanical partition of the guards -- two readers tried. What *is* reproducible is the command
+rather than any number it returned:
+`grep -c 'backend\.[a-z_]* is None' src/remote_agents/adapters/telegram/service.py`, whose hits
+sit in that many distinct functions, handlers and internal predicates together — 26 of them when
+last run, on 2026-09-17. This document said "nineteen" for one commit, which was a miscount, and
+then "twenty" for rather longer, which was accurate when written and had drifted to 26 by the
+time anyone re-ran the command it offers. **Run it; do not read the number here** — a figure
+printed beside the command that produces it is the second copy this document keeps failing to
+keep in step. The point the paragraph is making does not depend on the figure: the guards are
+many, they are everywhere, and a count is recorded in both `backend.py` and `TuiContext` — so the
+type has to be able to represent a host that wired nothing. *(That sentence read "The figure
+`backend.py` and `TuiContext` both record — so the type has to…" until 2026-09-17: a subject with
+no predicate, left by an earlier editing pass.)* The
 local surface takes the opposite contract and enforces it: `TuiContext.__post_init__` refuses
 a backend missing `sessions` or `projects`. Nothing anywhere probes for a capability by name
 any more — absence is a declared field checked as `is None`, which is what

@@ -18,20 +18,33 @@ One paragraph per sub-plan of the master
 that holds the evidence; nothing is claimed here that is not written there or in the sub-plan's
 own close-out.
 
+> **As-of note.** This section was written by sub-plan 04's Task 1.1, **before** Task 1.4 ran the
+> deploy that fills §4. Four sentences in it therefore described a pre-deploy world and were
+> **false by the time the same diff shipped** — sub-plan 01's first gate box, the state of §4's
+> capture slots, and whether the Claude row on this host had a source. They were corrected on
+> 2026-09-17 rather than left to be reconciled by a reader, and the corrections are marked
+> *(corrected post-deploy)* where they sit. The hazard is worth naming because it is structural:
+> a summary written early in a plan and a section written at its end travel in one commit range,
+> and nothing forces the first to be re-read.
+
 **Sub-plan 01 — Limit sources.** Closed 2026-09-14 on branch `limits-sources` (close-out commit
-`391c50b`, later merged to `main` as `4e41fb0`). It moved Codex's limits onto
+`391c50b`; `main` was then merged **into** that branch as `4e41fb0` — a merge commit whose parents
+are `391c50b` and `e833f5e` — and `origin/main` was fast-forwarded to it *(corrected 2026-09-17:
+this read "later merged to `main` as `4e41fb0`", which inverts the direction `git show 4e41fb0`
+reports; the sha and the outcome were right, the mechanism was backwards)*. It moved Codex's limits onto
 `account/rateLimits/read` with the rollout file as fallback, put Claude's on a status-line hop
 this project owns, and added the usage API as an opt-in second source behind a `config.toml`
-switch. Two of its three gate checks are `[x]`: the borrowed `/tmp/claude` cache is gone from
-`src/` and `tests/`, and `check_imports.py` reports zero violations with the hop added to
-`COMPOSITION_ROOTS` rather than smuggled past it. **The first gate box is still `[~]`** — on this
-host `local_context` printed the Codex entry with two windows and `stale_source=None`, but the
-Claude entry read `NO_READING` because no hop is installed here yet; §4's deploy installs it and
-ticks that box. Recorded DEC-087 (amends DEC-061), DEC-088 (narrows DEC-053) and DEC-089 (amends
-DEC-015 and the hook boundary). **Evidence: §1**, which measures what the hop costs — a 30 ms
-median through the console script against a 150 ms budget — and states plainly which console
-script it could and could not measure, since the installed tool on this host is pinned to
-`v0.41.0` and has no `statusline` subcommand at all.
+switch. **All three gate checks are now `[x]`** *(corrected post-deploy — two of them were `[x]`
+when this paragraph was written)*: the borrowed `/tmp/claude` cache is gone from `src/` and
+`tests/`, `check_imports.py` reports zero violations with the hop added to `COMPOSITION_ROOTS`
+rather than smuggled past it, and **the first box was unblocked and ticked on 2026-09-17** by §4's
+deploy. It had stood `[~]` since 2026-09-14 because `local_context` on this host printed the Codex
+entry with two windows and `stale_source=None` while the Claude entry read `NO_READING`, no hop
+being installed yet; §4.2 carries the run that settled it. Recorded DEC-087 (amends DEC-061),
+DEC-088 (narrows DEC-053) and DEC-089 (amends DEC-015 and the hook boundary). **Evidence: §1**,
+which measures what the hop costs and states plainly which console script it could and could not
+measure, since the installed tool was then pinned to `v0.41.0` and had no `statusline` subcommand
+at all — **a caveat §4 has now discharged by re-measuring through the installed `v0.42.0` script**.
 
 **Sub-plan 02 — Settings and the limits pane.** Closed 2026-09-15 on branch
 `settings-and-limits-pane`, 15 commits from `4e41fb0` (44 files, +3529/−653). It built one
@@ -60,12 +73,20 @@ on purpose, and which records two things a friendlier document would have droppe
 counterfactual that makes case 4 evidence rather than a tautology, and the vacuous assertion that
 mutant caught in the first version of that case.
 
-**Sub-plan 04 — Release.** In flight as this section is written. It owes the decisions check, this
-consolidated summary, `0.41.0 → 0.42.0` across the seven mirrors, the `v0.42.0` tag on `main`, and
-the deploy on the owner's host with the status-line hop installed. **Evidence: §4**, whose capture
-slots are unfilled below and are filled by its Task 1.4 from the real deploy on this host. Until
-they are, sub-plan 01's first gate box stays `[~]` and the Claude row on this machine has no
-source.
+**Sub-plan 04 — Release.** *(This paragraph was written mid-flight and is corrected post-deploy.)*
+It carried the decisions check, this consolidated summary, `0.41.0 → 0.42.0` across the seven
+mirrors, the `v0.42.0` tag on `main`, and the deploy on the owner's host with the status-line hop
+installed. **All of those are done**: the register audit found no gap, the tag sits on `c12d5ee`
+and is pushed, and the deploy ran on 2026-09-17. **Evidence: §4**, whose capture slots are
+**filled** from that deploy — `doctor` reporting `0.42.0` with the hop installed, the owner's own
+limits pane carrying both providers' windows, and the Settings screen's third row reading
+`Claude limits source · status line`. Sub-plan 01's first gate box is consequently `[x]`, and the
+Claude row on this machine reads `status line` rather than having no source.
+
+Two things §4 records that this summary would otherwise hide. The deploy found the retired
+**Alt-chord layer still bound on the owner's tmux server** — source-clean, but live, because
+nothing in the upgrade path clears a key table (§4.4). And §4.3's F2 evidence is deliberately
+**half-driven**, with the undriven half named rather than covered over.
 
 ---
 
@@ -364,9 +385,17 @@ presser cannot see.
 
 ## Section 4 — The deploy (Sub-plan 04, Task 1.4)
 
-**Filled 2026-09-17** on the owner's host. Every block below is real output, pasted as it
-printed; nothing is written from reasoning or from a previous version. Where a claim could not be
-driven from here it is recorded as *not obtained* with the reason rather than dropped.
+**Filled 2026-09-17** on the owner's host. Every block below is real output; nothing is written
+from reasoning or from a previous version. Where a claim could not be driven from here it is
+recorded as *not obtained* with the reason rather than dropped.
+
+**Some blocks are excerpted, and this note is what makes that honest.** An earlier version of
+this paragraph claimed every block was "pasted as it printed", which is not true and could not
+be: `remote-agents doctor` emits its whole report as a **single line** of Python-dict text, so
+every `doctor` block in §4.1 is a selection of keys from that line, re-wrapped to be readable.
+Excerpting is fine; claiming verbatim while excerpting is not, which is exactly what the Stage 1
+gate's third judgment clause — *nothing claims more than a capture shows* — is there to catch.
+Where a block is trimmed it now says so. Nothing has been reworded, reordered, or rounded.
 
 The deploy sequence Task 1.4 ran, in order: `remote-agents upgrade --version v0.42.0`;
 `remote-agents install-agent-hooks --provider claude` (the status-line hop); `systemctl --user
@@ -377,9 +406,32 @@ feature can be invisible until the service restarts.
 `~/.claude/settings.json`, which is outside this repo, so it was not installed unasked. The owner
 was shown what it does (records only `rate_limits` plus `recorded_at` to
 `~/.local/state/remote-agents/claude-limits.json` at `0600`, then runs their existing command on
-the same bytes), what it changes, its measured cost (**~0.03 s** against their existing status
-line's ~0.16 s, on a redraw already debounced at 300 ms), and that `--remove` restores their
-command. They answered: **"install the hop"**.
+the same bytes), what it changes, its cost, and that `--remove` restores their command. They
+answered: **"install the hop"**.
+
+**The cost figure the owner was shown was the wrong one of two, and the correction is recorded
+here rather than quietly swapped.** They were told *"~0.03 s against their existing status line's
+~0.16 s"*. That 30 ms is §1's **light path** — `python -m remote_agents statusline` — and §1 says
+in as many words that its first rows measure a path the artefact does not ship. §1 also promised
+that *"the release sub-plan re-measures through the installed console script"*, which is the
+obligation the master's sub-plan-1 handoff repeats. **Re-measured here through the installed
+`v0.42.0` console script**, nine runs each, wall-clock in ms:
+
+| What | Command | Runs (ms) | Median |
+|---|---|---|---|
+| Hop alone | `/home/user/.local/bin/remote-agents statusline --state-dir <tmp>` | 40 36 39 40 39 41 34 43 45 | **40** |
+| The owner's previous line alone | the `--then` word, run under `sh -c` | 169 177 169 176 173 174 174 168 170 | **173** |
+| The wrapped whole, as `settings.json` now holds it | `statusLine.command` verbatim | 213 217 219 220 222 206 217 220 219 | **219** |
+
+So the hop **alone** costs ~40 ms through the shipped script rather than the ~30 ms quoted, and
+its true **marginal** cost is `219 − 173 ≈ 46 ms` — the figure that actually matters and which was
+not measured at consent time at all. Against a redraw debounced at 300 ms this does not change the
+decision, and the owner has been told so directly; it is recorded because a consent record resting
+on an unsourced number is the defect, independent of whether the number was favourable.
+
+*The ~0.16 s comparator was real — it was measured in the deploy session — but it had no command
+or sample beside it in this document, which is what made it unverifiable. Its provenance is the
+middle row above.*
 
 **What the wrap did to their settings, verified rather than asserted.** Their previous command —
 the planning plugin's `sh -c '…statusline-chain.sh…'` resolver — was preserved verbatim as the
@@ -404,8 +456,11 @@ which is why sub-plan 01's first gate box is `[~]`), and the Claude limits sourc
 **Before the hop was installed** — `upgrade` had already landed `0.42.0`, and the report named
 its own missing piece, which is the state sub-plan 01 predicted:
 
+*(keys selected from the single-line report; `release` shown in full, including the `reason` key
+`release_status()` always emits)*
+
 ```
-'release': {'installed': '0.42.0', 'latest': 'v0.42.0', 'newer_available': False}
+'release': {'installed': '0.42.0', 'latest': 'v0.42.0', 'newer_available': False, 'reason': None}
 'claude_limits': 'status-line hop not installed (run remote-agents install-agent-hooks --provider claude)'
 'claude_limits_source': 'status line'
 ```
@@ -495,8 +550,17 @@ proves it again on the installed `v0.42.0` against the owner's own console.
 **The claim splits in two, and only one half was driven against the owner's own panes. Both are
 recorded for what they are.**
 
-**(a) `F2` opens Settings on the owner's live console — driven here.** `F2` was sent to the real
-sessions pane (`%1`, a process respawned from the deployed build) and the five-row screen opened:
+**(a) The deployed sessions pane opens Settings on `F2` — driven here.** **How it was delivered
+matters, so it is stated rather than implied:** `tmux -L remote-agents send-keys -t %1 F2`, which
+**writes the key into the pane and never consults a key table** (§3's preflight establishes that
+property, and it is why §3 had to drive the root table separately). `%1` is a real surface process
+respawned from the deployed build. So what this capture proves is that **the deployed pane's own
+handler** opens Settings on F2 — *not* that the root-table binding routed it there, which a
+capture of the resulting screen could not distinguish anyway, since the live root `F2` binding's
+own action is itself a `send-keys -t "$active" F2`. The root binding is verified separately below
+by enumeration, and the routing by the live test.
+
+The five-row screen opened:
 
 ```
  ⭘                     remote-agents  Sessions › Settings
@@ -532,10 +596,76 @@ REMOTE_AGENTS_LIVE_ACCEPTANCE=1 uv run --locked pytest \
 1 passed, 10 deselected in 26.63s
 ```
 
-Matching sub-plan 03's recorded 26.5 s. That test asserts all three of §3's cases, including `F2`
-from a displayed agent reaching the sessions pane and `F2` into an OpenCode-marked pane. **So the
-forwarding half is proved on the shipped code, not on the owner's own arrangement of it**, and
-the distinction is left visible here rather than collapsed into a single tick.
+Close to the **26.5 s** the master's gate recorded for the same command; sub-plan 03's own Stage 3
+gate recorded **27.5 s** for it. Two figures exist, they bracket this run, and nothing turns on
+which — noted because "matching sub-plan 03's 26.5 s" cited the master's number while attributing
+it to the sub-plan. That test asserts all three of §3's cases, including `F2` from a displayed
+agent reaching the sessions pane and `F2` into an OpenCode-marked pane. **So the forwarding half is
+proved on the shipped code, not on the owner's own arrangement of it**, and the distinction is
+left visible here rather than collapsed into a single tick.
+
+**(c) The root table on the owner's server, by enumeration.** What (a) could not distinguish, this
+settles: the deployed tmux server carries exactly the eleven-key row plus the mouse bindings the
+composer emits.
+
+```
+$ tmux -L remote-agents list-keys -T root | grep run-shell | awk '{print $4}'
+DoubleClick1Pane TripleClick1Pane F1 F2 F3 F4 F5 F6 F7 F8 F9 F10 F12
+```
+
+Eleven function keys, `F11` absent as DEC-093 specifies, matching `CONSOLE_BINDINGS` exactly.
+
+### 4.4 — What the deploy found: the retired Alt-chord layer is still bound on the owner's server
+
+**Sub-plan 03's headline outcome is not in force on this host, and no check in this plan was
+looking at the thing that would have shown it.** The independent gate evaluator found it by
+enumerating the deployed tmux server rather than the source tree.
+
+```
+$ tmux -L remote-agents list-keys -T prefix | grep run-shell | awk '{print $4}'
+h M-a M-c M-d M-f M-i M-m M-r M-s
+```
+
+`h` is current — it is `FOLD_PANES_KEY`, the one `ConsoleKeyTable.PREFIX` member the composer
+still emits (`console.py:60,284`). **The other eight are the retired Alt chords**, and they are
+not inert: each is a live `run-shell` carrying the *old* implementation, which still gates on
+`client_session = ra-console` and still resolves a pane from the console's own marks.
+
+**Why the deploy did not clear them.** The source is clean — `grep -rn "M-[a-z]"` over
+`adapters/tmux/` and `application/console.py` returns nothing, which is the master's own gate
+check and it passes. But **nothing in the project ever calls `unbind-key`**: `grep -rn 'unbind'
+src/` returns only three prose mentions in docstrings. A tmux key table is server state, and the
+composer only ever *adds* to it. This server started **2026-09-16 19:49**, ~26 h before the
+deploy, so it still holds every binding any earlier build wrote. `upgrade`, `systemctl restart`
+and respawning the panes all leave it untouched — the panes are clients of the server, not its
+owner.
+
+**What this means for the claim.** §3 measured "exactly 1 `run-shell` in the prefix table" on a
+**disposable** console the composer had just built, which is true of a fresh server and says
+nothing about a long-lived one. DEC-094 and the `v0.42.0` tag message both state the layer is
+retired; on this host, until the keys are unbound, it is retired *in the code* and still *pressable
+by the owner*.
+
+**Status: not fixed here, and the reason is not that it was judged unimportant.** Unbinding the
+eight keys on the live server was attempted and **refused by this session's permission layer as a
+shared-resource modification** — the correct call for an automated change to a server holding the
+owner's running agent sessions. The remedy is one command the owner can run, and it touches
+nothing else:
+
+```
+for k in M-a M-c M-d M-f M-i M-m M-r M-s; do tmux -L remote-agents unbind-key -T prefix "$k"; done
+```
+
+Verify with the `list-keys` command above: it should then print `h` alone. Killing and re-creating
+the tmux server would also clear it, at the cost of every running session.
+
+**The general defect is a class and is filed, not fixed.** *Any* binding the composer stops
+emitting survives on every existing server, so every future key retirement leaves the same
+residue. That is a code change — the composer would need to reconcile the table it emits against
+the table the server holds — and it is new executable behaviour, which this release sub-plan's
+declared `light` scope and its already-cut tag both exclude. **BL-096** carries it.
+
+---
 
 ### ACTION NEEDED — the owner has not seen the bot's Settings or the Claude limits line on their phone
 
