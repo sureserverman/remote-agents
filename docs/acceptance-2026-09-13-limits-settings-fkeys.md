@@ -155,3 +155,75 @@ and it is derivable in one line from the source:
 ```python
 len(f"{LIMITS_SOURCE_TITLE} · {LIMITS_SOURCE_LABELS['usage-api']}")   # < the capture's 100
 ```
+
+---
+
+## Section 3 — The F-key row, from preflight to a real console (Sub-plan 03)
+
+Branch `settings-and-limits-pane`. Everything below is either a preflight finding recorded
+before the work started, a measurement taken while it ran, or a live capture from the drill.
+The three are kept apart on purpose: a preflight finding is what we knew, a measurement is what
+this machine answered, and only the last was driven on a console the owner would recognise.
+
+### Preflight
+
+**Cursor CLI function keys — none documented.** `cursor-agent` version `2026.09.10-fd3934a`.
+Its `--help` names no function key, and a recursive search of `~/.cursor` config for a
+function-key binding matched nothing. Its `reserved_keys` is therefore the empty default, which
+is what the descriptor ships. Recorded as **"none documented, `--help` and config searched"**
+rather than as a full measurement: the live `/help` pane was not driven, so this is the absence
+of a documented binding rather than the absence of a binding. OpenCode is the one provider that
+declares anything (`F2`, `model_cycle_recent`); claude, codex and cursor all take the
+descriptor's empty default.
+
+**F1/F10/F12 on the owner's terminal — BLOCKED, and it stays blocked.** The check needs a key
+press on the owner's own emulator, and no automated session can make one:
+
+```
+cat -v          # then press F1, F10, F12, and see whether each prints an escape sequence
+```
+
+**Owner to confirm.** Nothing waited on it, because both outcomes leave every key bound either
+way: a key the emulator swallows is a key the console never sees, and a key it forwards is one
+the row already claims. Ten seconds with the command above closes it. For what it is worth, the
+console client observed during the plan reported `TERM=xterm-256color`.
+
+### Measured during execution
+
+These are readings, not claims.
+
+- **tmux 3.4** on this host (`tmux -V`).
+- **An unscoped `display-message -p '#{pane_id}'` inside a `run-shell` fired by a root binding
+  resolves to the pane that was active when the key was pressed.** Probed with a real pty
+  client on a two-pane session — the only mechanism that exercises it, since `send-keys` writes
+  into a pane and never consults a key table. The script recorded `%0` with the first pane
+  active and `%1` after selecting the second. Every branch of the forwarding script rests on
+  this: branch 1 and branch 2 both ask "which pane is the owner in", so a `#{pane_id}` that
+  resolved to anything else would misroute every function key.
+- **A disposable console built by the composer installs 11 root F-key bindings** — F1 through
+  F10, and F12 — **and leaves exactly 1 `run-shell` in the prefix table**, the fold key `h`.
+  Read off `tmux list-keys`. F11 is absent from the root set by construction.
+- **The reservation reaches the installed argv.** F2's script names `opencode`; F5's names no
+  provider at all. The pass-through is therefore a property of what is installed on the socket,
+  not of a branch that might or might not be reached.
+- **The footer fits five app entries at 80 columns on the inspect screen and clips at six.**
+  This is the whole reason the footer draws `F1`, `F7` and `F10` rather than all eleven, and
+  the reason F1's help panel — which renders `active_bindings` without filtering on `show` — is
+  the complete list.
+
+### Live captures
+
+**TO BE FILLED.** The live drill runs on a real console and its evidence is not yet in this
+document. Four cases, each with its own capture:
+
+1. **`F5` in the limits pane redraws it.** — TO BE FILLED
+2. **`F2` from a displayed agent opens the five-row Settings screen in the sessions pane.** —
+   TO BE FILLED
+3. **`F2` into an OpenCode-marked pane is received by that pane** rather than by the console. —
+   TO BE FILLED
+4. **An `attach` client pressing `F8` stops nothing.** — TO BE FILLED
+
+Case 4 is the one that matters most and the one this document must not record as passing on
+reasoning: the binding carries a guard asking which session the pressing client is attached to,
+and `F8` is an unconfirmed stop (DEC-018), so a guard that did not hold would end a session the
+presser cannot see.

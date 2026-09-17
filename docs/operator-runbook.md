@@ -1133,6 +1133,68 @@ once, so a mass failure points at the environment rather than at your change. Se
 module's docstring for the full rationale rather than duplicating it
 here; it is the copy that sits next to the code and will be updated with it.
 
+## The key row
+
+Both terminal surfaces — `remote-agents tui` and every pane of the console — answer the same
+eleven function keys, and on the console they are tmux **root** bindings on this project's own
+server, which is what makes them work from inside a displayed agent. Read this before either
+checklist below: several steps press a key and accept what happens.
+
+| Key | Action | Borrowed from |
+|---|---|---|
+| `F1`, `?` | help — the panel that lists every key | htop, mc |
+| `F2`, `,` | settings | htop Setup |
+| `F3` | inspect output | mc View |
+| `F4` | session detail | mc Edit |
+| `F5`, `Ctrl+R` | refresh | browsers, k9s |
+| `F6` | rename | mc RenMov |
+| `F7` | add project | mc Mkdir |
+| `F8` | stop and close — issued without asking | mc Delete |
+| `F9` | force stop — asks first | htop Kill |
+| `F10`, `q` at the resting position, `Ctrl+Q` | quit | htop, mc |
+| `F11` | unbound; the terminal's | terminal full-screen |
+| `F12` | projects | existing root key |
+
+Around them, `j` `k` `g` `G` move within a list, `q` is Back on a pushed screen, `/` filters,
+`:` and `Ctrl+P` open the command palette, and Escape, Enter and the arrows are unchanged.
+
+Four facts that are easy to get wrong when a key appears not to work:
+
+- **The console takes these keys from every pane on its server.** A root binding is not
+  scoped to our own panes; it is taken before any pane sees it, and then delivered to the
+  console pane that owns the act.
+- **One exception is built in.** A curated provider that declares a function key it already
+  binds gets it passed through to its own pane. OpenCode is the only one — it binds `F2` to
+  `model_cycle_recent` — so `F2` at an OpenCode pane is the model switch, not Settings. Claude
+  Code, Codex and Cursor bind no function key.
+- **An agent this project does not curate will lose a function key it binds, and nothing
+  reports it.** That is a stated, accepted cost of the row rather than a defect, tracked as
+  BL-094.
+- **The footer does not draw all eleven.** It is one clipping line — five app entries fit the
+  inspect screen at 80 columns and six do not — so it draws `F1`, `F7` and `F10` beside Escape
+  and the palette. **`F1` opens a panel listing every key**, which is where the rest are, and
+  the console's projects and feed panes name the session keys on their own hint row as
+  `F3 F4 F6 F8 F9`. The sessions pane does not — its border title already lists the same acts
+  as bare letters — and the limits pane draws no hint row at all.
+
+### Upgrading from 0.41.0: what each old key became
+
+Spelled the way 0.41.0's own footer and hint rows drew them.
+
+| Was | Is now |
+|---|---|
+| `⌥i` Inspect output | `F3` |
+| `⌥d` the session detail | `F4` |
+| `⌥r` Rename | `F6` |
+| `⌥s` Stop and close | `F8` |
+| `⌥f` Force stop | `F9` |
+| `⌥a` Copy attach, `⌥c` Clean up, `⌥m` Claude Remote Control | no function key — the bare `a`, `c` and `m` on the sessions pane, and the command palette |
+| `prefix M-<key>`, the forwarding route from a displayed agent | nothing to press — the F-keys reach you there directly |
+| `^n` add project | `F7` |
+| `^s` sessions | no key — the command palette (`:` or `Ctrl+P`), entry "Sessions" |
+| `^o` resume | no key — the palette, entry "Resume" |
+| `^r` refresh, `^q` quit | still work, unchanged — but the footer now draws `F5` and `F10` for those acts, because one line cannot hold both spellings |
+
 ## Local terminal acceptance checklist
 
 `remote-agents tui` launches one curated agent on this host and then hands the terminal to its
@@ -1150,7 +1212,7 @@ uv run --locked remote-agents tui
     the agent list.
 2. Confirm the agent list names each curated profile and the blocking reason beside any that is
    unavailable, and that selecting a blocked one is refused rather than launched.
-2b. Open the sessions list (Ctrl+S) and confirm each row carries a context gauge after its age —
+2b. Open the sessions list (the palette's Sessions entry) and confirm each row carries a context gauge after its age —
     a bar and a percentage for a codex session, and for a claude session the same only if
     `claude_context_window` is declared, otherwise a bare token count. Then confirm `s` on a
     running row acts **on that list**: no detail opens, the other rows stay, the stopped row
@@ -1175,21 +1237,22 @@ uv run --locked remote-agents tui
    Nothing is launched twice. Hosted by a client on the project's own server, the surface
    instead switches that client to the new session and stays alive — that path is exercised by
    the console acceptance steps, not this one.
-6b. Open a session's detail from Ctrl+S, choose Rename, type a name and press enter. Confirm
+6b. Open a session's detail from the sessions list, choose Rename, type a name and press enter. Confirm
     the detail comes back naming it and the sessions list agrees, and that an empty entry
     leaves the existing name alone rather than clearing it. This is the capability the local
     surface gained when the launch-time label step was removed; naming happens here now.
-6c. Press Ctrl+O, choose a project and an agent, and confirm the conversation list is the last
+6c. Open Resume from the palette, choose a project and an agent, and confirm the conversation list is the last
     position before anything starts — there is no confirmation step, matching Telegram. Confirm
     the cursor rests on Back rather than on a conversation, so a repeated enter starts nothing,
     and that choosing a conversation deliberately hands this terminal to the resumed pane.
-7. Press Ctrl+N, confirm the offered areas are the eligible existing directories under the
+7. Press `F7`, confirm the offered areas are the eligible existing directories under the
    configured `dev_root`, enter a rejected name such as `New Thing` and confirm nothing is
    created, then create a valid one and confirm it becomes selectable without leaving the app.
-   Escape is Back, Ctrl+Q quits, and Ctrl+R re-reads the screen you are on rather than
+   Escape is Back, `F10` quits, and `F5` re-reads the screen you are on rather than
    returning to the project list — confirm on the sessions view that it re-lists in place.
-   Confirm the footer drops Refresh on a screen with nothing to re-read, and that typing a
-   project name greys Ctrl+N, Ctrl+S and Ctrl+O rather than discarding what you typed.
+   Confirm `F1` opens a panel naming every key of the row above, that Refresh is absent from
+   that panel on a screen with nothing to re-read, and that typing a project name greys `F7`
+   and withdraws Sessions and Resume from the palette rather than discarding what you typed.
 
 ## Console acceptance checklist
 
@@ -1239,7 +1302,9 @@ uv run --locked remote-agents
    while the agent is still in front. This is the whole point of the layout: news reaches you
    without leaving the agent.
 7. Press `F12`. Confirm the projects surface comes back to the left pane and the agent's pane
-   returns to its own window. This is the console's only root key.
+   returns to its own window. It is one of the eleven root keys of *The key row* above, and the
+   only one that is not simply delivered to a pane — bringing the surface home is an exchange,
+   which is the one console operation tmux cannot perform by itself.
 8. Attach a second terminal with `tmux -L remote-agents attach-session -t ra-console:` and
    confirm it shows the same four panes rather than building a fifth.
 9. **The dangerous one.** With an agent displayed, run
@@ -1254,53 +1319,63 @@ uv run --locked remote-agents
 11. Run `remote-agents doctor --json` and confirm `console.panes_splittable` is `true`. It read
     `console.window_linkable` until the console stopped linking windows; if you have scripts
     reading that field, they need the new name.
-12. **The Alt layer, driven from a pane that is not the sessions pane.** The row keys of step 4
-    are also chords on the whole console, with Alt held: `⌥a` Copy attach, `⌥i` Inspect output,
-    `⌥r` Rename, `⌥s` Stop and close, `⌥c` Clean up, `⌥f` Force stop, `⌥m` Claude Remote
-    Control, and `⌥d` the detail. Each acts on the session the **sessions pane** highlights —
-    the row it marks `▸` in yellow, which is why the marker is there at all — not on anything
-    under the cursor of the pane you press it in. With two or more sessions listed,
+12. **The function-key row, driven from a pane that is not the sessions pane.** Five of the row
+    keys of step 4 are function keys on the whole console: `F3` Inspect output, `F4` the
+    detail, `F6` Rename, `F8` Stop and close, `F9` Force stop. Each acts on the session the
+    **sessions pane** highlights — the row it marks `▸` in yellow, which is why the marker is
+    there at all — not on anything under the cursor of the pane you press it in. Copy attach,
+    Clean up and Claude Remote Control got no function key and stay on the bare `a`, `c` and
+    `m` of step 4. With two or more sessions listed,
     highlight one in the sessions pane, move to the projects pane (`Ctrl-b ←`; `Ctrl-b o` steps one pane at a time and the console
    has four), press `/` and
     type two letters of a project name. Confirm three things at once: the filter still holds
     exactly what you typed — bare letters type here and do not act — the muted hint row beneath
-    it reads `⌥ a i r s c f m d` and is *not* dimmed, because a session is selected, and `⌥d`
+    it reads `F3 F4 F6 F8 F9` and is *not* dimmed, because a session is selected, and `F4`
     opens the detail of the sessions pane's marked row. Escape, and confirm the filter
-    still holds your two letters. Repeat `⌥i` from the feed pane on the same session. The limits
-    pane offers the same chords and does not name them, because it draws no hint row at all; the
-    sessions pane does not name them either, since its own frame already lists the same letters
-    bare, and neither do the session detail and rename screens, which carry them silently.
+    still holds your two letters. Repeat `F3` from the feed pane on the same session. The limits
+    pane answers the same keys and does not name them, because it draws no hint row at all; the
+    sessions pane does not name them either, since its own frame already lists the same acts as
+    bare letters, and neither do the session detail and rename screens, which carry them silently.
 
     **Three refusals are deliberate**, and each is a key that visibly does nothing. First, press
-    `r` on a sessions-pane row, which takes you to the rename box, and there press `⌥s`:
-    confirm no session is stopped. The three stops are refused wherever the text you are typing
-    is a commitment — the rename box and the new-project name step — while the navigating chords
+    `r` on a sessions-pane row, which takes you to the rename box, and there press `F8`:
+    confirm no session is stopped. The two stops are refused wherever the text you are typing
+    is a commitment — the rename box and the new-project name step — while the navigating keys
     still work and Escape returns to the text intact. Second, redo the cursor drill of step 5b
-    and, with nothing marked, press a chord from the projects pane: confirm it reports
+    and, with nothing marked, press a session key from the projects pane: confirm it reports
     `No session is selected.` and does nothing. A vanished row leaves no selection as well as
     no cursor, on either sessions position. Third, only a pane the console is currently
     showing may read that selection: a plain `remote-agents tui` started from a shell on this
     server, and the projects surface after step 3's exchange parked it in the agent's own
-    window, are both told `Session chords act on the console's own panes.` The question is
+    window, are both told `Session keys act on the console's own panes.` The question is
     asked at the moment the key is pressed, not once at start-up, which is why an exchange
     changes the answer for a process that never restarted.
-13. **The chord layer is the console's, not the server's.** First press `F12` to bring the
+13. **The row is the console's, not the server's.** First press `F12` to bring the
     projects surface home: while an agent is *displayed*, DEC-039's attach command names the
     session showing that pane — `ra-console` — so attaching with it would put you on the console
-    and the chord would fire correctly, reading as a broken guard. With no agent displayed,
+    and the key would fire correctly, reading as a broken guard. With no agent displayed,
     confirm the command the session detail hands you names `ra-<uuid>`, run it from a terminal
-    outside the console, and press your prefix then `M-d`. Nothing must happen: the
-    sessions pane must not move and no detail must open. A tmux key table belongs to the
-    *server* and every agent is attached to that server, so without the guard in the forwarding
-    binding this key reaches the console's sessions pane — and with `M-s` it would stop a row
-    you cannot see, unasked (DEC-018). Detach with your prefix then `d`.
+    outside the console, and press `F4`. Nothing must happen: the
+    sessions pane must not move and no detail must open. Then press `F8` from that same client
+    and confirm **nothing is stopped** — this is the one that matters. A tmux key table belongs
+    to the *server* and every agent is attached to that server, so without the guard in the
+    binding this key reaches the console's sessions pane and stops a row you cannot see,
+    unasked (DEC-018). Detach with your prefix then `d`.
 
-14. **The prefix route, from inside a displayed agent.** Display an agent in the left pane again
-    as in step 3 and put the keyboard in it. Press `Ctrl-b` (or your own prefix) and then `M-d`.
+14. **From inside a displayed agent, with nothing extra to press.** Display an agent in the left
+    pane again as in step 3 and put the keyboard in it. Press `F4`.
     Confirm the sessions pane opens the detail of its marked row and that the agent's own
-    pane received no keystroke — its output is unchanged. The eight chords are bound in tmux's
-    *prefix* table rather than as root keys, so they cost a displayed agent nothing and the
-    console's root-key budget is still the single `F12` of step 7.
+    pane received no keystroke — its output is unchanged. This is the position the row exists
+    for and the reason it is bound at the tmux root rather than behind the prefix: tmux takes
+    the key before the agent sees it. The cost is that the console takes these keys from every
+    pane on its server, which is what the fourth bullet of *The key row* is about.
+
+    **Then check the one pass-through.** Display an **OpenCode** session and press `F2` in it.
+    Confirm the model switch happens *in that pane* and that Settings does **not** open in the
+    sessions pane: OpenCode declares `F2` (`model_cycle_recent`) on its own descriptor, and the
+    binding reads the pane's profile at press time and hands the key over. Press `F2` from any
+    other pane, or at a Claude Code, Codex or Cursor session, and confirm Settings opens as
+    usual — none of those three declares a function key.
 
 15. **The fold, and it is three presses rather than one.** With an agent displayed as in step
     3, press `Ctrl-b h` (or `h` under your own prefix). Confirm the sessions, limits and feed
@@ -1334,7 +1409,7 @@ uv run --locked remote-agents
     console** — the session detail hands you that `remote-agents attach ra-<uuid>` command —
     and confirm nothing happens. A tmux key table belongs to the *server*, and every managed
     agent is attached to the same one, so the binding asks which session the pressing client
-    is on and does nothing unless it is the console (DEC-073(3)), exactly as the Alt chords do
+    is on and does nothing unless it is the console, exactly as the function-key row does
     in step 13.
 
 ## Terminal and service on one database
@@ -1372,8 +1447,8 @@ Each process also holds its own catalogue and its own profile probe, both taken 
 project created in the terminal is invisible to a running service until it re-reads — opening
 Launch or Resume from the navigation bar re-reads the catalogue, as do `/launch` and `/resume`,
 so no Refresh press is needed for this — and one created from Telegram or the command line is
-invisible in a running terminal until it re-reads the catalogue — press Ctrl+R on the project list, the
-resume project list, or use Add Project, which re-reads on the way out. Ctrl+R re-reads only
+invisible in a running terminal until it re-reads the catalogue — press `F5` on the project list, the
+resume project list, or use Add Project, which re-reads on the way out. `F5` re-reads only
 what the screen it is pressed on shows, and the catalogue is what those two show; on the
 sessions view it re-runs the readiness pass and the session list instead. No screen's Refresh
 re-probes the agents: one installed after the terminal started stays reported as unavailable
@@ -1537,7 +1612,7 @@ uv run --locked remote-agents tui
    the source in force in its `claude_limits_source` line, worded with that cost. The pane must never collapse to
    `No agent limits reported.` once a read has landed and any agent reported; that sentence
    belongs to the moment before the first read and to a host with no limits reader wired.
-1. Press Ctrl+S, which is available from any screen. Sessions lists every managed session the
+1. Open the command palette with `:` or `Ctrl+P` and choose Sessions, which is available from any screen. Sessions lists every managed session the
    shared store holds, including ones the bot launched and ones an earlier terminal run started.
    ENDED records are filtered because nothing is left to reach or stop. Readiness is refreshed
    once as the list opens, so a launch recorded as FAILED whose pane has since become ready is
@@ -1600,7 +1675,7 @@ uv run --locked remote-agents tui
    level, only after its ownership and output have been established. Forcing the first kind kills
    a pane this tool never properly owned — that is intended, and it is still a kill.
 
-Ctrl+O opens Resume, which starts a new managed session continuing a saved conversation, and it
+The palette's Resume entry starts a new managed session continuing a saved conversation, and it
 is offered only for profiles that report themselves resume-capable on this host. When a session
 cannot be salvaged, force stopping it and resuming its conversation into a fresh session is the
 local recovery route that keeps the prior work. That route depends on a conversation being bound
@@ -1659,7 +1734,7 @@ non-zero and prints a reason on standard error; refusals raised before the regis
 their cause, while a failure inside the write is reported as `project could not be catalogued`
 without its specific cause. Area and name must each be lowercase letters, digits, and single
 hyphens, 1 to 64 characters; the check runs before any filesystem effect. A canonical path the
-registry already holds is refused, including one recorded by a disabled entry. Ctrl+N in
+registry already holds is refused, including one recorded by a disabled entry. `F7` in
 `remote-agents tui` runs the same use case and the same append-only write from the terminal,
 under the same area eligibility and the same slug rule.
 

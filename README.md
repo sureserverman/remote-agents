@@ -390,18 +390,35 @@ attach to it rather than replace it. To get the three-pane console, kill it once
 
 ### Keys the console takes
 
-**One root key**, and it is worth knowing why. `F12` brings the projects surface back to the
-left pane. It is a tmux *root* binding — no prefix — installed on this project's own tmux
-server only, so your own tmux configuration is never touched, but on that server it is a key
-no agent can ever receive. It earns that because the route back is the one thing that must not
-require remembering configuration: an agent fills the pane you were working in, and that is
-exactly when a console looks stuck.
+**The function-key row**, and it is worth knowing why. F1 through F10 and F12 are tmux *root*
+bindings — no prefix — installed on this project's own tmux server only, so your own tmux
+configuration is never touched, but on that server they are keys no pane can receive. They earn
+that because the surface must stay reachable from the one position where no key of its own can
+be pressed: an agent fills the pane you were working in, and that is exactly when a console
+looks stuck. Each key is delivered at press time to whichever pane owns the act — the console's
+own pane if that is where you pressed it, the sessions pane otherwise — and F12 brings the
+projects surface back to the left pane, the one console operation tmux cannot perform by
+itself.
+
+**F11 is unbound on purpose.** It is the full-screen toggle in almost every emulator, and a
+binding of ours would be a key you lose without being able to tell which side took it.
+
+**An agent that already binds a function key keeps it.** A curated provider declares such a key
+on its own descriptor, and the binding reads the pane's profile at press time and hands the key
+straight over rather than taking it. OpenCode is the only one that declares anything — it binds
+F2 to `model_cycle_recent` — so F2 at an OpenCode pane cycles its model, and F2 anywhere else
+on the console opens Settings. Claude Code, Codex and Cursor bind no function key.
+
+**An agent this project does not curate loses any function key it binds, and nothing says so.**
+That is the accepted cost of taking the row at the root rather than a defect, and it is
+recorded as BL-094: the declaration that spares OpenCode comes from a curated provider's own
+descriptor, and an uncurated agent has none to make.
 
 **And one behind the prefix: `prefix h` folds the right column away.** Press `Ctrl-b h` (or
 `h` under whatever prefix this host sets) and the sessions, limits and feed panes slide off
 the right edge, giving the agent in the left pane the whole window; press it again and they
 slide back. It costs no agent anything — tmux takes the prefix in the client, before any key
-reaches a pane — which is why it is a prefix key rather than a second root one: the console is
+reaches a pane — which is why it is a prefix key rather than a twelfth root one: the console is
 entirely usable without it. Two things are worth knowing about the fold:
 
 - **It survives displaying an agent.** Folded, launch a session and the agent arrives in the
@@ -417,74 +434,133 @@ no slide.
 Everything else uses tmux's own keys. **Moving between the four panes is `Ctrl-b o`** (or
 the same `o` under whatever prefix this host's `~/.tmux.conf` sets) — the prefix reaches the
 client before any key reaches a pane, so it works even while an agent is displayed. An
-earlier design took a second root key for this; it was removed once that turned out to be
-true.
+earlier design took a root key of its own for this; it was removed once that turned out to be
+true, and moving between panes has cost no agent a keystroke since.
 
 Each pane offers only the flows it owns: the projects pane keeps *Add project* and *Resume*,
 which both begin by choosing a project. The sessions and feed panes offer neither.
 
-The session actions have keys of their own on every pane, but they are Alt chords rather than
-root keys and none of them is tmux's — see *The Alt layer* immediately below.
+The session actions have keys of their own on every pane, and they are five members of the same
+row — see *The function-key row* immediately below.
 
-### The Alt layer
+### The function-key row
 
-Every session action on the sessions list, and `d` with them, is also a chord on the whole
-console. Hold Alt and those row keys work from any pane: `⌥a` Copy attach, `⌥i` Inspect
-output, `⌥r` Rename, `⌥s` Stop and close, `⌥c` Clean up, `⌥f` Force stop, `⌥m` Claude Remote
-Control, and `⌥d` opens the detail. Each does exactly what its bare letter does on a row —
-same policy, same confirmations, `f` and both Remote Control directions still asking and `s`
-and `c` still not — to **the session the sessions pane has highlighted**, the row it marks `▸`
-in yellow, which is in a pane you are not focused on. A stop issued from the projects pane therefore reports as a toast
-rather than in the status line: the status line there describes the project list, and that is
-what you are looking at.
+Eleven keys, owner-validated, each borrowed from a program you already press it in — and F11,
+which is listed below because it is deliberately left alone. They are
+one table in the code, which is what the footer, F1's help panel and this document all read, so
+there is one spelling of each act rather than three that have to be kept agreeing:
 
-Alt, and not the bare letter, because the projects pane's filter holds the keyboard by
-construction. Bare letters still type into the filter; only the Alt layer acts. The projects
-pane and the feed pane name the layer on their muted hint row as `⌥ a i r s c f m d`, drawn dim
-whenever nothing is selected. Two surfaces carry the chords without naming them, and both
-omissions are deliberate: the sessions pane, because its own border title already lists the
-same letters bare and saying them twice on one small pane reads as two key sets, and the limits
-pane, because it draws no hint row at all — it hides its status and its border too, on the
-argument that two rows to restate a heading is too much on a pane whose content is two lines.
-The session detail and the rename screen carry them silently for the same reason as the
-sessions pane: the detail names each action in full already.
+| Key | Action | Borrowed from |
+|---|---|---|
+| `F1`, `?` | help — the panel that lists every key | htop, mc |
+| `F2`, `,` | settings | htop Setup |
+| `F3` | inspect output | mc View |
+| `F4` | session detail | mc Edit |
+| `F5`, `Ctrl+R` | refresh | browsers, k9s |
+| `F6` | rename | mc RenMov |
+| `F7` | add project | mc Mkdir |
+| `F8` | stop and close — issued without asking | mc Delete |
+| `F9` | force stop — asks first | htop Kill |
+| `F10`, `q` at the resting position, `Ctrl+Q` | quit | htop, mc |
+| `F11` | unbound; the terminal's | terminal full-screen |
+| `F12` | projects | existing root key |
 
-**From inside a displayed agent the route is the prefix.** An agent in the left pane receives
-every key you type, so the same eight chords are also bound in tmux's *prefix* table: press
-`Ctrl-b` (or your own prefix) and then the chord — `Ctrl-b M-d` — and it is forwarded to the
-sessions pane. The agent is never sent the key. This costs no root binding, so the console's
-root-key budget is still the single `F12` above — as does `prefix h`, the fold, for the same
-reason.
+The rest of the keyboard is what it is everywhere else: `j` `k` `g` `G` move within a list
+(vim, k9s, less), `q` is Back on a pushed screen, `/` filters (k9s, less, vim), `:` and
+`Ctrl+P` open the command palette (k9s; Textual), and Escape, Enter and the arrows are
+unchanged.
 
-**Three cases where a chord deliberately does nothing**, each worth knowing before you conclude
-a key is broken:
+**The footer does not draw all eleven**, and that is a width decision rather than a statement
+about which keys exist — every one of them is bound on every position that answers for it. The
+footer is a single clipping line: measured on the inspect screen at 80 columns, five app
+entries fit and six do not. So it draws `F1`, `F7` and `F10` beside Escape and the palette, and
+**`F1` opens a panel listing every key**, which is what that key is borrowed from htop for. The
+five session-shaped keys are left out of the footer because the console's projects and feed
+panes name them on their own hint row, and `F2`, `F5` and `F12` because `,`, `Ctrl+R` and the
+palette already say the same acts.
+
+**The five session keys act from any pane on the session the sessions pane has highlighted** —
+the row it marks `▸` in yellow, which is in a pane you are not focused on. `F3` Inspect output,
+`F4` the detail, `F6` Rename, `F8` Stop and close, `F9` Force stop. Each does exactly what its
+bare letter does on a row — same policy, same confirmations, `F9` and both Remote Control
+directions still asking and `F8` and Clean up still not. A stop issued from the projects pane
+therefore reports as a toast rather than in the status line: the status line there describes the
+project list, and that is what you are looking at.
+
+**Three row actions got no function key**, and they are the three that are not about ending or
+reading a session: Copy attach, Clean up and Claude Remote Control stay on their bare letters
+(`a`, `c`, `m`) on the sessions pane, and in the command palette. The row is spent on what the
+owner reaches for from another pane.
+
+Function keys rather than bare letters, because the projects pane's filter holds the keyboard by
+construction. Bare letters still type into the filter; the F-keys act. The projects pane and
+the feed pane name them on their muted hint row as `F3 F4 F6 F8 F9` — keys alone, no words,
+because that line is shared with the pane's own keys and is elided rather than wrapped at the
+narrow end of the supported widths — drawn dim whenever nothing is selected. Two surfaces carry
+them without naming them, and both omissions are deliberate: the sessions pane, because its own
+border title already lists the same acts as bare letters and saying them twice on one small pane
+reads as two key sets, and the limits pane, because it draws no hint row at all — it hides its
+status and its border too, on the argument that two rows to restate a heading is too much on a
+pane whose content is two lines. The session detail and the rename screen carry them silently for
+the same reason as the sessions pane: the detail names each action in full already.
+
+**From inside a displayed agent there is nothing extra to press.** An agent in the left pane
+receives every key you type, but not these: the row is bound at the tmux *root*, so tmux takes
+the key before the agent sees it and delivers it to the console pane that owns the act. The
+agent is never sent the key — unless it is one that declared it, which today means OpenCode and
+`F2`. There is no prefix route and no second spelling to remember, and that is the whole of what
+the row is worth: the keys cost every pane on this server a keystroke, and what they buy is a
+console that answers from the one position where nothing else can.
+
+**Four cases where a function key deliberately does nothing**, each worth knowing before you
+conclude a key is broken:
 
 - **While what you are typing is a commitment.** On the rename box and on the new-project name
-  step, `⌥s`, `⌥c` and `⌥f` are refused. The chords take priority over the focused text box, so
-  a slipped Alt would otherwise turn the next `s` into an unconfirmed, irreversible stop — of
-  the very session being renamed, or of whatever another pane happens to highlight. The
-  navigating chords still work there, and Escape comes back to the text you had typed. The cost
-  is accepted rather than overlooked: on an empty rename box `⌥s` was the best-targeted stop in
-  the app, its subject named and on screen, and it is refused too.
-- **When the sessions cursor rests on nothing.** There is then no selection to act on, and
-  every chord says `No session is selected.` and does nothing rather than guessing at a row.
-  This is the ordinary state from the moment the row you were on leaves the list until you
-  move the cursor onto another one — not a window that closes by itself — see *Keys on the
-  sessions list* below.
+  step, `F8` and `F9` are refused. The row takes priority over the focused text box, so it would
+  otherwise be one keystroke from an unconfirmed, irreversible stop — of the very session being
+  renamed, or of whatever another pane happens to highlight. The navigating keys still work
+  there, and Escape comes back to the text you had typed. The cost is accepted rather than
+  overlooked: on an empty rename box `F8` was the best-targeted stop in the app, its subject
+  named and on screen, and it is refused too.
+- **When the sessions cursor rests on nothing.** There is then no selection to act on, and every
+  session key says `No session is selected.` and does nothing rather than guessing at a row.
+  This is the ordinary state from the moment the row you were on leaves the list until you move
+  the cursor onto another one — not a window that closes by itself — see *Keys on the sessions
+  list* below.
 - **From a client that is not the console.** A tmux key table belongs to the *server*, and
-  managed agents are attached to that same server — so the prefix route above would otherwise
-  fire from a plain `remote-agents attach`, stopping a row you cannot see. It does not: the
-  binding asks which session your client is attached to and does nothing unless it is the
-  console. `Ctrl-b M-d` from an agent attach is deliberately inert.
+  managed agents are attached to that same server — so a root binding would otherwise fire from
+  a plain `remote-agents attach`, stopping a row you cannot see. It does not: the binding asks
+  which session your client is attached to and does nothing unless it is the console. `F8` from
+  an agent attach is deliberately inert.
 - **From a process that is not one of the console's own panes.** Only a pane the console is
   currently showing may read the selection, and that is asked at the moment you press the key
   rather than once at start-up. A plain `remote-agents tui` started from a shell on the
   console's own tmux server is refused, and so is the projects surface after an exchange has
   parked it in an agent's window — it keeps its slot mark, but it is no longer on the console.
-  Both are told `Session chords act on the console's own panes.` rather than being answered
-  from a console whose sessions list is not on their screen. Two of these keys end a session
-  with no confirmation, so the guard on who may read the selection is doing the job the
-  confirmation prompt is not.
+  Both are told `Session keys act on the console's own panes.` rather than being answered from a
+  console whose sessions list is not on their screen. Two of these keys end a session with no
+  confirmation, so the guard on who may read the selection is doing the job the confirmation
+  prompt is not.
+
+### Upgrading from 0.41.0: what each old key became
+
+The Alt layer and the three Ctrl flow keys are gone. The keys below are spelled the way 0.41.0's
+own footer drew them. Everything they did is still here; most of it is now one press rather than
+two, and two of them moved to the command palette on purpose.
+
+| Was | Is now |
+|---|---|
+| `⌥i` Inspect output | `F3` |
+| `⌥d` the session detail | `F4` |
+| `⌥r` Rename | `F6` |
+| `⌥s` Stop and close | `F8` |
+| `⌥f` Force stop | `F9` |
+| `⌥a` Copy attach, `⌥c` Clean up, `⌥m` Claude Remote Control | no function key — the bare `a`, `c` and `m` on the sessions pane, and the command palette |
+| `prefix M-<key>`, the forwarding route from a displayed agent | nothing to press — the F-keys reach you there directly |
+| `^n` add project | `F7` |
+| `^s` sessions | no key — the command palette (`:` or `Ctrl+P`), entry "Sessions" |
+| `^o` resume | no key — the palette, entry "Resume" |
+| `^r` refresh, `^q` quit | still work, unchanged — but the footer now draws `F5` and `F10` for those acts, because one line cannot hold both spellings |
 
 ### Width
 
@@ -524,18 +600,25 @@ breadcrumb and says what going through with it does: a ready launch hands this t
 session's pane, or prints how to reach it. It opens with Back highlighted rather than an agent,
 so a stray enter mutates nothing and reaching an agent is one arrow key — the same shape, and
 the same cost, as choosing a conversation to resume. Escape is
-Back, Ctrl+R re-reads whatever the screen
-you are on shows without leaving it, Ctrl+N adds a project, Ctrl+S opens the managed sessions,
-Ctrl+O resumes a saved conversation, and Ctrl+Q quits.
+Back, F5 re-reads whatever the screen
+you are on shows without leaving it, F7 adds a project, F10 quits, and F1 opens a panel naming
+every key. Sessions and Resume have no key of their own: they are entries in the command
+palette, which `:` and `Ctrl+P` both open. The whole row is *The function-key row* above, with
+what each of 0.41.0's keys became beneath it.
 
-The footer lists only the keys that do something where you are. Refresh appears only where
-something can be re-read, Back is absent at the project list because there is nowhere behind
-it, and Resume is absent entirely on a host that wired no conversation service. While a flow
-holds work you would lose — a project name or a session name being typed, or the add-project
-review holding one already committed — the three keys that leave the flow are greyed rather
-than hidden, so a keystroke meant for somewhere else does not discard it. The launch flow is
+The footer, F1's panel and the palette list only the keys that do something where you are, and
+they are one answer rather than three: each asks the position the same question. Refresh
+appears only where something can be re-read, Back is absent at the project list because there
+is nowhere behind it, and Resume is absent entirely on a host that wired no conversation
+service. While a flow holds work you would lose — a project name or a session name being typed,
+or the add-project review holding one already committed — the three jumps that leave the flow
+are withheld, so a keystroke meant for somewhere else does not discard it: F7 stays drawn and
+greyed, and Sessions and Resume drop out of the palette. F2 Settings is withheld with them,
+though escape would have come back to the typed value intact: a commitment screen is a position
+the surface has asked you to finish, and offering a way off it is the same surprise one step
+quieter. The launch flow is
 deliberately not among them: it holds one list choice and nothing typed, so re-picking costs
-one keystroke and greying the keys would be friction with nothing behind it. Ctrl+Q is deliberately
+one keystroke and greying the keys would be friction with nothing behind it. F10 is deliberately
 not among them: quit means leave, and an app that refuses to close until an entry is cleared
 would be the worse answer. It does take unsaved work with it.
 
@@ -554,7 +637,7 @@ A launch that raises, or one whose session never reaches readiness, leaves you o
 list with the cursor resting on nothing, reports the reason, and attaches to nothing. Where the session's pane may still exist, the attach
 command that reaches it stays on the status line rather than expiring with the notification.
 
-Add Project is Ctrl+N. The area is a choice between the existing directories the server enumerates
+Add Project is F7. The area is a choice between the existing directories the server enumerates
 under the configured development root, further restricted to those the project identity rule also
 accepts; a free-form area is never accepted. The name is typed and validated before anything is
 created, and Review names the area and the name before the mutation. After a create the catalogue
@@ -576,7 +659,7 @@ client, the launch still happens but the attach is refused rather than nested, a
 to reach the new session is printed instead. An exec that cannot happen prints the same command
 and exits non-zero, so a started session is never lost.
 
-Ctrl+S lists the managed sessions. The list is the shared store's rather than this process's, so a
+The palette's Sessions entry lists the managed sessions. The list is the shared store's rather than this process's, so a
 session the bot launched, or one a previous run of this app started, is there too; each row names
 the session, its state, how long ago it started, and how full its context window is — a bar and a
 percentage where the provider states a ceiling, and the bare token count where it does not, which
@@ -643,9 +726,9 @@ have no filter to type into.
 
 **They act on the row your cursor is on**, and that row is marked `▸` in yellow so you can see
 which it is. The marker is not a second selection — it is the cursor, drawn so that it reads
-from somewhere else. That matters because the same keys are Alt chords on the whole console:
-pressing `⌥s` in the projects pane acts on a row in a list you are not focused on, and the
-marker is how that list says which.
+from somewhere else. That matters because five of these acts are also function keys on the
+whole console: pressing `F8` in the projects pane acts on a row in a list you are not focused
+on, and the marker is how that list says which.
 
 A session that has just **started** takes the cursor, so the agent you launched is the one in
 front of you and the one your keys are pointed at, with no hunt down the list. A session that
@@ -676,7 +759,7 @@ failed on is still running, so a repeated keypress would re-issue a stop you nev
 twice.
 
 A vanished row therefore leaves **no selection**, no cursor, and no marker. Until you pick a row
-again the Alt chords described above have nothing to act on, from any pane, and say so.
+again the function keys described above have nothing to act on, from any pane, and say so.
 
 Copy attach is always offered and answers when it is chosen: a pane that is not live, or one whose
 project or agent does not match, is explained rather than left out, so a dead pane cannot be
@@ -690,7 +773,7 @@ and across the other surface. It and Force stop each move to a step of their own
 is issued, with Cancel first and resting under the cursor, so going through with either means
 choosing a different row on purpose rather than repeating the keystroke that raised it.
 
-Ctrl+O resumes a saved conversation. It asks for the project, then the agent, offering only those
+Resume, from the command palette, continues a saved conversation. It asks for the project, then the agent, offering only those
 whose provider reports itself resume-capable on this host; capability comes from the probe that
 asks each provider, never from a version allowlist. Then it pages that agent's conversations for
 that project, ten at a time. A row carries safe metadata only; the provider ID and the transcript
@@ -699,12 +782,13 @@ server resolves, so a stale one resolves to nothing rather than to a path. Choos
 conversation starts it — there is no confirmation step, matching the bot, which retired its own.
 A ready resume hands this terminal
 to the new session's pane exactly as a launch does; one that never reaches readiness prints the
-command that reaches the pane instead. Resume is Ctrl+O rather than Ctrl+E because the text input
-already binds Ctrl+E to end-of-line.
+command that reaches the pane instead. Resume has no key of its own: the function-key row is
+spent on what acts on a session that already exists, and the two flows that *start* one are
+reached from the palette, where every navigation entry already lives.
 
 ## Creating a project
 
-A project can be created from this host, with the command below or with Ctrl+N in the local
+A project can be created from this host, with the command below or with F7 in the local
 terminal surface, or from Telegram. Every surface runs the same validated use case and the same
 append-only registry write:
 
