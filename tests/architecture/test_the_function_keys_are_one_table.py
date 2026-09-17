@@ -450,18 +450,22 @@ def test_no_screen_declares_a_function_key_of_its_own() -> None:
 
 
 def test_only_a_session_key_marks_a_position_as_left_by_an_excursion() -> None:
-    """The mark belongs to the F-key layer, and the row keys share the code that would set it.
+    """The mark belongs to the F-key layer, and the shared performers may never set one.
 
-    `perform_row_action` and `perform_row_remote_control` are reached from two callers: the bare
-    row key on a sessions position, and an F-key from anywhere. Only the F-key takes the owner
-    *off* a position that will later consume a mark, so only it may set one. A row key that
-    marked its own screen would be inert today -- `SessionsScreen` never calls
-    `consume_excursion` -- which is exactly what makes it worth pinning: a one-shot flag nobody
-    reads is a trap for the next cursor-owning position to inherit `ProjectsScreen.on_reveal`.
+    `perform_row_action` and `perform_row_remote_control` are reached from two kinds of caller:
+    the bare row key on a sessions position, and a session-shaped F-key from anywhere. Only the
+    F-key takes the owner *off* a position that will later consume a mark, so only it may set
+    one. A row key that marked its own screen would be inert today -- `SessionsScreen` never
+    calls `consume_excursion` -- which is exactly what makes it worth pinning: a one-shot flag
+    nobody reads is a trap for the next cursor-owning position to inherit
+    `ProjectsScreen.on_reveal`.
 
-    **Two modules, since the retirement.** The marking that used to sit in `perform_chord` is
-    now in `RemoteAgentsTui.action_session_key`, so a check reading only `screens/sessions.py`
-    would see one caller where there are two and pass while the app grew a third.
+    **Two modules, and the shape changed twice.** While the layer was Alt chords the marking
+    lived in `perform_chord`, and `perform_row_remote_control` took a `mark_excursion` flag so
+    the chord could mark where the bare `m` did not. Retiring the layer moved the marking to
+    `RemoteAgentsTui.action_session_key` and left that flag with no caller at all, because
+    Remote Control got no F-key -- so it was deleted. What is asserted now is the stronger and
+    simpler property the two changes converged on: **the app marks, the performers never do.**
 
     **Asserted structurally, and that is the second choice.** The behavioural version -- press a
     bare `i` on the sessions pane and assert no mark -- could not be made to navigate in a unit
@@ -475,10 +479,8 @@ def test_only_a_session_key_marks_a_position_as_left_by_an_excursion() -> None:
     }
 
     callers: dict[str, int] = {}
-    trees: dict[str, ast.Module] = {}
-    for name, module in modules.items():
+    for module in modules.values():
         tree = ast.parse(module.read_text(encoding="utf-8"))
-        trees[name] = tree
         for node in ast.walk(tree):
             if not isinstance(node, ast.AsyncFunctionDef | ast.FunctionDef):
                 continue
@@ -490,27 +492,8 @@ def test_only_a_session_key_marks_a_position_as_left_by_an_excursion() -> None:
                 ):
                     callers[node.name] = callers.get(node.name, 0) + 1
 
-    assert set(callers) == {"action_session_key", "perform_row_remote_control"}, (
-        f"the excursion mark is set from {sorted(callers)}; only the F-key layer may set it, "
-        "and `perform_row_action` is shared with the bare row keys"
-    )
-
-    # And inside the remote-control helper, every mark sits under the parameter the layer passes.
-    helper = next(
-        node
-        for node in ast.walk(trees["sessions"])
-        if isinstance(node, ast.AsyncFunctionDef) and node.name == "perform_row_remote_control"
-    )
-    assert "mark_excursion" in {argument.arg for argument in helper.args.kwonlyargs}, (
-        "`perform_row_remote_control` marks unconditionally, so the bare `m` row key marks too"
-    )
-    guarded = [
-        sub
-        for sub in ast.walk(helper)
-        if isinstance(sub, ast.If)
-        and isinstance(sub.test, ast.Name)
-        and sub.test.id == "mark_excursion"
-    ]
-    assert len(guarded) == callers["perform_row_remote_control"], (
-        "not every mark in `perform_row_remote_control` sits under its `mark_excursion` guard"
+    assert set(callers) == {"action_session_key"}, (
+        f"the excursion mark is set from {sorted(callers)}; only the app's own session-key "
+        "action may set it, because `perform_row_action` and `perform_row_remote_control` are "
+        "shared with the bare row keys, which must not mark"
     )

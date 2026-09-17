@@ -721,12 +721,11 @@ _NAVIGATING_SESSION_KEYS = sorted(
 async def test_every_navigating_session_key_marks_the_position_it_leaves(key: str) -> None:
     """The property, in place of hand-placed calls and one test that happened to cover one.
 
-    `mark_excursion` is called from three sites — the detail branch and the row-action branch of
-    `action_session_key`, and both of `perform_row_remote_control`'s navigating paths. A review
-    predicted that only one of them was pinned; mutating the others left the suite green, which
-    is exactly right: a test per call site is a list, and the thing that must be true is a
-    *property* — every key that takes the owner off this position marks it, so the return draws
-    the list they left.
+    `mark_excursion` is called from two sites, the detail branch and the row-action branch of
+    `action_session_key`. A review predicted that only one of them was pinned; mutating the
+    other left the suite green, which is exactly right: a test per call site is a list, and the
+    thing that must be true is a *property* — every key that takes the owner off this position
+    marks it, so the return draws the list they left.
 
     Asserted on the flag rather than on the filter because the depth of the excursion differs by
     key (F6 lands two screens away, F4 one), and what is being tested is the mark, not the
@@ -737,10 +736,11 @@ async def test_every_navigating_session_key_marks_the_position_it_leaves(key: st
     was Alt chords, the Remote Control chord could mark the position and then refuse — it is only
     for a running Claude session — so a companion test pinned that a key which went nowhere
     left no mark. Remote Control has no F-key, and every session-shaped key that marks goes on
-    to `show_detail`, which always pushes. That companion test was deleted with its subject;
-    what still guards the property is
+    to `show_detail`, which always pushes. That companion test was deleted with its subject,
+    and so was the `mark_excursion` flag `perform_row_remote_control` carried for the chord
+    alone. What still guards the property is
     `tests/architecture/test_the_function_keys_are_one_table.py`, which reads the call sites and
-    fails if a mark appears anywhere but the two it allows.
+    fails if a mark appears anywhere but the app's own session-key action.
     """
     running = _record()
     console = SelectionConsole(selected=running.session_id)

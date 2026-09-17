@@ -536,14 +536,19 @@ async def perform_row_action(action: str, session_value: str, *, screen: ChoiceS
     await screen.tui.show_detail(session_value, action)
 
 
-async def perform_row_remote_control(
-    session_value: str, *, screen: ChoiceScreen, mark_excursion: bool = False
-) -> None:
+async def perform_row_remote_control(session_value: str, *, screen: ChoiceScreen) -> None:
     """Remote Control, which is the one key that cannot name its action in advance.
 
-    Shared by the row key and the F-key for the reason `perform_row_action` states. The busy
-    and cursor guards stay with the callers, because each resolves its session differently and
-    the refusal belongs beside the resolution.
+    The busy and cursor guards stay with the caller, because it resolves its session from a
+    cursor and the refusal belongs beside the resolution.
+
+    **One caller since sub-plan 03, and that is why this takes no `mark_excursion`.** It had
+    that parameter so the Alt chord could mark the position it was leaving while the bare `m`
+    row key -- pressed on a position that never consumes a mark -- did not. Remote Control got
+    no F-key in the owner's map, so the chord's call site went with the layer and only `m` is
+    left. A flag nobody sets is a trap for the next position to inherit
+    `ProjectsScreen.on_reveal`, which is the same argument that put the flag here in the first
+    place, read the other way round.
     """
     try:
         record = await screen.tui.current_record(session_value)
@@ -558,8 +563,6 @@ async def perform_row_remote_control(
         # read landing late pushes a detail onto whatever the owner navigated to instead.
         return
     if record is None:
-        if mark_excursion:
-            screen.mark_excursion()
         await screen.tui.show_detail(session_value)
         return
     if not remote_control_available(record):
@@ -580,8 +583,6 @@ async def perform_row_remote_control(
     # names is the freshest one this surface can take.
     directions = remote_control_directions(record, record.remote_control_state)
     opening = _REMOTE_CONTROL_KEYS[directions[0]] if directions else None
-    if mark_excursion:
-        screen.mark_excursion()
     await screen.tui.show_detail(session_value, opening)
 
 
