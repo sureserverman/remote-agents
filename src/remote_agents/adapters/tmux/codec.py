@@ -509,7 +509,7 @@ def _forward_function_key_command(
         f'profile=$(tmux show-options -qv -pt "$active" {_PROFILE_OPTION}); ' if reserving else ""
     )
     script = (
-        ""  # MUTANT: guard removed
+        f"{_PRESSED_FROM_THE_CONSOLE} "
         f'active=$(tmux display-message -p "#{{pane_id}}"); '
         f'slot=$(tmux show-options -qv -pt "$active" {CONSOLE_SLOT_OPTION}); '
         f"{reads_profile}"
