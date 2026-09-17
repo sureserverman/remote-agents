@@ -37,6 +37,15 @@ def descriptor() -> ProviderDescriptor:
     a live prompt with no question on it. Said here rather than left to the field's default,
     because four other artifacts describe this vertical as *declaring* the absence and a reader
     who came looking found nothing to read (DEC-009).
+
+    `reserved_keys` is the one non-empty reservation among the four providers, and it is a
+    reading of this agent's own keybinds rather than a policy: OpenCode binds `F2` to
+    `model_cycle_recent` (opencode.ai/docs/keybinds, read 2026-09-13; Shift+F2 cycles the other
+    way and the leader is Ctrl+X). The F-key console binds its function keys as tmux *root*
+    bindings, which take a key from every pane on the socket, so without this declaration an
+    owner pressing F2 at an OpenCode pane would get the console instead of the model switch the
+    agent binds -- and nothing would report it. Only plain `F2` belongs in the set: Shift+F2 is
+    a different tmux key name and the console binds no shifted function key.
     """
     return ProviderDescriptor(
         ProfileId("opencode"),
@@ -52,4 +61,7 @@ def descriptor() -> ProviderDescriptor:
         sessions=_sessions,
         usage=OpenCodeUsageReader(),
         hooks="opencode",
+        # tmux's spelling, not Textual's: this set is handed to `tmux bind-key`/`send-keys`,
+        # which knows `F2` and not `f2`.
+        reserved_keys=frozenset({"F2"}),
     )

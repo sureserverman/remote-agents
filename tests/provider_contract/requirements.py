@@ -8,6 +8,13 @@ match the registry's None-ness exactly (DEC-061: absence is declared, never inve
 in both directions: declaring `unsupported` over a wired capability hides coverage, and
 `supported` over a None invents it). `test_requirements_match_registry.py` enforces the
 agreement; the architecture tree's vacuity guard enforces completeness.
+
+**The table covers `capability_fields()` and nothing else.** `ProviderDescriptor.reserved_keys`
+is deliberately absent from every row: it is not a capability but a declared set whose empty
+value is an answer (a provider that binds no function key the console would take from it), so
+there is no absence for a state to describe -- UNSUPPORTED would turn three measurements into
+three skips, and SUPPORTED would make `frozenset()` a contradiction. Its contracts drive
+unconditionally in `test_reserved_key_contracts.py`, which also asserts no row here grows one.
 """
 
 from __future__ import annotations

@@ -440,6 +440,39 @@ def profile_glyphs(descriptors: tuple[ProviderDescriptor, ...] | None = None) ->
     return resolved
 
 
+def reserved_keys_by_profile(
+    descriptors: tuple[ProviderDescriptor, ...] | None = None,
+) -> dict[str, frozenset[str]]:
+    """Every curated profile, and the keys its agent already binds that a console must not take.
+
+    `profile_glyphs`' fold for the other declared-per-provider value, resolved the same way and
+    taking the descriptors for the same reason: a descriptor constructs its vertical's
+    collaborators, so a fold that rebuilt them per profile would build all four of them four
+    times over. Callers that already hold descriptors pass them.
+
+    **Total, and empty rather than missing.** A profile no vertical declares reserves nothing,
+    which is the same shape of answer as a provider that binds no function key — so the caller
+    composing a forwarding script asks one question and gets one kind of answer, instead of
+    telling an unknown profile apart from a provider with nothing to reserve and having to
+    decide what the difference means. `profile_trust_dialogs` omits its absences for the
+    opposite reason: there, `in` *is* the question the caller is asking.
+
+    The keys are tmux's spelling (`F1`…`F12`), because the caller binds and forwards them with
+    tmux. The declaration itself lives in the provider's own package (DEC-070); this only folds.
+    """
+    built = provider_descriptors() if descriptors is None else descriptors
+    by_provider = {str(descriptor.profile_id): descriptor.reserved_keys for descriptor in built}
+    executables = {str(profile.profile_id): profile.executable for profile in closed_profiles()}
+    resolved = {}
+    for profile in closed_profiles():
+        name = str(profile.profile_id)
+        declared = by_provider.get(name)
+        if declared is None:
+            declared = by_provider.get(executables.get(name, ""), frozenset())
+        resolved[name] = declared
+    return resolved
+
+
 def usage_readers(descriptors: tuple[ProviderDescriptor, ...]) -> ProfileUsageReaders:
     """Fold the registry's usage capabilities into the one dispatch both surfaces share.
 

@@ -19,6 +19,10 @@ vertical's `hooks.py` holds the configuration value), `activity` a declared plac
 `None` for all four providers until a vertical wires one — and `remote_control` the
 host-level Remote Control object, wired only by Codex because only Codex has a toggle
 whose subject is the machine rather than a pane.
+
+Identity and capabilities are not the whole record: `reserved_keys` is a third kind of field,
+a declared set whose *empty* value is an answer rather than an absence. Its own docstring and
+`tests/architecture/test_descriptor_fields_are_pinned.py` carry the argument.
 """
 
 from __future__ import annotations
@@ -142,6 +146,33 @@ class ProviderDescriptor:
     action and lives on the terminal port instead, so claude declares None here and is not
     thereby less capable — the two are different subjects, not two depths of one
     capability."""
+
+    reserved_keys: frozenset[str] = frozenset()
+    """The tmux key names this provider's own agent binds, which a console must pass through.
+
+    The F-key console binds function keys as tmux **root** bindings on its socket, and a root
+    binding takes that key from every pane on that server — including a pane whose agent had
+    already bound it. OpenCode binds `F2` (`model_cycle_recent`), so it reserves that one key and
+    the forwarding script hands `F2` to its panes rather than keeping it; the other three bind
+    no function key and declare the empty set. The console learns this here and nowhere else
+    (DEC-070): the provider that took the key is the one that knows it took it.
+
+    **tmux's spelling, not Textual's.** `F1`…`F12`, capital `F`, because these values are
+    handed to `tmux bind-key` and `send-keys`. The TUI writes the same keys `f1`…`f12`, and the
+    two spellings live in one codebase; tmux does not resolve the lowercase form, and the
+    failure it produces is silent — a binding that matches nothing, on a key the pane was
+    supposed to receive.
+
+    Neither identity nor a capability, and the default is where the difference shows. An empty
+    reservation is a **declared answer** — this provider binds nothing the console would take —
+    not the absence DEC-061 describes, where a host wired nothing and says so with a `None` a
+    frontend reads with `is None`. Admitting `None` here would make `frozenset()` and `None`
+    two spellings of one answer; the argument is written out in full, with what it costs, in
+    `tests/architecture/test_descriptor_fields_are_pinned.py`.
+
+    A `frozenset[str]` pulls nothing into the ports layer, exactly as `TrustDialog`'s five
+    strings do, so it is typed rather than loose like its capability neighbours.
+    """
 
 
 def capability_fields() -> tuple[str, ...]:

@@ -32,8 +32,18 @@ import typing
 #: It is also the first field carrying a *typed* value rather than an adapter object, which is
 #: legal here for the reason the port's own docstring gives: five strings pull nothing into the
 #: ports layer.
+#: It moved 8 -> 9 on 2026-09-13 by the plan
+#: `2026-09-13-reliable-limits-and-fkey-console-sub-03-fkey-console-plan.md`, and that one grew
+#: *neither* half: `reserved_keys` names the tmux keys a provider's own agent already binds, so
+#: the F-key console's root bindings pass them through to that pane instead of stealing them.
+#: It is pinned as a third category with its own rule, stated in
+#: `test_the_reservation_field_declares_an_empty_answer_rather_than_an_absence` below, because
+#: the two existing rules are opposites and a reservation obeys neither: it carries a default,
+#: so it is not identity, and its default is a real answer rather than a declared absence, so
+#: it is not a capability either.
 _IDENTITY_FIELDS = ("profile_id", "glyph")
 _CAPABILITY_FIELDS = ("sessions", "usage", "hooks", "activity", "remote_control", "trust_dialog")
+_RESERVATION_FIELDS = ("reserved_keys",)
 
 
 def _descriptor_fields() -> tuple[str, ...]:
@@ -44,20 +54,20 @@ def _descriptor_fields() -> tuple[str, ...]:
 
 
 def test_the_descriptor_field_set_is_read_from_the_dataclass() -> None:
-    """Eight fields: two identity, six capabilities. A ninth is a reviewable act."""
+    """Nine fields: two identity, six capabilities, one reservation. A tenth is a decision."""
     fields = _descriptor_fields()
-    expected = len(_IDENTITY_FIELDS) + len(_CAPABILITY_FIELDS)
+    expected = len(_IDENTITY_FIELDS) + len(_CAPABILITY_FIELDS) + len(_RESERVATION_FIELDS)
     assert len(fields) == expected, (
         f"`ProviderDescriptor` now declares {len(fields)} fields, not {expected}. That may "
         "be fine — but every field is something a frontend reads as declared rather than "
-        "discovers, so confirm the new field belongs here, decide whether it is identity or "
-        "a capability, and update this pin deliberately."
+        "discovers, so confirm the new field belongs here, decide whether it is identity, a "
+        "capability, or a reservation, and update this pin deliberately."
     )
     assert fields[: len(_IDENTITY_FIELDS)] == _IDENTITY_FIELDS, (
         "the identity fields must come first and keep their order: both are required, and a "
         "required field declared after a defaulted one is a dataclass the interpreter refuses"
     )
-    assert set(fields[len(_IDENTITY_FIELDS) :]) == set(_CAPABILITY_FIELDS)
+    assert set(fields[len(_IDENTITY_FIELDS) :]) == set(_CAPABILITY_FIELDS + _RESERVATION_FIELDS)
 
 
 def test_no_identity_field_is_optional() -> None:
@@ -99,3 +109,60 @@ def test_every_capability_field_is_declared_optional() -> None:
             f"`{name}` is a union that does not admit None; capability absence must be a "
             "declared None, per DEC-061."
         )
+
+
+def test_the_reservation_field_declares_an_empty_answer_rather_than_an_absence() -> None:
+    """The third category's rule, and the argument for having one at all.
+
+    A capability must admit `None` and an identity field must not: two opposite rules, and
+    `reserved_keys` obeys neither. It is a `frozenset[str]` whose **empty value is a real
+    answer** — *this provider binds no key the console would take from it* — measured off three
+    providers' keybinds rather than left unstated. That is not DEC-061's absence, which is a
+    host that wired nothing for a capability and says so with a `None` a frontend reads with
+    `is None`.
+
+    Forcing it into `_CAPABILITY_FIELDS` would cost two things. `frozenset()` and `None` would
+    become two spellings of one answer, so every reader would have to handle both and the
+    forwarding script's question ("which keys does this pane already own?") would have two empty
+    answers. And it would drag the field into `tests/provider_contract/requirements.py`'s
+    SUPPORTED/UNSUPPORTED/CONDITIONAL table, where the only honest row for a provider reserving
+    nothing is UNSUPPORTED — turning three measurements into three skips.
+
+    So the rule pinned here is the reservation's own: a default, because a provider that
+    reserves nothing should not have to say so with ceremony, and **no `None`**, because there
+    is no absence to declare.
+    """
+    from remote_agents.ports import provider_descriptor
+
+    hints = typing.get_type_hints(provider_descriptor.ProviderDescriptor)
+    fields = provider_descriptor.ProviderDescriptor.__dataclass_fields__
+    for name in _RESERVATION_FIELDS:
+        assert type(None) not in typing.get_args(hints[name]), (
+            f"`{name}` admits None, so 'reserves nothing' has two spellings; a reservation's "
+            "empty value is the declared answer (and not DEC-061's absence)."
+        )
+        default = fields[name].default
+        assert default is not dataclasses.MISSING, (
+            f"`{name}` is required, so every provider must restate an answer three of the four "
+            "give by having nothing to bind."
+        )
+        assert isinstance(default, frozenset) and not default, (
+            f"`{name}` defaults to {default!r}; the empty answer is what a provider that "
+            "reserves nothing declares by omission."
+        )
+
+
+def test_the_reservation_field_is_not_read_as_a_capability() -> None:
+    """`capability_fields()` drives the contract kit's requirements table; this must stay out.
+
+    The port's predicate is structural — a capability is the field whose default is `None` — so
+    a reservation stays out of it by construction rather than by a name list. This asserts the
+    construction actually holds, because the cost of it silently not holding is a requirements
+    row the kit would then demand for a field that has no state to declare.
+    """
+    from remote_agents.ports.provider_descriptor import capability_fields
+
+    capabilities = capability_fields()
+    assert set(capabilities) == set(_CAPABILITY_FIELDS), sorted(capabilities)
+    for name in _RESERVATION_FIELDS:
+        assert name not in capabilities
