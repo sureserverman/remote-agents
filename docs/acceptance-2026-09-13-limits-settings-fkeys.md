@@ -639,8 +639,13 @@ proved on the shipped code, not on the owner's own arrangement of it**, and the 
 left visible here rather than collapsed into a single tick.
 
 **(c) The root table on the owner's server, by enumeration.** What (a) could not distinguish, this
-settles: the deployed tmux server carries exactly the eleven-key row plus the mouse bindings the
-composer emits.
+settles: the deployed tmux server carries exactly the eleven-key row this project binds, alongside
+tmux's own default root bindings. *(Corrected 2026-09-17: this sentence said "plus the mouse
+bindings the composer emits". **The composer emits no mouse bindings** — `grep -rn mouse src/`
+returns only two unrelated comments in `app.py`, and `DoubleClick1Pane`/`TripleClick1Pane` are
+tmux 3.4's own defaults, present on a pristine `tmux -f /dev/null` server. The
+2026-09-08 console-panes acceptance already established exactly this and was not re-read. The
+full root table is 27 bindings: 11 ours, 16 tmux's.)*
 
 ```
 $ tmux -L remote-agents list-keys -T root | grep run-shell | awk '{print $4}'
