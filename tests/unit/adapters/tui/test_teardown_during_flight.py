@@ -441,8 +441,8 @@ async def test_the_pump_stays_free_while_a_create_is_in_flight() -> None:
         if suspend is not None:
             suspend.release.set()
 
-    assert warned and "Press ctrl+q again" in warned[-1], (
-        f"`ctrl+q` was not answered while a create was in flight — the surface said {warned}. "
+    assert warned and "Press the quit key again" in warned[-1], (
+        f"the quit key was not answered while a create was in flight — the surface said {warned}. "
         f"That is the defect this change exists to fix: the key sat in the pump behind the "
         f"create and the app looked hung."
     )

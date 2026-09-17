@@ -246,7 +246,7 @@ async def test_the_terminal_manages_a_session_the_service_started(
 
         async with app.run_test() as pilot:
             # 1. The terminal sees a session it did not start.
-            await pilot.press("ctrl+s")
+            await app.action_sessions()
             await _until(
                 pilot,
                 lambda: position(app) == "SESSIONS" and str(record.session_id) in _rows(app),
@@ -320,7 +320,7 @@ async def test_the_terminal_force_stops_a_session_through_the_confirmation_modal
         assert live is not None and live.live, "there was no pane for the force stop to kill"
 
         async with app.run_test() as pilot:
-            await pilot.press("ctrl+s")
+            await app.action_sessions()
             await _until(
                 pilot,
                 lambda: position(app) == "SESSIONS" and str(record.session_id) in _rows(app),
@@ -397,7 +397,7 @@ async def test_the_terminal_offers_only_resume_capable_agents_without_resuming_a
         }
 
         async with app.run_test() as pilot:
-            await pilot.press("ctrl+o")
+            await app.action_resume()
             await _until(
                 pilot,
                 lambda: (

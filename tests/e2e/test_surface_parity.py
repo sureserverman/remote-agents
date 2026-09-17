@@ -242,7 +242,7 @@ async def _choose(app, pilot, key: str) -> None:
 
 async def _open_detail(app, launcher, pilot) -> None:
     """Reach the detail the way an owner does: through the sessions list."""
-    await pilot.press("ctrl+s")
+    await app.action_sessions()
     await pilot.pause()
     await _choose(app, pilot, str(launcher.record.session_id))
 
@@ -251,7 +251,7 @@ async def _open_detail(app, launcher, pilot) -> None:
 
 
 async def _probe_sessions_list(app, launcher, pilot) -> None:
-    await pilot.press("ctrl+s")
+    await app.action_sessions()
     await pilot.pause()
     await _settle_position(app, pilot, "SESSIONS")
     assert any("existing" in row for row in _rows(app))
@@ -332,7 +332,7 @@ async def _probe_inspect(app, launcher, pilot) -> None:
 
 
 async def _probe_resume(app, launcher, pilot) -> None:
-    await pilot.press("ctrl+o")
+    await app.action_resume()
     await pilot.pause()
     await _choose(app, pilot, "opaque-existing")
     await _choose(app, pilot, "claude")
@@ -446,8 +446,8 @@ def test_every_capability_reached_by_a_binding_has_one() -> None:
     exists" mistake the probes were rewritten to avoid.
     """
     bound = {binding.key: binding.action for binding in RemoteAgentsTui.BINDINGS}
-    assert bound.get("ctrl+s") == "sessions"
-    assert bound.get("ctrl+o") == "resume"
+    assert bound.get("f7") == "add_project"
+    assert bound.get("f2") == "settings"
 
 
 def test_the_parity_claim_names_every_capability_the_plan_enumerated() -> None:

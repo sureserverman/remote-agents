@@ -209,7 +209,7 @@ def _console_composer(gateway=None, home: Path | None = None):
     # (`test_the_composition_root_does_not_load_the_terminal_library`). This function only runs
     # under console hosting, where Textual is loaded anyway. Same shape as `local_context`'s own
     # deferred `hosting_mode` import, for the same reason.
-    from remote_agents.adapters.tui.screens.sessions import CHORD_KEYS
+    from remote_agents.adapters.tui.screens.sessions import _FORWARDED_ROW_KEYS
     from remote_agents.application.console import ConsoleComposer, console_panes_binding
     from remote_agents.ports.console import ConsolePaneSlot
 
@@ -221,15 +221,18 @@ def _console_composer(gateway=None, home: Path | None = None):
         panes_command=_panes_command(),
         # Root keys plus the prefix layer. **Joined here and nowhere else**, because the two
         # halves live on opposite sides of a layer boundary: the argument for what a prefix
-        # binding is belongs to `application/console.py`, and the chord vocabulary is derived
+        # binding is belongs to `application/console.py`, and the forwarded letters are derived
         # from the TUI's own row-key table. The composition root is the one place allowed to
         # know both (the same split `attach_to`'s injected `switch_argv` makes).
         # Plus the fold key, which is a third declaration on purpose: the root budget is
-        # `CONSOLE_BINDINGS`, the chord layer is derived from the TUI's row keys, and folding
+        # `CONSOLE_BINDINGS`, the forwards are derived from the TUI's row keys, and folding
         # the column is neither. It is joined here because this is the one place allowed to
         # know all three.
+        #
+        # **The prefix forwards are inert as of Stage 1** and Stage 2 deletes them: the Alt
+        # bindings they delivered to are gone, and the F-key root set replaces them.
         bindings=CONSOLE_BINDINGS
-        + console_prefix_bindings(CHORD_KEYS)
+        + console_prefix_bindings(_FORWARDED_ROW_KEYS)
         + (console_panes_binding(),),
         arrangement_lock=ProductionPaths.for_home(
             home if home is not None else Path.home()

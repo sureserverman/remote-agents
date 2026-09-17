@@ -233,7 +233,10 @@ async def test_the_feed_pane_offers_no_flows_at_all() -> None:
     async with app.run_test() as pilot:
         await pilot.pause()
         offered = set(app.screen.active_bindings)
-        assert {"ctrl+n", "ctrl+o", "ctrl+s"}.isdisjoint(offered), offered
+        assert "f7" not in offered, offered
+        assert not any(
+            app.check_action(flow, ()) for flow in ("add_project", "sessions", "resume")
+        ), "a read-only pane offered a flow that starts a session"
 
         await app.action_add_project()
         await pilot.pause()

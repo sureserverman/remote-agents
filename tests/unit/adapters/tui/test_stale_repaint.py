@@ -192,7 +192,7 @@ async def _a_listing_read_left_in_flight(
     the held read would then keep a message pump alive through the app's own teardown — a
     hang instead of a failure, which is the worst way for an assertion to go wrong.
     """
-    await pilot.press("ctrl+s")
+    await app.action_sessions()
     await settle(app, pilot)
     screen = app.screen
     assert isinstance(screen, SessionsScreen), f"expected the sessions list, got {screen!r}"
@@ -252,7 +252,7 @@ async def test_a_keyed_refresh_holds_the_pump_so_nothing_can_navigate_out_from_u
     try:
         async with app.run_test(size=(100, 30)) as pilot:
             await pilot.pause()
-            await pilot.press("ctrl+s")
+            await app.action_sessions()
             await settle(app, pilot)
             assert position(app) == "SESSIONS"
 
@@ -313,7 +313,7 @@ async def test_a_read_left_behind_does_not_clobber_a_name_typed_on_the_position_
             screen, reading = await _a_listing_read_left_in_flight(app, pilot, launcher, gate)
             assert position(app) == "SESSIONS"
 
-            await pilot.press("ctrl+n")
+            await pilot.press("f7")
             await settle(app, pilot)
             assert position(app) == "AREAS"
             await pilot.press("enter")

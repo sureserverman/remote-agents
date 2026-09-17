@@ -138,14 +138,14 @@ class ProjectsScreen(ChoiceScreen):
         bare pop would return them to a narrowed list with no sign of why. `test_returning_to_
         the_project_list_clears_the_filter_and_rests_on_the_rows` is its argument in full.
 
-        An **excursion** is not that. A chord opens a session detail about a row in *another*
+        An **excursion** is not that. An F-key opens a session detail about a row in *another*
         pane and Escape comes straight back; the owner never left this list, never finished with
         their query, and did not choose anything here. Clearing the filter there is the same
         defect as clearing it on Ctrl+R, which `refresh_contents` already refuses on the grounds
         that a key which does not leave the position has no business discarding what the list is
         narrowed by. The Stage 3 gate requires exactly this state to survive.
 
-        So the two are told apart by a mark the chord sets and this consumes, rather than by
+        So the two are told apart by a mark the F-key sets and this consumes, rather than by
         this method guessing from what happens to be on the stack.
         """
         from textual.widgets import Input
@@ -237,7 +237,7 @@ class ProjectsScreen(ChoiceScreen):
             f"Choose a project — {count} available, {order}",
             # Through the seam rather than the constant: on the console's projects pane this
             # line also carries the Alt layer, and `_describe_projects` runs on every redraw --
-            # so a pane that appended the chords once would lose them at the next render.
+            # so a pane that appended the F-keys once would lose them at the next render.
             hint=self.hint_content(PROJECTS_HINT),
         )
 

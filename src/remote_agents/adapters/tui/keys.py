@@ -4,8 +4,8 @@
 that documents the console all have to agree on what each key does and where the convention
 was borrowed from, and three hand-kept copies of the same eleven rows is three chances to
 disagree. So the row is written once, here, as data -- and `RemoteAgentsTui.BINDINGS` is
-*built* from it rather than restating it, the way the Alt chord layer was built from
-`CHORD_KEYS`.
+*built* from it rather than restating it, the way the retired Alt layer was built from the
+row-key table it mirrored.
 
 **F11 is absent by construction.** The table is a tuple literal and the tests count eleven
 entries and assert `f11` is not among them; it is left to the terminal, where it is commonly
@@ -24,16 +24,16 @@ from typing import NamedTuple
 
 from textual.binding import Binding
 
-from remote_agents.application.session_actions import FORCE, GRACEFUL
+from remote_agents.application.session_actions import ACTION_LABELS, FORCE, GRACEFUL
 
 
 class SessionKey(NamedTuple):
     """One session-shaped F-key, by the name `action_session_key` accepts.
 
     `row_key` is the letter the sessions pane binds for the same act, and it is the whole of
-    how the F-key inherits the chord layer's bounds: `RemoteAgentsTui.check_action` routes
-    `session_key('<name>')` through the same gate `alt+<row_key>` is routed through, so F8 on
-    the rename box is refused for exactly the reason `alt+s` is (DEC-052, DEC-062).
+    how the key inherits the bare letter's bounds: `RemoteAgentsTui.check_action` asks
+    `_offers_session_key` about `row_key`, so F8 on the rename box is refused for exactly the
+    reason the bare `s` is not offered there (DEC-052, DEC-062).
 
     `action` is what `perform_row_action` is handed -- the row-action string for inspect and
     rename, the policy constant for the two stops -- and `None` for the detail, which opens a
@@ -52,6 +52,19 @@ SESSION_KEYS: tuple[SessionKey, ...] = (
     SessionKey("rename", "r", "rename"),
     SessionKey("graceful", "s", GRACEFUL),
     SessionKey("force", "f", FORCE),
+)
+
+
+#: The row letters whose F-key ends a session: F8 (graceful, unconfirmed by DEC-018) and F9
+#: (force, behind a modal). Derived from the policy's own label table rather than spelled, so a
+#: third lifecycle action given an F-key tomorrow is refused on a text-entry screen the day it
+#: appears rather than the day someone remembers.
+#:
+#: This is what `RemoteAgentsTui._offers_session_key` refuses on a commitment screen, and it is
+#: the set the retired Alt layer carried as its own stop set -- narrower by one, because clean up
+#: never got an F-key.
+SESSION_STOP_KEYS = frozenset(
+    entry.row_key for entry in SESSION_KEYS if entry.action in ACTION_LABELS
 )
 
 
@@ -91,6 +104,19 @@ FUNCTION_KEYS: tuple[FunctionKey, ...] = (
     FunctionKey("f9", "session_key('force')", "force", "htop Kill"),
     FunctionKey("f10", "quit", "quit", "htop, mc"),
     FunctionKey("f12", "projects_home", "projects", "existing root key"),
+)
+
+
+#: The session-shaped F-keys as a pane advertises them: `F3 F4 F6 F8 F9`.
+#:
+#: Built from the table so the row of keys the owner reads is the row that works. **Keys alone,
+#: no words**, which is a width decision and not a taste one: the hint shares one line with the
+#: pane's own keys, that line is `text-overflow: ellipsis` rather than wrapped, and the
+#: committed baselines go down to 60 columns -- so `F3 inspect · F8 stop · …` would be elided
+#: exactly where the stops are. The footer carries the words now, which the Alt layer this
+#: replaces could not do: a hidden chord had nowhere else to be explained.
+SESSION_KEY_HINT = " ".join(
+    entry.key.upper() for entry in FUNCTION_KEYS if entry.action.startswith("session_key(")
 )
 
 

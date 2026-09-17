@@ -71,9 +71,11 @@ async def test_the_terminal_lists_inspects_and_reaches_a_session_it_never_launch
         # Connection A — stands in for the running service.
         terminal = FakeTerminal()
         service = SessionService(SQLiteSessionStore(service_connection), terminal)
-        launched = (await service.launch(
-            LaunchCommand(ProjectId("opaque-existing"), ProfileId("claude"), "service-key")
-        )).record
+        launched = (
+            await service.launch(
+                LaunchCommand(ProjectId("opaque-existing"), ProfileId("claude"), "service-key")
+            )
+        ).record
 
         # Connection B — the terminal's own composition, sharing only the database file.
         context = TuiContext(
@@ -89,7 +91,7 @@ async def test_the_terminal_lists_inspects_and_reaches_a_session_it_never_launch
         app = RemoteAgentsTui(context)
 
         async with app.run_test() as pilot:
-            await pilot.press("ctrl+s")
+            await app.action_sessions()
             await pilot.pause()
 
             rows = _rows(app)
@@ -146,9 +148,11 @@ async def test_a_rename_typed_locally_is_on_disk_for_the_other_writer_to_read(
     try:
         terminal = FakeTerminal()
         service = SessionService(SQLiteSessionStore(service_connection), terminal)
-        launched = (await service.launch(
-            LaunchCommand(ProjectId("opaque-existing"), ProfileId("claude"), "service-key")
-        )).record
+        launched = (
+            await service.launch(
+                LaunchCommand(ProjectId("opaque-existing"), ProfileId("claude"), "service-key")
+            )
+        ).record
         assert launched.display.custom_label is None, "the fixture must start with no name"
 
         context = TuiContext(
@@ -164,7 +168,7 @@ async def test_a_rename_typed_locally_is_on_disk_for_the_other_writer_to_read(
         app = RemoteAgentsTui(context)
 
         async with app.run_test() as pilot:
-            await pilot.press("ctrl+s")
+            await app.action_sessions()
             await pilot.pause()
             await pilot.press("enter")
             await pilot.pause()
@@ -183,7 +187,7 @@ async def test_a_rename_typed_locally_is_on_disk_for_the_other_writer_to_read(
             # And the list behind it, which is a second read of the same write through the
             # same connection — the name has to reach the row the owner picks from, not only
             # the screen that set it.
-            await pilot.press("ctrl+s")
+            await app.action_sessions()
             await pilot.pause()
             listed = _rows(app)
 
@@ -207,9 +211,11 @@ async def test_a_session_stopped_by_the_service_leaves_the_terminal_list(
     try:
         terminal = FakeTerminal()
         service = SessionService(SQLiteSessionStore(service_connection), terminal)
-        launched = (await service.launch(
-            LaunchCommand(ProjectId("opaque-existing"), ProfileId("claude"), "service-key")
-        )).record
+        launched = (
+            await service.launch(
+                LaunchCommand(ProjectId("opaque-existing"), ProfileId("claude"), "service-key")
+            )
+        ).record
         context = TuiContext(
             backend=backend_for(
                 sessions=SessionService(SQLiteSessionStore(terminal_connection), terminal),
@@ -223,7 +229,7 @@ async def test_a_session_stopped_by_the_service_leaves_the_terminal_list(
         app = RemoteAgentsTui(context)
 
         async with app.run_test() as pilot:
-            await pilot.press("ctrl+s")
+            await app.action_sessions()
             await pilot.pause()
             assert len(_rows(app)) == 1
 
@@ -231,7 +237,7 @@ async def test_a_session_stopped_by_the_service_leaves_the_terminal_list(
 
             await service.force_stop(ForceStopCommand(launched.session_id))
 
-            await pilot.press("ctrl+s")
+            await app.action_sessions()
             await pilot.pause()
             rows = _rows(app)
             status = _status(app)

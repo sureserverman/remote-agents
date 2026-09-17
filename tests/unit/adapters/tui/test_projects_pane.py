@@ -27,6 +27,12 @@ from tui_filter import settle_filter
 from tui_positions import position
 
 from remote_agents.adapters.tui.context import TuiContext
+from remote_agents.adapters.tui.keys import (
+    FUNCTION_KEYS,
+    SESSION_KEY_HINT,
+    SESSION_STOP_KEYS,
+    session_key,
+)
 from remote_agents.adapters.tui.panes import ProjectsPane
 from remote_agents.adapters.tui.preferences import (
     ALPHABETICAL,
@@ -39,7 +45,6 @@ from remote_agents.adapters.tui.screens.dashboard import (
     ProjectsPaneScreen,
 )
 from remote_agents.adapters.tui.screens.launch import PROJECTS_HINT
-from remote_agents.adapters.tui.screens.sessions import CHORD_HINT, CHORD_NAVIGATES
 from remote_agents.application.profiles import ProfileAvailability
 from remote_agents.application.project_admin import CreatedProject, CreateProjectCommand
 from remote_agents.application.project_catalog import CatalogProject
@@ -101,7 +106,7 @@ class _Launcher(SessionUseCaseDouble):
         """The reading the Remote Control confirmation takes; `m` can reach it from here.
 
         Not a render-time read, so it is not on `SessionUseCaseDouble` -- it is modelled where
-        a test drives the chord that ends in the confirmation. UNKNOWN, which DEC-003 sends
+        a test drives the key that ends in the confirmation. UNKNOWN, which DEC-003 sends
         to ACTIVE.
         """
         from remote_agents.domain.remote_control import RemoteControlState
@@ -368,8 +373,8 @@ async def test_the_projects_pane_keeps_the_two_flows_that_begin_with_a_project()
     async with app.run_test(size=(120, 30)) as pilot:
         await pilot.pause()
         offered = set(app.screen.active_bindings)
-        assert "ctrl+n" in offered, offered
-        assert "ctrl+s" not in offered, offered
+        assert "f7" in offered, offered
+        assert app.check_action("sessions", ()) is False
 
 
 def _usage(opaque_id: str, count: int, days_ago: float) -> ProjectUsage:
@@ -611,8 +616,8 @@ async def test_the_hint_row_carries_this_pane_s_own_keys_and_the_console_wide_la
     """One line, two key sets, and the pane's own keys come first.
 
     The order is the argument: `enter choose · / filter · o order` are what this pane does to
-    the thing the owner is looking at, and the Alt layer acts on a session in another pane. A
-    hint that led with the chords would describe the neighbour before the position.
+    the thing the owner is looking at, and the F-keys act on a session in another pane. A
+    hint that led with the F-keys would describe the neighbour before the position.
 
     Asserted on the same row rather than on two, because `#hint` is fixed-height by contract —
     the row is one line precisely so the list beneath it never moves.
@@ -627,14 +632,14 @@ async def test_the_hint_row_carries_this_pane_s_own_keys_and_the_console_wide_la
         drawn = str(app.screen.query_one("#hint", Static).content)
 
     assert drawn.startswith(PROJECTS_HINT), f"the pane's own keys are not first: {drawn!r}"
-    assert CHORD_HINT in drawn, f"the Alt layer is missing from the hint row: {drawn!r}"
+    assert SESSION_KEY_HINT in drawn, f"the F-keys are missing from the hint row: {drawn!r}"
 
 
 async def test_the_hint_row_keeps_the_layer_across_a_redraw() -> None:
-    """`_describe_projects` runs on every render, so the chords have to survive one.
+    """`_describe_projects` runs on every render, so the F-keys have to survive one.
 
-    This is the failure the `hint_content` seam exists for: appending the layer once, at mount,
-    would lose it the first time the owner typed into the filter — the pane redraws, the status
+    This is the failure the `hint_content` seam exists for: appending the keys once, at mount,
+    would lose them the first time the owner typed into the filter — the pane redraws, the status
     is rewritten from the catalogue, and the hint goes back to the pane's own keys alone.
     """
     console = SelectionConsole(selected=SessionId.new())
@@ -649,17 +654,17 @@ async def test_the_hint_row_keeps_the_layer_across_a_redraw() -> None:
         await settle_filter(pilot)
         drawn = str(app.screen.query_one("#hint", Static).content)
 
-    assert CHORD_HINT in drawn, f"a redraw dropped the Alt layer from the hint row: {drawn!r}"
+    assert SESSION_KEY_HINT in drawn, f"a redraw dropped the F-keys from the hint row: {drawn!r}"
 
 
-async def test_a_chord_excursion_returns_to_the_filter_the_owner_typed() -> None:
-    """`/`, `ab`, `M-i`, escape — the state the Stage 3 gate requires to survive.
+async def test_a_session_key_excursion_returns_to_the_filter_the_owner_typed() -> None:
+    """`/`, `ab`, F3, escape — the state the owner's ask requires to survive.
 
-    The stop chords stopped disturbing this pane when `tui.stop`'s callbacks went onto the
-    `shows_the_acted_session` seam. The *navigating* chords reached it by a different route:
-    `perform_chord` sends `d a i r m` to `show_detail`, and escape from the pushed screen is
-    the app's `go_back`, which awaits the revealed screen's `on_reveal` — and that method
-    deliberately returns this position to a clean, unfiltered list.
+    The stop keys stopped disturbing this pane when `tui.stop`'s callbacks went onto the
+    `shows_the_acted_session` seam. The *navigating* keys reached it by a different route:
+    `action_session_key` sends inspect, detail and rename to `show_detail`, and escape from the
+    pushed screen is the app's `go_back`, which awaits the revealed screen's `on_reveal` — and
+    that method deliberately returns this position to a clean, unfiltered list.
 
     Deliberately, for a **flow**: the owner chose a project, walked into the agent list, and
     came back, so the query was one they had finished with. An excursion is not that. They never
@@ -688,9 +693,9 @@ async def test_a_chord_excursion_returns_to_the_filter_the_owner_typed() -> None
         entry = app.screen.query_one("#filter", Input)
         assert entry.value == "opaque-shift"
 
-        await pilot.press("alt+i")
+        await pilot.press("f3")
         await pilot.pause()
-        assert position(app) == "SESSION_DETAIL", "the chord did not open the detail"
+        assert position(app) == "SESSION_DETAIL", "F3 did not open the detail"
 
         await pilot.press("escape")
         await pilot.pause()
@@ -700,81 +705,42 @@ async def test_a_chord_excursion_returns_to_the_filter_the_owner_typed() -> None
         assert entry.has_focus, "the excursion left the keyboard off the filter"
 
 
-async def test_a_chord_that_went_nowhere_does_not_make_the_next_flow_return_keep_its_query() -> (
-    None
-):
-    """The excursion mark is one-shot *and* must not be set by a key that navigated nowhere.
-
-    `alt+m` is the one chord that decides what it means after reading the record, and it
-    ordinarily refuses: Remote Control is only for a running Claude session. Marking the
-    position before that read leaves the mark set on a key that went nowhere — and then the
-    owner's *next* genuine flow return consumes it and keeps a query they had finished with,
-    silently unpinning `test_returning_to_the_project_list_clears_the_filter_and_rests_on_the_
-    rows` for that one return.
-
-    Both halves of the distinction are already tested; this is the third state — a chord that
-    neither navigated nor was refused by the gate — and it is the one that leaks across.
-    """
-    stopped = _record(SessionState.PRESERVED)
-    console = SelectionConsole(selected=stopped.session_id)
-    app = ProjectsPane(
-        _context(
-            sessions=_Launcher((stopped,)),
-            console_read_selection=console.read,
-            console_holds_slot=console.holds_console_slot,
-        )
-    )
-
-    async with app.run_test(size=(120, 30)) as pilot:
-        await pilot.pause()
-        await pilot.click("#filter")
-        await pilot.press(*"opaque-shift")
-        await settle_filter(pilot)
-        assert app.screen.query_one("#filter", Input).value == "opaque-shift"
-
-        # Refused: not a running Claude, so no navigation happens.
-        await pilot.press("alt+m")
-        await pilot.pause()
-        assert position(app) == "PROJECTS", "alt+m navigated when it should have refused"
-
-        # Now a genuine flow: choose a project, then come back out of it. Escape first, which
-        # hands the keyboard from the filter back to the rows *keeping* the query -- that is
-        # `ProjectsScreen.key_escape`, and it is the state the owner is in when they choose.
-        await pilot.press("escape")
-        await pilot.pause()
-        assert app.screen.query_one("#filter", Input).value == "opaque-shift"
-        await pilot.press("enter")
-        await pilot.pause()
-        assert position(app) != "PROJECTS", "enter did not enter a flow"
-        await app.action_back()
-        await pilot.pause()
-
-        entry = app.screen.query_one("#filter", Input)
-        assert entry.value == "", (
-            "a refused chord left an excursion mark, and the flow return consumed it"
-        )
+#: The session-shaped F-keys that take the owner somewhere: every one whose action is not a
+#: stop. Derived from the table rather than spelled, so a sixth session key added tomorrow is
+#: covered here on the same commit.
+_NAVIGATING_SESSION_KEYS = sorted(
+    entry.key
+    for entry in FUNCTION_KEYS
+    if entry.action.startswith("session_key(")
+    and (found := session_key(entry.action[len("session_key('") : -2])) is not None
+    and found.row_key not in SESSION_STOP_KEYS
+)
 
 
-#: The one navigating chord that ends in a question rather than on a screen. Read from the
-#: surface rather than spelled, so a chord that grows a confirmation tomorrow is not silently
-#: left out of the branch below.
-_REMOTE_CONTROL_CHORD = "m"
+@pytest.mark.parametrize("key", _NAVIGATING_SESSION_KEYS)
+async def test_every_navigating_session_key_marks_the_position_it_leaves(key: str) -> None:
+    """The property, in place of hand-placed calls and one test that happened to cover one.
 
-
-@pytest.mark.parametrize("key", sorted(CHORD_NAVIGATES))
-async def test_every_navigating_chord_marks_the_position_it_leaves(key: str) -> None:
-    """The property, in place of four hand-placed calls and one test that happened to cover one.
-
-    `mark_excursion` is called from four sites — the detail branch, the row-action branch, and
-    both of `perform_row_remote_control`'s navigating paths. A review predicted that only one of
-    them was pinned; mutating the other three left the suite green, which is exactly right: a
-    test per call site is a list, and the thing that must be true is a *property* — every chord
-    that takes the owner off this position marks it, so the return draws the list they left.
+    `mark_excursion` is called from three sites — the detail branch and the row-action branch of
+    `action_session_key`, and both of `perform_row_remote_control`'s navigating paths. A review
+    predicted that only one of them was pinned; mutating the others left the suite green, which
+    is exactly right: a test per call site is a list, and the thing that must be true is a
+    *property* — every key that takes the owner off this position marks it, so the return draws
+    the list they left.
 
     Asserted on the flag rather than on the filter because the depth of the excursion differs by
-    key (`alt+r` lands two screens away, `alt+d` one), and what is being tested is the mark, not
-    the number of Escapes. The filter's survival end-to-end is
-    `test_a_chord_excursion_returns_to_the_filter_the_owner_typed`.
+    key (F6 lands two screens away, F4 one), and what is being tested is the mark, not the
+    number of Escapes. The filter's survival end-to-end is
+    `test_a_session_key_excursion_returns_to_the_filter_the_owner_typed`.
+
+    **The retirement emptied one branch of this test rather than moving it.** While the layer
+    was Alt chords, the Remote Control chord could mark the position and then refuse — it is only
+    for a running Claude session — so a companion test pinned that a key which went nowhere
+    left no mark. Remote Control has no F-key, and every session-shaped key that marks goes on
+    to `show_detail`, which always pushes. That companion test was deleted with its subject;
+    what still guards the property is
+    `tests/architecture/test_the_function_keys_are_one_table.py`, which reads the call sites and
+    fails if a mark appears anywhere but the two it allows.
     """
     running = _record()
     console = SelectionConsole(selected=running.session_id)
@@ -791,26 +757,14 @@ async def test_every_navigating_chord_marks_the_position_it_leaves(key: str) -> 
         pane = app.screen
         assert not pane._left_by_excursion
 
-        await pilot.press(f"alt+{key}")
-        if key == _REMOTE_CONTROL_CHORD:
-            # `alt+m` lands on a confirmation now, where it used to land on a bare detail: the
-            # Remote Control row no longer names a direction, so the policy always offers it
-            # and the detail always dispatches it. Escape answers that question `False` and
-            # leaves the excursion mark alone, which is the only thing this test is about.
-            #
-            # Pressed *before* the pause, because a modal waiting to be answered is a surface
-            # that never goes idle -- pausing first hung this test for its whole timeout.
-            # And only for this key: the other chords open no modal, so an escape there would
-            # navigate back and make `left` false, which is how a blanket escape fails three
-            # of the five cases while fixing one.
-            await pilot.press("escape")
+        await pilot.press(key)
         await pilot.pause()
 
         left = app.screen is not pane
         marked = pane._left_by_excursion
 
-    assert left, f"alt+{key} did not navigate, so it is not a navigating chord"
+    assert left, f"{key} did not navigate, so it is not a navigating session key"
     assert marked, (
-        f"alt+{key} took the owner off the projects pane without marking it, so the return "
+        f"{key} took the owner off the projects pane without marking it, so the return "
         "will discard the filter they typed"
     )

@@ -906,7 +906,8 @@ async def test_the_sessions_key_pressed_on_the_sessions_screen_keeps_the_cursor(
     `Ctrl+S` is an app-level binding offered *on the sessions screen itself*, where it means
     "re-read this list" rather than "navigate to it" — `show_sessions` sees it is already the
     current screen and reloads in place. It reloaded with the default, so the cursor went to
-    row 0, and `ctrl+s` then `s` issued a graceful stop against a session the owner never
+    row 0, and re-entering the sessions list then pressing `s` issued a graceful stop against
+    a session the owner never
     selected: the identical shape measured for `Ctrl+R`, one binding along.
 
     It survived Task 1.2's sweep because that sweep was `grep -nE 'self\\.reload\\(' on two
@@ -926,7 +927,7 @@ async def test_the_sessions_key_pressed_on_the_sessions_screen_keeps_the_cursor(
         choices.highlighted = 2
         chosen = choices.get_option_at_index(2).id
 
-        await pilot.press("ctrl+s")
+        await app.action_sessions()
         await pilot.pause()
 
         after = app.screen.query_one("#choices", OptionList)

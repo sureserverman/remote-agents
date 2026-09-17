@@ -79,7 +79,7 @@ class TuiContext:
     # object, for the same reason as everything above it: the surface is handed what it may do
     # (DEC-046, whose rejected alternative is literally a backend reached through an
     # `object | None` behind five `getattr` probes), never a handle it probes. Both are `None`
-    # off a console, so the Alt chord layer is not offered at all rather than offered and
+    # off a console, so the session-key layer is not offered at all rather than offered and
     # inert — a dead-end key being worse than an absent one, which is the reason `p` is gated
     # to the pane rather than shown everywhere.
     #

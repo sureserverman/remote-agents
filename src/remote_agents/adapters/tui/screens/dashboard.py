@@ -59,7 +59,7 @@ from remote_agents.adapters.tui.screens.feed import (
 )
 from remote_agents.adapters.tui.screens.launch import PROJECTS_HINT, ProfilesScreen, ProjectsScreen
 from remote_agents.adapters.tui.screens.resume import advance_to_resume_profiles
-from remote_agents.adapters.tui.screens.sessions import ChordHintRow, sessions_title
+from remote_agents.adapters.tui.screens.sessions import SessionKeyHintRow, sessions_title
 from remote_agents.application.host_remote_control import (
     HOST_REMOTE_CONTROL_TITLE,
     host_remote_control_directions,
@@ -149,13 +149,13 @@ title -- so those letters are avoided here even though nothing would collide tod
 key the frame names for one subject must not quietly mean another.
 
 **Nor the Alt layer built from those same letters**, and that follows from the sentence above
-rather than being a separate decision: the chord layer is offered where `carries_row_keys` is
-set, which is where the bare letter is already legal. `DashboardScreen` sets
-`owns_session_cursor` and not that flag, so `alt+s` and `alt+c` -- two stops DEC-018 forbids
-confirming -- are refused here exactly as `s` and `c` are. Gating the layer on the *cursor*
+rather than being a separate decision: the session-key layer is offered where `carries_row_keys`
+is set, which is where the bare letter is already legal. `DashboardScreen` sets
+`owns_session_cursor` and not that flag, so F8 and F9 -- the two stops DEC-018 forbids
+confirming -- are refused here exactly as `s` and `f` are. Gating the layer on the *cursor*
 instead would have handed them to this pane, whose sessions region is not even the focused
-widget; that was a Critical at Task 3.1's review, and
-`tests/architecture/test_the_chord_layer_is_the_row_keys.py` now fails if the flag and the
+widget; that was a Critical at review, and
+`tests/architecture/test_the_function_keys_are_one_table.py` now fails if the flag and the
 bindings ever disagree.
 
 **Not a root binding, so `CONSOLE_BINDINGS` is untouched.** This is a screen binding inside
@@ -577,7 +577,7 @@ class LimitsRegion:
         pane.add_option(Option(line, id=_CLAUDE_REMOTE_CONTROL_ROW, disabled=True))
 
 
-class ProjectsPaneScreen(ChordHintRow, ProjectsScreen):
+class ProjectsPaneScreen(SessionKeyHintRow, ProjectsScreen):
     """The projects position with the chooser in front of the wizard — the console's left pane.
 
     The projects picker on its own sends a chosen project straight into the agent list. This
@@ -591,8 +591,8 @@ class ProjectsPaneScreen(ChordHintRow, ProjectsScreen):
     copies would only have to disagree once.
     """
 
-    #: This pane's own keys, which `hint_content` appends the Alt layer to on a console.
-    chord_hint_base = PROJECTS_HINT
+    #: This pane's own keys, which `hint_content` appends the F-key layer to on a console.
+    session_key_hint_base = PROJECTS_HINT
 
     def __init__(self) -> None:
         super().__init__()
@@ -603,7 +603,7 @@ class ProjectsPaneScreen(ChordHintRow, ProjectsScreen):
     async def populate(self) -> None:
         await super().populate()
         self._report_console_recovery()
-        self.start_chord_hint()
+        self.start_session_key_hint()
 
     def render_projects(self, query: str = "", *, keep_focus: bool = False) -> None:
         super().render_projects(query, keep_focus=keep_focus)
@@ -737,7 +737,7 @@ class LimitsPaneScreen(LimitsRegion, ChoiceScreen):
     LimitsPaneScreen #limits-pane {
         height: 1fr; border: none; text-wrap: nowrap; text-overflow: ellipsis;
     }
-    /* And no hint row, which is also why this pane does not advertise the Alt chord layer even
+    /* And no hint row, which is also why this pane does not advertise the session-key layer even
        though it offers it. Task 3.3 named all three read-only panes; this one hides `#status`
        and its border already, on the argument that two rows to restate a heading is too much on
        a pane whose content is two lines -- and a third row for a keymap is the same argument
@@ -990,12 +990,12 @@ class DashboardScreen(LimitsRegion, FeedRegion, ProjectsPaneScreen):
     #: This position draws a sessions list of its own, in its top-right pane, so its cursor is
     #: the answer to "which session" for the one key that reads it: `d`, opening the detail.
     #:
-    #: **It is emphatically not what makes the Alt chord layer legal here — that is
+    #: **It is emphatically not what makes the session-key layer legal here — that is
     #: `carries_row_keys`, and this screen does not set it.** The two flags are separate on
-    #: purpose and must not be collapsed: gating the chords on *this* one handed `alt+s` and
-    #: `alt+c` to this pane, two stops DEC-018 forbids confirming, on a cursor that is not the
-    #: focused widget and at a position DEC-062's stated scope does not reach. That was a
-    #: Critical at Task 3.1's review. The argument in full is at the top of this module, beside
+    #: purpose and must not be collapsed: gating the layer on *this* one handed F8 and F9 to
+    #: this pane, two stops DEC-018 forbids confirming, on a cursor that is not the focused
+    #: widget and at a position DEC-062's stated scope does not reach. That was a Critical at
+    #: review. The argument in full is at the top of this module, beside
     #: the key-collision note; it is restated here because this is the line a maintainer edits.
     owns_session_cursor = True
 
@@ -1007,7 +1007,8 @@ class DashboardScreen(LimitsRegion, FeedRegion, ProjectsPaneScreen):
         that reaches this screen; two readers of the same pane would be two chances to disagree
         about which row a key lands on.
 
-        **No chord reaches it.** `_offers_chords` refuses this screen before resolution — see
+        **No session key reaches it.** `_offers_session_key` refuses this screen before
+        resolution — see
         `owns_session_cursor` above — so nothing that could stop a session is answered from
         here.
 

@@ -393,7 +393,10 @@ async def test_the_pane_offers_no_flow_that_starts_by_choosing_a_project() -> No
     async with app.run_test(size=(120, 30)) as pilot:
         await pilot.pause()
         offered = set(app.screen.active_bindings)
-        assert {"ctrl+n", "ctrl+o", "ctrl+s"}.isdisjoint(offered), offered
+        assert "f7" not in offered, offered
+        assert not any(
+            app.check_action(flow, ()) for flow in ("add_project", "sessions", "resume")
+        ), "the sessions pane offered a flow it does not own"
 
         await app.action_add_project()
         await app.action_sessions()
@@ -650,7 +653,7 @@ async def test_no_action_key_collides_with_an_app_level_binding() -> None:
     shadowing Quit or Back would take the key away everywhere it is inherited."""
     from remote_agents.adapters.tui.screens.sessions import SessionsPaneScreen as _Pane
 
-    app_keys = {"escape", "ctrl+r", "ctrl+n", "ctrl+s", "ctrl+o", "ctrl+q"}
+    app_keys = {"escape", "ctrl+r", "ctrl+q", "q", "colon", "question_mark"}
     pane_keys = {binding.key for binding in _Pane.BINDINGS}
     assert not (pane_keys & app_keys), sorted(pane_keys & app_keys)
 
@@ -809,7 +812,7 @@ async def test_the_merged_keymap_is_what_carries_the_action_keys() -> None:
         # keys just did rather than being asserted unconditionally beside them.
         assert ("m" in offered) is (state is SessionState.RUNNING)
         assert "d" in offered, "the detail key was lost"
-    assert {"escape", "ctrl+r", "ctrl+n", "ctrl+s", "ctrl+o", "ctrl+q"}.isdisjoint(
+    assert {"escape", "ctrl+r", "ctrl+q", "q", "colon", "question_mark"}.isdisjoint(
         {key for key, _a, _l, _w in SESSION_ACTION_KEYS} | {"m"}
     )
 
@@ -1434,7 +1437,7 @@ async def test_a_slow_publication_never_overwrites_a_newer_one() -> None:
     other pane's read gives until the cursor moves again.
 
     That matters here more than it would anywhere else in this surface, because the next stage
-    points `alt+s` and `alt+c` at this value and neither asks for confirmation. DEC-007's
+    points F8 at this value and it does not ask for confirmation. DEC-007's
     re-read at issue time does not cover it — that re-checks whether the *named* session may be
     stopped, not whether it is the session the owner is looking at. A stale-but-live id passes
     every check and stops the wrong agent.
@@ -1567,7 +1570,7 @@ async def test_a_failed_store_read_publishes_no_selection() -> None:
 
     Scenario: cursor on X, every other pane's chord resolving to X. The store blips — a locked
     database, a tmux hiccup — and the owner presses Ctrl+R. The pane says "No managed sessions
-    on this host" with an error status and no cursor anywhere on screen, and `alt+s` in the feed
+    on this host" with an error status and no cursor anywhere on screen, and F8 in the feed
     pane still stops X, unconfirmed. That is the sentence this stage was written around: the
     mitigation is local to the pane, and leaving the option set exports the hazard to three
     panes that cannot see it.
@@ -1809,7 +1812,7 @@ async def test_a_host_that_wires_no_watcher_still_lists_sessions() -> None:
         assert launcher.reads >= 1
 
 
-def test_the_chord_hint_keeps_its_own_ten_second_clock() -> None:
+def test_the_session_key_hint_keeps_its_own_ten_second_clock() -> None:
     """Two timers, and they stopped being the same number on 2026-09-12.
 
     The hint borrowed the sessions reload's interval on the argument that reading faster than
@@ -1821,12 +1824,12 @@ def test_the_chord_hint_keeps_its_own_ten_second_clock() -> None:
     constant took one test from about twenty seconds to 144, and the suite from 100 s to 197 s.
     """
     from remote_agents.adapters.tui.screens.sessions import (
-        _CHORD_HINT_REFRESH,
+        _SESSION_KEY_HINT_REFRESH,
         _SESSIONS_AUTO_REFRESH,
     )
 
-    assert _CHORD_HINT_REFRESH == 10.0
+    assert _SESSION_KEY_HINT_REFRESH == 10.0
     assert _SESSIONS_AUTO_REFRESH == 60.0
-    assert _CHORD_HINT_REFRESH != _SESSIONS_AUTO_REFRESH, (
+    assert _SESSION_KEY_HINT_REFRESH != _SESSIONS_AUTO_REFRESH, (
         "one clock for two unrelated cadences is how the first of them got six times slower"
     )

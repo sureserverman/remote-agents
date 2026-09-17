@@ -320,7 +320,7 @@ async def test_mashing_enter_from_the_sessions_list_destroys_nothing(
     app = RemoteAgentsTui(_context(launcher))
 
     async with app.run_test() as pilot:
-        await pilot.press("ctrl+s")
+        await app.action_sessions()
         await pilot.pause()
         for _ in range(presses):
             await pilot.press("enter")

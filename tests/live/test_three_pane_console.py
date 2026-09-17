@@ -1163,8 +1163,8 @@ async def test_a_prefix_chord_reaches_the_sessions_pane_from_inside_a_displayed_
 ) -> None:
     """The route out of a displayed agent, driven from a real attached client.
 
-    Under DEC-040 an agent exchanged into the left pane owns that pane's keyboard, so `alt+s`
-    typed there goes to the agent. `prefix` + the same chord does not, and **that interception
+    Under DEC-040 an agent exchanged into the left pane owns that pane's keyboard, so a bare
+    chord typed there goes to the agent. `prefix` + the same chord does not, and **that interception
     is the claim** — tmux takes the prefix in the *client*, before any key reaches a pane, which
     is DEC-041's whole argument for a one-key root budget.
 
@@ -1177,7 +1177,7 @@ async def test_a_prefix_chord_reaches_the_sessions_pane_from_inside_a_displayed_
     Three assertions, and the second is the one that needed a client:
 
     * the chord reaches the pane carrying the sessions slot mark — `^[s` is what `M-s` *is*,
-      ESC then `s`, the sequence Textual parses back into `alt+s`;
+      ESC then `s`, the sequence a terminal sends for that chord;
     * the pane standing in for the displayed agent never receives it, though it is the focused
       pane and every ordinary keystroke goes there;
     * a client attached to an **agent** session on the same socket does not fire it at all.

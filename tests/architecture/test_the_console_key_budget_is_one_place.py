@@ -149,7 +149,7 @@ def test_the_root_budget_is_still_one_key_and_the_prefix_layer_costs_none() -> N
     A forwarding key that landed in the root table would take eight keys from every agent on
     the server, silently, against a budget of one.
     """
-    from remote_agents.adapters.tui.screens.sessions import CHORD_KEYS
+    from remote_agents.adapters.tui.screens.sessions import _FORWARDED_ROW_KEYS
     from remote_agents.application.console import CONSOLE_BINDINGS, console_prefix_bindings
     from remote_agents.ports.console import ConsoleBindingAction, ConsoleKeyTable
 
@@ -159,8 +159,8 @@ def test_the_root_budget_is_still_one_key_and_the_prefix_layer_costs_none() -> N
     )
     assert all(binding.table is ConsoleKeyTable.ROOT for binding in CONSOLE_BINDINGS)
 
-    prefix = console_prefix_bindings(CHORD_KEYS)
-    assert {binding.key for binding in prefix} == {f"M-{key}" for key in CHORD_KEYS}, (
+    prefix = console_prefix_bindings(_FORWARDED_ROW_KEYS)
+    assert {binding.key for binding in prefix} == {f"M-{key}" for key in _FORWARDED_ROW_KEYS}, (
         "the prefix layer is not the chord vocabulary, so a chord exists that cannot be "
         "reached from inside a displayed agent"
     )
@@ -178,7 +178,7 @@ def test_every_binding_states_what_it_costs() -> None:
     owner's memory. Neither is free enough to take without an argument, and this is the field
     the plan's gate reads when it asks whether a budget is worth its price.
     """
-    from remote_agents.adapters.tui.screens.sessions import CHORD_KEYS
+    from remote_agents.adapters.tui.screens.sessions import _FORWARDED_ROW_KEYS
     from remote_agents.application.console import (
         CONSOLE_BINDINGS,
         console_panes_binding,
@@ -189,7 +189,7 @@ def test_every_binding_states_what_it_costs() -> None:
     # one binding whose `why` nothing asserted. It has a good one; this is what keeps it.
     for binding in (
         *CONSOLE_BINDINGS,
-        *console_prefix_bindings(CHORD_KEYS),
+        *console_prefix_bindings(_FORWARDED_ROW_KEYS),
         console_panes_binding(),
     ):
         assert binding.why.strip(), f"{binding.key} is bound with no argument for its cost"
@@ -210,7 +210,7 @@ def test_the_composed_console_installs_the_prefix_layer_and_no_second_root_key()
     check to find and does not lengthen the tuple the budget check measures. So the assertion
     is on the *composed* set: exactly one root key, and one prefix key per chord.
     """
-    from remote_agents.adapters.tui.screens.sessions import CHORD_KEYS
+    from remote_agents.adapters.tui.screens.sessions import _FORWARDED_ROW_KEYS
     from remote_agents.application.console import console_panes_binding
     from remote_agents.composition.tui import _console_composer
     from remote_agents.ports.console import ConsoleKeyTable
@@ -227,7 +227,7 @@ def test_the_composed_console_installs_the_prefix_layer_and_no_second_root_key()
     # `CONSOLE_BINDINGS` and outside the chord layer. Named here rather than allowed by a
     # subset check: a prefix key still costs the owner's memory, so an unannounced one
     # appearing in the composed set is exactly what this asserts against.
-    assert {binding.key for binding in prefix} == {f"M-{key}" for key in CHORD_KEYS} | {
+    assert {binding.key for binding in prefix} == {f"M-{key}" for key in _FORWARDED_ROW_KEYS} | {
         console_panes_binding().key
     }, (
         "the production console does not install the prefix layer, so either the Alt chords "
@@ -271,7 +271,7 @@ def test_the_settings_key_is_an_app_binding_and_costs_the_root_budget_nothing() 
     """
     from remote_agents.adapters.tui.app import RemoteAgentsTui
     from remote_agents.adapters.tui.screens.dashboard import SETTINGS_KEY
-    from remote_agents.adapters.tui.screens.sessions import CHORD_KEYS
+    from remote_agents.adapters.tui.screens.sessions import _FORWARDED_ROW_KEYS
     from remote_agents.application.console import CONSOLE_BINDINGS, console_prefix_bindings
 
     app_keys = {binding.key for binding in RemoteAgentsTui.BINDINGS}
@@ -281,7 +281,7 @@ def test_the_settings_key_is_an_app_binding_and_costs_the_root_budget_nothing() 
     )
 
     console_keys = {binding.key for binding in CONSOLE_BINDINGS} | {
-        binding.key for binding in console_prefix_bindings(CHORD_KEYS)
+        binding.key for binding in console_prefix_bindings(_FORWARDED_ROW_KEYS)
     }
     assert SETTINGS_KEY not in console_keys, (
         f"{SETTINGS_KEY!r} reached a console key table. A root binding takes that key from "

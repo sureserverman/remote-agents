@@ -90,9 +90,9 @@ class ConsoleBindingAction(Enum):
     FORWARD_TO_SESSIONS = "forward_to_sessions"
     """Resend this key to the console's sessions pane, wherever it currently is.
 
-    The prefix table's action, and the answer to the one place the Alt layer cannot reach: a
-    displayed agent owns the left pane's keyboard, so `alt+s` typed there goes to the agent.
-    `prefix` + the chord costs the agent nothing — DEC-041's own finding is that tmux
+    The prefix table's action, and the answer to the one place a pane-local binding cannot
+    reach: a displayed agent owns the left pane's keyboard, so a key typed there goes to the
+    agent. `prefix` + the same key costs the agent nothing — DEC-041's own finding is that tmux
     intercepts the prefix in the *client*, before any key reaches the pane — and lands on the
     pane that already handles the bare row keys.
 

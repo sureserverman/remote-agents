@@ -306,7 +306,7 @@ async def test_leaving_inspect_by_any_route_restores_the_list() -> None:
         await pilot.pause()
         assert app.screen.query_one("#choices").display is False
 
-        await pilot.press("ctrl+s")
+        await app.action_sessions()
         await pilot.pause()
         choices_visible = app.screen.query_one("#choices").display
         output_visible = app.screen.query_one("#output-pane").display

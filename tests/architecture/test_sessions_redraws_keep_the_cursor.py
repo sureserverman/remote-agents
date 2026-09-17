@@ -48,7 +48,8 @@ def _every_tui_module() -> dict[str, ast.Module]:
 
     The whole tree and not the two screen modules this file was first written against. A
     sixth redraw exit was living in `app.py` the day this test was written — `show_sessions`
-    reloading in place when `ctrl+s` is pressed on the screen it names — and the sweep that
+    reloading in place when the sessions flow is re-entered on the screen it names — and the
+    sweep that
     should have found it grepped `self.reload(` across `sessions.py` and `dashboard.py`. Wrong
     spelling, wrong file, and a check built to make the next arrival visible could not see the
     one already there. A sweep is only as good as its enumeration, so this one enumerates the

@@ -945,7 +945,7 @@ class ChoiceScreen(Screen[None]):
         region.set_class(not text, "-empty")
         region.update(text)
 
-    #: Set on the position the owner is being taken *away from* by an excursion — a chord that
+    #: Set on the position the owner is being taken *away from* by an excursion — an F-key that
     #: opens a session screen about a row in another pane — and cleared by the first
     #: `consume_excursion` after it. One-shot, because it describes one departure.
     _left_by_excursion: bool = False
@@ -957,7 +957,7 @@ class ChoiceScreen(Screen[None]):
     def consume_excursion(self) -> bool:
         """Whether the return being drawn is from an excursion, clearing the mark either way.
 
-        Read-and-clear rather than read, so a mark set by a chord that then went nowhere cannot
+        Read-and-clear rather than read, so a mark set by an F-key that went nowhere cannot
         outlive the redraw it was meant for and change the *next* return's answer.
         """
         was, self._left_by_excursion = self._left_by_excursion, False
@@ -967,8 +967,8 @@ class ChoiceScreen(Screen[None]):
         """What this position's hint row actually says, given the keys it wants to advertise.
 
         A seam, and the base answer is "exactly what you asked for". It exists so a console pane
-        can add the Alt layer to its own keys without every call site knowing about chords, and
-        without this module -- which `screens/sessions.py` imports -- having to know the chord
+        can add the F-key layer to its own keys without every call site knowing about it, and
+        without this module -- which `screens/sessions.py` imports -- having to know the layer's
         vocabulary that lives there. The pane mixin overrides it; nothing else does.
         """
         return base
@@ -1273,12 +1273,12 @@ class ChoiceScreen(Screen[None]):
         **The question every callback below turns on, and it did not exist before the Alt
         layer.** `tui.stop`'s callers used to be the two sessions positions and the detail, so
         "re-read yourself afterwards" was unconditionally right and the seams said exactly that.
-        A chord makes the receiving screen the projects, limits or feed pane, or a wizard step
+        An F-key makes the receiving screen the projects, limits or feed pane, or a wizard step
         pushed on top of one — positions whose rows have nothing to do with the session that
         just stopped, and for which re-reading is not a refresh but destruction: the projects
         pane's `on_reveal` calls `render_projects()`, which clears the filter `Input` and moves
         focus off it. The owner's originating ask was that the left pane keep typed text; a stop
-        chord that wiped the filter would defeat it on the success path.
+        key that wiped the filter would defeat it on the success path.
 
         Derived from the two flags rather than listed, so a position added later gets the right
         answer by declaring what it is instead of by being remembered here. Both flags are
@@ -1327,7 +1327,7 @@ class ChoiceScreen(Screen[None]):
         for the vanished case it is why `message` is optional there: the re-read writes "That
         session is no longer available." itself, and announcing it too would show one event
         twice. A position showing nothing about the session has no such redraw, so it must say
-        it in words or the chord would do nothing and say nothing.
+        it in words or the key would do nothing and say nothing.
         """
         if self.shows_the_acted_session:
             await self.refuse(message)
@@ -1338,12 +1338,12 @@ class ChoiceScreen(Screen[None]):
         """The screen handler `RowStopAction` is delivered to. DEC-025's required shape.
 
         **On `ChoiceScreen` rather than on the sessions positions, since the Alt layer.** The
-        chord posts this message to whichever screen the owner is looking at — the projects,
+        F-key posts this message to whichever screen the owner is looking at — the projects,
         limits or feed pane, or a wizard step pushed on top of one — so the handler has to exist
-        wherever a chord can be pressed. Defined here, every position that can receive one can
+        wherever an F-key can be pressed. Defined here, every position that can receive one can
         answer it, and the answer is the same code the row key has always run.
 
-        Before that it lived on `SessionsScreen`, and a stop chord pressed anywhere else
+        Before that it lived on `SessionsScreen`, and a stop key pressed anywhere else
         resolved a session, posted, and had the message bubble to the App, find no handler, and
         be dropped in silence. `tests/unit/adapters/tui/test_tui_bindings.py` pinned exactly
         that intermediate so it could not be mistaken for the working state.
@@ -1448,7 +1448,7 @@ class ChoiceScreen(Screen[None]):
     #:
     #: What it decides is where `RemoteAgentsTui.selected_session` looks: a position that owns
     #: a cursor answers from it, and every other position answers from the console's published
-    #: selection. Getting that backwards is a chord acting on a row the owner is not looking
+    #: selection. Getting that backwards is an F-key acting on a row the owner is not looking
     #: at, so a screen that draws sessions must say so rather than be recognised by its type --
     #: `tests/architecture/test_sessions_redraws_keep_the_cursor.py` pins the two together, so
     #: a position cannot gain `highlighted_session` and forget this.
@@ -1463,13 +1463,13 @@ class ChoiceScreen(Screen[None]):
     #: deliberately binds none of those letters.
     #:
     #: So the Alt layer is offered by *this* flag rather than by `owns_session_cursor`. Where
-    #: the bare letter is already legal, `alt+<letter>` adds no hazard — it is the same act on
-    #: the same cursor. Where it is not, the chord may not smuggle an unconfirmed stop onto a
+    #: the bare letter is already legal, its F-key adds no hazard — it is the same act on
+    #: the same cursor. Where it is not, the F-key may not smuggle an unconfirmed stop onto a
     #: cursor whose position was never argued for, and which on the dashboard is not even the
     #: focused widget.
     #:
     #: Pinned against the real bindings by `tests/architecture/
-    #: test_the_chord_layer_is_the_row_keys.py`, so a screen cannot gain the row keys and forget
+    #: test_the_function_keys_are_one_table.py`, so a screen cannot gain the row keys and forget
     #: this, or declare it and bind nothing.
     carries_row_keys: ClassVar[bool] = False
 
@@ -1488,10 +1488,10 @@ class ChoiceScreen(Screen[None]):
 
     #: Whether this screen is about **one particular session** rather than about a list.
     #:
-    #: The third answer `owns_session_cursor` cannot give, and the one that keeps `alt+c` on
+    #: The third answer `owns_session_cursor` cannot give, and the one that keeps F9 on
     #: session A's detail from acting on session B. A detail, a rename and an inspect each own
     #: no cursor, so without this they resolve to whatever the sessions pane in another pane
-    #: happens to highlight -- a chord acting on a session the owner is not looking at, which is
+    #: happens to highlight -- an F-key acting on a session the owner is not looking at, which is
     #: the same defect the flag above exists to prevent, one position along.
     #:
     #: Declared as "what this screen is about", not as "what it holds", and the difference is

@@ -174,7 +174,7 @@ async def test_the_terminal_gracefully_stops_a_session_the_service_launched(
         app = _tui(tui_service)
 
         async with app.run_test() as pilot:
-            await pilot.press("ctrl+s")
+            await app.action_sessions()
             await pilot.pause()
             await pilot.press("enter")
             await pilot.pause()

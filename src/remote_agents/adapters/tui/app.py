@@ -23,7 +23,11 @@ from textual.widgets import HelpPanel, Input
 from textual.worker import WorkerCancelled, WorkerFailed
 
 from remote_agents.adapters.tui.context import TuiContext
-from remote_agents.adapters.tui.keys import function_key_bindings, session_key
+from remote_agents.adapters.tui.keys import (
+    SESSION_STOP_KEYS,
+    function_key_bindings,
+    session_key,
+)
 from remote_agents.adapters.tui.model import (
     _BACK,
     AttachRequest,
@@ -61,12 +65,7 @@ from remote_agents.adapters.tui.screens.confirm import (
 from remote_agents.adapters.tui.screens.dashboard import SETTINGS_KEY
 from remote_agents.adapters.tui.screens.launch import ProjectsScreen
 from remote_agents.adapters.tui.screens.palette import NavigationCommands
-from remote_agents.adapters.tui.screens.sessions import (
-    CHORD_KEYS,
-    CHORD_STOPS,
-    perform_chord,
-    perform_row_action,
-)
+from remote_agents.adapters.tui.screens.sessions import perform_row_action
 from remote_agents.adapters.tui.screens.settings import SettingsScreen
 from remote_agents.adapters.tui.theme import THEMES, VARIABLE_DEFAULTS
 from remote_agents.application.backend import CLOSE_TIMEOUT_SECONDS
@@ -183,26 +182,25 @@ class RemoteAgentsTui(App[AttachRequest | None]):
     binding that *awaited* something would suspend the App's own message pump with nothing
     beneath it to hold the events back.
 
-    The Alt chord layer (see `BINDINGS`) is the first. It does not disturb the position,
-    because **no chord awaits a modal on this pump**: `action_chord` resolves a session and
-    hands the work to `perform_chord`, whose stop branch *posts* `RowStopAction` to the screen
+    The F-key row (see `BINDINGS`) is that set. It does not disturb the position, because
+    **no F-key awaits a modal on this pump**: `action_session_key` resolves a session and hands
+    the work to `perform_row_action`, whose stop branch *posts* `RowStopAction` to the screen
     the owner is looking at and returns. The question is then asked by
     `ChoiceScreen.on_row_stop_action`, on that screen's own pump, which is exactly the shape
-    DEC-025 requires and DEC-068 restates. `action_chord` does await two tmux reads — the
+    DEC-025 requires and DEC-068 restates. `action_session_key` does await two tmux reads — the
     read-side gate and the selection — and neither can push a screen or open a dialog.
 
     **The correction's hazard is two-sided, and so is the answer.** The other side is a
     priority binding firing *while a modal is open* and popping it out from under the suspended
     handler that asked — the same protection, read in the other direction. That is closed by
-    `_offers_chords`, which refuses every chord behind any `ModalScreen`, and it is why that
-    refusal is a rule about the modal rather than about which session the screen underneath
+    `_offers_session_key`, which refuses the whole layer behind any `ModalScreen`, and it is why
+    that refusal is a rule about the modal rather than about which session the screen underneath
     knows.
 
     Pinned rather than asserted, on both sides: `tests/architecture/
-    test_confirmations_are_asked_from_screen_handlers.py` fails if any function on the chord's
+    test_confirmations_are_asked_from_screen_handlers.py` fails if any function on the layer's
     synchronous path ever reaches `ask_to_confirm`, and
-    `test_a_chord_behind_a_modal_does_not_fire_when_the_key_is_really_pressed` drives a real
-    keypress at an open confirmation.
+    `test_no_session_key_fires_behind_a_modal` drives a real keypress at an open confirmation.
     """
 
     # Scoped to `ChoiceScreen`, not to every `OptionList` in the app. A bare type selector
@@ -302,12 +300,13 @@ class RemoteAgentsTui(App[AttachRequest | None]):
             "refresh",
             tooltip="Re-read what this screen shows, without leaving it",
         ),
-        Binding("ctrl+n", "add_project", "add project", tooltip="Register a new project directory"),
-        Binding("ctrl+s", "sessions", "sessions", tooltip="Every managed session on this host"),
-        Binding(
-            "ctrl+o", "resume", "resume", tooltip="Reopen a saved conversation as a new session"
-        ),
         Binding("ctrl+q", "quit", "quit", tooltip="Leave the terminal surface"),
+        # **`ctrl+n`, `ctrl+s` and `ctrl+o` are gone**, and only one of the three is replaced by
+        # a key. Add project is F7. Sessions and Resume have no F-key at all: the owner's key
+        # map spends the row on what acts on a *session*, and the two flows that start one are
+        # reached from the command palette (`:` or `ctrl+p`), where every navigation entry
+        # already lives. `ctrl+r`, `ctrl+q` and `ctrl+p` stay -- each is the key its act is
+        # called by everywhere else, and none of them was a flow jump.
         # Declared here rather than on `DashboardScreen`, which is where it lived until this
         # sub-plan. On a console the dashboard is one pane of four, so binding it there gave
         # three of the four panes no route to this screen at all (BL-057). An app binding is
@@ -322,35 +321,12 @@ class RemoteAgentsTui(App[AttachRequest | None]):
         Binding(
             SETTINGS_KEY, "settings", "settings", show=False, tooltip="This machine's settings"
         ),
-        # The Alt layer: every row key the sessions pane offers, available from any console
-        # pane, acting on the session that pane has highlighted.
-        #
-        # **The first `priority=True` bindings this app declares**, and that is the mechanism
-        # rather than a preference. Textual checks priority bindings from the App down before
-        # the focused widget sees the key (`App._check_bindings`), which is exactly the owner's
-        # ask: in the left pane a bare letter is text the projects filter takes, and the same
-        # letter under Alt is a session action the filter never sees. Measured on the pinned
-        # Textual 8.2.8 through tmux `send-keys M-s` with an `Input` focused and holding text.
-        #
-        # DEC-025's correction notes that its position "holds today only because this app
-        # declares no priority bindings of its own". These are the first, and they do not
-        # disturb it: `action_chord` awaits no modal on the App's pump — the stop chords *post*
-        # to the current screen and its handler is what asks (DEC-068).
-        #
-        # Built from `CHORD_KEYS` rather than written out, so the layer cannot drift from the
-        # row keys it mirrors; `tests/architecture/test_the_chord_layer_is_the_row_keys.py`
-        # asserts the two sets are equal, and the Stage 3 gate greps for a hand-spelled
-        # `"alt+<letter>"` anywhere in this tree.
-        *(
-            Binding(f"alt+{key}", f"chord('{key}')", "session action", priority=True, show=False)
-            for key in CHORD_KEYS
-        ),
         # The F-key row: one table in `keys.py`, bound here so every position is asked about
         # it and `check_action` decides where each key applies. Priority for the reason the
         # Alt layer is -- the key has to act from inside an `Input` -- and shown, because
         # these are the keys the footer exists to teach. The five session-shaped ones route
         # through `action_session_key`, which awaits no modal on this pump: its stops post to
-        # the screen exactly as the chords do (DEC-025, DEC-068).
+        # the screen rather than awaiting one here (DEC-025, DEC-068).
         *function_key_bindings(),
         # `?` beside F1, as htop and less have it. **Not `priority=True`**, for the reason `,`
         # is not: it is printable, so a focused `Input` must take it as text -- and Textual
@@ -498,15 +474,13 @@ class RemoteAgentsTui(App[AttachRequest | None]):
             # the identical dereference; the first version of this guard checked two conditions
             # that could never be false and left this one open.
             return True
-        if action == "chord":
-            return self._offers_chords(screen, str(parameters[0]) if parameters else "")
         if action == "session_key":
-            # The F-key inherits exactly the chord's bounds by being asked the chord's
-            # question about the row letter it stands for: refused behind a modal, refused on
-            # a commitment screen when it is a stop (DEC-052, DEC-062), offered where the
-            # chords are. An unknown name is an absent key rather than a dead one.
+            # The key is gated on the row letter it stands for: refused behind a modal,
+            # refused on a commitment screen when it is a stop (DEC-052, DEC-062), offered
+            # where that bare letter is already legal. An unknown name is an absent key rather
+            # than a dead one.
             named = session_key(str(parameters[0])) if parameters else None
-            return False if named is None else self._offers_chords(screen, named.row_key)
+            return False if named is None else self._offers_session_key(screen, named.row_key)
         if action in _BARE_KEY_ACTIONS and isinstance(self.focused, Input):
             # A bare printable key is a character wherever an `Input` holds the keyboard --
             # the filter, the rename box, the project name -- and the key everywhere else.
@@ -523,15 +497,19 @@ class RemoteAgentsTui(App[AttachRequest | None]):
             return None
         return screen.check_action(action, parameters)
 
-    def _offers_chords(self, screen: Screen[object], key: str) -> bool:
-        """Whether the Alt layer applies to the position on screen — the synchronous half.
+    def _offers_session_key(self, screen: Screen[object], key: str) -> bool:
+        """Whether a session-shaped F-key applies to the position on screen — the synchronous half.
+
+        Asked about the **row letter** the key stands for (`i d r s f`), not about the F-key
+        itself, because every rule below is a rule about that letter: it is the bare key the
+        sessions pane binds, and the whole claim of this layer is that F8 does what `s` does.
 
         Two refusals, and neither can be deferred to the action: `check_action` is what
         `App.run_action` consults before dispatching a priority binding, and a key that is
         offered and inert is the complaint a dead-end key already is (the reason `p` is gated
         to the sessions pane rather than bound everywhere and ignored).
 
-        **No chord while a modal is asking.** A modal is one question awaiting an answer, and
+        **Nothing fires while a modal is asking.** A modal is one question awaiting an answer, and
         the confirm modals carry a question string and no session id — deliberately, so the
         gate's registry sweep can construct each with no arguments. So they cannot answer
         `subject_session` the way a detail can, and the rule is about the modal rather than
@@ -539,7 +517,7 @@ class RemoteAgentsTui(App[AttachRequest | None]):
 
         **Off a console, nothing to act on.** `console_holds_slot` is wired only under console
         hosting, so its absence is the declared absence of the whole layer (DEC-046) — except
-        on a position that owns a sessions cursor, which needs no console at all: `alt+s` there
+        on a position that owns a sessions cursor, which needs no console at all: F8 there
         acts on the same row `s` does, and `remote-agents tui` in a bare shell is a real
         position with a real list.
 
@@ -552,45 +530,48 @@ class RemoteAgentsTui(App[AttachRequest | None]):
         sessions region is not the focused widget, and the import-time invariant in
         `screens/sessions.py` guards the *keys* rather than the positions they are offered on.
         So a cursor-owning screen that does not carry the keys is refused outright rather than
-        falling through to the console test below — the chord must not smuggle in a stop the
+        falling through to the console test below — the F-key must not smuggle in a stop the
         bare letter is not allowed to make there.
 
         **A screen about a session it cannot name is refused here too**, rather than offered and
         left to warn: `InspectScreen` declares `about_one_session` and answers `subject_session`
-        with `None` unconditionally, so its chord could only ever say "this screen names no
+        with `None` unconditionally, so its F-key could only ever say "this screen names no
         session". That is knowable synchronously, and an absent key beats a dead one.
 
         What this cannot answer is the strict gate itself. Whether *this* pane is one of the
         console's own is a tmux read, and `check_action` is synchronous — so that half lives in
         `_resolve_session`, and a refused process gets a word rather than a hidden key.
         """
-        if key in CHORD_STOPS and getattr(screen, "entry_is_a_commitment", False):
-            # **A screen whose typed text is a commitment does not carry the three keys that end
-            # a session.** `entry_is_a_commitment` already means "typed work a global key would
+        if key in SESSION_STOP_KEYS and getattr(screen, "entry_is_a_commitment", False):
+            # **A screen whose typed text is a commitment does not carry the keys that end a
+            # session.** `entry_is_a_commitment` already means "typed work a global key would
             # discard silently", and these bindings are `priority=True`, so the `Input` never
-            # sees the keystroke: on the rename box, a slipped Alt turns the next `s` into an
-            # unconfirmed, irreversible stop (DEC-018) of the very session being renamed, and on
-            # the project-name step into a stop of whatever another pane highlights.
+            # sees the keystroke: on the rename box, a mis-aimed F8 is an unconfirmed,
+            # irreversible stop (DEC-018) of the very session being renamed, and on the
+            # project-name step a stop of whatever another pane highlights.
             #
-            # **Refused rather than greyed, and greying is not actually on the table.** The
-            # flow-jump protection returns `None` for a key the *footer draws*, so the owner
-            # sees it dimmed; these bindings are `show=False`, so `None` and `False` are
-            # indistinguishable to them and greying would buy a second code path and no signal.
+            # **Refused rather than greyed.** The flow-jump protection returns `None` for a key
+            # the footer draws, so the owner sees it dimmed. These are drawn too, since the
+            # F-keys are shown -- but `None` would leave a greyed F8 on the one screen where
+            # the hazard is a stop nobody asked for, and an absent key says more there than a
+            # dim one. The cost is that the footer's F8 entry disappears while a name is being
+            # typed and returns when it is committed, which is the honest reading of a key that
+            # genuinely is not available at that moment.
             #
             # The coarser of two in-repo predicates, deliberately: `work_in_flight` would refuse
             # only once the box actually holds text, and a key that works until you type a
             # character is worse to learn than one that is never there. Accepted cost, stated
-            # because it is real: on an empty rename box `alt+s` was the best-targeted stop in
-            # the app — its subject is on screen and named — and it is refused too.
+            # because it is real: on an empty rename box F8 was the best-targeted stop in the
+            # app — its subject is on screen and named — and it is refused too.
             #
-            # The navigating chords stay: they push a screen and Escape comes back to the typed
+            # The navigating keys stay: they push a screen and Escape comes back to the typed
             # text intact, which is the excursion path. The projects *filter* is deliberately
-            # not a commitment (leaving that position is the ordinary thing to do there), so the
-            # owner's originating ask -- bare letters type, Alt letters act -- is untouched.
+            # not a commitment (leaving that position is the ordinary thing to do there), so
+            # bare letters still type there while the F-keys act.
             return False
         if isinstance(screen, ModalScreen) or not isinstance(screen, ChoiceScreen):
-            # `perform_chord` reaches `screen.tui`, `screen.announce` and `screen.showing`, all
-            # of which are `ChoiceScreen`'s. Every screen this app pushes is one today, so the
+            # `perform_row_action` reaches `screen.tui`, `screen.announce` and `screen.showing`,
+            # all of which are `ChoiceScreen`'s. Every screen this app pushes is one today, so the
             # second half refuses nothing — it is here so that a future plain `Screen` is an
             # absent key rather than an `AttributeError` out of a key handler, which this file
             # records elsewhere as the class that has already killed the app once.
@@ -1220,12 +1201,11 @@ class RemoteAgentsTui(App[AttachRequest | None]):
         **The argument for each, and both gates, live in `_resolve_session`.** This is a thin
         reader over it that drops the refusal wording — read that method rather than this one.
 
-        **Two production callers, and they run on different clocks.** `action_chord` reaches
-        `_resolve_session` directly, because it needs the refusal wording too; this method is
-        called by `ChordHintRow.refresh_chord_hint`, on a timer, on every console pane that draws
-        the hint row — so the resolver runs without anyone pressing anything, and its cost is not
-        only paid per keypress. That sentence used to say the callers were `action_chord` and the
-        tests; Task 3.3 made it false and it was reported fixed a round before it was.
+        **Two production callers, and they run on different clocks.** `action_session_key`
+        reaches `_resolve_session` directly, because it needs the refusal wording too; this
+        method is called by `SessionKeyHintRow.refresh_session_key_hint`, on a timer, on every
+        console pane that draws the hint row — so the resolver runs without anyone pressing
+        anything, and its cost is not only paid per keypress.
 
         Each flag is read with `getattr(..., False)` because not every screen is a
         `ChoiceScreen` — the modals in `confirm.py` are `ModalScreen`s outside that hierarchy —
@@ -1234,14 +1214,14 @@ class RemoteAgentsTui(App[AttachRequest | None]):
         declared flag rather than a type check", which is the shape it disclaims: a probe with a
         silent default. It is a probe. What makes it safe is not the read but the paired
         architecture checks — `test_sessions_redraws_keep_the_cursor.py` for the cursor flag and
-        `test_the_chord_layer_is_the_row_keys.py` for the other two — which fail when a screen
+        `test_the_function_keys_are_one_table.py` for the other two — which fail when a screen
         grows the behaviour and forgets the declaration. That is the Stage 1 gate's lesson: a
         predicate recognising today's positions is silent about tomorrow's.
 
         **Never cached.** Two tmux reads per press — the gate, then the selection — are the
         price of never acting on a stale one, both `show-options`/`list-panes` against a local
-        socket. (The plan costed this layer at one read per press; the read-side gate made it
-        two, and the hint row's poll pays the same pair per pane per tick.) A cache would be correct
+        socket. (The read-side gate is what makes it two rather than one, and the hint row's
+        poll pays the same pair per pane per tick.) A cache would be correct
         for exactly as long as nobody moved the cursor in the other pane, which is the whole
         thing this has to survive.
 
@@ -1272,7 +1252,7 @@ class RemoteAgentsTui(App[AttachRequest | None]):
         """`selected_session`, plus the words for why there is nothing — one pass, one gate read.
 
         Two callers want different halves of the same work. `selected_session` wants the value.
-        `action_chord` wants the value *and*, when there is none, which of three different
+        `action_session_key` wants the value *and*, when there is none, which of three different
         nothings it is — because "no session is selected" sent to a process that is not one of
         the console's panes would send the owner to move a cursor that was never the problem.
         Resolving twice would take the gate's tmux read twice and could answer differently
@@ -1297,7 +1277,7 @@ class RemoteAgentsTui(App[AttachRequest | None]):
         if getattr(screen, "about_one_session", False):
             # A screen that is about one session acts on that one, and a screen that is about
             # one it cannot name acts on nothing. Never a fall-through to the published
-            # selection: `alt+c` on session A's detail acting on session B is the same defect
+            # selection: F9 on session A's detail acting on session B is the same defect
             # the gate below exists for, arriving from inside the console rather than outside.
             # `getattr` on both, consistently: the flag is read defensively because not every
             # screen is a `ChoiceScreen` (the modals in `confirm.py` are `ModalScreen`s outside
@@ -1309,7 +1289,7 @@ class RemoteAgentsTui(App[AttachRequest | None]):
         if getattr(screen, "owns_session_cursor", False):
             return screen.highlighted_session(), _NOTHING_SELECTED
         if not await self._holds_console_slot():
-            return None, "Session chords act on the console's own panes."
+            return None, "Session keys act on the console's own panes."
         read = self.services.console_read_selection
         if read is None:
             return None, _NOTHING_SELECTED
@@ -1341,47 +1321,11 @@ class RemoteAgentsTui(App[AttachRequest | None]):
             _LOG.debug("the console arrangement could not be read", exc_info=True)
             return False
 
-    async def action_chord(self, key: str) -> None:
-        """One Alt chord: do what its bare letter does on a row, to the selected session.
-
-        **Posts rather than performs, and never awaits a modal here.** This runs on the App's
-        pump, so `perform_chord` hands every stop to the receiving screen's own handler
-        (DEC-025, DEC-068) — which is what lets these be the first `priority=True` bindings this
-        app declares without disturbing DEC-025's position.
-
-        DEC-027: where there is nothing to act on, the key warns on itself. It never asks, and
-        it never navigates somewhere as a way of refusing.
-        """
-        if self.busy:
-            # The same refusal the row keys take one step earlier, for the same reason: a
-            # command in flight owns the surface, and a chord queued behind it would land on
-            # whatever screen had arrived by the time it ran.
-            return
-        screen = self.screen
-        session_value, refusal = await self._resolve_session()
-        if session_value is None:
-            self.announce(refusal, severity="warning")
-            return
-        if self.busy or self.screen is not screen:
-            # The gate's tmux read is an await — up to two subprocess round trips — and both
-            # facts the guard above checked can change inside it. The screen matters because
-            # `perform_chord` posts to `screen`, and a stale one would deliver a stop to a
-            # screen the owner has left. `busy` matters because the row keys check it with *no*
-            # await between the check and the use, so without re-checking here the chord would
-            # be the one path that can navigate while a command is in flight — and
-            # `perform_row_remote_control` reaches `show_detail`, which `tui.stop`'s own refusal
-            # does not cover.
-            return
-        await perform_chord(key, session_value, screen=screen)
-
     async def action_session_key(self, name: str) -> None:
         """One session-shaped F-key: what its row letter does on a row, to the selected session.
 
-        The same body as `action_chord`, on purpose, and the same excursion-marking rules as
-        `perform_chord`: the keys that navigate mark the position they leave so the return is
-        drawn as a return, and the two stops mark nothing because they go nowhere. Written out
-        rather than routed through `perform_chord` because the chord layer is what this row
-        replaces, and the retirement should not have to reach inside this method.
+        The keys that navigate mark the position they leave, so the return is drawn as a
+        return; the two stops mark nothing, because they go nowhere.
 
         **Posts rather than performs, and never awaits a modal here.** `perform_row_action`
         hands both stops to the receiving screen's own handler (DEC-025, DEC-068), so F9's
@@ -1390,9 +1334,10 @@ class RemoteAgentsTui(App[AttachRequest | None]):
         """
         named = session_key(name)
         if named is None or self.busy:
-            # An unknown name is unreachable through the derived bindings and returns rather
-            # than raises for the reason `perform_chord` gives; busy is the row keys' own
-            # refusal, one step earlier.
+            # An unknown name is unreachable through the derived bindings, and returns rather
+            # than raises because `session_key` is a public action name: `run_action` reaches
+            # here from the command palette or a test, and a `KeyError` out of an action exits
+            # the app. `busy` is the row keys' own refusal, one step earlier.
             return
         screen = self.screen
         session_value, refusal = await self._resolve_session()
@@ -1400,7 +1345,12 @@ class RemoteAgentsTui(App[AttachRequest | None]):
             self.announce(refusal, severity="warning")
             return
         if self.busy or self.screen is not screen:
-            # Both facts can change across the gate's tmux read; see `action_chord`.
+            # Both facts can change across the gate's tmux read -- up to two subprocess round
+            # trips. The screen matters because `perform_row_action` posts to `screen`, and a
+            # stale one would deliver a stop to a screen the owner has left. `busy` matters
+            # because the row keys check it with *no* await between the check and the use, so
+            # without re-checking here this would be the one path that can navigate while a
+            # command is in flight.
             return
         if named.action is None:
             screen.mark_excursion()
@@ -1973,7 +1923,7 @@ class RemoteAgentsTui(App[AttachRequest | None]):
 
         **There are two gates, not one.** The second is `shows_the_acted_session`: every word
         below is about the *sessions* store, so a position that shows no sessions — the
-        projects, limits and feed panes, which a chord's own re-read reaches (DEC-007) — gets
+        projects, limits and feed panes, which the layer's own re-read reaches (DEC-007) — gets
         the toast and keeps its rows and its status line. The failure is never silent; what it
         is not allowed to do is rewrite a listing it is not about.
         """
@@ -1995,7 +1945,7 @@ class RemoteAgentsTui(App[AttachRequest | None]):
         # funnel; the hook is what stops there being a sixth.
         # **On the seam too, and for the same reason as the rest of the stop callbacks.** Every
         # word below is about the *sessions* store, so on a position that shows no sessions --
-        # the projects, limits and feed panes, reached here by a chord's re-read (DEC-007) --
+        # the projects, limits and feed panes, reached here by the layer's re-read (DEC-007) --
         # replacing the rows with a lone `Back` and writing "The managed sessions could not be
         # read" describes something that position does not show and destroys what it does. The
         # toast still fires, so the failure is never silent; what it is not allowed to do is

@@ -1,9 +1,9 @@
-"""The F-key row: one table, bound on the app, acting exactly as the Alt chords did.
+"""The F-key row: one table, bound on the app, acting on the console's published selection.
 
 Sub-plan 03 Task 1.1. Every check here reads `adapters/tui/keys.py::FUNCTION_KEYS` rather
 than spelling the keys out, so a row added to the table is a row covered here on the same
 commit -- and the session-shaped keys (F3, F4, F6, F8, F9) are driven through the same doubles
-the chord layer's tests use, because the claim is that they resolve their session the same way.
+the row keys' own tests use, because the claim is that F8 resolves its session as `s` does.
 
 Test names deliberately avoid the substrings later tasks reserve for their own `-k` selectors.
 """
@@ -27,14 +27,15 @@ from remote_agents.adapters.tui.context import TuiContext
 from remote_agents.adapters.tui.keys import (
     FUNCTION_KEYS,
     SESSION_KEYS,
+    SESSION_STOP_KEYS,
     FunctionKey,
     function_key_bindings,
 )
 from remote_agents.adapters.tui.panes import FeedPane, ProjectsPane, SessionsPane
 from remote_agents.adapters.tui.screens.confirm import ForceConfirmModal
 from remote_agents.adapters.tui.screens.sessions import (
-    CHORD_KEYS,
-    CHORD_STOPS,
+    _DETAIL_KEY,
+    ROW_KEY_LETTERS,
     RenameScreen,
     SessionDetailScreen,
 )
@@ -194,22 +195,21 @@ def test_every_table_entry_names_an_action_the_app_has() -> None:
     assert not missing, f"these keys name actions the app does not have: {missing}"
 
 
-def test_the_session_shaped_keys_name_a_row_key_the_chord_layer_carries() -> None:
-    """F3/F4/F6/F8/F9 inherit the chords' bounds by naming the chords' own row letters.
+def test_the_session_shaped_keys_name_a_row_key_the_sessions_pane_binds() -> None:
+    """F3/F4/F6/F8/F9 inherit the bare letters' bounds by naming those letters.
 
     Reserved names, so the parametrised action is `session_key('<name>')` and nothing else:
     the five names are the vocabulary `action_session_key` accepts, and each resolves to a
-    letter `_offers_chords` already rules on. F8 and F9 must land on the stop letters, since
+    letter `_offers_session_key` already rules on. F8 and F9 must land on the stop letters, since
     that is what gets them refused on a commitment screen (DEC-052/DEC-062 as carried forward).
     """
     by_name = {session_key.name: session_key for session_key in SESSION_KEYS}
     assert set(by_name) == {"inspect", "detail", "rename", "graceful", "force"}
     for session_key in SESSION_KEYS:
-        assert session_key.row_key in CHORD_KEYS, (
-            f"{session_key.name} names the row key {session_key.row_key!r}, "
-            "which the chord layer does not carry"
+        assert session_key.row_key in {*ROW_KEY_LETTERS.split(), _DETAIL_KEY}, (
+            f"{session_key.name} names the row key {session_key.row_key!r}, which no row binds"
         )
-    assert {by_name["graceful"].row_key, by_name["force"].row_key} <= CHORD_STOPS
+    assert {by_name["graceful"].row_key, by_name["force"].row_key} == SESSION_STOP_KEYS
     assert by_name["detail"].action is None, "F4 opens the detail and performs no action"
     bound = {entry.action for entry in FUNCTION_KEYS if _action_name(entry.action) == "session_key"}
     assert bound == {f"session_key('{name}')" for name in by_name}, (
@@ -398,7 +398,7 @@ async def test_f6_renames_the_published_selection_through_the_row_path() -> None
 
 
 async def test_the_stop_keys_are_refused_on_the_rename_box_and_the_others_are_not() -> None:
-    """F8/F9 inherit exactly `alt+s`/`alt+f`'s bounds on a screen that commits typed text.
+    """F8/F9 inherit exactly the bare `s`/`f` bounds on a screen that commits typed text.
 
     The binding is `priority=True`, so the `Input` never sees the key; the refusal has to be
     `check_action`'s, and it is asserted both as the answer and as the absence of a stop.

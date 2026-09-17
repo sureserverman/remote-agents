@@ -199,10 +199,10 @@ async def test_the_palette_withholds_a_flow_jump_that_would_discard_typed_work()
     """The palette must not become the second route around a guard the key already honours.
 
     `ChoiceScreen.check_action` answers `None` — drawn but refused — for a flow jump while a
-    value is being typed, which is how sub-plan 3 stopped `ctrl+s` throwing away a
+    value is being typed, which is how sub-plan 3 stopped the sessions jump throwing away a
     half-finished project name. This provider filtered on `is not False`, promoting every
     `None` to "available", and dispatched by reaching for `action_*` directly, which consults
-    no guard at all. Reproduced before the fix: `ctrl+s` on `NAME` kept `half-typed-name`,
+    no guard at all. Reproduced before the fix: the sessions jump on `NAME` kept `half-typed-name`,
     and the palette's "Sessions" entry landed on the sessions list with the name gone.
     """
     from textual.widgets import Input
@@ -210,7 +210,7 @@ async def test_the_palette_withholds_a_flow_jump_that_would_discard_typed_work()
     app = RemoteAgentsTui(_context(projects=_Creator(), conversations=_Conversations()))
 
     async with app.run_test() as pilot:
-        await pilot.press("ctrl+n")
+        await pilot.press("f7")
         await pilot.pause()
         await app.screen.choose("infra")
         await pilot.pause()
@@ -222,8 +222,13 @@ async def test_the_palette_withholds_a_flow_jump_that_would_discard_typed_work()
 
         offered = await _discovered(app)
 
-        # The key's own behaviour, as the control: refused, and the value survives.
-        await pilot.press("ctrl+s")
+        # The dispatcher's own behaviour, as the control: refused, and the value survives.
+        # `run_action` rather than `action_sessions()`: the guard lives in `check_action`, which
+        # only the dispatcher consults, and the palette's whole hazard is a second route that
+        # skips it. Calling the method directly would test the thing this test exists to say is
+        # not enough -- and `ctrl+s`, which used to be the control here, was retired with the
+        # Alt layer, so the dispatcher is now also how the *owner* reaches this flow.
+        await app.run_action("sessions")
         await pilot.pause()
         by_key = app.screen.position
         survived = app.screen.query_one("#filter", Input).value
@@ -249,7 +254,7 @@ async def test_an_entry_is_re_checked_when_it_is_chosen_not_only_when_it_is_list
 
         # Listed from the resting position, then chosen after the surface has moved into a
         # state that refuses it — the interleaving a list-time-only check cannot see.
-        await pilot.press("ctrl+n")
+        await pilot.press("f7")
         await pilot.pause()
         await app.screen.choose("infra")
         await pilot.pause()
@@ -289,7 +294,7 @@ async def test_choosing_settings_pushes_the_screen_rather_than_unwinding_to_it()
     app = RemoteAgentsTui(_context(conversations=_Conversations()))
 
     async with app.run_test() as pilot:
-        await pilot.press("ctrl+s")
+        await app.action_sessions()
         await pilot.pause()
         depth = len(app.screen_stack)
         opened_from = app.screen.position
@@ -312,7 +317,7 @@ async def test_the_palette_withholds_settings_while_a_name_is_half_typed() -> No
     app = RemoteAgentsTui(_context(projects=_Creator(), conversations=_Conversations()))
 
     async with app.run_test() as pilot:
-        await pilot.press("ctrl+n")
+        await pilot.press("f7")
         await pilot.pause()
         await app.screen.choose("infra")
         await pilot.pause()
@@ -354,7 +359,7 @@ async def test_the_settings_key_opens_the_screen_from_a_position_that_is_not_the
     app = RemoteAgentsTui(_context(conversations=_Conversations()))
 
     async with app.run_test() as pilot:
-        await pilot.press("ctrl+s")
+        await app.action_sessions()
         await pilot.pause()
         assert not isinstance(app.screen, SettingsScreen), "fixture: start off the dashboard"
 

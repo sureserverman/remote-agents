@@ -72,7 +72,7 @@ async def test_the_terminal_creates_picks_and_launches_one_project(
         app = RemoteAgentsTui(context)
 
         async with app.run_test() as pilot:
-            await pilot.press("ctrl+n")
+            await pilot.press("f7")
             await pilot.pause()
             await pilot.press("enter")
             await pilot.pause()

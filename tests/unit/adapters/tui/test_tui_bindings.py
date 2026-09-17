@@ -16,13 +16,11 @@ from tui_positions import position
 
 from remote_agents.adapters.tui.app import RemoteAgentsTui
 from remote_agents.adapters.tui.context import TuiContext
+from remote_agents.adapters.tui.keys import SESSION_KEYS, SESSION_STOP_KEYS
 from remote_agents.adapters.tui.panes import FeedPane, LimitsPane, ProjectsPane, SessionsPane
 from remote_agents.adapters.tui.screens.confirm import ForceConfirmModal
 from remote_agents.adapters.tui.screens.project import NameScreen
 from remote_agents.adapters.tui.screens.sessions import (
-    CHORD_KEYS,
-    CHORD_NAVIGATES,
-    CHORD_STOPS,
     InspectScreen,
     RenameScreen,
     SessionDetailScreen,
@@ -73,13 +71,13 @@ class _Listing(SessionUseCaseDouble):
     records: tuple[SessionRecord, ...] = ()
     refreshed: int = 0
     #: Every command the surface issued, in order. A list rather than a count, because the
-    #: chord tests need to say *which session* was stopped as well as how many times: a chord
-    #: acting on the pane's own rows instead of the published selection would issue exactly one
+    #: session key tests need to say *which session* was stopped as well as how many times: a
+    #: key acting on the pane's own rows instead of the published selection would issue exactly one
     #: command too, and only the id tells the two apart.
     issued: list[object] = field(default_factory=list)
     #: Raised by every stop, so the failure path can be driven. The success path is the default
     #: because most cases want it — which is exactly why the failure path went unexamined until
-    #: a review asked what a failed chord stop does to a pane that shows no sessions.
+    #: a review asked what a failed session key stop does to a pane that shows no sessions.
     error: Exception | None = None
     #: What `graceful_stop` reports back. `None` means the clean exit most cases assume; a
     #: not-taken observation is how the "dispatched but did not work" branch is driven, which is
@@ -138,11 +136,19 @@ def _context(launcher: _Listing) -> TuiContext:
     )
 
 
-def test_ctrl_s_is_bound_and_shown_in_the_footer() -> None:
-    bindings = {binding.key: binding for binding in RemoteAgentsTui.BINDINGS}
-    assert "ctrl+s" in bindings
-    assert bindings["ctrl+s"].action == "sessions"
-    assert bindings["ctrl+s"].description
+def test_the_sessions_flow_is_reachable_without_a_key() -> None:
+    """`ctrl+s` was retired with the Alt layer; the flow kept its route, not its key.
+
+    The owner's key map spends the F-key row on what acts on a *session*, so the two flows
+    that start one -- Sessions and Resume -- have no key at all and are reached from the
+    command palette. So the thing to assert is that no binding claims the action (a stale key
+    would be a second, unreviewed route) and that the palette still offers it.
+    """
+    from remote_agents.adapters.tui.screens.palette import NAVIGATION_COMMANDS
+
+    actions = {binding.action for binding in RemoteAgentsTui.BINDINGS}
+    assert "sessions" not in actions, "a binding still claims the retired sessions key"
+    assert "sessions" in {action for _name, _help, action in NAVIGATION_COMMANDS}
 
 
 def test_the_existing_bindings_keep_their_behavior() -> None:
@@ -150,7 +156,7 @@ def test_the_existing_bindings_keep_their_behavior() -> None:
     bindings = {binding.key: binding.action for binding in RemoteAgentsTui.BINDINGS}
     assert bindings["escape"] == "back"
     assert bindings["ctrl+r"] == "refresh"
-    assert bindings["ctrl+n"] == "add_project"
+    assert bindings["f7"] == "add_project"
     assert bindings["ctrl+q"] == "quit"
 
 
@@ -158,7 +164,7 @@ def test_the_existing_bindings_keep_their_behavior() -> None:
     "step_setup",
     ["projects", "chooser", "profiles", "areas"],
 )
-async def test_ctrl_s_opens_sessions_from_any_wizard_step(step_setup: str) -> None:
+async def test_the_sessions_flow_opens_from_any_wizard_step(step_setup: str) -> None:
     """Ctrl+S reaches the sessions list from every position the launch wizard has.
 
     **Two of these cases were not reaching the positions they were named for, and the test was
@@ -206,7 +212,7 @@ async def test_ctrl_s_opens_sessions_from_any_wizard_step(step_setup: str) -> No
     assert step == "SESSIONS"
 
 
-async def test_ctrl_s_is_refused_while_busy() -> None:
+async def test_the_sessions_flow_is_refused_while_busy() -> None:
     """Matching the existing guard on refresh and add-project."""
     launcher = _Listing((_record(),))
     app = RemoteAgentsTui(_context(launcher))
@@ -225,15 +231,19 @@ async def test_ctrl_s_is_refused_while_busy() -> None:
     assert launcher.refreshed == before
 
 
-async def test_pressing_the_key_actually_reaches_the_action() -> None:
-    """Binding tables can be right while the keystroke still goes nowhere."""
+async def test_dispatching_the_action_actually_reaches_it() -> None:
+    """Tables can be right while the dispatch still goes nowhere.
+
+    Driven through `App.run_action`, which is what both the palette and a key press go
+    through, since the sessions flow has no key of its own since the Alt layer was retired.
+    """
     launcher = _Listing((_record(),))
     app = RemoteAgentsTui(_context(launcher))
 
     async with app.run_test() as pilot:
         await pilot.pause()
         before = launcher.refreshed
-        await pilot.press("ctrl+s")
+        await app.run_action("sessions")
         await pilot.pause()
         step = position(app)
 
@@ -241,7 +251,7 @@ async def test_pressing_the_key_actually_reaches_the_action() -> None:
     assert launcher.refreshed == before + 1
 
 
-async def test_ctrl_r_on_the_sessions_list_re_lists_it_and_stays_put() -> None:
+async def test_refresh_on_the_sessions_list_re_lists_it_and_stays_put() -> None:
     """The one view whose answer goes stale on its own is the one Refresh used to abandon.
 
     A second process writes the same store, so the sessions list is the position where the
@@ -252,7 +262,7 @@ async def test_ctrl_r_on_the_sessions_list_re_lists_it_and_stays_put() -> None:
     app = RemoteAgentsTui(_context(launcher))
 
     async with app.run_test() as pilot:
-        await pilot.press("ctrl+s")
+        await app.run_action("sessions")
         await pilot.pause()
         assert position(app) == "SESSIONS"
         listed, depth = launcher.refreshed, len(app.screen_stack)
@@ -265,7 +275,7 @@ async def test_ctrl_r_on_the_sessions_list_re_lists_it_and_stays_put() -> None:
         assert len(app.screen_stack) == depth, "refresh moved the owner off the sessions list"
 
 
-async def test_ctrl_r_where_there_is_nothing_to_re_read_does_not_navigate() -> None:
+async def test_refresh_where_there_is_nothing_to_re_read_does_not_navigate() -> None:
     """A screen with nothing to refresh stays where it is, rather than unwinding the stack.
 
     Task 1.2 turns this into a disabled binding the footer stops advertising; until then the
@@ -350,7 +360,7 @@ async def test_the_selection_capability_is_absent_off_a_console() -> None:
     """Declared absence, not a probe (DEC-046).
 
     A surface that is not hosted by a console has no published selection to read and nothing
-    to publish to. Both capabilities are then `None`, and the Alt chord layer is not offered at
+    to publish to. Both capabilities are then `None`, and the session-key layer is not offered at
     all rather than offered and inert — a dead-end key is worse than an absent one, which is
     the same reasoning that gates `p` to the sessions pane.
     """
@@ -450,9 +460,9 @@ async def test_selected_session_elsewhere_answers_from_the_published_selection()
 
 
 async def test_selected_session_is_nothing_off_a_console() -> None:
-    """No cursor here and no console to ask, so there is nothing for a chord to act on.
+    """No cursor here and no console to ask, so there is nothing for a session key to act on.
 
-    The chord layer is not offered at all in this case (Task 3.1), but this is the value it is
+    The session key layer is not offered at all in this case (Task 3.1), but this is the value it is
     gated on, and "nothing" has to be a returned answer rather than a raised one.
     """
     app = ProjectsPane(_context(_Listing(())))
@@ -469,7 +479,8 @@ async def test_a_console_that_cannot_be_asked_selects_nothing() -> None:
     `read_selection` shells out to tmux and a server that has gone away exits non-zero, which
     `AsyncTmuxRunner` raises. This resolver runs from a keypress, and every sibling in this
     package catches for exactly that reason — an exception out of a key handler exits the app.
-    This one was the exception, and it is the one a destructive chord will call on every press.
+    This one was the exception, and it is the one a destructive session key will call on every
+    press.
     """
 
     async def unreachable() -> SessionId | None:
@@ -484,12 +495,12 @@ async def test_a_console_that_cannot_be_asked_selects_nothing() -> None:
         assert app.is_running, "a failed selection read ended the surface"
 
 
-async def test_an_alt_chord_acts_on_the_published_selection_and_leaves_the_filter_alone() -> None:
+async def test_a_session_key_acts_on_the_published_selection_and_leaves_the_filter_alone() -> None:
     """The owner's ask, in one test: bare letters are text, Alt letters are session actions.
 
     `priority=True` is what makes both halves true at once. Textual checks priority bindings
-    from the App down *before* the focused widget (`App._check_bindings`), so `alt+i` never
-    reaches the filter's `Input`, and `i` never reaches the chord layer. Measured on the
+    from the App down *before* the focused widget (`App._check_bindings`), so `F3` never
+    reaches the filter's `Input`, and `i` never reaches the session key layer. Measured on the
     pinned Textual 8.2.8 through a real tmux `send-keys M-i` before the layer was written.
 
     The read is taken per press and the gate with it — neither is cached, because the owner can
@@ -521,20 +532,20 @@ async def test_an_alt_chord_acts_on_the_published_selection_and_leaves_the_filte
         assert entry.has_focus and entry.value == "ab", "the filter never took the typed text"
 
         reads, slot_reads = console.reads, console.slot_reads
-        await pilot.press("alt+i")
+        await pilot.press("f3")
         await pilot.pause()
 
         assert opened == [(str(chosen), "inspect")]
-        assert entry.value == "ab", "the chord's letter was typed into the filter as well"
+        assert entry.value == "ab", "the session key's letter was typed into the filter as well"
         # Deltas: the hint row's own poll reads the same double (see the note in
         # `test_selected_session_elsewhere_answers_from_the_published_selection`).
         assert console.reads - reads == 1 and console.slot_reads - slot_reads == 1
 
 
-async def test_an_alt_chord_really_navigates_and_does_not_only_resolve() -> None:
+async def test_a_session_key_really_navigates_and_does_not_only_resolve() -> None:
     """The end-to-end half of the test above, which stubs `show_detail` to read its arguments.
 
-    `alt+d` is the one chord that names no action, so it is the one that can be driven all the
+    `F4` is the one session key that names no action, so it is the one that can be driven all the
     way to a screen without a backend having to answer for an action on the far side.
     """
     chosen = SessionId.new()
@@ -550,14 +561,14 @@ async def test_an_alt_chord_really_navigates_and_does_not_only_resolve() -> None
     async with app.run_test(size=(120, 30)) as pilot:
         await pilot.pause()
 
-        await pilot.press("alt+d")
+        await pilot.press("f4")
         await pilot.pause()
 
         assert isinstance(app.screen, SessionDetailScreen)
         assert app.screen.session_value == str(chosen)
 
 
-async def test_an_alt_chord_is_not_offered_off_a_console() -> None:
+async def test_a_session_key_is_not_offered_off_a_console() -> None:
     """A dead-end key is worse than an absent one — the same rule that gates `p` to the pane.
 
     Off a console there is no published selection and no slot to hold, so the layer is not
@@ -569,10 +580,10 @@ async def test_an_alt_chord_is_not_offered_off_a_console() -> None:
     async with app.run_test(size=(120, 30)) as pilot:
         await pilot.pause()
 
-        assert app.check_action("chord", ("i",)) is False
+        assert app.check_action("session_key", ("inspect",)) is False
 
 
-async def test_an_alt_chord_from_a_pane_holding_no_console_slot_refuses_and_reads_nothing() -> None:
+async def test_a_session_key_off_the_console_s_own_panes_refuses_and_reads_nothing() -> None:
     """The strict read-gate the owner decided on, 2026-09-05.
 
     Two processes reach this line that are not one of the console's panes, and `hosting_mode`
@@ -597,7 +608,7 @@ async def test_an_alt_chord_from_a_pane_holding_no_console_slot_refuses_and_read
     async with app.run_test(size=(120, 30)) as pilot:
         await pilot.pause()
 
-        await pilot.press("alt+d")
+        await pilot.press("f4")
         await pilot.pause()
 
         assert not isinstance(app.screen, SessionDetailScreen)
@@ -606,15 +617,15 @@ async def test_an_alt_chord_from_a_pane_holding_no_console_slot_refuses_and_read
         # selected" would send them to move a cursor that was never the problem — and that
         # distinction is the entire reason `_resolve_session` returns a pair instead of a value.
         assert announcements(app, severity="warning") == [
-            "Session chords act on the console's own panes."
+            "Session keys act on the console's own panes."
         ]
 
 
-async def test_an_alt_chord_with_nothing_selected_says_so_and_navigates_nowhere() -> None:
+async def test_a_session_key_with_nothing_selected_says_so_and_navigates_nowhere() -> None:
     """DEC-027: a global binding warns on its own key rather than asking anything.
 
     The sessions cursor rests on nothing whenever the row it held has left the list, and that
-    is published as nothing (Stage 2). A chord pressed in that window has no session to act on,
+    is published as nothing. A session key pressed in that window has no session to act on,
     and the honest answer is a word — not a guess at row 0, which is the whole hazard Stage 1
     closed.
     """
@@ -631,7 +642,7 @@ async def test_an_alt_chord_with_nothing_selected_says_so_and_navigates_nowhere(
         await pilot.pause()
 
         before = console.reads
-        await pilot.press("alt+d")
+        await pilot.press("f4")
         await pilot.pause()
 
         assert not isinstance(app.screen, SessionDetailScreen)
@@ -642,7 +653,7 @@ async def test_an_alt_chord_with_nothing_selected_says_so_and_navigates_nowhere(
 
 
 async def test_a_screen_that_knows_its_own_session_answers_from_it() -> None:
-    """`alt+c` on session A's detail must not act on session B.
+    """`F9` on session A's detail must not act on session B.
 
     A detail, a rename and an inspect each name exactly one session, and none of them owns a
     cursor — so without this they resolve to whatever the sessions pane in the *other* pane
@@ -668,7 +679,7 @@ async def test_a_screen_that_knows_its_own_session_answers_from_it() -> None:
         assert console.reads == before, "a screen that knows its session asked the console anyway"
 
 
-async def test_a_screen_that_is_about_a_session_it_cannot_name_refuses_the_chord() -> None:
+async def test_a_screen_that_is_about_a_session_it_cannot_name_refuses_the_key() -> None:
     """`InspectScreen` is about one session and holds no id for it — so it answers nothing.
 
     Its constructor takes the captured output alone; the session's name lives on the detail one
@@ -695,13 +706,13 @@ async def test_a_screen_that_is_about_a_session_it_cannot_name_refuses_the_chord
         assert console.reads == before
 
 
-async def test_an_alt_chord_is_refused_while_a_modal_is_asking() -> None:
+async def test_a_session_key_is_refused_while_a_modal_is_asking() -> None:
     """A modal is a question awaiting an answer, and the layer must not act behind it.
 
     The confirm modals carry a question string and no session id — deliberately, so the stage
     gate's registry sweep can construct each one with no arguments — so they cannot answer
     `subject_session` the way the detail does. The rule is therefore about the modal rather
-    than about its subject: no chord fires while one is up, whichever modal it is.
+    than about its subject: no session key fires while one is up, whichever modal it is.
     """
     console = SelectionConsole(selected=SessionId.new())
     app = ProjectsPane(
@@ -717,7 +728,7 @@ async def test_an_alt_chord_is_refused_while_a_modal_is_asking() -> None:
         app.push_screen(ForceConfirmModal("Force stop this session?"))
         await pilot.pause()
 
-        assert app.check_action("chord", ("f",)) is False
+        assert app.check_action("session_key", ("force",)) is False
 
 
 @pytest.mark.parametrize(
@@ -732,13 +743,13 @@ async def test_an_alt_chord_is_refused_while_a_modal_is_asking() -> None:
         (RemoteAgentsTui, True, False),
     ],
 )
-async def test_which_surfaces_are_offered_the_alt_chord_layer(
+async def test_which_surfaces_are_offered_the_session_key_layer(
     surface: type[RemoteAgentsTui], wired: bool, offered: bool
 ) -> None:
     """Every position the layer reaches, and the two it must not — asserted as one table.
 
     The four console panes offer it, which is the owner's ask. A console pane that is not on a
-    console offers nothing, except the sessions pane: `alt+s` there does exactly what `s` there
+    console offers nothing, except the sessions pane: `F8` there does exactly what `s` there
     already does, so it needs no console at all.
 
     **`RemoteAgentsTui` is the row that matters, and it is `False` in both columns.** Its
@@ -746,14 +757,15 @@ async def test_which_surfaces_are_offered_the_alt_chord_layer(
     binds none of `a i r s c f m` (`dashboard.py`). DEC-062's position names `SessionsScreen`
     and `SessionsPaneScreen` and *only* those: it makes an unconfirmed `s`/`c` legal there,
     tied to `_draw_listing` resting a vanished row on nothing, and the dashboard is a third
-    position that argument does not reach. Offering the chords there would carry two
+    position that argument does not reach. Offering the session keys there would carry two
     unconfirmed stops onto a cursor that is not even the focused widget — the sessions region
     sits passive while the projects list on the left holds the keyboard — which is the exact
     "acts on a session the owner is not looking at" this layer's gate exists to prevent.
 
     So the discriminator is **whether the screen already carries the row keys**, not whether it
-    owns a cursor. Where the bare letter is already legal the chord adds no hazard; where it is
-    not, the chord may not smuggle it in.
+    owns a cursor. Where the bare letter is already legal the session key adds no hazard; where it
+    is
+    not, the session key may not smuggle it in.
     """
     console = SelectionConsole(selected=SessionId.new())
     context = _context(_Listing(()))
@@ -768,16 +780,16 @@ async def test_which_surfaces_are_offered_the_alt_chord_layer(
     async with app.run_test(size=(120, 30)) as pilot:
         await pilot.pause()
 
-        assert app.check_action("chord", ("s",)) is offered
+        assert app.check_action("session_key", ("graceful",)) is offered
 
 
-async def test_a_chord_behind_a_modal_does_not_fire_when_the_key_is_really_pressed() -> None:
+async def test_a_session_key_behind_a_modal_does_not_fire_when_it_is_really_pressed() -> None:
     """The modal refusal, driven through a keypress rather than through `check_action`.
 
     The refusal above asks `check_action` directly, which dies if the branch is deleted but
     asserts nothing about *when Textual consults it*. That premise is load-bearing and specific
     to this layer being `priority=True`: non-priority bindings walk `_modal_binding_chain`,
-    which truncates at the modal, so under `priority=False` the App's chords would be
+    which truncates at the modal, so under `priority=False` the App's session keys would be
     unreachable behind a modal for free. Priority walks `reversed(_binding_chain)` from the App
     down and reaches them, which is exactly why the refusal has to exist — and why it has to be
     asserted against a real press.
@@ -797,15 +809,17 @@ async def test_a_chord_behind_a_modal_does_not_fire_when_the_key_is_really_press
         await pilot.pause()
         before = console.reads
 
-        await pilot.press("alt+d")
+        await pilot.press("f4")
         await pilot.pause()
 
-        assert isinstance(app.screen, ForceConfirmModal), "a chord navigated out from under a modal"
-        assert console.reads == before, "a chord behind a modal read the console's selection"
+        assert isinstance(app.screen, ForceConfirmModal), (
+            "a session key navigated out from under a modal"
+        )
+        assert console.reads == before, "a session key behind a modal read the console's selection"
 
 
-async def test_a_chord_on_a_detail_acts_on_that_detail_s_session_not_the_published_one() -> None:
-    """The headline hazard, as a keypress: `alt+d` on session A's detail must not open B's.
+async def test_a_session_key_on_a_detail_acts_on_its_own_session_not_the_published_one() -> None:
+    """The headline hazard, as a keypress: `F4` on session A's detail must not open B's.
 
     The resolver-level assertion next door proves `selected_session`; this proves the sentence
     the plan actually wrote down, which is about a key pressed on a screen that is displaying
@@ -828,7 +842,7 @@ async def test_a_chord_on_a_detail_acts_on_that_detail_s_session_not_the_publish
         await pilot.pause()
         before = console.reads
 
-        await pilot.press("alt+d")
+        await pilot.press("f4")
         await pilot.pause()
 
         assert isinstance(app.screen, SessionDetailScreen)
@@ -837,17 +851,17 @@ async def test_a_chord_on_a_detail_acts_on_that_detail_s_session_not_the_publish
         assert console.reads == before
 
 
-async def test_an_alt_stop_issues_one_graceful_stop_against_the_published_id() -> None:
-    """`alt+s` from a pane with no sessions list of its own — the layer's whole point.
+async def test_f8_issues_one_graceful_stop_against_the_published_id() -> None:
+    """`F8` from a pane with no sessions list of its own — the layer's whole point.
 
     This test replaces the one that recorded the opposite. Until Task 3.2 the handler existed
-    only on `SessionsScreen`, so a stop chord pressed on any other pane resolved a session,
+    only on `SessionsScreen`, so a stop session key pressed on any other pane resolved a session,
     passed every gate, posted `RowStopAction`, and the message bubbled to the App, found no
     handler and was dropped — silently, with no notification and no log. That intermediate was
     pinned deliberately so it could not be confused in CI with the working state; this is the
     working state it was waiting for.
 
-    Asserting the *id* and not merely the count, because a chord acting on the projects pane's
+    Asserting the *id* and not merely the count, because a session key acting on the projects pane's
     own rows instead of the published selection would also issue exactly one command.
 
     DEC-018: `s` does not ask, on any pane. There is no modal in this path and none is expected.
@@ -866,7 +880,7 @@ async def test_an_alt_stop_issues_one_graceful_stop_against_the_published_id() -
     async with app.run_test(size=(120, 30)) as pilot:
         await pilot.pause()
 
-        await pilot.press("alt+s")
+        await pilot.press("f8")
         await pilot.pause()
 
         assert [type(command) for command in listing.issued] == [GracefulStopCommand]
@@ -878,8 +892,8 @@ async def test_an_alt_stop_issues_one_graceful_stop_against_the_published_id() -
         assert not isinstance(app.screen, ForceConfirmModal), "a graceful stop asked first"
 
 
-async def test_an_alt_stop_asks_for_force_from_the_receiving_pane_and_escape_dismisses_it() -> None:
-    """`alt+f` in a pane that has never had a sessions list draws the modal on its own pump.
+async def test_f9_asks_for_force_from_the_receiving_pane_and_escape_dismisses_it() -> None:
+    """`F9` in a pane that has never had a sessions list draws the modal on its own pump.
 
     **This is the shape DEC-025 and DEC-068 require, and the reason `perform_row_action` posts
     rather than performs.** A binding action runs on the *App's* message pump, so awaiting a
@@ -908,7 +922,7 @@ async def test_an_alt_stop_asks_for_force_from_the_receiving_pane_and_escape_dis
     async with app.run_test(size=(120, 30)) as pilot:
         await pilot.pause()
 
-        await pilot.press("alt+f")
+        await pilot.press("f9")
         await pilot.pause()
 
         assert isinstance(app.screen, ForceConfirmModal), "force did not ask before killing"
@@ -921,20 +935,22 @@ async def test_an_alt_stop_asks_for_force_from_the_receiving_pane_and_escape_dis
         assert app.is_running, "the surface stopped answering after the modal"
 
 
-async def test_an_alt_stop_from_a_console_pane_never_reaches_that_pane_s_own_rows() -> None:
-    """The projects pane's rows are projects, and a stop chord must not touch them.
+async def test_a_stop_key_from_a_console_pane_never_reaches_that_pane_s_own_rows() -> None:
+    """The projects pane's rows are projects, and a stop session key must not touch them.
 
     Stated as its own case because the failure it guards is silent: `perform_row_action` takes
     the session it is given, and a resolver that fell back to "whatever this screen highlights"
     would hand it a project id, which the store would answer `None` for — a refusal that looks
     like an ordinary vanished session rather than like a bug.
 
-    `PRESERVED` rather than `RUNNING`, because `alt+c` is the chord under test and cleanup is
-    only available on a preserved session — `tui.stop` re-reads the record and re-checks the
-    policy at issue time (DEC-007), so a running one is refused before the pane's rows are ever
-    relevant and the test would pass for the wrong reason.
+    `RUNNING` and F8, where this was `PRESERVED` and the cleanup chord while the layer was Alt:
+    clean up never got an F-key -- it stays on the bare row key and the palette -- so graceful
+    stop is the layer's stop that can be driven here. The property is unchanged, and so is the
+    reason the state matters: `tui.stop` re-reads the record and re-checks the policy at issue
+    time (DEC-007), so a session in a state the action is not offered for would be refused
+    before the pane's rows were ever relevant and the test would pass for the wrong reason.
     """
-    chosen = _record(SessionState.PRESERVED)
+    chosen = _record(SessionState.RUNNING)
     console = SelectionConsole(selected=chosen.session_id)
     listing = _Listing((chosen,))
     app = ProjectsPane(
@@ -950,49 +966,49 @@ async def test_an_alt_stop_from_a_console_pane_never_reaches_that_pane_s_own_row
         rows = app.screen.query_one("#choices", OptionList)
         assert rows.option_count, "the projects pane drew no rows, so this proves nothing"
 
-        await pilot.press("alt+c")
+        await pilot.press("f8")
         await pilot.pause()
 
-        assert [type(command) for command in listing.issued] == [CleanupCommand]
+        assert [type(command) for command in listing.issued] == [GracefulStopCommand]
         assert listing.issued[0].session_id == chosen.session_id
-        assert not isinstance(app.screen, ForceConfirmModal), "a cleanup asked first"
+        assert not isinstance(app.screen, ForceConfirmModal), "a graceful stop asked first"
 
 
-async def test_the_standalone_sessions_position_is_offered_the_alt_chord_layer_off_a_console() -> (
-    None
-):
-    """`ctrl+s` from the plain dashboard reaches `SessionsScreen`, a different class from the pane.
+async def test_the_standalone_sessions_position_is_offered_the_layer_off_a_console() -> None:
+    """The sessions flow from the plain dashboard reaches `SessionsScreen`, not the pane class.
 
     It is the other holder of `carries_row_keys`, and the table above never reaches it — the
     panes rest on `SessionsPaneScreen` and the plain surface rests on `DashboardScreen`. Here
-    the bare letters are bound and legal (DEC-062 names this position by name), so `alt+s` is
+    the bare letters are bound and legal (DEC-062 names this position by name), so `F8` is
     the same act on the same cursor and needs no console at all.
     """
     app = RemoteAgentsTui(_context(_Listing((_record(),))))
 
     async with app.run_test(size=(120, 30)) as pilot:
         await pilot.pause()
-        assert app.check_action("chord", ("s",)) is False, "the dashboard offers no chords"
+        assert app.check_action("session_key", ("graceful",)) is False, (
+            "the dashboard offers no session keys"
+        )
 
         await app.action_sessions()
         await pilot.pause()
 
         assert isinstance(app.screen, SessionsScreen)
-        assert app.check_action("chord", ("s",)) is True
+        assert app.check_action("session_key", ("graceful",)) is True
 
 
-async def test_a_chord_stands_down_when_a_command_starts_during_the_gate_read() -> None:
+async def test_a_session_key_stands_down_when_a_command_starts_during_the_gate_read() -> None:
     """The post-await re-check, which the review found had no killing test.
 
     `busy` is checked before `_resolve_session` and the gate then makes up to two tmux
     subprocess round trips, so a command starting inside that window would otherwise be
     overtaken. The row keys cannot hit this — they check `busy` with no await between the check
-    and the use — so the chord is the one path that could navigate while a command is in
+    and the use — so the session key is the one path that could navigate while a command is in
     flight, and `perform_row_remote_control` reaches `show_detail`, which `tui.stop`'s own
     refusal does not cover.
 
     Driven by making the gate itself take the surface busy, which is exactly the interleaving:
-    the answer the chord is waiting for is the thing that arrives too late.
+    the answer the session key is waiting for is the thing that arrives too late.
     """
     console = SelectionConsole(selected=SessionId.new())
     app = ProjectsPane(_context(_Listing(())))
@@ -1010,22 +1026,22 @@ async def test_a_chord_stands_down_when_a_command_starts_during_the_gate_read() 
     async with app.run_test(size=(120, 30)) as pilot:
         await pilot.pause()
 
-        await pilot.press("alt+d")
+        await pilot.press("f4")
         await pilot.pause()
 
         assert not isinstance(app.screen, SessionDetailScreen), (
-            "a chord navigated while a command was in flight"
+            "a session key navigated while a command was in flight"
         )
 
 
-async def test_alt_force_on_a_session_detail_asks_about_that_detail_s_own_session() -> None:
+async def test_f9_on_a_session_detail_asks_about_that_detail_s_own_session() -> None:
     """The signature the inherited handler calls with — a `TypeError` here exits the app.
 
     `ChoiceScreen.on_row_stop_action` calls `self.confirm_force(message.session_value)`, and
     `SessionDetailScreen` overrides `confirm_force`. Before the override took the argument, the
-    first `alt+f` pressed on any detail raised `TypeError` out of a message handler, which
+    first `F9` pressed on any detail raised `TypeError` out of a message handler, which
     Textual turns into `App._handle_exception` and the surface ends. Reachable by two keys from
-    any pane — `alt+d`, then `alt+f` — and by nothing else in the suite, which is why no test
+    any pane — `F4`, then `F9` — and by nothing else in the suite, which is why no test
     saw it until a review read the signatures.
 
     The modal has to name *this* detail's session, not the published one, which is the same
@@ -1058,7 +1074,7 @@ async def test_alt_force_on_a_session_detail_asks_about_that_detail_s_own_sessio
         await app.push_screen(SessionDetailScreen(str(subject.session_id)))
         await pilot.pause()
 
-        await pilot.press("alt+f")
+        await pilot.press("f9")
         await pilot.pause()
 
         asked = position(app)
@@ -1069,8 +1085,8 @@ async def test_alt_force_on_a_session_detail_asks_about_that_detail_s_own_sessio
         await pilot.pause()
         after = position(app)
 
-    assert alive, "alt+f on a detail took the surface down"
-    assert asked == "FORCE_MODAL", f"alt+f on a detail reached {asked} instead of the confirmation"
+    assert alive, "F9 on a detail took the surface down"
+    assert asked == "FORCE_MODAL", f"F9 on a detail reached {asked} instead of the confirmation"
     named_subject, named_published = with_project_names((subject, published), (_EXISTING,))
     assert named_subject.display.rendered in question, (
         "the modal named a session this detail is not showing"
@@ -1080,7 +1096,7 @@ async def test_alt_force_on_a_session_detail_asks_about_that_detail_s_own_sessio
     assert after == "SESSION_DETAIL", f"aborting returned to {after}, not the detail"
 
 
-async def test_a_chord_stop_leaves_the_projects_filter_exactly_as_the_owner_left_it() -> None:
+async def test_a_stop_key_leaves_the_projects_filter_exactly_as_the_owner_left_it() -> None:
     """The owner's originating ask, on the success path — and it was broken by the handler move.
 
     `tui.stop` calls back into the receiving screen when the stop succeeds. That callback used
@@ -1113,7 +1129,7 @@ async def test_a_chord_stop_leaves_the_projects_filter_exactly_as_the_owner_left
         entry = app.screen.query_one("#filter", Input)
         assert entry.value == "ab" and entry.has_focus
 
-        await pilot.press("alt+s")
+        await pilot.press("f8")
         await pilot.pause()
 
         assert [type(command) for command in listing.issued] == [GracefulStopCommand]
@@ -1121,7 +1137,7 @@ async def test_a_chord_stop_leaves_the_projects_filter_exactly_as_the_owner_left
         assert entry.has_focus, "the stop moved the keyboard off the filter"
 
 
-async def test_a_failed_chord_stop_leaves_a_non_sessions_pane_s_rows_alone() -> None:
+async def test_a_failed_stop_leaves_a_non_sessions_pane_s_rows_alone() -> None:
     """A stop that raises must not replace the projects catalogue with a lone `Back` row.
 
     `redraw_after_failure`'s base implementation collapses the list and writes "Go back and open
@@ -1154,7 +1170,7 @@ async def test_a_failed_chord_stop_leaves_a_non_sessions_pane_s_rows_alone() -> 
         before = [option.id for option in rows.options]
         assert before, "the projects pane drew no rows, so this proves nothing"
 
-        await pilot.press("alt+s")
+        await pilot.press("f8")
         await pilot.pause()
 
         assert [option.id for option in rows.options] == before, (
@@ -1173,21 +1189,21 @@ async def test_a_failed_chord_stop_leaves_a_non_sessions_pane_s_rows_alone() -> 
     [
         (
             "the policy refuses the action on this state",
-            SessionState.RUNNING,
-            "alt+c",
+            SessionState.PRESERVED,
+            "f8",
             True,
             "is no longer available for this session",
         ),
         (
             "the session ended between the publish and the press",
             SessionState.RUNNING,
-            "alt+s",
+            "f8",
             False,
             "That session is no longer available.",
         ),
     ],
 )
-async def test_a_refused_chord_stop_leaves_a_non_sessions_pane_untouched_and_says_so(
+async def test_a_refused_stop_leaves_a_non_sessions_pane_untouched_and_says_so(
     name: str, state: SessionState, key: str, records: bool, said: str
 ) -> None:
     """`stop`'s own refusals, which the first fix routed around rather than through.
@@ -1195,14 +1211,18 @@ async def test_a_refused_chord_stop_leaves_a_non_sessions_pane_untouched_and_say
     Two branches, both one keypress from the console's projects pane, and both reached far more
     often than the failure path:
 
-    * **the policy refuses** — `alt+c` against a RUNNING selection, since cleanup is offered only
-      on PRESERVED. `resolve_stop` answers `UNAVAILABLE` before anything is dispatched.
-    * **the session is gone** — `alt+s` against a selection whose row has ended, which is exactly
+    * **the policy refuses** — F8 against a PRESERVED selection, since graceful stop is offered
+      only on a running session. `resolve_stop` answers `UNAVAILABLE` before anything is
+      dispatched. (While the layer was Alt chords this branch was the cleanup chord
+      against a RUNNING session, the mirror image of the same rule; clean up has no F-key, so
+      the refusal is driven from the other side.)
+    * **the session is gone** — `F8` against a selection whose row has ended, which is exactly
       the window DEC-007's re-read exists to catch.
 
     Both used to call `ChoiceScreen.refuse`, which is announce-then-`on_reveal` — so on the
     projects pane they re-rendered the catalogue, cleared the filter and moved the keyboard off
-    it. The vanished branch passes no message, so that one also said *nothing*: a chord that ate
+    it. The vanished branch passes no message, so that one also said *nothing*: a session key that
+    ate
     the owner's typing and reported nothing at all.
 
     The assertions are the discriminators, not the rows: `refuse` re-renders the *same* project
@@ -1273,7 +1293,7 @@ async def test_a_stop_that_did_not_take_does_not_leave_its_sentence_on_a_project
         await pilot.pause()
         before = status(app)
 
-        await pilot.press("alt+s")
+        await pilot.press("f8")
         await pilot.pause()
 
         assert [type(command) for command in listing.issued] == [GracefulStopCommand]
@@ -1286,16 +1306,20 @@ async def test_a_stop_that_did_not_take_does_not_leave_its_sentence_on_a_project
 
 
 async def test_an_unreadable_store_does_not_repaint_a_pane_that_shows_no_sessions() -> None:
-    """`report_store_failure` is the last callback on the seam, reached by a chord's own re-read.
+    """`report_store_failure` is the last callback on the seam, reached by a session key's own re-
+    read.
 
-    Every chord re-reads the record before acting (DEC-007), and that read can fail — it is a
+    Every session key re-reads the record before acting (DEC-007), and that read can fail — it is a
     store read from a keypress. The reporting was written for the positions that list sessions:
     it replaces the rows with a lone `Back` and writes "The managed sessions could not be read"
     into the status line. On the projects pane both sentences are about something that position
     does not show, and the row replacement destroys the catalogue it does.
 
-    Driven through `alt+m`, which is the chord that re-reads and then decides what its key means
-    — the one place a chord asks the store a question before it knows what it is doing.
+    Driven through F9, whose `ChoiceScreen.confirm_force` reads the record before it can raise
+    the question -- the first read on that path, so nothing else has reported the failure and
+    an exception escaping the binding would exit the app. While the layer was Alt chords this
+    was the Remote Control chord, which read the record to decide what it even meant; that has no
+    F-key, and the force key's own pre-question read reaches the same reporting seam.
 
     The toast still fires, which is the whole distinction being drawn: the failure is reported,
     it just does not get to rewrite a listing it is not about.
@@ -1318,7 +1342,7 @@ async def test_an_unreadable_store_does_not_repaint_a_pane_that_shows_no_session
         before_status = status(app)
         assert before_rows, "the projects pane drew no rows, so this proves nothing"
 
-        await pilot.press("alt+m")
+        await pilot.press("f9")
         await pilot.pause()
 
         assert [option.id for option in rows.options] == before_rows, (
@@ -1333,7 +1357,7 @@ async def test_an_unreadable_store_does_not_repaint_a_pane_that_shows_no_session
 
 
 @pytest.mark.parametrize("surface", [ProjectsPane, SessionsPane, LimitsPane, FeedPane])
-async def test_alt_d_from_every_console_pane_opens_the_detail_and_escape_comes_home(
+async def test_f4_from_every_console_pane_opens_the_detail_and_escape_comes_home(
     surface: type[RemoteAgentsTui],
 ) -> None:
     """The Stage 3 gate's judgment check, at unit scope across all four panes.
@@ -1362,7 +1386,7 @@ async def test_alt_d_from_every_console_pane_opens_the_detail_and_escape_comes_h
         await pilot.pause()
         home = position(app)
 
-        await pilot.press("alt+d")
+        await pilot.press("f4")
         await pilot.pause()
         opened = position(app)
         named = getattr(app.screen, "session_value", None)
@@ -1371,23 +1395,22 @@ async def test_alt_d_from_every_console_pane_opens_the_detail_and_escape_comes_h
         await pilot.pause()
         returned = position(app)
 
-    assert opened == "SESSION_DETAIL", f"{surface.__name__}: alt+d reached {opened}"
+    assert opened == "SESSION_DETAIL", f"{surface.__name__}: F4 reached {opened}"
     assert named == str(chosen.session_id), (
         f"{surface.__name__}: the detail names {named}, not the selected session"
     )
     assert returned == home, f"{surface.__name__}: escape landed on {returned}, not {home}"
 
 
-async def test_a_wizard_step_over_a_pane_keeps_the_navigating_chords_and_refuses_the_stops() -> (
-    None
-):
+async def test_a_wizard_step_over_a_pane_keeps_the_navigating_keys_and_refuses_the_stops() -> None:
     """The layer on a screen whose whole affordance is typing letters — both halves.
 
-    **Navigating chords still work**, which is the stage goal reaching a position pushed on top
+    **Navigating session keys still work**, which is the stage goal reaching a position pushed on
+    top
     of a console pane: the owner is naming a new project, the sessions pane's row needs looking
-    at, `alt+d` opens it and Escape comes back to the half-typed name.
+    at, `F4` opens it and Escape comes back to the half-typed name.
 
-    **The three stop chords are refused**, and this is a deliberate narrowing of that goal.
+    **The three stop session keys are refused**, and this is a deliberate narrowing of that goal.
     These bindings are `priority=True`, so the focused `Input` never sees the keystroke — on a
     text-entry screen a slipped Alt turns the next `s` into an unconfirmed, irreversible stop
     (DEC-018) of a session in another pane. `entry_is_a_commitment` is the flag this repo
@@ -1419,9 +1442,11 @@ async def test_a_wizard_step_over_a_pane_keeps_the_navigating_chords_and_refuses
         entry = app.screen.query_one("#filter", Input)
         assert entry.value == "my-new-project"
 
-        offered = {key: app.check_action("chord", (key,)) for key in CHORD_KEYS}
+        offered = {
+            entry.name: app.check_action("session_key", (entry.name,)) for entry in SESSION_KEYS
+        }
 
-        await pilot.press("alt+d")
+        await pilot.press("f4")
         await pilot.pause()
         opened = position(app)
         await pilot.press("escape")
@@ -1429,25 +1454,27 @@ async def test_a_wizard_step_over_a_pane_keeps_the_navigating_chords_and_refuses
         returned = position(app)
         kept = app.screen.query_one("#filter", Input).value
 
-    assert {key for key, yes in offered.items() if yes} == set(CHORD_NAVIGATES), (
-        f"the wrong chords are offered while a name is being typed: {offered}"
+    navigating = {entry.name for entry in SESSION_KEYS if entry.row_key not in SESSION_STOP_KEYS}
+    stops = {entry.name for entry in SESSION_KEYS if entry.row_key in SESSION_STOP_KEYS}
+    assert {name for name, yes in offered.items() if yes} == navigating, (
+        f"the wrong session keys are offered while a name is being typed: {offered}"
     )
-    assert not any(offered[key] for key in CHORD_STOPS), "a stop chord is live on a text entry"
-    assert opened == "SESSION_DETAIL", f"alt+d from a wizard step reached {opened}"
+    assert not any(offered[name] for name in stops), "a stop key is live on a text entry"
+    assert opened == "SESSION_DETAIL", f"F4 from a wizard step reached {opened}"
     assert returned == "NAME", f"escape landed on {returned}, not the half-typed name"
     assert kept == "my-new-project", "the excursion discarded the name the owner was typing"
 
 
-async def test_no_stop_chord_survives_on_any_screen_that_commits_typed_text() -> None:
+async def test_no_stop_key_survives_on_any_screen_that_commits_typed_text() -> None:
     """The property, not the two screens that have it today — and it is asserted on *instances*.
 
     **The first version of this test could not fail**, and the way it could not is worth keeping
-    written down. It passed screen *classes* to `_offers_chords`. A class object is not an
+    written down. It passed screen *classes* to `_offers_session_key`. A class object is not an
     instance of `ChoiceScreen`, so execution never reached the rule under test: it fell through
     to the `not isinstance(screen, ChoiceScreen)` guard and returned `False` for the wrong
     reason. Delete the rule entirely and the assertions still held. Measured:
-    `_offers_chords(SessionsScreen, "s")` is `False` while `_offers_chords(SessionsScreen(), "s")`
-    is `True` — the one screen where that chord must be live.
+    `_offers_session_key(SessionsScreen, "s")` is `False` while the same call on an *instance*
+    is `True` — the one screen where that key must be live.
 
     So: instances, and a **positive control** on a screen that does not commit typed text, so
     the loop cannot pass by refusing everything.
@@ -1468,20 +1495,20 @@ async def test_no_stop_chord_survives_on_any_screen_that_commits_typed_text() ->
 
         for screen in committing:
             assert screen.entry_is_a_commitment, f"{type(screen).__name__} is not the shape tested"
-            for key in CHORD_STOPS:
-                assert app._offers_chords(screen, key) is False, (
-                    f"{type(screen).__name__} carries the unconfirmed stop chord {key!r} while "
+            for key in SESSION_STOP_KEYS:
+                assert app._offers_session_key(screen, key) is False, (
+                    f"{type(screen).__name__} carries the unconfirmed stop key {key!r} while "
                     "the owner is typing into it"
                 )
-            for key in CHORD_NAVIGATES:
-                assert app._offers_chords(screen, key) is True, (
-                    f"{type(screen).__name__} refused the navigating chord {key!r}, which costs "
+            for key in {e.row_key for e in SESSION_KEYS} - SESSION_STOP_KEYS:
+                assert app._offers_session_key(screen, key) is True, (
+                    f"{type(screen).__name__} refused the navigating key {key!r}, which costs "
                     "the owner nothing and is the half of the layer that still works here"
                 )
 
         # The positive control: the same keys on a position that commits no typed text.
-        for key in CHORD_STOPS:
-            assert app._offers_chords(SessionsScreen(), key) is True, (
-                f"the stop chord {key!r} is refused on the sessions position, so the loop above "
+        for key in SESSION_STOP_KEYS:
+            assert app._offers_session_key(SessionsScreen(), key) is True, (
+                f"the stop key {key!r} is refused on the sessions position, so the loop above "
                 "proves nothing — everything is being refused"
             )

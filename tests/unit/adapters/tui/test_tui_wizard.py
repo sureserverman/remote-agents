@@ -601,7 +601,7 @@ async def test_the_add_project_binding_opens_the_area_list() -> None:
     app = RemoteAgentsTui(_context())
 
     async with app.run_test() as pilot:
-        await pilot.press("ctrl+n")
+        await pilot.press("f7")
         await pilot.pause()
 
         assert _keys(app)[:2] == ["dev-area", "infra"]
@@ -624,7 +624,7 @@ async def test_typing_a_new_project_name_reviews_it_before_creating_anything() -
     app = RemoteAgentsTui(_context(projects=creator))
 
     async with app.run_test() as pilot:
-        await pilot.press("ctrl+n")
+        await pilot.press("f7")
         await pilot.pause()
         await pilot.press("enter")
         await pilot.pause()
@@ -939,7 +939,7 @@ async def test_an_invalid_project_name_is_rejected_while_it_is_being_typed() -> 
     app = RemoteAgentsTui(_context())
 
     async with app.run_test() as pilot:
-        await pilot.press("ctrl+n")
+        await pilot.press("f7")
         await pilot.pause()
         await _choose(app, pilot, "infra")
         entry = app.screen.query_one("#filter", Input)
@@ -1018,7 +1018,7 @@ async def test_the_name_entry_opens_without_refusing_the_value_it_has_not_been_g
     app = RemoteAgentsTui(_context())
 
     async with app.run_test() as pilot:
-        await pilot.press("ctrl+n")
+        await pilot.press("f7")
         await pilot.pause()
         await _choose(app, pilot, "infra")
         entry = app.screen.query_one("#filter", Input)
@@ -1042,7 +1042,7 @@ async def test_the_name_entry_still_refuses_an_empty_name_when_it_is_submitted()
     app = RemoteAgentsTui(_context())
 
     async with app.run_test() as pilot:
-        await pilot.press("ctrl+n")
+        await pilot.press("f7")
         await pilot.pause()
         await _choose(app, pilot, "infra")
         before = app.screen.position

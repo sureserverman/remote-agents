@@ -28,13 +28,10 @@ from tui_filter import settle_filter
 
 from remote_agents.adapters.tui.app import RemoteAgentsTui
 from remote_agents.adapters.tui.context import TuiContext
+from remote_agents.adapters.tui.keys import SESSION_KEY_HINT
 from remote_agents.adapters.tui.panes import FeedPane, LimitsPane, ProjectsPane, SessionsPane
 from remote_agents.adapters.tui.screens import ALL_SCREENS
-from remote_agents.adapters.tui.screens.sessions import (
-    _CHORD_HINT_REFRESH,
-    CHORD_HINT,
-    CHORD_KEYS,
-)
+from remote_agents.adapters.tui.screens.sessions import _SESSION_KEY_HINT_REFRESH
 from remote_agents.application.profiles import ProfileAvailability
 from remote_agents.application.project_catalog import CatalogProject
 from remote_agents.domain.conversations import (
@@ -53,6 +50,15 @@ from remote_agents.domain.models import (
     SessionRecord,
     SessionState,
 )
+
+#: The three app-level flows that unwind the stack, by action name rather than by key.
+#:
+#: Keys until sub-plan 03 retired `ctrl+n`, `ctrl+s` and `ctrl+o`. Add project kept a key (F7);
+#: the other two are palette-only now. The property these tests assert was never about the
+#: keystroke -- it is that a flow jump refuses to discard work the owner cannot get back -- so
+#: they drive `App.run_action`, which is the same entry point the palette uses and which
+#: consults `check_action` exactly as a key press does.
+_FLOW_JUMP_ACTIONS = ["add_project", "sessions", "resume"]
 
 _PROJECT = CatalogProject("opaque-existing", "existing", "infra", "Registered")
 _SESSION_ID = SessionId.new()
@@ -319,21 +325,31 @@ async def test_the_footer_offers_the_reorder_key_exactly_where_the_action_exists
 async def test_the_footer_offers_resume_only_where_a_conversation_service_exists(
     screen_type: type[Screen], wired: bool
 ) -> None:
-    """`action_resume` returns early without a conversation service; the footer now says so.
+    """`action_resume` returns early without a conversation service, and the guard says so.
 
     Parametrized over the host configuration rather than asserted on the wired one only,
     because the unwired host is the case that was wrong: `TuiContext.conversations` is
-    optional precisely so a host can decline the capability, and the key was advertised there
+    optional precisely so a host can decline the capability, and the flow was advertised there
     all the same.
+
+    **Asked of `check_action` rather than of the footer, since `ctrl+o` was retired.** Resume
+    has no key at all now -- it is reached from the command palette, whose own filter reads
+    exactly this predicate (`NavigationCommands._available`), so this is still the question the
+    surface actually asks before offering the flow. The footer cannot answer it any more,
+    because there is no entry there to hide.
     """
     app = RemoteAgentsTui(_context(conversations=wired))
     async with app.run_test(size=(100, 30)) as pilot:
         await pilot.pause()
         await _arrange(app, pilot, screen_type)
-        offered = "ctrl+o" in _footer_keys(app)
+        # `is not False` rather than `is True`, which is the footer's own rule and the reason
+        # this reads as a *visibility* test: `active_bindings` drops an entry only on `False`,
+        # so a `None` from the work-in-flight guard on `ProjectReviewScreen` was always drawn,
+        # greyed. Asking for `True` here would fold that separate rule into this one.
+        offered = app.check_action("resume", ()) is not False
         modal = app.screen.is_modal
 
-    # A modal truncates the binding chain, so no app binding is offered there whatever the
+    # A modal truncates the binding chain, so no app action is offered there whatever the
     # host wired — asserted rather than excluded, since "the modal hides everything" is itself
     # a property this stage should not be able to lose silently.
     assert offered is (wired and not modal), (
@@ -419,12 +435,12 @@ def test_every_screen_that_commits_typed_text_declares_it() -> None:
     )
 
 
-@pytest.mark.parametrize("binding", ["ctrl+n", "ctrl+s", "ctrl+o"])
+@pytest.mark.parametrize("flow", _FLOW_JUMP_ACTIONS)
 @pytest.mark.parametrize("screen_type", _WORK_SCREENS, ids=lambda c: c.__name__)
 async def test_a_flow_jump_neither_navigates_nor_loses_work_in_flight(
-    screen_type: type[Screen], binding: str
+    screen_type: type[Screen], flow: str
 ) -> None:
-    """The task's own case: press a global key mid-entry and keep both the position and the text.
+    """The task's own case: fire a global flow mid-entry and keep both the position and the text.
 
     Each of these three unwinds the stack to the resting position, so before this rule they
     discarded a half-typed label or project name with no warning and nothing to recover it
@@ -447,30 +463,35 @@ async def test_a_flow_jump_neither_navigates_nor_loses_work_in_flight(
 
         position_before = app.screen.position
         depth_before = len(app.screen_stack)
-        await pilot.press(binding)
+        await app.run_action(flow)
         await pilot.pause()
 
         assert app.screen.position == position_before, (
-            f"{binding} left {position_before} with text half-typed"
+            f"{flow} left {position_before} with text half-typed"
         )
         assert len(app.screen_stack) == depth_before
         if entry.display:
             assert app.screen.query_one("#filter", Input).value == "nightly", (
-                f"{binding} discarded the text the owner was typing"
+                f"{flow} discarded the text the owner was typing"
             )
 
 
-@pytest.mark.parametrize("binding", ["ctrl+n", "ctrl+s", "ctrl+o"])
+@pytest.mark.parametrize("flow", _FLOW_JUMP_ACTIONS)
 @pytest.mark.parametrize("screen_type", _WORK_SCREENS, ids=lambda c: c.__name__)
 async def test_a_flow_jump_is_greyed_rather_than_hidden_while_text_is_in_flight(
-    screen_type: type[Screen], binding: str
+    screen_type: type[Screen], flow: str
 ) -> None:
-    """`None`, not `False` — the key stays drawn and stops working.
+    """`None`, not `False` — the entry stays drawn and stops working.
 
     Hiding it would be a second surprise on top of the first: entries vanishing from the footer
     as the owner types is exactly the blinking that the `_busy` rule was left out to avoid. The
     distinction is only observable through `active_bindings`, since both answers stop the
     action, so it is asserted here rather than assumed from the return value.
+
+    **Add project is the only one of the three with a footer entry left**, since `ctrl+s` and
+    `ctrl+o` were retired and their flows moved to the palette. For those two the same `None`
+    is asserted on `check_action` directly, which is what the palette's filter reads -- the
+    answer is the thing under test, and the footer was only ever one of its two readers.
     """
     from textual.widgets import Input
 
@@ -485,13 +506,17 @@ async def test_a_flow_jump_is_greyed_rather_than_hidden_while_text_is_in_flight(
             await pilot.pause()
         assert app.screen.work_in_flight
 
-        active = app.screen.active_bindings
-        assert binding in active, f"{binding} vanished from the footer while typing"
-        assert not active[binding].enabled, f"{binding} is still live with text in flight"
+        assert app.check_action(flow, ()) is None, (
+            f"{flow} answers something other than drawn-and-refused with text in flight"
+        )
+        if flow == "add_project":
+            active = app.screen.active_bindings
+            assert "f7" in active, "F7 vanished from the footer while typing"
+            assert not active["f7"].enabled, "F7 is still live with text in flight"
 
 
-@pytest.mark.parametrize("binding", ["ctrl+n", "ctrl+s", "ctrl+o"])
-async def test_a_flow_jump_still_works_when_the_entry_is_a_filter(binding: str) -> None:
+@pytest.mark.parametrize("flow", _FLOW_JUMP_ACTIONS)
+async def test_a_flow_jump_still_works_when_the_entry_is_a_filter(flow: str) -> None:
     """The rule is about text that cannot be recovered, and a filter is not that.
 
     Typing into the project list's filter narrows a list; it is one keystroke to retype and it
@@ -512,16 +537,16 @@ async def test_a_flow_jump_still_works_when_the_entry_is_a_filter(binding: str) 
         assert entry.value == "exist"
         assert app.screen.position == "DASHBOARD"
 
-        await pilot.press(binding)
+        await app.run_action(flow)
         await pilot.pause()
 
         assert app.screen.position != "DASHBOARD", (
-            f"{binding} was refused on the project filter, where the text is disposable"
+            f"{flow} was refused on the project filter, where the text is disposable"
         )
 
 
-@pytest.mark.parametrize("binding", ["ctrl+n", "ctrl+s", "ctrl+o"])
-async def test_a_flow_jump_still_works_on_the_agent_list(binding: str) -> None:
+@pytest.mark.parametrize("flow", _FLOW_JUMP_ACTIONS)
+async def test_a_flow_jump_still_works_on_the_agent_list(flow: str) -> None:
     """The launch flow stopped protecting work, because its work stopped being unrecoverable.
 
     It held a gathered selection *plus a typed label*, and the label was the part escape could
@@ -544,10 +569,8 @@ async def test_a_flow_jump_still_works_on_the_agent_list(binding: str) -> None:
         await pilot.pause()
         assert app.screen.position == "PROFILES", f"the walk landed on {app.screen.position}"
 
-        active = app.screen.active_bindings
-        assert binding in active, f"{binding} is not offered on the review at all"
-        assert active[binding].enabled, (
-            f"{binding} is greyed on the review, which now holds nothing escape cannot give back"
+        assert app.check_action(flow, ()) is True, (
+            f"{flow} is refused on the review, which now holds nothing escape cannot give back"
         )
 
 
@@ -711,7 +734,7 @@ async def test_a_flow_jump_at_the_agent_list_leaves_and_the_cost_is_one_reselect
         assert app.selection.project is not None
         assert app.selection.profile is None
 
-        await pilot.press("ctrl+s")
+        await app.action_sessions()
         await pilot.pause()
 
         assert app.screen.position == "SESSIONS", (
@@ -836,7 +859,7 @@ async def test_only_the_console_panes_that_navigate_draw_the_app_chrome(
 
 
 @pytest.mark.parametrize("width", [60, 80])
-async def test_the_chord_hint_is_drawn_whole_at_the_committed_widths(width: int) -> None:
+async def test_the_session_key_hint_is_drawn_whole_at_the_committed_widths(width: int) -> None:
     """Measured, not assumed — the plan's own instruction, and the row that can silently lose it.
 
     `#hint` is one row with `text-overflow: ellipsis`, so a hint too long for the pane is not
@@ -863,13 +886,11 @@ async def test_the_chord_hint_is_drawn_whole_at_the_committed_widths(width: int)
         drawn = "".join(hint.render_line(row).text for row in range(hint.size.height))
 
     assert "…" not in drawn, f"the hint was elided at {width} columns: {drawn!r}"
-    for key in CHORD_KEYS:
-        assert f" {key}" in drawn, (
-            f"chord key {key!r} is not on screen at {width} columns: {drawn!r}"
-        )
+    for name in SESSION_KEY_HINT.split():
+        assert name in drawn, f"session key {name!r} is not on screen at {width} columns: {drawn!r}"
 
 
-async def test_the_chord_hint_is_dim_while_nothing_is_selected_and_lit_once_something_is() -> None:
+async def test_the_session_key_hint_dims_with_nothing_selected_and_lights_once_it_is() -> None:
     """The two states, read off the rendered styles rather than off the text.
 
     Both states draw the identical letters, so a test asserting on text alone cannot tell them
@@ -886,12 +907,12 @@ async def test_the_chord_hint_is_dim_while_nothing_is_selected_and_lit_once_some
         )
     )
 
-    def chord_styles(screen) -> set[str]:
+    def session_key_styles(screen) -> set[str]:
         content = screen.query_one("#hint", Static).content
         return {
             str(span.style)
             for span in content.spans
-            if CHORD_HINT[2:] in content.plain[span.start : span.end]
+            if SESSION_KEY_HINT[2:] in content.plain[span.start : span.end]
         }
 
     async with app.run_test(size=(120, 30)) as pilot:
@@ -900,18 +921,18 @@ async def test_the_chord_hint_is_dim_while_nothing_is_selected_and_lit_once_some
         # one constant; when that one was lengthened to sixty as a fallback, this test's two
         # sleeps went from twelve seconds each to seventy-two and took the whole suite from
         # 100 s to 197 s -- the coupling made visible by a stopwatch rather than by reading.
-        await pilot.pause(_CHORD_HINT_REFRESH * 1.2)
-        dim = chord_styles(app.screen)
+        await pilot.pause(_SESSION_KEY_HINT_REFRESH * 1.2)
+        dim = session_key_styles(app.screen)
 
         console.selected = SessionId.new()
-        await pilot.pause(_CHORD_HINT_REFRESH * 1.2)
-        lit = chord_styles(app.screen)
+        await pilot.pause(_SESSION_KEY_HINT_REFRESH * 1.2)
+        lit = session_key_styles(app.screen)
 
     assert dim == {"$text-disabled"}, f"the layer was not dimmed with nothing selected: {dim}"
     assert lit != dim, "the hint looks the same whether or not a chord would do anything"
 
 
-async def test_no_chord_hint_appears_off_a_console() -> None:
+async def test_no_session_key_hint_appears_off_a_console() -> None:
     """The layer is not offered there, so advertising it would be a lie in the quietest place."""
     app = ProjectsPane(_context())
 
@@ -948,7 +969,7 @@ async def test_the_sessions_pane_does_not_repeat_the_letters_its_title_already_c
         (RemoteAgentsTui, False),
     ],
 )
-async def test_which_surfaces_draw_the_chord_hint(
+async def test_which_surfaces_draw_the_session_key_hint(
     surface: type[RemoteAgentsTui], advertises: bool
 ) -> None:
     """Which positions *say* the layer exists, as one table — and it is not "every console pane".
@@ -983,18 +1004,18 @@ async def test_which_surfaces_draw_the_chord_hint(
         # and — on the dashboard — measures the wrong thing: its own `_draw_session_rows` rewrites
         # the hint on the next tick, so a settled reading is identical whether or not the layer
         # was ever drawn there. The transient is the defect, so the refresh is called directly.
-        refresh = getattr(app.screen, "refresh_chord_hint", None)
+        refresh = getattr(app.screen, "refresh_session_key_hint", None)
         if refresh is not None:
             await refresh()
         await pilot.pause()
         drawn = str(app.screen.query_one("#hint", Static).content)
-        declared = getattr(app.screen, "advertises_chords", lambda: False)()
+        declared = getattr(app.screen, "advertises_session_keys", lambda: False)()
 
-    assert (CHORD_HINT in drawn) is advertises, (
+    assert (SESSION_KEY_HINT in drawn) is advertises, (
         f"{surface.__name__} hint row is {drawn!r}, which does not match advertises={advertises}"
     )
     assert declared is advertises, (
-        f"{surface.__name__} declares advertises_chords()={declared}, not {advertises}"
+        f"{surface.__name__} declares advertises_session_keys()={declared}, not {advertises}"
     )
 
 
