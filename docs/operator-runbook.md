@@ -34,6 +34,24 @@ only when `uv` is absent, from a *versioned* URL, and verifies a committed SHA-2
 executing a byte of it; a mismatch aborts and the fetched bytes never run. An already-present
 `uv` is used as-is and nothing is fetched at all.
 
+**A running service is not a finished host, and what is missing is named here rather than left
+to `doctor` to reveal.** Nothing on this path installs the Claude status-line hop: not the
+bootstrap, and not `remote-agents upgrade`, which re-runs onboarding as a child with
+`stdin=DEVNULL`. Onboarding *offers* it, but only in a terminal — so a piped install, which is
+the form the one-liner takes, is never asked and installs nothing. Run it yourself afterwards:
+
+```bash
+remote-agents install-agent-hooks --provider claude
+```
+
+Until it is installed, Claude's row in the `Plan limits` pane reads `no reading yet` — honest
+under DEC-061, and indistinguishable from an agent that genuinely publishes nothing. The
+`claude_limits` line of `remote-agents doctor` is the artifact that tells the two apart, and it
+does not move `healthy` either way. Nothing else is outstanding for limits: Codex's are asked of
+`codex app-server` with its own rollout files as the stamped fallback, and OpenCode and Cursor
+publish no rate limits at all. The installer's own closing output names this command for the
+same reason, so an operator who scrolls back has it without re-reading this page.
+
 **A piped run cannot prompt.** `curl | bash` makes this script's own remaining text the process's
 stdin, so onboarding sees a non-tty and refuses to prompt rather than reading the installer's
 bytes as if they were an answer. Supply the three Telegram values through the environment for a
@@ -48,7 +66,9 @@ curl -fsSL https://raw.githubusercontent.com/sureserverman/remote-agents/main/sc
 
 `--no-onboard` is the installer script's only option, and it belongs to the script rather than to
 `onboard`, which has no such flag. It stops once the tool is installed; run `remote-agents
-onboard --install-daemon` when you are ready.
+onboard --install-daemon` when you are ready. Because onboarding never runs on that path, its own
+report of the status-line hop never prints either — the installer's closing lines are the only
+place a `--no-onboard` run hears about it.
 
 The same two steps without the fetched script:
 
@@ -98,6 +118,18 @@ what it did not write: a config you have edited and a credential you pasted are 
 line saying so, and the daemon is rewritten only when the rendered definition actually changed.
 One side effect is worth knowing — `--install-daemon` means "register *and* start", so it will
 bring up a service you had deliberately stopped. Stop it again afterwards, or use `--remove`.
+
+**Run in a terminal, onboarding offers the Claude status-line hop, and every gate between that
+offer and your `~/.claude/settings.json` is a skip rather than an assumed yes.** It is skipped
+when stdin is not a tty, because there is nobody to ask and a prompt into a closed pipe is the
+thing the credential resolver already refuses to do. It is skipped under `--yes`, which exists
+so an unattended run does not
+*block* on the dependency prompt: suppressing a question is not answering it, and this is the
+step in onboarding that writes a file onboarding does not own. And it is skipped when the hop is
+already there, because re-offering something the host has is how a prompt gets trained into
+reflexive assent. Only an explicit `yes` installs, and it installs once. Declining changes
+nothing about the exit status — the hop is outside the boundary DEC-058 draws — and
+`remote-agents install-agent-hooks --provider claude` is available at any later time.
 
 **Its exit status answers for onboarding's own work, not for the whole host (DEC-058).** Zero
 means the parts onboarding owns are in place: the system dependencies, the credential file, and
@@ -706,7 +738,11 @@ retired on 2026-08-30 for telling the owner nothing they could act on. **That is
 evidence and it is written that way on purpose** — the identical sentence stood for `opencode`
 for six weeks and turned out to mean "nobody has looked" (DEC-076).
 
-None of these are installed by the unit, by `serve`, or by `doctor`. Install them once per host:
+None of these are installed by the unit, by `serve`, by `doctor`, or by `scripts/install.sh`.
+Onboarding's offer of the Claude status-line hop also reaches this installer without the command
+being typed — in a terminal, on an explicit yes (see **Installing** above). It runs the `claude`
+install below, so accepting it installs this provider's event hooks along with the status line.
+Install them once per host:
 
 ```bash
 uv run --locked remote-agents install-agent-hooks

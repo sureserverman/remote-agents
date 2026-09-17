@@ -333,6 +333,26 @@ say ""
 say "Installed. The executable is ${installed_bin}/remote-agents"
 say "If that directory is not on your PATH, run: uv tool update-shell"
 say ""
+# **Names the step this script structurally cannot take.** Onboarding offers the Claude
+# status-line hop only when it has a terminal to ask at, and a piped run has none -- the same
+# non-tty this file's header explains for the credentials. So the offer is never put to anybody
+# on the path the README tells operators to prefer, and `--no-onboard` skips onboarding
+# altogether, which is the case where onboarding's own notice cannot print at all.
+#
+# It does NOT claim the hop is missing. This script cannot read the owner's Claude settings, and
+# a re-run against a host that already has the hop would be telling the operator something
+# false. Onboarding reads that file and says which state the host is in; this says only what the
+# piped path did not do, which is true on every host.
+#
+# Scoped to Claude deliberately. Codex's limits are asked of `codex app-server` and fall back to
+# its own rollout files, so they need no hook of ours; overstating this as "the host is not
+# configured" would send an operator looking for a step that does not exist.
+say "A piped install cannot take this step: the Claude status-line hop. Onboarding offers it"
+say "  only when it has a terminal to ask at, and this one does not, so this run did not:"
+say "  remote-agents install-agent-hooks --provider claude"
+say "  Without it the Claude plan-limits row reads as absent, which looks the same as an agent"
+say "  that publishes no limits at all. 'remote-agents doctor' reports which it is."
+say ""
 # **Deliberately does not name `uv tool upgrade`.** Measured against uv 0.11.9 on 2026-08-25:
 # with `remote-agents @ git+<url>@<tag>` installed, that command prints "Nothing to upgrade"
 # and exits 0, because it honours the requirement the tool was installed with -- and this

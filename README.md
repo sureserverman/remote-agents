@@ -43,6 +43,22 @@ installer URL before executing a byte of it, and using an already-present `uv` a
 this tool from the pinned tag, and then hands off to `remote-agents onboard --install-daemon`.
 The one line therefore ends at a **running service**, not at an installed executable.
 
+**It does not end at a fully configured one, and the gap is specific.** Nothing on this path
+installs the Claude status-line hop. The bootstrap does not, and `remote-agents upgrade` does
+not — it re-runs onboarding with the child's stdin closed. Onboarding *offers* it, but only when
+it has a terminal to ask at, and a piped run has none. Until the hop is installed, Claude's row
+in the plan-limits pane reads as absent, and an absent row looks exactly like an agent that
+publishes no limits at all. Install it yourself after a piped run:
+
+```bash
+remote-agents install-agent-hooks --provider claude
+```
+
+Nothing else on the host is waiting on you for this. Codex's limits are asked of `codex
+app-server` and fall back to its own rollout files, so no hook of ours stands behind them.
+OpenCode and Cursor publish no rate limits at all. `remote-agents doctor` reports which state
+this host is in on its `claude_limits` line, without moving `healthy`.
+
 To pass the script an option you need bash's `-s --`. A piped `bash --no-onboard` is bash's own
 option, and fails before the script runs at all:
 
@@ -82,6 +98,13 @@ REMOTE_AGENTS_TELEGRAM_BOT_TOKEN=… REMOTE_AGENTS_OWNER_USER_ID=… \
 world-readable and argv lands in shell history, so there is no flag that takes the value: it
 comes from the environment, or `--bot-token-file` names a path to read it from. Save the
 installer and run it in a terminal instead, and onboarding prompts for all three.
+
+**`--yes` does not answer the status-line hop's question, and that asymmetry is deliberate.** It
+exists so an unattended run does not *block* on the dependency prompt, which is onboarding's own
+work. Installing the hop writes `~/.claude/settings.json`, a file onboarding does not own, so
+suppressing a question is not treated as answering it: an unattended run installs nothing there
+and says so. An unattended host therefore needs `remote-agents install-agent-hooks --provider
+claude` run against it before Claude's limits are readable.
 
 ### Upgrading
 
@@ -158,9 +181,18 @@ daemon your platform actually uses: a systemd user unit on Linux, a LaunchAgent 
 macOS. Re-running it is safe — it keeps a config or a credential file you already
 have, and rewrites the daemon only if the definition changed.
 
+**Run in a terminal, it also offers the Claude status-line hop**, which is the step the one-line
+bootstrap cannot take for you. The offer appears only when the hop is absent and only when there
+is somebody to ask: a non-tty run installs nothing and names the command instead, and `--yes`
+does not answer it. Answering `no` leaves the host exactly as it was, and
+`remote-agents install-agent-hooks --provider claude` installs it at any later time — the same
+command with `--remove` unwraps the status line it wrapped.
+
 Its exit status answers for onboarding's own work, not for the whole host: a zero means the
 config, the credentials and the daemon are as it left them, and `doctor` is what asks whether
-everything else on this machine is happy (DEC-058).
+everything else on this machine is happy (DEC-058). The hop is outside that boundary in both
+directions: declining it does not make the exit status non-zero, and installing it is not what
+makes onboarding succeed.
 
 One side effect of re-running is worth knowing: `--install-daemon` means "register
 and start", so if the service is down it will be brought up, including when you
@@ -255,7 +287,10 @@ limits reader at all. Claude's
 rate limits are the one figure that is not the session's own — Claude Code hands them to a
 status-line command and never writes them down, so `install-agent-hooks --provider claude`
 wraps that command in a hop of this project's own that records them, they are read from that
-recording while it is fresh, and the line says where they came from. A rate-limit window whose reset has already
+recording while it is fresh, and the line says where they came from. **On a host where that hop
+was never installed, Claude's row therefore says *no reading yet* permanently**, and that reads
+as transient when the cause is a step nobody took: `remote-agents doctor`'s `claude_limits` line
+is what tells the two apart. A rate-limit window whose reset has already
 passed is dropped rather than shown, because the window it counted against has since reopened.
 
 Every keyboard is widened to one floor, so screens do not alternate between a narrow box and a
@@ -321,7 +356,10 @@ buzz. The message stands beside the live view with one button that opens the ses
 and it starts over from the next report only once it has left the chat — pressing `Open
 session` deletes it. A
 managed Claude session reports this itself through a global Claude Code hook, installed once with
-`remote-agents install-agent-hooks` and removed with `--remove`. The
+`remote-agents install-agent-hooks` and removed with `--remove`. **None of the hooks on this page
+are installed by the bootstrap, by the daemon, or by `doctor`** — onboarding's terminal-only
+offer of the Claude status-line hop, described under [Installing](#installing), runs this same
+command for `claude`, so accepting it installs this hook along with the status line. The
 hook fires in every Claude session on the host — it starts a short-lived Python process each time —
 but it writes nothing and exits 0 unless the environment carries the session identifier this
 service injects into the panes it launches. Descendants of a managed pane inherit that identifier,
