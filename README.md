@@ -474,7 +474,17 @@ unchanged.
 about which keys exist — every one of them is bound on every position that answers for it. The
 footer is a single clipping line: measured on the inspect screen at 80 columns, five app
 entries fit and six do not. So it draws `F1`, `F7` and `F10` beside Escape and the palette, and
-**`F1` opens a panel listing every key**, which is what that key is borrowed from htop for. The
+**`F1` opens a panel listing every key**, which is what that key is borrowed from htop for.
+
+**`F10` is the one exception, and only inside the console.** A surface pane hosted by the
+console is not a standalone app: quitting it closes the pane outright — the surface panes carry
+no `remain-on-exit` — and the console runs a third short until something restarts it. So under
+console hosting the footer withholds `quit`. **The key still works and `F1` still lists it**;
+what changes is that the console stops advertising, in a fixed line the owner reads at a glance,
+an act that costs them a pane. Outside the console — `remote-agents tui` in an ordinary terminal
+— the footer draws it as before, because there quitting means what it says.
+
+The
 five session-shaped keys are left out of the footer because the console's projects and feed
 panes name them on their own hint row, and `F2`, `F5` and `F12` because `,`, `Ctrl+R` and the
 palette already say the same acts.
@@ -560,7 +570,7 @@ two, and two of them moved to the command palette on purpose.
 | `^n` add project | `F7` |
 | `^s` sessions | no key — the command palette (`:` or `Ctrl+P`), entry "Sessions" |
 | `^o` resume | no key — the palette, entry "Resume" |
-| `^r` refresh, `^q` quit | still work, unchanged — but the footer now draws `F5` and `F10` for those acts, because one line cannot hold both spellings |
+| `^r` refresh, `^q` quit | still work, unchanged — but the footer now draws `F5` and `F10` for those acts, because one line cannot hold both spellings. Inside the console the footer withholds `F10`: the key works, `F1` lists it, and the footer stops offering an act that closes a console pane |
 
 ### Width
 
@@ -601,7 +611,8 @@ session's pane, or prints how to reach it. It opens with Back highlighted rather
 so a stray enter mutates nothing and reaching an agent is one arrow key — the same shape, and
 the same cost, as choosing a conversation to resume. Escape is
 Back, F5 re-reads whatever the screen
-you are on shows without leaving it, F7 adds a project, F10 quits, and F1 opens a panel naming
+you are on shows without leaving it, F7 adds a project, F10 quits — though the console's footer
+does not offer F10, since inside a console quitting closes the pane — and F1 opens a panel naming
 every key. Sessions and Resume have no key of their own: they are entries in the command
 palette, which `:` and `Ctrl+P` both open. The whole row is *The function-key row* above, with
 what each of 0.41.0's keys became beneath it.

@@ -347,7 +347,11 @@ class RemoteAgentsTui(App[AttachRequest | None]):
         # the resting position (less, man, htop), `:` is the palette (vim, k9s). Both printable,
         # so neither is priority -- an `Input` takes them as text -- and `check_action` refuses
         # both wherever one holds the keyboard, so the footer and the palette agree with the
-        # key. Hidden: the footer draws F10 and the palette has ctrl+p.
+        # key. Hidden: the footer draws F10 and the palette has ctrl+p -- except under console
+        # hosting, where F10's own footer entry is withheld as well (see
+        # `_withhold_console_footer_entries`). `q` stays hidden there regardless: this comment
+        # argues why it is not *drawn*, and the console case removes the entry that made that
+        # argument true rather than changing the argument.
         Binding("q", "back_or_quit", "back", show=False),
         Binding("colon", "bare_palette", "palette", show=False),
     ]

@@ -1176,6 +1176,13 @@ Four facts that are easy to get wrong when a key appears not to work:
   the console's projects and feed panes name the session keys on their own hint row as
   `F3 F4 F6 F8 F9`. The sessions pane does not — its border title already lists the same acts
   as bare letters — and the limits pane draws no hint row at all.
+- **Under console hosting the footer withholds `F10`, and only there.** A console surface pane
+  carries no `remain-on-exit`, so quitting it closes the pane and the console runs a third short
+  until a surface start re-runs `ensure()`. The key remains bound and `F1` still lists it — this
+  is de-advertisement, not removal — but the footer stops offering, in a line the owner reads at
+  a glance, the one act on it that costs a pane. Outside the console the footer draws `F10` as
+  before. Opened as BL-097 after the owner pressed it on 2026-09-17 and the sessions pane
+  vanished.
 
 ### Upgrading from 0.41.0: what each old key became
 
@@ -1193,7 +1200,7 @@ Spelled the way 0.41.0's own footer and hint rows drew them.
 | `^n` add project | `F7` |
 | `^s` sessions | no key — the command palette (`:` or `Ctrl+P`), entry "Sessions" |
 | `^o` resume | no key — the palette, entry "Resume" |
-| `^r` refresh, `^q` quit | still work, unchanged — but the footer now draws `F5` and `F10` for those acts, because one line cannot hold both spellings |
+| `^r` refresh, `^q` quit | still work, unchanged — but the footer now draws `F5` and `F10` for those acts, because one line cannot hold both spellings. Inside the console the footer withholds `F10` (see above) |
 
 ## Local terminal acceptance checklist
 
@@ -1248,8 +1255,9 @@ uv run --locked remote-agents tui
 7. Press `F7`, confirm the offered areas are the eligible existing directories under the
    configured `dev_root`, enter a rejected name such as `New Thing` and confirm nothing is
    created, then create a valid one and confirm it becomes selectable without leaving the app.
-   Escape is Back, `F10` quits, and `F5` re-reads the screen you are on rather than
-   returning to the project list — confirm on the sessions view that it re-lists in place.
+   Escape is Back, `F10` quits — in a **bare** terminal; inside the console its footer entry is
+   withheld, so confirm this step outside the console — and `F5` re-reads the screen you are on
+   rather than returning to the project list; confirm on the sessions view that it re-lists in place.
    Confirm `F1` opens a panel naming every key of the row above, that Refresh is absent from
    that panel on a screen with nothing to re-read, and that typing a project name greys `F7`
    and withdraws Sessions and Resume from the palette rather than discarding what you typed.
@@ -1462,6 +1470,23 @@ process, and treat `doctor --profiles`, which probes when it is run, as the curr
 The console — the `ra-console` tmux session the bare `remote-agents` command enters — is
 presentation only: it writes no record, and every failure inside it costs you the display and
 nothing else.
+
+**The console turns `mouse on` on its own tmux server**, in `ensure()`, every time a surface
+starts — so an existing console picks it up on the next start rather than only a freshly built
+one. It is scoped to this project's socket (`tmux -L remote-agents`) and reaches no other tmux
+server you run.
+
+*Why it is set at all, since tmux's default is `off`:* with `mouse off`, tmux enables terminal
+mouse reporting only on behalf of the **active** pane's application. The console's resting state
+is an agent displayed in the left slot, and an agent that does not ask for mouse — codex reports
+`mouse_any_flag=0` — means tmux never asks the terminal to report mouse at all. Clicking a
+surface pane then does nothing whatever, which reads as a broken pane rather than as a setting.
+All three surface panes report `mouse_any_flag=1`: they want it and will use it.
+
+*The cost, which is why tmux does not default to it:* **native terminal text selection now needs
+Shift held**, and the wheel enters tmux copy-mode in panes that do not request mouse. To undo it
+for a session — `tmux -L remote-agents set -g mouse off`; it returns on the next surface start,
+since `ensure()` is idempotent. Opened as BL-098.
 
 **The console is one window of four panes** — projects left, and on the right sessions, limits,
 then feed — and it shows an agent by **exchanging** that agent's pane into the left slot. The
