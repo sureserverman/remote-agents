@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import dataclasses
 import logging
 from collections.abc import Callable, Iterable
 from datetime import UTC, datetime
@@ -24,6 +25,7 @@ from textual.worker import WorkerCancelled, WorkerFailed
 
 from remote_agents.adapters.tui.context import TuiContext
 from remote_agents.adapters.tui.keys import (
+    CONSOLE_WITHHELD_FROM_FOOTER,
     SESSION_STOP_KEYS,
     function_key_bindings,
     session_key,
@@ -367,9 +369,49 @@ class RemoteAgentsTui(App[AttachRequest | None]):
         """Whether this surface offers one of the app-level flows."""
         return action in self.flows
 
+    def _withhold_console_footer_entries(self) -> None:
+        """Stop advertising, on this instance only, the entries a console pane cannot afford.
+
+        **The act is de-advertisement, not removal** (BL-097, DEC-093, DEC-095). `F10` is
+        `quit`, and a console surface pane carries no `remain-on-exit`: pressing it ends that
+        pane's process, tmux closes the pane, and the layout reflows over the gap. Off a
+        console the same key leaves the app and hands the terminal back, which is what htop
+        and mc mean by it and what the footer is right to offer. So the key stays bound, it
+        still quits, and F1's panel still lists it -- `BindingsTable` renders
+        `active_bindings` without filtering on `show`, which is the property that makes this
+        honest rather than a silent removal. Only the drawing goes.
+
+        **Why here and not in the table.** `BINDINGS` is a class attribute, built from
+        `function_key_bindings()` at import time, and hosting is not knowable then: the
+        composition root classifies it from `$TMUX` by socket name, per process. So the
+        instance is told (`TuiContext.console_hosted`, DEC-046) and adjusts the bindings map
+        Textual already gave it a private copy of.
+
+        **A new list, never an in-place edit.** `DOMNode.__init__` sets `self._bindings` to
+        `cls._merged_bindings.copy()`, and `BindingsMap.copy` copies the *dict* while sharing
+        the lists inside it with the class-level map. Editing a list here would therefore
+        withhold the entry from every surface in the process -- including a bare
+        `remote-agents tui` running beside a console -- so each key's entry is rebound to a
+        freshly built list and the shared one is left alone.
+        """
+        for key in CONSOLE_WITHHELD_FROM_FOOTER:
+            bound = self._bindings.key_to_bindings.get(key)
+            if bound is None:
+                # Not an error: the table decides which keys exist and this set is derived
+                # from it, so the only way here is a key the app genuinely does not bind --
+                # in which case there is nothing being advertised to withhold.
+                continue
+            self._bindings.key_to_bindings[key] = [
+                dataclasses.replace(binding, show=False) for binding in bound
+            ]
+
     def __init__(self, context: TuiContext) -> None:
         super().__init__()
         self._services = context
+        if context.console_hosted:
+            # After `super().__init__()`, which is what builds `self._bindings`, and before
+            # anything mounts: the footer composes from `active_bindings` on first paint.
+            self._withhold_console_footer_entries()
         # The two relay themes, registered before the theme is chosen so the choice can name
         # one. Read from the preference file with the same total read the project order gets:
         # an unknown or unreadable value is the default, never an `InvalidThemeError` here.

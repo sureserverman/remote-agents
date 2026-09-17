@@ -323,7 +323,13 @@ def local_context(config, connection, paths: ProductionPaths):
     console_holds_slot = None
     hide_in_console = None
     console_recovery = None
-    if hosting_mode(os.environ) is HostingMode.CONSOLE:
+    # The classification itself, kept as a value rather than left inside the `if`: the surface
+    # needs the *fact* as well as the capabilities, because one of its decisions -- which
+    # entries the footer draws -- is not a call it makes but a shape it is built in
+    # (`adapters/tui/keys.py::CONSOLE_WITHHELD_FROM_FOOTER`, BL-097). Decided here, where
+    # hosting is already decided once, so the app never asks the environment itself.
+    console_hosted = hosting_mode(os.environ) is HostingMode.CONSOLE
+    if console_hosted:
         # Hosted by a client on our own server: opening a session **exchanges** its pane into
         # the console's left slot, every sessions reload notices what the other writer did to
         # whatever is displayed, and the surface stays alive. Everywhere else these fields
@@ -426,6 +432,7 @@ def local_context(config, connection, paths: ProductionPaths):
         # Per-surface, and staying that way: DEC-039 keeps the attach route this surface's
         # own rather than following the host the way the bot's does.
         attach_argv=lambda session_id: attach_argv(SessionId.parse(session_id)),
+        console_hosted=console_hosted,
         open_in_console=open_in_console,
         console_sync=console_sync,
         console_flash=console_flash,

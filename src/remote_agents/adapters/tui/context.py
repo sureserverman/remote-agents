@@ -52,6 +52,23 @@ class TuiContext:
     # surface stays alive, while `console_sync` notices what the other writer did to whatever
     # is displayed, wherever the surface reloads its list. Hosts wiring neither keep the
     # exec-attach contract exactly as it was.
+    # Whether this surface is a pane of the console, as a **fact** rather than as a capability
+    # -- the one console field that is not something the surface may *do*. `console_recovery`
+    # is already the precedent for a field of that kind here.
+    #
+    # It exists because one console-dependent decision is not a capability call at all: which
+    # entries the footer draws (`keys.py::CONSOLE_WITHHELD_FROM_FOOTER`). `RemoteAgentsTui.
+    # BINDINGS` is a class attribute evaluated at import, long before any host is known, so the
+    # app has to be *told* at construction -- and the composition root is the one place that
+    # already classifies hosting (`attach.hosting_mode`, by socket name). Reading `$TMUX` inside
+    # the app would be a second answer to that question, on the wrong side of DEC-046.
+    #
+    # **Not derived from `console_holds_slot is not None`**, which is the nearest existing
+    # probe. That field is `None` when tmux set no `$TMUX_PANE`, which is a console pane whose
+    # *selection gate* is unavailable -- a pane that would then be told it is not on a console
+    # and would advertise the key that closes it. The two questions differ exactly where it
+    # would hurt.
+    console_hosted: bool = False
     open_in_console: Callable[[str], Awaitable[str | None]] | None = None
     console_sync: Callable[[tuple], Awaitable[None]] | None = None
     # One line on the tmux status bar when the feed gains news — wired only under console

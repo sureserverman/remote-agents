@@ -152,6 +152,20 @@ def test_no_further_capability_leaked_into_the_context() -> None:
         "attach_argv",
         # A parameter of `backend.capture`, not a capability of its own.
         "capture_redactions",
+        # Added by the 2026-09-17 plan's Task 1.1 (BL-097), and listed here because this test
+        # is where growing the set is supposed to be a decision. It is the one console field
+        # that is **not a capability**: a plain fact, "this surface is a pane of the console",
+        # rather than something the surface may do. `console_recovery` is the precedent for a
+        # non-callable here, and the reason a fact is needed at all is that one console
+        # decision is not a call the surface makes -- `RemoteAgentsTui.BINDINGS` is a class
+        # attribute evaluated at import, so which entries the footer draws has to be settled
+        # when the app is *constructed*, from something it was told.
+        #
+        # Deliberately not derived from `console_holds_slot is not None`, the nearest existing
+        # probe: that field is `None` on a console pane for which tmux set no `$TMUX_PANE`, so
+        # deriving hosting from it would tell a real console pane it is a bare terminal -- and
+        # the entry it would then advertise is the one that closes the pane.
+        "console_hosted",
         # The console capabilities (DEC-040), wired only under console hosting.
         "open_in_console",
         "console_sync",

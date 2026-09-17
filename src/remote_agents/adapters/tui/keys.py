@@ -121,6 +121,31 @@ FUNCTION_KEYS: tuple[FunctionKey, ...] = (
 )
 
 
+#: The footer entries a **console** surface pane withholds, by key. Derived from the table, so
+#: the rule is a rule rather than a fact about one key.
+#:
+#: **Why a key is withheld here and nowhere else.** `footer` above answers "does this entry fit
+#: on a clipping line"; this answers a different question -- "does pressing this entry cost the
+#: owner the thing they are looking at". Off a console, `quit` leaves the app and the terminal
+#: comes back. In a console surface pane it ends *that pane's* process, and the panes carry no
+#: `remain-on-exit`: tmux closes the pane and reflows the layout over the gap, so a footer entry
+#: the owner read as "leave" silently destroys a third of the console (BL-097, hit on
+#: 2026-09-17; the console ran two panes short for twenty minutes).
+#:
+#: **De-advertisement, not removal.** The key stays bound, it still quits, and F1's panel still
+#: lists it -- `BindingsTable` renders `active_bindings` without filtering on `show`, which is
+#: what the key was borrowed from htop for. DEC-093 keeps every F-key bound and DEC-095 keeps
+#: F10 meaning what htop and mc mean by it; neither is touched by withholding a *drawing*.
+#:
+#: The self-healing alternative -- a surviving pane noticing the gap and rebuilding the layout
+#: -- is the one BL-039 blocks: that rebuild path is what put the sessions pane into Textual
+#: 8.2.8's `Screen._refresh_layout` loop at 100% CPU. So the cheap, honest half ships and the
+#: pane the owner closes stays closed.
+CONSOLE_WITHHELD_FROM_FOOTER: frozenset[str] = frozenset(
+    entry.key for entry in FUNCTION_KEYS if entry.action == "quit"
+)
+
+
 #: The session-shaped F-keys as a pane advertises them: `F3 F4 F6 F8 F9`.
 #:
 #: Built from the table so the row of keys the owner reads is the row that works. **Keys alone,
