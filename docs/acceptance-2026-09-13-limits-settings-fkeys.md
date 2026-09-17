@@ -11,6 +11,64 @@ uses a scratch state directory, a copy of the settings file, or a disposable tmu
 
 ---
 
+## Section 0 — What each sub-plan proved, and where the evidence sits
+
+One paragraph per sub-plan of the master
+`2026-09-13-reliable-limits-and-fkey-console-master-plan.md`. Each points at the section below
+that holds the evidence; nothing is claimed here that is not written there or in the sub-plan's
+own close-out.
+
+**Sub-plan 01 — Limit sources.** Closed 2026-09-14 on branch `limits-sources` (close-out commit
+`391c50b`, later merged to `main` as `4e41fb0`). It moved Codex's limits onto
+`account/rateLimits/read` with the rollout file as fallback, put Claude's on a status-line hop
+this project owns, and added the usage API as an opt-in second source behind a `config.toml`
+switch. Two of its three gate checks are `[x]`: the borrowed `/tmp/claude` cache is gone from
+`src/` and `tests/`, and `check_imports.py` reports zero violations with the hop added to
+`COMPOSITION_ROOTS` rather than smuggled past it. **The first gate box is still `[~]`** — on this
+host `local_context` printed the Codex entry with two windows and `stale_source=None`, but the
+Claude entry read `NO_READING` because no hop is installed here yet; §4's deploy installs it and
+ticks that box. Recorded DEC-087 (amends DEC-061), DEC-088 (narrows DEC-053) and DEC-089 (amends
+DEC-015 and the hook boundary). **Evidence: §1**, which measures what the hop costs — a 30 ms
+median through the console script against a 150 ms budget — and states plainly which console
+script it could and could not measure, since the installed tool on this host is pinned to
+`v0.41.0` and has no `statusline` subcommand at all.
+
+**Sub-plan 02 — Settings and the limits pane.** Closed 2026-09-15 on branch
+`settings-and-limits-pane`, 15 commits from `4e41fb0` (44 files, +3529/−653). It built one
+Settings screen — five rows in the terminal, three on the bot — registered in every sweep, and
+put a Claude Remote Control row on the limits pane and in the bot's limits block. All three gate
+checks are `[x]` and none `[~]`: flipping the limits-source row changes the stamp on the next
+`backend.limits()` read without recomposing, both surfaces render the row from one
+`LIMITS_SOURCE_TITLE` definition (13 references, 1 definition), and the TUI unit tree is green
+with `SETTINGS` in `_POSITIONS`. It closed BL-057 and BL-058 and recorded DEC-091 and DEC-092.
+**Evidence: §2**, which is a live reading rather than a fixture — the real composition root over
+this machine's own `config.toml`, settings file and Codex daemon — and which also records the two
+deliberate asymmetries between the surfaces, the limits pane's truncation arithmetic, and the
+open `ACTION NEEDED` on `SETTINGS.svg` that became BL-093 so it would outlive the closed plan.
+
+**Sub-plan 03 — The F-key console.** Closed 2026-09-17 on the same branch, 23 commits
+`bf5e5c0..4259dc5` from base `886829f`, every task `[x]` and all three stage gates green. It
+replaced the Alt-chord layer with one F-key layer that reaches every pane including a displayed
+agent, with a per-provider reserved-key pass-through. Its gate drove
+`tests/live/test_three_pane_console.py -k function_keys` alone (1 passed, 26.5 s), confirmed no
+chord survives in either the Textual or the tmux layer, and ran the e2e journeys serially (179
+passed). Recorded DEC-093 (supersedes DEC-041), DEC-094 (supersedes DEC-073) and DEC-095, the
+borrowed-keys principle; opened BL-094 and BL-095 and re-scoped BL-044 and BL-045. One Preflight
+box stays `[~]` and is the owner's — F1/F10/F12 under `cat -v` needs a key press on their own
+emulator. **Evidence: §3**, which keeps preflight findings, measurements and live captures apart
+on purpose, and which records two things a friendlier document would have dropped: the mutant
+counterfactual that makes case 4 evidence rather than a tautology, and the vacuous assertion that
+mutant caught in the first version of that case.
+
+**Sub-plan 04 — Release.** In flight as this section is written. It owes the decisions check, this
+consolidated summary, `0.41.0 → 0.42.0` across the seven mirrors, the `v0.42.0` tag on `main`, and
+the deploy on the owner's host with the status-line hop installed. **Evidence: §4**, whose capture
+slots are unfilled below and are filled by its Task 1.4 from the real deploy on this host. Until
+they are, sub-plan 01's first gate box stays `[~]` and the Claude row on this machine has no
+source.
+
+---
+
 ## Section 1 — The status-line hop's cost (Sub-plan 01, Task 2.5)
 
 The hop runs on every status-line update in every Claude Code session on the machine
@@ -301,3 +359,71 @@ Case 4 is the one that matters most and the one this document must not record as
 reasoning: the binding carries a guard asking which session the pressing client is attached to,
 and `F8` is an unconfirmed stop (DEC-018), so a guard that did not hold would end a session the
 presser cannot see.
+
+---
+
+## Section 4 — The deploy (Sub-plan 04, Task 1.4)
+
+**This section is a skeleton. Every capture slot below is unfilled.** Task 1.4 runs the real
+deploy on the owner's host and pastes the real output into these blocks; nothing here may be
+written from reasoning, from a test run, or from what a previous version printed. A slot that
+cannot be filled is recorded as *not obtained* with the reason, not quietly dropped.
+
+The deploy sequence Task 1.4 runs, in order: `remote-agents upgrade --version v0.42.0`;
+`remote-agents install-agent-hooks --provider claude` (the status-line hop — the owner's consent
+belongs in the capture); `systemctl --user restart remote-agents`; then the four console panes
+respawned by process, because a shipped feature can be invisible until the service restarts.
+
+### 4.1 — `remote-agents doctor`: the version, the hop, the limits source
+
+The one live artifact the Stage 1 gate names. It must show the installed release at `0.42.0`, the
+status-line hop installed (before the deploy this host answered *"status-line hop not installed"*,
+which is why sub-plan 01's first gate box is `[~]`), and the Claude limits source.
+
+```
+PENDING — filled by Task 1.4
+```
+
+### 4.2 — The limits pane: Codex's two windows and Claude's row
+
+Codex's two windows within one refresh, Claude's within one Claude turn, with the Claude Remote
+Control row drawn under the Codex one. This is also where sub-plan 01's first gate box is settled:
+the Claude entry must read `status line` rather than `NO_READING` once the hop is installed.
+
+```
+PENDING — filled by Task 1.4
+```
+
+### 4.3 — `F2` from a displayed agent opens Settings, on the deployed build
+
+§3 case 3 proved this on a disposable console built by the composer, on the branch. This slot
+proves it again on the installed `v0.42.0` against the owner's own console.
+
+```
+PENDING — filled by Task 1.4
+```
+
+### ACTION NEEDED — the owner has not seen the bot's Settings or the Claude limits line on their phone
+
+Every bot-side reading in this document was rendered in-process:
+`PrivateBotBoundary._settings_screen()` in §2 is a pure render with no network, and no capture
+anywhere below or above was taken from a real Telegram client on the owner's device. **Two things
+need the owner's own phone, and neither can be driven from here:**
+
+1. **The three-row Settings screen.** Open Settings from the bot and confirm it draws the three
+   rows §2 records — Claude Remote Control, Codex Remote Control, Claude limits source — plus the
+   back button, with the paragraph above them, and that the readings agree with what `doctor`
+   reports in §4.1. What is being checked is that the screen *arrives on a phone* looking like the
+   render, not that the render is what it is.
+2. **The Claude line in the limits block.** Confirm the Claude Remote Control line appears in the
+   bot's limits block under the Codex one, and that the Claude limits reading is present rather
+   than absent once the hop from §4.1 is installed. Note per §2's first asymmetry that on the
+   **sessions list** the Claude line is *expected to be absent* when the capability is unwired —
+   that is the deliberate behaviour, not a defect to report.
+
+Report back either way. An absence here is as much a finding as a match, and this document should
+record what the owner saw rather than what it expected them to see.
+
+```
+PENDING — the owner's phone-side report
+```
