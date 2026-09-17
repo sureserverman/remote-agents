@@ -61,14 +61,21 @@ tests in `tests/architecture/`.
 
 ## ARCH-B1 — one `Backend`, and both frontends receive it
 
-`application/backend.py: Backend` is a frozen, slotted dataclass carrying eleven fields
-(DEC-046):
+`application/backend.py: Backend` is a frozen, slotted dataclass carrying sixteen fields
+(DEC-046), in declaration order:
 `sessions`, `projects`, `conversations`, `catalogue`, `refresh_catalogue`, `profiles`,
-`capture`, `activity_feed`, `usage`, `limits`, `max_label_length`. (It read "nine" and omitted
+`capture`, `activity_feed`, `usage`, `limits`, `close_usage_readers`, `host_remote_control`,
+`claude_remote_control_default`, `claude_limits_source`, `state_events`, `max_label_length`.
+(It read "nine" and omitted
 `usage` before `limits` was added beside it; a count in prose next to the list it counts is a
-second copy to keep agreeing, and this one had already drifted.) It is the whole set of use cases a frontend
-may drive. Before it, `bootstrap` composed the Telegram service and the local surface
-separately — two `SessionService` instances over one domain SQLite file, two catalogue providers,
+second copy to keep agreeing, and this one had already drifted. **It then drifted a second
+time, the same way**: it read "eleven" and listed eleven while the type had grown to sixteen,
+because five fields were added over three sub-plans and each one changed the type without
+changing the prose. Derive both halves from the type before trusting either —
+`python3 -c "import ast; ..."` over `backend.py`'s `Backend` body is what produced this list,
+and a sweep of `grep -n 'field' docs/architecture.md` is what found the count.) It is the whole
+set of use cases a frontend may drive. Before it, `bootstrap` composed the Telegram service and
+the local surface separately — two `SessionService` instances over one domain SQLite file, two catalogue providers,
 two profile probes — and only one of the two halves was typed at all: `PrivateBotBoundary`
 declared its launcher `object | None` and reached into it by name, so a capability the
 composition root forgot to wire produced no error, just a row that quietly stopped being
@@ -103,6 +110,19 @@ local surface takes the opposite contract and enforces it: `TuiContext.__post_in
 a backend missing `sessions` or `projects`. Nothing anywhere probes for a capability by name
 any more — absence is a declared field checked as `is None`, which is what
 `tests/architecture/test_frontends_share_one_backend.py` rule 2 exists to keep true.
+
+**One field's value lives in the operator's file rather than in the composition.**
+`claude_limits_source` (a `ports.limits_source` port) decides whether the service reads the
+owner's Claude credential and calls Anthropic on a timer, so its value is
+`limits.claude_limits_source` in `config.toml` — `"status-line"` | `"usage-api"`, default
+`"status-line"`, optional in the schema the way `claude_context_window` is (DEC-087/DEC-088).
+`config.write_limits_key(path, "claude_limits_source", value)` is the **one** writer, called by
+the Settings row and by nothing else; `read_claude_limits_source` is the **total** reader, which
+answers the default rather than raising on a file that never mentions the key. `AppConfig`
+records the path it was loaded from and the compositions read the switch back from that file on
+every account read, so a flip needs no restart and no recompose — the field on `Backend` is the
+port, not a value captured at composition time. That is the distinction to keep: every other
+field here is what a process *wired*, and this one is where a process *looks*.
 
 ## ARCH-B2 — composed once per process, not once globally
 
