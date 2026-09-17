@@ -504,6 +504,27 @@ def test_a_function_key_binding_refuses_a_profile_name_it_cannot_safely_interpol
         )
 
 
+def test_a_function_key_binding_refuses_to_be_built_without_the_reservations() -> None:
+    """The refusal lives here too, at the layer that actually interpolates the key.
+
+    `ConsoleComposer` refuses the same omission, and that guards the one production caller.
+    This guards the *act*: `None` defaulting to an empty mapping is a valid "nobody reserves
+    anything", so a future caller reaching `console_binding_args` directly — a maintenance
+    command, a second composition root, a debug script — would build a script that silently
+    takes OpenCode's F2 from the agent that binds it. Raised by the Stage 2 review, which
+    pointed out that a safety property holding only while every caller routes through one
+    constructor is not a property of this function.
+
+    Stating `{}` is still allowed and still means what it says.
+    """
+    with pytest.raises(ValueError, match="reserved_keys"):
+        console_binding_args("F2", ConsoleBindingAction.FORWARD_FUNCTION_KEY)
+
+    argv = console_binding_args("F2", ConsoleBindingAction.FORWARD_FUNCTION_KEY, reserved_keys={})
+    assert argv[:3] == ("bind-key", "-n", "F2")
+    assert '"$profile"' not in argv[4], "an empty reservation still tested a profile"
+
+
 def test_a_function_key_binding_builds_its_own_command() -> None:
     """Like the forwarding chord: the command is derived from the key, never supplied."""
     with pytest.raises(ValueError, match="builds its own command"):

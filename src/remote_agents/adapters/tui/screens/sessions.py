@@ -357,23 +357,6 @@ _SHOW_PROJECTS_BINDING = Binding("p", "show_projects_pane", "Projects", show=Fal
 #: two places is the drift `test_the_function_keys_are_one_table.py` exists to catch.
 _DETAIL_KEY = "d"
 
-#: Every row letter the console's tmux prefix table still forwards, built from the tables
-#: rather than written beside them.
-#:
-#: **This is a survivor of the retired Alt layer and it is inert until Stage 2 removes it.**
-#: The prefix forwards send `M-<letter>` into the sessions pane, which no longer binds any of
-#: them -- the F-key row replaced that layer, and the root bindings that replace these forwards
-#: are Stage 2's work. It is kept for one stage rather than deleted here because
-#: `composition/tui.py` installs the prefix table and this module is the only declaration of
-#: which letters a row carries; deleting it in the same commit as the Textual layer would put a
-#: tmux change inside a task whose rollback says no file outside `adapters/tui` moves.
-_FORWARDED_ROW_KEYS: tuple[str, ...] = (
-    *(key for key, _action, _label, _word in SESSION_ACTION_KEYS),
-    _REMOTE_CONTROL_KEY,
-    _DETAIL_KEY,
-)
-
-
 def session_key_hint_content(base: str, *, live: bool) -> Content:
     """The hint row for a console pane: its own keys, then the F-keys, dim when they are inert.
 
@@ -498,12 +481,6 @@ class SessionKeyHintRow:
             return
         self._session_keys_live = live
         self.set_hint(self.hint_content(self.session_key_hint_base))
-
-
-#: Which action each row key names. `keys.py` arrives holding a *key*; the row bindings arrive
-#: holding an *action*, because that is what `Binding` was given. One mapping, so the two entry
-#: points cannot disagree about what `s` means.
-_KEY_ACTIONS = {key: action for key, action, _label, _word in SESSION_ACTION_KEYS}
 
 
 async def perform_row_action(action: str, session_value: str, *, screen: ChoiceScreen) -> None:

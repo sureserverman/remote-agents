@@ -181,6 +181,16 @@ def test_the_root_row_is_the_surface_s_own_key_table_in_tmux_s_spelling() -> Non
 
     Compared case-insensitively because the spellings genuinely differ and both are right:
     tmux resolves `F2` and Textual delivers `f2`.
+
+    **What this cannot see, stated rather than left for the next reader to discover.** It
+    compares the two *sets* of keys, not what either side does with them — so the deliberate
+    F12 asymmetry is invisible here: tmux runs a pane exchange and the surface returns to
+    projects in-process, which agree in meaning and share nothing in code. A regression that
+    kept F12 bound on both sides while breaking one of the two acts would pass this check. The
+    acts are covered where each of them lives (`test_f12_unwinds_to_the_projects_position` for
+    the surface, `test_the_root_set_is_the_function_key_row_and_nothing_else` for the action
+    the console binds); what is asserted *here* is only that neither side grows or loses a key
+    the other has.
     """
     from remote_agents.adapters.tui.keys import FUNCTION_KEYS
     from remote_agents.application.console import CONSOLE_BINDINGS

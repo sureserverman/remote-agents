@@ -64,7 +64,21 @@ class RecordingConsole:
     async def create_console(self, command: tuple[str, ...], cwd: Path) -> None:
         self.calls.append(("create_console",))
 
-    async def install_console_binding(self, key: str, *_rest, **_kwargs) -> None:
+    async def install_console_binding(
+        self,
+        key: str,
+        action=None,
+        command: tuple[str, ...] = (),
+        table=None,
+        *,
+        reserved_keys=None,
+    ) -> None:
+        # Spelled out rather than `*_rest, **_kwargs`, which is what it was until the Stage 2
+        # review. The catch-all never broke, and that is exactly the problem: `ensure()` swallows
+        # every binding-install failure by design, so a double whose signature has fallen behind
+        # the port does not raise, it simply records nothing — and one that accepts anything can
+        # never fall behind, so it can never report that the port moved either. Three sibling
+        # doubles were found stale this way; this one was found by being unable to go stale.
         self.calls.append(("install_console_binding", key))
 
     async def pane_arrangement(self):

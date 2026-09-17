@@ -602,7 +602,20 @@ def console_binding_args(
             raise ValueError(
                 "a function-key forward binds F1-F12 in tmux's own spelling, with no modifier"
             )
-        reserved_keys = {} if reserved_keys is None else reserved_keys
+        if reserved_keys is None:
+            # **Refused here as well as at `ConsoleComposer`, and this is the layer that
+            # matters.** The composer's own refusal was written first and guards the one
+            # production caller; this guards the *act*. `None` defaulting to `{}` is a
+            # perfectly valid "nobody reserves anything", so any future caller reaching this
+            # function directly — a maintenance command, a second composition root, a debug
+            # script — would build a script that silently takes a key from the agent that
+            # binds it. A safety property that holds only while every caller routes through
+            # one constructor is not a property of this function, and this function is where
+            # the key is interpolated.
+            raise ValueError(
+                "a function-key forward needs the reservations to pass through; pass "
+                "reserved_keys={} only to state that no provider reserves one"
+            )
         for name in reserved_keys:
             if not _PROFILE_NAME.match(name):
                 raise ValueError(
