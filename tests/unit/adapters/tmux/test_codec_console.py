@@ -19,6 +19,7 @@ from __future__ import annotations
 import pytest
 
 from remote_agents.adapters.tmux.codec import (
+    _PROFILE_OPTION,
     CONSOLE_SESSION_NAME,
     CONSOLE_SLOT_OPTION,
     SELECTED_SESSION_OPTION,
@@ -360,3 +361,299 @@ def test_the_panes_key_needs_the_command_that_folds_the_column() -> None:
     """
     with pytest.raises(ValueError, match="needs the command"):
         console_binding_args("h", ConsoleBindingAction.TOGGLE_PANES, table=ConsoleKeyTable.PREFIX)
+
+
+# --- The F-key root layer (sub-plan 03 Stage 2) ------------------------------------------
+
+#: What the registry answers today, passed in rather than imported so these tests pin the
+#: *rule* the script encodes and not the measurement, which `tests/provider_contract` owns.
+_RESERVED = {
+    "claude": frozenset(),
+    "codex": frozenset(),
+    "opencode": frozenset({"F2"}),
+    "cursor-agent": frozenset(),
+}
+
+
+def test_a_function_key_binding_carries_the_guard_and_its_three_branches() -> None:
+    """One root key, three destinations, decided at press time from the active pane's own marks.
+
+    **Root, not prefix, and that is the whole point of the layer.** An F-key must work from
+    inside a displayed agent, where the agent owns the pane's keyboard — so it cannot be behind
+    a prefix the owner would have to press first. The price is DEC-041's currency: a root
+    binding is a key every pane on this socket can never receive, which is exactly why the
+    third branch exists.
+
+    The three branches, in the order the script decides them:
+
+    * **the active pane is one of ours** — the owner is in a console pane, so the key belongs to
+      the surface running there and is sent straight back to it;
+    * **the active pane's provider reserves this key** — the agent binds it already, so the
+      console hands it over rather than stealing it. That is what stops F2 at an OpenCode pane
+      opening Settings instead of cycling the model;
+    * **otherwise** — an agent that does not want this key, so it goes to the sessions pane,
+      which is the position the layer is *for*.
+
+    Marks are read at press time rather than captured at install (DEC-038): a pane can be
+    rebuilt or exchanged while the binding stands, and the mark travels with it.
+    """
+    argv = console_binding_args(
+        "F2", ConsoleBindingAction.FORWARD_FUNCTION_KEY, reserved_keys=_RESERVED
+    )
+
+    assert argv[:3] == ("bind-key", "-n", "F2"), (
+        f"an F-key must be a root binding or it cannot reach a displayed agent: {argv}"
+    )
+    assert argv[3] == "run-shell"
+    script = argv[4]
+
+    # The guard, whole rather than in parts — the same reasoning the chord layer's own test
+    # records: `!= "ra-console"` still contains `= "ra-console"`, so a substring assertion
+    # survives an inverted guard.
+    guard = (
+        f'test "$(tmux display-message -p "##{{client_session}}")" = "{CONSOLE_SESSION_NAME}" '
+        f"|| exit 0;"
+    )
+    assert guard in script, (
+        "an F-key root binding does not refuse a client attached to anything but the console, "
+        f"so it fires from any client on this server (DEC-073(3)): {script}"
+    )
+
+    assert f"##{{{CONSOLE_SLOT_OPTION}}}" in script, "the script never reads the slot mark"
+    assert _PROFILE_OPTION in script, "the script never reads the profile mark"
+    assert 'send-keys -t "$active" F2' in script, "no branch sends the key to the active pane"
+    assert 'send-keys -t "$panes" F2' in script, "no branch sends the key to the sessions pane"
+
+    # Exactly the provider that reserves F2, and no other name from the table.
+    assert '"$profile" = "opencode"' in script, "the reservation never reaches the script"
+    for absent in ("claude", "codex", "cursor-agent"):
+        assert absent not in script, (
+            f"{absent!r} reserves no key and must not appear in the F2 script: {script}"
+        )
+
+
+def test_a_function_key_no_provider_reserves_has_no_pass_through_branch() -> None:
+    """The reservation is per key, so a key nobody binds carries no provider name at all.
+
+    Asserted because the opposite is the silent failure: a script that tested every profile
+    against an empty set would still work, and would then hand the key to whichever agent
+    happened to be there the day someone widened a set by accident.
+    """
+    script = console_binding_args(
+        "F5", ConsoleBindingAction.FORWARD_FUNCTION_KEY, reserved_keys=_RESERVED
+    )[4]
+
+    for absent in _RESERVED:
+        assert absent not in script, f"{absent!r} reserves no F5 and is named anyway: {script}"
+    assert '"$profile"' not in script, "F5 tests a profile it has no reason to read"
+    assert 'send-keys -t "$active" F5' in script, "the console's own panes still get the key"
+
+
+def test_the_sessions_branch_delivers_to_exactly_one_pane_or_to_nothing() -> None:
+    """BL-042's stricter arm, decided here for this path: ambiguity delivers nothing.
+
+    The chord layer took `head -n 1`, which picks a pane when two carry the sessions mark —
+    and the key it delivers can be an unconfirmed stop (DEC-018) against a row in whichever
+    console the arbitrary winner belongs to. A root key reaches further than a prefix one, so
+    this path refuses instead: the count must be exactly one.
+
+    **`grep -c .` rather than `wc -l`, and the difference is the empty case plus a platform.**
+    `printf "%s\\n"` of an empty result still emits one line, so `wc -l` would report `1` for
+    "no sessions pane at all" and the key would be sent to the empty string. `grep -c .` counts
+    only non-empty lines, so nothing matched reads as `0` without a second clause. It also
+    sidesteps BSD `wc`, which pads its output — `test "       1" = 1` is false, and this
+    project runs on macOS as well as Linux.
+    """
+    script = console_binding_args(
+        "F8", ConsoleBindingAction.FORWARD_FUNCTION_KEY, reserved_keys=_RESERVED
+    )[4]
+
+    assert 'grep -c .)" = 1' in script, (
+        f"the sessions branch does not require exactly one marked pane: {script}"
+    )
+    assert "head -n 1" not in script, (
+        "this path must not pick a winner when two panes carry the sessions mark"
+    )
+
+
+def test_f11_is_refused_at_build() -> None:
+    """The one F-key the layer leaves alone, refused where it is built rather than omitted.
+
+    F11 is the terminal's own full-screen toggle almost everywhere. Taking it as a root key
+    would be taking it from the emulator, and the owner would have no way to tell which side
+    swallowed it. Omitting it from the table is what makes it unbound; refusing it here is what
+    stops the next author binding it without meeting the argument.
+    """
+    with pytest.raises(ValueError, match="F11"):
+        console_binding_args(
+            "F11", ConsoleBindingAction.FORWARD_FUNCTION_KEY, reserved_keys=_RESERVED
+        )
+
+
+@pytest.mark.parametrize(
+    "key",
+    ["F2; rm -rf /", "F2\n", "M-F2", "f2", "F0", "F13", "F", "", "C-F2", "F2 ", "F2\n\n"],
+)
+def test_a_function_key_that_is_not_one_is_refused_before_it_is_interpolated(key: str) -> None:
+    """The key is interpolated into a shell string, so the validation is the safety property.
+
+    `console_binding_args`' general check accepts anything alphanumeric behind one optional
+    modifier, which is true of `f2`, `M-F2` and `C-F2` — all three would build a script for a
+    key tmux either resolves differently or not at all, and the lowercase one is the quiet
+    disaster: Textual spells these keys `f2` and tmux spells them `F2`, the two meet in this
+    codebase, and tmux would bind a key nothing sends.
+
+    So this branch validates the key *again*, stricter, against the original string rather than
+    the modifier-stripped body — and it runs before the script is built, which is the ordering
+    the whole injection argument rests on.
+    """
+    with pytest.raises(ValueError):
+        console_binding_args(
+            key, ConsoleBindingAction.FORWARD_FUNCTION_KEY, reserved_keys=_RESERVED
+        )
+
+
+def test_a_function_key_binding_is_refused_outside_the_root_table() -> None:
+    """The mirror of the forwarding chord's refusal, and for the opposite reason.
+
+    A chord is affordable *because* it is a prefix key. An F-key is only useful because it is
+    a root one: behind a prefix it could never reach a displayed agent, which is the single
+    position the layer exists to serve. Refused where it is built, so a caller cannot quietly
+    install a key that looks bound and answers nowhere.
+    """
+    with pytest.raises(ValueError, match="root table"):
+        console_binding_args(
+            "F2",
+            ConsoleBindingAction.FORWARD_FUNCTION_KEY,
+            reserved_keys=_RESERVED,
+            table=ConsoleKeyTable.PREFIX,
+        )
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        'opencode"; rm -rf /; #',
+        "opencode\n",
+        "opencode\nrm -rf /",
+        "open code",
+        "opencode$(id)",
+        "",
+    ],
+    ids=[
+        "metacharacters",
+        "trailing-newline",
+        "embedded-newline",
+        "space",
+        "substitution",
+        "empty",
+    ],
+)
+def test_a_function_key_binding_refuses_a_profile_name_it_cannot_safely_interpolate(
+    name: str,
+) -> None:
+    """The reservation's *keys* reach the shell too, and nothing upstream promised they were safe.
+
+    The names come from the curated registry today, so this cannot fire from production input.
+    It is here because the argument that makes the key safe — validated before interpolation —
+    has to hold for every value that reaches the script, and a reader checking that argument
+    should find it covering both rather than having to notice the second one is unguarded.
+
+    **`trailing-newline` is the case this task's review found, and it is why the others are here
+    too.** The pattern was anchored `^...$`, and Python's `$` also matches immediately before one
+    trailing newline — so `"opencode\n"` passed a check whose whole job was to make
+    interpolation safe. It was not an injection, because the value lands inside double quotes
+    where POSIX keeps a newline literal; it was a comparison that would silently never match,
+    which is the quieter half of the same defect. The first version of this test carried only
+    the metacharacter payload, which the pattern already rejected — so it could not have caught
+    this. The population is now every shape that must be refused, not the one that reads as
+    dangerous.
+    """
+    with pytest.raises(ValueError, match="profile"):
+        console_binding_args(
+            "F2",
+            ConsoleBindingAction.FORWARD_FUNCTION_KEY,
+            reserved_keys={name: frozenset({"F2"})},
+        )
+
+
+def test_a_function_key_binding_builds_its_own_command() -> None:
+    """Like the forwarding chord: the command is derived from the key, never supplied."""
+    with pytest.raises(ValueError, match="builds its own command"):
+        console_binding_args(
+            "F2",
+            ConsoleBindingAction.FORWARD_FUNCTION_KEY,
+            ("true",),
+            reserved_keys=_RESERVED,
+        )
+
+
+def test_the_function_key_script_is_byte_stable_across_builds() -> None:
+    """Two builds of one key are the same string, so a rebuilt console reinstalls the same thing.
+
+    Not a style check. The reservation arrives as a mapping, and a script built by iterating it
+    would reorder whenever the registry's insertion order changed — which makes every console
+    rebuild a diff, and makes a byte comparison useless as a way of asking whether the installed
+    bindings are the ones this version emits.
+
+    **Driven with two providers reserving one key, which today's registry does not have.** The
+    first version of this test used the real table, where only OpenCode reserves F2 — so the
+    script had one name in it, every ordering produced the same string, and dropping the `sorted`
+    left the test green. A test that cannot fail is worse than no test, so the population here is
+    the one where order is observable rather than the one that happens to ship.
+    """
+    two = {
+        "opencode": frozenset({"F2"}),
+        "another-agent": frozenset({"F2"}),
+        "codex": frozenset(),
+    }
+    shuffled = dict(reversed(list(two.items())))
+
+    first = console_binding_args("F2", ConsoleBindingAction.FORWARD_FUNCTION_KEY, reserved_keys=two)
+    second = console_binding_args(
+        "F2", ConsoleBindingAction.FORWARD_FUNCTION_KEY, reserved_keys=shuffled
+    )
+
+    assert first == second, "the script depends on the order the reservation happens to arrive in"
+    assert first[4].count('"$profile" = ') == 2, (
+        f"the fixture must put two names in the script or order cannot be observed: {first[4]}"
+    )
+
+
+def test_no_console_binding_script_carries_a_raw_control_character() -> None:
+    """Every script this module builds is one shell string, so a raw newline in it is a defect.
+
+    **Found the hard way, in this task.** The sessions branch counts panes with
+    `printf "%s\\n"`, and the format has to reach `/bin/sh` as the two characters `\\` and `n`.
+    Written as a single escape in the Python source it becomes an *actual* newline instead, at
+    which point `printf` prints a newline rather than the pane list, `grep -c .` counts zero,
+    and the branch silently delivers nothing — a key that does nothing, on every press, with no
+    error anywhere. The build still succeeded and every other assertion in this file still
+    passed.
+
+    So the property is asserted over **every** action rather than fixed in the one place it bit:
+    a control character in a `run-shell` string is never intended here, and the next script to
+    grow a format string gets the same protection without anyone remembering to ask for it.
+    """
+    built = {
+        "F2": console_binding_args(
+            "F2", ConsoleBindingAction.FORWARD_FUNCTION_KEY, reserved_keys=_RESERVED
+        ),
+        "M-s": console_binding_args(
+            "M-s", ConsoleBindingAction.FORWARD_TO_SESSIONS, table=ConsoleKeyTable.PREFIX
+        ),
+        "F12": console_binding_args("F12", ConsoleBindingAction.SHOW_PROJECTS, ("true",)),
+        "z": console_binding_args(
+            "z", ConsoleBindingAction.TOGGLE_PANES, ("true",), table=ConsoleKeyTable.PREFIX
+        ),
+    }
+
+    offenders = {
+        key: repr(argv[-1])
+        for key, argv in built.items()
+        if any(character in argv[-1] for character in "\n\r\t\x00")
+    }
+    assert not offenders, (
+        f"these binding scripts carry a raw control character, which never survives as the "
+        f"format or argument it was meant to be: {offenders}"
+    )

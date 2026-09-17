@@ -71,20 +71,44 @@ class ConsoleKeyTable(Enum):
 class ConsoleBindingAction(Enum):
     """What one console binding does — a closed set, not a description.
 
-    Root *and* prefix since the Alt layer: `SHOW_PROJECTS` is the root key DEC-041's budget is
-    spent on, and `FORWARD_TO_SESSIONS` and `TOGGLE_PANES` are prefix-only and refused
-    anywhere else. Which table a binding goes in is `ConsoleKeyTable`, not this.
+    Root *and* prefix: `SHOW_PROJECTS` and `FORWARD_FUNCTION_KEY` are root-only,
+    `FORWARD_TO_SESSIONS` and `TOGGLE_PANES` prefix-only, and each is refused in the other
+    table where it is built. Which table a binding goes in is `ConsoleKeyTable`, not this.
 
     A binding's action decides tmux argv, so it is chosen from here rather than passed as
     free text (DEC-001).
 
-    **Three members, and a fourth was removed.** A `FOCUS_NEXT_PANE` action bound a second root key
+    **Four members, and a fifth was removed.** A `FOCUS_NEXT_PANE` action bound a second root key
     to `select-pane -t :.+`, on the premise that a displayed agent consumes the prefix key
     along with everything else the owner types. That premise is false — tmux intercepts the
     prefix in the *client*, before any key reaches the pane, so `prefix + o` already cycles
     the console's panes and costs no agent anything. The action is removed rather than
     left unbound: an unbindable member invites the next author to spend a key on the argument
     that was just disproved.
+    """
+
+    FORWARD_FUNCTION_KEY = "forward_function_key"
+    """Deliver one function key to whichever pane should have it, decided at press time.
+
+    The **root** table's forwarding action, and the counterpart of `FORWARD_TO_SESSIONS` rather
+    than a variant of it. That one is a prefix key that always means "the sessions pane"; this
+    one is a root key with three destinations, chosen from the marks on the pane the owner is
+    actually in:
+
+    * one of the console's own panes — the surface running there owns the key;
+    * an agent whose provider declares the key in `reserved_keys` — the agent binds it already,
+      so the console hands it over instead of stealing it;
+    * anything else — the sessions pane, which is the position the layer exists for.
+
+    **Root is what it costs and what it buys.** A root binding is a key every pane on this
+    socket can never receive (DEC-041's currency), which is precisely why the second branch has
+    to exist: without it, binding F2 here would take OpenCode's model switch away from an owner
+    who never asked the console for anything. It is root rather than prefix because the one
+    position the layer is for — inside a displayed agent, which owns that pane's keyboard
+    (DEC-040) — is the one a prefix binding could only reach by being pressed twice.
+
+    The reservation reaches this action from the provider's own descriptor through the registry
+    (DEC-070); the codec never holds a list of its own.
     """
 
     FORWARD_TO_SESSIONS = "forward_to_sessions"

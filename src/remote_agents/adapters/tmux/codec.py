@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+import re
 import shlex
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -400,8 +401,7 @@ _BINDABLE_KEY_CHARACTERS = frozenset(
 #: forwarding script and is lifted here because the fold key needs the identical sentence: a
 #: second copy is a second thing to get wrong, and the one that is wrong will be the quiet one.
 _PRESSED_FROM_THE_CONSOLE = (
-    f'test "$(tmux display-message -p "#{{client_session}}")" = "{CONSOLE_SESSION_NAME}" '
-    f"|| exit 0;"
+    f'test "$(tmux display-message -p "#{{client_session}}")" = "{CONSOLE_SESSION_NAME}" || exit 0;'
 )
 
 
@@ -450,11 +450,115 @@ def _forward_to_sessions_command(key: str) -> tuple[str, ...]:
     return ("sh", "-c", script)
 
 
+#: A function key, as tmux spells it. F1-F12 and nothing else.
+#:
+#: **Stricter than `_BINDABLE_KEY_CHARACTERS`, and matched against the key as given rather than
+#: against the modifier-stripped body.** The general check accepts anything alphanumeric behind
+#: one optional `C-`/`M-`, which is true of `f2`, `M-F2` and `C-F2`. All three would build a
+#: script, and the lowercase one is the quiet failure: Textual spells these keys `f2`, tmux
+#: spells them `F2`, the two meet in this codebase, and `bind-key f2` binds a key nothing sends.
+#:
+#: **`\A`/`\Z`, never `^`/`$`.** Python's `$` also matches immediately before a single trailing
+#: newline, so `^...$` would accept `"F2\n"` — and `re.match` anchors only the start. Here the
+#: character-set check above happens to reject a newline before this pattern is consulted, so
+#: the gap is masked rather than open; it is closed anyway, because the masking is a property
+#: of one other check's position and this pattern is written as if it were self-sufficient.
+_FUNCTION_KEY = re.compile(r"\AF(?:[1-9]|1[0-2])\Z")
+
+#: What a profile may be called, checked because the reservation's *keys* are interpolated too.
+#:
+#: They come from the curated registry, so this cannot fire from anything an owner types. It
+#: exists because the argument that makes this script safe is "every value was validated before
+#: interpolation", and an argument with one unguarded value in it is not that argument.
+#:
+#: **`\A`/`\Z` for the reason `_FUNCTION_KEY` gives, and here it was not masked.** Nothing else
+#: inspects a profile name, so `^...$` really did admit one ending in a single newline — found
+#: by this task's own review. The interpolation site is inside double quotes, where POSIX
+#: preserves a newline literally rather than treating it as a separator, so the effect would
+#: have been a comparison that silently never matches rather than an injection. A validation
+#: that is only safe because of where its output happens to land is not the invariant this
+#: module claims, so the pattern is what changed rather than the argument.
+_PROFILE_NAME = re.compile(r"\A[A-Za-z0-9_-]+\Z")
+
+#: The key the terminal keeps. Refused here as well as omitted from the console's table.
+#:
+#: F11 is the full-screen toggle in almost every emulator. A root binding would take it from
+#: the emulator, and the owner pressing it would have no way to tell which side swallowed it.
+#: Leaving it out of `CONSOLE_BINDINGS` is what makes it unbound; refusing it here is what
+#: stops the next author binding it without first meeting that argument.
+_TERMINALS_OWN_KEY = "F11"
+
+
+def _forward_function_key_command(
+    key: str, reserved_keys: Mapping[str, frozenset[str]]
+) -> tuple[str, ...]:
+    """The `sh -c` argv for one root F-key: three destinations, decided from the active pane.
+
+    **Every value here is validated before it reaches the string.** `key` against
+    `_FUNCTION_KEY` and each profile name against `_PROFILE_NAME`, both in
+    `console_binding_args` immediately before this is called. That ordering is the whole of the
+    injection argument: weakening or moving either check is a security change, not a refactor.
+
+    The branches, in the order the script decides them:
+
+    1. **the active pane carries a console slot mark** — the owner is in one of our own panes,
+       so the surface process there owns the key and it is sent straight back;
+    2. **the active pane's profile reserves this key** — the agent binds it already
+       (`reserved_keys`, declared by the provider's own descriptor per DEC-070), so the console
+       hands it over rather than stealing it;
+    3. **otherwise** — the sessions pane, found by its slot mark.
+
+    **Branch 3 refuses ambiguity rather than picking a winner**, which is where this parts
+    company with `_forward_to_sessions_command`'s `head -n 1`. That one is a prefix key; this is
+    a root key, and the key it delivers can be an unconfirmed stop (DEC-018) — so two panes
+    carrying the sessions mark deliver nothing at all. `grep -c .` rather than `wc -l`: an empty
+    result still prints one line through `printf`, and BSD `wc` pads its output, so counting
+    non-empty lines is both the correct arithmetic and the portable one.
+
+    Marks are read at press time (DEC-038). A pane is rebuilt by an exchange while the binding
+    stands, and the mark travels with the pane; a pane id captured at install would not.
+
+    **`display-message -p` carries no `-t`, and that is the load-bearing assumption here.**
+    Branch 1 and branch 2 both ask "which pane is the owner in", so if an unscoped
+    `#{pane_id}` resolved to anything but the pane the key was pressed in, every function key
+    would misroute. Measured on tmux 3.4 rather than read off the manual, with a **real
+    attached client** pressing a **root** binding — which is the only mechanism that exercises
+    this, since `send-keys` writes into a pane and never consults a key table: on a two-pane
+    session the script recorded `%0` with the first pane active and `%1` after selecting the
+    second, so the resolution follows the active pane press by press.
+    """
+    reserving = sorted(name for name, keys in reserved_keys.items() if key in keys)
+    # Sorted, because the mapping arrives from a registry fold whose insertion order is not part
+    # of anyone's contract, and a script that reordered with it would make every console rebuild
+    # a diff — which would in turn make a byte comparison useless for asking whether what is
+    # installed is what this version emits.
+    mine_or_reserved = 'test -n "$slot"' + "".join(
+        f' || test "$profile" = "{name}"' for name in reserving
+    )
+    reads_profile = (
+        f'profile=$(tmux show-options -qv -pt "$active" {_PROFILE_OPTION}); ' if reserving else ""
+    )
+    script = (
+        f"{_PRESSED_FROM_THE_CONSOLE} "
+        f'active=$(tmux display-message -p "#{{pane_id}}"); '
+        f'slot=$(tmux show-options -qv -pt "$active" {CONSOLE_SLOT_OPTION}); '
+        f"{reads_profile}"
+        f'if {mine_or_reserved}; then tmux send-keys -t "$active" {key}; exit 0; fi; '
+        f'panes=$(tmux list-panes -a -F "#{{pane_id}}" '
+        f'-f "#{{==:#{{{CONSOLE_SLOT_OPTION}}},{ConsolePaneSlot.SESSIONS.value}}}"); '
+        f'test "$(printf "%s\\n" "$panes" | grep -c .)" = 1 '
+        f'&& tmux send-keys -t "$panes" {key}'
+    )
+    return ("sh", "-c", script)
+
+
 def console_binding_args(
     key: str,
     action: ConsoleBindingAction,
     command: tuple[str, ...] = (),
     table: ConsoleKeyTable = ConsoleKeyTable.ROOT,
+    *,
+    reserved_keys: Mapping[str, frozenset[str]] | None = None,
 ) -> tuple[str, ...]:
     """Return the argv suffix that installs one console binding, root or prefix, on our socket.
 
@@ -513,7 +617,29 @@ def console_binding_args(
         # was deleted on the argument that a closed set leaves no third value to pass; this
         # is what makes that argument true at runtime rather than only for a type checker.
         raise ValueError(f"a console binding's table is a ConsoleKeyTable, not {table!r}")
-    if action is ConsoleBindingAction.FORWARD_TO_SESSIONS:
+    if action is ConsoleBindingAction.FORWARD_FUNCTION_KEY:
+        if table is not ConsoleKeyTable.ROOT:
+            # The mirror of the forwarding chord's refusal, and for the opposite reason: a chord
+            # is affordable *because* it is a prefix key, and an F-key is only useful because it
+            # is a root one. Behind a prefix it could never reach a displayed agent, which is
+            # the single position this layer exists to serve.
+            raise ValueError("a function-key forward may only be bound in the root table")
+        if command:
+            raise ValueError("the function-key binding builds its own command")
+        if key == _TERMINALS_OWN_KEY:
+            raise ValueError(f"{_TERMINALS_OWN_KEY} belongs to the terminal and is not bound here")
+        if not _FUNCTION_KEY.match(key):
+            raise ValueError(
+                "a function-key forward binds F1-F12 in tmux's own spelling, with no modifier"
+            )
+        reserved_keys = {} if reserved_keys is None else reserved_keys
+        for name in reserved_keys:
+            if not _PROFILE_NAME.match(name):
+                raise ValueError(
+                    f"a profile name reaching the forwarding script is unsafe: {name!r}"
+                )
+        command = _forward_function_key_command(key, reserved_keys)
+    elif action is ConsoleBindingAction.FORWARD_TO_SESSIONS:
         if table is not ConsoleKeyTable.PREFIX:
             # The forwarding keys are affordable *because* they are prefix keys — eight of them
             # in the root table would take eight keys from every agent on this server, against a
