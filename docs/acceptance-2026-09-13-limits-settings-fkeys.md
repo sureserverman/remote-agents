@@ -213,15 +213,89 @@ These are readings, not claims.
 
 ### Live captures
 
-**TO BE FILLED.** The live drill runs on a real console and its evidence is not yet in this
-document. Four cases, each with its own capture:
+Driven by
+`tests/live/test_three_pane_console.py::test_the_function_keys_reach_the_pane_the_owner_is_in_and_the_agent_that_reserves_one`
+on 2026-09-17: one console, four real `remote-agents pane` surfaces, a real attached client,
+and the reservation folded from the providers' own descriptors rather than stubbed. One test,
+26.5 s, run alone with `REMOTE_AGENTS_LIVE_ACCEPTANCE=1`.
 
-1. **`F5` in the limits pane redraws it.** — TO BE FILLED
-2. **`F2` from a displayed agent opens the five-row Settings screen in the sessions pane.** —
-   TO BE FILLED
-3. **`F2` into an OpenCode-marked pane is received by that pane** rather than by the console. —
-   TO BE FILLED
-4. **An `attach` client pressing `F8` stops nothing.** — TO BE FILLED
+**The order of the four is load-bearing.** `F8` is pressed while the sessions pane still rests
+on its list with a session under the cursor — over the Settings screen a refusal would prove
+nothing — and the two `F2` cases run reservation-first, so "Settings did not open" is a fact
+about *that* press rather than about a screen that was already absent.
+
+1. **`F5` in the limits pane redraws it** — branch 1, the owner is in one of the console's own
+   panes. A six-second control window before the press showed no change; after it:
+
+   ```
+    claude  no reading yet
+    codex   no reading yet
+    Claude Remote Control · on            <- was "Claude Remote Control · Claude's default"
+    Codex Remote Control · unreachable
+   ```
+
+   The one confound — the limits pane's own sixty-second re-read — is bounded inside the test
+   (the press lands well under 55 s from `ensure`, measured at about 30 s), and on a slower host
+   the case fails as *inconclusive* rather than crediting `F5` with a redraw it may not have
+   caused.
+
+2. **`F2` into an OpenCode-marked pane is received by that pane** — branch 2, the pass-through.
+   The agent's own pty received the key's bytes, and the sessions pane in the same instant was
+   unchanged, still its list, no Settings:
+
+   ```
+   agent pty: b'\x1bOQ'
+
+    ⭘                               remote-agents  Sessions
+    ● 1 running
+    enter open · d detail · p projects · F12 from inside an agent
+   ╭─ Sessions 1 · a i r s c f m ──────────────────────────────────────────────╮
+   │ ▸ ● qualification · claude #1                         running 0m —        │
+   ```
+
+3. **`F2` from a displayed agent opens the five-row Settings screen in the sessions pane** —
+   branch 3, and the headline: this is the position DEC-040 puts the owner in, and the whole
+   reason the row is bound at the root. The same pane as case 2, marked `claude` instead:
+
+   ```
+    ⭘                          remote-agents  Sessions › Settings
+    Press enter on a row to change it.
+   ▊ Claude Remote Control · on                                               ▎
+   ▊ Codex Remote Control · unreachable                                       ▎
+   ▊ Claude limits source · status line                                       ▎
+   ▊ Theme · night                                                            ▎
+   ▊ Project order · recent first                                             ▎
+    esc back  f1 help  f10 quit                                     ▏^p palette
+   ```
+
+   Five rows, asserted against `len(SETTINGS_ROWS)` rather than the literal five. The agent's
+   sink afterwards still held exactly the one byte string from case 2 — nothing was added, so
+   the key went to the sessions pane and not to both.
+
+4. **An `attach` client pressing `F8` stops nothing** — DEC-073(3). Before and after are the
+   same quiet list (`▸ ● qualification · claude #1  running 0m —`), no announcement anywhere in
+   the ten-second watch, and the record still `RUNNING`.
+
+   **What the mutant drew in the same position is the counterfactual**, and it is why this case
+   is evidence rather than a tautology. With `_PRESSED_FROM_THE_CONSOLE` removed from the
+   forwarding script:
+
+   ```
+   │ ▸ ● qualification · claude #1                           running 0m —      │
+   │                          ▌ The stop was never sent. Nothing was           │
+   │                          ▌ signalled to the agent and nothing was         │
+   │                          ▌ stopped, because this host could not match     │
+   │                          ▌ the session to a live pane it owns ...         │
+   ```
+
+   **One vacuous assertion was caught here and is recorded rather than quietly replaced.** The
+   case first asserted only that the record was still `RUNNING`, and the mutant *survived* it: a
+   stop issued inside a **disposable** console cannot complete at all, because the service
+   reaches the terminal through a port carrying the **production** socket name and finds no
+   managed pane. `RUNNING` was therefore true whether or not the key arrived. What a delivered
+   `F8` provably does is draw the stop's own refusal, so the marker is that refusal, watched
+   across the settle because the toast dismisses itself, and self-validated by asserting the same
+   absence *before* the press. `RUNNING` is kept as a labelled weaker second arm.
 
 Case 4 is the one that matters most and the one this document must not record as passing on
 reasoning: the binding carries a guard asking which session the pressing client is attached to,
