@@ -701,7 +701,7 @@ declared `light` scope and its already-cut tag both exclude. **BL-096** carries 
 
 ---
 
-### ACTION NEEDED — the owner has not seen the bot's Settings or the Claude limits line on their phone
+### RESOLVED 2026-09-17 — the owner checked both on their phone
 
 Every bot-side reading in this document was rendered in-process:
 `PrivateBotBoundary._settings_screen()` in §2 is a pure render with no network, and no capture
@@ -722,6 +722,26 @@ need the owner's own phone, and neither can be driven from here:**
 Report back either way. An absence here is as much a finding as a match, and this document should
 record what the owner saw rather than what it expected them to see.
 
+**The owner's report, 2026-09-17, in their own words:**
+
 ```
-PENDING — the owner's phone-side report
+checked on my phone, all three rows correct, the limits block works as expected
 ```
+
+**What that settles.** Both items above are confirmed on a real Telegram client on the owner's own
+device, against the deployed `v0.42.0` service — which is the one thing no capture in this
+document could reach, every other bot-side reading here being an in-process render with no
+network. The three-row Settings screen arrives on a phone looking like §2's render, and the limits
+block behaves as §2 and §4.1 describe.
+
+**What it deliberately does not claim.** The owner reported at the granularity they were asked to
+check, not row by row, and this document does not upgrade that into per-field assertions they did
+not make. Specifically: *"all three rows correct"* is recorded as their judgement that the rows
+match what §2 and `doctor` say, **not** as a transcription of three values read back from the
+screen; and *"the limits block works as expected"* is not re-stated here as the narrower claim
+that the Claude Remote Control line was observed sitting under the Codex one. Both are almost
+certainly true and neither is written down as though it were captured. **The last unverified
+surface in this plan is now verified by the only party who could verify it, and the limit of that
+verification is its own sentence rather than a footnote.**
+
+*This was the final `ACTION NEEDED` in this document. Nothing in it is now `PENDING`.*
