@@ -649,9 +649,13 @@ DoubleClick1Pane TripleClick1Pane F1 F2 F3 F4 F5 F6 F7 F8 F9 F10 F12
 
 Eleven function keys, `F11` absent as DEC-093 specifies, matching `CONSOLE_BINDINGS` exactly.
 
-### 4.4 — What the deploy found: the retired Alt-chord layer is still bound on the owner's server
+### 4.4 — What the deploy found: the retired Alt-chord layer was still bound on the owner's server
 
-**Sub-plan 03's headline outcome is not in force on this host, and no check in this plan was
+*(Found at the gate; **cleared on this host later the same day** — see the Status note at the end
+of this section. The finding is kept in its original tense because what it exposed is a mechanism,
+and the mechanism is still there.)*
+
+**Sub-plan 03's headline outcome was not in force on this host, and no check in this plan was
 looking at the thing that would have shown it.** The independent gate evaluator found it by
 enumerating the deployed tmux server rather than the source tree.
 
@@ -680,18 +684,32 @@ nothing about a long-lived one. DEC-094 and the `v0.42.0` tag message both state
 retired; on this host, until the keys are unbound, it is retired *in the code* and still *pressable
 by the owner*.
 
-**Status: not fixed here, and the reason is not that it was judged unimportant.** Unbinding the
-eight keys on the live server was attempted and **refused by this session's permission layer as a
-shared-resource modification** — the correct call for an automated change to a server holding the
-owner's running agent sessions. The remedy is one command the owner can run, and it touches
-nothing else:
+**Status: cleared on this host 2026-09-17, on the owner's explicit instruction.** The first
+attempt was **refused by the session's permission layer as a shared-resource modification** — the
+correct call for an automated change to a server holding the owner's running agent sessions — and
+it was recorded here as unfixed rather than worked around. The owner then asked for it directly,
+which is the authorization that was missing:
 
 ```
 for k in M-a M-c M-d M-f M-i M-m M-r M-s; do tmux -L remote-agents unbind-key -T prefix "$k"; done
 ```
 
-Verify with the `list-keys` command above: it should then print `h` alone. Killing and re-creating
-the tmux server would also clear it, at the cost of every running session.
+**After, verified rather than assumed:**
+
+```
+$ tmux -L remote-agents list-keys -T prefix | grep run-shell | awk '{print $4}'
+h
+```
+
+`h` survives — the one `PREFIX` member the composer still emits — and the root table is untouched
+at `F1`–`F10`, `F12` plus the two mouse bindings. All six panes were re-enumerated afterwards and
+are alive, including the two agent panes (`%7` claude, `%5` codex) that were the reason not to
+take this action unasked. **DEC-094 is now true of this host as well as of the code**, which is
+the claim §4.4 was opened to deny.
+
+*What this does not fix:* the next key retirement will leave the same residue, on this server and
+every other. **BL-096 stays open** for that — clearing one instance by hand is not the mechanism,
+and the entry records the shape of the real fix.
 
 **The general defect is a class and is filed, not fixed.** *Any* binding the composer stops
 emitting survives on every existing server, so every future key retirement leaves the same
