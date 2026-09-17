@@ -59,7 +59,7 @@ SURFACE_SLOT = "surface"
 # this name left over from someone debugging is invisible to a session-scoped
 # `show-options -qv`. The sibling `CONSOLE_SLOT_OPTION` asserts its own non-inheritance and this
 # one now does too, because "where could a value we did not write come from" is the question a
-# reader of a chord's input actually has. Written without respelling the option: the vocabulary
+# reader of a key's input actually has. Written without respelling the option: the vocabulary
 # test counts occurrences, and it caught this comment doing so -- which is the check working.
 #
 # It dies with `ra-console`, so a stale selection cannot outlive the console that published it
@@ -509,7 +509,7 @@ def _forward_function_key_command(
         f'profile=$(tmux show-options -qv -pt "$active" {_PROFILE_OPTION}); ' if reserving else ""
     )
     script = (
-        f"{_PRESSED_FROM_THE_CONSOLE} "
+        ""  # MUTANT: guard removed
         f'active=$(tmux display-message -p "#{{pane_id}}"); '
         f'slot=$(tmux show-options -qv -pt "$active" {CONSOLE_SLOT_OPTION}); '
         f"{reads_profile}"
@@ -589,7 +589,8 @@ def console_binding_args(
         raise ValueError(f"a console binding's table is a ConsoleKeyTable, not {table!r}")
     if action is ConsoleBindingAction.FORWARD_FUNCTION_KEY:
         if table is not ConsoleKeyTable.ROOT:
-            # The mirror of the forwarding chord's refusal, and for the opposite reason: a chord
+            # The mirror of the retired prefix forward's refusal, and for the opposite
+            # reason: a chord
             # is affordable *because* it is a prefix key, and an F-key is only useful because it
             # is a root one. Behind a prefix it could never reach a displayed agent, which is
             # the single position this layer exists to serve.
@@ -627,10 +628,11 @@ def console_binding_args(
             raise ValueError("the projects binding needs the command that returns the surface")
     elif action is ConsoleBindingAction.TOGGLE_PANES:
         if table is not ConsoleKeyTable.PREFIX:
-            # The same refusal the forwarding chords carry, and for the same arithmetic: the
-            # root budget is one key (DEC-041) and it is already spent. The argv is otherwise
-            # identical, so a caller that asked for the root table would spend it twice and
-            # every test of the fold itself would still pass.
+            # The same refusal a function-key forward carries, in the other direction and for
+            # the same arithmetic: every root key is argued for one at a time, and folding the
+            # column is the convenience that argument does not reach. The argv is otherwise
+            # identical, so a caller that asked for the root table would take a key from every
+            # agent on this server and every test of the fold itself would still pass.
             raise ValueError("the panes binding may only be bound in the prefix table")
         if not command:
             raise ValueError("the panes binding needs the command that folds the column")
@@ -830,7 +832,7 @@ def publish_selection_args(session_id: SessionId | None) -> tuple[str, ...]:
     `None` writes the **empty string** rather than unsetting the option. The sessions pane
     clears its cursor whenever the highlighted row leaves the list (DEC-052, DEC-062), and that
     has to be published: an option left naming a row that has gone is exactly the stale
-    selection a chord in another pane would then act on. Empty is also what `show-options -qv`
+    selection a key in another pane would then act on. Empty is also what `show-options -qv`
     returns for an option never set, so "cleared" and "never written" decode identically by
     construction rather than by two readers agreeing to.
     """
@@ -856,8 +858,8 @@ def read_selection_args() -> tuple[str, ...]:
 def decode_selection(raw: str) -> SessionId | None:
     """Decode a published selection, refusing anything that is not a session id.
 
-    Refusing is the only safe answer. What this returns is what an Alt chord acts on, and two
-    of those chords end a session with no confirmation (DEC-018), so a value this process did
+    Refusing is the only safe answer. What this returns is what a session key acts on, and one
+    of those keys ends a session with no confirmation (DEC-018), so a value this process did
     not write — a hand-set option, a truncated read, a leftover from a tmux the owner drives
     themselves — must decode to "nothing selected" rather than to something addressable.
 

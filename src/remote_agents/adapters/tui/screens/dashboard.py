@@ -148,7 +148,7 @@ letters (`a i r s c f m`) the dashboard's sessions pane nonetheless *advertises*
 title -- so those letters are avoided here even though nothing would collide today, because a
 key the frame names for one subject must not quietly mean another.
 
-**Nor the Alt layer built from those same letters**, and that follows from the sentence above
+**Nor the session keys that carry those same acts**, and that follows from the sentence above
 rather than being a separate decision: the session-key layer is offered where `carries_row_keys`
 is set, which is where the bare letter is already legal. `DashboardScreen` sets
 `owns_session_cursor` and not that flag, so F8 and F9 -- the two stops DEC-018 forbids
@@ -1193,7 +1193,8 @@ class DashboardScreen(LimitsRegion, FeedRegion, ProjectsPaneScreen):
     async def populate(self) -> None:
         await super().populate()
         if self.services.open_in_console is not None:
-            # The console's one root key, documented where the owner rests. It said "F12
+            # The one root key that is an exchange rather than a delivery, documented where
+            # the owner rests. It said "F12
             # returns to this dashboard", which was true of the tab model and is not true
             # now: F12 brings the console's **projects pane** back to the left slot, and
             # this combined dashboard is a different surface that a console never runs.

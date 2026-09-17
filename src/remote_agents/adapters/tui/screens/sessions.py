@@ -224,7 +224,7 @@ class OpeningAction(Message):
 #: **The `\u25b8` marker is what that residual bought a mitigation for**, and it is a rendering
 #: rather than a second selection: the row these keys act on is drawn marked and yellow, so
 #: "which session is one keypress from ending" is legible -- including from the panes that
-#: carry the Alt layer and cannot see this cursor at all. A design that made the marker a
+#: carry the session keys and cannot see this cursor at all. A design that made the marker a
 #: *separate*, committed selection was built and reverted; two answers to "which session" cost
 #: more confusion than the scrolling hazard it removed, and DEC-062 had already accepted that
 #: hazard on the owner's behalf.
@@ -803,7 +803,7 @@ class SessionsScreen(_SessionActionKeys, ChoiceScreen):
     is the one showing. Read by `RemoteAgentsTui._refresh_context_windows_tick`; screens without
     it cost no provider read at all."""
 
-    #: This position binds the bare row keys, so the Alt layer is legal here (see the flag's
+    #: This position binds the bare row keys, so the session keys are legal here (see the flag's
     #: declaration on `ChoiceScreen`). Declared on the screen rather than on `_SessionActionKeys`
     #: for the reason `SESSION_ACTION_BINDINGS` is attached to screens: the mixin is where the
     #: *actions* live and the screen is where the *bindings* do, and this flag is about the

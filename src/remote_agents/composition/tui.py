@@ -374,7 +374,8 @@ def local_context(config, connection, paths: ProductionPaths):
         # has to be asked for per press, which is what `holds_console_slot` reads.
         #
         # Left `None` when tmux set no `TMUX_PANE`, which under CONSOLE hosting should not
-        # happen: an absent gate refuses every chord, so the failure mode of a surprise is a
+        # happen: an absent gate refuses every session key, so the failure mode of a
+        # surprise is a
         # layer that does not work rather than one that acts on the wrong console's selection.
         pane_id = os.environ.get("TMUX_PANE")
         if pane_id:

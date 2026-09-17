@@ -472,7 +472,7 @@ def _enter_console(
     """Enter the console: ensure it exists and become its client, honoring the hosting.
 
     The bare invocation's whole meaning. A client already on our server is told it is
-    already there, and told what the one root key does — this line said "F12 returns to the
+    already there, and told what F12 does — this line said "F12 returns to the
     dashboard" until Sub-plan 3, which was the tab model's answer and named a surface the
     console does not run; a foreign tmux client gets the command printed rather than a nested
     client; a bare shell ensures the console — one window of three panes, running

@@ -56,7 +56,7 @@ class ConsoleKeyTable(Enum):
     closed set rather than passed as text (DEC-001's typed ports). The failure it forecloses is
     quiet — `"Prefix"` type-checks, passes every test that does not construct it, raises at
     install time, and is then swallowed by `ConsoleComposer`'s "the console stands without it",
-    leaving a console that looks fine with a chord that does nothing but a log line.
+    leaving a console that looks fine with a key that does nothing but a log line.
     """
 
     ROOT = "root"
@@ -126,9 +126,9 @@ class ConsoleBindingAction(Enum):
     TOGGLE_PANES = "toggle_panes"
     """Fold the console's right column off the edge, or bring it back — whichever it is not.
 
-    Prefix-only, and refused in the root table: the root budget is one key (DEC-041), it is
-    already spent on the way back from a displayed agent, and a fold is a convenience the
-    console works perfectly well without. A key that costs every agent on this server a
+    Prefix-only, and refused in the root table: every root key is argued for one at a time
+    against what it takes from the owner's agents, and a fold is a convenience the console
+    works perfectly well without. A key that costs every agent on this server a
     keystroke forever has to be the difference between a usable console and a trap; this one
     is the difference between a wide agent and a full-width one.
 
@@ -293,7 +293,7 @@ class ConsolePort(Protocol):
         Console state rather than pane identity, and session-scoped for that reason — the
         codec's `SELECTED_SESSION_OPTION` carries the argument against DEC-038. `None` means
         the cursor rests on nothing and must be published as such: an unpublished clear leaves
-        the last selection standing, which is the one thing a chord in another pane must never
+        the last selection standing, which is the one thing a key in another pane must never
         act on (DEC-052, DEC-062).
         """
         ...
@@ -301,7 +301,7 @@ class ConsolePort(Protocol):
     async def read_selection(self) -> SessionId | None:
         """The session the console has selected, or `None` when nothing is.
 
-        Never cached. One read per chord press is the price of never acting on a stale
+        Never cached. One read per key press is the price of never acting on a stale
         selection, and it is a `show-options` against a local socket.
         """
         ...

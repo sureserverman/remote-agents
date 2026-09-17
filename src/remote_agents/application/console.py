@@ -53,7 +53,8 @@ JUMP_HOME_KEY = "F12"
 #: Not part of the root budget above, and the distinction is the whole reason this key could be
 #: taken at all: a prefix binding is invisible to every pane, because tmux intercepts the prefix
 #: in the *client* (DEC-041's own finding). `h` for hide, unshifted, and it collides with
-#: nothing: the Alt layer is `M-<key>` and tmux's own default prefix table has `h` unbound.
+#: nothing: this is the only binding left in the prefix table and tmux's own defaults leave
+#: `h` unbound.
 #: `prefix z` — tmux's instant zoom — is deliberately left alone beside it: it is the same
 #: destination without the motion, and it costs nothing to keep.
 FOLD_PANES_KEY = "h"
@@ -158,14 +159,15 @@ class ConsoleBinding:
     """Which tmux key table this goes in, and it decides what the key *costs*.
 
     `root` is `bind-key -n`: no prefix, so the key is one every agent on this server can never
-    receive, for as long as it is bound. That budget is fixed at one (DEC-041) and the argument
-    for spending it is the `why` above.
+    receive, for as long as it is bound. DEC-041 fixed that budget at one and this sub-plan
+    supersedes it at eleven; what did not change is that the argument for spending a root key
+    is the `why` above, per key.
 
     `prefix` costs an agent **nothing**. tmux intercepts the prefix key in the client, before
     any key reaches a pane, so a prefix binding takes nothing from anybody — which is why the
-    eight forwarding chords are affordable and the one root key had to be argued for. A `why`
-    is still required here: the cost is not zero, it is paid in the owner's memory rather than
-    in their agents' keyboards.
+    fold key is affordable and every root key has to be argued for. A `why` is still required
+    here: the cost is not zero, it is paid in the owner's memory rather than in their agents'
+    keyboards.
     """
 
 
@@ -259,13 +261,12 @@ CONSOLE_BINDINGS: tuple[ConsoleBinding, ...] = (
 def console_panes_binding() -> ConsoleBinding:
     """The fold key, declared apart from the root budget because it costs a different thing.
 
-    **Deliberately not in `CONSOLE_BINDINGS`.** That tuple is the number DEC-041 fixed at one
-    and the one a reader must not see grow; folding the column is a convenience the console
-    works perfectly well without, so it goes where a convenience can be afforded — the prefix
-    table, which takes nothing from any agent. Declared as its own function rather than
-    appended to the chord layer for the same reason in the other direction: it is not one of
-    the row chords, carries no forwarding, and would be invisible inside a comprehension over
-    the TUI's key table.
+    **Deliberately not in `CONSOLE_BINDINGS`.** That tuple is the root set a reader must not
+    see grow without an argument; folding the column is a convenience the console works
+    perfectly well without, so it goes where a convenience can be afforded — the prefix table,
+    which takes nothing from any agent. Declared as its own function rather than appended to
+    the row for the same reason in the other direction: it is not a function key, carries no
+    forwarding, and would be invisible inside a comprehension over that row.
 
     Like the projects key, the *command* it runs is the composition root's to supply — which
     entry point folds the panes is composition policy, exactly as which entry point is the
@@ -477,9 +478,9 @@ class ConsoleComposer:
         # Caught by the Stage 2 gate evaluator, against a test whose *name* already said this
         # was the intended behaviour while its assertion said the opposite.
         for binding in self._bindings:
-            # Two actions run a program of ours now, so this is a mapping rather than a
-            # conditional: an action absent from it takes no command, which is what the
-            # forwarding chords need (they derive their own from the key they are bound to).
+            # Two actions run a program of ours, so this is a mapping rather than a
+            # conditional: an action absent from it takes no command, which is what a
+            # function-key forward needs (it derives its own from the key it is bound to).
             command = {
                 ConsoleBindingAction.SHOW_PROJECTS: self._projects_command,
                 ConsoleBindingAction.TOGGLE_PANES: self._panes_command,

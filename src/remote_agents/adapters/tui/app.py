@@ -156,7 +156,7 @@ __all__ = [
 #: default gave it — a gate evaluator measured the message at 55 words.
 _FAILURE_TIMEOUT = 20.0
 
-#: What the Alt layer says when the console has nothing selected — one string, because the
+#: What a session key says when the console has nothing selected — one string, because the
 #: sessions cursor resting on nothing is one condition however the position reached it
 #: (DEC-052, DEC-062: a vanished row rests on nothing rather than falling back to row 0).
 _NOTHING_SELECTED = "No session is selected."
@@ -317,9 +317,9 @@ class RemoteAgentsTui(App[AttachRequest | None]):
         # three of the four panes no route to this screen at all (BL-057). An app binding is
         # asked of every position, and `check_action` is what decides where it applies.
         #
-        # **A bare printable key, and deliberately not `priority=True`.** The Alt layer below
-        # takes priority precisely so a bare letter can stay text in the projects filter; this
-        # key wants the opposite and gets it by default, since Textual gives a focused `Input`
+        # **A bare printable key, and deliberately not `priority=True`.** The F-key row below
+        # takes priority precisely so a key can act from inside the projects filter; this key
+        # wants the opposite and gets it by default, since Textual gives a focused `Input`
         # every printable key before a non-priority binding sees it. So `,` opens Settings on
         # the rows and types a comma in the filter, which is the rule `o` on this position
         # already lives by.
@@ -328,7 +328,8 @@ class RemoteAgentsTui(App[AttachRequest | None]):
         ),
         # The F-key row: one table in `keys.py`, bound here so every position is asked about
         # it and `check_action` decides where each key applies. Priority for the reason the
-        # Alt layer is -- the key has to act from inside an `Input` -- and shown, because
+        # retired Alt layer was -- the key has to act from inside an `Input` -- and shown where
+        # the table says, because
         # these are the keys the footer exists to teach. The five session-shaped ones route
         # through `action_session_key`, which awaits no modal on this pump: its stops post to
         # the screen rather than awaiting one here (DEC-025, DEC-068).

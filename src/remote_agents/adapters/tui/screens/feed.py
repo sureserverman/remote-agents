@@ -635,9 +635,9 @@ class FeedScreen(SessionKeyHintRow, FeedRegion, ChoiceScreen):
         self.query_one("#feed-pane", OptionList).focus()
         if self._timer is None:
             self._timer = self.set_interval(self._FEED_AUTO_REFRESH, self._auto_reload)
-        # Read-only, so the hint row is the Alt layer alone -- and this is the layer's least
-        # obvious home, because the pane shows notifications *about* sessions while owning none
-        # of them.
+        # Read-only, so the hint row is the session-key row alone -- and this is that row's
+        # least obvious home, because the pane shows notifications *about* sessions while
+        # owning none of them.
         #
         # **What the row says is "these keys work here", not "they act on the notification you
         # are reading".** They act on whatever the *sessions pane* has selected, which need not

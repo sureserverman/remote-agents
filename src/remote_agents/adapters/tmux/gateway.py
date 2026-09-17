@@ -654,10 +654,10 @@ class TmuxGateway:
 
         A failure here is not fatal to the caller, but it is **not** harmless either, and an
         earlier version of this paragraph said it was. It claimed a console that cannot write
-        the option is one "whose chords fall back to no session selected". That is true only
+        the option is one "whose session keys fall back to no session selected". That is true only
         before the first successful write: `set-option` failing does not clear the option, so
         after one success every later failure leaves the *previous* value standing while the
-        cursor moves on. The chords then act on a stale row rather than on nothing.
+        cursor moves on. The keys then act on a stale row rather than on nothing.
 
         It is still not raised, because the caller is a cursor move and there is nothing useful
         for it to do about a tmux that will not answer. What contains the consequence is
@@ -682,7 +682,7 @@ class TmuxGateway:
         the pane carries in its own right, and whether the console is the window hosting it. So
         the gate is a filter over a listing this adapter already builds and already tests,
         rather than a new option read whose decoder would be a second place the two facts could
-        be spelled. One `list-panes -a` per chord press, against a local socket.
+        be spelled. One `list-panes -a` per key press, against a local socket.
 
         `on_console` is what closes the exchange case: the mark travels with the pane (DEC-038),
         so an exiled projects pane still has one and is no longer shown by the console. A pane

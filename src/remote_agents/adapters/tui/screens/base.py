@@ -931,7 +931,7 @@ class ChoiceScreen(Screen[None]):
         screen with nothing to hint gives the rows the line back.
 
         `Content` as well as `str`, because a hint can now carry **two** emphases on one line:
-        the pane's own keys, and the console-wide Alt layer greyed further when there is no
+        the pane's own keys, and the console-wide session keys greyed further when there is no
         selection for it to act on. The region is composed `markup=False`, so a marked-up
         *string* would be drawn literally -- a `Content` object carries its spans instead of
         asking this row to start parsing text it is given.
@@ -1462,7 +1462,7 @@ class ChoiceScreen(Screen[None]):
     #: no third position, and `DashboardScreen` is one: it owns a sessions cursor and
     #: deliberately binds none of those letters.
     #:
-    #: So the Alt layer is offered by *this* flag rather than by `owns_session_cursor`. Where
+    #: So the session keys are offered by *this* flag rather than by `owns_session_cursor`. Where
     #: the bare letter is already legal, its F-key adds no hazard — it is the same act on
     #: the same cursor. Where it is not, the F-key may not smuggle an unconfirmed stop onto a
     #: cursor whose position was never argued for, and which on the dashboard is not even the

@@ -236,7 +236,7 @@ class ProjectsScreen(ChoiceScreen):
         self.set_status(
             f"Choose a project — {count} available, {order}",
             # Through the seam rather than the constant: on the console's projects pane this
-            # line also carries the Alt layer, and `_describe_projects` runs on every redraw --
+            # line also carries the F-key row, and `_describe_projects` runs on every redraw --
             # so a pane that appended the F-keys once would lose them at the next render.
             hint=self.hint_content(PROJECTS_HINT),
         )
