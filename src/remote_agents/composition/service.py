@@ -38,9 +38,12 @@ _TRUST_POLL_SECONDS = 5.0
 #: looks. What the message buys is *knowing without looking*, and five minutes is prompt for
 #: that while costing one bounded read per provider per tick against a rate-limit endpoint.
 #:
-#: It is also comfortably wider than `EARLY_RESET_GRACE`, which is the property that keeps a
-#: merely-late rollover from reading as news: a grace narrower than the polling period would
-#: report scheduled resets on a schedule.
+#: It is deliberately *not* compared to `EARLY_RESET_GRACE` here. An earlier version of this
+#: comment called the period "comfortably wider" than that grace while the grace's own comment
+#: claimed the reverse, and the two values are both five minutes, so neither statement was
+#: true. The two numbers answer unrelated questions: this one is how often the figures are
+#: asked for, and the grace is how far ahead of its published instant a wipe must be to count
+#: as early. A scheduled rollover is silent whatever either of them is set to.
 _LIMITS_POLL_SECONDS = 300.0
 
 

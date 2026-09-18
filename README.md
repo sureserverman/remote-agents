@@ -394,6 +394,22 @@ claims neither limit kind for the same reason Codex does not, and its `completed
 closing sentence — the event has no field that could hold one, so that is permanent rather than
 pending.
 
+One thing the service says unprompted is not about a session at all. When a provider clears a
+plan's usage windows ahead of the instant it had itself recorded for them, the owner gets one
+Telegram message for that provider — `Claude limits were reset early — 5h 91% → 2%, week 64%
+→ 0%` — naming every window that moved and what it moved from. DEC-097 admits it as the single
+account-level exception to the rule that a notification is about a live session, and admits it
+on that rule's own test: a wiped meter changes what the owner can do in the next hour. A
+rollover that arrives on the schedule the provider published is silent, a window merely filling
+up is silent — this is not a threshold alarm — and two readings that did not come from the same
+source are never compared at all, because a `status line` figure held against a `usage API` one
+is two instruments differing rather than an event (DEC-087). It is a bot message only; the
+console's feed reads what agents did to their sessions, and this is not that. Two costs come
+with it and neither is a false alarm: an early reset around a service restart is missed, and on
+the default Claude source it is noticed only when the next Claude session reports. Both are
+stated in full under
+[what each notification means](docs/operator-runbook.md#what-each-notification-means).
+
 See [the operator runbook](docs/operator-runbook.md) for acceptance, recovery, and rollback, and
 [agent activity notifications](docs/operator-runbook.md#agent-activity-notifications) for
 installing, verifying and removing the hooks.

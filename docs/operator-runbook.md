@@ -1131,6 +1131,43 @@ suppresses another — past Telegram's per-chat rate, at which point its refusal
 a growing backlog. Nothing is dropped: the remainder stays queued and the next poll takes it, so a
 burst arrives spread over a minute or two instead of being refused.
 
+**One message the service sends is not about a session at all.** When a provider clears a plan's
+usage windows ahead of the instant it had itself recorded for them, the owner gets one Telegram
+message for that provider — `Claude limits were reset early — 5h 91% → 2%, week 64% → 0%` —
+naming every window that moved and what it moved from. DEC-097 admits it as the single
+account-level exception to the rule that a notification is about a live session, and admits it on
+that rule's own test: a wiped meter changes what the owner can do in the next hour. A rollover
+that arrives on the schedule the provider published is silent, a window merely filling up is
+silent — it is not a threshold alarm — and two readings carrying different source stamps are
+never compared at all, because a `status line` figure held against a `usage API` one is two
+instruments differing rather than an event (DEC-087, DEC-061). It reaches the bot only: the local
+feed reads `agent_activity`, which is the record of what agents did to their sessions, and an
+account's meters are not a session's news.
+
+It is driven by a fourth periodic pass beside reconcile, activity and trust: **each provider's
+limits are read every 300 seconds**, one bounded read per provider per tick through the same
+`Backend.limits` both surfaces already use. Unlike `activity_poll_seconds` that period is not
+configurable and there is no config key to add — nobody has asked to tune it, and it is paired
+with the five-minute grace the rule applies at a window's own deadline, which is what keeps a
+wipe that beat its schedule by a minute — or a provider's clock disagreeing with ours — from
+reading as news. An ordinary rollover is silent for a simpler reason: by the time the drop is
+visible its published instant has already passed. Each pass
+compares a provider's reading against the one before it and then
+replaces it; the first reading after a start is a baseline and reports nothing.
+
+Two costs were accepted for that shape, and both are worth knowing before you go looking for a
+message that never came. **An early reset around a service restart is missed**, because the
+baseline is held in memory and does not survive the process — persisting it was offered to the
+owner and declined, as a migration and a store port to cover a gap of minutes. Missed, never
+invented, and that direction is the whole design: a false "your limits were reset" is the one an
+owner would act on, so every guard in the rule fails towards silence. **And with the Claude
+limits source set to `status line` — `claude_limits_source = "status-line"`, the default, reading
+the status-line hop's recording — an early Claude reset is noticed only when the next Claude
+session reports**, because that is when the figure moves at all. The watcher never reaches for
+the usage API on its own, so DEC-087's opt-in remains the only thing that decides what is read.
+Codex has no equivalent gap: its figures are asked of `codex app-server` on each pass, so they
+move whether or not a Codex session has run.
+
 ## Local terminal visual baselines
 
 Every position the terminal wizard can be in has a committed SVG baseline under

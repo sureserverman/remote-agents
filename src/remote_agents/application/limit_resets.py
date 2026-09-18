@@ -44,14 +44,21 @@ from datetime import datetime, timedelta
 
 from remote_agents.ports.agent_usage import AgentLimits, UsageWindow
 
-#: How late a scheduled rollover may be observed before it stops looking scheduled.
+#: How far ahead of its published instant a wipe must be observed to count as early.
 #:
-#: `resets_at` is written by the provider against its own clock; this service observes the
-#: effect on a timer of its own. The two are not the same clock and the loop's period is not
-#: zero, so a window whose recorded instant has just passed, or is about to, is the ordinary
-#: case rather than news. Five minutes is wider than any interval the loop is configured with,
-#: which is the property that matters -- a grace narrower than the polling period would report
-#: rollovers on a schedule.
+#: **Not a guard against scheduled rollovers, which are silent without it.** A rollover is
+#: observed *after* the instant it was published for, so `resets_at > now` is already false by
+#: the time the drop is visible and the rule refuses it for any grace at all, including zero.
+#: An earlier version of this comment claimed the grace had to exceed the polling period or
+#: rollovers would be reported on a schedule; that is not what the arithmetic does, the two
+#: values are equal anyway, and the comment beside `_LIMITS_POLL_SECONDS` claimed the opposite
+#: ordering of the same pair. Found by a Task 2.6 reader, 2026-09-18.
+#:
+#: What it actually buys is the boundary. `resets_at` is written against the provider's clock
+#: and read against ours, so a window observed a minute before its own deadline may simply be
+#: a clock disagreeing rather than a wipe -- and a reset that beat its schedule by two minutes
+#: is not news anybody can act on. Five minutes covers both and costs only the early resets
+#: that were barely early.
 #:
 #: A module-level name and not a config key: no owner has asked to tune it (design,
 #: 2026-09-18), and a knob nobody turns is a schema field, a migration and a settings row that

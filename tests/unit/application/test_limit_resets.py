@@ -506,3 +506,26 @@ def test_the_detector_never_raises_over_the_whole_table() -> None:
             results = detect(previous, current, now=NOW)
             assert isinstance(results, tuple)
             assert all(isinstance(result, EarlyReset) for result in results)
+
+
+def test_a_scheduled_rollover_is_silent_whatever_the_grace_is_set_to(monkeypatch) -> None:
+    """The claim three comments now rest on, made checkable instead of argued.
+
+    Two of those comments previously said the grace had to out-measure the polling period or
+    rollovers would be reported on a schedule — in opposite directions, with both constants set
+    to five minutes. The arithmetic does something simpler: a rollover is observed *after* the
+    instant it was published for, so `resets_at > now + grace` is already false at grace zero.
+
+    Pinned across the range rather than at the shipped value, because what the comments claim is
+    that the grace is not what makes a rollover silent — and a test at one value cannot say
+    that. Found by a Task 2.6 reader, 2026-09-18.
+    """
+    observed = NOW + timedelta(minutes=30)
+    before = _reading(_window("5h", 91.0, resets_in=timedelta(minutes=5)))
+    after = _reading(_window("5h", 2.0, resets_in=timedelta(hours=5)), minute=30)
+
+    for grace in (timedelta(0), timedelta(minutes=1), timedelta(minutes=5), timedelta(hours=2)):
+        monkeypatch.setattr(limit_resets, "EARLY_RESET_GRACE", grace)
+        assert limit_resets.detect(before, after, now=observed) == (), (
+            f"a scheduled rollover was reported with the grace at {grace}"
+        )
