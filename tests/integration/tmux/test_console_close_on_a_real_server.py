@@ -290,7 +290,12 @@ async def test_console_close_by_a_real_f10_leaves_the_displayed_agent_running(
         assert server.agent_pane_pid() == agent_pid, (
             "the pane carrying the agent's mark is not the one that was launched"
         )
-        os.kill(agent_pid, 0)
+        try:
+            os.kill(agent_pid, 0)
+        except ProcessLookupError:  # pragma: no cover - the failure this file exists to catch
+            raise AssertionError(
+                f"the agent's process (pid {agent_pid}) died with the console"
+            ) from None
     finally:
         server.kill()
 

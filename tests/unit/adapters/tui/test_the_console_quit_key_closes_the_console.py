@@ -176,3 +176,38 @@ async def test_off_a_console_quit_leaves_the_app_exactly_as_it_always_did() -> N
         await pilot.pause()
 
         assert not app.is_running, "off a console F10 must still leave the app"
+
+
+async def test_a_launch_that_fails_leaves_the_console_standing_and_the_surface_alive() -> None:
+    """A wired capability may not take the surface down — and here that rule IS the feature.
+
+    A spawn fails for reasons that arrive exactly when an owner reaches for quit: a host out
+    of file descriptors or memory, an executable that moved under a half-finished upgrade.
+    Unguarded, the exception leaves `action_quit` and reaches the app's crash path, which ends
+    this process — and ending this process inside a console pane is BL-097, arriving through a
+    new door. Worse than the original, which was only a key doing the wrong thing.
+
+    So both halves are asserted: the surface survives, and it does **not** fall through to the
+    ordinary quit, which would close the pane exactly as the old defect did.
+
+    Found by Stage 1's Tier-2 review, which noted this file's own siblings
+    (`console_read_selection`, `console_holds_slot`) already guard at their call sites.
+    """
+
+    class _Refuses:
+        launches = 0
+
+        async def __call__(self) -> None:
+            raise OSError("cannot allocate memory")
+
+    app = RemoteAgentsTui(_context(_Refuses()))  # type: ignore[arg-type]
+    async with app.run_test(size=(100, 30)) as pilot:
+        await pilot.pause()
+
+        await pilot.press("f10")
+        await pilot.pause()
+
+        assert app.is_running, (
+            "a failed spawn ended the pane, which is BL-097 through a different door"
+        )
+        assert announcements(app, severity="error"), "the owner was told nothing"

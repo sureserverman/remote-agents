@@ -1224,7 +1224,28 @@ class RemoteAgentsTui(App[AttachRequest | None]):
             # After the warning check, deliberately: the console makes this press cost *more*
             # than it does off a console, so the one question DEC-027 allows is asked first
             # and a closer is never started behind a warning the owner is still reading.
-            await self._services.console_close()
+            #
+            # **Guarded, and the `return` below the guard is the load-bearing half.** A wired
+            # capability may not take the surface down — the rule `_console_notes` states in
+            # the composition and the rule `console_read_selection` and `console_holds_slot`
+            # already follow at their own call sites here. A spawn can fail for reasons that
+            # arrive exactly when an owner reaches for quit: `EMFILE`, `ENOMEM`, an executable
+            # that moved. Unguarded, that exception leaves this action and reaches the app's
+            # crash path, which ends this process — and ending this process in a console pane
+            # is BL-097 itself, arriving through a new door and worse than the original, since
+            # the old defect was a key doing the wrong thing rather than a surface dying.
+            #
+            # So the failure is contained and the key does nothing: the console stays standing,
+            # nothing is destroyed, and the owner is told. Falling through to
+            # `super().action_quit()` is the one thing that must not happen here.
+            try:
+                await self._services.console_close()
+            except Exception:
+                _LOG.exception("the console teardown could not be started")
+                self.announce(
+                    "The console could not be closed. It is still here — try again.",
+                    severity="error",
+                )
             return
         await super().action_quit()
 
