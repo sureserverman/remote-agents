@@ -522,6 +522,11 @@ what changes is that the console stops advertising, in a fixed line the owner re
 an act that costs them a pane. Outside the console — `remote-agents tui` in an ordinary terminal
 — the footer draws it as before, because there quitting means what it says.
 
+**This does not cover the position you are in most often.** While an agent is *displayed*, `F10`
+is taken by the tmux **root** binding and forwarded to the sessions pane, which quits — and no
+footer is on screen to have been withheld. The operator runbook's *Four facts that are easy to get
+wrong when a key appears not to work* carries the detail; **BL-097 stays open for that route.**
+
 The
 five session-shaped keys are left out of the footer because the console's projects and feed
 panes name them on their own hint row, and `F2`, `F5` and `F12` because `,`, `Ctrl+R` and the

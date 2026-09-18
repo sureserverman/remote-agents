@@ -447,8 +447,13 @@ def _say_what_the_hop_would_add(report: dict[str, object]) -> None:
     decided. A second predicate here would be a second thing to keep true.
 
     **Why onboarding says anything at all.** `install_agent_hooks` has exactly one caller in
-    `src/` — its own CLI command. Onboarding does not call it, `upgrade` does not, and
-    `scripts/install.sh` does not. So a fresh host finishes here looking entirely healthy while
+    `src/` until this module became the second — its own CLI command. **`upgrade` still does
+    not and `scripts/install.sh` still does not**, and `upgrade` could not even if it tried:
+    `_run_command` passes `stdin=subprocess.DEVNULL`, so its onboard child never sees a tty and
+    never reaches the offer. *(Written in the present tense by Task 2.1 and falsified by Task
+    2.2, which made this module the second caller — the exact "true when written, false after a
+    later task" shape a stage-level review exists to catch, in the docstring a maintainer
+    auditing write paths would read.)* So a fresh host finishes here looking entirely healthy while
     the Claude limits row reads as *absent* — which is DEC-061's "absent is a first-class
     answer" behaving exactly as designed, and therefore **indistinguishable from a provider
     that genuinely publishes nothing**. The operator has no way to tell a host that cannot

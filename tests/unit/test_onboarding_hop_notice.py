@@ -7,8 +7,9 @@ second place for the answer to drift. It is the existing answer, said in words, 
 place a new operator is looking.
 
 Why it matters enough to print: `install_agent_hooks` has exactly one call site in `src/` --
-the `install-agent-hooks` CLI command itself. `onboard` does not call it, `upgrade` does not,
-`scripts/install.sh` does not. So a fresh host finishes onboarding with a running service, a
+the `install-agent-hooks` CLI command itself. `onboard` did not call it until the offer landed
+beside this notice; `upgrade` still does not and `scripts/install.sh` still does not. So a fresh
+host finishes onboarding with a running service, a
 registered daemon and a working console, and with the Claude limits row reading as *absent*.
 That absence is honest -- DEC-061's "absent is a first-class answer" working exactly as
 designed -- and therefore indistinguishable from a provider that genuinely publishes nothing.

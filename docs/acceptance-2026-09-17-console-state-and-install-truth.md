@@ -41,12 +41,21 @@ CONSOLE_WITHHELD_FROM_FOOTER = frozenset(
 
 so a twelfth key that quits is withheld on the commit that adds it.
 
-**The owner's live console, after the deploy** — the footer that used to read
-`esc back · f1 help · f10 quit · ^p palette`:
+**The owner's live console, before and after, on the same screen.** Both lines are the
+**sessions list** in the console's sessions pane, captured from the running console:
 
 ```
- f1 help                                                     ▏^p palette
+before   f1 help  f10 quit                                   |^p palette
+after    f1 help                                             |^p palette
 ```
+
+*Corrected after a Tier-2 review.* The first version of this section paired that after-capture
+with `esc back · f1 help · f10 quit · ^p palette` as the before — which is the **Settings
+screen's** footer, not the list's. Two entries differ between those two lines and only one of
+them is this release's doing: `esc back` is absent from the list because `check_action` refuses
+`back` where there is nowhere to return to, which has always been true. Pairing them implied this
+change removed two footer entries when it removed one. An acceptance capture exists to isolate
+the change, so a mismatched pair is the one thing it must not be.
 
 **A hazard found while implementing it, worth more than the fix.** `DOMNode.__init__` does
 `self._bindings = cls._merged_bindings.copy()`, and `BindingsMap.copy()` copies the **dict** while
