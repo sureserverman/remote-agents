@@ -184,6 +184,39 @@ def _panes_command() -> tuple[str, ...]:
     return (sys.executable, "-m", "remote_agents", "console", "panes")
 
 
+def _close_command() -> tuple[str, ...]:
+    """The argv `quit` runs under console hosting, built the same way and for the same reason."""
+    return (sys.executable, "-m", "remote_agents", "console", "close")
+
+
+async def _launch_console_close() -> None:
+    """Start the console teardown and return, without waiting for it and without a pane.
+
+    **`start_new_session=True` is the whole of it.** The caller is a surface pane the teardown
+    is about to remove, and tmux kills a pane's process group. A new session puts the closer in
+    a group of its own before `exec`, so the kill that ends this pane does not reach it -- which
+    is the property `close()` depends on: it has an agent to send home and an arrangement to
+    verify before it may kill anything, and a teardown that died half-way through would leave a
+    console nobody finished tearing down and nobody reported on.
+
+    **Output is discarded, and that is not carelessness.** The pty it would inherit belongs to
+    the pane being handed back, so a write after the session goes lands on a closed descriptor.
+    The two things the owner can still see are the console's own status bar, which `console
+    close` flashes a refusal to, and the exit status, which a deploy script reads -- neither of
+    them this process's stdout.
+
+    Nothing is awaited past the spawn. `create_subprocess_exec` returns once the child exists,
+    and this surface has no use for its result: by the time there is one, this pane is gone.
+    """
+    await asyncio.create_subprocess_exec(
+        *_close_command(),
+        stdin=asyncio.subprocess.DEVNULL,
+        stdout=asyncio.subprocess.DEVNULL,
+        stderr=asyncio.subprocess.DEVNULL,
+        start_new_session=True,
+    )
+
+
 def _console_composer(gateway=None, home: Path | None = None):
     """Build the one console composer shape, so four call sites cannot drift apart.
 
@@ -318,16 +351,17 @@ def local_context(config, connection, paths: ProductionPaths):
     console_sync = None
     console_flash = None
     console_show_projects = None
+    console_close = None
     console_publish_selection = None
     console_read_selection = None
     console_holds_slot = None
     hide_in_console = None
     console_recovery = None
     # The classification itself, kept as a value rather than left inside the `if`: the surface
-    # needs the *fact* as well as the capabilities, because one of its decisions -- which
-    # entries the footer draws -- is not a call it makes but a shape it is built in
-    # (`adapters/tui/keys.py::CONSOLE_WITHHELD_FROM_FOOTER`, BL-097). Decided here, where
-    # hosting is already decided once, so the app never asks the environment itself.
+    # needs the *fact* as well as the capabilities, because one of its decisions -- what its
+    # footer entries *say* -- is not a call it makes but a shape it is built in
+    # (`adapters/tui/keys.py::CONSOLE_FOOTER_LABELS`, BL-097). Decided here, where hosting is
+    # already decided once, so the app never asks the environment itself.
     console_hosted = hosting_mode(os.environ) is HostingMode.CONSOLE
     if console_hosted:
         # Hosted by a client on our own server: opening a session **exchanges** its pane into
@@ -365,6 +399,10 @@ def local_context(config, connection, paths: ProductionPaths):
         console_sync = composer.sync
         console_flash = composer.flash
         console_show_projects = composer.show_projects
+        # Not `composer.close` -- deliberately, and the difference is the point. The surface
+        # must *launch* the teardown, never run it: this process is one of the panes the
+        # teardown removes (DEC-096).
+        console_close = _launch_console_close
         # Straight onto the gateway rather than through the composer: publishing a selection is
         # one `set-option` on the console session and needs none of the arrangement reasoning
         # the composer exists for. Both wired on every console pane, because which of them a
@@ -437,6 +475,7 @@ def local_context(config, connection, paths: ProductionPaths):
         console_sync=console_sync,
         console_flash=console_flash,
         console_show_projects=console_show_projects,
+        console_close=console_close,
         console_publish_selection=console_publish_selection,
         console_read_selection=console_read_selection,
         console_holds_slot=console_holds_slot,

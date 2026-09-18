@@ -25,7 +25,7 @@ from textual.worker import WorkerCancelled, WorkerFailed
 
 from remote_agents.adapters.tui.context import TuiContext
 from remote_agents.adapters.tui.keys import (
-    CONSOLE_WITHHELD_FROM_FOOTER,
+    CONSOLE_FOOTER_LABELS,
     SESSION_STOP_KEYS,
     function_key_bindings,
     session_key,
@@ -347,11 +347,10 @@ class RemoteAgentsTui(App[AttachRequest | None]):
         # the resting position (less, man, htop), `:` is the palette (vim, k9s). Both printable,
         # so neither is priority -- an `Input` takes them as text -- and `check_action` refuses
         # both wherever one holds the keyboard, so the footer and the palette agree with the
-        # key. Hidden: the footer draws F10 and the palette has ctrl+p -- except under console
-        # hosting, where F10's own footer entry is withheld as well (see
-        # `_withhold_console_footer_entries`). `q` stays hidden there regardless: this comment
-        # argues why it is not *drawn*, and the console case removes the entry that made that
-        # argument true rather than changing the argument.
+        # key. Hidden: the footer draws F10 and the palette has ctrl+p. Under console hosting
+        # F10 is still the drawn one, reading `close console` rather than `quit` (see
+        # `_relabel_console_footer_entries`), so this argument holds in both hostings -- which
+        # it did not while that entry was withheld from the console footer entirely.
         Binding("q", "back_or_quit", "back", show=False),
         Binding("colon", "bare_palette", "palette", show=False),
     ]
@@ -373,17 +372,24 @@ class RemoteAgentsTui(App[AttachRequest | None]):
         """Whether this surface offers one of the app-level flows."""
         return action in self.flows
 
-    def _withhold_console_footer_entries(self) -> None:
-        """Stop advertising, on this instance only, the entries a console pane cannot afford.
+    def _relabel_console_footer_entries(self) -> None:
+        """Say, on this instance only, what a console pane's host-dependent entries really do.
 
-        **The act is de-advertisement, not removal** (BL-097, DEC-093, DEC-095). `F10` is
-        `quit`, and a console surface pane carries no `remain-on-exit`: pressing it ends that
-        pane's process, tmux closes the pane, and the layout reflows over the gap. Off a
-        console the same key leaves the app and hands the terminal back, which is what htop
-        and mc mean by it and what the footer is right to offer. So the key stays bound, it
-        still quits, and F1's panel still lists it -- `BindingsTable` renders
-        `active_bindings` without filtering on `show`, which is the property that makes this
-        honest rather than a silent removal. Only the drawing goes.
+        **The act is a relabel, not a removal and no longer a withholding** (BL-097, DEC-093,
+        DEC-095, DEC-096). `F10` is `quit`. Off a console that ends the app and hands the
+        terminal back, which is what htop and mc mean by it. In a console surface pane it
+        closes the **whole console** — one press, four panes — and the word for that is not
+        `quit`, so the entry reads `close console` there.
+
+        This method used to hide those entries instead, and the reason was that the key ended
+        the pane the owner was reading: the panes carry no `remain-on-exit`, so the process
+        ending closed the pane and the layout reflowed over the gap. The key now does the thing
+        the owner meant, so it may be advertised again — what it may not do is carry the bare
+        terminal's word for a press that costs four times as much.
+
+        **Nothing about the key changes but the words.** It stays bound, it still runs `quit`,
+        and F1's panel lists it in both hostings — `BindingsTable` renders `active_bindings`
+        without filtering, which is what the key was borrowed from htop for.
 
         **Why here and not in the table.** `BINDINGS` is a class attribute, built from
         `function_key_bindings()` at import time, and hosting is not knowable then: the
@@ -394,19 +400,19 @@ class RemoteAgentsTui(App[AttachRequest | None]):
         **A new list, never an in-place edit.** `DOMNode.__init__` sets `self._bindings` to
         `cls._merged_bindings.copy()`, and `BindingsMap.copy` copies the *dict* while sharing
         the lists inside it with the class-level map. Editing a list here would therefore
-        withhold the entry from every surface in the process -- including a bare
+        relabel the entry for every surface in the process -- including a bare
         `remote-agents tui` running beside a console -- so each key's entry is rebound to a
         freshly built list and the shared one is left alone.
         """
-        for key in CONSOLE_WITHHELD_FROM_FOOTER:
+        for key, label in CONSOLE_FOOTER_LABELS.items():
             bound = self._bindings.key_to_bindings.get(key)
             if bound is None:
-                # Not an error: the table decides which keys exist and this set is derived
+                # Not an error: the table decides which keys exist and this mapping is derived
                 # from it, so the only way here is a key the app genuinely does not bind --
-                # in which case there is nothing being advertised to withhold.
+                # in which case there is nothing being advertised to relabel.
                 continue
             self._bindings.key_to_bindings[key] = [
-                dataclasses.replace(binding, show=False) for binding in bound
+                dataclasses.replace(binding, description=label) for binding in bound
             ]
 
     def __init__(self, context: TuiContext) -> None:
@@ -415,7 +421,7 @@ class RemoteAgentsTui(App[AttachRequest | None]):
         if context.console_hosted:
             # After `super().__init__()`, which is what builds `self._bindings`, and before
             # anything mounts: the footer composes from `active_bindings` on first paint.
-            self._withhold_console_footer_entries()
+            self._relabel_console_footer_entries()
         # The two relay themes, registered before the theme is chosen so the choice can name
         # one. Read from the preference file with the same total read the project order gets:
         # an unknown or unreadable value is the default, never an `InvalidThemeError` here.
@@ -1202,6 +1208,24 @@ class RemoteAgentsTui(App[AttachRequest | None]):
                     severity="warning",
                 )
                 return
+        if self._services.console_close is not None:
+            # **Under console hosting `quit` means leave remote-agents, not leave this
+            # process** (DEC-096). The console is four panes and this is one of them; ending
+            # here would close that pane and reflow the layout over the gap, which is BL-097
+            # itself. So the teardown is *started* and this surface stays up: the pane goes
+            # away when tmux removes the session out from under it, which is the closer's job.
+            #
+            # **Not awaited to completion, and never run in-process.** Whatever the
+            # composition root wired here returns once the closer is launched. A teardown
+            # running inside the session it removes could die between sending the displayed
+            # agent home and killing the console, finishing neither and reporting neither --
+            # which is the hazard the whole three-step teardown exists against.
+            #
+            # After the warning check, deliberately: the console makes this press cost *more*
+            # than it does off a console, so the one question DEC-027 allows is asked first
+            # and a closer is never started behind a warning the owner is still reading.
+            await self._services.console_close()
+            return
         await super().action_quit()
 
     async def action_settings(self) -> None:

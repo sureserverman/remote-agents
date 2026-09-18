@@ -121,32 +121,30 @@ FUNCTION_KEYS: tuple[FunctionKey, ...] = (
 )
 
 
-#: The footer entries a **console** surface pane withholds, by key. Derived from the table, so
-#: the rule is a rule rather than a fact about one key.
+#: What a **console** surface pane calls each footer entry whose meaning depends on its host,
+#: by key. Derived from the table, so the rule is a rule rather than a fact about one key.
 #:
-#: **Why a key is withheld here and nowhere else.** `footer` above answers "does this entry fit
-#: on a clipping line"; this answers a different question -- "does pressing this entry cost the
-#: owner the thing they are looking at". Off a console, `quit` leaves the app and the terminal
-#: comes back. In a console surface pane it ends *that pane's* process, and the panes carry no
-#: `remain-on-exit`: tmux closes the pane and reflows the layout over the gap, so a footer entry
-#: the owner read as "leave" silently destroys the pane they were reading (BL-097, hit on
-#: 2026-09-17; the console ran a pane short for twenty minutes). No count is written here on
-#: purpose -- `ConsolePaneSlot`'s own docstring records that prose restating the size of the
-#: thing it describes is a second declaration nothing keeps true, and it said "three" while
-#: carrying four members for exactly that reason.
+#: **This replaces a set that withheld those entries from the console footer entirely, and
+#: the reason it could be replaced is the whole of BL-097.** That set existed because pressing
+#: `quit` in a console surface pane destroyed the pane the owner was reading: the panes carry
+#: no `remain-on-exit`, so the process ending closed the pane and tmux reflowed the layout over
+#: the gap with nothing to rebuild it. A footer entry reading `quit` was therefore advertising
+#: something false, and dropping the drawing was the cheap honest half of a fix.
 #:
-#: **De-advertisement, not removal.** The key stays bound, it still quits, and F1's panel still
-#: lists it -- `BindingsTable` renders `active_bindings` without filtering on `show`, which is
-#: what the key was borrowed from htop for. DEC-093 keeps every F-key bound and DEC-095 keeps
-#: F10 meaning what htop and mc mean by it; neither is touched by withholding a *drawing*.
+#: Under DEC-096 the key means what the owner meant by it — the whole console goes and the
+#: shell comes back — so it is advertising a true thing again and may be drawn. What it may
+#: **not** do is keep the bare terminal's word: off a console `quit` costs the owner one
+#: process they started on purpose, and in a console pane one press now closes four panes.
+#: `close console` is that difference, in the owner's vocabulary rather than the table's.
 #:
-#: The self-healing alternative -- a surviving pane noticing the gap and rebuilding the layout
-#: -- is the one BL-039 blocks: that rebuild path is what put the sessions pane into Textual
-#: 8.2.8's `Screen._refresh_layout` loop at 100% CPU. So the cheap, honest half ships and the
-#: pane the owner closes stays closed.
-CONSOLE_WITHHELD_FROM_FOOTER: frozenset[str] = frozenset(
-    entry.key for entry in FUNCTION_KEYS if entry.action == "quit"
-)
+#: **Only the words change.** The key, the action and the binding are identical in both
+#: hostings — DEC-093 keeps every F-key bound and DEC-095 keeps `F10` meaning what htop and mc
+#: mean by it, and neither is touched by relabelling a *drawing*. No count is written here on
+#: purpose: `ConsolePaneSlot`'s own docstring records that prose restating the size of the
+#: thing it describes is a second declaration nothing keeps true.
+CONSOLE_FOOTER_LABELS: dict[str, str] = {
+    entry.key: "close console" for entry in FUNCTION_KEYS if entry.action == "quit"
+}
 
 
 #: The session-shaped F-keys as a pane advertises them: `F3 F4 F6 F8 F9`.

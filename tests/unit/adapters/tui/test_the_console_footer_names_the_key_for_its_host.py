@@ -1,17 +1,23 @@
-"""What the footer advertises depends on where the surface is hosted -- BL-097.
+"""What the footer *calls* an entry depends on where the surface is hosted — BL-097, DEC-096.
 
 `F10` is `quit`. In a bare terminal that means "leave the app" and the footer is right to say
-so. In a **console surface pane** it means "destroy the pane the owner is reading": those panes
-carry no `remain-on-exit`, so the pane closes outright and tmux reflows the layout over the
-gap. The owner pressed it on 2026-09-17, lost the sessions pane, and ran degraded for twenty
-minutes.
+so. In a **console surface pane** it closes the whole console: four panes go, the shell comes
+back, and every agent session keeps running.
 
-The fix chosen for that is **de-advertisement, not removal** (DEC-093, DEC-095): the key stays
-bound, it still quits, and F1's panel still lists it -- the console's footer simply stops
-offering it. So the three halves of that sentence are three assertions here, and every one of
-them is made **over `FUNCTION_KEYS` as a whole** rather than over `f10`. A twelfth key added to
-the table with `footer=True` is visited by the same loops on the commit that adds it, which is
-the only way this rule stays a rule instead of becoming a fact about one key.
+**This file used to assert the opposite of its own subject, and the history is the argument.**
+`quit` in a console pane once meant "destroy the pane the owner is reading" — those panes carry
+no `remain-on-exit`, so the process ending closed the pane and tmux reflowed the layout over the
+gap. The owner pressed it on 2026-09-17, lost the sessions pane, and ran degraded for twenty
+minutes. The fix shipped then was **de-advertisement**: the key stayed bound and the console's
+footer stopped offering it. That was the cheap honest half.
+
+DEC-096 is the other half, and it makes the entry true again, so it is drawn again. What it may
+not do is keep the bare terminal's word: off a console the press costs one process the owner
+started on purpose, and here it costs four panes. So the console's entry reads `close console`.
+
+Every claim below is made **over `FUNCTION_KEYS` as a whole** rather than over `f10`. A twelfth
+key added to the table is visited by the same loops on the commit that adds it, which is the
+only way this stays a rule instead of becoming a fact about one key.
 
 The hosting seam is `TuiContext.console_hosted`, wired by the composition root exactly as the
 other console-only fields are (DEC-046). These tests therefore state hosting the way production
@@ -31,7 +37,7 @@ from textual.widgets._key_panel import BindingsTable
 
 from remote_agents.adapters.tui.app import RemoteAgentsTui
 from remote_agents.adapters.tui.context import TuiContext
-from remote_agents.adapters.tui.keys import CONSOLE_WITHHELD_FROM_FOOTER, FUNCTION_KEYS
+from remote_agents.adapters.tui.keys import CONSOLE_FOOTER_LABELS, FUNCTION_KEYS
 from remote_agents.application.profiles import ProfileAvailability
 from remote_agents.application.project_catalog import CatalogProject
 from remote_agents.domain.models import (
@@ -136,33 +142,39 @@ async def _reading(*, console_hosted: bool) -> _Reading:
     return _Reading(drawn, drawn_labels, frozenset(active), panel, displays)
 
 
-def test_the_console_withholds_from_its_footer_exactly_the_keys_that_close_the_pane() -> None:
-    """*Why* a key is withheld, stated as a predicate over the table rather than as a list.
+def test_the_console_relabels_exactly_the_footer_entries_whose_meaning_its_host_changes() -> None:
+    """*Why* an entry is relabelled, as a predicate over the table rather than as a list.
 
-    A console surface pane has no `remain-on-exit`: an action that ends this process ends the
-    pane, and the layout reflows over the gap. So the set the console withholds is not an
-    arbitrary one -- it is the footer entries whose action quits. Asserting the equality both
-    ways is what stops the set from drifting in either direction: a twelfth key that quits and
-    is not withheld fails here, and so does a key withheld for some reason nobody wrote down.
+    An entry is relabelled because the act it names costs something different here: `quit` off
+    a console ends one process, and in a console pane it closes the console. So the relabelled
+    set is not an arbitrary one — it is the footer entries whose action quits. Asserting the
+    equality both ways stops it drifting in either direction: a twelfth quitting key with no
+    console wording fails here, and so does a wording nobody wrote a reason for.
     """
     quits = {entry.key for entry in FUNCTION_KEYS if entry.action == "quit"}
 
-    assert CONSOLE_WITHHELD_FROM_FOOTER == quits, (
-        "the console withholds a footer entry because pressing it destroys the pane, so the "
-        f"withheld set must be exactly the table's quitting keys: {quits}"
+    assert set(CONSOLE_FOOTER_LABELS) == quits, (
+        "the console renames a footer entry because the act it names costs something different "
+        f"there, so the relabelled set must be exactly the table's quitting keys: {quits}"
+    )
+    assert all(entry.footer for entry in FUNCTION_KEYS if entry.key in CONSOLE_FOOTER_LABELS), (
+        "relabelling a key the footer never draws says nothing; the set must be footer keys"
     )
     assert all(
-        entry.footer for entry in FUNCTION_KEYS if entry.key in CONSOLE_WITHHELD_FROM_FOOTER
-    ), "withholding a key the footer never drew anyway says nothing; the set must be footer keys"
+        label != entry.label
+        for entry in FUNCTION_KEYS
+        for label in [CONSOLE_FOOTER_LABELS.get(entry.key)]
+        if label is not None
+    ), "a console wording identical to the table's own is a relabel that relabels nothing"
 
 
-async def test_the_console_footer_draws_every_footer_key_except_the_withheld_ones() -> None:
-    """The de-advertisement itself, asserted over the whole table in both hosting modes.
+async def test_both_hostings_draw_every_footer_key_the_table_declares() -> None:
+    """The console withholds nothing any more, and that is the assertion worth keeping.
 
-    Both halves matter and only together: that the console drops the withheld entries, and
-    that the standalone surface still draws them. A test asserting only the first passes just
-    as well against a key dropped from the footer everywhere, which is a removal wearing this
-    change's clothes.
+    This is the inverted form of what this file asserted before DEC-096. The console's footer
+    used to be the table's footer entries *minus* the quitting ones; it is now the table's
+    footer entries, full stop. Both hostings are read so that a key dropped from the footer
+    everywhere -- a removal wearing this change's clothes -- cannot pass.
     """
     bare = await _reading(console_hosted=False)
     console = await _reading(console_hosted=True)
@@ -172,35 +184,47 @@ async def test_the_console_footer_draws_every_footer_key_except_the_withheld_one
             f"off a console the footer draws what the table says: {entry.key} has "
             f"footer={entry.footer} and is {'drawn' if entry.key in bare.drawn else 'absent'}"
         )
-        withheld = entry.key in CONSOLE_WITHHELD_FROM_FOOTER
-        assert (entry.key in console.drawn) is (entry.footer and not withheld), (
-            f"under console hosting {entry.key} should be "
-            f"{'withheld from' if withheld else 'drawn in'} the footer"
+        assert (entry.key in console.drawn) is entry.footer, (
+            f"under console hosting the footer draws what the table says: {entry.key} has "
+            f"footer={entry.footer} and is {'drawn' if entry.key in console.drawn else 'absent'}"
         )
 
-    # The same claim in the owner's own vocabulary, and deliberately not derived from the
-    # withheld set: the word on the console's footer is what the owner reads, and `quit` is the
-    # word that must not be there. A rename of the key or a second key acquiring the label is
-    # caught here rather than passing because the key names still line up.
+
+async def test_the_console_footer_says_close_console_where_a_bare_terminal_says_quit() -> None:
+    """The claim in the owner's own vocabulary, which is the only one they actually read.
+
+    Deliberately not derived from `CONSOLE_FOOTER_LABELS` on the bare side: `quit` is the word
+    a terminal-owning app must offer, and `close console` is the word it must not. Stating both
+    literally is what catches a mapping that is correct and applied to the wrong hosting.
+    """
+    bare = await _reading(console_hosted=False)
+    console = await _reading(console_hosted=True)
+
     assert "quit" in bare.drawn_labels, "off a console the footer still offers quit"
+    assert "close console" not in bare.drawn_labels, (
+        f"a bare terminal has no console to close: {sorted(bare.drawn_labels)}"
+    )
+
+    assert "close console" in console.drawn_labels, (
+        f"the console footer does not say what F10 now does: {sorted(console.drawn_labels)}"
+    )
     assert "quit" not in console.drawn_labels, (
-        f"the console footer still reads `quit`: {sorted(console.drawn_labels)}"
+        "the console footer still reads `quit`, which understates a press that closes four "
+        f"panes: {sorted(console.drawn_labels)}"
     )
 
 
-async def test_a_key_withheld_from_the_console_footer_stays_bound_and_stays_in_f1() -> None:
-    """The half that makes this a de-advertisement rather than a removal (DEC-093, DEC-095).
+async def test_hosting_changes_the_words_and_never_whether_a_key_is_bound() -> None:
+    """The half that keeps this a relabel rather than a removal (DEC-093, DEC-095).
 
-    Two properties, both read over the table. First, **hosting decides drawing and nothing
-    else**: whether a key is in `active_bindings` -- the map `App.run_action` dispatches
-    through, so a key absent from it does not work -- must be the same answer in both modes for
-    every row. That is the assertion a removal disguised as this change would fail, and it
-    covers a twelfth key on the commit that adds it.
+    **Hosting decides wording and nothing else**: whether a key is in `active_bindings` -- the
+    map `App.run_action` dispatches through, so a key absent from it does not work -- must be
+    the same answer in both modes for every row. That is the assertion a removal disguised as
+    this change would fail, and it covers a twelfth key on the commit that adds it.
 
-    Second, the withheld keys specifically are still bound and still listed in F1's panel,
-    which renders `active_bindings` without filtering on `show`. Without that second half the
-    owner would have a key that works, is drawn nowhere, and is reachable only by knowing it is
-    there -- which is the thing `FunctionKey.footer`'s own argument forbids.
+    And the relabelled keys specifically are still listed in F1's panel in both hostings, which
+    renders `active_bindings` without filtering -- the property the key was borrowed from htop
+    for.
 
     Not every row is in `active_bindings` here, and that is correct rather than a gap: the
     session-shaped keys are refused by `check_action` at the resting position, because the
@@ -213,19 +237,16 @@ async def test_a_key_withheld_from_the_console_footer_stays_bound_and_stays_in_f
     for entry in FUNCTION_KEYS:
         assert (entry.key in bare.bound) is (entry.key in console.bound), (
             f"console hosting changed whether {entry.key} is bound at all; it may change only "
-            "what the footer draws (DEC-093, DEC-095)"
+            "what the footer says (DEC-093, DEC-095)"
         )
-        if entry.key not in CONSOLE_WITHHELD_FROM_FOOTER:
+        if entry.key not in CONSOLE_FOOTER_LABELS:
             continue
         for where, reading in (("off a console", bare), ("under console hosting", console)):
             assert entry.key in reading.bound, (
-                f"{entry.key} is not bound {where}; withholding a footer entry must never "
+                f"{entry.key} is not bound {where}; relabelling a footer entry must never "
                 "unbind the key (DEC-093)"
             )
             assert reading.displays[entry.key] in reading.panel, (
                 f"F1's panel does not list {entry.key} {where}, so the key would be bound, "
                 "drawn nowhere, and reachable only by knowing it is there"
-            )
-            assert entry.label in reading.panel, (
-                f"F1's panel does not carry {entry.label!r} {where} (DEC-007: one wording)"
             )

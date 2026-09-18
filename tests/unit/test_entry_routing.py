@@ -462,3 +462,19 @@ def test_bootstrap_console_close_did_not_open_the_closed_set_of_actions(
     with pytest.raises(SystemExit) as refusal:
         bootstrap.main(["console", "bogus"])
     assert refusal.value.code != 0
+
+
+def test_the_close_command_runs_this_interpreter_rather_than_a_name_on_path() -> None:
+    """The same pipx trap the projects and fold commands already avoid, for the same reason.
+
+    The console is started from whatever interpreter the owner installed this into, and an
+    argv assuming a `remote-agents` console script on `PATH` works on a developer's host and
+    fails on a pipx install — where it would mean F10 silently doing nothing at all.
+    """
+    import sys
+
+    from remote_agents.composition import tui
+
+    command = tui._close_command()
+    assert command[0] == sys.executable
+    assert command[1:] == ("-m", "remote_agents", "console", "close")

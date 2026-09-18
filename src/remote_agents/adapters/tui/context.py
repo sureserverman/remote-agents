@@ -56,8 +56,8 @@ class TuiContext:
     # -- the one console field that is not something the surface may *do*. `console_recovery`
     # is already the precedent for a field of that kind here.
     #
-    # It exists because one console-dependent decision is not a capability call at all: which
-    # entries the footer draws (`keys.py::CONSOLE_WITHHELD_FROM_FOOTER`). `RemoteAgentsTui.
+    # It exists because one console-dependent decision is not a capability call at all: what
+    # the footer's entries *say* (`keys.py::CONSOLE_FOOTER_LABELS`). `RemoteAgentsTui.
     # BINDINGS` is a class attribute evaluated at import, long before any host is known, so the
     # app has to be *told* at construction -- and the composition root is the one place that
     # already classifies hosting (`attach.hosting_mode`, by socket name). Reading `$TMUX` inside
@@ -65,10 +65,19 @@ class TuiContext:
     #
     # **Not derived from `console_holds_slot is not None`**, which is the nearest existing
     # probe. That field is `None` when tmux set no `$TMUX_PANE`, which is a console pane whose
-    # *selection gate* is unavailable -- a pane that would then be told it is not on a console
-    # and would advertise the key that closes it. The two questions differ exactly where it
-    # would hurt.
+    # *selection gate* is unavailable -- a pane that would then be told it is not on a console,
+    # and would answer `quit` by ending its own pane instead of closing the console. The two
+    # questions differ exactly where it would hurt.
     console_hosted: bool = False
+    # Start the detached teardown that removes the whole console (DEC-096). Wired only under
+    # console hosting; `None` everywhere else, where `quit` still means "leave the app".
+    #
+    # **A launch, not the teardown itself**, and the seam is what makes that true rather than
+    # remembered: whatever is wired here returns as soon as the closer is started, so the
+    # process doing the work is never the one being killed. A teardown run in-process would sit
+    # inside the session it removes and could die between sending the displayed agent home and
+    # killing the console -- finishing neither, and reporting neither.
+    console_close: Callable[[], Awaitable[None]] | None = None
     open_in_console: Callable[[str], Awaitable[str | None]] | None = None
     console_sync: Callable[[tuple], Awaitable[None]] | None = None
     # One line on the tmux status bar when the feed gains news — wired only under console
