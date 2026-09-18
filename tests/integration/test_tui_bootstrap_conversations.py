@@ -178,6 +178,18 @@ def test_no_further_capability_leaked_into_the_context() -> None:
         # and an *exchange* that writes no record and touches no lifecycle (DEC-040). It is not
         # a new kind of capability, it is the return trip of one already here.
         "console_show_projects",
+        # Added by this plan's Task 1.5, and listed here because that is what this test is for:
+        # growing the set is a decision, not a diff nobody reads. Same family as
+        # `console_show_projects` on the axes that matter -- console hosting's alone, absent in
+        # a bare terminal, wired by the composition root rather than probed for (DEC-046).
+        #
+        # **Where it differs, and the difference is the reason it earns its own field rather
+        # than riding on `console_hosted`.** Every other console capability rearranges the
+        # console; this one ends it (DEC-096). And it is a *launch*: whatever is wired here
+        # returns as soon as the detached closer is started, because the process that runs the
+        # teardown must not be one of the panes the teardown removes. A surface holding
+        # `composer.close` directly would be exactly that process.
+        "console_close",
         # The console-wide selection: which session the sessions pane has highlighted, so that
         # the panes without a cursor can act on it. Two fields rather than one, and the split is
         # the decision this test exists to make visible — **publishing is the sessions pane's
