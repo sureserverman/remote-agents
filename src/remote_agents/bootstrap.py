@@ -77,6 +77,7 @@ from remote_agents.composition.onboarding import (
 from remote_agents.composition.service import (
     _serve_with_reconciliation,
 )
+from remote_agents.application.console import CloseOutcome
 from remote_agents.composition.telegram import _private_boundary
 from remote_agents.composition.tui import (
     _console_composer,
@@ -154,7 +155,12 @@ def main(
     # which exchange brings the surface home, and it cannot slide a split and then remember
     # across an exchange that it did. Not a surface — each arranges panes and exits.
     console_parser = subcommands.add_parser("console")
-    console_parser.add_argument("action", choices=("projects", "panes"))
+    # `close` is the third, and the only one that destroys anything: it removes the console
+    # session and hands the owner back their shell (DEC-096). It is a verb rather than
+    # something F10 does in-process because the process doing the teardown would otherwise be
+    # inside the session it kills — and one that dies between "send the agent home" and "kill"
+    # neither finishes nor reports.
+    console_parser.add_argument("action", choices=("projects", "panes", "close"))
     # A one-time repair for sessions launched before identity moved to the pane (DEC-038).
     # They stayed manageable but gained no pane to exchange, so the console could not show
     # them. Explicit rather than automatic: it writes onto a running agent's pane.
@@ -538,8 +544,33 @@ def _console_arrange(action: str) -> int:
     if action == "panes":
         asyncio.run(_console_composer().toggle_panes())
         return 0
+    if action == "close":
+        return _console_close()
     # pragma: no cover - argparse `choices` is the real guard
     print(f"unknown console action: {action}", file=sys.stderr)
+    return 1
+
+
+def _console_close() -> int:
+    """Tear the console down and say, in the two places the owner can still see, what happened.
+
+    **There is nowhere to print.** This runs detached, off any pane, and the terminal it might
+    have written to is the one being handed back. So a refusal reaches the owner through the
+    console's own status bar — `flash`, the one surface still standing — and through the exit
+    status, which is what a deploy script reads.
+
+    Silent on success, and on a console that was already gone: both are the state the owner
+    asked for, and a line on the status bar of a console about to vanish would be a line
+    nobody sees. Non-zero only on a refusal, which is the case where F10 appeared to do
+    nothing and the owner is owed a reason.
+    """
+    composer = _console_composer()
+    report = asyncio.run(composer.close())
+    if report.outcome is not CloseOutcome.REFUSED:
+        return 0
+    # The reason, not a paraphrase of it: `close()` already worded it for the owner, and a
+    # second wording here would be a second vocabulary for one condition (DEC-043).
+    asyncio.run(composer.flash(report.reason or "the console was not closed"))
     return 1
 
 

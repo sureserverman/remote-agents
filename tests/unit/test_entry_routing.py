@@ -389,3 +389,76 @@ def test_the_upgrade_verb_says_so_when_there_is_nothing_to_do(
     monkeypatch.setattr(bootstrap, "TmuxGateway", _Gateway)
     assert bootstrap.main(["upgrade-sessions"]) == 0
     assert "already carries its identity" in capsys.readouterr().out
+
+
+# `console close` is the third console verb, and the only one that destroys anything. F10
+# launches it detached rather than running the teardown in the pane it is about to kill —
+# a process inside the session it removes cannot finish, or report, if it dies half-way
+# (DEC-096). Which means the exit status and the flash are the whole of what the owner sees.
+
+
+def test_bootstrap_console_close_exits_zero_when_the_console_went_away(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Both silent outcomes are exit zero: the owner asked for a gone console and has one."""
+    from remote_agents.application import console
+    from remote_agents.application.console import CloseOutcome, CloseReport
+
+    for outcome in (CloseOutcome.CLOSED, CloseOutcome.NOTHING_TO_CLOSE):
+        flashed: list[str] = []
+
+        class _Composer:
+            def __init__(self, *args, **kwargs) -> None:
+                pass
+
+            async def close(self) -> CloseReport:
+                return CloseReport(outcome)
+
+            async def flash(self, text: str) -> None:
+                flashed.append(text)
+
+        monkeypatch.setattr(console, "ConsoleComposer", _Composer)
+        assert bootstrap.main(["console", "close"]) == 0, outcome
+        # Nothing to say: the console is gone, which is what was asked for.
+        assert flashed == [], outcome
+
+
+def test_bootstrap_console_close_flashes_the_reason_and_exits_non_zero_on_a_refusal(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A refusal is F10 appearing to do nothing, so the reason has to reach the owner's eyes.
+
+    There is no terminal to print to that will outlive this: the verb runs detached, off any
+    pane. The console's own status bar is the one surface still standing, which is what
+    `flash` writes to — and a non-zero exit is what a script driving a deploy reads.
+    """
+    from remote_agents.application import console
+    from remote_agents.application.console import CloseOutcome, CloseReport
+
+    flashed: list[str] = []
+
+    class _Composer:
+        def __init__(self, *args, **kwargs) -> None:
+            pass
+
+        async def close(self) -> CloseReport:
+            return CloseReport(CloseOutcome.REFUSED, "the console still shows an agent")
+
+        async def flash(self, text: str) -> None:
+            flashed.append(text)
+
+    monkeypatch.setattr(console, "ConsoleComposer", _Composer)
+    assert bootstrap.main(["console", "close"]) == 1
+    assert flashed == ["the console still shows an agent"]
+
+
+def test_bootstrap_console_close_did_not_open_the_closed_set_of_actions(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Adding a third choice must not turn the closed set into an open one."""
+    monkeypatch.setattr(
+        bootstrap, "_console_arrange", lambda action: pytest.fail("no such console action")
+    )
+    with pytest.raises(SystemExit) as refusal:
+        bootstrap.main(["console", "bogus"])
+    assert refusal.value.code != 0
