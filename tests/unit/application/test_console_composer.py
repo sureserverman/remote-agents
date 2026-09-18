@@ -21,6 +21,7 @@ import pytest
 
 from remote_agents.application.console import (
     CONSOLE_BINDINGS,
+    CloseOutcome,
     ConsoleComposer,
     console_panes_binding,
 )
@@ -1297,3 +1298,192 @@ async def test_ensure_turns_the_mouse_on_and_survives_a_server_that_refuses() ->
         "a tmux that refused the mouse option cost the owner the whole console"
     )
     assert ("write_console_server_option", "mouse", "on") in refusing.calls
+
+
+def _agent_console_window(session_id: SessionId) -> tuple[HostedPane, ...]:
+    """The console window while an agent is displayed: its pane is in slot 0, ours parked."""
+    return (
+        HostedPane(None, True, 0, 0, "%7", session_id, False, ConsolePaneSlot.PROJECTS.value),
+        HostedPane(None, True, 0, 1, "%1", None, False, ConsolePaneSlot.SESSIONS.value),
+        HostedPane(None, True, 0, 2, "%2", None, False, ConsolePaneSlot.FEED.value),
+        # Where the exchange parked our surface: the agent's own session, not the console.
+        HostedPane(session_id, False, 0, 0, "%0", None, True, ConsolePaneSlot.PROJECTS.value),
+    )
+
+
+async def test_close_kills_a_resting_console_and_reports_closed() -> None:
+    """The ordinary F10: nothing is displayed, so there is nothing to send home."""
+    console = RecordingConsole()
+
+    report = await _composer(console).close()
+
+    assert report.outcome is CloseOutcome.CLOSED
+    assert report.reason is None
+    assert len(named(console, "kill_console")) == 1
+
+
+class ExchangingConsole(RecordingConsole):
+    """A double whose `swap_panes` actually exchanges the two panes' positions.
+
+    The shared `RecordingConsole` records the call and leaves the arrangement alone, which is
+    enough for every test that asks *whether* an exchange was ordered. It is not enough here:
+    `close()` re-reads the arrangement precisely to find out whether the exchange worked, so
+    against the recording double every close would refuse — the fake would be answering "the
+    agent is still displayed" for every input, and the refusal test would pass for the wrong
+    reason.
+
+    `swap-pane` exchanges the panes, not the slots: each pane takes the other's window and
+    position and keeps its own identity. So the two entries trade everything about *where*
+    they are and keep everything about *what* they are.
+    """
+
+    async def swap_panes(self, source_pane: str, target_pane: str) -> None:
+        self.calls.append(("swap_panes", source_pane, target_pane))
+        self._raise_if_armed()
+        panes = {pane.pane_id: pane for pane in (self._arrangement or ())}
+        source, target = panes.get(source_pane), panes.get(target_pane)
+        if source is None or target is None:
+            return
+
+        def moved(pane: HostedPane, to: HostedPane) -> HostedPane:
+            return HostedPane(
+                host=to.host,
+                on_console=to.on_console,
+                window_index=to.window_index,
+                pane_index=to.pane_index,
+                pane_id=pane.pane_id,
+                session_id=pane.session_id,
+                surface=pane.surface,
+                console_slot=to.console_slot,
+            )
+
+        swapped = {source_pane: moved(source, target), target_pane: moved(target, source)}
+        self._arrangement = tuple(
+            swapped.get(pane.pane_id, pane) for pane in (self._arrangement or ())
+        )
+
+
+async def test_close_sends_a_displayed_agent_home_before_it_kills_the_console() -> None:
+    """Order is the whole safety property (DEC-040): the swap must precede the kill.
+
+    A displayed agent's pane lives in the console *window*, so killing the session takes the
+    agent with it. Asserting both calls happened would pass on the sequence that destroys an
+    agent, so this asserts their positions.
+    """
+    console = ExchangingConsole(arrangement=_agent_console_window(_RUNNING))
+
+    report = await _composer(console).close()
+
+    verbs = [call[0] for call in console.calls]
+    assert report.outcome is CloseOutcome.CLOSED
+    assert verbs.index("swap_panes") < verbs.index("kill_console")
+
+
+async def test_close_refuses_while_an_agent_is_still_in_the_console_window() -> None:
+    """Send-home swallows its own failure, so `close` may not trust it — it re-reads.
+
+    `show_projects()` catches everything into a log line, which is right for a key and wrong
+    for a teardown: the caller cannot tell a console it emptied from one it did not. So the
+    arrangement is read again and any pane in the console's own window still carrying a
+    `session_id` refuses the kill (DEC-038 — identity is read off the pane).
+    """
+
+    class SendHomeFails(RecordingConsole):
+        async def swap_panes(self, source_pane: str, target_pane: str) -> None:
+            self.calls.append(("swap_panes", source_pane, target_pane))
+            raise RuntimeError("swap refused")
+
+    console = SendHomeFails(arrangement=_agent_console_window(_RUNNING))
+
+    report = await _composer(console).close()
+
+    assert report.outcome is CloseOutcome.REFUSED
+    assert report.reason and str(_RUNNING) in report.reason
+    assert named(console, "kill_console") == []
+
+
+async def test_close_reports_nothing_to_close_when_there_is_no_console() -> None:
+    """Exit zero, no kill: the state the owner asked for is the state they are in."""
+    console = RecordingConsole(exists=False)
+
+    report = await _composer(console).close()
+
+    assert report.outcome is CloseOutcome.NOTHING_TO_CLOSE
+    assert named(console, "kill_console") == []
+
+
+async def test_close_writes_no_record_because_the_composer_holds_no_store() -> None:
+    """DEC-036, asserted on the seam rather than on a double that could not be called anyway.
+
+    "The fake store records zero calls" is unreachable here: `ConsoleComposer` takes a
+    `ConsolePort` and nothing else, so there is no store to hand it. That absence *is* the
+    property, so it is asserted where it lives — on the constructor's signature, and on the
+    complete record of what `close()` touched.
+    """
+    import inspect
+
+    parameters = set(inspect.signature(ConsoleComposer.__init__).parameters)
+    assert not {name for name in parameters if "store" in name or "repository" in name}
+
+    console = ExchangingConsole(arrangement=_agent_console_window(_RUNNING))
+    await _composer(console).close()
+
+    # Every verb `close()` reached, and they are all on the console port.
+    assert set(call[0] for call in console.calls) <= {
+        "console_exists",
+        "pane_arrangement",
+        "swap_panes",
+        "kill_console",
+        "console_zoomed_pane",
+        "console_pane_geometry",
+        "resize_console_pane",
+        "zoom_console_pane",
+        "read_console_option",
+    }
+
+
+async def test_close_refuses_for_an_agent_anywhere_in_the_console_window_not_just_the_slot() -> None:
+    """"Any pane of the console window", which is the half a slot-shaped check would miss.
+
+    Added because a mutant survived: narrowing `_displayed_agents` to `pane_index == 0` passed
+    all 778 application tests, so nothing was holding the property the design actually states.
+    The slot is where an *exchange* puts an agent; it is not the only place a pane can be. An
+    operator can `split-window` by hand into the console window, and a crashed exchange can
+    leave a marked pane at any index — and `kill-session` would take every one of them.
+    """
+    displaced = HostedPane(None, True, 0, 0, "%0", None, True, ConsolePaneSlot.PROJECTS.value)
+    stray = HostedPane(None, True, 0, 3, "%9", _STARTING, False, None)
+    console = ExchangingConsole(arrangement=(displaced, stray))
+
+    report = await _composer(console).close()
+
+    assert report.outcome is CloseOutcome.REFUSED
+    assert report.reason and str(_STARTING) in report.reason
+    assert named(console, "kill_console") == []
+
+
+async def test_close_survives_a_console_that_vanishes_before_the_verify() -> None:
+    """A console gone between the existence check and the verify is `closed`, never an error.
+
+    `console_exists()` is read outside the arrangement lock, so a second `close()` or a
+    hand-typed `kill-session` can remove the console in between. Nothing downstream can tell
+    `closed` from `nothing to close` — both exit zero and neither flashes — so the label is
+    left imprecise and the property that matters is pinned here instead: the race produces a
+    clean answer rather than a traceback or a refusal.
+
+    Raised as an Important by Task 1.3's Tier-1 review.
+    """
+
+    class VanishesAfterTheCheck(RecordingConsole):
+        async def pane_arrangement(self) -> tuple[HostedPane, ...]:
+            self.calls.append(("pane_arrangement",))
+            # An absent server answers with an empty arrangement rather than raising, which
+            # is the same shape as "the console is gone" (see the gateway's own tests).
+            return ()
+
+    console = VanishesAfterTheCheck()
+
+    report = await _composer(console).close()
+
+    assert report.outcome is CloseOutcome.CLOSED
+    assert report.reason is None

@@ -28,6 +28,7 @@ import asyncio
 import logging
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
+from enum import StrEnum
 from pathlib import Path
 
 from remote_agents.application.console_lock import ConsoleArrangementLock, ConsoleBusy
@@ -313,6 +314,30 @@ class RecoveryReport:
 
     settled: bool
     """Whether the console's own arrangement is at rest. Says nothing about `blocked`."""
+
+
+class CloseOutcome(StrEnum):
+    """What `close()` did, in the three answers the owner can act on differently."""
+
+    CLOSED = "closed"
+    REFUSED = "refused"
+    NOTHING_TO_CLOSE = "nothing to close"
+
+
+@dataclass(frozen=True, slots=True)
+class CloseReport:
+    """The teardown's answer: what happened, and — when it refused — why.
+
+    Three outcomes rather than a bool, because the caller spends them differently: `closed`
+    and `nothing to close` are both exit zero and silent (the owner asked for a gone console
+    and has one), while `refused` has to reach the owner's eyes, since the symptom otherwise
+    is a key that did nothing.
+    """
+
+    outcome: CloseOutcome
+
+    reason: str | None = None
+    """Owner-facing words, set only on `refused`. Why the console is still standing."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -929,6 +954,75 @@ class ConsoleComposer:
             # already unzoomed the window, and a tail call would be skipped exactly then.
             await self._reassert_panes()
 
+    async def close(self) -> CloseReport:
+        """Tear the console down: send any displayed agent home, verify, then kill (DEC-096).
+
+        **The three steps stay in this order, and the order is the safety property.** Since
+        DEC-040 the console shows an agent by exchanging its left pane, so the agent's pane
+        lives in the console's own window and dies with the session. Killing first would end
+        an agent with a keypress; that is the hazard this whole method exists against.
+
+        **Step 2 is here because step 1 cannot be trusted.** `show_projects()` catches every
+        failure into a log line, which is right for a key — a console that will not rearrange
+        must not cost the owner their session — and wrong for a teardown, because the caller
+        cannot tell a console it emptied from one it did not. So the arrangement is **read
+        again** and any pane in the console's own window still carrying a `session_id` refuses
+        the kill. Identity is read off the pane (DEC-038), never off a pane id remembered from
+        the first reading.
+
+        **Refusal is the safe direction.** F10 then appears to do nothing, and the reason is
+        handed back for the caller to flash; the console stays up and the agent stays in it.
+
+        **What holds the lock, and what cannot.** `show_projects()` takes `self._links`
+        itself, and that lock is not reentrant, so step 1 runs outside it. Steps 2 and 3 run
+        **under** it as one unit, which is the protection that matters: no `show` can exchange
+        an agent in between a verify that found none and the kill that follows it.
+
+        **The two silent outcomes are not distinguished under a race, on purpose.**
+        `console_exists()` is a fast path read before the lock, so a console that vanishes
+        between it and step 2 — a second `close()`, or an `tmux kill-session` by hand — lands
+        on `closed` rather than `nothing to close`: the arrangement comes back empty, nothing
+        lingers, and `kill_console()` no-ops on an absent target. Harmless, and the reason is
+        that nothing downstream can tell them apart — the CLI verb exits zero on both and
+        flashes on neither. Paying a second round-trip under the lock to sharpen a
+        label no caller reads would be spending the owner's latency on tidiness. Raised by
+        Task 1.3's Tier-1 review; pinned by
+        `test_close_survives_a_console_that_vanishes_before_the_verify`.
+
+        Writes no record of any kind — the composer holds no store, and closing the console
+        may not end, stop or rewrite a session (DEC-036). Every managed session outlives it.
+        """
+        try:
+            if not await self._console.console_exists():
+                return CloseReport(CloseOutcome.NOTHING_TO_CLOSE)
+            await self.show_projects()
+            async with self._links:
+                arrangement = await self._console.pane_arrangement()
+                lingering = _displayed_agents(arrangement)
+                if lingering:
+                    listed = ", ".join(str(session_id) for session_id in lingering)
+                    return CloseReport(
+                        CloseOutcome.REFUSED,
+                        f"the console still shows {listed}; it was not closed",
+                    )
+                await self._console.kill_console()
+        except ConsoleBusy:
+            # The one refusal that is not about an agent: another process is arranging these
+            # panes, so this reading is about to be wrong and a kill decided from it would be
+            # decided from a console that no longer looks like this. Pressing again is the
+            # whole remedy, exactly as `show` says.
+            _LOG.info("the console was busy; it was not closed")
+            return CloseReport(
+                CloseOutcome.REFUSED, "The console is busy rearranging itself. Try that again."
+            )
+        except Exception as error:
+            # Unlike every other method here, a failure is **reported** rather than degraded
+            # to nothing: the caller's whole job is to say whether the console went away, and
+            # a swallowed error is a console reported closed while it is still standing.
+            _LOG.exception("closing the console failed; it may still be standing")
+            return CloseReport(CloseOutcome.REFUSED, f"the console could not be closed: {error}")
+        return CloseReport(CloseOutcome.CLOSED)
+
     #: How many resizes one fold is made of. Eight, because the motion has to read as a
     #: motion rather than a jump and tmux has no animation of its own: the pane edge is moved
     #: in whole columns, so "smooth" here is a number of steps and an interval between them.
@@ -1443,6 +1537,34 @@ def _projects_width(window_width: int) -> int:
     # is not the main pane's to spend. Without the `- 1` the fold comes back one column wider
     # than the console it left at every width except the one this was calibrated on.
     return max(1, (window_width - 1) * projects // 100)
+
+
+def _displayed_agents(arrangement: tuple[HostedPane, ...]) -> tuple[SessionId, ...]:
+    """Every agent still sitting in the console's own window, by its own identity.
+
+    The console window is found the way `_left_slot` finds it — the lowest window index the
+    console has, never a hardcoded 0, because the dedicated server reads the owner's
+    `~/.tmux.conf` and `base-index 1` is common.
+
+    **Every pane of that window, not just the left slot.** The slot is where an exchange puts
+    an agent, but it is not the only place a pane can be: an operator can split by hand and a
+    crashed exchange can leave one anywhere. The question this answers is not "is an agent
+    displayed" but "would the kill take a session with it", and that is a question about the
+    window.
+
+    `session_id` is the pane's identity **in its own right** (DEC-038); an inherited mark is
+    reported as `host` and is deliberately not consulted, because a console pane parked in an
+    agent's window carries one and is not an agent.
+    """
+    console_panes = [pane for pane in arrangement if pane.on_console]
+    if not console_panes:
+        return ()
+    window = min(pane.window_index for pane in console_panes)
+    return tuple(
+        pane.session_id
+        for pane in console_panes
+        if pane.window_index == window and pane.session_id is not None
+    )
 
 
 def _left_slot(arrangement: tuple[HostedPane, ...]) -> HostedPane | None:
