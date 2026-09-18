@@ -629,7 +629,7 @@ def limit_rows(
                 windows=tuple(
                     LimitWindow(
                         window.label,
-                        round(window.used_percent),
+                        whole_percent(window.used_percent),
                         None if window.resets_at is None else until(window.resets_at),
                     )
                     for window in windows
@@ -794,9 +794,21 @@ def _window_phrase(window: UsageWindow) -> str:
     return f"{spent} (resets in {until(window.resets_at)})"
 
 
+def whole_percent(value: float) -> int:
+    """The one rounding rule for a usage percentage, shared by everything that renders one.
+
+    Public, and extracted on 2026-09-18, because a third renderer arrived: the early-reset
+    message (DEC-097). The rule was already spelled twice — here and in `limit_rows`, which
+    rounds on its way into `LimitWindow.percent` — and a third copy in an adapter would have
+    put a figure reading `90.6%` in a Telegram message beside one reading `91%` two screens
+    away. Two opinions about one number is what DEC-043 forbids, so the number has one.
+    """
+    return round(value)
+
+
 def _percent(value: float) -> str:
     """Whole percent, because no decision a reader makes here turns on a tenth of one."""
-    return f"{round(value)}%"
+    return f"{whole_percent(value)}%"
 
 
 def _tokens(count: int) -> str:
