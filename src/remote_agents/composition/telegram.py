@@ -174,4 +174,5 @@ def _private_boundary(
         paths.activity_directory,
         SQLiteActivityStore(connection),
         trust_notifier=boundary.trust_notifier,
+        limit_reset_notifier=boundary.limit_reset_notifier,
     )

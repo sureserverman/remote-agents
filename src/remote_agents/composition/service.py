@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from remote_agents.adapters.sqlite.activity_store import SQLiteActivityStore
+from remote_agents.adapters.telegram.limit_reset_notifications import LimitResetNotifier
 from remote_agents.adapters.telegram.service import PrivateBotBoundary
 from remote_agents.adapters.telegram.trust_notifications import TrustNotifier
 from remote_agents.adapters.tmux.runtime import TmuxTerminal
@@ -30,6 +31,17 @@ _ACTIVITY_POLL_SECONDS = 30.0
 #: "immediately" -- neither the 30 s activity poll nor the 60 s reconcile is that. The pass is
 #: cheap: it reads the records it already has and touches Telegram only when something changed.
 _TRUST_POLL_SECONDS = 5.0
+#: How often each provider is asked what its plan's windows now read. Sixty times the trust
+#: cadence, and the gap is what the two are waiting on. A trust question is a session standing
+#: still until the owner answers it. An early limits reset is not waiting on anybody: nothing
+#: the owner does changes it, and the figures are already on the limits screen for whoever
+#: looks. What the message buys is *knowing without looking*, and five minutes is prompt for
+#: that while costing one bounded read per provider per tick against a rate-limit endpoint.
+#:
+#: It is also comfortably wider than `EARLY_RESET_GRACE`, which is the property that keeps a
+#: merely-late rollover from reading as news: a grace narrower than the polling period would
+#: report scheduled resets on a schedule.
+_LIMITS_POLL_SECONDS = 300.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -70,6 +82,18 @@ class ServiceComposition:
     and never costs the phone its notification.
     """
 
+    limit_reset_notifier: LimitResetNotifier | None = None
+    """The pass that notices a provider wiping its meters early, or None where nothing does.
+
+    None in compositions that wire no Telegram — the message is bot-only (DEC-097) — and in
+    every composition predating it, which is why it defaults. The watch is created only when
+    this is wired: the notifier is what holds the baseline, so without one there is nothing for
+    a loop to tick.
+
+    Placed after `trust_notifier` for the reason that field's own note gives: this dataclass is
+    constructed positionally in places, so a new field goes at the end with a default.
+    """
+
     trust_notifier: TrustNotifier | None = None
     """The pass that asks an untrusted session's question, or None where nothing asks it.
 
@@ -87,6 +111,7 @@ async def _serve_with_reconciliation(
     interval: float,
     activity_interval: float = _ACTIVITY_POLL_SECONDS,
     trust_interval: float = _TRUST_POLL_SECONDS,
+    limits_interval: float = _LIMITS_POLL_SECONDS,
 ) -> None:
     """Poll Telegram while keeping durable records agreeing with observed panes.
 
@@ -131,6 +156,17 @@ async def _serve_with_reconciliation(
         # baseline to establish, because an untrusted session standing at start-up is exactly
         # what the owner most needs to be told about.
         periodic.append(asyncio.create_task(_watch_trust_periodically(composition, trust_interval)))
+    if composition.limit_reset_notifier is not None:
+        # The fourth, on the same terms as the three above: its own task, its own clock, and it
+        # never raises into serving. Unlike the trust watch it establishes a baseline on its
+        # first tick and reports nothing from it — there is no "already true at start-up" here,
+        # because a reset is a *change* and the first reading is only the thing it will be
+        # compared against. Gated on the notifier rather than on `Backend.limits`: the notifier
+        # is what holds the baseline and what was handed the read, so a wired one is the whole
+        # condition and asking the backend again here would be a second opinion about it.
+        periodic.append(
+            asyncio.create_task(_watch_limits_periodically(composition, limits_interval))
+        )
     # Not a fourth periodic task, and the difference is the point: the three above each poll
     # something on a clock of their own, while this *subscribes* to a watcher that already
     # polls. Subscribing is what starts it (`StoreWatch.subscribe`), so there is no task to
@@ -252,6 +288,23 @@ async def _watch_trust_periodically(composition: ServiceComposition, interval: f
             # One pass, logged. A trust question that could not be asked this time is asked
             # next time; a loop that dies takes every later question with it.
             _LOG.exception("the folder-trust pass failed; it will be retried")
+
+
+async def _watch_limits_periodically(composition: ServiceComposition, interval: float) -> None:
+    """Ask each provider what its windows read, on a clock of its own — and never raise.
+
+    The same shape as the trust watch, and the same contract: one pass, logged, and the loop
+    goes on. A provider's reader that started failing must not stop reconciliation, activity or
+    trust, because every one of those is more urgent than a limits figure being stale.
+    """
+    while True:
+        await asyncio.sleep(interval)
+        try:
+            await composition.limit_reset_notifier.pass_once()
+        except Exception:
+            # One pass, logged. The baseline is the notifier's and survives this, so a tick lost
+            # to a failing reader costs at most the detection that tick would have made.
+            _LOG.exception("the limits watch could not complete a pass")
 
 
 async def _watch_activity_periodically(composition: ServiceComposition, interval: float) -> None:

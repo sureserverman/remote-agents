@@ -1045,3 +1045,37 @@ async def test_compose_backend_reads_claude_limits_from_the_hop_file_under_the_s
         await backend.close_usage_readers()
     finally:
         connection.close()
+
+
+async def test_a_composition_predating_the_limits_watch_still_constructs(tmp_path: Path) -> None:
+    """The fourth loop is additive: every composition written before it keeps working.
+
+    `ServiceComposition` is constructed positionally in places, so a field added anywhere but
+    the end with anything but a default would break callers that never mentioned it — which is
+    the rule `trust_notifier`'s own note records, applied again. This asserts it on the shape
+    rather than on the convention: the three positional arguments every composition has always
+    passed still build one, and the new field answers `None`.
+
+    `None` is also the production answer on a host whose providers publish no limits, so this
+    is not only a compatibility check — it is the no-watch path (DEC-097 is bot-only, and
+    `Backend.limits` is what the boundary gates on).
+    """
+    from remote_agents.adapters.sqlite.database import open_database
+    from remote_agents.adapters.sqlite.session_store import SQLiteSessionStore
+    from remote_agents.adapters.telegram.service import build_private_bot
+    from remote_agents.application.reconcile import ReconciliationService
+    from remote_agents.composition.service import ServiceComposition
+
+    connection = open_database(tmp_path / "sessions.sqlite3")
+    try:
+        composition = ServiceComposition(
+            build_private_bot(7, 11),
+            FakeTerminal(),  # type: ignore[arg-type]
+            ReconciliationService(SQLiteSessionStore(connection)),
+        )
+        assert composition.limit_reset_notifier is None
+        # The field it was placed after, still where it was: the ordering argument is only
+        # worth anything if nothing shifted underneath it.
+        assert composition.trust_notifier is None
+    finally:
+        connection.close()

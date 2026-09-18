@@ -38,6 +38,9 @@ from telegram.ext import (
 from remote_agents.adapters.telegram.callbacks import CallbackStateStore
 from remote_agents.adapters.telegram.flood import FloodGate
 from remote_agents.adapters.telegram.inspection import inspect_capture
+from remote_agents.adapters.telegram.limit_reset_notifications import (
+    LimitResetNotifier,
+)
 from remote_agents.adapters.telegram.live_view import ChatViewStore, LiveView
 from remote_agents.adapters.telegram.notifications import (
     NOTIFIED_DETAIL_ACTION as _NOTIFIED_DETAIL,
@@ -659,6 +662,15 @@ class PrivateBotBoundary:
     separately and each kept going regardless.
     """
     notifier: ActivityNotifier = field(init=False)
+    limit_reset_notifier: LimitResetNotifier | None = None
+    """The pass that notices a provider wiping its meters early, or None where nothing can.
+
+    None wherever `Backend.limits` is not wired — a host whose providers publish no limits has
+    nothing for it to read — and in every boundary built by a test that constructs one
+    directly. Bot-only by decision (DEC-097): the message is about the account and the local
+    feed is session-shaped.
+    """
+
     trust_notifier: TrustNotifier | None = None
     """The pass that asks an untrusted session's folder-trust question, or None where none does.
 
@@ -4237,6 +4249,22 @@ def build_private_bot(
             finished=bot._finished_sessions,  # noqa: SLF001
         )
     )
+    if bot.backend.limits is not None:
+        object.__setattr__(
+            bot,
+            "limit_reset_notifier",
+            LimitResetNotifier(
+                # The one argumentless read both surfaces share, handed over rather than
+                # reached for: the notifier cannot choose a source, so the owner's Settings
+                # choice and DEC-087's opt-in stay the only things that decide one.
+                limits=bot.backend.limits,
+                view=bot.view,
+                # The existing naming site, passed in. The notifier is forbidden to spell a
+                # provider name of its own, and a test over its AST holds that.
+                name_for=_profile_name,
+                flood=bot.flood,
+            ),
+        )
     if trust_store is not None:
         object.__setattr__(
             bot,
@@ -4304,6 +4332,10 @@ async def run_private_bot(
     # wires no trust pass -- every test that constructs one directly -- has none.
     if boundary.trust_notifier is not None:
         boundary.trust_notifier.attach(application.bot)
+    # And to the limits watch, for the same reason and with the same guard: it answers no
+    # update either, and a boundary whose providers publish no limits has none.
+    if boundary.limit_reset_notifier is not None:
+        boundary.limit_reset_notifier.attach(application.bot)
     try:
         await _sync_owner_metadata(
             application.bot, secrets.owner_chat_id, owner_commands(boundary.backend)

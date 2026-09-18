@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -644,3 +645,208 @@ async def test_a_legacy_marked_pane_still_owns_its_migrated_record(tmp_path: Pat
         )
     finally:
         connection.close()
+
+
+# --- the fourth periodic loop: an early limits reset, reported once (DEC-097) ----------------
+#
+# Three loops ran here before this one — reconcile, activity, trust — and each has its own task
+# and its own clock because they wait on different things and one that hangs must not stop the
+# others. This adds a fourth on the same terms. What is new is that its subject is the account
+# rather than a session, which DEC-031 forbade until DEC-097 amended it.
+
+
+class _RecordingView:
+    """The one method a notifier of this shape reaches for, and a record of what it sent."""
+
+    chat_id = 11
+
+    def __init__(self) -> None:
+        self.sent: list[str] = []
+
+    async def send_apart(self, bot: object, arguments: dict[str, object]) -> int:
+        self.sent.append(str(arguments["text"]))
+        return 900 + len(self.sent)
+
+
+def _limits_reading(percent: float, at: datetime):
+    from remote_agents.ports.agent_usage import AgentLimits, UsageWindow
+
+    return (
+        AgentLimits(
+            ProfileId("claude"),
+            (UsageWindow("5h", percent, at + timedelta(hours=4)),),
+            observed_at=at,
+            stale_source="usage API",
+        ),
+    )
+
+
+def _limits_notifier(view: _RecordingView, readings: list):
+    """A real `LimitResetNotifier` over scripted readings; only the reader is a double."""
+    from remote_agents.adapters.telegram.limit_reset_notifications import LimitResetNotifier
+
+    ticks = iter(readings)
+
+    async def limits():
+        try:
+            return next(ticks)
+        except StopIteration:
+            return readings[-1] if readings else ()
+
+    notifier = LimitResetNotifier(
+        limits=limits,
+        view=view,
+        name_for=lambda profile_id: profile_id.title(),
+    )
+    notifier.attach(object())
+    return notifier
+
+
+async def test_the_limits_watch_reports_one_early_reset_and_then_stops_talking(
+    tmp_path: Path,
+) -> None:
+    """End to end through the real serving loop: one message, and no second one after it."""
+    moment = datetime.now(UTC)
+    view = _RecordingView()
+    notifier = _limits_notifier(
+        view,
+        [
+            _limits_reading(91, moment),
+            _limits_reading(2, moment + timedelta(minutes=10)),
+            _limits_reading(2, moment + timedelta(minutes=20)),
+            _limits_reading(2, moment + timedelta(minutes=30)),
+        ],
+    )
+    connection = open_database(tmp_path / "sessions.sqlite3")
+    try:
+        store = SQLiteSessionStore(connection)
+        composition = ServiceComposition(
+            build_private_bot(7, 11),
+            StubTerminal(),
+            ReconciliationService(store),
+            limit_reset_notifier=notifier,
+        )
+
+        async def poll(secrets: TelegramSecrets, boundary: PrivateBotBoundary) -> None:
+            # Long enough for several ticks of a zero-interval watch, short enough to be a test.
+            await asyncio.sleep(0.2)
+
+        await _serve_with_reconciliation(
+            _SECRETS, composition, poll, 3600, limits_interval=0
+        )
+
+    finally:
+        connection.close()
+
+    assert view.sent == ["Claude limits were reset early — 5h 91% → 2%"], (
+        f"the watch said {view.sent}"
+    )
+
+
+async def test_the_limits_watch_is_not_created_when_no_notifier_is_wired(
+    tmp_path: Path, caplog
+) -> None:
+    """A composition that wires no Telegram wires no watch — and still serves.
+
+    The local surface never sends notifications (DEC-047), and every test constructing a
+    composition directly predates this field. Both get the behaviour they had before it existed.
+
+    **Asserted through the journal, because the obvious assertion does not hold the property.**
+    An earlier version checked only that the field was `None` and that serving still happened —
+    and it passed with the guard deleted, because a loop ticking on a `None` notifier raises
+    `AttributeError` straight into the watch's own `except`, which logs and carries on. So what
+    is asserted is the behaviour that actually distinguishes "no loop" from "a loop failing
+    quietly": with no notifier, a zero-interval watch says nothing at all. Found by a mutant
+    that survived the first battery.
+    """
+    connection = open_database(tmp_path / "sessions.sqlite3")
+    try:
+        store = SQLiteSessionStore(connection)
+        composition = _composition(store, StubTerminal())
+        assert composition.limit_reset_notifier is None
+
+        polled = False
+
+        async def poll(secrets: TelegramSecrets, boundary: PrivateBotBoundary) -> None:
+            nonlocal polled
+            polled = True
+            # Long enough that a zero-interval watch would tick many times if one existed.
+            await asyncio.sleep(0.1)
+
+        with caplog.at_level(logging.DEBUG, logger="remote_agents.composition.service"):
+            await _serve_with_reconciliation(
+                _SECRETS, composition, poll, 3600, limits_interval=0
+            )
+    finally:
+        connection.close()
+
+    assert polled, "the service never polled"
+    assert not [r for r in caplog.records if "limits watch" in r.getMessage()], (
+        "a limits watch ran without a notifier to drive it"
+    )
+
+
+async def test_the_limits_watch_survives_a_pass_that_raises(tmp_path: Path) -> None:
+    """Never into the serving loop — the contract every one of the four passes carries.
+
+    A watch that let an exception out would take reconciliation, activity and trust down with
+    it on a timer, which is worse than any limits figure being stale.
+    """
+
+    class _Exploding:
+        passes = 0
+
+        async def pass_once(self) -> None:
+            _Exploding.passes += 1
+            raise RuntimeError("the provider's reader fell over")
+
+    connection = open_database(tmp_path / "sessions.sqlite3")
+    try:
+        store = SQLiteSessionStore(connection)
+        composition = ServiceComposition(
+            build_private_bot(7, 11),
+            StubTerminal(),
+            ReconciliationService(store),
+            limit_reset_notifier=_Exploding(),  # type: ignore[arg-type]
+        )
+
+        async def poll(secrets: TelegramSecrets, boundary: PrivateBotBoundary) -> None:
+            await asyncio.sleep(0.15)
+
+        await _serve_with_reconciliation(_SECRETS, composition, poll, 3600, limits_interval=0)
+
+    finally:
+        connection.close()
+
+    assert _Exploding.passes > 1, (
+        f"the watch stopped after its first failure ({_Exploding.passes} passes)"
+    )
+
+
+async def test_the_limits_watch_is_cancelled_with_the_other_periodic_tasks(
+    tmp_path: Path,
+) -> None:
+    """On the way out, or the process does not go out: the task must not outlive serving."""
+    view = _RecordingView()
+    notifier = _limits_notifier(view, [_limits_reading(91, datetime.now(UTC))])
+    before = len(asyncio.all_tasks())
+    connection = open_database(tmp_path / "sessions.sqlite3")
+    try:
+        store = SQLiteSessionStore(connection)
+        composition = ServiceComposition(
+            build_private_bot(7, 11),
+            StubTerminal(),
+            ReconciliationService(store),
+            limit_reset_notifier=notifier,
+        )
+
+        async def poll(secrets: TelegramSecrets, boundary: PrivateBotBoundary) -> None:
+            await asyncio.sleep(0.05)
+
+        await _serve_with_reconciliation(_SECRETS, composition, poll, 3600, limits_interval=3600)
+
+    finally:
+        connection.close()
+
+    await asyncio.sleep(0)
+    assert len(asyncio.all_tasks()) <= before, "a periodic task outlived the serving loop"
