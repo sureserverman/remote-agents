@@ -618,9 +618,10 @@ class ProjectsPaneScreen(SessionKeyHintRow, ProjectsScreen):
         *person*; anything the owner must keep belongs in the status line, which is the rule
         the attach command is already handled by.
 
-        Before this, neither reached them at all: `moved` was logged at INFO with no logging
-        configured anywhere in `src/`, and `blocked` was printed to stderr in the instant
-        before Textual took the alternate screen.
+        Before this, neither reached them at all: `moved` was logged at INFO by a process that
+        configures no logging, and `blocked` was printed to stderr in the instant before
+        Textual took the alternate screen. (The *service* has configured logging since 0.44.2;
+        this surface has not, and an INFO line here would still reach nobody.)
         """
         report = self.services.console_recovery
         if report is None:

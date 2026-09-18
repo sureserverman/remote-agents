@@ -95,6 +95,14 @@ What is demonstrated instead, in descending order of directness:
   `doctor` at acceptance time — an early Claude reset is noticed only when the next Claude
   session reports, because that is when the figure moves at all. Codex has no equivalent gap:
   its figures are asked of `codex app-server` every pass.
+- **A provider that has been unreadable for hours looks like a provider with nothing to say.**
+  The baseline line fires once, when a provider's baseline is *first* taken, and a failed read
+  never touches the baseline — so a provider that goes unreadable and later recovers logs
+  nothing on either transition. The startup lines still prove the watch is alive as a whole,
+  which is what the three releases above were about; what they do not distinguish is "alive,
+  but this one provider has answered nothing since 04:00". Raised by Stage 3's own Tier-2
+  review, and named here rather than fixed: closing it means logging per failed read, and the
+  failure this feature is arranged against is a false alarm, not a missed line.
 
 ---
 

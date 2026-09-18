@@ -816,7 +816,7 @@ class ConsoleComposer:
         """Put one agent's pane in the console's left slot; answer with why, if it could not.
 
         **The return value is the whole point of this signature.** Everything here degrades to
-        a log line by design (DEC-040), and there is no logging configured anywhere in `src/` —
+        a log line by design (DEC-040), and the TUI process configures no logging at all —
         so a session that could not be displayed was a click that did nothing, with no
         explanation on screen. The commonest cause is not a fault at all: a session launched
         before identity moved to the pane (DEC-038) names no pane, so there is nothing to
