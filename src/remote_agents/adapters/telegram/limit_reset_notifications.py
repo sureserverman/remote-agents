@@ -150,7 +150,23 @@ class LimitResetNotifier:
         now = self._now()
         for reading in readings:
             key = str(reading.profile_id)
-            for_this_provider = detect(self._baseline.get(key), reading, now=now)
+            previous = self._baseline.get(key)
+            for_this_provider = detect(previous, reading, now=now)
+            if previous is None:
+                # **The one line a healthy watch prints, and it exists because the alternative
+                # was unobservable.** A pass with nothing to report was silent, so on a real
+                # host "the loop ran and found nothing" and "the loop was never created"
+                # produced identical journals — the same ambiguity a surviving mutant exposed
+                # in the unit tests, which the Stage 3 live gate then could not satisfy at all.
+                #
+                # Once per provider, at the moment its baseline is first taken. Not repeated:
+                # a line per provider every five minutes forever is a journal nobody reads,
+                # which is its own kind of unobservable.
+                _LOG.info(
+                    "limits watch: baseline taken for %s (%d window(s)); nothing to report",
+                    key,
+                    len(reading.windows),
+                )
             self._baseline[key] = reading
             if not for_this_provider or key in self._abandoned:
                 continue

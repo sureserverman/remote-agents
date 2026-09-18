@@ -316,3 +316,40 @@ async def test_a_fresh_detection_does_not_inherit_the_previous_events_refusals(c
     assert not [r for r in caplog.records if "giving up" in r.getMessage()], (
         "the second wipe inherited the first event's refusals and was abandoned early"
     )
+
+
+async def test_the_notifier_says_in_the_journal_that_it_took_a_baseline(caplog) -> None:
+    """A healthy watch must be distinguishable from a watch that was never created.
+
+    **Found by the Stage 3 live gate, which could not be satisfied.** The gate asks the
+    operator's journal to show the watch taking its baseline; the first version of this class
+    logged only on failure, so a successful pass was silent — and on a real host "the loop ran
+    and had nothing to say" and "the loop was never started" produced byte-identical journals.
+    That is the same ambiguity a surviving mutant exposed in the unit tests, unfixed in
+    production, and the gate caught it exactly where the tests could not.
+
+    One line per provider, at the moment its baseline is first taken, naming the provider and
+    saying nothing was reported. Not repeated afterwards: a line per provider per five minutes
+    forever is a journal nobody reads, which is its own kind of unobservable.
+    """
+    view = _View()
+    moment = _START
+    notifier = _notifier(
+        view,
+        [
+            _two_providers(91, 30, at=moment),
+            _two_providers(91, 30, at=moment + timedelta(minutes=10)),
+        ],
+    )
+
+    with caplog.at_level(logging.INFO):
+        await notifier.pass_once()
+        first = [r.getMessage() for r in caplog.records if "baseline" in r.getMessage()]
+        await notifier.pass_once()
+        second = [r.getMessage() for r in caplog.records if "baseline" in r.getMessage()]
+
+    assert len(first) == 2, f"expected one baseline line per provider, got {first}"
+    assert any("claude" in line for line in first)
+    assert any("codex" in line for line in first)
+    assert second == first, "the baseline line repeated on a later pass"
+    assert view.sent == [], "a baseline pass must report nothing"
