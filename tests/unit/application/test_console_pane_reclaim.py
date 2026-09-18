@@ -70,6 +70,9 @@ class RecordingConsole:
         self.rejoined: list[tuple[str, str, bool, int, bool]] = []
         self.normalized: list[tuple[int, tuple[tuple[str, int], ...]]] = []
 
+    async def kill_console(self) -> None:
+        self.calls.append(("kill_console",))
+
     async def pane_arrangement(self) -> tuple[HostedPane, ...]:
         return self.arrangement
 

@@ -427,3 +427,40 @@ async def test_the_gate_refuses_a_pane_the_arrangement_does_not_mention() -> Non
 
     assert await gateway(listed).holds_console_slot("%9") is False
     assert await gateway(absent).holds_console_slot("%1") is False
+
+
+async def test_kill_console_names_the_console_session_and_reads_a_gone_console_as_done() -> None:
+    """The port's one destructive verb, at argv level: `kill-session` against the console.
+
+    **A session target rather than a pane id, and the split in `TmuxGateway`'s own docstring
+    is why.** `destroy` names a pane because it acts on *the agent*, which moves between
+    windows; this acts on a container the owner navigates, and the container is the whole
+    point — there is no agent to miss, because `ConsoleComposer.close()` has already sent one
+    home and refused to call this at all if it could not (DEC-040).
+
+    **Gone is done, not an error.** A second press of F10 arrives at a console that is already
+    dead, and so does the deploy's `console close` run twice; both mean the thing this verb
+    exists to achieve. An absent server says the same thing more loudly — the dedicated server
+    holds the console, so no server is no console.
+    """
+    runner = RecordingRunner()
+    await gateway(runner).kill_console()
+    assert runner.calls == [(*_BASE, "kill-session", "-t", "ra-console:")]
+
+    gone = RecordingRunner(error=RuntimeError("can't find session: ra-console"))
+    await gateway(gone).kill_console()
+
+    absent = RecordingRunner(error=RuntimeError("no server running on /tmp/tmux-1000/x"))
+    await gateway(absent).kill_console()
+
+
+async def test_kill_console_lets_a_real_tmux_failure_through() -> None:
+    """Anything that is not "already gone" keeps its type, so a broken tmux is not success.
+
+    The failure direction that matters for a destructive verb is the inverse of the usual one:
+    swallowing an error here reports a console closed while it is still standing, and the
+    caller flashes nothing and exits zero.
+    """
+    broken = RecordingRunner(error=RuntimeError("lost server"))
+    with pytest.raises(RuntimeError, match="lost server"):
+        await gateway(broken).kill_console()

@@ -230,6 +230,27 @@ class ConsolePort(Protocol):
 
     async def create_console(self, dashboard_command: tuple[str, ...], cwd: Path) -> None: ...
 
+    async def kill_console(self) -> None:
+        """Remove the console session, and nothing else (DEC-096).
+
+        **The only destructive verb on this port**, and the reason it is safe to have one is
+        that it is narrow rather than careful: it names the console container and takes no
+        argument, so there is no target a caller could get wrong. What makes a *call* safe is
+        upstream — `ConsoleComposer.close()` sends a displayed agent home, re-reads the
+        arrangement, and refuses to reach this verb at all while a pane in the console window
+        still carries a `session_id` (DEC-040, DEC-038).
+
+        **A console that is already gone is not an error.** Two presses of F10, or a deploy
+        running `console close` twice, both arrive here with nothing to kill and both mean the
+        thing the verb exists to achieve. An absent server says the same: the dedicated server
+        is what holds the console.
+
+        No session record is read or written by this or by any caller of it — the console is
+        presentation and nothing depends on it (DEC-036). Every managed session on the server
+        outlives this call.
+        """
+        ...
+
     async def split_console_pane(
         self,
         target_pane: str,

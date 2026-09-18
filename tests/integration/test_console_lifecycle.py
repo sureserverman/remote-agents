@@ -17,6 +17,7 @@ capabilities, any other hosting wires none.
 
 from __future__ import annotations
 
+import os
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -87,6 +88,9 @@ class RecordingConsole:
 
     async def pane_arrangement(self):
         return tuple(self.panes)
+
+    async def kill_console(self) -> None:
+        self.calls.append(("kill_console",))
 
     async def swap_panes(self, source_pane: str, target_pane: str) -> None:
         self.calls.append(("swap", source_pane, target_pane))
@@ -241,3 +245,54 @@ async def test_a_reload_leaves_a_trust_blocked_agent_on_screen() -> None:
         "an agent waiting on its own trust dialog must stay on screen; the dialog is the "
         "only place DEC-047 leaves the owner to answer it locally"
     )
+
+
+async def test_kill_console_removes_the_console_and_leaves_a_managed_session_running() -> None:
+    """The destructive verb against a real tmux server: the console dies, the agent does not.
+
+    **Here rather than in `tests/integration/tmux/` because the plan's selector names this
+    file**, and the question is a lifecycle one: what survives the console. It is the only
+    test in this module that talks to a real server, so it builds and tears down its own
+    disposable one rather than borrowing a fixture that does not exist.
+
+    The managed session runs `sleep`, and the assertion is about its **pane pid** rather than
+    about tmux's session list: a session name outliving the process it is supposed to hold is
+    exactly the failure `destroy`'s docstring records from 2026-08-19, and a test that asks
+    only `has-session` cannot tell the two apart.
+
+    The second call proves idempotence against a real "can't find session", which is the error
+    string the argv-level test stubs.
+    """
+    import subprocess
+    from uuid import uuid4
+
+    from remote_agents.adapters.tmux.gateway import TmuxGateway
+    from remote_agents.adapters.tmux.runtime import AsyncTmuxRunner
+
+    socket = f"remote-agents-test-close-{uuid4().hex}"
+    session_id = SessionId.new()
+    managed = f"ra-{session_id}"
+
+    def tmux(*args: str, check: bool = True) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            ["tmux", "-L", socket, *args], capture_output=True, text=True, check=check
+        )
+
+    tmux("new-session", "-d", "-s", "ra-console", "-x", "80", "-y", "24", "sleep", "300")
+    tmux("new-session", "-d", "-s", managed, "-x", "80", "-y", "24", "sleep", "300")
+    try:
+        agent_pid = int(
+            tmux("list-panes", "-t", f"{managed}:", "-F", "#{pane_pid}").stdout.split()[0]
+        )
+
+        await TmuxGateway(socket, AsyncTmuxRunner()).kill_console()
+
+        assert tmux("has-session", "-t", "ra-console:", check=False).returncode != 0
+        assert tmux("has-session", "-t", f"{managed}:", check=False).returncode == 0
+        # The pane's own process, not the session name that claims to hold it.
+        os.kill(agent_pid, 0)
+
+        # Twice is the ordinary case: F10 pressed again, or a deploy running the verb twice.
+        await TmuxGateway(socket, AsyncTmuxRunner()).kill_console()
+    finally:
+        subprocess.run(["tmux", "-L", socket, "kill-server"], capture_output=True, check=False)

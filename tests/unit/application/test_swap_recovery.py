@@ -94,6 +94,9 @@ class RecordingConsole:
         self.swaps: list[tuple[str, str]] = []
         self.marked: list[str] = []
 
+    async def kill_console(self) -> None:
+        self.calls.append(("kill_console",))
+
     async def pane_arrangement(self) -> tuple[HostedPane, ...]:
         return self.arrangement
 

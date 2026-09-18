@@ -95,6 +95,9 @@ class RecordingConsole:
         self.swaps: list[tuple[str, str]] = []
         self.reads = 0
 
+    async def kill_console(self) -> None:
+        self.calls.append(("kill_console",))
+
     async def pane_arrangement(self) -> tuple[HostedPane, ...]:
         self.reads += 1
         if self.error is not None:

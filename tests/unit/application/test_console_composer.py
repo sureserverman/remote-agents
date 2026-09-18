@@ -173,6 +173,10 @@ class RecordingConsole:
         self.calls.append(("install_console_binding", key, action, command, table))
         self._raise_if_armed()
 
+    async def kill_console(self) -> None:
+        self.calls.append(("kill_console",))
+        self._raise_if_armed()
+
     async def pane_arrangement(self) -> tuple[HostedPane, ...]:
         """A console already at rest: its left slot holds the marked projects surface.
 

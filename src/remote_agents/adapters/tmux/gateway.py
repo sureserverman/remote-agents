@@ -889,6 +889,39 @@ class TmuxGateway:
             raise
         return True
 
+    async def kill_console(self) -> None:
+        """Kill the console session; a console that is already gone is done, not an error.
+
+        **A session target, deliberately, and the split in this class's own docstring is the
+        argument.** `destroy` names a pane because it acts on *the agent*, which moves between
+        windows and must not be reached through whatever occupies one. This acts on the
+        container the owner navigates — and by the time it runs, `ConsoleComposer.close()` has
+        already sent any displayed agent home and re-read the arrangement to prove it, so
+        there is no agent in this window to miss (DEC-040, DEC-096). It names
+        `console_target()` rather than `exact_session_target`, which is why the pane-addressing
+        architecture test does not list it: the console is not a managed session and has no
+        UUID to parse.
+
+        **`kill-session` is right here even though it was wrong for `destroy`.** That method's
+        hazard was a window *linked* into another session, where killing the session removed
+        the name and left the pane running. The console links nothing (Sub-plan 3, Task 2.4,
+        with an architecture test keeping the verb out of the codec), and its window is its
+        own; a displaced agent's pane living there is exactly what `close()` refuses to let
+        this see.
+
+        **Only "already gone" is swallowed.** Anything else keeps its type and reaches the
+        caller, because the failure that matters for a destructive verb is the inverse of the
+        usual one: a swallowed error reports a closed console while it is still standing, and
+        `console close` would then flash nothing and exit zero.
+        """
+        try:
+            await self._runner.run(*self._base_argv(), "kill-session", "-t", console_target())
+        except RuntimeError as error:
+            message = str(error)
+            if _reports_absent_server(message) or _reports_absent_target(message):
+                return
+            raise
+
     async def create_console(self, dashboard_command: tuple[str, ...], cwd: Path) -> None:
         """Create the detached console session running the dashboard as window 0.
 
