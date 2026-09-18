@@ -1145,8 +1145,8 @@ feed reads `agent_activity`, which is the record of what agents did to their ses
 account's meters are not a session's news.
 
 It is driven by a fourth periodic pass beside reconcile, activity and trust: **each provider's
-limits are read every 300 seconds**, one bounded read per provider per tick through the same
-`Backend.limits` both surfaces already use. Unlike `activity_poll_seconds` that period is not
+limits are read every 300 seconds**, one call per tick to the same argumentless
+`Backend.limits` both surfaces already use, which answers for every provider at once. Unlike `activity_poll_seconds` that period is not
 configurable and there is no config key to add — nobody has asked to tune it, and it is paired
 with the five-minute grace the rule applies at a window's own deadline, which is what keeps a
 wipe that beat its schedule by a minute — or a provider's clock disagreeing with ours — from

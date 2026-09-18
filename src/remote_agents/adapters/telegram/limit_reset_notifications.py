@@ -159,36 +159,73 @@ class LimitResetNotifier:
             # is the truer one, and two notifications about one wipe is the shape DEC-031's
             # one-per-pass clause exists to prevent.
             self._pending[key] = limit_reset_message(self._name_for(key), for_this_provider)
+            # **The new sentence starts its own count.** Refusals recorded against the event it
+            # replaces are about a message nobody will ever send now; carried over, they would
+            # let a fresh wipe be abandoned on its first real attempt at delivery, on the
+            # strength of an unrelated earlier failure.
+            self._refusals.pop(key, None)
         await self._deliver()
 
     async def _deliver(self) -> None:
-        """Send what is outstanding, or hold it — and give up on it at the third refusal."""
+        """Send what is outstanding, and let a pass that reached nobody say nothing about it.
+
+        **A refusal is evidence about this message only when the channel is demonstrably
+        working** — DEC-049's clause, and the reason the strikes are collected across the pass
+        rather than counted as they happen. When at least one other provider's message got
+        through, a refusal really is about the message that was refused: too long, bad markup,
+        something this pass will never fix by repeating. When nothing got through, the refusals
+        are evidence about an outage, and counting them would spend the whole budget on a
+        Telegram hiccup.
+
+        The arithmetic is why that matters more here than anywhere else in this adapter. At a
+        300 s cadence three strikes is fifteen minutes; `_abandoned` is keyed on the **provider**
+        rather than on a session, and nothing clears it — a session ends and takes its
+        abandonment with it, a provider does not. So the first version of this method, which
+        struck unconditionally, turned one ordinary outage into early-reset notifications being
+        silently dead for that provider for the life of the process. It cited DEC-049 in its own
+        docstring while not implementing it, which is worse than not citing it at all. Found by
+        Stage 2's Tier-2 review, against `trust_notifications.py`, which has it right.
+        """
         if self._bot is None or not self._pending:
             return
-        if self._flood.held():
-            # Telegram has told this chat to wait. Holding costs nothing; spending a request
-            # during a ban is what extends it.
-            _LOG.debug(
-                "limit-reset notifications held: %.0fs left on the chat's flood hold",
-                self._flood.remaining(),
-            )
-            return
+        refused: list[str] = []
+        delivered = 0
         for key, text in list(self._pending.items()):
+            if self._flood.held():
+                # Re-asked per message, not once for the pass: a send that trips a fresh ban
+                # must not be followed by another spending a request into the ban it just
+                # caused. The siblings ask once; this asks each time, which costs nothing.
+                _LOG.debug(
+                    "limit-reset notifications held: %.0fs left on the chat's flood hold",
+                    self._flood.remaining(),
+                )
+                break
             try:
                 await self._view.send_apart(
                     self._bot, {"text": text, "parse_mode": ParseMode.HTML}
                 )
             except Exception:
-                self._refusals[key] = self._refusals.get(key, 0) + 1
-                if self._refusals[key] >= _REFUSALS_BEFORE_ABANDONING:
-                    self._abandoned.add(key)
-                    self._pending.pop(key, None)
-                    _LOG.warning(
-                        "giving up on the early-limits-reset message for %s after %d refusals; "
-                        "the figures themselves are on the limits screen",
-                        key,
-                        _REFUSALS_BEFORE_ABANDONING,
-                    )
+                refused.append(key)
                 continue
             self._pending.pop(key, None)
             self._refusals.pop(key, None)
+            delivered += 1
+        if not delivered:
+            if refused:
+                _LOG.info(
+                    "no early-limits-reset message got through this pass (%d refused); "
+                    "treating it as an outage rather than as evidence about any provider",
+                    len(refused),
+                )
+            return
+        for key in refused:
+            self._refusals[key] = self._refusals.get(key, 0) + 1
+            if self._refusals[key] >= _REFUSALS_BEFORE_ABANDONING:
+                self._abandoned.add(key)
+                self._pending.pop(key, None)
+                _LOG.warning(
+                    "giving up on the early-limits-reset message for %s after %d refusals; "
+                    "the figures themselves are on the limits screen",
+                    key,
+                    _REFUSALS_BEFORE_ABANDONING,
+                )

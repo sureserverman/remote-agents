@@ -31,7 +31,7 @@ wipe, so the one silence that would manufacture a false alarm out of a missing f
 silence that must never become a baseline.
 
 **Nothing here reads a clock, a file or a provider.** `now` arrives as an argument, which is
-what lets the eleven cases in `tests/unit/application/test_limit_resets.py` be a table rather
+what lets `tests/unit/application/test_limit_resets.py` be a table rather
 than a fake clock threaded through a fake sender. It is also what keeps this module unable to
 choose a source: it cannot reach a reader, so the owner's Settings choice stays the only thing
 that decides where a figure came from.
