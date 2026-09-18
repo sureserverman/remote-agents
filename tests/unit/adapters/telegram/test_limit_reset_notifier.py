@@ -173,12 +173,18 @@ async def test_the_notifier_abandons_a_message_after_three_refusals_with_one_jou
 ) -> None:
     """DEC-049's three strikes — the half that fires, and the arrangement it needs to fire in.
 
-    **This test used to have one provider refusing into the void, and it passed against a
-    notifier that struck unconditionally — which was the defect.** A refusal is evidence about
-    the message only when the channel is demonstrably working, so a lone pending provider can
-    never be struck: there is nothing to tell an unsendable message apart from an unreachable
-    chat. Codex therefore drops eleven points every pass, delivering each time, and Claude's
-    refusals are then genuinely about Claude's message.
+    **What this test does and does not prove, stated because its first version got it wrong.**
+    It proves the threshold — three strikes, one journal line, no fourth attempt — and that
+    abandonment is per provider, leaving Codex's own messages unaffected. It does **not** prove
+    DEC-049's outage attribution: Codex delivers on every pass here, so `delivered` is non-zero
+    throughout and this scenario comes out the same whether the strike is gated on it or not.
+    `test_the_notifier_records_no_strike_on_a_pass_where_nothing_got_through` is what holds that
+    clause, and a regression in it would show there rather than here.
+
+    It used to have one provider refusing into the void, which is precisely the case DEC-049
+    says must never be struck — so it passed against the unconditional-strike defect and failed
+    against the fix. Codex is here to make a strike legitimate at all: a refusal is evidence
+    about the message only when something else proved the channel live.
 
     What is retried is the message, not the detection: the baseline moves on the pass that
     detects, so the wipe can never be found again and a refusal that dropped the sentence would
