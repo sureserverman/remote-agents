@@ -519,3 +519,50 @@ async def test_the_console_close_launcher_detaches_the_child_from_this_process_g
     # session goes lands on a closed descriptor.
     assert seen["stdout"] is asyncio.subprocess.DEVNULL
     assert seen["stderr"] is asyncio.subprocess.DEVNULL
+
+
+def test_serve_configures_logging_so_the_services_own_info_lines_reach_the_journal(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Nothing in `src/` configured logging, so every `_LOG.info` was unreachable in production.
+
+    **Found by a live gate, which is the only place it could have been found.** Stage 3 asked
+    the operator's journal to show the limits watch taking its baseline. The line was added and
+    shipped — and still did not appear, because the root logger sits at WARNING by default and
+    nothing had ever raised it. Eighteen `_LOG.info` sites across this codebase were invisible
+    on the deployed service, and so were thirty-five `_LOG.debug` ones; only warnings and
+    uncaught tracebacks ever reached the journal.
+
+    **Root stays at WARNING and only `remote_agents` is lifted**, which is the whole care here.
+    `httpx` logs one line per request, and this service polls Telegram continuously, so a root
+    logger at INFO would bury its own output in HTTP chatter within minutes — an observability
+    fix that made the journal less readable than it was.
+
+    Asserted on the effective levels rather than on a call, because what matters is the state a
+    record is filtered against, not which function arranged it.
+    """
+    import logging
+
+    from remote_agents import bootstrap
+
+    # Restored by monkeypatch, so configuring logging here does not leak into sibling tests.
+    monkeypatch.setattr(logging.getLogger(), "level", logging.NOTSET)
+    monkeypatch.setattr(logging.getLogger("remote_agents"), "level", logging.NOTSET)
+    monkeypatch.setattr(logging.getLogger("httpx"), "level", logging.NOTSET)
+
+    bootstrap._configure_service_logging()
+
+    assert logging.getLogger("remote_agents").getEffectiveLevel() == logging.INFO
+    assert logging.getLogger("remote_agents.adapters.telegram").getEffectiveLevel() == logging.INFO
+    assert logging.getLogger("httpx").getEffectiveLevel() >= logging.WARNING, (
+        "a root logger at INFO buries this service's own lines in per-request HTTP chatter"
+    )
+    # **Root's handlers are cleared first, or this assertion proves nothing**: under pytest the
+    # root logger already carries handlers, so it passes whether or not this function attaches
+    # one — and the branch that attaches it is the one that runs in production, where a freshly
+    # started service has none. A surviving mutant found exactly that.
+    monkeypatch.setattr(logging.getLogger(), "handlers", [])
+    bootstrap._configure_service_logging()
+    assert logging.getLogger().handlers, (
+        "a fresh process gets an INFO level and no handler, which still reaches nothing"
+    )

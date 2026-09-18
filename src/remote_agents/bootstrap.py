@@ -433,8 +433,41 @@ def _open_both_stores(paths: ProductionPaths, wants_unit_directory: bool):
         raise
 
 
+def _configure_service_logging() -> None:
+    """Make the service's own INFO lines reach the journal, and nothing else's.
+
+    **Nothing in `src/` configured logging at all**, so the root logger sat at its default
+    WARNING and every `_LOG.info` in this codebase was unreachable on the deployed service —
+    eighteen of them, plus thirty-five `_LOG.debug`. Only warnings and uncaught tracebacks ever
+    appeared. `application/console.py` had said so in prose for months ("there is no logging
+    configured anywhere in `src/`"); what was missing was anybody needing it to be false.
+
+    Found by the live acceptance gate for the limits watch, which asked the journal to show the
+    watch taking its baseline. The line was written, shipped as 0.44.1, and still did not
+    appear. A unit test cannot catch this: it asserts on a logger, and the thing that was wrong
+    was that nobody had ever configured one.
+
+    **Root stays at WARNING; only `remote_agents` is lifted.** `httpx` emits a line per request
+    and this service polls Telegram continuously, so a root logger at INFO would bury the
+    service's own output in HTTP chatter — an observability change that left the journal less
+    readable than it found it.
+
+    Called from `_serve` alone. The TUI and the one-shot verbs write to a terminal that is
+    about to be taken by the alternate screen or to exit, and neither has a journal to reach.
+    """
+    root = logging.getLogger()
+    if not root.handlers:
+        # `basicConfig` is a no-op when the root logger already has a handler, so it is used
+        # for what it is good at -- attaching one to stderr, which is what systemd captures --
+        # and the levels below are set outright rather than left to that conditional.
+        logging.basicConfig()
+    root.setLevel(logging.WARNING)
+    logging.getLogger("remote_agents").setLevel(logging.INFO)
+
+
 def _serve(arguments, serve_runner) -> int:
     """Run the installed service. Extracted so `main` can guard it like every other command."""
+    _configure_service_logging()
     paths = ProductionPaths.for_home(Path.home())
     config = _private_state_config(arguments.config, paths)
     wants_unit_directory = _supervisor_for_host().kind is SupervisorKind.SYSTEMD
