@@ -478,3 +478,44 @@ def test_the_close_command_runs_this_interpreter_rather_than_a_name_on_path() ->
     command = tui._close_command()
     assert command[0] == sys.executable
     assert command[1:] == ("-m", "remote_agents", "console", "close")
+
+
+async def test_the_console_close_launcher_detaches_the_child_from_this_process_group(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`start_new_session=True` is the flag the whole teardown depends on, so it is asserted.
+
+    `tests/integration/tmux/test_console_close_on_a_real_server.py` proves on real processes
+    that a spawn made this way survives its parent being killed. It cannot prove that *this*
+    launcher makes it that way — the verb it would have to call builds its composer from the
+    hardcoded production socket (BL-041) — so the two halves are asserted apart: the flag here,
+    the consequence there.
+
+    Without it the closer sits in the pane's process group and tmux kills it mid-teardown:
+    after the displayed agent was sent home and before the console was killed, or between the
+    verify and the kill. Nothing would finish the job and nothing would report that it had not
+    been finished.
+    """
+    import asyncio
+    import sys
+
+    from remote_agents.composition import tui
+
+    seen: dict[str, object] = {}
+
+    async def _record(*argv: str, **kwargs: object):
+        seen["argv"] = argv
+        seen.update(kwargs)
+        return None
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", _record)
+    await tui._launch_console_close()
+
+    assert seen["argv"] == (sys.executable, "-m", "remote_agents", "console", "close")
+    assert seen["start_new_session"] is True, (
+        "the closer would be killed with the pane that started it"
+    )
+    # The pty it would inherit belongs to the pane being handed back, so a write after the
+    # session goes lands on a closed descriptor.
+    assert seen["stdout"] is asyncio.subprocess.DEVNULL
+    assert seen["stderr"] is asyncio.subprocess.DEVNULL
