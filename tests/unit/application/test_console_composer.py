@@ -1442,8 +1442,8 @@ async def test_close_writes_no_record_because_the_composer_holds_no_store() -> N
     }
 
 
-async def test_close_refuses_for_an_agent_anywhere_in_the_console_window_not_just_the_slot() -> None:
-    """"Any pane of the console window", which is the half a slot-shaped check would miss.
+async def test_close_refuses_for_an_agent_anywhere_in_the_console_window() -> None:
+    """"Any pane" of the console window, which is the half a slot-shaped check would miss.
 
     Added because a mutant survived: narrowing `_displayed_agents` to `pane_index == 0` passed
     all 778 application tests, so nothing was holding the property the design actually states.

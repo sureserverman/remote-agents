@@ -54,6 +54,7 @@ if TYPE_CHECKING:
     from remote_agents.adapters.tui.model import AttachRequest
 from remote_agents.adapters.sqlite.store_split import split_stores
 from remote_agents.agent_event import spool_from_stdin
+from remote_agents.application.console import CloseOutcome
 from remote_agents.application.doctor import (
     credential_file_report,
     production_doctor,
@@ -77,7 +78,6 @@ from remote_agents.composition.onboarding import (
 from remote_agents.composition.service import (
     _serve_with_reconciliation,
 )
-from remote_agents.application.console import CloseOutcome
 from remote_agents.composition.telegram import _private_boundary
 from remote_agents.composition.tui import (
     _console_composer,
