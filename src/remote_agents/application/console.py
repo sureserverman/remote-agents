@@ -982,7 +982,7 @@ class ConsoleComposer:
         `console_exists()` is a fast path read before the lock, so a console that vanishes
         between it and step 2 — a second `close()`, or an `tmux kill-session` by hand — lands
         on `closed` rather than `nothing to close`: the arrangement comes back empty, nothing
-        lingers, and `kill_console()` no-ops on an absent target. Harmless, and the reason is
+        lingers, and the kill no-ops on an absent target. Harmless, and the reason is
         that nothing downstream can tell them apart — the CLI verb exits zero on both and
         flashes on neither. Paying a second round-trip under the lock to sharpen a
         label no caller reads would be spending the owner's latency on tidiness. Raised by
