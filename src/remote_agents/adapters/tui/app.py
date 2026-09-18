@@ -350,7 +350,7 @@ class RemoteAgentsTui(App[AttachRequest | None]):
         # key. Hidden: the footer draws F10 and the palette has ctrl+p. Under console hosting
         # F10 is still the drawn one, reading `close console` rather than `quit` (see
         # `_relabel_console_footer_entries`), so this argument holds in both hostings -- which
-        # it did not while that entry was withheld from the console footer entirely.
+        # it did not while that entry was kept out of the console footer entirely.
         Binding("q", "back_or_quit", "back", show=False),
         Binding("colon", "bare_palette", "palette", show=False),
     ]
@@ -375,7 +375,7 @@ class RemoteAgentsTui(App[AttachRequest | None]):
     def _relabel_console_footer_entries(self) -> None:
         """Say, on this instance only, what a console pane's host-dependent entries really do.
 
-        **The act is a relabel, not a removal and no longer a withholding** (BL-097, DEC-093,
+        **The act is a relabel, not a removal and no longer a hiding** (BL-097, DEC-093,
         DEC-095, DEC-096). `F10` is `quit`. Off a console that ends the app and hands the
         terminal back, which is what htop and mc mean by it. In a console surface pane it
         closes the **whole console** — one press, four panes — and the word for that is not

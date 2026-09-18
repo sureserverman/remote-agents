@@ -1187,7 +1187,7 @@ checklist below: several steps press a key and accept what happens.
 | `F7` | add project | mc Mkdir |
 | `F8` | stop and close — issued without asking | mc Delete |
 | `F9` | force stop — asks first | htop Kill |
-| `F10`, `q` at the resting position, `Ctrl+Q` | quit | htop, mc |
+| `F10`, `q` at the resting position, `Ctrl+Q` | quit — inside the console, close the console | htop, mc |
 | `F11` | unbound; the terminal's | terminal full-screen |
 | `F12` | projects | existing root key |
 
@@ -1212,23 +1212,29 @@ Four facts that are easy to get wrong when a key appears not to work:
   the console's projects and feed panes name the session keys on their own hint row as
   `F3 F4 F6 F8 F9`. The sessions pane does not — its border title already lists the same acts
   as bare letters — and the limits pane draws no hint row at all.
-- **Under console hosting the footer withholds `F10`, and only there.** A console surface pane
-  carries no `remain-on-exit`, so quitting it closes the pane and the console runs a pane short
-  until a surface start re-runs `ensure()`. The key remains bound and `F1` still lists it — this
-  is de-advertisement, not removal — but the footer stops offering, in a line the owner reads at
-  a glance, the one act on it that costs a pane. Outside the console the footer draws `F10` as
-  before. Opened as BL-097 after the owner pressed it on 2026-09-17 and the sessions pane
-  vanished.
-- **That does not cover the position you are in most often, and BL-097 stays open for it.**
+- **Under console hosting `F10` closes the whole console, and only there.** A console surface
+  pane is one of four processes arranged into a tmux session, not an app that owns its terminal,
+  so "leave the program" means leave remote-agents: `ra-console` is removed and the owner is
+  handed back the shell they entered from. Every managed session keeps running, and the next
+  `remote-agents` builds fresh panes (DEC-096). The footer draws that entry as `close console`
+  rather than `quit`, which is the only thing about the key that differs between hostings — it
+  stays bound, `F1` lists it in both, and `Ctrl+Q` and the resting `q` mean whatever it means.
+  The teardown runs outside the console as `remote-agents console close`, because a process
+  tearing down the session it is sitting in could die half-way through and report nothing.
+- **That covers the position you are in most often, and it is how BL-097 was closed.**
   While an agent is *displayed* in the left slot, `F10` is taken by the tmux **root** binding and
   forwarded: the active pane carries no console slot mark and no curated agent reserves `F10`
   (only OpenCode reserves anything, and only `F2`), so the forwarding script's third branch
-  delivers it **to the sessions pane** — which quits, exactly as if you had pressed it there.
-  **No footer is on screen to have been withheld.** So from inside a displayed agent the hazard
-  is unmitigated, and the footer change helps only when you are looking at a surface pane's own
-  footer. Closing that route means refusing the key in the forwarding script's third branch,
-  which is a separate change; it is the one mitigation that needs neither BL-039 resolved nor a
-  console rebuild.
+  delivers it **to the sessions pane** — exactly as if you had pressed it there, and that pane's
+  quit is the console-aware one. The teardown's first step swaps the displayed agent back into
+  its own window, so the agent survives a press made from inside it; if the verify that follows
+  still finds an agent in the console's window, the kill is refused and the console stays up.
+  Refusing the key in the forwarding script's third branch was BL-097's own proposed fix and was
+  **not** taken: the key is given a correct meaning rather than removed from the one position the
+  owner is in most often. The cost, stated because it is real: one press closes four panes and
+  asks nothing first — a global binding may not raise a modal (DEC-025, DEC-027), so the only
+  question ever asked is the existing unsaved-work warning. Nothing is destroyed by it, no store
+  is written, and one `remote-agents` restores the surface.
 
 ### Upgrading from 0.41.0: what each old key became
 
@@ -1246,7 +1252,7 @@ Spelled the way 0.41.0's own footer and hint rows drew them.
 | `^n` add project | `F7` |
 | `^s` sessions | no key — the command palette (`:` or `Ctrl+P`), entry "Sessions" |
 | `^o` resume | no key — the palette, entry "Resume" |
-| `^r` refresh, `^q` quit | still work, unchanged — but the footer now draws `F5` and `F10` for those acts, because one line cannot hold both spellings. Inside the console the footer withholds `F10` (see above) |
+| `^r` refresh, `^q` quit | still work, unchanged — but the footer now draws `F5` and `F10` for those acts, because one line cannot hold both spellings. Inside the console both quit keys close the whole console and the footer entry reads `close console` (see above) |
 
 ## Local terminal acceptance checklist
 
@@ -1301,8 +1307,8 @@ uv run --locked remote-agents tui
 7. Press `F7`, confirm the offered areas are the eligible existing directories under the
    configured `dev_root`, enter a rejected name such as `New Thing` and confirm nothing is
    created, then create a valid one and confirm it becomes selectable without leaving the app.
-   Escape is Back, `F10` quits — in a **bare** terminal; inside the console its footer entry is
-   withheld, so confirm this step outside the console — and `F5` re-reads the screen you are on
+   Escape is Back, `F10` quits — in a **bare** terminal; inside the console the same key closes
+   the whole console, so confirm this step outside the console — and `F5` re-reads the screen you are on
    rather than returning to the project list; confirm on the sessions view that it re-lists in place.
    Confirm `F1` opens a panel naming every key of the row above, that Refresh is absent from
    that panel on a screen with nothing to re-read, and that typing a project name greys `F7`
@@ -1364,7 +1370,10 @@ uv run --locked remote-agents
 9. **The dangerous one.** With an agent displayed, run
    `tmux -L remote-agents kill-session -t ra-console` and confirm the agent's process is gone
    and its session name is not — this is DEC-040's accepted cost, and it is why step 7 comes
-   first in normal use. Then run `remote-agents` again and confirm a fresh console comes up, and
+   first in normal use. Then confirm the supported route does not have that cost: display an
+   agent again, run `remote-agents console close`, and confirm the console is gone while the
+   agent's session and its pane process are both still alive — the teardown sends it home
+   before it kills anything (DEC-096). Then run `remote-agents` again and confirm a fresh console comes up, and
    that it names any defunct `ra-<uuid>` still holding an old projects surface so you can kill
    it by hand.
 10. Kill one pane's process (`tmux -L remote-agents kill-pane -t <the feed pane>`), run
@@ -1539,18 +1548,29 @@ then feed — and it shows an agent by **exchanging** that agent's pane into the
 projects surface goes to live in the agent's own window until it is swapped back (DEC-040),
 which is why the sessions list and the feed stay on screen while you work in an agent.
 
-**Killing the console is safe only while nothing is displayed:**
+**Closing the console has a verb, and it is the one to use:**
 
 ```bash
-tmux -L remote-agents kill-session -t ra-console
+remote-agents console close
 remote-agents
 ```
 
-**While an agent is displayed, that command destroys the agent's process.** Its pane physically
-lives in the console's window, so `kill-session -t ra-console` takes it, and the agent's session
-name survives without it — nothing looks obviously wrong at a glance. `remain-on-exit` does not
-save it: that governs a process exiting, not tmux killing the pane out from under it. Press
-`F12` first to bring the projects surface back, then kill the console if you still need to.
+`console close` is what `F10` runs from inside a pane, and it is three steps in this order: send
+a displayed agent home, re-read the arrangement, then kill `ra-console` (DEC-096). The middle
+step is there because the first cannot be trusted — the send-home swallows its own failure into
+a log line, which is right for a key and wrong for a teardown — so a pane in the console's window
+still carrying a session id refuses the kill outright. A refusal is reported in the console's own
+status bar and as a non-zero exit, which is what a deploy script reads; a console that was
+already gone is not a refusal and exits zero. It runs detached, off any pane, because a teardown
+running inside the session it removes could die between the send-home and the kill and finish
+neither.
+
+**A bare `tmux -L remote-agents kill-session -t ra-console` while an agent is displayed destroys
+the agent's process.** Its pane physically lives in the console's window, so `kill-session` takes
+it, and the agent's session name survives without it — nothing looks obviously wrong at a glance.
+`remain-on-exit` does not save it: that governs a process exiting, not tmux killing the pane out
+from under it. That is exactly the hazard `console close` refuses on your behalf; if you kill by
+hand anyway, press `F12` first to bring the projects surface back.
 
 **If a pane's process dies**, the console rebuilds exactly that pane on the next start, and puts
 the window back in its proportions afterwards — including its own projects surface, which is
@@ -1558,18 +1578,26 @@ split back in beside the sessions pane. "On the next start" is literal: nothing 
 panes, so a pane that dies mid-session stays dead until `remote-agents` runs again. An ordinary
 start does *not* resize anything, so a layout you adjusted by hand survives.
 
-**Upgrading an already-running console.** A console is a tmux session, so it outlives the code
-that built it: after deploying this version, `remote-agents` attaches to whatever console is
-already there rather than replacing it. On a host upgrading from the tab-model console that
-means a left pane still running the combined dashboard, possibly with old linked windows
-attached — which is *adopted* as the projects slot rather than rebuilt, because the composer
-cannot tell a surface it made from one an older version made. Kill it once, with nothing
-displayed, and run the command again:
+**Upgrading an already-running console, which is the surface-side half of every deploy.** A
+console is a tmux session, so it outlives the code that built it: after deploying a new version,
+`remote-agents` attaches to whatever console is already there rather than replacing it, and its
+four panes go on running the code they started on. So the step is **close and re-enter**, and it
+replaces the older "respawn the four surface panes by process" (DEC-096):
 
 ```bash
-tmux -L remote-agents kill-session -t ra-console
+remote-agents console close
 remote-agents
 ```
+
+From inside a console already running this version, `F10` is the same two seconds of work. Note
+the one-time asymmetry on the deploy that *ships* this: the panes in front of you are still the
+old build, so that console is closed from a shell holding the new binary rather than by pressing
+the key.
+
+On a host upgrading from the tab-model console the same commands apply, and the reason to run
+them is stronger: a left pane still running the combined dashboard, possibly with old linked
+windows attached, is *adopted* as the projects slot rather than rebuilt, because the composer
+cannot tell a surface it made from one an older version made.
 
 Managed sessions do not live in that session and survive it.
 
@@ -1578,7 +1606,7 @@ pane's status line and asks to be restarted — but, like the pane rebuild above
 start**. A duplicate that appears while the console is already up is silent until
 `remote-agents` runs again, which is also when it would be noticed. Nothing removes the extra
 automatically: a pane the composer cannot be sure it created is not its to kill, so the fix is
-the same two commands above. It is reachable because every pane process runs the same
+the same close-and-re-enter above. It is reachable because every pane process runs the same
 start-time repair and the lock between them is per-process, so two callers reading the same
 stale arrangement can each split for the same missing slot.
 

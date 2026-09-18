@@ -139,6 +139,21 @@ you learn from the command you already run rather than by accident. It never aff
 being a release behind is a diagnostic, not ill health — the rule DEC-002 already sets for the
 agent CLIs' own versions.
 
+**None of that moves a console that is already up**, and one command is the whole surface-side
+half of a deploy. A console is a tmux session, so it outlives the code that built it: its four
+panes keep running whatever version they started on, and `remote-agents` attaches to what is
+there rather than replacing it. So close it and enter again — which is also what `F10` does from
+inside it (DEC-096):
+
+```bash
+remote-agents console close
+remote-agents
+```
+
+Respawning the four surface panes by process was the older step and is retired: `console close`
+sends a displayed agent back to its own window before it kills anything, and every managed
+session keeps running across both commands.
+
 ### Uninstalling
 
 **In this order — the daemon first, or nothing is left that can take it away:**
@@ -412,9 +427,16 @@ same exchange run backwards. It is a key inside our own process, so it works onl
 are focused on that pane; `F12` below does the same thing from anywhere, including from
 inside a displayed agent.
 
-**Killing the console while an agent is displayed destroys that agent's process**, because
-its pane is physically in the console's window (DEC-040). With nothing displayed, killing the
-console is safe and every managed session survives it.
+**Closing the console is a verb of its own — `remote-agents console close`**, which is what
+`F10` runs from inside a pane. It sends a displayed agent back to its own window first, then
+re-reads the arrangement and refuses to kill anything while a pane in the console's window still
+carries a session; on a refusal it says why in the console's own status bar and exits non-zero
+(DEC-096). A console that is already gone is not an error.
+
+**A bare `tmux kill-session -t ra-console` while an agent is displayed destroys that agent's
+process**, because its pane is physically in the console's window (DEC-040). That is the hazard
+the verb above exists to take off you. With nothing displayed the two are equivalent, and every
+managed session survives either.
 
 If a pane's process dies, the console rebuilds exactly that one — including its own projects
 surface — **on the next `remote-agents`**, not the moment it happens. Nothing watches the
@@ -422,9 +444,15 @@ panes; a pane that dies mid-session stays dead until you run the command again.
 
 **Upgrading:** a console that was already running before this version keeps running whatever
 it was. It is a tmux session, so it outlives the code that made it, and `remote-agents` will
-attach to it rather than replace it. To get the three-pane console, kill it once —
-`tmux -L remote-agents kill-session -t ra-console` with nothing displayed — and run
-`remote-agents` again. Your managed sessions are not in that session and survive it.
+attach to it rather than replace it. To get the three-pane console, close it once and enter
+again:
+
+```bash
+remote-agents console close
+remote-agents
+```
+
+Your managed sessions are not in that session and survive it.
 
 ### Keys the console takes
 
@@ -499,7 +527,7 @@ there is one spelling of each act rather than three that have to be kept agreein
 | `F7` | add project | mc Mkdir |
 | `F8` | stop and close — issued without asking | mc Delete |
 | `F9` | force stop — asks first | htop Kill |
-| `F10`, `q` at the resting position, `Ctrl+Q` | quit | htop, mc |
+| `F10`, `q` at the resting position, `Ctrl+Q` | quit — inside the console, close the console | htop, mc |
 | `F11` | unbound; the terminal's | terminal full-screen |
 | `F12` | projects | existing root key |
 
@@ -514,18 +542,26 @@ footer is a single clipping line: measured on the inspect screen at 80 columns, 
 entries fit and six do not. So it draws `F1`, `F7` and `F10` beside Escape and the palette, and
 **`F1` opens a panel listing every key**, which is what that key is borrowed from htop for.
 
-**`F10` is the one exception, and only inside the console.** A surface pane hosted by the
-console is not a standalone app: quitting it closes the pane outright — the surface panes carry
-no `remain-on-exit` — and the console runs a pane short until something restarts it. So under
-console hosting the footer withholds `quit`. **The key still works and `F1` still lists it**;
-what changes is that the console stops advertising, in a fixed line the owner reads at a glance,
-an act that costs them a pane. Outside the console — `remote-agents tui` in an ordinary terminal
-— the footer draws it as before, because there quitting means what it says.
+**`F10` means something different inside the console, and only there.** A surface pane hosted
+by the console is not a standalone app that owns its terminal, so "leave the program" cannot mean
+"leave this pane": it means leave remote-agents. One press closes the **whole console** — the
+`ra-console` session is removed and you get back the shell you entered from — and every managed
+agent session keeps running (DEC-096). The footer says so: under console hosting that entry reads
+`close console` rather than `quit`. Outside the console — `remote-agents tui` in an ordinary
+terminal — the key exits the app and the footer draws `quit`, because there leaving the program
+is leaving this process. `Ctrl+Q`, and `q` at the resting position, mean whatever `F10` means.
 
-**This does not cover the position you are in most often.** While an agent is *displayed*, `F10`
-is taken by the tmux **root** binding and forwarded to the sessions pane, which quits — and no
-footer is on screen to have been withheld. The operator runbook's *Four facts that are easy to get
-wrong when a key appears not to work* carries the detail; **BL-097 stays open for that route.**
+**That covers the position you are in most often, too.** While an agent is *displayed*, `F10` is
+taken by the tmux **root** binding and forwarded to the sessions pane — which is a console
+surface pane like any other, so the press runs the same teardown, and the teardown swaps the
+agent back into its own window before it kills anything. Earlier versions kept that footer entry
+out of the console's line instead, and the key still cost the owner the pane they were reading;
+that was BL-097, and giving the key a correct meaning is what closed it.
+
+**The cost is real, and the key asks nothing first:** one press now closes four panes instead of
+one. Nothing is destroyed by it — no session ends and nothing is written — and `remote-agents`
+builds the panes back on the version that is installed, but an owner who meant "close just this
+pane" has no key for that.
 
 The
 five session-shaped keys are left out of the footer because the console's projects and feed
@@ -613,7 +649,7 @@ two, and two of them moved to the command palette on purpose.
 | `^n` add project | `F7` |
 | `^s` sessions | no key — the command palette (`:` or `Ctrl+P`), entry "Sessions" |
 | `^o` resume | no key — the palette, entry "Resume" |
-| `^r` refresh, `^q` quit | still work, unchanged — but the footer now draws `F5` and `F10` for those acts, because one line cannot hold both spellings. Inside the console the footer withholds `F10`: the key works, `F1` lists it, and the footer stops offering an act that closes a console pane |
+| `^r` refresh, `^q` quit | still work, unchanged — but the footer now draws `F5` and `F10` for those acts, because one line cannot hold both spellings. Inside the console both quit keys close the whole console, and the footer entry reads `close console` |
 
 ### Width
 
@@ -654,9 +690,9 @@ session's pane, or prints how to reach it. It opens with Back highlighted rather
 so a stray enter mutates nothing and reaching an agent is one arrow key — the same shape, and
 the same cost, as choosing a conversation to resume. Escape is
 Back, F5 re-reads whatever the screen
-you are on shows without leaving it, F7 adds a project, F10 quits — though the console's footer
-does not offer F10, since inside a console quitting closes the pane — and F1 opens a panel naming
-every key. Sessions and Resume have no key of their own: they are entries in the command
+you are on shows without leaving it, F7 adds a project, F10 quits — inside a console that means
+closing the console rather than this one pane, which is what its footer entry says — and F1 opens
+a panel naming every key. Sessions and Resume have no key of their own: they are entries in the command
 palette, which `:` and `Ctrl+P` both open. The whole row is *The function-key row* above, with
 what each of 0.41.0's keys became beneath it.
 

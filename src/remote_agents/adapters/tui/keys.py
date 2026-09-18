@@ -124,7 +124,7 @@ FUNCTION_KEYS: tuple[FunctionKey, ...] = (
 #: What a **console** surface pane calls each footer entry whose meaning depends on its host,
 #: by key. Derived from the table, so the rule is a rule rather than a fact about one key.
 #:
-#: **This replaces a set that withheld those entries from the console footer entirely, and
+#: **This replaces a set that kept those entries out of the console footer entirely, and
 #: the reason it could be replaced is the whole of BL-097.** That set existed because pressing
 #: `quit` in a console surface pane destroyed the pane the owner was reading: the panes carry
 #: no `remain-on-exit`, so the process ending closed the pane and tmux reflowed the layout over
