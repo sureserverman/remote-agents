@@ -2391,8 +2391,8 @@ def test_a_codex_permission_request_carries_its_command_from_the_hook_to_the_mes
 
     from remote_agents.adapters.agents.activity_spool import spool_agent_event
     from remote_agents.adapters.telegram.notifications import render_activity
-    from remote_agents.application.notification_policy import SessionGroup
     from remote_agents.application.activity import drain_activity
+    from remote_agents.application.notification_policy import SessionGroup
     from remote_agents.ports.agent_activity import ActivityKind
     from remote_agents.ports.session_identity import SESSION_ID_VARIABLE
 

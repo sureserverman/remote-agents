@@ -764,7 +764,7 @@ class ActivityNotifier:
                 held.extend(group.activities)
                 continue
             try:
-                delivered, alerted, unsaid = await self._send(group)
+                delivered, alerted, still_owed = await self._send(group)
             except Exception as refusal:
                 # Held whole. The record is already off disk -- the drain deletes before it
                 # returns (DEC-013 cost 3) and DEC-026 keeps this queue in memory with nothing
@@ -804,7 +804,7 @@ class ActivityNotifier:
             sent += int(delivered)
             arrived_at_the_bottom = arrived_at_the_bottom or alerted
             # What the message could not spell out is owed, not spent.
-            held.extend(unsaid)
+            held.extend(still_owed)
         if sent and refused_sessions:
             # **A strike counts only when the service was otherwise working.** Something
             # reached the owner this pass, so Telegram is up and the credentials are good;
@@ -886,7 +886,7 @@ class ActivityNotifier:
                 len(self._pending),
             )
 
-    async def _send(self, group: SessionGroup) -> tuple[bool, tuple[AgentActivity, ...]]:
+    async def _send(self, group: SessionGroup) -> tuple[bool, bool, tuple[AgentActivity, ...]]:
         """Deliver one session's news as one message, and answer what is still owed.
 
         Returns whether a message went out, and the observations it did *not* spell out --
@@ -905,8 +905,9 @@ class ActivityNotifier:
         *group*, deleting a queued observation while a message to that very session went out
         with four of its five lines unused. Corrected to gate the whole message, it then read
         its own suppression as evidence: a kind held back by its window was absent from the
-        message, and `record_sent` scored that absence as "the session reported something
-        different, so the held kind is not repeating", so a standing condition backed off to
+        message, and the window's own bookkeeping scored that absence as "the session
+        reported something different, so the held kind is not repeating", so a standing
+        condition backed off to
         sixty-four minutes was absent from sixty-three of every sixty-four minutes' messages
         and never advanced past the first step -- measured at 75 to 255 notifications overnight
         where the taper intended 12.

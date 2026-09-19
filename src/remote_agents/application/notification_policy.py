@@ -1,15 +1,17 @@
 """Which of an agent's observations the owner is told about, and how they are bundled.
 
 Policy, not delivery. Nothing here reads a clock, a bot, a session store or a socket: every
-moment a rule reasons about arrives as an argument, which is what lets the eight-hour taper
-proof be a loop over integers instead of a fake clock threaded through a Telegram double.
+moment a rule reasons about arrives as an argument. That was what let the eight-hour taper
+proof be a loop over integers instead of a fake clock threaded through a Telegram double; the
+taper is gone (DEC-048) and the property is kept, because it is what makes every rule here
+testable without a clock at all.
 `ActivityNotifier` in `adapters/telegram/notifications.py` is the driver that asks these
 questions and then does the sending; it kept the PTB verbs, the token minting (DEC-011) and the
 wording.
 
 **Clock-free is not the same as side-effect-free, and the difference is deliberate.**
-`grouped_for_delivery` and its neighbours are pure functions. `record_sent`, `forget_expired`
-and `enqueue` are not: they mutate a mapping or a sequence the *surface* owns and passes in.
+`grouped_for_delivery` and its neighbours are pure functions. `enqueue` and `refused` are not:
+they mutate a mapping or a sequence the *surface* owns and passes in.
 That is the split this module is built on -- the rules moved, the state did not, on the same
 reading DEC-026 already applied to the backlog -- and calling the whole module "pure" would
 paper over the one thing a reader most needs to know about it.
@@ -26,9 +28,8 @@ opinion about a number the surface owns (DEC-034 accepted cost 4).
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping, MutableMapping, MutableSequence
+from collections.abc import Iterable, MutableMapping, MutableSequence
 from dataclasses import dataclass
-from datetime import datetime, timedelta
 
 from remote_agents.ports.agent_activity import ActivityKind, AgentActivity
 
@@ -193,9 +194,12 @@ def told(
 ) -> tuple[ActivityKind, ...]:
     """The kinds this pass both heard and put in front of the owner.
 
-    The rate limit's question is how often a session *reports* a kind, so a line the message
-    is merely still displaying is not an answer to it. See the call site for why narrowing to
-    this is not the narrowing `record_sent` warns against.
+    A line the message is merely still displaying is not something the session reported this
+    pass, and the two are easy to conflate because the rendered message shows both.
+
+    This used to cite `record_sent`'s warning about narrowing. That function was the taper's
+    and went with it (DEC-048); the distinction it warned about is real without it, so the
+    argument is stated here rather than pointed at.
     """
     return tuple(activity.kind for activity in shown if activity in arrived)
 
@@ -240,184 +244,6 @@ def unsaid(
     go loses agent output permanently.
     """
     return tuple(activity for activity in arrived if activity not in shown)
-
-
-# The suppression window --------------------------------------------------------------------
-#
-# The rules move; the map does not. `ActivityNotifier` keeps holding the
-# `dict[(session, kind), Sent]` for the same reason DEC-026 keeps the backlog in the adapter's
-# memory -- residence is not policy -- and hands it to each function below. That is what makes
-# these pure in the sense the sub-plan asked for: no object here survives between calls, and
-# every moment they reason about arrives as an argument.
-
-MAXIMUM_BACKOFF_DOUBLINGS = 5
-"""How far the repeat window may double: 2 minutes to 64, and no further.
-
-Capped rather than unbounded because an agent that has been waiting eight hours is still
-waiting, and a window that keeps doubling eventually amounts to never telling the owner again.
-"""
-
-
-@dataclass(frozen=True, slots=True)
-class Sent:
-    """When a (session, kind) was last delivered, and how many consecutive times."""
-
-    sent_at: datetime
-    repeats: int
-
-
-def window(repeats: int, *, rate_limit: timedelta) -> timedelta:
-    """How long this news stays old, given how many times it has already been sent.
-
-    A fixed window is the right answer for a burst and the wrong one for a **standing**
-    condition. `Stop` fires per turn, so a busy agent repeats "finished" and one message
-    per two minutes is a fair summary. But `needs_answer` repeats for as long as the owner
-    does not answer -- which, at three in the morning, is all night -- and a fixed window
-    turns that into a message every two minutes until they wake up. The pane-quiet path had
-    carried the equivalent rule since it was written -- it reported once per spell and re-armed
-    only on a change -- while the hook-sourced kinds had nothing, because the burst was the only
-    case anyone had in mind. That path was retired on 2026-08-30 along with the `quiet` activity
-    kind; the rule it demonstrated is the one below, and it now has no other home.
-
-    So the window doubles per consecutive repeat, capped: 2 minutes, 4, 8, 16, 32, then
-    every 64 minutes for as long as it lasts. The first message arrives as fast as ever --
-    this only ever makes the *second and later* copies rarer -- and the cap keeps the signal
-    alive rather than muting it, because an agent that is still waiting is still news.
-
-    `rate_limit` is the base window, asked for rather than held, on the same argument as the
-    line budget: it is the surface's number, and a second frontend would answer it differently.
-    """
-    return rate_limit * (2 ** min(repeats, MAXIMUM_BACKOFF_DOUBLINGS))
-
-
-def due(
-    activity: AgentActivity,
-    sent: Mapping[tuple[str, ActivityKind], Sent],
-    moment: datetime,
-    *,
-    rate_limit: timedelta,
-) -> bool:
-    """Whether this one observation is news, given when its kind was last sent.
-
-    Measured against the window that entry's *own* repeat count earns, not the base one --
-    which is the whole of what the taper does, and the reason `moment` is a parameter rather
-    than a clock read in here.
-    """
-    entry = sent.get((activity.session_id, activity.kind))
-    return entry is None or moment - entry.sent_at >= window(entry.repeats, rate_limit=rate_limit)
-
-
-def record_sent(
-    sent: MutableMapping[tuple[str, ActivityKind], Sent],
-    session_id: str,
-    kinds: Iterable[ActivityKind],
-    moment: datetime,
-) -> None:
-    """Stamp every kind this message carried, and let the rest of the session start over.
-
-    A repeat count is a claim that *nothing has changed*. The moment a session reports a
-    different kind, something has: an agent that finishes, is asked something, and finishes
-    again is not repeating itself, and backing its second "finished" off to an hour would
-    answer the wrong question. Only the counter resets -- the other kinds keep their stamps,
-    so their base windows still collapse a genuine burst.
-
-    **The kinds this message carried are exempt from that reset, and the exemption is the
-    whole reason this takes a batch rather than a key.** The rule was written when a
-    message carried exactly one kind, and applied per-kind to a grouped one it turns on
-    itself: recording the second kind resets the first, which was recorded a moment earlier
-    in the same send and is not evidence that anything changed.
-
-    **`kinds` is what the message *carried*, which since `_send` stops filtering by window
-    is everything the session was observed saying this pass** -- and that identity is what
-    makes the exemption complete rather than partial. An earlier version passed only the
-    kinds whose own window had elapsed, which left the dominant case open: a standing
-    condition backed off to sixty-four minutes is *absent* from almost every message, so it
-    was almost always the kind being reset, by its own suppression. Measured, that produced
-    75 to 255 notifications overnight where the taper intends 12. A caller that ever
-    narrows this argument again reopens exactly that, and nothing about the resulting
-    messages would look wrong.
-
-    So the reset applies to what the session did not say at all this pass, which is what "a
-    different kind" always meant.
-
-    Mutates the map it is given rather than returning a new one, because the map is the
-    surface's and this is a rule being applied to it, not a second copy of it being made.
-    """
-    carried = set(kinds)
-    for kind in carried:
-        key = (session_id, kind)
-        prior = sent.get(key)
-        sent[key] = Sent(moment, 0 if prior is None else prior.repeats + 1)
-    for other, entry in sent.items():
-        if other[0] == session_id and other[1] not in carried and entry.repeats:
-            sent[other] = Sent(entry.sent_at, 0)
-
-
-RETENTION_WINDOWS = 2
-"""How many of its own windows an entry is kept for after its suppression has lapsed.
-
-Two, so a repeat arriving any time before the window has passed *again* is still recognised as
-a repeat. One would mean the count died with the suppression it caused, and the backoff could
-never reach its second step.
-"""
-
-
-def forget_expired(
-    sent: MutableMapping[tuple[str, ActivityKind], Sent],
-    moment: datetime,
-    *,
-    rate_limit: timedelta,
-) -> None:
-    """Keep the suppression map the size of what it is still suppressing.
-
-    One entry per (session, kind) is small, but it is unbounded over the life of a service
-    that launches sessions all day, and an entry older than its window suppresses nothing.
-
-    Measured against **its own** window rather than the base one. Under a fixed horizon a
-    backed-off entry -- the ones that matter, because they are the repeating ones -- was
-    forgotten while it was still suppressing, which silently restored the every-two-minutes
-    behaviour the backoff exists to remove, and did it only for standing conditions.
-
-    And kept for `RETENTION_WINDOWS` times that, because the repeat count has to outlive
-    the suppression it produced. Dropped the instant the window closed, the entry took the
-    count with it, so the very next repeat looked like a first sighting and reset the
-    backoff to two minutes -- a backoff that could never reach its second step, which is
-    exactly as good as no backoff. The extra life is what makes a repeat recognisable *as*
-    one; the entry is inert during it, since the window has already passed.
-
-    **Under a floor, and the floor is the whole of the taper working at all.** Both terms
-    above scale with the count they exist to preserve, so at zero repeats the horizon was
-    four minutes -- and a kind observed less often than *that* always found its own entry
-    already discarded, was re-created at zero, and could never reach the first doubling.
-    The counter is what makes each wait longer, and it could not climb. `Stop` fires per
-    turn and a turn routinely takes longer than four minutes, so this was the ordinary
-    case: a lone `Stop` every five minutes produced 96 messages over eight hours against a
-    taper intending twelve, and every notification in the pile was individually true.
-
-    The bootstrapping problem is why a proportional horizon cannot fix itself: the entry
-    must already have a high count to be kept long enough to earn a high count. So the
-    floor is a fixed quantity that does not consult the count at all -- the widest window
-    the backoff can ever reach. Anything reporting more often than that hourly cap now
-    accumulates, which is every case the cap was designed for.
-
-    It is a floor rather than a removal because the map is still unbounded over the life
-    of a service launching sessions all day, and forgetting is what bounds it. A kind that
-    genuinely stops reporting is still forgotten -- an hour or so later than before, one
-    small entry per (session, kind) -- and that is the whole price.
-
-    `moment` is a parameter rather than a clock read here, which is what lets the eight-hour
-    run in `tests/unit/application/test_notification_policy.py` be a loop over integers
-    instead of a fake clock threaded through a notifier.
-    """
-    floor = window(MAXIMUM_BACKOFF_DOUBLINGS, rate_limit=rate_limit)
-    expired = [
-        key
-        for key, entry in sent.items()
-        if moment - entry.sent_at
-        >= max(window(entry.repeats, rate_limit=rate_limit) * RETENTION_WINDOWS, floor)
-    ]
-    for key in expired:
-        del sent[key]
 
 
 # The bounded backlog -----------------------------------------------------------------------
