@@ -300,6 +300,13 @@ def test_no_document_still_describes_the_retired_suppression_taper() -> None:
     current behaviour, so any of them reappearing means some document has started describing
     the taper again.
 
+    **What this case cannot do is prove absence, and its name should not be read as claiming
+    to.** It checks a list. The first version of that list missed four sentences in the very
+    document this case was written to clean, and an independent evaluator found them by
+    reading rather than by grepping. Every phrase here is one somebody has actually written;
+    the next one nobody has written yet will not be caught, and the remedy for that is a
+    reader, not a longer tuple.
+
     Deliberately NOT banning the bare word "taper": these documents are allowed -- encouraged --
     to say that a taper used to exist and why it went. What they may not do is speak of it in
     the present tense.
@@ -312,6 +319,14 @@ def test_no_document_still_describes_the_retired_suppression_taper() -> None:
         "record_sent",
         "forget_expired",
         "one message every 64 minutes",
+        # Added 2026-09-19 after an independent gate evaluator found four sentences this list
+        # missed -- sitting four lines below the paragraph that declares the taper gone. Each
+        # entry below is one of them, and their survival is why the docstring above now says
+        # plainly that this is a vocabulary guard and not a proof.
+        "advance the backoff",
+        "the taper intends",
+        "doubling described above",
+        "never backed off",
     )
     documents = {
         "README.md": _ROOT / "README.md",
@@ -344,6 +359,9 @@ def test_the_runbook_says_an_ask_now_shows_its_words_and_how_to_get_them() -> No
         "the operator has to be told to re-run the installer, in so many words"
     )
     assert "claude gained a\n> `permissionrequest` hook" in runbook, "and which event is why"
-    assert "looks exactly like the feature not working" in runbook, (
-        "and what the symptom is, since a host that skips it sees wordless asks and no error"
+    assert "stop arriving altogether" in runbook, (
+        "and what the cost of skipping it actually is. This assertion pinned the phrase "
+        "'looks exactly like the feature not working' until 2026-09-19, when two reviews "
+        "established that sentence was FALSE -- such a host does not see degraded asks, it "
+        "sees none -- so the guard now pins the accurate claim rather than the reassuring one"
     )

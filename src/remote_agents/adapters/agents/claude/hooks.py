@@ -14,9 +14,18 @@ It is what makes a Claude ask say what it is asking: the `Notification` this ser
 installed carries the constant `Claude needs your permission` and nothing about the ask, so
 every Claude `needs_answer` read identically -- 86 of them since 2026-09-01.
 
-**Adding it means an operator must re-run `install-agent-hooks`.** A host that does not will go
-on reporting through `Notification` alone, which is the pre-DEC-098 behaviour rather than a
-broken one; the runbook says so.
+**Adding it means an operator MUST re-run `install-agent-hooks`, and the cost of not doing so
+is not cosmetic.** `permission_prompt` left `_NOTIFICATIONS` in the same change, because on a
+re-installed host it is the wordless twin of this event. A host that upgrades the service but
+not its hooks therefore has neither: no `PermissionRequest` group in its settings, and no
+mapping for the `Notification` that used to stand in. Its Claude approvals stop producing a
+`needs_answer` **at all** -- silently, with nothing logged, until the installer is re-run.
+
+An earlier draft of this paragraph said such a host "will go on reporting through
+`Notification` alone… the pre-DEC-098 behaviour rather than a broken one". That was wrong in
+the direction that matters: it describes graceful degradation where the real behaviour is the
+loss of the whole approval channel, which is the one this product exists for at 3am. Two
+independent reviews caught it.
 """
 
 RETIRED_EVENTS = ("SessionEnd",)

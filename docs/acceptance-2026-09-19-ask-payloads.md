@@ -13,8 +13,10 @@ could never be produced, silently.
 
 Unlike the 2026-08-29 drill, captured **values** are reproduced here as well as field names. Every
 command shown was authored by this drill (`whoami`, `curl https://example.com`, an edit to the
-drill's own `README.md`) and none of it is the owner's work. DEC-098 reverses the refusal that
-kept the 2026-08-29 measurement to names alone.
+drill's own `README.md`) and none of it is the owner's work. DEC-098 records this as a practice change under
+GDEC-SEC-001 rather than a breach of it: fixtures stay synthetic, and what is reproduced here is
+drill-authored throughout. The register carries that clause — this document asserted it before
+DEC-098 did, which an independent gate evaluator flagged, and the register is where it belongs.
 
 ## Boundaries the drill held
 

@@ -136,12 +136,17 @@ def test_the_adapter_never_doubles_anything() -> None:
 
 
 def test_the_adapter_never_stamps_a_repeat_count() -> None:
-    """Writing a `Sent` is the counter bookkeeping, and the reset rule rides on it.
+    """A guard that outlived its subject, kept deliberately, and re-aimed.
 
-    The adapter still *owns* the map -- residence is not policy, the same split DEC-026 makes
-    for the backlog -- so it reads entries freely. What it may not do is decide what goes in
-    one, because that decision is where "a different kind resets the session" lives, and a
-    second copy of it would be a second answer to when the owner stops being told.
+    **There is no `Sent`, no suppression map and no repeat counter anywhere in the tree.**
+    DEC-048 removed the mechanism on 2026-08-23 and the dead code went on 2026-09-19. This
+    docstring used to say the adapter "still *owns* the map", which was true when written and
+    false for a month before anyone noticed -- the tests below passed throughout, vacuously,
+    because a thing that does not exist cannot be written by the wrong layer.
+
+    It is kept rather than deleted because it now guards the reintroduction: if a repeat count
+    ever comes back, this says where it may not live. What it may not do is be read as a
+    description of what the adapter holds today, which is a backlog deque and refusal counts.
 
     Two sweeps, because the first is a name check and the stage's evaluator was right that a
     name check does not hold: a re-derivation storing `(moment, count)` as a plain tuple, or as
@@ -173,14 +178,17 @@ def test_the_adapter_never_stamps_a_repeat_count() -> None:
 
 
 def test_the_adapter_never_ages_an_entry_against_a_horizon() -> None:
-    """Retention and dueness both reduce to "how old is this entry", and both moved.
+    """Retention and dueness both reduced to "how old is this entry", and both are gone.
 
-    `sent_at` is what neither can be written without: a horizon is a comparison against it, and
-    `due` is the same comparison with a different threshold. The adapter still *holds* the map
-    -- residence is not policy -- and passes it whole, so it never needs to read inside an
-    entry. The moment it does, the count-independent floor DEC-031 records has a second
-    implementation, and that one will be the proportional horizon again, because the
-    proportional horizon is the obvious thing to write.
+    `sent_at` was what neither could be written without: a horizon is a comparison against
+    it, and `due` was the same comparison with a different threshold. Both went with the
+    taper (DEC-048), along with the map this paragraph used to say the adapter still held.
+
+    The guard is kept and re-aimed, exactly as its sibling above is: should any age-against-a-
+    horizon rule return, this says it may not be written here. The reason is unchanged and is
+    worth keeping in front of whoever writes it -- a second implementation of the
+    count-independent floor DEC-031 records will be the proportional horizon again, because
+    the proportional horizon is the obvious thing to write.
     """
     offenders = [
         _where(path, node)

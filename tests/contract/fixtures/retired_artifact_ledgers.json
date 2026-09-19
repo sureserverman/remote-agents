@@ -1,5 +1,5 @@
 {
-  "agent_hook_events": ["Stop", "StopFailure", "Notification", "SessionEnd"],
+  "agent_hook_events": ["Stop", "StopFailure", "Notification", "SessionEnd", "PermissionRequest"],
   "systemd_unit_paths": [
     ".config/systemd/user/remote-agents.service",
     ".config/systemd/user/default.target.wants/remote-agents.service"

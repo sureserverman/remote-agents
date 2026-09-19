@@ -339,7 +339,8 @@ def _offer_the_status_line_hop(
 
     **The prompt names everything the yes writes, and that is the whole point of the function.**
     A Tier-1 review caught the first version describing only the status-line wrap while the call
-    installs the wrap **and** three event-hook groups (`Stop`, `StopFailure`, `Notification`,
+    installs the wrap **and** four event-hook groups (`Stop`, `StopFailure`, `Notification`,
+    `PermissionRequest`,
     from `adapters.agents.claude.hooks.INSTALLED_EVENTS`) that fire in **every** Claude session
     on the host, not only sessions this project manages. The gate's predicate
     (`claude_status_line_hop_installed`, which answers only about the wrap) is deliberately
@@ -404,7 +405,8 @@ def _offer_the_status_line_hop(
     print(f"  Installing the agent hooks would write two things into {settings_path}:")
     print("    - the status-line hop: it wraps your existing status line, records only the")
     print("      limit windows, and hands the same input on to whatever you had;")
-    print("    - three event hooks, Stop / StopFailure / Notification, which fire in")
+    print("    - four event hooks, Stop / StopFailure / Notification /")
+    print("      PermissionRequest, which fire in")
     print("      EVERY Claude session on this host, not only ones this project started,")
     print("      and are how the bot learns an agent has finished or is waiting.")
     print("  Both are reversible: `remote-agents install-agent-hooks --provider claude --remove`.")

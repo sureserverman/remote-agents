@@ -766,10 +766,17 @@ uv run --locked remote-agents install-agent-hooks --provider opencode
 > **Upgrading to 0.45.0 or later: re-run the `claude` line.** Claude gained a
 > `PermissionRequest` hook on 2026-09-19 (DEC-098), and that is the hook that makes an approval
 > notification name the command or the question instead of the constant
-> `Claude needs your permission`. A host that does not re-run `install-agent-hooks` keeps
-> reporting through `Notification` alone: nothing breaks, and nothing improves either — the
-> asks stay wordless, which looks exactly like the feature not working. Re-running is
-> idempotent and leaves one entry per event.
+> `Claude needs your permission`.
+>
+> **If you do not re-run it, Claude approval notifications stop arriving altogether.** Not
+> wordlessly — at all. The same change removed `permission_prompt` from the notification map,
+> because on a re-installed host it is the wordless twin of the new event; a host with neither
+> has no route from a Claude approval to your phone, and nothing logs that it is missing. An
+> agent waiting on a question at 3am will simply never tell you.
+>
+> Re-running is idempotent and leaves one entry per event. `remote-agents upgrade` does **not**
+> do it for you — the installer is a separate command by design, because it writes into a file
+> outside this project's control.
 
 `--remove` takes any of them back out. For opencode that deletes the generated plugin file as
 well as its entry, and it deletes only a file carrying this project's own generated-file marker:
@@ -1030,7 +1037,7 @@ notifications are still delivered and the menu simply stays where it was.
 | `completed` | ✅ **Finished its work** | Claude's `Stop` hook | reported |
 | `limit_reached` | ⛽ **Hit a usage limit** | Claude's `StopFailure` hook, `error: rate_limit` | reported |
 | `output_limit` | 📏 **Hit its output ceiling** | Claude's `StopFailure` hook, `error: max_output_tokens` | reported |
-| `needs_answer` | ❓ **Waiting for an answer** | Claude's `Notification` hook, `notification_type: permission_prompt` or `agent_needs_input` | reported |
+| `needs_answer` | ❓ **Waiting for an answer** | Claude's `PermissionRequest` hook (since 2026-09-19); `Notification` with `notification_type: agent_needs_input` | reported |
 
 The four sentences this table used to quote ("The agent has finished its work.") were replaced
 by these headlines on 2026-09-02; the table kept the old wording until 2026-09-06, which is
@@ -1144,14 +1151,12 @@ removed because it suppressed *content*, not merely interruptions: a gated obser
 neither sent nor held, and the drain had already deleted the record, so a genuinely new
 question arriving behind a repeating one was destroyed rather than delayed. Nothing at any
 later pass told the owner that the question they were reading had been superseded.
-A repeat is counted only when a message was actually sent; a suppressed one does not advance the
-backoff.
 
-The doubling described above only started working correctly in this release. Before it, the rate
-limit's memory was discarded after 4 minutes, so any kind reporting less often than that was
-always treated as first-time and never backed off: measured, a `Stop` every 5 minutes produced 96
-messages over 8 hours where the taper intends 12. Operators upgrading will notice fewer repeated
-notifications from a busy agent, and that is intended, not a fault.
+Two paragraphs that stood here — about when a repeat advanced the backoff, and about the
+doubling being fixed "in this release" — went with it on 2026-09-19. They described the
+mechanism's internals in the present tense directly beneath the sentence saying it no longer
+exists, which is the clearest possible demonstration of why prose needs the same sweep code
+gets.
 
 One further bound sits above all of that, and it is the only one about the chat rather than about
 a session's news: **at most ten messages are sent per poll.** The per-session limit cannot

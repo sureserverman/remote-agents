@@ -54,8 +54,8 @@ def test_apply_patch_is_an_edit_ask_rather_than_an_unrecognised_one() -> None:
 
 @pytest.mark.parametrize(
     "token",
-    ["Read", "Edit", "WebFetch", "SomeToolNobodyHasSeen", "", "BASH", "Bash_"],
-    ids=["read", "edit", "webfetch", "unseen", "empty", "uppercase", "suffixed"],
+    ["Read", "WebFetch", "SomeToolNobodyHasSeen", "", "BASH", "Bash_", "edit"],
+    ids=["read", "webfetch", "unseen", "empty", "uppercase", "suffixed", "lowercase-edit"],
 )
 def test_every_unrecognised_token_classifies_as_unknown_rather_than_leaking(token: str) -> None:
     """An unrecognised token is a class, not a string to pass through.
@@ -100,3 +100,17 @@ def test_no_generated_token_but_the_measured_ones_are_ever_recognised() -> None:
     assert ask_class("apply_patch") is AskClass.EDIT
     for token in measured - {"apply_patch"}:
         assert ask_class(token) is AskClass.SHELL
+
+
+def test_claudes_edit_is_the_same_class_as_codexs_apply_patch() -> None:
+    """`Edit` left the unrecognised list on 2026-09-19 the only way a token may: by measurement.
+
+    A real Claude approval for a file edit carried `tool_name: "Edit"`
+    (`docs/acceptance-2026-09-19-ask-payloads.md`). The table is provider-blind, so the two
+    providers' spellings of "change a file" land on one class and each surface says it once.
+
+    Lowercase `edit` is NOT admitted and stays in the unrecognised list above, for the reason
+    `BASH` does: nobody has measured a provider sending it.
+    """
+    assert ask_class("Edit") is AskClass.EDIT
+    assert ask_class("apply_patch") is AskClass.EDIT
