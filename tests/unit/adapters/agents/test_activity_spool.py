@@ -319,3 +319,146 @@ def test_the_drain_is_never_stricter_than_the_spool_about_an_ask_token() -> None
     # And the bound itself, since a length change is the likeliest divergence.
     assert _PLAIN_TOKEN.fullmatch("A" * 64) and _ASK_TOKEN.fullmatch("A" * 64)
     assert not _PLAIN_TOKEN.fullmatch("A" * 65) and not _ASK_TOKEN.fullmatch("A" * 65)
+
+
+# --- Codex `PermissionRequest` detail (DEC-098) ---------------------------------------------
+#
+# Every payload below is shaped from a real capture recorded in
+# `docs/acceptance-2026-09-19-ask-payloads.md`, taken against codex-cli 0.154.0 in a disposable
+# home. The key names are that measurement's, not a guess: `tool_input` is nested, `Bash` carries
+# `command` + `description`, and `apply_patch` carries `command` alone.
+
+_CODEX_PERMISSION_PAYLOAD: dict[str, Any] = {
+    "session_id": "01a0b94c-92b7-7d13-a0ce-876ef3fa386d",
+    "turn_id": "01a0b94c-e43c-7d50-8b98-1e1836eeccdd",
+    "transcript_path": "/home/user/.codex/sessions/2026/09/19/rollout.jsonl",
+    "cwd": "/home/user/workspace",
+    "hook_event_name": "PermissionRequest",
+    "model": "gpt-5.6-sol",
+    "permission_mode": "default",
+    "tool_name": "Bash",
+    "tool_input": {
+        "command": "whoami > /tmp/ra-drill-probe.txt",
+        "description": "Do you want to allow the exact command to write /tmp/ra-drill-probe.txt?",
+    },
+}
+
+
+def _codex_permission(tool_name: str = "Bash", **tool_input: Any) -> dict[str, Any]:
+    payload = {**_CODEX_PERMISSION_PAYLOAD, "tool_name": tool_name}
+    payload["tool_input"] = dict(tool_input)
+    return payload
+
+
+def test_a_codex_permission_request_says_what_it_is_asking(tmp_path: Path) -> None:
+    """The reversal DEC-098 records: the agent's own reason, and the command it is about.
+
+    Before this, 95 of 95 Codex `needs_answer` rows read `ask=Bash` and carried no detail at
+    all -- "waiting for an answer about a shell command", which on a phone cannot tell an
+    `rm -rf` from an `ls`.
+    """
+    directory = _spool(tmp_path)
+
+    _run(_stream(_codex_permission(
+        command="whoami > /tmp/ra-drill-probe.txt",
+        description="Do you want to allow the exact command to write /tmp/ra-drill-probe.txt?",
+    )), directory, provider="codex")
+
+    record = _record(directory)
+    assert record["detail"] == (
+        "Do you want to allow the exact command to write /tmp/ra-drill-probe.txt? "
+        "— $ whoami > /tmp/ra-drill-probe.txt"
+    )
+    assert record["ask"] == "Bash", "the class stays the headline; the words are beside it"
+
+
+def test_a_codex_apply_patch_permission_request_carries_its_command_alone(
+    tmp_path: Path,
+) -> None:
+    """`apply_patch` was measured carrying `command` and **no** `description`.
+
+    So the rendered shape has to survive a missing half rather than assume both. This is the
+    case that would have produced `"None — $ ..."` had the formatter been written from the
+    `Bash` sample alone.
+    """
+    directory = _spool(tmp_path)
+
+    _run(_stream(_codex_permission(
+        "apply_patch",
+        command="*** Begin Patch\n*** Update File: README.md\n@@\n drill\n+EDIT\n*** End Patch",
+    )), directory, provider="codex")
+
+    record = _record(directory)
+    assert record["detail"] is not None
+    assert record["detail"].startswith("$ *** Begin Patch")
+    assert "—" not in record["detail"], "no dangling separator for the half that is absent"
+    assert record["ask"] == "apply_patch"
+
+
+def test_a_codex_permission_request_with_only_a_reason_renders_that_half_alone(
+    tmp_path: Path,
+) -> None:
+    """The mirror of the case above, so the formatter is pinned from both sides."""
+    directory = _spool(tmp_path)
+
+    _run(_stream(_codex_permission(description="Allow writing in the working directory?")),
+         directory, provider="codex")
+
+    record = _record(directory)
+    assert record["detail"] == "Allow writing in the working directory?"
+    assert "$" not in record["detail"], "no empty command marker for the half that is absent"
+
+
+def test_a_codex_permission_request_carrying_neither_key_is_still_a_record(
+    tmp_path: Path,
+) -> None:
+    """Wordless, never dropped.
+
+    A silent ask is the exact failure DEC-098 reverses, so a payload this parser cannot find
+    words in must still arrive as a `needs_answer` the owner can act on -- with its class, and
+    with `detail` absent rather than invented.
+    """
+    directory = _spool(tmp_path)
+
+    _run(_stream(_codex_permission("Read")), directory, provider="codex")
+
+    record = _record(directory)
+    assert record["detail"] is None, "nothing invents words the payload did not carry"
+    assert record["ask"] == "Read"
+    assert record["event"] == "PermissionRequest"
+
+
+def test_a_codex_permission_request_detail_is_bounded_to_one_line(tmp_path: Path) -> None:
+    """`apply_patch`'s command is a multi-line patch envelope, not a one-line shell string.
+
+    It is the first detail source this project has read that is *structurally* multi-line, so
+    the bound is asserted on the shape that actually arrives rather than on a synthetic essay.
+    """
+    directory = _spool(tmp_path)
+
+    _run(_stream(_codex_permission(
+        "apply_patch",
+        command="*** Begin Patch\n" + ("a" * 400) + "\n*** End Patch",
+    )), directory, provider="codex")
+
+    detail = _record(directory)["detail"]
+    assert "\n" not in detail
+    assert len(detail) <= MAXIMUM_DETAIL_CHARACTERS
+
+
+def test_a_codex_permission_request_never_spools_the_layout_its_payload_carries(
+    tmp_path: Path,
+) -> None:
+    """DEC-098 widened the licence by exactly two keys and no further.
+
+    `transcript_path` and `cwd` are on this event and remain refused; the amendment note on the
+    2026-08-29 acceptance document says so in the same words.
+    """
+    directory = _spool(tmp_path)
+
+    _run(_stream(_codex_permission(command="ls", description="List files")),
+         directory, provider="codex")
+
+    written = json.dumps(_record(directory))
+    assert "/home/user/.codex" not in written
+    assert "/home/user/workspace" not in written

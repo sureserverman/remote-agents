@@ -77,9 +77,9 @@ _DETAIL_FIELDS = ("message", "last_assistant_message")
 #: written as code. Deliberately narrower than `_DETAIL_FIELDS`: `message` was never observed on
 #: a Codex payload, and a field this project has not seen is not a field it reads.
 #:
-#: `Stop` is the only key. `PermissionRequest` admits nothing, which is narrower than the
-#: measurement permits: `tool_name` is the one field on that event that names the ask without
-#: carrying a command, a path or a prompt, and it is declined anyway.
+#: `Stop` is the only key here. `PermissionRequest`'s detail is composed separately, by
+#: `_ask_detail`, because its words live one level down inside `tool_input` rather than at the
+#: top level this mapping is read with.
 #:
 #: **Not because nothing would render it.** That was the first reason given and it was wrong --
 #: it holds for `reason`, which only ever feeds `_kind`, and not for `detail`, which is
@@ -94,16 +94,26 @@ _DETAIL_FIELDS = ("message", "last_assistant_message")
 #: rather than to inherit from a parser change. Recorded as DEC-067.
 #:
 #: **That decision was taken on 2026-09-06 and `tool_name` is now admitted** -- not here, into
-#: `detail`, which is what DEC-067 refused and still refuses, but into `ask`, a field of its
-#: own (`_CODEX_ASK_FIELDS`, DEC-074). This paragraph is kept because its argument is why the
-#: two fields are separate; it is annotated because a reader hits it a hundred lines before the
-#: code that admits the field, and would otherwise leave with the wrong conclusion.
+#: `detail`, but into `ask`, a field of its own (`_CODEX_ASK_FIELDS`, DEC-074). This paragraph is
+#: kept because its argument is why the two fields are separate; it is annotated because a reader
+#: hits it a hundred lines before the code that admits the field, and would otherwise leave with
+#: the wrong conclusion.
+#:
+#: **Amended 2026-09-19 by DEC-098, and this is the paragraph a reader must not stop at.** The
+#: argument above concluded that a bare provider token is not prose and so does not belong in
+#: `detail`. That conclusion stands and is why `ask` still exists. What DEC-098 reverses is the
+#: separate refusal of `tool_input`: the owner is the sole operator and the sole recipient, so
+#: their own command is not a leak, and `tool_input.description` is not a token at all -- it is
+#: the agent's own one-sentence reason, which is precisely what `detail` has always meant. The
+#: words now ride in `detail` beside the class in `ask`; neither field took the other's job.
 _CODEX_DETAIL_FIELDS: dict[str, tuple[str, ...]] = {"Stop": ("last_assistant_message",)}
 
 #: What a Codex payload may contribute as an ASK CLASS, per event. `PermissionRequest` only,
 #: and `tool_name` only -- the one field the measurement
 #: (`docs/acceptance-2026-08-29-codex-activity-detail.md`) licenses, whose own licensing
-#: section reads "`PermissionRequest` -> `tool_name` at most, and nothing else". `Stop` admits
+#: section reads "`PermissionRequest` -> `tool_name` at most, and nothing else" -- a licence
+#: **amended on 2026-09-19 by DEC-098**, which additionally admits `tool_input`'s two measured
+#: keys into `detail`; this tuple, which is about `ask` alone, is unchanged by that. `Stop` admits
 #: none: an agent that has finished is not waiting on anything.
 _CODEX_ASK_FIELDS: dict[str, tuple[str, ...]] = {"PermissionRequest": ("tool_name",)}
 
@@ -246,10 +256,11 @@ def _observed_event(
         # claim is scoped to the pane-*title* watcher, which is untouched and still retains one
         # boolean.
         #
-        # `PermissionRequest` still admits no *detail* -- see `_CODEX_DETAIL_FIELDS` -- and
-        # since 2026-09-06 admits `tool_name` as an `ask`, a different field for a different
-        # kind of string (DEC-074, superseding DEC-067's rejected-alternative clause;
-        # DEC-067's field-conflation reasoning stands and is why `ask` is not `detail`).
+        # `PermissionRequest` admits `tool_name` as an `ask` (DEC-074), and since 2026-09-19
+        # admits its `tool_input` words as `detail` too (DEC-098) -- two fields for two kinds of
+        # string, which is DEC-067's field-conflation reasoning still doing its job rather than
+        # being overturned by it. What DEC-098 reversed was DEC-067's separate refusal of
+        # `tool_input` as a leak; see `_ask_detail`.
         #
         # Read through `_plain_token`, not `bounded_detail_line`. The measurement observed
         # `tool_name` only as `Bash` in all four samples and says so; its value space is
@@ -264,7 +275,11 @@ def _observed_event(
             session_id=session_id,
             event=event,
             reason=None,
-            detail=_first(document, _CODEX_DETAIL_FIELDS.get(event, ()), bounded_detail_line),
+            detail=(
+                _ask_detail(document)
+                if event == "PermissionRequest"
+                else _first(document, _CODEX_DETAIL_FIELDS.get(event, ()), bounded_detail_line)
+            ),
             observed_at=moment.astimezone(UTC),
             ask=_first(document, _CODEX_ASK_FIELDS.get(event, ()), _plain_token),
         )
@@ -305,6 +320,50 @@ def _observed_opencode_event(
         observed_at=moment.astimezone(UTC),
         ask=_first(document, _OPENCODE_ASK_FIELDS.get(event, ()), _plain_token),
     )
+
+
+#: What a `PermissionRequest`'s nested `tool_input` may contribute as DETAIL (DEC-098).
+#:
+#: Two keys, measured on both providers the same day
+#: (`docs/acceptance-2026-09-19-ask-payloads.md`): Codex `Bash` and Claude `Bash` each carry
+#: `command` and `description`, and Codex `apply_patch` carries `command` alone. That the two
+#: agents agree on these names is why one reader serves both rather than one per provider.
+#:
+#: **Read by name, one level down, and no further.** `tool_input` is the only nested object this
+#: spool descends into, and it descends exactly one level: a recursive walk would turn every
+#: future tool's payload into detail sight unseen, which is the assumption
+#: `_DISCRIMINATING_FIELDS` exists to warn about. A tool carrying neither key yields no detail
+#: and still spools its record.
+#:
+#: Deliberately NOT admitted, and still refused after DEC-098: `transcript_path` and `cwd`, which
+#: are on this event and are filesystem layout rather than anything the owner is being asked
+#: about.
+_ASK_REASON_FIELD = "description"
+_ASK_COMMAND_FIELD = "command"
+
+
+def _ask_detail(document: Mapping[str, object]) -> str | None:
+    """Compose the agent's reason and the command it is about into one bounded line.
+
+    Either half alone when the other is absent -- which is not defensive coding but the measured
+    case: `apply_patch` carries a command and no description, and a formatter written from the
+    `Bash` sample alone would render the literal word `None` into a notification.
+
+    Each half is bounded before it is joined and the join is bounded again. The inner pass is
+    what keeps a 30 KB patch envelope from being concatenated in full before being cut, and the
+    outer pass is what keeps the budget the far end measures against honest once a separator has
+    been added between them.
+    """
+    tool_input = document.get("tool_input")
+    if not isinstance(tool_input, Mapping):
+        return None
+    reason = bounded_detail_line(tool_input.get(_ASK_REASON_FIELD))
+    command = bounded_detail_line(tool_input.get(_ASK_COMMAND_FIELD))
+    if reason is not None and command is not None:
+        return bounded_detail_line(f"{reason} — $ {command}")
+    if command is not None:
+        return bounded_detail_line(f"$ {command}")
+    return reason
 
 
 def _first(
