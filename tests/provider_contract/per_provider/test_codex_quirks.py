@@ -59,7 +59,7 @@ def test_a_codex_stop_detail_is_bounded_exactly_as_claudes_is() -> None:
     assert "\n" not in observed.detail
 
 
-def test_a_codex_permission_request_names_the_ask_and_still_carries_no_agent_words() -> None:
+def test_a_codex_permission_request_names_the_ask_and_carries_the_agents_words() -> None:
     """`tool_name` is admitted — as an ASK CLASS, never as the agent's words.
 
     DEC-067 declined `tool_name` in 2026-08-30 and said exactly why the decline was
@@ -93,7 +93,11 @@ def test_a_codex_permission_request_names_the_ask_and_still_carries_no_agent_wor
         "— $ rm -rf /home/owner/secret-project"
     ), "the agent's own reason, and the command it is about"
     assert "rollout-secret.jsonl" not in (observed.detail or ""), "transcript_path stays refused"
-    assert "/home/owner/secret-project\"" not in repr(observed.reason), "and so does cwd"
+    # Asserted on `detail`, which is where a leak could now actually land. This read
+    # `repr(observed.reason)` for one commit -- and `reason` is hard-coded `None` on this
+    # branch, asserted three lines above, so `repr(None)` made it unfailable whatever the
+    # parser did. A dead assertion presented as a live guarantee is worse than no assertion.
+    assert "secret-working-directory" not in (observed.detail or ""), "cwd stays refused"
     assert observed.ask == "Bash", "the tool class names what is being asked about"
 
 

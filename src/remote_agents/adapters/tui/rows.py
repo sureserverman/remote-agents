@@ -661,8 +661,14 @@ def feed_row_content(
     on the reading that the class was what there was to say when the agent had said nothing --
     sound while the only detail an ask carried was Claude's constant "Claude needs your
     permission". Now that the detail is the actual command, the two say genuinely different
-    things: the class is what KIND of answer is wanted, the detail is what it is about. The
-    class leads, because it is the shorter and the one that survives a narrow pane.
+    things: the class is what KIND of answer is wanted, the detail is what it is about.
+
+    **The class leads, and the precise claim is about ORDER, not survival.** Both live in the
+    flexible cell, so a narrow pane truncates from the tail: the detail's end is eaten first
+    and the class outlives it. That is as far as it goes -- narrow the pane enough and the
+    class is cut too, then the identity, then the kind word. Nothing here promises any of them
+    survives an arbitrarily small width, and an earlier draft of this paragraph said the class
+    "survives a narrow pane", which is true only relative to the detail.
     """
     history = datetime.now(UTC) - observed_at > FEED_HISTORY_AGE
     kind_style = MUTED if history else KIND_STYLE[kind]

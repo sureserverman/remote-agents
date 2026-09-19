@@ -1441,3 +1441,38 @@ def test_the_feed_shows_an_asks_class_and_its_detail_together() -> None:
 
     assert "shell command" in row, "the class, in this surface's words"
     assert "whoami" in row, "and the command the owner is being asked about"
+
+
+def test_a_narrow_pane_eats_the_detail_before_the_ask_class() -> None:
+    """The ordering claim `feed_row_content`'s docstring makes, asserted rather than asserted-at.
+
+    The two cases above deliberately render wide, so neither of them exercises the truncation
+    path at all -- which left the claim "the class leads, so the detail is cut first" resting
+    on reading `columns()`. A Tier-2 review of the DEC-098 diff pointed that out.
+
+    80 columns is chosen because it is where the detail has gone entirely and the class is
+    still whole. It is a real terminal width, not a contrived one.
+
+    **What this does NOT claim** is that the class survives any width: at 60 it is cut too, and
+    at 40 so is the kind word. The property is the order things are given up in, and that is
+    what makes the class worth putting first.
+    """
+    from remote_agents.adapters.tui.screens.feed import feed_rows
+
+    base = _activity(ActivityKind.NEEDS_ANSWER, minutes_ago=1)
+    both = AgentActivity(
+        base.session_id,
+        base.kind,
+        "Allow the write? — $ whoami > /tmp/probe.txt",
+        base.observed_at,
+        ActivityConfidence.REPORTED,
+        "Bash",
+    )
+
+    narrow = feed_rows((both,), width=80)[0][1].plain
+
+    assert "(about a shell command)" in narrow, "the class is whole at 80 columns"
+    assert "whoami" not in narrow, "and the detail has been given up first"
+
+    wider = feed_rows((both,), width=200)[0][1].plain
+    assert "whoami" in wider, "the detail returns once there is room, so 80 proved a cut"

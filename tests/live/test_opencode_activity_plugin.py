@@ -279,7 +279,7 @@ def test_a_managed_opencode_turn_asking_for_approval_spools_a_named_wait(tmp_pat
         )
     for wait in waits:
         assert wait.session_id == str(session_id)
-        assert wait.detail is None, "an approval carries no agent words, on any provider"
+        assert wait.detail is None, "an OpenCode approval carries no agent words (unlike Codex since DEC-098)"
         assert wait.ask == "bash", f"the measured tool class is `bash`, not {wait.ask!r}"
         assert ask_class(wait.ask) is AskClass.SHELL
     # The literal command the owner was asked to approve, from the real payload's `patterns` and

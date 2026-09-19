@@ -235,10 +235,15 @@ def test_no_current_document_still_offers_the_retired_pane_quiet_fallback() -> N
 def test_current_docs_say_what_a_codex_notification_carries_and_what_it_does_not() -> None:
     """Both halves, because the asymmetry is the whole boundary and is easy to state as one.
 
-    A Codex `Stop` now carries the agent's own last line, bounded exactly as Claude's is. A Codex
-    `PermissionRequest` still carries nothing, and neither does the title-derived
-    `needs_answer` -- and an operator who reads only the first half will expect a wordy approval
-    notification that is never coming. The documents have to say which is which.
+    **The asymmetry moved on 2026-09-19 (DEC-098); it did not disappear.** It used to run
+    between `Stop` (words) and every approval (none). It now runs between an approval the
+    **hook** reported, which names what it is asking, and one the **pane title** inferred,
+    which names no command because the watcher reads a marker and never pane content.
+
+    An operator who reads only half of that still gets it wrong -- in the opposite direction
+    from before: they now expect words on every approval and will not understand why a
+    title-derived one is bare. The documents have to say which is which, so this case keeps
+    asserting both halves and only changes what each half says.
     """
     runbook = (_ROOT / "docs" / "operator-runbook.md").read_text(encoding="utf-8").lower()
     readme = (_ROOT / "README.md").read_text(encoding="utf-8").lower()
@@ -250,9 +255,18 @@ def test_current_docs_say_what_a_codex_notification_carries_and_what_it_does_not
     # coincidence pins nothing.
     assert "codex `stop` carries" in runbook, "the runbook must say the detail now arrives"
     assert "the agent's own last line" in runbook + readme
+    assert "names what it is asking" in runbook, (
+        "the positive half: a hook-reported approval now carries the agent's reason and the "
+        "command, and an operator who reads only the old negative half will not look for them"
+    )
     assert "names no command" in runbook, (
-        "the negative half: an approval notification is still wordless, and an operator who "
-        "reads only the positive half will wait for words that are never coming"
+        "the negative half, which survives on the title-derived path: that wait is still "
+        "wordless, and an operator who reads only the positive half will wait for words that "
+        "are never coming"
+    )
+    assert "transcript_path" in runbook, (
+        "and what the widening did NOT admit, since 'it now shows the command' reads as "
+        "'it now shows everything' unless the boundary is stated"
     )
 
 

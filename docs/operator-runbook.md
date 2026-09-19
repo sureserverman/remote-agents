@@ -682,32 +682,45 @@ The service sends unprompted messages when a managed agent stops working, one me
 session per delivery pass, beside the live view rather than inside it. Two sources feed them and
 only one has to be installed. A managed `claude` session reports through Claude Code's own
 hooks. Codex is hybrid: its `Stop` hook reports `completed`; when Codex emits it, its
-`PermissionRequest` hook reports `needs_answer`. Its native code-mode escalation currently skips
-that hook, so the service instead watches the managed pane's content-free `Action Required` title
-and emits one inferred `needs_answer` until that title clears. It never captures or retains the
-approval's command, prompt, path, or transcript, and Telegram remains observation-only. A
-provider-reported permission in the same pass wins over the title edge, so the two never describe
-one wait twice.
+`PermissionRequest` hook reports `needs_answer`. On **codex-cli 0.154.0 that hook fires for
+every escalation raised**, including `apply_patch` — measured 3 of 3 in
+`docs/acceptance-2026-09-19-ask-payloads.md`. On 0.151.0 it did not, which is why the service
+also watches the managed pane's content-free `Action Required` title and emits one *inferred*
+`needs_answer` until that title clears; that path remains as the fallback for a host still on an
+older build. The **title watcher** captures no command, prompt, path or transcript — it reads a
+marker and nothing else — and Telegram remains observation-only. A provider-reported permission
+in the same pass wins over the title edge, so the two never describe one wait twice.
 
-**Codex `Stop` carries the agent's own last line; a Codex approval carries nothing.** Since
-2026-08-30 a completed Codex turn arrives with the agent's closing sentence, bounded to one line
+**Codex `Stop` carries the agent's own last line, and since 2026-09-19 so does a Codex
+approval.** A completed Codex turn arrives with the agent's closing sentence, bounded to one line
 exactly as Claude's is — the `last_assistant_message` field, read from the hook payload after it
-was measured rather than assumed (`docs/acceptance-2026-08-29-codex-activity-detail.md`). The
-asymmetry is deliberate and is the half worth reading twice: an approval notification
-**names no command, path, prompt or transcript**, whether it came from the `PermissionRequest`
-hook or from the pane title. The payload does carry fields that could describe it, and this
-service reads none of them: `tool_input.command` is the literal command and
-`tool_input.description` reads like a safe summary while restating the path, so both are
-refused outright.
+was measured rather than assumed (`docs/acceptance-2026-08-29-codex-activity-detail.md`).
+
+**An approval reported through the hook now names what it is asking (DEC-098).** The owner ruled
+on 2026-09-19 that, as the sole operator and the sole recipient of these notifications, their own
+commands and paths are not a leak — so `tool_input.description` (the agent's own one-sentence
+reason) and `tool_input.command` are read and rendered as `<reason> — $ <command>`, either half
+alone when the other is absent. `apply_patch` was measured carrying a command and no reason.
+
+What is **still refused**, on that event and every other: `transcript_path`, `cwd` and `prompt`.
+The widening was by exactly two named keys, and
+`tests/provider_contract/per_provider/test_codex_quirks.py` asserts it against the whole
+serialized record rather than field by field.
+
+An **inferred** wait — one the pane-title watcher raised rather than the hook —
+**names no command**, and that is unchanged: the service never renders words for a pane it
+deliberately did not read.
 
 **One field is now read, and it is not a description.** `tool_name` — the tool class, e.g.
 `Bash` — was declined until 2026-09-06 because the only field it could have landed in was the
 one that means *the agent's own words*, where a bare token reads as a sentence the agent wrote.
 That was a wording decision nobody had taken (DEC-067), and DEC-074 took it: the token goes in a
-field of its own, and each surface words it itself. So a Codex approval from the **hook** now
-tells you it is waiting *about a shell command*, and still names no command. An approval read
-from the **pane title** says only that something is waiting, because a title carries no tool
-class to read — open the session to find out what.
+field of its own, and each surface words it itself. So a Codex approval from the **hook** tells
+you it is waiting *about a shell command* — and, since DEC-098 reversed the refusal above, names
+the command underneath it. The class is still the headline and the words still ride beside it in
+the expandable quote; that separation is DEC-074's and is unchanged. An approval read from the
+**pane title** says only that something is waiting, because a title carries no tool class and no
+words to read — open the session to find out what.
 
 `opencode` reports through a plugin rather than a hook command, since 2026-09-06. OpenCode
 has no hook-command mechanism at all; what it does publish is a plugin API, so
