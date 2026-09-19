@@ -260,15 +260,19 @@ it is easy to misread the layering without it. When a rule is lifted out of a dr
 into `application/`, the **rule** moves and the **state it operates on stays behind**.
 
 `application/notification_policy.py` is the worked example. `ActivityNotifier` in
-`adapters/telegram/notifications.py` still owns its suppression map and its backlog deque; the
-policy module holds the taper, the reset rule, the retention floor, the grouping collapse and
-the eviction rule, and is handed the container to apply them to. Every clock reading arrives
-as an argument — nothing there reads a clock, a bot, a session store or a socket — which is
-what lets DEC-031's eight-hour proof be a loop over integers rather than a fake clock threaded
-through a Telegram double.
+`adapters/telegram/notifications.py` owns its backlog deque and its refusal counts; the policy
+module holds the grouping collapse, the eviction rule, the what-is-unheard rule and the
+what-is-still-owed rule, and is handed the container to apply them to. Nothing there reads a
+clock, a bot, a session store or a socket.
+
+The suppression taper this paragraph used to describe — and the suppression map beside it —
+went with DEC-048 on 2026-08-23, and the code went with Task 2.2 of the 2026-09-19 plan. The
+clock-free property is kept even though the eight-hour proof that motivated it is gone,
+because it is what lets every remaining rule be tested without a fake clock threaded through
+a Telegram double.
 
 Two consequences a reader should carry: the module is **clock-free but not side-effect-free**
-(`grouped_for_delivery` is pure; `record_sent`, `forget_expired` and `enqueue` mutate the
+(`grouped_for_delivery` is pure; `enqueue` and `refused` mutate the
 caller's container), and encapsulation cannot enforce the split, so the guard is a test that
 sweeps for the *write into the container* rather than for the type of what is written.
 

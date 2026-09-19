@@ -763,6 +763,14 @@ uv run --locked remote-agents install-agent-hooks --provider codex
 uv run --locked remote-agents install-agent-hooks --provider opencode
 ```
 
+> **Upgrading to 0.45.0 or later: re-run the `claude` line.** Claude gained a
+> `PermissionRequest` hook on 2026-09-19 (DEC-098), and that is the hook that makes an approval
+> notification name the command or the question instead of the constant
+> `Claude needs your permission`. A host that does not re-run `install-agent-hooks` keeps
+> reporting through `Notification` alone: nothing breaks, and nothing improves either — the
+> asks stay wordless, which looks exactly like the feature not working. Re-running is
+> idempotent and leaves one entry per event.
+
 `--remove` takes any of them back out. For opencode that deletes the generated plugin file as
 well as its entry, and it deletes only a file carrying this project's own generated-file marker:
 anything else standing at that path is left alone. For claude the same install also wraps the
@@ -968,11 +976,12 @@ replacement, so it keeps working across the swap.
 
 Sent-then-deleted rather than edited in place, deliberately: an edit is silent and stays where
 it was, so an updated message you are never told about is most of the value gone. The cost is
-that every update notifies — which is why the per-`(session, kind)` window still governs
-**every** send, a replacement included. Without that an agent finishing a turn every five
-minutes would buzz ninety-six times overnight while leaving one tidy message behind. Anything
-the window suppresses is dropped rather than queued: it is a report already made inside its
-own window, and holding it would have every pass report an outage that is not happening.
+that every update notifies, and what keeps that from buzzing ninety-six times overnight is
+**what was said**, not a clock: a kind the standing message already carries is amended into it
+**silently**, and only something the owner has not been alerted to arrives. A `needs_answer`
+is the exception that proves the rule — a question whose text matches none of the standing
+ones is a *different* question, and the owner cannot answer what they were never shown, so it
+arrives (DEC-048).
 
 The message is replaced from scratch — starting over from the next report rather than
 continuing the story — only once the old one has left the chat, which is what pressing
@@ -1111,23 +1120,30 @@ under the upgrade note above.
 shipped sample sets it to `30` (bounded 5–600), which is how often the service reads the title of
 each running Codex pane and drains the hook spool.
 
-Separately, and not configurable, each kind of a session's news is rate-limited on its own — a
-`Stop` hook fires per turn rather than per task, so an agent working through a long instruction
-reports "finished" repeatedly and each report is true. The first message of a kind is always
-prompt; the window then **doubles for each consecutive repeat of that same kind**, from 2 minutes
-to 4, 8, 16, 32, and no further than one message every 64 minutes. Only the second and later
-copies are made rarer, and the cap keeps the signal alive rather than muting it: an agent that has
-been waiting all night is still waiting, and a window that kept doubling would amount to never
-mentioning it again. The window decides only whether a message is sent at all, never which lines
-a sent message carries: if anything in a session's group is due, the whole group goes out,
-because a second line in a message the owner is already receiving costs nothing.
+Separately, and not configurable, repetition is suppressed by **what was said** rather than by
+a clock — a `Stop` hook fires per turn rather than per task, so an agent working through a long
+instruction reports "finished" repeatedly and each report is true. A kind the session's standing
+message already carries has been put in front of the owner, so a fresher copy of it is amended
+into that message **silently**; a kind the message does not carry has been told to nobody and
+earns a message that arrives. The first alert of a kind is therefore as prompt as it ever was,
+and what is taken away is the second and later copies of it.
 
-The limit is keyed by session *and* kind, and so is the backoff. An agent that finishes and then
-needs an answer has said two different things and both arrive. A **different** kind for the same
-session also resets that session's repeat counts to zero, because a different kind means something
-changed and the count is a claim that nothing has: an agent that finishes, is asked something, and
-finishes again is not repeating itself, and its second "finished" arrives at the base window rather
-than an hour later. The other kinds keep their timestamps, so a genuine burst is still collapsed.
+`needs_answer` is the exception, and it is the reason a timed window could go. A second
+question is not the first one asked again — it is the agent blocked on something else — so a
+`needs_answer` whose **text** matches none of the standing ones counts as unheard and arrives.
+Since 2026-09-19 that text is the real command or question (see the approval section above),
+which is what makes the comparison meaningful: before it, every Codex ask carried identical
+words, so a genuinely different second question was indistinguishable from the first and the
+owner was never shown it.
+
+An identical re-render is not sent at all — it would say exactly what the message already says.
+
+**There is no timed suppression window, and there has not been since 2026-08-23 (DEC-048).**
+An earlier revision of this page described one that doubled from 2 minutes to 64. It was
+removed because it suppressed *content*, not merely interruptions: a gated observation was
+neither sent nor held, and the drain had already deleted the record, so a genuinely new
+question arriving behind a repeating one was destroyed rather than delayed. Nothing at any
+later pass told the owner that the question they were reading had been superseded.
 A repeat is counted only when a message was actually sent; a suppressed one does not advance the
 backoff.
 

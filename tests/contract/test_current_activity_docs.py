@@ -284,3 +284,66 @@ def test_the_retired_config_key_is_described_as_retired_rather_than_required() -
     assert "activity_quiet_polls = 3" not in runbook, (
         "the runbook still instructs the operator to add the retired key"
     )
+
+
+def test_no_document_still_describes_the_retired_suppression_taper() -> None:
+    """DEC-048 removed the per-(session, kind) window on 2026-08-23. The prose outlived it.
+
+    Three documents went on describing a mechanism the product does not have -- and not in a
+    historical aside, but in the present tense, as the thing that decides how often the owner's
+    phone buzzes. An operator reading the runbook would have budgeted for one message every 64
+    minutes on a repeating kind, and a contributor reading the architecture doc would have gone
+    looking for a suppression map that was deleted.
+
+    Asserted as a VOCABULARY rather than a behaviour because that is what this failure mode
+    actually is: the code was right the whole time. The phrases below are each a claim about
+    current behaviour, so any of them reappearing means some document has started describing
+    the taper again.
+
+    Deliberately NOT banning the bare word "taper": these documents are allowed -- encouraged --
+    to say that a taper used to exist and why it went. What they may not do is speak of it in
+    the present tense.
+    """
+    retired = (
+        "the taper still",
+        "per-session rate limit governs",
+        "still owns its suppression map",
+        "window then **doubles",
+        "record_sent",
+        "forget_expired",
+        "one message every 64 minutes",
+    )
+    documents = {
+        "README.md": _ROOT / "README.md",
+        "docs/operator-runbook.md": _ROOT / "docs" / "operator-runbook.md",
+        "docs/architecture.md": _ROOT / "docs" / "architecture.md",
+    }
+
+    for name, path in documents.items():
+        text = path.read_text(encoding="utf-8")
+        for phrase in retired:
+            assert phrase not in text, f"{name} still describes the retired taper: {phrase!r}"
+
+
+def test_the_runbook_says_an_ask_now_shows_its_words_and_how_to_get_them() -> None:
+    """Two halves, and the second is the one an operator has to act on.
+
+    A Claude host that does not re-run `install-agent-hooks` keeps reporting through
+    `Notification` alone and never sees the new words -- which looks exactly like the feature
+    not working. Saying what changed without saying what to run would generate the support
+    question this paragraph exists to prevent.
+    """
+    runbook = (_ROOT / "docs" / "operator-runbook.md").read_text(encoding="utf-8").lower()
+
+    # A distinctive sentence, not the three words separately. The first draft of this case
+    # asserted `"install-agent-hooks" in runbook` and `"re-run" in runbook` -- both of which
+    # were already true, eight times over, about unrelated commands. It passed on arrival and
+    # pinned nothing, which is the failure the note above the Codex case in this file already
+    # records. Verified absent before the paragraph it guards was written.
+    assert "re-run the `claude` line" in runbook, (
+        "the operator has to be told to re-run the installer, in so many words"
+    )
+    assert "claude gained a\n> `permissionrequest` hook" in runbook, "and which event is why"
+    assert "looks exactly like the feature not working" in runbook, (
+        "and what the symptom is, since a host that skips it sees wordless asks and no error"
+    )

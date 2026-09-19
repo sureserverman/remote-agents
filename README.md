@@ -365,9 +365,10 @@ report**: the first thing it says sends that message, and each later report send
 carrying the story so far and deletes the one it supersedes, up to what a message can hold and
 saying anything repeated only once. A session that reports all night leaves one message in the
 chat rather than ninety-six, and it is the newest thing there rather than buried where the
-first report landed. Because a replacement notifies like any other message, the per-session
-rate limit governs every send, so the taper still decides how often the phone is allowed to
-buzz. The message stands beside the live view with one button that opens the session it names,
+first report landed. Because a replacement notifies like any other message, a
+replacement the owner has already been alerted about is amended in silently rather than
+arriving again — and a **different** question is news and does arrive, because the owner
+cannot answer what they were never shown (DEC-048). The message stands beside the live view with one button that opens the session it names,
 and it starts over from the next report only once it has left the chat — pressing `Open
 session` deletes it. A
 managed Claude session reports this itself through a global Claude Code hook, installed once with
