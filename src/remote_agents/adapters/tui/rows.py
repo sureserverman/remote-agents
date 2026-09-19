@@ -657,8 +657,12 @@ def feed_row_content(
     not, which is DEC-067's conflation argument reappearing at a presentation slot rather than
     at a port field.
 
-    A row may carry either, never both: an agent that said something is quoted, and the class
-    is what there is to say when it did not.
+    **A row carries both, since DEC-098.** It carried either and never both until 2026-09-19,
+    on the reading that the class was what there was to say when the agent had said nothing --
+    sound while the only detail an ask carried was Claude's constant "Claude needs your
+    permission". Now that the detail is the actual command, the two say genuinely different
+    things: the class is what KIND of answer is wanted, the detail is what it is about. The
+    class leads, because it is the shorter and the one that survives a narrow pane.
     """
     history = datetime.now(UTC) - observed_at > FEED_HISTORY_AGE
     kind_style = MUTED if history else KIND_STYLE[kind]
@@ -666,10 +670,10 @@ def feed_row_content(
     body = Content.assemble((identity, body_style))
     if sequence is not None:
         body = body + Content.assemble((f" #{sequence}", MUTED))
+    if ask_words:
+        body = body + Content.assemble((f" ({ask_words})", body_style or DIM))
     if detail:
         body = body + Content.assemble((" — ", MUTED), (detail, MUTED))
-    elif ask_words:
-        body = body + Content.assemble((f" ({ask_words})", body_style or DIM))
     cells: list[tuple[Content, int | None]] = [
         (text(KIND_GLYPH[kind], kind_style), 1),
         (text(kind_word, kind_style), kind_width),

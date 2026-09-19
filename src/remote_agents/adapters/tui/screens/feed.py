@@ -247,7 +247,16 @@ def feed_rows(
         # entirely, so neither a token nobody has measured nor a guess the watcher never read
         # can reach the owner's pane.
         detail = _elide(activity.detail) if activity.detail else None
-        ask_words = _ask_words(activity) if not activity.detail else None
+        # **Both, since DEC-098.** This read `if not activity.detail`, on the reading that a
+        # needs_answer carrying words had no use for a class as well -- true while the only
+        # detail an ask ever carried was Claude's constant "Claude needs your permission",
+        # which says nothing a class does not. DEC-098 admits the real command, so that
+        # condition would now delete the class from essentially every ask: the one row shape
+        # the owner reads at a glance would lose the word that says what KIND of answer is
+        # wanted, exactly as the detail became worth reading. The two slots are drawn
+        # differently and `feed_row_content` fits them against the measured width, so the
+        # narrow case elides rather than choosing for the reader.
+        ask_words = _ask_words(activity)
         key = feed_key(activity)
         occurrence = seen.get(key, 0)
         seen[key] = occurrence + 1

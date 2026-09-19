@@ -1790,3 +1790,86 @@ async def test_a_refusal_that_says_when_to_come_back_is_recorded_on_the_shared_g
 
     assert flood.held(), "the refusal named a wait and nothing recorded it"
     assert flood.remaining() > 600
+
+
+# --- A needs_answer that says what it asks (DEC-098) -----------------------------------------
+
+
+def test_an_ask_renders_its_class_as_the_headline_and_its_detail_in_the_quote() -> None:
+    """The two fields do different jobs in the same message, and both are on screen.
+
+    DEC-043 is what makes this the renderer's test rather than the parser's: the surface turns
+    `ask` into its own sentence, and the agent's own words ride underneath untranslated.
+    """
+    message = render_activity(
+        _group(
+            _activity(
+                ActivityKind.NEEDS_ANSWER,
+                ask="Bash",
+                detail="Allow writing the report? — $ whoami > /tmp/probe.txt",
+            )
+        ),
+        display=DISPLAY,
+        open_session=OPEN,
+    )
+
+    assert "shell command" in message.text, "the class stays the headline"
+    assert (
+        "<blockquote expandable>Allow writing the report? "
+        "— $ whoami &gt; /tmp/probe.txt</blockquote>" in message.text
+    ), "the words the agent chose ride in the expandable quote, escaped"
+
+
+def test_an_ask_detail_carrying_markup_is_escaped_before_it_is_quoted() -> None:
+    """A command is the first detail source that routinely carries `<`, `>` and `&`.
+
+    `last_assistant_message` is prose and rarely does. A shell one-liner with a redirect and a
+    background `&` is ordinary, and unescaped it would either break the parse -- which under
+    DEC-049 costs the whole delivery pass, not one message -- or inject markup into a message
+    the owner is about to act on.
+    """
+    message = render_activity(
+        _group(
+            _activity(
+                ActivityKind.NEEDS_ANSWER,
+                ask="Bash",
+                detail="$ cat <report> & echo 'done' > out.txt",
+            )
+        ),
+        display=DISPLAY,
+        open_session=OPEN,
+    )
+
+    assert "&lt;report&gt;" in message.text
+    assert "&amp; echo" in message.text
+    assert "<report>" not in message.text
+
+
+def test_a_second_ask_with_a_different_command_is_unheard_and_arrives() -> None:
+    """DEC-048's whole point, and what admitting real commands makes finally true.
+
+    Under the old wording every Codex ask carried the same words -- "waiting for an answer
+    about a shell command" -- so a genuinely different second question was indistinguishable
+    from the first being repeated, and the owner was never shown it. The silence was not
+    restraint; it was the bug.
+    """
+    from remote_agents.application.notification_policy import unheard
+
+    first = _activity(ActivityKind.NEEDS_ANSWER, ask="Bash", detail="$ rm -rf build/")
+    second = _activity(ActivityKind.NEEDS_ANSWER, ask="Bash", detail="$ git push --force")
+
+    assert unheard((first,), (second,)) == (ActivityKind.NEEDS_ANSWER,)
+
+
+def test_the_same_ask_and_detail_repeated_is_a_silent_amendment() -> None:
+    """The other half of the same rule, asserted so the pair cannot drift apart.
+
+    A burst of identical asks is the agent repeating itself, not a new question, and it is
+    amended into the standing message rather than jumping the chat again.
+    """
+    from remote_agents.application.notification_policy import unheard
+
+    asked = _activity(ActivityKind.NEEDS_ANSWER, ask="Bash", detail="$ rm -rf build/")
+    again = _activity(ActivityKind.NEEDS_ANSWER, ask="Bash", detail="$ rm -rf build/")
+
+    assert unheard((asked,), (again,)) == ()
