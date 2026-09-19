@@ -25,6 +25,7 @@ import os
 import shutil
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -32,7 +33,7 @@ import pytest
 from remote_agents.adapters.agents.registry import install_agent_hooks
 from remote_agents.application.activity import drain_activity
 from remote_agents.domain.models import SessionId
-from remote_agents.ports.agent_activity import ActivityKind
+from remote_agents.ports.agent_activity import ActivityKind, AgentActivity
 from remote_agents.ports.session_identity import SESSION_ID_VARIABLE
 
 _TURN = "Reply with exactly the word: spooled"
@@ -167,3 +168,224 @@ def test_the_hook_payload_field_names_match_the_installed_agent() -> None:
         "the installed agent does not spell these discriminating fields the way "
         f"activity_spool._DISCRIMINATING_FIELDS expects: {wrong}"
     )
+
+
+# --- A real approval, from a real pane, carrying its command (DEC-098) ------------------------
+#
+# The gate criterion of the 2026-09-19 plan, and the only place the ask-detail path meets a real
+# agent. Everything else about it is fixtures shaped from captures.
+#
+# It has to drive a TUI in a tmux pane rather than `claude -p` / `codex exec`, because an
+# approval is an interactive act: `codex exec` answers "This session does not permit approval
+# escalation" and auto-rejects, so only `Stop` ever fires
+# (`docs/acceptance-2026-08-29-codex-activity-detail.md`).
+#
+# Boundaries, the same ones both drills held: a disposable agent home, the owner's credential
+# reached only through a symlink that is never opened here, hook and directory trust granted
+# inside the disposable home through the TUI's own prompts (never `--dangerously-bypass-hook-
+# trust`), a `remote-agents-test-*` tmux socket that is destroyed, and a spool made by the test.
+
+_DRILL_SOCKET = "remote-agents-test-ask-detail"
+_PANE_SETTLE_SECONDS = 2.0
+_PANE_TIMEOUT_SECONDS = 120.0
+
+
+def _tmux(*arguments: str, socket: str = _DRILL_SOCKET) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        ["tmux", "-L", socket, *arguments],
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False,
+    )
+
+
+def _pane_text(socket: str = _DRILL_SOCKET) -> str:
+    return _tmux("capture-pane", "-p", "-t", "0", socket=socket).stdout
+
+
+def _wait_for_any(*expected: str, socket: str = _DRILL_SOCKET) -> str | None:
+    """Poll until the pane shows one of several things, and say which.
+
+    Needed because these TUIs' opening sequence is not fixed: Claude raises a folder-trust
+    prompt only for a folder it has not been told about, so a drill that waits unconditionally
+    for one waits out the whole timeout on a host that has already trusted the path.
+    """
+    deadline = time.monotonic() + _PANE_TIMEOUT_SECONDS
+    while time.monotonic() < deadline:
+        text = _pane_text(socket=socket)
+        for candidate in expected:
+            if candidate in text:
+                return candidate
+        time.sleep(1.0)
+    return None
+
+
+def _wait_for_pane(expected: str, *, socket: str = _DRILL_SOCKET) -> bool:
+    """Poll the pane until it shows `expected`. Polled, never slept-then-asserted.
+
+    A fixed sleep is what makes a drill like this flake: model latency is not a constant, and a
+    sleep long enough to be safe makes the suite unusable.
+    """
+    deadline = time.monotonic() + _PANE_TIMEOUT_SECONDS
+    while time.monotonic() < deadline:
+        if expected in _pane_text(socket=socket):
+            return True
+        time.sleep(1.0)
+    return False
+
+
+def _type(text: str, *, socket: str = _DRILL_SOCKET) -> None:
+    """Send a line, then Enter as its own key.
+
+    Batched into one `send-keys` these drop during a redraw -- the failure recorded in the vault
+    as *Batched tmux send-keys Drop During Redraw*.
+    """
+    _tmux("send-keys", "-t", "0", "-l", text, socket=socket)
+    time.sleep(_PANE_SETTLE_SECONDS)
+    _tmux("send-keys", "-t", "0", "Enter", socket=socket)
+
+
+def _spooled_ask(spool: Path) -> AgentActivity | None:
+    deadline = time.monotonic() + 30.0
+    while time.monotonic() < deadline:
+        if spool.is_dir() and any(spool.iterdir()):
+            for activity in drain_activity(spool):
+                if activity.kind is ActivityKind.NEEDS_ANSWER:
+                    return activity
+        time.sleep(1.0)
+    return None
+
+
+def _live_pane_requirements(executable: str) -> None:
+    if os.environ.get("REMOTE_AGENTS_LIVE_ACCEPTANCE") != "1":
+        pytest.skip("BLOCKED: REMOTE_AGENTS_LIVE_ACCEPTANCE is not enabled")
+    for needed in (executable, "tmux"):
+        if shutil.which(needed) is None:
+            pytest.skip(f"BLOCKED: executable_missing: {needed}")
+
+
+@pytest.mark.live_profile
+def test_a_real_codex_approval_spools_the_command_it_is_asking_about(tmp_path: Path) -> None:
+    """One escalation in a real 0.154 pane, one record, and the command is in it."""
+    _live_pane_requirements("codex")
+    owner_auth = Path(os.environ.get("CODEX_HOME", Path.home() / ".codex")) / "auth.json"
+    if not owner_auth.is_file():
+        pytest.skip("BLOCKED: Codex is not logged in with ChatGPT")
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    codex_home = workspace / ".codex"
+    codex_home.mkdir(mode=0o700)
+    spool = tmp_path / "activity"
+    # Never opened, copied or serialized here -- only linked, so the ordinary ChatGPT
+    # entitlement is used instead of separate API billing.
+    os.symlink(owner_auth, codex_home / "auth.json")
+    (codex_home / "config.toml").write_text(
+        'approval_policy = "on-request"\nsandbox_mode = "read-only"\n', encoding="utf-8"
+    )
+    install_agent_hooks(
+        codex_home / "hooks.json",
+        executable=Path(sys.executable),
+        activity_directory=spool,
+        provider="codex",
+    )
+    subprocess.run(["git", "init", "-q"], cwd=workspace, check=False, timeout=30)
+
+    _tmux("kill-server")
+    try:
+        _tmux(
+            "new-session", "-d", "-x", "200", "-y", "50", "-c", str(workspace),
+            "-e", f"CODEX_HOME={codex_home}",
+            "-e", f"{SESSION_ID_VARIABLE}={SessionId.new()}",
+            "codex",
+        )
+        if not _wait_for_pane("Do you trust"):
+            pytest.skip(f"BLOCKED: codex did not reach its trust prompt: {_pane_text()[-400:]}")
+        _tmux("send-keys", "-t", "0", "Enter")
+        # Hook trust, granted inside this disposable home only. Codex persists it per home, so
+        # the owner's trust state is untouched.
+        if not _wait_for_pane("Hooks need review"):
+            pytest.skip(f"BLOCKED: codex did not offer hook trust: {_pane_text()[-400:]}")
+        _tmux("send-keys", "-t", "0", "Down")
+        time.sleep(1.0)
+        _tmux("send-keys", "-t", "0", "Enter")
+        if not _wait_for_pane("Ask Codex"):
+            pytest.skip(f"BLOCKED: codex never became ready: {_pane_text()[-400:]}")
+
+        probe = tmp_path / "codex-probe.txt"
+        _type(f"Run this exact shell command and nothing else: whoami > {probe}")
+        if not _wait_for_pane("Would you like to run"):
+            pytest.skip(f"BLOCKED: codex raised no approval: {_pane_text()[-600:]}")
+
+        activity = _spooled_ask(spool)
+        assert activity is not None, "a real escalation spooled no needs_answer"
+        assert activity.detail is not None, "the ask arrived wordless"
+        assert "whoami" in activity.detail, (
+            f"the ask does not name the command it is about: {activity.detail!r}"
+        )
+        assert activity.ask == "Bash"
+    finally:
+        _tmux("kill-server")
+
+
+@pytest.mark.live_profile
+def test_a_real_claude_approval_spools_the_command_it_is_asking_about(tmp_path: Path) -> None:
+    """The same proof for Claude, through the `PermissionRequest` event DEC-098 installs.
+
+    Scoped to a disposable PROJECT rather than a disposable `CLAUDE_CONFIG_DIR`: a fresh config
+    directory demands an interactive OAuth login, which a drill has no business performing. The
+    settings file this installs is inside the temporary workspace and goes with it.
+    """
+    _live_pane_requirements("claude")
+
+    workspace = tmp_path / "workspace"
+    (workspace / ".claude").mkdir(parents=True)
+    spool = tmp_path / "activity"
+    install_agent_hooks(
+        workspace / ".claude" / "settings.local.json",
+        executable=Path(sys.executable),
+        activity_directory=spool,
+    )
+
+    _tmux("kill-server")
+    try:
+        _tmux(
+            "new-session", "-d", "-x", "200", "-y", "50", "-c", str(workspace),
+            "-e", f"{SESSION_ID_VARIABLE}={SessionId.new()}",
+            "claude",
+        )
+        reached = _wait_for_any("Is this a project you created", "auto mode")
+        if reached is None:
+            pytest.skip(f"BLOCKED: claude never started: {_pane_text()[-400:]}")
+        if reached != "auto mode":
+            # Only raised for a folder claude has not been told about; a host that has already
+            # trusted this path goes straight to the prompt.
+            _tmux("send-keys", "-t", "0", "Down")
+            time.sleep(1.0)
+            _tmux("send-keys", "-t", "0", "Enter")
+            if not _wait_for_pane("auto mode"):
+                pytest.skip(f"BLOCKED: claude never became ready: {_pane_text()[-400:]}")
+
+        # Into the mode that asks. Cycling is the only interface for this.
+        for _ in range(5):
+            if "manual mode" in _pane_text():
+                break
+            _tmux("send-keys", "-t", "0", "BTab")
+            time.sleep(2.0)
+        else:
+            pytest.skip("BLOCKED: could not reach claude's manual mode")
+
+        _type("Run the bash command: curl -s -o /dev/null -w '%{http_code}' https://example.com")
+        if not _wait_for_pane("Do you want to proceed"):
+            pytest.skip(f"BLOCKED: claude raised no approval: {_pane_text()[-600:]}")
+
+        activity = _spooled_ask(spool)
+        assert activity is not None, "a real approval spooled no needs_answer"
+        assert activity.detail is not None, "the ask arrived wordless"
+        assert "curl" in activity.detail, (
+            f"the ask does not name the command it is about: {activity.detail!r}"
+        )
+        assert activity.ask == "Bash"
+    finally:
+        _tmux("kill-server")
