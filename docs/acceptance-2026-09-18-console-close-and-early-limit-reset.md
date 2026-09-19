@@ -168,9 +168,18 @@ in production. The live gate is what found the production half.
 
 ---
 
-## Close-out still owed by the owner
+## Close-out by the owner — done, 2026-09-19
 
 Press **F10** on the real console once with an agent displayed and once from a pane, and confirm
 both return the shell with every agent still listed by the bot. This session proved the verb and
 the forwarded key on a disposable server and proved `console close` on the live one; only the
 owner's hands prove the owner's terminal.
+
+**Confirmed by the owner on 2026-09-19: "F10 works as intended."**
+
+That closes the last claim this document could not make for itself, and it is the one that
+matters most: everything above proves `remote-agents console close` — the *verb*. The owner's
+press is the only evidence that the **key** reaches it, through the real binding, on a real
+terminal, on a tmux server carrying root bindings that predate the deploy (BL-096 — a running
+server keeps its old root bindings until the composer re-emits them, which is why this had to be
+checked after a console rebuild rather than before).
