@@ -2374,3 +2374,63 @@ async def test_a_bot_launch_stands_the_notification_pass_down_for_that_session()
         "the launch reply did not stand the pass down, so the owner will get the same "
         "question again as a message"
     )
+
+
+def test_a_codex_permission_request_carries_its_command_from_the_hook_to_the_message(
+    tmp_path,
+) -> None:
+    """The whole boundary, end to end, on a payload shaped from a real 0.154.0 capture.
+
+    The three halves of DEC-098 are each tested in isolation elsewhere; this is the one case
+    that runs the hook entry point, the drain and the renderer against each other. That
+    matters because the spool's two ends are different processes with deliberately duplicated
+    guards -- `_PLAIN_TOKEN` at the writer, `_ASK_TOKEN` at the reader -- and the way this
+    project has broken that seam before is for both sides' own tests to pass while the pair
+    disagrees (`_DISCRIMINATING_FIELDS`, `error_type`/`end_reason`).
+    """
+    import io
+    import json
+
+    from remote_agents.adapters.agents.activity_spool import spool_agent_event
+    from remote_agents.adapters.telegram.notifications import render_activity
+    from remote_agents.application.notification_policy import SessionGroup
+    from remote_agents.application.activity import drain_activity
+    from remote_agents.ports.agent_activity import ActivityKind
+    from remote_agents.ports.session_identity import SESSION_ID_VARIABLE
+
+    session_id = "0191f2c2-0000-7000-8000-00000000abcd"
+    spool = tmp_path / "activity"
+    spool.mkdir(mode=0o700)
+    payload = {
+        "session_id": "01a0b94c-92b7-7d13-a0ce-876ef3fa386d",
+        "cwd": "/home/user/workspace",
+        "hook_event_name": "PermissionRequest",
+        "tool_name": "Bash",
+        "tool_input": {
+            "command": "whoami > /tmp/ra-drill-probe.txt",
+            "description": "Do you want to allow the exact command to write the probe file?",
+        },
+    }
+
+    exit_status = spool_agent_event(
+        io.BytesIO(json.dumps(payload).encode("utf-8")),
+        activity_directory=spool,
+        environment={SESSION_ID_VARIABLE: session_id},
+        provider="codex",
+    )
+    assert exit_status == 0, "a hook never fails the session it runs inside"
+
+    (activity,) = drain_activity(spool)
+    assert activity.kind is ActivityKind.NEEDS_ANSWER
+    assert activity.ask == "Bash"
+
+    message = render_activity(
+        SessionGroup(activity.session_id, (activity,)),
+        display="atlas · codex",
+        open_session="c1_open_session_token",
+    )
+
+    assert "shell command" in message.text, "the class is still the headline"
+    assert "whoami &gt; /tmp/ra-drill-probe.txt" in message.text, (
+        "and the owner can finally tell this ask from any other one"
+    )
