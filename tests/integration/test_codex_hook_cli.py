@@ -40,7 +40,11 @@ def test_codex_hook_cli_spools_only_managed_sessions(tmp_path: Path) -> None:
     completed = _run(command, environment)
     assert completed.returncode == 0 and completed.stdout == b""
     (activity,) = drain_activity(spool)
-    assert activity.kind is ActivityKind.NEEDS_ANSWER and activity.detail is None
+    # `detail is None` until 2026-09-19. DEC-098 admits `tool_input`'s measured keys, so the
+    # command this fixture sends now arrives as the ask's words -- which is the point of the
+    # reversal and not a leak: the owner is the only recipient of their own commands. What this
+    # case is actually about is the session guard below, and that is unchanged.
+    assert activity.kind is ActivityKind.NEEDS_ANSWER and activity.detail == "$ secret"
 
     unmanaged = {key: value for key, value in environment.items() if key != SESSION_ID_VARIABLE}
     assert _run(command, unmanaged).returncode == 0

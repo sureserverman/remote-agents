@@ -1,9 +1,9 @@
 {
-  "_provenance": "Field vocabulary captured in docs/acceptance-2026-08-29-codex-activity-detail.md against codex-cli 0.151.0 (DEC-067); values are synthetic per GDEC-SEC-001, chosen so any leak is recognisable in an assertion, and the payload is deliberately over-filled with the fields the measurement showed are dangerous.",
+  "_provenance": "Field vocabulary captured in docs/acceptance-2026-08-29-codex-activity-detail.md against codex-cli 0.151.0 (DEC-067) and re-measured on 0.154.0 in docs/acceptance-2026-09-19-ask-payloads.md; values are synthetic per GDEC-SEC-001, chosen so any leak is recognisable in an assertion -- and since DEC-098, chosen so cwd is NOT a substring of the admitted command, or no assertion could tell a leaked field from a path the agent legitimately named in its own sentence. The payload stays deliberately over-filled. Since DEC-098 the two tool_input keys are ADMITTED by decision rather than dangerous, and transcript_path and cwd are what this fixture now proves are still refused.",
   "session_id": "provider-session-not-ours",
   "turn_id": "turn-0",
   "transcript_path": "/home/owner/.codex/sessions/rollout-secret.jsonl",
-  "cwd": "/home/owner/secret-project",
+  "cwd": "/home/owner/secret-working-directory",
   "hook_event_name": "PermissionRequest",
   "model": "gpt-5.6-sol",
   "permission_mode": "default",

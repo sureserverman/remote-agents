@@ -84,7 +84,16 @@ def test_a_codex_permission_request_names_the_ask_and_still_carries_no_agent_wor
     assert observed.reason is None, (
         "nothing renders a reason for this event; storing one is retention"
     )
-    assert observed.detail is None, "a permission request still carries no agent words"
+    # **Reversed on 2026-09-19 by DEC-098**, on the owner's ruling that they are the sole
+    # operator and the sole recipient. The two keys admitted are exactly `tool_input.command`
+    # and `tool_input.description`; what this fixture is over-filled with otherwise is still
+    # refused, and the next two assertions are what prove the widening stopped where it said.
+    assert observed.detail == (
+        "Do you want to allow deleting /home/owner/secret-project? "
+        "— $ rm -rf /home/owner/secret-project"
+    ), "the agent's own reason, and the command it is about"
+    assert "rollout-secret.jsonl" not in (observed.detail or ""), "transcript_path stays refused"
+    assert "/home/owner/secret-project\"" not in repr(observed.reason), "and so does cwd"
     assert observed.ask == "Bash", "the tool class names what is being asked about"
 
 
@@ -112,12 +121,21 @@ def test_no_codex_payload_field_naming_a_path_command_or_prompt_reaches_disk() -
 
     Written against the *whole* document that reaches the spool file: a future field added
     upstream fails here without anyone having to predict its name.
+
+    **Narrowed on 2026-09-19 by DEC-098, and only by the two keys it names.** The command and
+    the agent's reason left this list because they are now admitted by decision. Everything
+    that remains is what the widening had to *not* touch -- the filesystem layout and the
+    provider's own session id -- so this test still fails on a future field that carries any
+    of them, which is the property it was written for.
+
+    The fixture's `cwd` was changed at the same time so that it is not a substring of the
+    command the agent names: while it was, a leaked `cwd` and a path the agent legitimately
+    wrote in its own sentence produced the identical string, and this assertion could not tell
+    them apart in either direction.
     """
     forbidden = (
-        "/home/owner/secret-project",
+        "/home/owner/secret-working-directory",
         "/home/owner/.codex/sessions/rollout-secret.jsonl",
-        "rm -rf",
-        "Do you want to allow deleting",
         "provider-session-not-ours",
     )
     for name in ("stop.json", "permission_request.json"):
@@ -143,8 +161,13 @@ def test_the_codex_field_allow_lists_are_exactly_what_the_measurement_licensed()
 
     `docs/acceptance-2026-08-29-codex-activity-detail.md`'s licensing section is what these
     two dicts are: `Stop` → `last_assistant_message`, `PermissionRequest` → `tool_name` at
-    most, and **never** `tool_input` (either key), `transcript_path`, `cwd` or `prompt`.
+    most, and never `transcript_path`, `cwd` or `prompt`.
     Changing either dict should require changing this test, which is the point of it.
+
+    **`tool_input` is no longer on that never-list (DEC-098), and it is not on these dicts
+    either** -- its two keys are read by `_ask_detail`, which descends one level and is keyed
+    on nothing these two allow-lists control. That is why both assertions below are unchanged
+    by the widening: the thing they pin did not move.
     """
     assert spool._CODEX_DETAIL_FIELDS == {"Stop": ("last_assistant_message",)}
     assert spool._CODEX_ASK_FIELDS == {"PermissionRequest": ("tool_name",)}
