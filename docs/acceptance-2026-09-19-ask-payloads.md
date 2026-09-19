@@ -135,6 +135,17 @@ plan's Task 2.1 in favour of removal, on measurement rather than on assumption.
 - **`agent_needs_input`** — not provoked; see (b). Unchanged by this work.
 - **Codex `apply_patch` with a `description`** — never observed carrying one; whether it ever
   does is unverified, so the parser must tolerate its absence rather than assume it.
+- **Whether the hook is LOADED in a given session, which is a different question from whether
+  it fires.** Every payload here came from a disposable home where hook trust had just been
+  granted through the TUI's own prompt. Measured 2026-09-19 after release: a *managed* Codex
+  session launched into `~/dev/infra/tui-tester` raised a real `apply_patch` approval and
+  produced **no hook event at all** — not `PermissionRequest`, not even `Stop` across five
+  completed turns. Its only record was the pane-title watcher's inferred, wordless
+  `needs_answer`. The owner's store shows the hook working normally elsewhere (545 `Bash` and
+  76 `apply_patch` reported asks), so this is not a parser or payload fact — it is the vault
+  gotcha *Codex Hooks Load at Session Start and Are Skipped Until Trusted*. **Nothing in this
+  document establishes that a managed session's hooks are loaded**, and the "3 of 3" above
+  should be read as "3 of 3 *once loaded*".
 - **The value space of `tool_name`** — four Claude tools and two Codex tools were seen. The
   `_plain_token` reader that guards `ask` is unchanged and still refuses anything with a space,
   a slash or a quote.
