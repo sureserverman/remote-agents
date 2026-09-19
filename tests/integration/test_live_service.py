@@ -2042,7 +2042,9 @@ async def test_one_session_saying_several_things_in_a_pass_gets_one_message(tmp_
     session_id = str(record.session_id)
     _spool(spool, session_id, stamp="000001")
     _spool(spool, session_id, event="StopFailure", reason="rate_limit", stamp="000002")
-    _spool(spool, session_id, event="Notification", reason="permission_prompt", stamp="000003")
+    # `PermissionRequest` rather than a `permission_prompt` Notification: the latter stopped
+    # being mapped on 2026-09-19 (DEC-098) because it is the wordless twin of this event.
+    _spool(spool, session_id, event="PermissionRequest", stamp="000003")
 
     await _watch_activity_once(
         ServiceComposition(
@@ -2072,13 +2074,9 @@ async def test_two_sessions_in_one_pass_get_one_message_each(tmp_path) -> None:
     _spool(spool, str(first.session_id), stamp="000001")
     _spool(spool, str(second.session_id), stamp="000002")
     _spool(spool, str(first.session_id), event="StopFailure", reason="rate_limit", stamp="000003")
-    _spool(
-        spool,
-        str(second.session_id),
-        event="Notification",
-        reason="permission_prompt",
-        stamp="000004",
-    )
+    # `PermissionRequest`, not a `permission_prompt` Notification: that type stopped being
+    # mapped on 2026-09-19 (DEC-098). What this case needs is a second KIND for this session.
+    _spool(spool, str(second.session_id), event="PermissionRequest", stamp="000004")
 
     await _watch_activity_once(
         ServiceComposition(

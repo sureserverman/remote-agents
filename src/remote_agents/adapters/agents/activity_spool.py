@@ -283,6 +283,20 @@ def _observed_event(
             observed_at=moment.astimezone(UTC),
             ask=_first(document, _CODEX_ASK_FIELDS.get(event, ()), _plain_token),
         )
+    # `PermissionRequest` is Claude's since 2026-09-19 (DEC-098) and is read exactly as Codex's
+    # is: the tool class into `ask`, through the narrow token reader, and the ask's own words
+    # into `detail` through `_ask_detail`. `_DETAIL_FIELDS` is not consulted for it -- a
+    # `PermissionRequest` carries no `message` and no `last_assistant_message`, and reading a
+    # group of fields that cannot be present would only obscure which one was expected.
+    if event == "PermissionRequest":
+        return ObservedAgentEvent(
+            session_id=session_id,
+            event=event,
+            reason=None,
+            detail=_ask_detail(document),
+            observed_at=moment.astimezone(UTC),
+            ask=_plain_token(document.get("tool_name")),
+        )
     return ObservedAgentEvent(
         session_id=session_id,
         event=event,
@@ -341,6 +355,28 @@ def _observed_opencode_event(
 _ASK_REASON_FIELD = "description"
 _ASK_COMMAND_FIELD = "command"
 
+#: What a Claude ask carries when it is not a command: a path, or a question.
+#:
+#: Measured the same day. `Edit` carries `file_path` beside `old_string`/`new_string`, and those
+#: two are file CONTENT -- deliberately not read, because the owner is being asked *which file*,
+#: not shown a diff on a phone. `AskUserQuestion` nests its text one level deeper again, in
+#: `questions[0]["question"]`, and only the question is taken: the options are a menu, and a
+#: menu is what opening the session is for.
+_ASK_PATH_FIELD = "file_path"
+_ASK_QUESTIONS_FIELD = "questions"
+_ASK_QUESTION_FIELD = "question"
+
+
+def _first_question(tool_input: Mapping[str, object]) -> str | None:
+    """The text of the first question an `AskUserQuestion` payload carries, if it carries one."""
+    questions = tool_input.get(_ASK_QUESTIONS_FIELD)
+    if not isinstance(questions, list) or not questions:
+        return None
+    first = questions[0]
+    if not isinstance(first, Mapping):
+        return None
+    return bounded_detail_line(first.get(_ASK_QUESTION_FIELD))
+
 
 def _ask_detail(document: Mapping[str, object]) -> str | None:
     """Compose the agent's reason and the command it is about into one bounded line.
@@ -363,7 +399,16 @@ def _ask_detail(document: Mapping[str, object]) -> str | None:
         return bounded_detail_line(f"{reason} — $ {command}")
     if command is not None:
         return bounded_detail_line(f"$ {command}")
-    return reason
+    if reason is not None:
+        return reason
+    # Ordered by how much the half above says, not by provider. A tool carrying a command is
+    # answered by the command; one carrying only a path is answered by the path; a question is
+    # answered by itself. Nothing here branches on `tool_name`, so a tool that starts carrying
+    # a `description` gains one without this function learning its name.
+    path = bounded_detail_line(tool_input.get(_ASK_PATH_FIELD))
+    if path is not None:
+        return path
+    return _first_question(tool_input)
 
 
 def _first(

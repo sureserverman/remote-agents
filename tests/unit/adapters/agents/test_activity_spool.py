@@ -462,3 +462,120 @@ def test_a_codex_permission_request_never_spools_the_layout_its_payload_carries(
     written = json.dumps(_record(directory))
     assert "/home/user/.codex" not in written
     assert "/home/user/workspace" not in written
+
+
+# --- Claude `PermissionRequest` (DEC-098, DEC-051) --------------------------------------------
+#
+# Shaped from real captures in `docs/acceptance-2026-09-19-ask-payloads.md`, taken against
+# Claude Code v2.1.278. `Bash` carries the same two keys Codex's does -- which is why one reader
+# serves both -- while `Edit` carries a path and `AskUserQuestion` carries a list.
+
+_CLAUDE_PERMISSION_PAYLOAD: dict[str, Any] = {
+    "session_id": "6b1c1f10-6d2f-4a3f-9a4e-0c2b8f4f1a22",
+    "transcript_path": "/home/user/.claude/projects/infra/6b1c1f10.jsonl",
+    "cwd": "/home/user/workspace",
+    "prompt_id": "40cd6023-f3c1-4390-ae1b-316780d135a5",
+    "permission_mode": "default",
+    "hook_event_name": "PermissionRequest",
+    "tool_name": "Bash",
+    "tool_input": {},
+}
+
+
+def _claude_permission(tool_name: str = "Bash", **tool_input: Any) -> dict[str, Any]:
+    payload = {**_CLAUDE_PERMISSION_PAYLOAD, "tool_name": tool_name}
+    payload["tool_input"] = dict(tool_input)
+    return payload
+
+
+def test_a_claude_bash_permission_request_says_what_it_is_asking(tmp_path: Path) -> None:
+    """The same two keys Codex's `Bash` carries, read by the same reader.
+
+    Claude's `needs_answer` was no better off than Codex's before this: the only detail it ever
+    carried was the constant `Claude needs your permission`, 86 times since 2026-09-01.
+    """
+    directory = _spool(tmp_path)
+
+    _run(_stream(_claude_permission(
+        command='curl -s -o /dev/null -w "%{http_code}" https://example.com',
+        description="Check HTTP status code for example.com",
+    )), directory)
+
+    record = _record(directory)
+    assert record["detail"] == (
+        "Check HTTP status code for example.com "
+        '— $ curl -s -o /dev/null -w "%{http_code}" https://example.com'
+    )
+    assert record["ask"] == "Bash"
+
+
+def test_a_claude_file_permission_request_names_the_file(tmp_path: Path) -> None:
+    """`Edit` carries no command and no description -- it carries the path it wants to change.
+
+    Its `old_string` and `new_string` carry file CONTENT and are deliberately not read: the
+    owner is being asked which file, not shown a diff on their phone.
+    """
+    directory = _spool(tmp_path)
+
+    _run(_stream(_claude_permission(
+        "Edit",
+        file_path="/home/user/workspace/README.md",
+        old_string="a secret sentence from the file",
+        new_string="another secret sentence",
+        replace_all=False,
+    )), directory)
+
+    record = _record(directory)
+    assert record["detail"] == "/home/user/workspace/README.md"
+    assert record["ask"] == "Edit"
+    written = json.dumps(record)
+    assert "secret sentence" not in written, "file content is not what the ask is about"
+
+
+def test_a_claude_question_permission_request_carries_the_question(tmp_path: Path) -> None:
+    """`AskUserQuestion` nests its text one level deeper, inside a list.
+
+    The question is the single most answerable thing this service can put on a phone, so the
+    reader descends to it -- but only to the first question's text, never the options.
+    """
+    directory = _spool(tmp_path)
+
+    _run(_stream(_claude_permission(
+        "AskUserQuestion",
+        questions=[{
+            "question": "Do you prefer tabs or spaces for indentation?",
+            "header": "Indentation",
+            "options": [{"label": "Spaces", "description": "…"}],
+            "multiSelect": False,
+        }],
+    )), directory)
+
+    record = _record(directory)
+    assert record["detail"] == "Do you prefer tabs or spaces for indentation?"
+    assert record["ask"] == "AskUserQuestion"
+
+
+def test_a_claude_permission_request_never_spools_the_layout_it_carries(tmp_path: Path) -> None:
+    """DEC-098 admits the ask's words and nothing around them, on this provider too."""
+    directory = _spool(tmp_path)
+
+    _run(_stream(_claude_permission(command="ls", description="List files")), directory)
+
+    written = json.dumps(_record(directory))
+    assert "/home/user/.claude/projects" not in written
+    assert "/home/user/workspace" not in written
+
+
+def test_a_claude_permission_request_with_an_unreadable_tool_input_is_still_a_record(
+    tmp_path: Path,
+) -> None:
+    """Wordless, never dropped -- the rule is the provider-independent one."""
+    directory = _spool(tmp_path)
+
+    payload = {**_CLAUDE_PERMISSION_PAYLOAD, "tool_name": "Read", "tool_input": "not a mapping"}
+    _run(_stream(payload), directory)
+
+    record = _record(directory)
+    assert record["detail"] is None
+    assert record["ask"] == "Read"
+    assert record["event"] == "PermissionRequest"

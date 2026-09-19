@@ -7,7 +7,17 @@ from pathlib import Path
 
 from remote_agents.adapters.agents.hook_settings import _HookProvider
 
-INSTALLED_EVENTS = ("Stop", "StopFailure", "Notification")
+INSTALLED_EVENTS = ("Stop", "StopFailure", "Notification", "PermissionRequest")
+"""`PermissionRequest` joined 2026-09-19 (DEC-098).
+
+It is what makes a Claude ask say what it is asking: the `Notification` this service already
+installed carries the constant `Claude needs your permission` and nothing about the ask, so
+every Claude `needs_answer` read identically -- 86 of them since 2026-09-01.
+
+**Adding it means an operator must re-run `install-agent-hooks`.** A host that does not will go
+on reporting through `Notification` alone, which is the pre-DEC-098 behaviour rather than a
+broken one; the runbook says so.
+"""
 
 RETIRED_EVENTS = ("SessionEnd",)
 """Events this installer used to own and must still clean up after.

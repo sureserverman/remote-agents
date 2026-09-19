@@ -109,9 +109,24 @@ _STOP_FAILURES = {
 # weak signal safe to send, which it does not: a hedge changes how a message reads, never
 # whether it was worth sending. When the timer is right, one of these two says the same thing.
 _NOTIFICATIONS = {
-    "permission_prompt": (ActivityKind.NEEDS_ANSWER, ActivityConfidence.REPORTED),
     "agent_needs_input": (ActivityKind.NEEDS_ANSWER, ActivityConfidence.REPORTED),
 }
+"""Which `Notification` types mean something this service will say out loud.
+
+**`permission_prompt` left on 2026-09-19 (DEC-098), and it left on a measurement.** Every one
+of them shares a `prompt_id` with a `PermissionRequest` for the same ask -- 3 of 3 observed,
+unmatched set empty (`docs/acceptance-2026-09-19-ask-payloads.md`). Now that
+`PermissionRequest` is installed for Claude, keeping this mapped would send a wordless twin of
+an ask the owner is already being told about, in the same drain pass. Its whole payload was the
+constant `Claude needs your permission`, which is what the ask class says better.
+
+It is dropped here rather than deduplicated downstream because this is where the project
+decides what an event MEANS, and what this one now means is "something already reported".
+
+`agent_needs_input` stays, and stays a deduction: it has never been observed. The 2026-09-19
+drill idled 90 s trying and got `idle_prompt`, which `_kind` drops. See
+`tests/provider_contract/per_provider/test_claude_quirks.py`.
+"""
 
 _ASK_TOKEN = re.compile(r"[A-Za-z0-9_-]{1,64}")
 """The same shape `activity_spool._plain_token` writes, asserted again on the way back in.

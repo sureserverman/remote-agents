@@ -166,6 +166,7 @@ _ASK_CLASSES: dict[str, AskClass] = {
     "Bash": AskClass.SHELL,
     "bash": AskClass.SHELL,
     "apply_patch": AskClass.EDIT,
+    "Edit": AskClass.EDIT,
 }
 """The measured tokens, and only the measured tokens.
 
@@ -173,7 +174,12 @@ Exact-match, case included: `BASH` is not `Bash`. Matching an unseen casing woul
 a provider's conventions on a value space both measurements say is unverified, and the honest
 answer to an unmeasured token is `UNKNOWN` -- which the surfaces can say.
 
-Three entries, each earned by its own evidence. `apply_patch` is Codex's, and its evidence is
+Four entries, each earned by its own evidence. `Edit` is Claude's and is the newest: measured
+2026-09-19 in `docs/acceptance-2026-09-19-ask-payloads.md`, where a real Claude approval for a
+file edit carried `tool_name: "Edit"`. Claude's `AskUserQuestion` was measured in the same drill
+and is deliberately NOT here -- it would need a class of its own, and a class needs words in
+both surfaces; an unrecognised ask classifies as `UNKNOWN`, which contributes no words, and the
+question text itself is what that ask now carries as its detail. `apply_patch` is Codex's, and its evidence is
 the strongest of the three: not a drill but 22 real `PermissionRequest` hooks in the owner's
 activity store, against 45 carrying `Bash`. The others: Codex spells the shell one `Bash`
 (`docs/acceptance-2026-08-29-codex-activity-detail.md`, 4 of 4 payloads) and OpenCode spells it

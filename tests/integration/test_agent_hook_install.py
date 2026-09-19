@@ -915,3 +915,21 @@ def test_install_says_that_it_wrapped_the_status_line(tmp_path: Path) -> None:
 
     assert "wrapped the statusLine in the status-line hop" in first.summary
     assert not second.changed and "wrapped" not in second.summary
+
+
+def test_claude_installs_the_permission_request_event(tmp_path: Path) -> None:
+    """DEC-051's mechanism, exercised on the event DEC-098 adds.
+
+    An event joins by entering `INSTALLED_EVENTS` and leaves by moving to `RETIRED_EVENTS`,
+    never by disappearing -- otherwise `_without_our_groups` stops inspecting it and our group
+    is stranded on every host for ever.
+    """
+    assert "PermissionRequest" in INSTALLED_EVENTS
+    assert "PermissionRequest" not in RETIRED_EVENTS
+
+    settings = tmp_path / "settings.json"
+    settings.write_text("{}\n", encoding="utf-8")
+    install_agent_hooks(settings, executable=Path(sys.executable), activity_directory=tmp_path)
+
+    document = json.loads(settings.read_text(encoding="utf-8"))
+    assert len(document["hooks"]["PermissionRequest"]) == 1

@@ -83,7 +83,13 @@ def test_an_exhausted_output_budget_is_not_reported_as_a_usage_limit(tmp_path: P
 
 
 def test_a_permission_request_is_an_agent_that_needs_an_answer(tmp_path: Path) -> None:
-    _spool(tmp_path, event="Notification", reason="permission_prompt", detail="Allow Bash?")
+    """Driven by the `PermissionRequest` event since DEC-098, which is what the name says.
+
+    It used to reach `needs_answer` through a `permission_prompt` Notification, because that
+    was the only route Claude had. That type is no longer mapped -- it was the wordless twin of
+    an ask now reported directly -- so this drives the event it is actually named after.
+    """
+    _spool(tmp_path, event="PermissionRequest", detail="Allow Bash?", ask="Bash")
 
     (activity,) = drain_activity(tmp_path)
 
@@ -663,3 +669,37 @@ def test_a_shortened_line_says_it_was_shortened() -> None:
     assert line.endswith("…")
     # And the other direction: something that fits is returned whole, unmarked.
     assert bounded_detail_line("short enough") == "short enough"
+
+
+def test_a_claude_permission_prompt_notification_no_longer_becomes_a_notification(
+    tmp_path: Path,
+) -> None:
+    """One ask, one notification (DEC-098).
+
+    Measured on 2026-09-19: every `permission_prompt` Notification shares a `prompt_id` with a
+    `PermissionRequest` for the same ask, 3 of 3, unmatched set empty
+    (`docs/acceptance-2026-09-19-ask-payloads.md`). Now that `PermissionRequest` is installed
+    for Claude, leaving `permission_prompt` mapped would send the owner a wordless twin of an
+    ask they are already being told about, in the same pass.
+
+    It is dropped rather than deduplicated downstream because the drain is where this project
+    decides what an event MEANS, and what this one means is now "something already reported".
+    """
+    _spool(tmp_path, event="Notification", reason="permission_prompt")
+
+    assert drain_activity(tmp_path) == ()
+
+
+def test_a_claude_needs_input_notification_still_becomes_a_needs_answer(tmp_path: Path) -> None:
+    """`agent_needs_input` is untouched by DEC-098, and deliberately so.
+
+    The 2026-09-19 drill idled 90 s and got `idle_prompt`, not this -- so this type remains what
+    `test_claude_quirks` already calls it: a deduction, never measured, its fixture marked
+    `"_measured": false`. A reversal that admitted new words elsewhere is not a licence to start
+    claiming things about an event nobody has seen.
+    """
+    _spool(tmp_path, event="Notification", reason="agent_needs_input", detail="Waiting on you")
+
+    (activity,) = drain_activity(tmp_path)
+    assert activity.kind is ActivityKind.NEEDS_ANSWER
+    assert activity.detail == "Waiting on you", "it keeps its message"
