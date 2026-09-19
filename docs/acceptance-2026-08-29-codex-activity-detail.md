@@ -158,6 +158,15 @@ unfiltered path since the spool was written. Widening Codex is what caused anyon
 
 ## What this licenses the next task to parse
 
+> **Amended 2026-09-19 (DEC-098).** The third bullet's refusal of `tool_input` no longer holds.
+> The owner ruled that, as the sole operator and sole recipient of these notifications, their own
+> commands and paths are not a leak, so `tool_input.command` and `tool_input.description` are now
+> admitted into `detail`. `transcript_path`, `cwd` and `prompt` remain refused, and the rest of
+> this list is unchanged. **The measurement below is not rewritten** — it recorded what the
+> payloads carried, which is still true; what changed is the licence, and it changed by decision
+> rather than by discovery. See `docs/acceptance-2026-09-19-ask-payloads.md` for the 0.154.0
+> re-measurement, which also found that `PermissionRequest` now fires for every escalation.
+
 - **`Stop` → `last_assistant_message`**, bounded by `bounded_detail_line` exactly as Claude's is.
 - **`PermissionRequest` → `tool_name` at most**, and nothing else.
 - **Never** `tool_input` (either key), `transcript_path`, `cwd`, `prompt`, or any field not listed
