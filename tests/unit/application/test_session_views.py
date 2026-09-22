@@ -943,7 +943,12 @@ def test_an_agent_whose_read_failed_keeps_its_row_and_says_so() -> None:
     conflation DEC-061 exists to prevent.
     """
     rows = limit_rows(
-        (AgentLimits(ProfileId("codex"), absence=LimitsAbsence.UNREADABLE),),
+        (
+            AgentLimits(ProfileId("codex"), absence=LimitsAbsence.UNREADABLE),
+            # What opencode's reader always files. Until 0.46.0 this entry was left out and the
+            # profile dropped anyway; a profile no reader mentions now reads "no reading yet".
+            AgentLimits(ProfileId("opencode"), absence=LimitsAbsence.NOT_REPORTED),
+        ),
         (ProfileId("codex"), ProfileId("opencode")),
     )
 
