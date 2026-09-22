@@ -1301,17 +1301,20 @@ def test_a_needs_answer_row_says_what_class_of_thing_is_being_waited_on() -> Non
     assert "Bash" not in row, "the row says the class, never the provider's token"
 
 
-def test_the_ask_class_and_the_agents_own_words_both_appear() -> None:
-    """**Reversed by DEC-098**, and the paragraph it replaces is worth keeping in mind.
+def test_the_agents_own_words_win_over_the_ask_class_when_both_are_present() -> None:
+    """A detail is what the agent said; an ask class is what this service inferred it is about.
 
-    This asserted that a detail *won* over the class, because "showing both would put two
-    descriptions of one event on a row that has space for neither". That was true of the
-    detail an ask used to carry: Claude's constant "Claude needs your permission", which is a
-    worse restatement of the class and nothing more.
+    **Reversed on 2026-09-19 and restored on 2026-09-22 — the round trip is the point.**
+    DEC-098 made a Codex ask carry the real command, and the case for showing both was that
+    they say different things: what kind of answer is wanted, and what it is about. Shown the
+    live row, the owner called it redundant, and it is: `needs answer … (about a shell
+    command) — $ rm -rf build/` states one fact three times, and the kind column already
+    carries the first.
 
-    It stopped being true when the detail became the command. "about a shell command" and
-    "$ rm -rf build/" are not two descriptions of one event -- they are what kind of answer is
-    wanted, and what it is about. The row shows both.
+    The original reasoning holds for a reason its author did not need — not that the class
+    restates the detail, but that one line shared with the session identity cannot afford
+    both. The Telegram headline is untouched and still carries the clause, because there it is
+    a sentence above a collapsed quotation rather than a parenthetical competing for a line.
     """
     from remote_agents.adapters.tui.screens.feed import feed_rows
 
@@ -1326,7 +1329,7 @@ def test_the_ask_class_and_the_agents_own_words_both_appear() -> None:
     )
     row = feed_rows((observation,), width=200)[0][1].plain
     assert "Overwrite config.toml?" in row
-    assert "about a shell command" in row
+    assert "about a shell command" not in row
 
 
 def test_an_unrecognised_ask_leaves_the_needs_answer_row_exactly_as_it_was() -> None:
@@ -1358,9 +1361,9 @@ def test_the_service_s_phrase_is_drawn_unlike_the_agent_s_own_words() -> None:
     conflation argument reappearing at a presentation slot rather than at a port field.
 
     A detail follows an em dash; an ask class is parenthesised and dimmer. **That distinction is
-    the whole of this test and it survives DEC-098 untouched** -- what DEC-098 changed is that a
-    row now carries both, which makes drawing them differently matter more than it did when only
-    one could ever be present.
+    the whole of this test**, and it outlived both the 2026-09-19 change that briefly drew the
+    two together and the 2026-09-22 change that restored one or the other: whichever appears,
+    it is drawn as its own kind of string.
     """
     from remote_agents.adapters.tui.screens.feed import feed_rows
 
@@ -1378,18 +1381,12 @@ def test_the_service_s_phrase_is_drawn_unlike_the_agent_s_own_words() -> None:
     )
 
     ask_row = feed_rows((asked,), width=80)[0][1].plain
-    # Wide, because at 80 columns the detail elides away behind the class and this case is
-    # about how the two are DRAWN, not about which survives a narrow pane. That the class is
-    # what survives is asserted by the elision cases above.
     said_row = feed_rows((said,), width=200)[0][1].plain
 
     assert "(about a shell command)" in ask_row
     assert "—" not in ask_row, "the em dash introduces an agent's words, not ours"
     assert "— Overwrite config.toml?" in said_row
-    assert "(about a shell command)" in said_row, "both, each drawn as its own kind of string"
-    assert said_row.index("(about a shell command)") < said_row.index("—"), (
-        "the class leads: it is the shorter, and the one that survives a narrow pane"
-    )
+    assert "about a shell command" not in said_row, "a row carries one or the other"
 
 
 def test_the_feed_drops_an_inferred_observations_ask_as_it_drops_its_detail() -> None:
@@ -1417,62 +1414,3 @@ def test_the_feed_words_a_patch_approval_in_its_own_voice() -> None:
 
     assert ASK_WORDS[AskClass.EDIT] == "about editing a file"
     assert AskClass.UNKNOWN not in ASK_WORDS
-
-
-def test_the_feed_shows_an_asks_class_and_its_detail_together() -> None:
-    """The TUI's own sentence for the class, beside the agent's own words (DEC-043).
-
-    The bot proves the same pair separately. Both are asserted because each surface owns its
-    wording, so a change to one cannot be assumed to have covered the other.
-    """
-    from remote_agents.adapters.tui.screens.feed import feed_rows
-
-    base = _activity(ActivityKind.NEEDS_ANSWER, minutes_ago=1)
-    asking = AgentActivity(
-        base.session_id,
-        base.kind,
-        "Allow the write? — $ whoami > /tmp/probe.txt",
-        base.observed_at,
-        ActivityConfidence.REPORTED,
-        "Bash",
-    )
-
-    row = feed_rows((asking,), width=200)[0][1].plain
-
-    assert "shell command" in row, "the class, in this surface's words"
-    assert "whoami" in row, "and the command the owner is being asked about"
-
-
-def test_a_narrow_pane_eats_the_detail_before_the_ask_class() -> None:
-    """The ordering claim `feed_row_content`'s docstring makes, asserted rather than asserted-at.
-
-    The two cases above deliberately render wide, so neither of them exercises the truncation
-    path at all -- which left the claim "the class leads, so the detail is cut first" resting
-    on reading `columns()`. A Tier-2 review of the DEC-098 diff pointed that out.
-
-    80 columns is chosen because it is where the detail has gone entirely and the class is
-    still whole. It is a real terminal width, not a contrived one.
-
-    **What this does NOT claim** is that the class survives any width: at 60 it is cut too, and
-    at 40 so is the kind word. The property is the order things are given up in, and that is
-    what makes the class worth putting first.
-    """
-    from remote_agents.adapters.tui.screens.feed import feed_rows
-
-    base = _activity(ActivityKind.NEEDS_ANSWER, minutes_ago=1)
-    both = AgentActivity(
-        base.session_id,
-        base.kind,
-        "Allow the write? — $ whoami > /tmp/probe.txt",
-        base.observed_at,
-        ActivityConfidence.REPORTED,
-        "Bash",
-    )
-
-    narrow = feed_rows((both,), width=80)[0][1].plain
-
-    assert "(about a shell command)" in narrow, "the class is whole at 80 columns"
-    assert "whoami" not in narrow, "and the detail has been given up first"
-
-    wider = feed_rows((both,), width=200)[0][1].plain
-    assert "whoami" in wider, "the detail returns once there is room, so 80 proved a cut"

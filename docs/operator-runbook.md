@@ -74,7 +74,7 @@ The same two steps without the fetched script:
 
 ```bash
 uv tool install --managed-python \
-  "remote-agents @ git+https://github.com/sureserverman/remote-agents@v0.45.0"
+  "remote-agents @ git+https://github.com/sureserverman/remote-agents@v0.45.1"
 remote-agents onboard --install-daemon
 ```
 
@@ -182,7 +182,7 @@ the repository and the version before installing anything:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/sureserverman/remote-agents/main/scripts/install.sh \
-  | REMOTE_AGENTS_VERSION=v0.45.0 bash
+  | REMOTE_AGENTS_VERSION=v0.45.1 bash
 remote-agents onboard --install-daemon
 ```
 
@@ -763,7 +763,7 @@ uv run --locked remote-agents install-agent-hooks --provider codex
 uv run --locked remote-agents install-agent-hooks --provider opencode
 ```
 
-> **Upgrading to 0.45.0 or later: re-run the `claude` line.** Claude gained a
+> **Upgrading to 0.45.1 or later: re-run the `claude` line.** Claude gained a
 > `PermissionRequest` hook on 2026-09-19 (DEC-098), and that is the hook that makes an approval
 > notification name the command or the question instead of the constant
 > `Claude needs your permission`.

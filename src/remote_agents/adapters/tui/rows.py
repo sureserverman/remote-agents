@@ -657,18 +657,20 @@ def feed_row_content(
     not, which is DEC-067's conflation argument reappearing at a presentation slot rather than
     at a port field.
 
-    **A row carries both, since DEC-098.** It carried either and never both until 2026-09-19,
-    on the reading that the class was what there was to say when the agent had said nothing --
-    sound while the only detail an ask carried was Claude's constant "Claude needs your
-    permission". Now that the detail is the actual command, the two say genuinely different
-    things: the class is what KIND of answer is wanted, the detail is what it is about.
+    **A row carries either, never both** -- an agent that said something is quoted, and the
+    class is what there is to say when it did not.
 
-    **The class leads, and the precise claim is about ORDER, not survival.** Both live in the
-    flexible cell, so a narrow pane truncates from the tail: the detail's end is eaten first
-    and the class outlives it. That is as far as it goes -- narrow the pane enough and the
-    class is cut too, then the identity, then the kind word. Nothing here promises any of them
-    survives an arbitrarily small width, and an earlier draft of this paragraph said the class
-    "survives a narrow pane", which is true only relative to the detail.
+    **That rule went and came back, and the round trip is the useful part.** DEC-098 made a
+    Codex ask carry the real command, and on 2026-09-19 this drew both on the reading that the
+    class says what KIND of answer is wanted while the detail says what it is about. Shown the
+    result, the owner called it redundant, and they are right: with the command on the row, the
+    line read `needs answer … (about a shell command) — $ rm -rf build/` -- the same fact three
+    times, in a cell that has to share its width with the session identity.
+
+    The class earns its place only when nothing else says what the wait is about, which is
+    exactly the `elif` below. The Telegram headline is unaffected and still carries the clause,
+    because there it is a sentence with a collapsed quotation underneath rather than a
+    parenthetical competing for one line.
     """
     history = datetime.now(UTC) - observed_at > FEED_HISTORY_AGE
     kind_style = MUTED if history else KIND_STYLE[kind]
@@ -676,10 +678,10 @@ def feed_row_content(
     body = Content.assemble((identity, body_style))
     if sequence is not None:
         body = body + Content.assemble((f" #{sequence}", MUTED))
-    if ask_words:
-        body = body + Content.assemble((f" ({ask_words})", body_style or DIM))
     if detail:
         body = body + Content.assemble((" — ", MUTED), (detail, MUTED))
+    elif ask_words:
+        body = body + Content.assemble((f" ({ask_words})", body_style or DIM))
     cells: list[tuple[Content, int | None]] = [
         (text(KIND_GLYPH[kind], kind_style), 1),
         (text(kind_word, kind_style), kind_width),
