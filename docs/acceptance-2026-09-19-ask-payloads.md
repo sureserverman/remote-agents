@@ -2,6 +2,8 @@
 
 Date: 2026-09-19
 Builds measured: **`codex-cli 0.154.0`** and **Claude Code `v2.1.278`**
+Builds on this host as of 2026-09-22: **`codex-cli 0.155.1`** and **Claude Code `v2.1.280`** —
+see *Not re-measured on 0.155.1*, below
 Host: this workstation, Linux
 Method: disposable agent homes whose hooks dump raw hook stdin to a file, driven through a real
 TUI in a scratch tmux server (the method of `docs/acceptance-2026-08-29-codex-activity-detail.md`)
@@ -129,6 +131,26 @@ turn's `prompt_id` and has no `PermissionRequest`, which is consistent — it is
 installed for Claude, **`permission_prompt` leaves `_NOTIFICATIONS`**: keeping both would send
 the wordless record and the worded one for the same ask. This resolves the conditional in the
 plan's Task 2.1 in favour of removal, on measurement rather than on assumption.
+
+## Not re-measured on 0.155.1
+
+Codex moved to **0.155.1** on this host on 2026-09-22 and Claude to **2.1.280**. The payload
+vocabulary below has **not** been re-verified against either, and this section exists so the
+date on the header is not read as currency.
+
+An attempt was made the same day and did not complete. `tests/live/test_agent_activity_hooks.py`
+drives a real pane, and its opening sequence was written as a fixed list — trust prompt, hook
+trust, composer — which 0.155.1 broke by adding a rate-limit prompt offering a cheaper model.
+The case reported `BLOCKED: codex never became ready` and **skipped**, which on a summary line
+is indistinguishable from a pass. A table-driven rewrite of that sequence still did not reach
+the composer, and was reverted rather than shipped unverified.
+
+So two things are open, and they are different sizes. Whether 0.155.1's payloads still carry
+`tool_input.command` and `tool_input.description` is **unknown and probably fine** — nothing
+suggests a change, and the owner confirmed a real Codex ask rendering usefully on 0.155.1 on
+2026-09-22, which is weak evidence that the keys are intact. That the live drill cannot open a
+current Codex **is** a defect, and it is the one that matters: a drill that skips is a drill
+that has stopped testing. Filed as BL-105.
 
 ## What this measurement did not look at
 
