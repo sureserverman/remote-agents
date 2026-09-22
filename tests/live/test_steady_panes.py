@@ -195,15 +195,20 @@ async def test_the_feed_holds_still_an_arrival_takes_the_cursor_and_limits_keep_
         limits = [
             _ANSI.sub("", _inner(line)) for line in _region(await _capture(socket), "Plan limits")
         ]
-        agents = [line for line in limits if re.match(r" (claude|codex)\b", line)]
-        assert agents, "\n".join(limits)
         text = "\n".join(limits)
-        for agent in ("claude", "codex"):
-            if agent not in text:
-                continue
-            block = text[text.index(agent) :]
-            assert "5h" in block and "wk" in block, text
-            assert block.index("5h") < block.index("wk"), text
+        # Each agent's own block: from its name to the next line that starts a new row (a name
+        # or a Remote Control line), so one agent's labels cannot satisfy another's check.
+        starts = [i for i, line in enumerate(limits) if line.strip() and not line.startswith("  ")]
+        blocks = {
+            limits[start].split()[0]: "\n".join(limits[start:end])
+            for start, end in zip(starts, [*starts[1:], len(limits)], strict=True)
+        }
+        agents = [name for name in ("claude", "codex") if name in blocks]
+        assert agents, text
+        for agent in agents:
+            block = blocks[agent]
+            assert "5h" in block and "wk" in block, f"{agent}:\n{text}"
+            assert block.index("5h") < block.index("wk"), f"{agent}:\n{text}"
     finally:
         try:
             await _run("tmux", "-L", socket, "kill-server")

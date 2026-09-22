@@ -106,7 +106,8 @@ FEED_AGE_WIDTH = 3
 """The age column's width: `age_short`'s widest ordinary output (`59m`, `23h`, `99d`).
 
 A constant for the same reason as `FEED_KIND_WIDTH`: one row ageing `9m` -> `10m` moved every
-row. An age past 999 days would be cut; the feed shows the newest twenty observations.
+row. An age of 100 days or more (`100d`) is cut to fit; the feed shows the newest twenty
+observations, so that takes a host quiet for over three months.
 """
 
 
