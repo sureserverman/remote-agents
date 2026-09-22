@@ -208,7 +208,7 @@ class ProjectsScreen(ChoiceScreen):
         choices.border_title = (
             f"Projects[$text-muted] · {_ORDER_TITLE[self.tui.project_order]} · o toggles order[/]"
         )
-        width = choices.content_size.width or None
+        width = choices.scrollable_content_region.width or None
         last_used = self.tui.project_last_used
         self._describe_projects(len(projects))
         self.show_choices(

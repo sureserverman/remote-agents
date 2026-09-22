@@ -1490,7 +1490,7 @@ class SessionsScreen(_SessionActionKeys, ChoiceScreen):
             session_row_parts(record, self.tui.context_window_for(record.session_id))
             for record in records
         ]
-        width = choices.content_size.width or None
+        width = choices.scrollable_content_region.width or None
         # Recorded so `on_resize` can tell a width change from the several same-width resizes a
         # single layout pass emits. Set on every fill rather than only in `on_resize`, because
         # a fill is also a lay-out and leaving it stale would make the next genuine width
@@ -1589,7 +1589,7 @@ class SessionsScreen(_SessionActionKeys, ChoiceScreen):
         if not (self.showing and self._drawn):
             return
         choices = self.query_one("#choices", OptionList)
-        width = choices.content_size.width or None
+        width = choices.scrollable_content_region.width or None
         if width == self._laid_out_width:
             return
         self._laid_out_width = width

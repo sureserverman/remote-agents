@@ -390,7 +390,7 @@ class FeedRegion:
             return
         pane = found.first(OptionList)
         activities, names = self._feed_drawn
-        measured = pane.content_size.width
+        measured = pane.scrollable_content_region.width
         try:
             self._draw_feed(
                 pane,
@@ -530,7 +530,7 @@ class FeedRegion:
             # The pane's own width, for wrapping an expanded detail. Reported as 0 before the
             # first layout, which `_continuation_rows` falls back on -- and an expansion only
             # ever happens on a keypress, by which time the pane has certainly been laid out.
-            measured = pane.content_size.width
+            measured = pane.scrollable_content_region.width
             names = await self._session_names()
             self._draw_feed(
                 pane,
@@ -591,7 +591,9 @@ class FeedScreen(SessionKeyHintRow, FeedRegion, ChoiceScreen):
        because the `Static` this replaced drew none and the dashboard's twin sets one
        explicitly. `text-wrap`/`text-overflow` are load-bearing: they are the whole of
        one-observation-one-row. */
-    FeedScreen #feed-pane { height: 1fr; text-wrap: nowrap; text-overflow: ellipsis; }
+    FeedScreen #feed-pane {
+        height: 1fr; text-wrap: nowrap; text-overflow: ellipsis; scrollbar-gutter: stable;
+    }
     """
 
     def __init__(self) -> None:

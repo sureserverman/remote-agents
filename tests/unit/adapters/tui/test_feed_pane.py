@@ -17,6 +17,7 @@ interpreted).
 
 from __future__ import annotations
 
+import re
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -1465,3 +1466,58 @@ def test_stable_columns_keep_the_age_against_the_right_edge(width: int) -> None:
     row = _row_text_beside(None, width)
 
     assert len(row) == width and row.endswith(" 5m"), repr(row)
+
+
+# --- the scrollbar gutter is reserved (0.46.0) ----------------------------------------------
+
+
+def _ticking(count: int):
+    rows = tuple(
+        _activity(
+            ActivityKind.COMPLETED,
+            minutes_ago=index,
+            detail="a long enough answer that the detail always has to be cut to fit the row",
+        )
+        for index in range(count)
+    )
+
+    async def feed() -> tuple[AgentActivity, ...]:
+        return rows
+
+    return feed
+
+
+async def _painted(surface, count: int, size: tuple[int, int]) -> tuple[list[str], bool]:
+    """The first three rows as painted, and whether the pane had a scrollbar to paint."""
+    app = surface(_context(_ticking(count)))
+    async with app.run_test(size=size) as pilot:
+        await pilot.pause()
+        await pilot.pause()
+        pane = _feed_pane(app)
+        painted = [pane.render_line(y).text for y in range(pane.size.height)]
+        body = [line for line in painted if "finished" in line or "✓" in line][:3]
+        return body, pane.max_scroll_y > 0
+
+
+@pytest.mark.parametrize(
+    ("surface", "size"),
+    ((RemoteAgentsTui, (120, 40)), (FeedPane, (120, 16))),
+    ids=("dashboard-region", "standalone-pane"),
+)
+async def test_the_scrollbar_does_not_move_or_clip_a_row(surface, size) -> None:
+    """Three rows and twenty (scrollbar shown) paint the three they share identically.
+
+    Measured with the scrollbar's cells counted as row width, the rows were laid out two cells
+    too wide once it appeared, and the widget cut them -- the age went under an ellipsis.
+    """
+    few, few_scrolls = await _painted(surface, 3, size)
+    many, many_scrolls = await _painted(surface, 25, size)
+
+    assert not few_scrolls and many_scrolls, "the fixture must show the scrollbar only once"
+    assert len(few) == len(many) == 3, (few, many)
+    for line in many:
+        assert re.search(r"\d+m\s*\S?\s*$", line), f"the age was clipped: {line!r}"
+    strip = str.maketrans("", "", "▁▂▃▄▅▆▇█▌▐▎▊")
+    assert [line.translate(strip).rstrip() for line in few] == [
+        line.translate(strip).rstrip() for line in many
+    ]

@@ -542,7 +542,7 @@ class LimitsRegion:
             self._add_host_row(pane, host_line)
             _fit_to_content(pane, (Content(NO_LIMITS), claude_line, host_line))
             return
-        width = pane.content_size.width
+        width = pane.scrollable_content_region.width
         if width <= 0:
             # Drawn inside `populate`, before the pane has been laid out: the lines are built
             # for an unknown width now and rebuilt for the real one after the first refresh --
@@ -893,7 +893,7 @@ class DashboardScreen(LimitsRegion, FeedRegion, ProjectsPaneScreen):
     }
     DashboardScreen #feed-pane {
         height: 1fr; border: round $secondary; margin-top: 1;
-        text-wrap: nowrap; text-overflow: ellipsis;
+        text-wrap: nowrap; text-overflow: ellipsis; scrollbar-gutter: stable;
     }
     """
 
@@ -1372,7 +1372,7 @@ class DashboardScreen(LimitsRegion, FeedRegion, ProjectsPaneScreen):
             session_row_parts(record, self.tui.context_window_for(record.session_id))
             for record in records
         ]
-        contents = session_contents(parts, pane.content_size.width or None)
+        contents = session_contents(parts, pane.scrollable_content_region.width or None)
         for record, content in zip(records, contents, strict=True):
             pane.add_option(
                 Option(
@@ -1433,7 +1433,7 @@ def _fit_to_content(pane: OptionList, lines: Iterable[Content]) -> None:
     rows = tuple(lines)
 
     def measure() -> None:
-        width = pane.content_size.width
+        width = pane.scrollable_content_region.width
         if width <= 0:
             return
         # A lost row here would be unreachable rather than untidy: every option is disabled, so
