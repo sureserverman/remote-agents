@@ -710,7 +710,8 @@ def feed_row_content(
         (text(KIND_GLYPH[kind], kind_style), 1),
         (text(kind_word, kind_style), kind_width),
         (body, None),
-        (text(age_text, MUTED), age_width),
+        # Right-aligned: the column is wider than most ages, and an age is read at the edge.
+        (text(age_text.rjust(age_width), MUTED), age_width),
     ]
     if width is not None and width - (1 + kind_width + age_width + 3) < FEED_NARROW_ROOM:
         # The glyph alone carries the kind where the word would take the identity's room --

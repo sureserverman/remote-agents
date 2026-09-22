@@ -17,6 +17,7 @@ interpreted).
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -1414,3 +1415,53 @@ def test_the_feed_words_a_patch_approval_in_its_own_voice() -> None:
 
     assert ASK_WORDS[AskClass.EDIT] == "about editing a file"
     assert AskClass.UNKNOWN not in ASK_WORDS
+
+
+# --- stable columns (0.46.0) ---------------------------------------------------------------
+#
+# The owner saw feed rows move sideways. The kind and age columns were sized from the rows on
+# screen, so one row's age going `9m` -> `10m`, or a `needs answer` arriving among `finished`
+# rows, shifted every row -- and moved the narrow threshold that decides whether the kind
+# word is drawn at all. The widths are now constants.
+
+
+def _row_text_beside(neighbour: AgentActivity | None, width: int) -> str:
+    """The same observation's row, drawn with one neighbour (or none) above it."""
+    from remote_agents.adapters.tui.screens.feed import feed_rows
+
+    mine = _activity(ActivityKind.COMPLETED, minutes_ago=5, detail="wrapped the refactor up")
+    shown = (mine,) if neighbour is None else (neighbour, mine)
+    return feed_rows(shown, width=width)[-1][1].plain
+
+
+@pytest.mark.parametrize("width", [30, 36, 44, 60, 80, 120])
+def test_stable_columns_do_not_follow_a_neighbour_s_age(width: int) -> None:
+    """A neighbour aged `9m` or `10m` leaves this row's text exactly as it was."""
+    young = _activity(ActivityKind.COMPLETED, minutes_ago=0)
+    nine = replace(young, observed_at=datetime.now(UTC) - timedelta(minutes=9, seconds=5))
+    ten = replace(young, observed_at=datetime.now(UTC) - timedelta(minutes=10, seconds=5))
+
+    assert _row_text_beside(nine, width) == _row_text_beside(ten, width)
+
+
+@pytest.mark.parametrize("width", [30, 36, 44, 60, 80, 120])
+def test_stable_columns_do_not_follow_a_neighbour_s_kind(width: int) -> None:
+    """A `needs answer` among `finished` rows neither shifts them nor drops their kind word."""
+    asked = _activity(ActivityKind.NEEDS_ANSWER, minutes_ago=1, detail="$ rm -rf build/")
+
+    assert _row_text_beside(asked, width) == _row_text_beside(None, width)
+
+
+def test_stable_columns_are_the_widest_word_and_three_cells_of_age() -> None:
+    from remote_agents.adapters.tui.screens.feed import FEED_AGE_WIDTH, FEED_KIND_WIDTH, KIND_WORDS
+
+    assert FEED_KIND_WIDTH == max(len(word) for word in KIND_WORDS.values())
+    assert FEED_AGE_WIDTH == 3
+
+
+@pytest.mark.parametrize("width", [36, 80])
+def test_stable_columns_keep_the_age_against_the_right_edge(width: int) -> None:
+    """`0m` in a three-cell column is right-aligned, so every age ends at the pane's edge."""
+    row = _row_text_beside(None, width)
+
+    assert len(row) == width and row.endswith(" 5m"), repr(row)

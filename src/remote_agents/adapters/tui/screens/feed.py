@@ -94,6 +94,21 @@ at a glance and the word confirms it; the two together are what survive `NO_COLO
 flash reads the same word, so what the status bar says and what the row says stay one vocabulary.
 """
 
+FEED_KIND_WIDTH = max(len(KIND_WORDS.get(kind, kind.value)) for kind in ActivityKind)
+"""The kind column's width: the longest word any kind can draw, whatever the rows on screen.
+
+A constant since 0.46.0. Measured from the shown rows, one `needs answer` arriving among
+`finished` rows shifted every row sideways, and moved the narrow threshold that decides whether
+the word is drawn at all (`rows.feed_row_content`).
+"""
+
+FEED_AGE_WIDTH = 3
+"""The age column's width: `age_short`'s widest ordinary output (`59m`, `23h`, `99d`).
+
+A constant for the same reason as `FEED_KIND_WIDTH`: one row ageing `9m` -> `10m` moved every
+row. An age past 999 days would be cut; the feed shows the newest twenty observations.
+"""
+
 
 #: The row id for the pane's declared empty state. Disabled, so the cursor never rests on a
 #: sentence it can press Enter on.
@@ -213,9 +228,7 @@ def feed_rows(
     names = names or {}
     rows: list[tuple[str, Content, bool]] = []
     shown = activities[:limit]
-    kind_width = max((len(KIND_WORDS.get(a.kind, a.kind.value)) for a in shown), default=0)
     ages = [age_short(activity.observed_at) for activity in shown]
-    age_width = max((len(rendered) for rendered in ages), default=0)
     #: How many rows already carry each composite key. `feed_key` is
     #: session + kind + observed_at, and nothing in the store makes that unique: the only
     #: unique column on `agent_activity` is `activity_id`, which `activity_store` discards
@@ -270,8 +283,8 @@ def feed_rows(
                     activity.observed_at,
                     age_text,
                     width=width,
-                    kind_width=kind_width,
-                    age_width=age_width,
+                    kind_width=FEED_KIND_WIDTH,
+                    age_width=FEED_AGE_WIDTH,
                     ask_words=ask_words,
                 ),
                 False,
