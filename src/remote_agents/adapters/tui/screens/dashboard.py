@@ -871,7 +871,9 @@ class DashboardScreen(LimitsRegion, FeedRegion, ProjectsPaneScreen):
     #: redesign's header names the surface after it: `Projects › dashboard`.
     crumb = "Projects › dashboard"
 
-    # Unchanged proportions -- 3fr / 2fr, and the right column's 2fr / 40% / 1fr. What the
+    # Proportions 3fr / 2fr, and the right column's 2fr / 45% / 1fr -- the limits cap was 40%
+    # until 0.46.0, when every agent began drawing every column and two stacked agents plus the
+    # Remote Control lines stopped fitting at 80x24. What the
     # redesign changed: all four panes framed alike, the projects list included (it used to be
     # the one unframed list), and an even one-cell gutter between them -- `margin: 0 1` on the
     # left column, `margin-top: 1` between the right-hand panes.
@@ -886,7 +888,7 @@ class DashboardScreen(LimitsRegion, FeedRegion, ProjectsPaneScreen):
         height: 2fr; border: round $secondary; text-wrap: nowrap; text-overflow: ellipsis;
     }
     DashboardScreen #limits-pane {
-        max-height: 40%; border: round $secondary; margin-top: 1;
+        max-height: 45%; border: round $secondary; margin-top: 1;
         text-wrap: nowrap; text-overflow: ellipsis;
     }
     DashboardScreen #feed-pane {

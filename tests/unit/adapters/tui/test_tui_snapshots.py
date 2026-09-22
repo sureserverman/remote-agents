@@ -137,6 +137,8 @@ def _as_drawn(sentence: str) -> str:
     can fail.
     """
     return sentence.replace(" ", "&#160;")
+
+
 _UPDATE = os.environ.get("REMOTE_AGENTS_SNAPSHOT_UPDATE") == "1"
 # Pinned because the SVG encodes pixel geometry: a different terminal size is a different
 # file, so an unpinned size would make every baseline depend on whoever last ran it.
@@ -826,6 +828,29 @@ async def _to_expanded_feed(app: RemoteAgentsTui, pilot) -> None:
     await pilot.pause()
 
 
+def _claude_week_only_reader():
+    """Claude's five-hour window lapsed beside a Codex publishing both: the owner's swap.
+
+    Until 0.46.0 this drew Codex week-first, because the columns were collected first-seen and
+    Claude's row is read first. Photographed so the fixed order is in the visual net too.
+    """
+
+    async def read() -> tuple[AgentLimits, ...]:
+        return (
+            AgentLimits(ProfileId("claude"), (UsageWindow("week", 49.0),)),
+            AgentLimits(ProfileId("codex"), (UsageWindow("5h", 12.0), UsageWindow("week", 61.0))),
+        )
+
+    return read
+
+
+async def _to_limits_pane(app: RemoteAgentsTui, pilot) -> None:
+    from remote_agents.adapters.tui.screens import LimitsPaneScreen
+
+    await app.push_screen(LimitsPaneScreen())
+    await pilot.pause()
+
+
 async def _to_sessions(app: RemoteAgentsTui, _pilot) -> None:
     await app.show_sessions()
 
@@ -870,6 +895,12 @@ async def _to_resume_profiles_revealed(app: RemoteAgentsTui, pilot) -> None:
 
 
 _STATES = (
+    _State(
+        "LIMITS_PANE_CLAUDE_WEEK_ONLY",
+        "LIMITS_PANE",
+        lambda: _context(limits=_claude_week_only_reader()),
+        _to_limits_pane,
+    ),
     _State(
         "FEED_EXPANDED",
         "FEED",

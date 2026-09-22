@@ -363,8 +363,7 @@ async def test_the_limits_pane_declares_something_before_any_read() -> None:
 
 
 _ALL_AGENTS = tuple(
-    ProfileAvailability(name, True)
-    for name in ("claude", "codex", "opencode", "cursor-agent")
+    ProfileAvailability(name, True) for name in ("claude", "codex", "opencode", "cursor-agent")
 )
 
 
@@ -397,8 +396,9 @@ async def test_a_reporting_agent_that_answered_nothing_keeps_its_row() -> None:
         await pilot.pause()
         drawn = _limit_lines(app.screen.query_one("#limits-pane", OptionList))
 
-        assert [line.split()[0] for line in drawn] == ["claude", "codex"]
-        assert all("no reading yet" in line for line in drawn), drawn
+        agents = [line.split()[0] for line in drawn if not line.startswith(" ")]
+        assert agents == ["claude", "codex"], drawn
+        assert "\n".join(drawn).count("no reading yet") == 2, drawn
         assert NO_LIMITS not in drawn
 
 
@@ -456,11 +456,19 @@ async def test_the_limits_pane_draws_one_row_per_answering_agent() -> None:
         # A column of percentages is compared down its right edge, and until 2026-09-06 this
         # pane was the one list in the surface that did not align them (the sessions pane has
         # measured its columns across the whole listing since it was written).
-        assert drawn == ["claude  5h █░░░░░░░  2%", "codex   wk █████░░░ 61%"]
+        #
+        # Every agent draws every column since 0.46.0, stacked at this width: Codex's `5h`
+        # is its label and an empty bar, and its `wk` sits in the `wk` column.
+        assert drawn == [
+            "claude  5h █░░░░░░░  2%",
+            "        wk ░░░░░░░░",
+            "codex   5h ░░░░░░░░",
+            "        wk █████░░░ 61%",
+        ]
 
         # And the property behind the literal, so a future edit cannot quietly return to
         # ragged rows while keeping two hand-written strings that happen to agree.
-        assert len({line.index("%") for line in drawn}) == 1
+        assert len({line.index("%") for line in drawn if "%" in line}) == 1
 
 
 async def test_every_row_in_the_limits_pane_is_disabled() -> None:
@@ -500,10 +508,11 @@ async def test_a_raising_read_before_any_figures_says_unreadable_not_pending() -
         await pilot.pause()
         pane = app.screen.query_one("#limits-pane", OptionList)
 
-        assert _limit_lines(pane) == ["claude  unreadable"]
-
-
-
+        assert _limit_lines(pane) == [
+            "claude  5h ░░░░░░░░",
+            "        wk ░░░░░░░░",
+            "        unreadable",
+        ]
 
 
 async def test_the_limits_pane_rides_the_tick_the_other_two_panes_ride() -> None:
@@ -549,7 +558,7 @@ async def test_a_read_that_finds_nothing_withdraws_the_figures_it_last_drew() ->
     async with app.run_test() as pilot:
         await pilot.pause()
         pane = app.screen.query_one("#limits-pane", OptionList)
-        assert _limit_lines(pane) == ["claude  5h █░░░░░░░ 2%"]
+        assert _limit_lines(pane) == ["claude  5h █░░░░░░░ 2%", "        wk ░░░░░░░░"]
 
         screen = app.screen
         assert isinstance(screen, DashboardScreen)
@@ -559,7 +568,11 @@ async def test_a_read_that_finds_nothing_withdraws_the_figures_it_last_drew() ->
         # is unchanged; what changed on 2026-09-08 is that the agent keeps its place in the
         # grid and says why the cell is empty, instead of the whole pane collapsing to a
         # sentence about every provider.
-        assert _limit_lines(pane) == ["claude  no reading yet"]
+        assert _limit_lines(pane) == [
+            "claude  5h ░░░░░░░░",
+            "        wk ░░░░░░░░",
+            "        no reading yet",
+        ]
         assert "2%" not in "".join(_limit_lines(pane))
 
 
@@ -582,7 +595,7 @@ async def test_a_failed_read_still_leaves_the_last_figures_standing() -> None:
         await screen._reload_limits()
 
         pane = screen.query_one("#limits-pane", OptionList)
-        assert _limit_lines(pane) == ["claude  5h █░░░░░░░ 2%"]
+        assert _limit_lines(pane) == ["claude  5h █░░░░░░░ 2%", "        wk ░░░░░░░░"]
 
 
 @pytest.mark.parametrize("width", [60, 73, 74, 75, 86, 87, 100, 120])
@@ -624,6 +637,35 @@ async def test_no_row_of_the_limits_pane_is_cut_off_at_any_width(width: int) -> 
         assert pane.max_scroll_y == 0, (
             f"at {width} columns the pane scrolls by {pane.max_scroll_y} row(s) that no key "
             "can reach, because every option is disabled"
+        )
+
+
+@pytest.mark.parametrize("size", [(80, 24), (100, 30)])
+async def test_the_limits_pane_fits_every_column_at_ordinary_terminal_sizes(
+    size: tuple[int, int],
+) -> None:
+    """Since 0.46.0 every agent draws every column, so two stacked agents are four lines.
+
+    At 80x24 that plus the two Remote Control lines ran past the pane's `max-height` and put
+    the host line under a scrollbar no key can reach -- every option is disabled. Measured at
+    the sizes the owner's terminals are, where `max-height` is what binds.
+    """
+
+    async def reader() -> tuple[AgentLimits, ...]:
+        return (
+            AgentLimits(ProfileId("claude"), (UsageWindow("5h", 4.0), UsageWindow("week", 49.0))),
+            AgentLimits(ProfileId("codex"), (UsageWindow("week", 61.0),)),
+        )
+
+    app = RemoteAgentsTui(_context(limits=reader))
+    async with app.run_test(size=size) as pilot:
+        await pilot.pause()
+        await pilot.pause()
+        pane = app.screen.query_one("#limits-pane", OptionList)
+
+        assert pane.option_count == 6, _limit_lines(pane)
+        assert pane.max_scroll_y == 0, (
+            f"at {size} the pane scrolls by {pane.max_scroll_y} row(s) that no key can reach"
         )
 
 
