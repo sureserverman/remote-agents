@@ -763,7 +763,7 @@ uv run --locked remote-agents install-agent-hooks --provider codex
 uv run --locked remote-agents install-agent-hooks --provider opencode
 ```
 
-> **Upgrading to 0.45.1 or later: re-run the `claude` line.** Claude gained a
+> **Upgrading to 0.45.0 or later: re-run the `claude` line.** Claude gained a
 > `PermissionRequest` hook on 2026-09-19 (DEC-098), and that is the hook that makes an approval
 > notification name the command or the question instead of the constant
 > `Claude needs your permission`.
