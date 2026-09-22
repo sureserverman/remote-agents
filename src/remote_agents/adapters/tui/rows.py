@@ -25,7 +25,9 @@ session_views.py`'s. This module only places and colours what it is handed (DEC-
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+import math
+import re
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
@@ -310,6 +312,34 @@ def _percent_style(percent: int) -> str:
 _WINDOW_LABELS = {"week": "wk"}
 """The provider's `week` is this surface's `wk`: the pane is a third of a column wide."""
 
+LIMIT_COLUMNS = ("5h", "week")
+"""The window kinds every limits row draws, in this order, whatever any row published.
+
+Fixed rather than collected from the readings (0.46.0). Collected first-seen, one row's state
+reordered another's: Claude's row is read first, so when its five-hour window lapsed the
+columns became `[week, 5h]` and Codex was drawn week-first. A kind outside this pair (Codex
+can derive `day` from `window_minutes`) follows it, ordered by duration.
+"""
+
+_LABEL_MINUTES = {"m": 1, "h": 60, "d": 1440, "w": 10080}
+_NAMED_MINUTES = {"day": 1440, "week": 10080}
+
+
+def _label_minutes(label: str) -> float:
+    """How long a window labelled `label` is, for ordering kinds outside `LIMIT_COLUMNS`."""
+    if label in _NAMED_MINUTES:
+        return _NAMED_MINUTES[label]
+    match = re.fullmatch(r"(\d+)([mhdw])", label)
+    if match is None:
+        return math.inf
+    return int(match.group(1)) * _LABEL_MINUTES[match.group(2)]
+
+
+def _column_labels(seen: Iterable[str]) -> tuple[str, ...]:
+    """`LIMIT_COLUMNS`, then any other published kind by duration -- never by first sight."""
+    extra = {label for label in seen if label not in LIMIT_COLUMNS}
+    return LIMIT_COLUMNS + tuple(sorted(extra, key=lambda label: (_label_minutes(label), label)))
+
 
 @dataclass(frozen=True, slots=True)
 class _LimitColumns:
@@ -326,15 +356,13 @@ class _LimitColumns:
     label: int
     percent: int
     reset: int
-    labels: tuple[str, ...] = ()
-    """Which window kinds the table has a column for, left to right, first-seen order.
+    labels: tuple[str, ...] = LIMIT_COLUMNS
+    """Which window kinds the table has a column for, left to right: `_column_labels`.
 
     A column is a *window kind*, not a position. Positional layout was BL-046: an agent that
     published only a weekly window had it drawn in the column its neighbour used for five
     hours, so the grid invited the owner to read one agent's week against another's afternoon,
-    with both labels truthful. First-seen order rather than sorted, because the providers
-    publish shortest-first and the reading order that produces is the one the owner already
-    has; sorting would reorder the common case to fix nothing.
+    with both labels truthful. Every row draws every one of these columns.
     """
 
 
@@ -371,25 +399,19 @@ def _limit_columns(rows: Sequence[LimitRow], width: int | None = None) -> _Limit
     at all, which `limit_rows` can still hand us.
     """
     windows = [(row, window) for row in rows for window in row.windows]
-    label = max((len(_window_label(window)) for _row, window in windows), default=0)
+    labels = _column_labels(window.label for _row, window in windows)
+    label = max(len(_WINDOW_LABELS.get(kind, kind)) for kind in labels)
     percent = max((len(f"{window.percent}%") for _row, window in windows), default=0)
     reset = max((len(_reset_text(row, window)) for row, window in windows), default=0)
     profile = max((len(row.profile) for row in rows), default=0)
-    # The absence phrase is deliberately *not* measured into any column width, and an earlier
-    # version of this comment claimed otherwise. It is safe unpadded because a row carrying one
-    # has no windows at all, so nothing is drawn after it -- `_one_line` breaks out of the
-    # column walk at the first index. Were that ever to change, the phrase would need a width
-    # reserved here, and it does not have one.
-    labels: list[str] = []
-    for _row, window in windows:
-        if window.label not in labels:
-            labels.append(window.label)
+    # The absence phrase is deliberately *not* measured into any column width. It trails the
+    # row's last column, so nothing is drawn after it and it aligns nothing.
     return _LimitColumns(
         profile=_capped_profile(profile, width, label=label, percent=percent, reset=reset),
         label=label,
         percent=percent,
         reset=reset,
-        labels=tuple(labels),
+        labels=labels,
     )
 
 
@@ -461,17 +483,21 @@ def _window_content(row: LimitRow, window, columns: _LimitColumns, *, last: bool
     return cell + Content.assemble((f" {padded}", MUTED))
 
 
-def _cell_width(columns: _LimitColumns, *, last: bool) -> int:
-    """How wide one window cell is, including the padding that holds the next column's edge.
+def _empty_window_content(label: str, columns: _LimitColumns, *, last: bool) -> Content:
+    """A window this row did not publish: its label and an empty bar, the figures left blank.
 
-    Derived from the same four numbers `_window_content` assembles from, rather than measured
-    off a rendered cell: a blank column has no cell to measure, and that is precisely the case
-    this exists for.
+    Blank at their widths rather than dropped, so the next column starts where it does on
+    every other row. DEC-010: the missing figure is told by the absent percent, not a colour.
     """
-    width = columns.label + 1 + _GAUGE_WIDTH + 1 + columns.percent
+    cell = Content.assemble(
+        (_WINDOW_LABELS.get(label, label).ljust(columns.label), MUTED),
+        (" ", None),
+        (percent_gauge(0), "$secondary"),
+        (" " * (1 + columns.percent), None),
+    )
     if columns.reset and not last:
-        width += 1 + columns.reset
-    return width
+        cell = cell + Content(" " * (1 + columns.reset))
+    return cell
 
 
 def _row_windows(row: LimitRow) -> dict[str, object]:
@@ -519,36 +545,25 @@ def _one_line(row: LimitRow, columns: _LimitColumns, trailer: Content) -> Conten
     """The row, laid out against the table's columns rather than against its own windows.
 
     Walking `columns.labels` rather than `row.windows` is the whole of BL-046's fix: a window
-    is drawn in the column its *kind* owns, and a kind this row does not publish leaves that
-    column blank instead of pulling the next window left into it.
+    is drawn in the column its *kind* owns. Every row walks every column (0.46.0): a kind this
+    row did not publish is drawn as its label and an empty bar, and a row's absence phrase
+    trails the bars rather than replacing them.
     """
     line = _name(row, columns)
-    if not columns.labels:
-        # No agent in this render published a window, so the table has no window columns at
-        # all and every row is a phrase. The gutter still applies: without it the phrase abuts
-        # a profile name that exactly fills its column, and `claude-remote` renders as
-        # `claude-remoteno reading yet`.
-        if not row.absence:
-            return line + trailer
-        return line + Content(" " * _GROUP_GUTTER) + _absence_cell(row, columns) + trailer
     published = _row_windows(row)
-    # Trailing blank columns are dropped rather than padded: they align nothing, and the
-    # spaces would count toward the length that decides whether this row stacks.
-    drawn = [label for label in columns.labels if label in published]
-    last_drawn = columns.labels.index(drawn[-1]) if drawn else -1
     for index, label in enumerate(columns.labels):
-        if index > last_drawn:
-            break
-        last = index == last_drawn
+        last = index == len(columns.labels) - 1
         window = published.get(label)
         if window is None:
-            cell = Content(" " * _cell_width(columns, last=last))
+            cell = _empty_window_content(label, columns, last=last)
         else:
             cell = _window_content(row, window, columns, last=last)
         line = line + Content(" " * _GROUP_GUTTER) + cell
-    if not drawn and row.absence:
-        line = line + Content(" " * _GROUP_GUTTER) + _absence_cell(row, columns)
-    return line + trailer
+    if row.absence:
+        line = line.rstrip() + Content(" " * _GROUP_GUTTER) + _absence_cell(row, columns)
+    # Trailing blanks align nothing, and they would count toward the length that decides
+    # whether this row stacks.
+    return line.rstrip() + trailer
 
 
 def _overflows(row: LimitRow, columns: _LimitColumns, width: int | None) -> bool:

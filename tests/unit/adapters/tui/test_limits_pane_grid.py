@@ -94,9 +94,14 @@ def _percent_ends(line: str) -> list[int]:
     the end of the first `%` following that gauge.
     """
     ends = []
-    for _start, gauge_end in _gauge_spans(line):
-        marker = line.index("%", gauge_end)
-        ends.append(marker + 1)
+    spans = _gauge_spans(line)
+    for index, (_start, gauge_end) in enumerate(spans):
+        # Only up to the next gauge: an unpublished window's bar has no percent after it, and
+        # searching past it would find the next window's.
+        stop = spans[index + 1][0] if index + 1 < len(spans) else len(line)
+        marker = line.find("%", gauge_end, stop)
+        if marker >= 0:
+            ends.append(marker + 1)
     return ends
 
 
@@ -178,8 +183,9 @@ def test_a_window_kind_begins_at_one_offset_across_the_whole_render() -> None:
             f"{label} is drawn at {sorted(starts)}; a column is one offset.\n" + "\n".join(lines)
         )
 
-    # And the columns are laid out in one order, left to right, first-seen -- so a row's
-    # windows cannot be permuted into somebody else's columns while still "aligning".
+    # And the columns are laid out in one fixed order, left to right -- `5h`, then `wk`, then
+    # any other kind by duration -- so a row's windows cannot be permuted into somebody else's
+    # columns while still "aligning".
     ordered = [label for label, _ in sorted(offsets.items(), key=lambda pair: min(pair[1]))]
     assert ordered == ["5h", "wk", "day"], ordered
 
@@ -195,7 +201,9 @@ def test_a_window_kind_ends_its_percent_at_one_offset() -> None:
     ends: dict[str, set[int]] = {}
     for line in lines:
         for label, (_start, gauge_end) in _labelled_gauges(line).items():
-            ends.setdefault(label, set()).add(line.index("%", gauge_end) + 1)
+            marker = line.find("%", gauge_end)
+            if line[_start:gauge_end].strip("░"):
+                ends.setdefault(label, set()).add(marker + 1)
 
     for label, edges in ends.items():
         assert len(edges) == 1, (
@@ -245,10 +253,8 @@ def test_the_columns_are_a_property_of_the_set_not_of_the_first_row(
 def test_rows_with_different_window_counts_still_agree_on_window_zero() -> None:
     """One agent publishing one window beside another publishing three.
 
-    The shape where an off-by-one in `_window_content`'s `last=` would first show: the
-    single-window row's only window IS its last and so goes unpadded, while the three-window
-    row's first is padded. Nothing follows the short row's window, so the suppression cannot
-    propagate — but that is an argument, and this is the test that makes it checkable.
+    Since 0.46.0 every row draws every column, so the one-window row carries two empty ones;
+    what this still guards is the `last=` padding, which must not move window 0 on either row.
     """
     rows = (
         LimitRow("solo", (LimitWindow("5h", 7, "1h"),), None, None),
@@ -265,7 +271,7 @@ def test_rows_with_different_window_counts_still_agree_on_window_zero() -> None:
     )
     lines = [content.plain for content in limit_rows_content(rows, WIDE)]
     per_row = [_gauge_spans(line) for line in lines]
-    assert [len(spans) for spans in per_row] == [1, 3], lines
+    assert [len(spans) for spans in per_row] == [3, 3], lines
 
     assert len({spans[0][0] for spans in per_row}) == 1, "window 0 misaligned:\n" + "\n".join(lines)
     assert len({_percent_ends(line)[0] for line in lines}) == 1, "\n".join(lines)
@@ -306,8 +312,10 @@ def _asymmetric() -> tuple[LimitRow, ...]:
     what makes the misreading so easy.
     """
     return (
-        LimitRow("claude", (LimitWindow("5h", 34, "2h"), LimitWindow("wk", 61, "3d")), None, None),
-        LimitRow("codex", (LimitWindow("wk", 9, None),), None, None),
+        LimitRow(
+            "claude", (LimitWindow("5h", 34, "2h"), LimitWindow("week", 61, "3d")), None, None
+        ),
+        LimitRow("codex", (LimitWindow("week", 9, None),), None, None),
     )
 
 
@@ -331,8 +339,13 @@ def test_a_window_lands_under_the_same_window_and_not_under_the_same_position() 
     )
 
 
-def test_a_column_a_row_does_not_publish_is_blank_and_not_closed_up() -> None:
-    """The blank is the point: a row keeps the shape of the table it belongs to."""
+def test_a_column_a_row_does_not_publish_keeps_its_label_and_an_empty_bar() -> None:
+    """A row keeps the shape of the table it belongs to: label and empty bar, no figure.
+
+    Until 0.46.0 the unpublished column was blank. The owner asked for every element always
+    present, so the label stays and the bar is drawn empty; the missing figure is told by the
+    absent percent (DEC-010: no colour carries it).
+    """
     lines = [content.plain for content in limit_rows_content(_asymmetric(), WIDE)]
     claude, codex = lines
 
@@ -340,19 +353,21 @@ def test_a_column_a_row_does_not_publish_is_blank_and_not_closed_up() -> None:
     # the second does. Measured off claude's row rather than written down, so the assertion
     # follows the layout instead of restating it.
     cell = slice(claude.index("5h"), claude.index("wk"))
-    assert codex[cell].strip() == "", (
-        "codex publishes no five-hour window, so that column must be blank on its row -- "
-        f"found {codex[cell]!r}.\n" + "\n".join(lines)
+    drawn = codex[cell]
+    assert drawn.split()[:2] == ["5h", "░" * 8], (
+        f"codex's five-hour column should be its label and an empty bar -- found {drawn!r}.\n"
+        + "\n".join(lines)
     )
-    assert "5h" not in codex, "codex publishes no five-hour window and must not show one"
+    figures = drawn[drawn.index("░") :]
+    assert not re.search(r"[0-9%]", figures), f"an unpublished window shows a figure: {drawn!r}"
 
 
-def test_a_row_with_no_windows_says_which_silence_it_is_where_its_windows_would_be() -> None:
-    """DEC-061's three absences, drawn as words in the first window column.
+def test_a_row_with_no_windows_draws_empty_bars_then_says_which_silence_it_is() -> None:
+    """DEC-061's three absences, drawn as words after the row's empty bars.
 
     A word rather than a colour or a dash (DEC-010): the grid has to survive monochrome, and a
-    dash would be a fourth thing meaning none of the three. The phrase starts where the first
-    window would, so the eye reads down one column and finds either a gauge or a reason.
+    dash would be a fourth thing meaning none of the three. Until 0.46.0 the phrase took the
+    bars' place; it now trails them, so every row has every column and the reason still reads.
     """
     rows = (
         LimitRow("claude", (LimitWindow("5h", 34, "2h"),), None, None),
@@ -362,12 +377,12 @@ def test_a_row_with_no_windows_says_which_silence_it_is_where_its_windows_would_
     )
     lines = [content.plain for content in limit_rows_content(rows, WIDE)]
     assert len(lines) == 4, "\n".join(lines)
-    first_window = lines[0].index("5h")
 
     for line, phrase in zip(lines[1:], ("never reported", "no reading yet", "unreadable")):
-        assert line.index(phrase) == first_window, (
-            f"{phrase!r} starts at {line.index(phrase)}, not the first window column "
-            f"{first_window}.\n" + "\n".join(lines)
+        bars = _gauge_spans(line)
+        assert len(bars) == 2 and all(line[a:b] == "░" * 8 for a, b in bars), line
+        assert line.index(phrase) > bars[-1][1], f"{phrase!r} should trail the bars.\n" + "\n".join(
+            lines
         )
 
     assert len({line.split()[0] for line in lines}) == 4, "every agent keeps its own row"
@@ -612,3 +627,66 @@ async def test_a_pushed_claude_row_reading_is_drawn_without_a_second_read() -> N
         claude, _codex = _claude_row_and_codex_row(app)
         assert claude == remote_control_default_line(RemoteControlDefault.ON)
         assert port.reads == reads, "the pushed reading was drawn, not re-read"
+
+
+# --- one fixed column set (0.46.0) ----------------------------------------------------------
+#
+# The owner saw Codex's `week` and `5h` swap whenever Claude's five-hour window lapsed: the
+# columns were collected first-seen across every row, and Claude's row is read first. The
+# columns are now a fixed list by window kind, so no row's state can reorder another's.
+
+
+def _claude_week_only_beside_codex_both() -> tuple[LimitRow, ...]:
+    return (
+        LimitRow("claude", (LimitWindow("week", 61, "3d"),), None, None),
+        LimitRow("codex", (LimitWindow("5h", 3, "4h"), LimitWindow("week", 40, "5d")), None, None),
+    )
+
+
+@pytest.mark.parametrize("width", [120, 80, 60])
+def test_codex_order_does_not_follow_claude(width: int) -> None:
+    """Claude with only its week beside Codex with both: Codex still reads `5h` then `wk`."""
+    lines = [
+        content.plain
+        for content in limit_rows_content(_claude_week_only_beside_codex_both(), width)
+    ]
+    text = "\n".join(lines)
+    codex = text[text.index("codex") :]
+    assert codex.index("5h") < codex.index("wk"), f"at width {width}:\n{text}"
+
+
+def test_a_missing_window_draws_its_label_and_an_empty_bar() -> None:
+    """Claude's lapsed five-hour window is its label, an empty bar, and no figure at all."""
+    claude, codex = [
+        content.plain for content in limit_rows_content(_claude_week_only_beside_codex_both(), WIDE)
+    ]
+    cell = claude[claude.index("5h") : claude.index("wk")]
+    assert "░" * 8 in cell, f"the missing window has no empty bar: {claude!r}"
+    figures = cell[cell.index("░") :]
+    assert not re.search(r"[0-9%]", figures), f"the missing window shows a figure: {cell!r}"
+    assert claude.index("5h") == codex.index("5h") and claude.index("wk") == codex.index("wk")
+
+
+_KINDS = ((), ("5h",), ("week",), ("5h", "week"))
+
+
+@pytest.mark.parametrize("first", _KINDS, ids=lambda kinds: "+".join(kinds) or "none")
+@pytest.mark.parametrize("second", _KINDS, ids=lambda kinds: "+".join(kinds) or "none")
+def test_every_row_draws_every_column(first: tuple[str, ...], second: tuple[str, ...]) -> None:
+    """Every combination of present and absent windows for two agents: same columns, same place."""
+
+    def row(profile: str, kinds: tuple[str, ...]) -> LimitRow:
+        windows = tuple(LimitWindow(kind, 50, "1h") for kind in kinds)
+        return LimitRow(profile, windows, None, None, absence=None if windows else "no reading yet")
+
+    lines = [
+        content.plain
+        for content in limit_rows_content((row("claude", first), row("codex", second)), WIDE)
+    ]
+    assert len(lines) == 2, "\n".join(lines)
+    offsets = _column_offsets(lines)
+    assert list(offsets) == ["5h", "wk"], "\n".join(lines)
+    for label, starts in offsets.items():
+        assert len(starts) == 1, f"{label} is drawn at {sorted(starts)}.\n" + "\n".join(lines)
+    for line in lines:
+        assert line.index("5h") < line.index("wk"), line
