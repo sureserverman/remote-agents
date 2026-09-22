@@ -314,9 +314,13 @@ async def test_a_row_id_is_stable_across_reloads_and_unique_per_observation(surf
 
 
 @_SURFACES
-async def test_a_reload_keeps_the_cursor_on_the_row_it_was_on(surface) -> None:
-    """The pane repaints every 10 seconds. A cursor that jumped home on each tick would make
-    the list unusable for the one thing it is now for -- reading down it."""
+async def test_an_arrival_takes_the_cursor_from_the_row_it_was_on(surface) -> None:
+    """A new notification is what the owner wants to see, so it takes the cursor (0.46.0).
+
+    This used to pin the opposite: the cursor followed its old observation down as the new one
+    pushed it. No decision required that, and the owner asked for the new row instead. A
+    reload with nothing new still leaves the cursor alone -- see the `no_change_reload` tests.
+    """
     rows = [
         (
             _activity(ActivityKind.NEEDS_ANSWER, minutes_ago=1, detail="one"),
@@ -341,10 +345,8 @@ async def test_a_reload_keeps_the_cursor_on_the_row_it_was_on(surface) -> None:
         await pilot.pause()
 
         pane = _feed_pane(app)
-        assert pane.get_option_at_index(pane.highlighted).id == held, (
-            "the cursor must follow its observation, not its index"
-        )
-        assert pane.highlighted == 3
+        assert pane.highlighted == 0, "the arrival must take the cursor"
+        assert pane.get_option_at_index(3).id == held, "the old row is pushed down, not lost"
 
 
 @_SURFACES
@@ -986,10 +988,14 @@ async def test_a_row_with_no_detail_toggles_without_emitting_an_empty_row(surfac
 
 
 @_SURFACES
-async def test_a_reload_that_adds_a_newer_observation_keeps_the_open_row_open(surface) -> None:
-    """The pane repaints on a 10s interval and on every reveal. An expansion discarded under
-    the owner's cursor reads as the surface refusing the key they just pressed -- and the
-    window is widest exactly when the feed is busy, which is when they are reading it."""
+async def test_an_arrival_closes_the_open_row(surface) -> None:
+    """A new notification collapses the open row and takes the cursor (0.46.0).
+
+    This used to keep the row open under an arrival. The owner asked for the reverse: the new
+    row is what to read, and an expansion left open below it would push it out of a pane a
+    third of a column tall. A reload with nothing new still keeps the row open -- see
+    `test_a_no_change_reload_leaves_scroll_cursor_expansion_and_options_alone`.
+    """
     rows = [
         (
             _activity(ActivityKind.NEEDS_ANSWER, minutes_ago=1, detail=_LONG_DETAIL),
@@ -1015,14 +1021,12 @@ async def test_a_reload_that_adds_a_newer_observation_keeps_the_open_row_open(su
         await pilot.pause()
 
         pane = _feed_pane(app)
-        assert app.screen.opened_notification == key, "the reload closed the open row"
+        assert app.screen.opened_notification is None, "the arrival left the row open"
         ids = [pane.get_option_at_index(i).id for i in range(pane.option_count)]
-        assert key in ids, "the open row itself vanished"
-        assert any(i.startswith(f"{key}:detail:") for i in ids), (
-            "the open row is still open but drew no continuation rows"
-        )
+        assert not any(":detail:" in i for i in ids), "continuation rows survived the collapse"
         # It moved down by exactly the one observation that arrived above it.
         assert ids.index(key) == 1
+        assert pane.highlighted == 0
 
 
 @_SURFACES
@@ -1627,3 +1631,90 @@ async def test_a_no_change_reload_at_the_head_keeps_the_scroll_when_the_tail_cha
 
         assert pane.option_count < 22, "the fixture must have changed the rows"
         assert pane.scroll_y == min(scrolled, pane.max_scroll_y)
+
+
+# --- a new notification takes the cursor (0.46.0) --------------------------------------------
+
+
+def _mutable_feed(count: int):
+    rows = list(_older_rows(count))
+
+    async def feed() -> tuple[AgentActivity, ...]:
+        return tuple(rows)
+
+    return rows, feed
+
+
+def _older_rows(count: int) -> tuple[AgentActivity, ...]:
+    return tuple(
+        _activity(
+            ActivityKind.COMPLETED,
+            minutes_ago=index + 1,
+            detail="a long enough answer that the detail always has to be cut to fit the row",
+        )
+        for index in range(count)
+    )
+
+
+@_STEADY_SIZES
+async def test_an_arrival_highlights_the_new_row_collapses_the_open_one_and_scrolls_up(
+    surface, size
+) -> None:
+    rows, feed = _mutable_feed(25)
+    app = surface(_context(feed))
+    async with app.run_test(size=size) as pilot:
+        await pilot.pause()
+        pane = _feed_pane(app)
+        key = pane.get_option_at_index(5).id
+        await app.screen.choose(key)
+        await pilot.pause()
+        pane.highlighted = pane.get_option_index(key)
+        pane.scroll_to(y=pane.max_scroll_y, animate=False, immediate=True)
+        await pilot.pause()
+        assert pane.scroll_y > 0 and app.screen.opened_notification == key
+
+        rows.insert(0, _activity(ActivityKind.NEEDS_ANSWER, minutes_ago=0, detail="May I?"))
+        await app.screen._reload_feed()
+        await pilot.pause()
+
+        assert pane.highlighted == 0
+        assert app.screen.opened_notification is None
+        assert pane.scroll_y == 0, "row 0 must be scrolled into view"
+        assert ":needs_answer:" in pane.get_option_at_index(0).id, "row 0 is the arrival"
+
+
+@_STEADY_SIZES
+async def test_the_first_load_is_not_an_arrival(surface, size) -> None:
+    """DEC-007: the first read is history, so the cursor rests on row 0 and nothing flashes."""
+    flashed: list[str] = []
+
+    async def flash(words: str) -> None:
+        flashed.append(words)
+
+    _rows, feed = _mutable_feed(25)
+    app = surface(replace(_context(feed), console_flash=flash))
+    async with app.run_test(size=size) as pilot:
+        await pilot.pause()
+        pane = _feed_pane(app)
+
+        assert pane.highlighted == 0 and pane.scroll_y == 0
+        assert flashed == []
+
+
+@_STEADY_SIZES
+async def test_an_open_row_that_aged_out_without_an_arrival_is_forgotten(surface, size) -> None:
+    """The open key is cleared when its row leaves the window, so it cannot reopen by itself."""
+    rows, feed = _mutable_feed(3)
+    app = surface(_context(feed))
+    async with app.run_test(size=size) as pilot:
+        await pilot.pause()
+        key = _feed_pane(app).get_option_at_index(2).id
+        await app.screen.choose(key)
+        await pilot.pause()
+        assert app.screen.opened_notification == key
+
+        del rows[2]
+        await app.screen._reload_feed()
+        await pilot.pause()
+
+        assert app.screen.opened_notification is None

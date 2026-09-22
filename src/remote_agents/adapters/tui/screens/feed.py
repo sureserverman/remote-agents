@@ -341,6 +341,17 @@ class FeedNews:
         self._head: tuple[str, str, object] | None = None
         self._primed = False
 
+    def is_news(self, activities: tuple[AgentActivity, ...]) -> bool:
+        """Whether `arrived` would call this read news, without priming or moving the head.
+
+        Asked before the pane is drawn, because news changes the draw: the open row collapses
+        and the cursor goes to the new one. `arrived` still records it, after a successful draw.
+        """
+        if not activities or not self._primed:
+            return False
+        newest = activities[0]
+        return (newest.session_id, newest.kind.value, newest.observed_at) != self._head
+
     def arrived(self, activities: tuple[AgentActivity, ...]) -> AgentActivity | None:
         """The newest observation if it is news, else None; priming either way."""
         if not activities:
@@ -557,21 +568,32 @@ class FeedRegion:
             pane.add_option(Option(NO_NOTIFICATIONS, id=_EMPTY_FEED_ROW, disabled=True))
             self._feed_news.arrived(activities)
             return
+        # **A new notification takes the cursor** (0.46.0): the open row collapses, the new row
+        # is highlighted and scrolled into view. The owner asked for this over the old rule,
+        # which kept the cursor on its observation as the new one pushed it down.
+        news = self._feed_news.is_news(activities)
+        if news:
+            self.opened_notification = None
         try:
             # The pane's own width, for wrapping an expanded detail. Reported as 0 before the
             # first layout, which `_continuation_rows` falls back on -- and an expansion only
             # ever happens on a keypress, by which time the pane has certainly been laid out.
             measured = pane.scrollable_content_region.width
             names = await self._session_names()
-            self._draw_feed(
-                pane,
-                feed_rows(
-                    activities,
-                    names,
-                    opened=self.opened_notification,
-                    width=measured if measured > 0 else None,
-                ),
+            rows = feed_rows(
+                activities,
+                names,
+                opened=self.opened_notification,
+                width=measured if measured > 0 else None,
             )
+            if self.opened_notification not in {key for key, _line, _disabled in rows}:
+                # Its row has left the window. Leaving the key set would describe a row the
+                # pane is not drawing, and it would reopen by itself if that key came back.
+                self.opened_notification = None
+            self._draw_feed(pane, rows)
+            if news:
+                pane.highlighted = 0
+                pane.scroll_to(y=0, animate=False, immediate=True)
             self._feed_drawn = (activities, names)
         except Exception:
             # The docstring above promises "never an exception" for the *method*, and only
