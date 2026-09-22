@@ -86,12 +86,15 @@ def _fresh_row() -> LimitRow:
 
 
 def test_a_narrow_pane_gives_each_window_its_own_line() -> None:
-    """Two windows that cannot share a line are stacked, not truncated."""
+    """Windows that cannot share a line are stacked, not truncated -- one line per column.
+
+    `5h` and `wk` are drawn whatever the row published (0.46.0), and Codex's `day` follows.
+    """
     lines = [content.plain for content in limit_rows_content((_fresh_row(),), NARROW)]
     assert len(lines) >= 2, f"expected the stacked layout at {NARROW} cells, got {lines}"
 
     carrying = [line for line in lines if _GAUGE_RUN.search(line)]
-    assert len(carrying) == 2, f"one line per window, got {len(carrying)}: {lines}"
+    assert len(carrying) == 3, f"one line per column, got {len(carrying)}: {lines}"
 
 
 def test_no_narrow_line_ever_carries_part_of_a_gauge() -> None:
@@ -250,3 +253,76 @@ async def test_the_claude_row_truncates_with_an_ellipsis_and_never_wraps() -> No
             f"the pane paints {len(drawn_rows)} lines for {pane.option_count} rows, so one of "
             f"them wrapped: {painted}"
         )
+
+
+# --- the stacked layout walks the fixed column set (0.46.0) ---------------------------------
+
+
+def _labels_in(lines: list[str]) -> list[str]:
+    """The window label in front of each gauge, in the order drawn."""
+    return [
+        line[: run.start()].rstrip().split()[-1]
+        for line in lines
+        for run in _GAUGE_RUN.finditer(line)
+    ]
+
+
+def test_stacked_mode_draws_every_column_in_order_for_every_row() -> None:
+    """A row with one window and a row with none both stack `5h` then `wk`, bars whole."""
+    rows = (
+        LimitRow("claude", (LimitWindow("week", 61, "3d"),), None, None),
+        LimitRow("codex", (), None, None, absence="no reading yet"),
+    )
+    lines = [content.plain for content in limit_rows_content(rows, NARROW)]
+    codex_at = next(i for i, line in enumerate(lines) if line.startswith("codex"))
+    assert _labels_in(lines[:codex_at]) == ["5h", "wk"], "\n".join(lines)
+    assert _labels_in(lines[codex_at:]) == ["5h", "wk"], "\n".join(lines)
+    for line in lines[codex_at:]:
+        for run in _GAUGE_RUN.finditer(line):
+            assert run.group() == "░" * GAUGE_CELLS, f"an unread row shows a fill: {line!r}"
+
+
+def test_the_stack_decision_does_not_depend_on_which_windows_rows_publish() -> None:
+    """Claude week-only beside Codex both stacks exactly when Claude both beside Codex both does."""
+    codex = LimitRow(
+        "codex", (LimitWindow("5h", 3, "4h"), LimitWindow("week", 40, "5d")), None, None
+    )
+    partial = (LimitRow("claude", (LimitWindow("week", 61, "3d"),), None, None), codex)
+    full = (
+        LimitRow(
+            "claude", (LimitWindow("5h", 34, "2h"), LimitWindow("week", 61, "3d")), None, None
+        ),
+        codex,
+    )
+    # A stale week-only Claude and an unread one: what a row *says after* its bars must not
+    # decide the layout either, or the pane flips between one-line and stacked as Claude's
+    # borrowed reading ages past its fence.
+    stale = (LimitRow("claude", (LimitWindow("week", 61, "3d"),), None, "2h"), codex)
+    unread = (LimitRow("claude", (), None, None, absence="no reading yet"), codex)
+    variants = (partial, full, stale, unread)
+    for width in range(30, 131):
+        stacked = [
+            any(len(_GAUGE_RUN.findall(c.plain)) == 1 for c in limit_rows_content(rows, width))
+            for rows in variants
+        ]
+        assert len(set(stacked)) == 1, f"at width {width}: stacked = {stacked}"
+
+
+def test_each_absence_trails_empty_bars_in_both_layouts() -> None:
+    """DEC-061: `no reading yet`, `unreadable` and a stale date stay distinct, after the bars."""
+    cases = (
+        (LimitRow("codex", (), None, None, absence="no reading yet"), "no reading yet"),
+        (LimitRow("codex", (), None, None, absence="unreadable"), "unreadable"),
+        (LimitRow("codex", (LimitWindow("5h", 3, "4h"),), None, "2h"), "as of 2h"),
+    )
+    for row, phrase in cases:
+        for width in (120, NARROW):
+            text = "\n".join(content.plain for content in limit_rows_content((row,), width))
+            assert _labels_in(text.splitlines()) == ["5h", "wk"], f"at {width}:\n{text}"
+            assert phrase in text, f"at {width} {phrase!r} fell off:\n{text}"
+            last_bar = max(
+                m.end() + sum(len(above) + 1 for above in text.splitlines()[:i])
+                for i, line in enumerate(text.splitlines())
+                for m in _GAUGE_RUN.finditer(line)
+            )
+            assert text.index(phrase) > last_bar, f"at {width} {phrase!r} precedes a bar:\n{text}"

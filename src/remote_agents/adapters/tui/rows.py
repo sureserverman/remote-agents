@@ -516,24 +516,6 @@ def _absence_cell(row: LimitRow, columns: _LimitColumns) -> Content:
     return Content.assemble((row.absence or "", MUTED))
 
 
-def _trailers(row: LimitRow) -> Content:
-    """What a row says after its windows: how old a stale reading is, dim. The borrowed-source
-    stamp DEC-061 asks for is not drawn here -- it cost the console's 73-column pane its
-    one-line row (removed 2026-09-03 on the owner's ask); the bot still says it."""
-    trailer = Content("")
-    if row.absence is not None:
-        # A row saying *no reading yet* must not also say *· as of 3d*: the trailer dates a
-        # reading, so beside a phrase denying there is one it contradicts the row it trails.
-        # Reachable, not hypothetical -- Codex stamps `observed_at` from the rollout record
-        # even when every window in it has lapsed, which is the ordinary idle host. Suppressed
-        # here rather than in that reader, because the rule is about what a row may say and
-        # holds for any reader that dates an answer it could not fill.
-        return trailer
-    if row.stale_for is not None:
-        trailer = trailer + Content.assemble((f" · as of {row.stale_for}", DIM))
-    return trailer
-
-
 def _name(row: LimitRow, columns: _LimitColumns) -> Content:
     """The profile, padded to the column -- or ellipsised into it when the name is the thing
     that does not fit. `truncate` both pads and cuts, which is what `columns()` uses one
@@ -541,13 +523,13 @@ def _name(row: LimitRow, columns: _LimitColumns) -> Content:
     return text(row.profile, None).truncate(columns.profile, ellipsis=True, pad=True)
 
 
-def _one_line(row: LimitRow, columns: _LimitColumns, trailer: Content) -> Content:
+def _one_line(row: LimitRow, columns: _LimitColumns) -> Content:
     """The row, laid out against the table's columns rather than against its own windows.
 
     Walking `columns.labels` rather than `row.windows` is the whole of BL-046's fix: a window
     is drawn in the column its *kind* owns. Every row walks every column (0.46.0): a kind this
-    row did not publish is drawn as its label and an empty bar, and a row's absence phrase
-    trails the bars rather than replacing them.
+    row did not publish is drawn as its label and an empty bar. What the row says after its
+    bars is `_note`'s, added by `limit_row_content`.
     """
     line = _name(row, columns)
     published = _row_windows(row)
@@ -559,17 +541,42 @@ def _one_line(row: LimitRow, columns: _LimitColumns, trailer: Content) -> Conten
         else:
             cell = _window_content(row, window, columns, last=last)
         line = line + Content(" " * _GROUP_GUTTER) + cell
-    if row.absence:
-        line = line.rstrip() + Content(" " * _GROUP_GUTTER) + _absence_cell(row, columns)
     # Trailing blanks align nothing, and they would count toward the length that decides
-    # whether this row stacks.
-    return line.rstrip() + trailer
+    # whether the note fits beside the bars.
+    return line.rstrip()
 
 
-def _overflows(row: LimitRow, columns: _LimitColumns, width: int | None) -> bool:
-    if width is None or width <= 0:
-        return False
-    return _one_line(row, columns, _trailers(row)).cell_length > width
+def _table_width(columns: _LimitColumns) -> int:
+    """How wide one row's bars can be: the profile and every column, at their widths.
+
+    What the stack decision is made from, and nothing else (0.46.0). Every row draws every
+    column, so this is a property of the table; what a row says *after* its bars -- a stale
+    date, an absence phrase -- takes a line of its own when it does not fit, rather than
+    flipping the whole pane between layouts as a reading ages.
+    """
+    cell = columns.label + 1 + _GAUGE_WIDTH + 1 + columns.percent
+    if columns.reset:
+        cell += 1 + columns.reset
+    return columns.profile + len(columns.labels) * (_GROUP_GUTTER + cell)
+
+
+def _note(row: LimitRow, columns: _LimitColumns) -> tuple[Content, Content]:
+    """What a row says after its bars, as (separator, words): its silence, or its age.
+
+    DEC-061's absences trail the bars rather than replacing them, so a row with no reading
+    still draws every column. The borrowed-source stamp DEC-061 asks for is not drawn here --
+    it cost the console's 73-column pane its one-line row (removed 2026-09-03 on the owner's
+    ask); the bot still says it.
+    """
+    # A row saying *no reading yet* must not also say *· as of 3d*: the date is a reading's,
+    # so beside a phrase denying there is one it contradicts the row it trails. Reachable --
+    # Codex stamps `observed_at` from the rollout record even when every window in it has
+    # lapsed, which is the ordinary idle host.
+    if row.absence:
+        return Content(" " * _GROUP_GUTTER), _absence_cell(row, columns)
+    if row.stale_for is not None:
+        return Content.assemble((" · ", DIM)), Content.assemble((f"as of {row.stale_for}", DIM))
+    return Content(""), Content("")
 
 
 def limit_row_content(
@@ -585,42 +592,43 @@ def limit_row_content(
 
     One grid row where the pane is wide enough for it; where it is not -- the dashboard's right
     column at 100 columns is 38 cells, and two windows with countdowns run to 46 -- each window
-    takes a line of its own under the profile, and the trailers a line of their own after
-    those, so a gauge is never broken across two rows and the borrowed-source stamp is never
-    the part that falls off. The pane draws these `nowrap`, so what this returns *is* the rows.
+    takes a line of its own under the profile, and the row's note (`_note`) a line of its own
+    when it does not fit beside the last bar, so a gauge is never broken across two rows and a
+    stale date or an absence phrase is never the part that falls off. The pane draws these
+    `nowrap`, so what this returns *is* the rows.
 
     **Every field is padded to a width measured across the whole render** (`columns`), so the
     Nth window of every agent begins in the same column and the pane reads as one table rather
     than as one sentence per agent. That is what the sessions pane has always done through
     `session_contents`, and this list is the one in the surface that did not.
     """
-    trailer = _trailers(row)
     if stack is None:
-        stack = _overflows(row, columns, width)
-    if not stack:
-        return [_one_line(row, columns, trailer)]
-    # Rebuilt without the reset field's trailing pad. That pad exists so the window *after*
-    # this one starts in a fixed column; here the next window is on the next line, so it
-    # aligns nothing and only inflates `cell_length` -- the measurement that decides whether
-    # the trailer fits beside the last window, which would then be pushed onto a line of its
-    # own by spaces the owner cannot see. **The trailer-fit arithmetic below depends on this**,
-    # which is the coupling that produced the defect this suppression fixed.
-    name = _name(row, columns)
-    stacked = [_window_content(row, window, columns, last=True) for window in row.windows]
+        stack = width is not None and width > 0 and _table_width(columns) > width
+    published = _row_windows(row)
     indent = Content(" " * (columns.profile + _GROUP_GUTTER))
-    if not stacked and row.absence:
-        # A row with no windows has nothing to stack, and its phrase is the whole of it. Left
-        # out of this branch when the phrase was added, so a pane narrow enough to stack --
-        # which the dashboard's limits pane is at every ordinary width -- drew the agent's name
-        # and then silence, which is the defect the phrase exists to end.
-        return [name + Content(" " * _GROUP_GUTTER) + _absence_cell(row, columns) + trailer]
-    lines = [name + Content(" " * _GROUP_GUTTER) + stacked[0]] if stacked else [name]
-    lines.extend(indent + cell for cell in stacked[1:])
-    if trailer:
-        if width is None or width <= 0 or (lines[-1] + trailer).cell_length <= width:
-            lines[-1] = lines[-1] + trailer
+    if stack:
+        # Every column, one per line, in `columns.labels` order -- a window this row did not
+        # publish is its label and an empty bar here too. Each cell is built unpadded: the next
+        # window is on the next line, so a reset pad would align nothing and only inflate the
+        # length that decides whether the note fits beside the last one.
+        cells = [
+            (
+                _empty_window_content(label, columns, last=True)
+                if published.get(label) is None
+                else _window_content(row, published[label], columns, last=True)
+            ).rstrip()
+            for label in columns.labels
+        ]
+        lines = [_name(row, columns) + Content(" " * _GROUP_GUTTER) + cells[0]]
+        lines.extend(indent + cell for cell in cells[1:])
+    else:
+        lines = [_one_line(row, columns)]
+    separator, words = _note(row, columns)
+    if words:
+        if width is None or width <= 0 or (lines[-1] + separator + words).cell_length <= width:
+            lines[-1] = lines[-1] + separator + words
         else:
-            lines.append(indent + Content(trailer.plain.lstrip(" ·")).stylize(DIM))
+            lines.append(indent + words)
     return lines
 
 
@@ -637,8 +645,9 @@ def limit_rows_content(rows: Sequence[LimitRow], width: int | None = None) -> li
     # stage's own goal failing inside a single render, and the reason is that the layout is a
     # property of the table rather than of the row. The routine case is exactly the one that
     # hits it: Claude's borrowed reading goes stale behind a thirty-minute fence while Codex's
-    # does not, so one row carries countdowns and the other carries a date.
-    stack = any(_overflows(row, columns, width) for row in rows)
+    # does not, so one row carries countdowns and the other carries a date. Since 0.46.0 it is
+    # made from the column set alone (`_table_width`), so no row's data can flip it.
+    stack = width is not None and width > 0 and _table_width(columns) > width
     return [line for row in rows for line in limit_row_content(row, columns, width, stack=stack)]
 
 
