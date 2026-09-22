@@ -1718,3 +1718,33 @@ async def test_an_open_row_that_aged_out_without_an_arrival_is_forgotten(surface
         await pilot.pause()
 
         assert app.screen.opened_notification is None
+
+
+@_SURFACES
+async def test_an_arrival_whose_draw_fails_leaves_the_open_row_open(surface, monkeypatch) -> None:
+    """Stale is not wrong: a failed draw keeps the pane AND the open-row state as they were.
+
+    The arrival branch cleared `opened_notification` before building the rows. When the build
+    then raised, the pane still showed the row expanded while the state said nothing was open,
+    so the owner's next Enter on it opened it instead of closing it.
+    """
+    from remote_agents.adapters.tui.screens import feed as feed_module
+
+    rows, feed = _mutable_feed(3)
+    app = surface(_context(feed))
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        key = _feed_pane(app).get_option_at_index(0).id
+        await app.screen.choose(key)
+        await pilot.pause()
+        before = _feed_rows(app)
+
+        rows.insert(0, _activity(ActivityKind.NEEDS_ANSWER, minutes_ago=0, detail="May I?"))
+        monkeypatch.setattr(
+            feed_module, "feed_rows", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("boom"))
+        )
+        await app.screen._reload_feed()
+        await pilot.pause()
+
+        assert _feed_rows(app) == before, "the drawn rows must be left alone"
+        assert app.screen.opened_notification == key, "the state no longer matches the pane"

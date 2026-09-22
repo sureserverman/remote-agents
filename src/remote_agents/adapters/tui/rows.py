@@ -506,7 +506,7 @@ def _row_windows(row: LimitRow) -> dict[str, object]:
 
 
 def _absence_cell(row: LimitRow, columns: _LimitColumns) -> Content:
-    """A row's silence, in the first window column, muted and in words.
+    """A row's silence, after its bars (`_note`), muted and in words.
 
     Words rather than a colour or a dash, per DEC-010: the pane is read in monochrome by
     someone who has never been told a convention, and a dash would be a fourth thing meaning

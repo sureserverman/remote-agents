@@ -572,8 +572,9 @@ class FeedRegion:
         # is highlighted and scrolled into view. The owner asked for this over the old rule,
         # which kept the cursor on its observation as the new one pushed it down.
         news = self._feed_news.is_news(activities)
-        if news:
-            self.opened_notification = None
+        # Decided here, committed only after a successful draw: a draw that fails leaves the
+        # pane as it was, and the open-row state must keep matching it ("stale, not wrong").
+        opened = None if news else self.opened_notification
         try:
             # The pane's own width, for wrapping an expanded detail. Reported as 0 before the
             # first layout, which `_continuation_rows` falls back on -- and an expansion only
@@ -583,14 +584,15 @@ class FeedRegion:
             rows = feed_rows(
                 activities,
                 names,
-                opened=self.opened_notification,
+                opened=opened,
                 width=measured if measured > 0 else None,
             )
-            if self.opened_notification not in {key for key, _line, _disabled in rows}:
+            if opened not in {key for key, _line, _disabled in rows}:
                 # Its row has left the window. Leaving the key set would describe a row the
                 # pane is not drawing, and it would reopen by itself if that key came back.
-                self.opened_notification = None
+                opened = None
             self._draw_feed(pane, rows)
+            self.opened_notification = opened
             if news:
                 pane.highlighted = 0
                 pane.scroll_to(y=0, animate=False, immediate=True)
