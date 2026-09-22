@@ -606,7 +606,7 @@ def limit_rows(
         wanted = [
             name
             for name in (str(profile) for profile in profiles)
-            if name in entries and entries[name].absence is not LimitsAbsence.NOT_REPORTED
+            if name not in entries or entries[name].absence is not LimitsAbsence.NOT_REPORTED
         ]
         # A reading is never dropped for want of a matching profile. The profile set decides
         # the grid's *shape*; it does not get to silence an agent that answered -- a host

@@ -876,7 +876,7 @@ def test_the_bar_is_clamped_even_though_the_percent_is_not() -> None:
     assert len(gauge.split(" ")[0]) == 8
 
 
-def test_the_grid_carries_only_agents_that_report_limits_at_all() -> None:
+def test_an_agent_that_never_reports_limits_is_not_listed() -> None:
     """Two rows on this host -- claude and codex -- and the rule, not the pair, is what is coded.
 
     Narrowed on the owner's instruction 2026-09-09, after the pane shipped with a row per
@@ -912,6 +912,27 @@ def test_the_grid_carries_only_agents_that_report_limits_at_all() -> None:
 
     assert [row.profile for row in rows] == ["claude", "codex"]
     assert rows[1].absence == NO_READING, "an agent that does report keeps its absence words"
+
+
+def test_limit_rows_keep_a_profile_no_reader_mentioned_as_no_reading_yet() -> None:
+    """Nothing read for an agent is `NO_READING`, and it costs the agent no row.
+
+    Until 0.46.0 the profile path kept only profiles the readings named, so an agent whose
+    reader answered nothing at all vanished from the pane -- the opposite of what this
+    function's own docstring promised. Only an agent that *says* it never reports
+    (`NOT_REPORTED`) is left off the grid.
+    """
+    profiles = tuple(ProfileId(name) for name in ("claude", "codex", "opencode"))
+    rows = limit_rows(
+        (
+            _account("claude", UsageWindow("5h", 9.0)),
+            AgentLimits(ProfileId("opencode"), absence=LimitsAbsence.NOT_REPORTED),
+        ),
+        profiles,
+    )
+
+    assert [row.profile for row in rows] == ["claude", "codex"]
+    assert rows[1].windows == () and rows[1].absence == NO_READING
 
 
 def test_an_agent_whose_read_failed_keeps_its_row_and_says_so() -> None:
