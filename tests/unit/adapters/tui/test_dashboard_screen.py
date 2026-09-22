@@ -640,33 +640,79 @@ async def test_no_row_of_the_limits_pane_is_cut_off_at_any_width(width: int) -> 
         )
 
 
-@pytest.mark.parametrize("size", [(80, 24), (100, 30)])
-async def test_the_limits_pane_fits_every_column_at_ordinary_terminal_sizes(
-    size: tuple[int, int],
-) -> None:
-    """Since 0.46.0 every agent draws every column, so two stacked agents are four lines.
+def _both_read() -> tuple[AgentLimits, ...]:
+    return (
+        AgentLimits(ProfileId("claude"), (UsageWindow("5h", 4.0), UsageWindow("week", 49.0))),
+        AgentLimits(ProfileId("codex"), (UsageWindow("week", 61.0),)),
+    )
 
-    At 80x24 that plus the two Remote Control lines ran past the pane's `max-height` and put
-    the host line under a scrollbar no key can reach -- every option is disabled. Measured at
-    the sizes the owner's terminals are, where `max-height` is what binds.
+
+def _claude_unread() -> tuple[AgentLimits, ...]:
+    return (
+        AgentLimits(ProfileId("claude"), absence=LimitsAbsence.NO_READING),
+        AgentLimits(ProfileId("codex"), (UsageWindow("week", 61.0),)),
+    )
+
+
+def _both_unread() -> tuple[AgentLimits, ...]:
+    return (
+        AgentLimits(ProfileId("claude"), absence=LimitsAbsence.NO_READING),
+        AgentLimits(ProfileId("codex"), absence=LimitsAbsence.UNREADABLE),
+    )
+
+
+def _stale_beside_unread() -> tuple[AgentLimits, ...]:
+    return (
+        AgentLimits(
+            ProfileId("claude"),
+            (UsageWindow("5h", 4.0), UsageWindow("week", 49.0)),
+            observed_at=datetime.now(UTC) - timedelta(hours=3),
+        ),
+        AgentLimits(ProfileId("codex"), absence=LimitsAbsence.NO_READING),
+    )
+
+
+@pytest.mark.parametrize("size", [(80, 24), (100, 30)])
+@pytest.mark.parametrize(
+    "readings",
+    [_both_read, _claude_unread, _both_unread, _stale_beside_unread],
+    ids=["both-read", "claude-unread", "both-unread", "stale-beside-unread"],
+)
+async def test_the_limits_pane_fits_every_column_at_ordinary_terminal_sizes(
+    size: tuple[int, int], readings
+) -> None:
+    """Since 0.46.0 every agent draws every column, and a note trails the bars.
+
+    Two stacked agents are four lines; at a narrow pane a note ("no reading yet", "as of 3h")
+    takes a line of its own, so the worst case for the two agents that report is eight lines
+    with the Remote Control pair. Past the pane's `max-height` the last of them went under a
+    scrollbar no key can reach -- every option is disabled. The owner chose (2026-09-22) to
+    give the pane the room rather than drop elements, so the feed keeps less at 80x24.
     """
 
     async def reader() -> tuple[AgentLimits, ...]:
+        # What the two agents that never report always file, so the host offers all four
+        # agents and the grid is exactly the two that do.
         return (
-            AgentLimits(ProfileId("claude"), (UsageWindow("5h", 4.0), UsageWindow("week", 49.0))),
-            AgentLimits(ProfileId("codex"), (UsageWindow("week", 61.0),)),
+            *readings(),
+            AgentLimits(ProfileId("opencode"), absence=LimitsAbsence.NOT_REPORTED),
+            AgentLimits(ProfileId("cursor-agent"), absence=LimitsAbsence.NOT_REPORTED),
         )
 
-    app = RemoteAgentsTui(_context(limits=reader))
+    app = RemoteAgentsTui(_every_agent(limits=reader))
     async with app.run_test(size=size) as pilot:
         await pilot.pause()
         await pilot.pause()
         pane = app.screen.query_one("#limits-pane", OptionList)
+        feed = app.screen.query_one("#feed-pane", OptionList)
+        agents = [line.split()[0] for line in _limit_lines(pane) if not line.startswith(" ")]
+        assert agents == ["claude", "codex"], _limit_lines(pane)
 
-        assert pane.option_count == 6, _limit_lines(pane)
         assert pane.max_scroll_y == 0, (
-            f"at {size} the pane scrolls by {pane.max_scroll_y} row(s) that no key can reach"
+            f"at {size} the pane scrolls by {pane.max_scroll_y} row(s) that no key can reach:\n"
+            + "\n".join(_limit_lines(pane))
         )
+        assert feed.scrollable_content_region.height >= 1, "the feed was squeezed off screen"
 
 
 # --- the per-row context gauge ------------------------------------------------------------
