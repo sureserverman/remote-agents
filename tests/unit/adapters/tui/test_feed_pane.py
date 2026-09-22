@@ -1521,3 +1521,109 @@ async def test_the_scrollbar_does_not_move_or_clip_a_row(surface, size) -> None:
     assert [line.translate(strip).rstrip() for line in few] == [
         line.translate(strip).rstrip() for line in many
     ]
+
+
+# --- a refresh with nothing new touches nothing (0.46.0) ------------------------------------
+#
+# Every rebuild called `clear_options()`, which zeroes `scroll_y`, on a ten-second timer and on
+# every store change -- so a pane the owner had scrolled jumped back to the cursor each tick.
+
+_STEADY_SIZES = pytest.mark.parametrize(
+    ("surface", "size"),
+    ((RemoteAgentsTui, (120, 40)), (FeedPane, (120, 16))),
+    ids=("dashboard-region", "standalone-pane"),
+)
+
+
+async def _scrolled_and_open(app, pilot) -> tuple[OptionList, str]:
+    """The pane scrolled down, the cursor on a row below the fold's top, that row expanded."""
+    pane = _feed_pane(app)
+    key = pane.get_option_at_index(14).id
+    await app.screen.choose(key)
+    await pilot.pause()
+    pane.highlighted = pane.get_option_index(key)
+    await pilot.pause()
+    target = min(12, pane.max_scroll_y)
+    assert target >= 5, f"the fixture must scroll: max_scroll_y={pane.max_scroll_y}"
+    pane.scroll_to(y=target, animate=False, immediate=True)
+    await pilot.pause()
+    assert pane.scroll_y == target
+    return pane, key
+
+
+@_STEADY_SIZES
+async def test_a_no_change_reload_leaves_scroll_cursor_expansion_and_options_alone(
+    surface, size
+) -> None:
+    app = surface(_context(_ticking(25)))
+    async with app.run_test(size=size) as pilot:
+        await pilot.pause()
+        pane, key = await _scrolled_and_open(app, pilot)
+        before = (pane.scroll_y, pane.highlighted, app.screen.opened_notification)
+        options = [id(option) for option in pane.options]
+
+        for _ in range(3):
+            await app.screen._reload_feed()
+            await pilot.pause()
+
+        assert (pane.scroll_y, pane.highlighted, app.screen.opened_notification) == before
+        assert app.screen.opened_notification == key
+        assert [id(option) for option in pane.options] == options, "DEC-069: same Options"
+
+
+@_STEADY_SIZES
+async def test_a_no_change_reload_that_only_ages_a_row_redraws_in_place(
+    surface, size, monkeypatch
+) -> None:
+    import remote_agents.adapters.tui.screens.feed as feed_module
+
+    app = surface(_context(_ticking(25)))
+    async with app.run_test(size=size) as pilot:
+        await pilot.pause()
+        pane, _key = await _scrolled_and_open(app, pilot)
+        before = (pane.scroll_y, pane.highlighted)
+
+        monkeypatch.setattr(feed_module, "age_short", lambda _moment: "10m")
+        await app.screen._reload_feed()
+        await pilot.pause()
+
+        assert "10m" in str(pane.get_option_at_index(0).prompt), "the age must be redrawn"
+        assert (pane.scroll_y, pane.highlighted) == before
+
+
+def test_a_no_change_reload_still_repaints_a_row_that_only_changed_colour() -> None:
+    """`Content ==` ignores styles, so a row turning muted must not read as unchanged."""
+    from textual.content import Content
+
+    from remote_agents.adapters.tui.screens.feed import _same_prompt
+
+    plain = Content.assemble(("✓ finished", "$success"))
+    muted = Content.assemble(("✓ finished", "$text-muted"))
+    assert plain == muted, "the premise: Content equality ignores styles"
+    assert not _same_prompt(plain, muted)
+    assert _same_prompt(plain, Content.assemble(("✓ finished", "$success")))
+
+
+@_STEADY_SIZES
+async def test_a_no_change_reload_at_the_head_keeps_the_scroll_when_the_tail_changes(
+    surface, size
+) -> None:
+    """The oldest row leaving is a real change and a rebuild -- but not news, so no jump."""
+    full = _ticking(25)
+    rows = list(await full())
+
+    async def shrinking() -> tuple[AgentActivity, ...]:
+        return tuple(rows)
+
+    app = surface(_context(shrinking))
+    async with app.run_test(size=size) as pilot:
+        await pilot.pause()
+        pane, _key = await _scrolled_and_open(app, pilot)
+        scrolled = pane.scroll_y
+
+        del rows[19:]
+        await app.screen._reload_feed()
+        await pilot.pause()
+
+        assert pane.option_count < 22, "the fixture must have changed the rows"
+        assert pane.scroll_y == min(scrolled, pane.max_scroll_y)

@@ -354,6 +354,19 @@ class FeedNews:
         return newest if arrived else None
 
 
+def _same_prompt(drawn: object, line: Content) -> bool:
+    """Whether a drawn prompt already reads `line`, styles included.
+
+    `Content.__eq__` compares the text alone, so a row that only changed colour -- one ageing
+    past `rows.FEED_HISTORY_AGE` and turning muted -- would compare equal and never repaint.
+    """
+    return (
+        isinstance(drawn, Content)
+        and drawn.plain == line.plain
+        and list(drawn.spans) == list(line.spans)
+    )
+
+
 class FeedRegion:
     """Renders the durable feed into this screen's `#feed-pane`, and flashes only on news.
 
@@ -483,8 +496,25 @@ class FeedRegion:
 
         A key that has gone falls back to row 0, the resting position every other list on this
         surface uses (DEC-007). The cursor always rests somewhere.
+
+        **Nothing new, nothing touched** (0.46.0). `clear_options()` zeroes the scroll, and this
+        ran on a ten-second timer and on every store change, so a pane the owner had scrolled
+        jumped back to the cursor each tick. When the rows are the same rows in the same order,
+        only a prompt whose text changed (an age ticking over) is replaced, in place -- the same
+        `Option` objects stay (DEC-069), and with them the scroll and the cursor. A real change
+        rebuilds and puts the scroll back where it was.
         """
+        keys = [key for key, _line, _disabled in rows]
+        drawn = pane.options
+        if [option.id for option in drawn] == keys and all(
+            option.disabled == disabled for option, (_key, _line, disabled) in zip(drawn, rows)
+        ):
+            for index, (option, (_key, line, _disabled)) in enumerate(zip(drawn, rows)):
+                if not _same_prompt(option.prompt, line):
+                    pane.replace_option_prompt_at_index(index, line)
+            return
         held_id = held_option_id(pane)
+        scrolled = pane.scroll_y
         # Built before the pane is cleared, so a failure here leaves the drawn rows standing.
         # `clear_options()` first would have emptied the pane and *then* raised, which is a
         # blank pane rather than a stale one -- and `_reload_feed`'s docstring promises the
@@ -494,7 +524,8 @@ class FeedRegion:
         options = [Option(line, id=key, disabled=disabled) for key, line, disabled in rows]
         pane.clear_options()
         pane.add_options(options)
-        restore_highlight_by_id(pane, held_id, [key for key, _line, _disabled in rows])
+        restore_highlight_by_id(pane, held_id, keys)
+        pane.scroll_to(y=scrolled, animate=False, immediate=True)
 
     async def _reload_feed(self) -> None:
         """Render the newest observations, or the placeholder — never an exception.
