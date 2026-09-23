@@ -29,6 +29,14 @@ import time
 from pathlib import Path
 
 import pytest
+from agent_panes import (
+    CLAUDE_OPENING,
+    CLAUDE_READY,
+    CODEX_OPENING,
+    CODEX_READY,
+    Interstitial,
+    open_to_composer,
+)
 
 from remote_agents.adapters.agents.registry import install_agent_hooks
 from remote_agents.application.activity import drain_activity
@@ -204,21 +212,16 @@ def _pane_text(socket: str = _DRILL_SOCKET) -> str:
     return _tmux("capture-pane", "-p", "-t", "0", socket=socket).stdout
 
 
-def _wait_for_any(*expected: str, socket: str = _DRILL_SOCKET) -> str | None:
-    """Poll until the pane shows one of several things, and say which.
-
-    Needed because these TUIs' opening sequence is not fixed: Claude raises a folder-trust
-    prompt only for a folder it has not been told about, so a drill that waits unconditionally
-    for one waits out the whole timeout on a host that has already trusted the path.
-    """
-    deadline = time.monotonic() + _PANE_TIMEOUT_SECONDS
-    while time.monotonic() < deadline:
-        text = _pane_text(socket=socket)
-        for candidate in expected:
-            if candidate in text:
-                return candidate
-        time.sleep(1.0)
-    return None
+def _open(agent: str, ready: str, interstitials: tuple[Interstitial, ...]) -> None:
+    """Answer whatever the pane shows until its composer is up (BL-105); fail if it cannot."""
+    open_to_composer(
+        _pane_text,
+        lambda key: (_tmux("send-keys", "-t", "0", key), time.sleep(0.5)),
+        ready=ready,
+        interstitials=interstitials,
+        agent=agent,
+        timeout=_PANE_TIMEOUT_SECONDS,
+    )
 
 
 def _wait_for_pane(expected: str, *, socket: str = _DRILL_SOCKET) -> bool:
@@ -295,23 +298,23 @@ def test_a_real_codex_approval_spools_the_command_it_is_asking_about(tmp_path: P
     _tmux("kill-server")
     try:
         _tmux(
-            "new-session", "-d", "-x", "200", "-y", "50", "-c", str(workspace),
-            "-e", f"CODEX_HOME={codex_home}",
-            "-e", f"{SESSION_ID_VARIABLE}={SessionId.new()}",
+            "new-session",
+            "-d",
+            "-x",
+            "200",
+            "-y",
+            "50",
+            "-c",
+            str(workspace),
+            "-e",
+            f"CODEX_HOME={codex_home}",
+            "-e",
+            f"{SESSION_ID_VARIABLE}={SessionId.new()}",
             "codex",
         )
-        if not _wait_for_pane("Do you trust"):
-            pytest.skip(f"BLOCKED: codex did not reach its trust prompt: {_pane_text()[-400:]}")
-        _tmux("send-keys", "-t", "0", "Enter")
-        # Hook trust, granted inside this disposable home only. Codex persists it per home, so
-        # the owner's trust state is untouched.
-        if not _wait_for_pane("Hooks need review"):
-            pytest.skip(f"BLOCKED: codex did not offer hook trust: {_pane_text()[-400:]}")
-        _tmux("send-keys", "-t", "0", "Down")
-        time.sleep(1.0)
-        _tmux("send-keys", "-t", "0", "Enter")
-        if not _wait_for_pane("Ask Codex"):
-            pytest.skip(f"BLOCKED: codex never became ready: {_pane_text()[-400:]}")
+        # Directory and hook trust are granted inside this disposable home only; Codex
+        # persists both per home, so the owner's trust state is untouched.
+        _open("codex", CODEX_READY, CODEX_OPENING)
 
         probe = tmp_path / "codex-probe.txt"
         _type(f"Run this exact shell command and nothing else: whoami > {probe}")
@@ -351,21 +354,19 @@ def test_a_real_claude_approval_spools_the_command_it_is_asking_about(tmp_path: 
     _tmux("kill-server")
     try:
         _tmux(
-            "new-session", "-d", "-x", "200", "-y", "50", "-c", str(workspace),
-            "-e", f"{SESSION_ID_VARIABLE}={SessionId.new()}",
+            "new-session",
+            "-d",
+            "-x",
+            "200",
+            "-y",
+            "50",
+            "-c",
+            str(workspace),
+            "-e",
+            f"{SESSION_ID_VARIABLE}={SessionId.new()}",
             "claude",
         )
-        reached = _wait_for_any("Is this a project you created", "auto mode")
-        if reached is None:
-            pytest.skip(f"BLOCKED: claude never started: {_pane_text()[-400:]}")
-        if reached != "auto mode":
-            # Only raised for a folder claude has not been told about; a host that has already
-            # trusted this path goes straight to the prompt.
-            _tmux("send-keys", "-t", "0", "Down")
-            time.sleep(1.0)
-            _tmux("send-keys", "-t", "0", "Enter")
-            if not _wait_for_pane("auto mode"):
-                pytest.skip(f"BLOCKED: claude never became ready: {_pane_text()[-400:]}")
+        _open("claude", CLAUDE_READY, CLAUDE_OPENING)
 
         # Into the mode that asks. Cycling is the only interface for this.
         for _ in range(5):
@@ -389,3 +390,67 @@ def test_a_real_claude_approval_spools_the_command_it_is_asking_about(tmp_path: 
         assert activity.ask == "Bash"
     finally:
         _tmux("kill-server")
+
+
+# --- the opener itself, without an agent (BL-105) ---------------------------------------------
+#
+# Not live: these feed `open_to_composer` scripted screens, so they run everywhere and pin the
+# one property the live drills cannot show on a good day -- that a screen the drill does not
+# recognise FAILS, with the pane in the message, instead of skipping.
+
+
+class _Screens:
+    """A pane that shows each screen in turn, advancing when a key is pressed."""
+
+    def __init__(self, *screens: str) -> None:
+        self.screens = list(screens)
+        self.pressed: list[str] = []
+
+    def capture(self) -> str:
+        return self.screens[0]
+
+    def press(self, key: str) -> None:
+        self.pressed.append(key)
+        if key == "Enter" and len(self.screens) > 1:
+            self.screens.pop(0)
+
+
+def _fake_clock():
+    now = [0.0]
+    return (lambda: now[0]), (lambda seconds: now.__setitem__(0, now[0] + seconds))
+
+
+def test_the_opener_fails_on_a_screen_it_does_not_recognise_and_shows_it() -> None:
+    clock, sleep = _fake_clock()
+    screens = _Screens("Something new: pick a plan\n› 1. Pro\n  2. Free")
+
+    # BaseException, then the type: a skip is also an outcome exception, and a skip here is
+    # the exact defect this pins -- `pytest.raises(pytest.fail.Exception)` would let it through.
+    with pytest.raises(BaseException) as failure:
+        open_to_composer(
+            screens.capture, screens.press, ready=CODEX_READY, interstitials=CODEX_OPENING,
+            agent="codex", timeout=10, clock=clock, sleep=sleep,
+        )  # fmt: skip
+
+    assert failure.type is pytest.fail.Exception, f"it must FAIL, not {failure.type.__name__}"
+    assert "Something new: pick a plan" in str(failure.value), "the pane must be in the failure"
+    assert screens.pressed == [], "nothing may be typed into a screen the drill does not know"
+
+
+def test_the_opener_answers_codex_0_155_s_rate_limit_prompt_by_its_words() -> None:
+    """BL-105's screen: the option is chosen by name, wherever the highlight starts."""
+    clock, sleep = _fake_clock()
+    screens = _Screens(
+        "Do you trust the contents of this directory?\n› 1. Yes, continue\n  2. No, quit",
+        "Approaching rate limits\n› 1. Switch to gpt-6-mini\n  2. Keep current model\n"
+        "  3. Keep current model (never show again)",
+        "Hooks need review\n  1. Review\n› 2. Trust all and continue\n  3. Continue without",
+        f"› {CODEX_READY}",
+    )
+
+    open_to_composer(
+        screens.capture, screens.press, ready=CODEX_READY, interstitials=CODEX_OPENING,
+        agent="codex", timeout=30, clock=clock, sleep=sleep,
+    )  # fmt: skip
+
+    assert screens.pressed == ["Enter", "Down", "Enter", "Enter"]
