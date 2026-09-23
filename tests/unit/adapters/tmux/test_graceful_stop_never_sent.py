@@ -248,3 +248,41 @@ def test_a_stop_that_submits_nothing_still_goes_to_a_dialog() -> None:
     asyncio.run(terminal.graceful_stop(pane.session_id, ProfileId("opencode")))
 
     assert pane.keys == ["C-c"]
+
+
+def test_a_codex_stop_sends_every_key_over_the_screens_between_them() -> None:
+    """Between `/exit Enter Enter` Codex shows its command menu, then "Shutting down…".
+
+    Captured on 0.155.1 (`fixtures/panes/stop_sequence/`). Both read UNKNOWN, not DIALOG, so the
+    re-check before each later key lets the stop through; a dialog pattern loosened to match
+    either would hold back every Codex stop, and this is what would say so.
+    """
+    import asyncio
+
+    from remote_agents.adapters.agents.registry import profile_composers
+
+    from .test_send_prompt import PromptPane
+
+    panes = Path(__file__).resolve().parents[3] / "fixtures/panes"
+    screens = [
+        (panes / "codex" / "idle.txt").read_text(encoding="utf-8"),
+        (panes / "stop_sequence" / "codex_after_exit_typed.txt").read_text(encoding="utf-8"),
+        (panes / "stop_sequence" / "codex_after_first_enter.txt").read_text(encoding="utf-8"),
+    ]
+    pane = PromptPane(screens, profile="codex")
+    keys = ("/exit", "Enter", "Enter")
+    terminal = TmuxTerminal(
+        TmuxGateway("remote-agents-test-graceful", pane),
+        {},
+        {
+            ProfileId("codex"): LaunchProfile(
+                "/usr/bin/codex", ("/usr/bin/codex",), {}, None, graceful_keys=keys
+            )
+        },
+        startup_timeout=0.05,
+        composers=profile_composers(),
+    )
+
+    asyncio.run(terminal.graceful_stop(pane.session_id, ProfileId("codex")))
+
+    assert pane.keys == list(keys)

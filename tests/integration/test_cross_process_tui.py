@@ -78,6 +78,17 @@ class RecordingGateway:
         self.keys.append((session_id, keys))
         self.preserved.add(session_id)
 
+    async def send_keys_when(self, session_id, keys, allowed, *, between=None):
+        """The gateway's guarded send: a capture judged first, and re-judged before later keys."""
+        capture = await self.capture(session_id)
+        if not allowed(capture):
+            return capture
+        for _later in keys[1:]:
+            if between is not None and not between(await self.capture(session_id)):
+                raise AssertionError("this double's screen never changes mid-sequence")
+        await self.send_keys(session_id, keys)
+        return None
+
     async def destroy(self, session_id: SessionId) -> None:
         """Model the pane kill, which is how force stop and cleanup retire a pane.
 
