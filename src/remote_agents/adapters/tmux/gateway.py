@@ -485,6 +485,45 @@ class TmuxGateway:
                 if index < len(keys) - 1:
                     await asyncio.sleep(0.15)
 
+    async def send_keys_when(
+        self,
+        session_id: SessionId,
+        keys: tuple[str, ...],
+        allowed: Callable[[str], bool],
+    ) -> str | None:
+        """Send `keys` only onto a screen `allowed` accepts, judged and typed under one lock hold.
+
+        One styled capture (`-e`, so a dim suggestion is told from a draft), then the caller's
+        predicate, then the keys -- all inside the session's key lock, so neither another sender
+        nor a second look can come between the check and the keys it licenses (BL-055, BL-056).
+        This is the relay's shape (`deliver_prompt`, DEC-099) for a fixed sequence, and so is its
+        accepted cost: the lock keeps other senders out, not the agent, which can still raise a
+        dialog between the capture and the first key. Returns the capture that refused, or None
+        once every key is sent.
+        """
+        if not keys:
+            raise ValueError("a guarded key sequence must not be empty")
+        target = await self._following_target(session_id)
+        async with self._keys_for(session_id):
+            try:
+                capture = await self._runner.run(
+                    *self._base_argv(), "capture-pane", "-p", "-e", "-t", target
+                )
+            except RuntimeError as error:
+                raise _target_missing_or(error, f"ra-{session_id}") from error
+            if not allowed(capture):
+                return capture
+            # Inline rather than shared with `send_keys`: every `send-keys` argv must sit inside
+            # a `_keys_for` block to exist (`test_key_lock.py` parses this file for it).
+            for index, key in enumerate(keys):
+                try:
+                    await self._runner.run(*self._base_argv(), "send-keys", "-t", target, key)
+                except RuntimeError as error:
+                    raise _target_missing_or(error, f"ra-{session_id}") from error
+                if index < len(keys) - 1:
+                    await asyncio.sleep(0.15)
+        return None
+
     async def deliver_prompt(
         self,
         session_id: SessionId,
