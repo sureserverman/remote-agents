@@ -104,6 +104,14 @@ class ComposerScreen:
     dialogs: tuple[str, ...] = ()
     """Patterns (multiline) any of which means a dialog is up. Checked before anything else: a
     dialog can be drawn over a composer that is still on screen."""
+    folded: tuple[str, ...] = ()
+    """Patterns for the placeholder a long paste is folded into (Claude: `[Pasted text #1]`),
+    which stands for the pasted draft when the relay checks what it pasted."""
+    command_menu: str | None = None
+    """A pattern (multiline) whose group `first` is the entry a command menu will run on
+    `Enter`, found directly above the composer. None when the menu cannot be read -- then a
+    message beginning with `/` is pasted but never submitted, because `Enter` could run a
+    different command than the one typed (OpenCode's menu is fuzzy)."""
     draft_line: str = r"^\s*"
     """What is stripped from the start of each draft line before the lines are compared
     (OpenCode draws its composer inside a `┃` box)."""

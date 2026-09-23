@@ -11,7 +11,11 @@ from check_surface import scan
 @pytest.mark.parametrize(
     ("relative_path", "content", "expected"),
     (
-        ("src/remote_agents/remote.py", "def send_prompt(): pass\n", "prohibited remote surface"),
+        (
+            "src/remote_agents/remote.py",
+            "def send_keystroke(): pass\n",
+            "prohibited remote surface",
+        ),
         (
             "src/remote_agents/remote.py",
             "import subprocess\nsubprocess.run('x', shell=True)\n",

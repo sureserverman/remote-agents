@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import sys
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
@@ -49,11 +50,47 @@ from remote_agents.ports.console import (
 from remote_agents.ports.terminal import TerminalTargetMissing
 from remote_agents.ports.tmux_server import is_our_socket
 
+_CLEANUP_SECONDS = 2.0
+"""How long deleting a relay buffer after a failed paste may take before it is abandoned."""
+
 
 class TmuxRunner(Protocol):
     """Argument-vector subprocess boundary used by the tmux adapter."""
 
     async def run(self, *argv: str) -> str: ...
+
+    async def feed(self, data: str, *argv: str) -> str:
+        """Run `argv` with `data` on its stdin -- how text reaches `load-buffer -` without ever
+        being an argument (DEC-099)."""
+        ...
+
+
+class PromptPartway(RuntimeError):
+    """tmux failed during a relayed delivery; `touched` says whether a load had begun.
+
+    The caller's answer turns on it: before any buffer was loaded nothing can have reached the
+    pane, so the message was refused; after, it may have landed, so it is unconfirmed.
+    """
+
+    def __init__(self, message: str, *, touched: bool) -> None:
+        super().__init__(message)
+        self.touched = touched
+
+
+@dataclass(frozen=True, slots=True)
+class PromptSteps:
+    """What one relayed delivery did, capture by capture, for the caller to judge.
+
+    The gateway decides nothing: whether it may paste and whether it may press `Enter` are the
+    caller's answers, asked of these very captures, so the judgement and the keystroke describe
+    one observation.
+    """
+
+    before: str
+    pasted: bool = False
+    after_paste: str | None = None
+    entered: bool = False
+    after_enter: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -437,6 +474,72 @@ class TmuxGateway:
                     raise _target_missing_or(error, f"ra-{session_id}") from error
                 if index < len(keys) - 1:
                     await asyncio.sleep(0.15)
+
+    async def deliver_prompt(
+        self,
+        session_id: SessionId,
+        text: str,
+        *,
+        may_paste: Callable[[str], bool],
+        may_enter: Callable[[str], bool],
+        settle: float,
+    ) -> PromptSteps:
+        """Paste `text` into one managed pane and press `Enter`, each only if the caller agrees.
+
+        Capture, then paste only if `may_paste` accepts it; capture again, then one `Enter` only
+        if `may_enter` accepts that; capture once more. All of it under the session's key lock,
+        so no other sender's keys land between the check and the keystroke (BL-056). The text
+        reaches tmux on `load-buffer`'s stdin, into a buffer named for the session, and is pasted
+        bracketed with its line feeds kept (`-p -r`) and the buffer deleted (`-d`) -- never as a
+        `send-keys` argument, so no word in it can act as a key name.
+        """
+        target = await self._following_target(session_id)
+        buffer = f"ra-relay-{session_id}"
+        async with self._keys_for(session_id):
+            # Set *before* the load is awaited: tmux can create the buffer and the call still be
+            # cancelled (the relay's time bound) before it returns, and the owner's words must
+            # not be left on the server for that.
+            loading = False
+            pasted = False
+            try:
+                before = await self._runner.run(
+                    *self._base_argv(), "capture-pane", "-p", "-t", target
+                )
+                if not may_paste(before):
+                    return PromptSteps(before)
+                loading = True
+                await self._runner.feed(text, *self._base_argv(), "load-buffer", "-b", buffer, "-")
+                await self._runner.run(
+                    *self._base_argv(), "paste-buffer", "-d", "-p", "-r", "-b", buffer, "-t", target
+                )
+                pasted = True
+                await asyncio.sleep(settle)
+                after_paste = await self._runner.run(
+                    *self._base_argv(), "capture-pane", "-p", "-t", target
+                )
+                if not may_enter(after_paste):
+                    return PromptSteps(before, True, after_paste)
+                await self._runner.run(*self._base_argv(), "send-keys", "-t", target, "Enter")
+                await asyncio.sleep(settle)
+                after_enter = await self._runner.run(
+                    *self._base_argv(), "capture-pane", "-p", "-t", target
+                )
+                return PromptSteps(before, True, after_paste, True, after_enter)
+            except RuntimeError as error:
+                retyped = _target_missing_or(error, f"ra-{session_id}")
+                if isinstance(retyped, TerminalTargetMissing):
+                    raise retyped from error
+                raise PromptPartway(str(error), touched=loading) from error
+            finally:
+                if loading and not pasted:
+                    # The owner's words must not outlive a failed paste on the server. Bounded
+                    # on its own: this can run while the caller's bound is cancelling us, and a
+                    # tmux that hung the paste could hang this too.
+                    with contextlib.suppress(Exception):
+                        await asyncio.wait_for(
+                            self._runner.run(*self._base_argv(), "delete-buffer", "-b", buffer),
+                            _CLEANUP_SECONDS,
+                        )
 
     async def pane_arrangement(self) -> tuple[HostedPane, ...]:
         """Every pane on the server, with where it is shown and whose it is.

@@ -7,7 +7,13 @@ from remote_agents.domain.conversations import ProviderConversationId
 from remote_agents.domain.models import ProfileId, ProjectId, SessionId
 from remote_agents.domain.remote_control import RemoteControlState
 from remote_agents.domain.trust import TrustState
-from remote_agents.ports.terminal import TerminalObservation, TrustAnswer
+from remote_agents.ports.terminal import (
+    PromptDelivery,
+    PromptOutcome,
+    PromptReason,
+    TerminalObservation,
+    TrustAnswer,
+)
 
 
 class FakeTerminal:
@@ -30,6 +36,9 @@ class FakeTerminal:
         #: The pair rather than the flag alone: what needs asserting is that the *right*
         #: agent got it, and a list of bare booleans cannot say which launch each came from.
         self.launched_remote_control: list[tuple[ProfileId, bool]] = []
+        #: Every relayed message, as (session, text), and the deliveries to answer them with.
+        self.prompts: list[tuple[SessionId, str]] = []
+        self.prompt_deliveries: list[PromptDelivery] = []
 
     async def managed_process_roots(self) -> tuple[int, ...]:
         return ()
@@ -199,6 +208,20 @@ class FakeTerminal:
     async def cleanup(self, session_id: SessionId) -> None:
         """Remove a preserved fake session."""
         self._observations.pop(session_id, None)
+
+    async def send_prompt(self, session_id: SessionId, text: str) -> PromptDelivery:
+        """Record the message; answer the next armed delivery, or SENT to a live session.
+
+        Armed like `trust_states`, one per call, so a test can drive a busy pane that becomes
+        idle -- REFUSED, then SENT on the retry -- which is the queue's whole behaviour.
+        """
+        self.prompts.append((session_id, text))
+        if self.prompt_deliveries:
+            return self.prompt_deliveries.pop(0)
+        observation = self._observations.get(session_id)
+        if observation is None or not observation.live:
+            return PromptDelivery(PromptOutcome.REFUSED, PromptReason.NOT_RUNNING)
+        return PromptDelivery(PromptOutcome.SENT)
 
     async def force_stop(self, session_id: SessionId) -> TerminalObservation:
         """Remove a live fake session and report its verified termination."""

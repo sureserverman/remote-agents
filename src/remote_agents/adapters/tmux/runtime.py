@@ -3,14 +3,24 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
+import logging
 import os
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, replace
 from pathlib import Path
 
 from remote_agents.adapters.tmux.codec import attach_command
-from remote_agents.adapters.tmux.gateway import TmuxGateway, TmuxRunner
+from remote_agents.adapters.tmux.composer import (
+    REFUSAL_FOR,
+    PaneState,
+    classify,
+    composer_draft,
+    enter_refusal,
+    prompt_text,
+)
+from remote_agents.adapters.tmux.gateway import PromptPartway, TmuxGateway, TmuxRunner
 from remote_agents.adapters.tmux.remote_control import (
     REMOTE_CONTROL_DISCONNECT_KEYS,
     REMOTE_CONTROL_DISMISS_MENU_KEYS,
@@ -26,17 +36,22 @@ from remote_agents.domain.models import ProfileId, ProjectId, SessionId
 from remote_agents.domain.remote_control import RemoteControlState
 from remote_agents.domain.trust import TrustState
 from remote_agents.ports.private_directory import open_private_directory
-from remote_agents.ports.provider_descriptor import TrustDialog
+from remote_agents.ports.provider_descriptor import ProviderDescriptor, TrustDialog
 from remote_agents.ports.terminal import (
     GRACEFUL_TIMEOUT,
     NOT_AWAITING_TRUST,
     OWNERSHIP_LOST,
     TERMINAL_NOT_LIVE,
     UNKNOWN_SESSION,
+    PromptDelivery,
+    PromptOutcome,
+    PromptReason,
     TerminalObservation,
     TerminalTargetMissing,
     TrustAnswer,
 )
+
+_LOG = logging.getLogger(__name__)
 
 _REMOTE_CONTROL_ENABLE_WAIT_SECONDS = 3
 _REMOTE_CONTROL_MENU_WAIT_SECONDS = 1
@@ -86,6 +101,13 @@ class TerminalWaits:
     decline: float = float(_TRUST_DECLINE_WAIT_SECONDS)
     """A declined agent running its own shutdown before its pane is killed."""
 
+    prompt_settle: float = 0.5
+    """A paste or an `Enter` being drawn before the pane is read again -- one redraw."""
+
+    prompt_bound: float = 20.0
+    """The whole of one relayed delivery, every tmux call in it included. The bot handles one
+    update at a time, so a tmux call that never returned would otherwise freeze it."""
+
 
 #: What a caller that has no opinion gets, so the production path names nothing.
 _DEFAULT_WAITS = TerminalWaits()
@@ -95,10 +117,27 @@ class AsyncTmuxRunner(TmuxRunner):
     """Run only prevalidated tmux argument vectors without a shell."""
 
     async def run(self, *argv: str) -> str:
+        return await self._exec(argv, None)
+
+    async def feed(self, data: str, *argv: str) -> str:
+        return await self._exec(argv, data.encode("utf-8"))
+
+    async def _exec(self, argv: tuple[str, ...], stdin: bytes | None) -> str:
         process = await asyncio.create_subprocess_exec(
-            *argv, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
+            *argv,
+            # `run` keeps its old behaviour (stdin inherited); only `feed` opens a pipe.
+            stdin=asyncio.subprocess.PIPE if stdin is not None else None,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
         )
-        stdout, stderr = await process.communicate()
+        try:
+            stdout, stderr = await process.communicate(stdin)
+        except asyncio.CancelledError:
+            # A caller's time bound ran out (the prompt relay bounds every call it makes): the
+            # tmux process must not outlive the call that was waiting for it.
+            with contextlib.suppress(ProcessLookupError):
+                process.kill()
+            raise
         if process.returncode:
             raise RuntimeError(
                 f"tmux command failed: {stderr.decode('utf-8', errors='replace').strip()}"
@@ -163,6 +202,7 @@ class TmuxTerminal:
             dict[ProfileId, Callable[[SessionId, ProviderConversationId], LaunchProfile]] | None
         ) = None,
         trust_dialogs: Mapping[str, TrustDialog] | None = None,
+        composers: Mapping[str, ProviderDescriptor] | None = None,
         waits: TerminalWaits | None = None,
     ) -> None:
         # Which profiles can be asked the folder-trust question, and the dialog to read each
@@ -177,6 +217,10 @@ class TmuxTerminal:
         # to declare its dialog -- and was the whole reason the owner saw one button where the
         # ask said two.
         self._trust_dialogs = dict(trust_dialogs or {})
+        # The agents that may be typed into, by profile, and how each draws its composer
+        # (DEC-099). Injected like `trust_dialogs`, for its reason: this adapter must not import
+        # the provider packages.
+        self._composers = dict(composers or {})
         self._waits = waits or _DEFAULT_WAITS
         self._gateway = gateway
         self._project_paths = project_paths
@@ -557,6 +601,62 @@ class TmuxTerminal:
                     host_session=pane.session_name,
                 )
         return None
+
+    async def send_prompt(self, session_id: SessionId, text: str) -> PromptDelivery:
+        """Type an owner's message into one managed pane, only if it is sitting idle (DEC-099).
+
+        Refused without typing anything when the text is empty or would run as a shell command,
+        the pane is not running (DEC-022: keys sent to a dead pane exit 0), its agent declares no
+        composer, or a fresh capture -- taken under the session's key lock, immediately before
+        the paste -- is not an empty idle composer. `Enter` is pressed only on a capture showing
+        the pasted draft and no dialog (`composer.enter_refusal`). Anything that may have
+        typed and was not seen to land is UNCONFIRMED, and is never tried again.
+        """
+        cleaned = prompt_text(text)
+        if not cleaned:
+            return PromptDelivery(PromptOutcome.REFUSED, PromptReason.EMPTY)
+        if cleaned.startswith("!"):
+            return PromptDelivery(PromptOutcome.REFUSED, PromptReason.SHELL)
+        try:
+            return await asyncio.wait_for(
+                self._deliver_prompt(session_id, cleaned), self._waits.prompt_bound
+            )
+        except TimeoutError:
+            return PromptDelivery(PromptOutcome.UNCONFIRMED, PromptReason.TIMEOUT)
+
+    async def _deliver_prompt(self, session_id: SessionId, text: str) -> PromptDelivery:
+        observation = await self.inspect(session_id)
+        if observation is None or not observation.live:
+            return PromptDelivery(PromptOutcome.REFUSED, PromptReason.NOT_RUNNING)
+        descriptor = self._composers.get(str(observation.profile_id))
+        if descriptor is None or descriptor.composer is None:
+            return PromptDelivery(PromptOutcome.REFUSED, PromptReason.NO_COMPOSER)
+        try:
+            steps = await self._gateway.deliver_prompt(
+                session_id,
+                text,
+                may_paste=lambda capture: classify(capture, descriptor) is PaneState.IDLE,
+                may_enter=lambda capture: enter_refusal(capture, descriptor, text) is None,
+                settle=self._waits.prompt_settle,
+            )
+        except TerminalTargetMissing:
+            return PromptDelivery(PromptOutcome.REFUSED, PromptReason.NOT_RUNNING)
+        except PromptPartway as failure:
+            # Any other tmux failure. Never raised past a caller that would retry; `_LOG` is the
+            # only place its detail survives, since a surface only ever sees `tmux_error`.
+            _LOG.exception("relaying a message to %s failed partway", session_id)
+            if not failure.touched:
+                return PromptDelivery(PromptOutcome.REFUSED, PromptReason.TMUX_ERROR)
+            return PromptDelivery(PromptOutcome.UNCONFIRMED, PromptReason.TMUX_ERROR)
+        if not steps.pasted:
+            state = classify(steps.before, descriptor)
+            return PromptDelivery(PromptOutcome.REFUSED, REFUSAL_FOR[state])
+        if not steps.entered:
+            reason = enter_refusal(steps.after_paste or "", descriptor, text)
+            return PromptDelivery(PromptOutcome.UNCONFIRMED, reason)
+        if composer_draft(steps.after_enter or "", descriptor) == "":
+            return PromptDelivery(PromptOutcome.SENT)
+        return PromptDelivery(PromptOutcome.UNCONFIRMED, PromptReason.SUBMIT_NOT_SEEN)
 
     async def capture(self, session_id: SessionId) -> str:
         """Return one managed pane's output for the presentation boundary to sanitize."""

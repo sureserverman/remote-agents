@@ -102,5 +102,12 @@ def descriptor(
             composer=r"^─{10,}\n[❯!] ?(?P<draft>[^\n]*(?:\n  [^\n]*)*?)\n─{10,}(?:\n[^\n]*){0,3}\Z",
             busy=(r"^[✻✽✶✳✢·*] \S[^\n]*…",),
             dialogs=(r"^ \S[^\n]*\bEsc to cancel\b", r"^ Do you want to proceed\?"),
+            # A long paste folds to `[Pasted text #1]` (`composed_long.txt`).
+            folded=(r"\[Pasted text #\d+[^\]]*\]",),
+            # The command menu is drawn directly above the composer's top rule, the exact
+            # match first (`composed_slash.txt`); `Enter` runs that first entry.
+            command_menu=(
+                r"^  (?P<first>/\S+)[^\n]*(?:\n(?:  /\S+| {10,}\S)[^\n]*)*\n─{10,}\n[❯!]"
+            ),
         ),
     )

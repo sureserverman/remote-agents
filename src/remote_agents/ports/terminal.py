@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from enum import StrEnum
 from typing import Protocol
 
 from remote_agents.domain.conversations import ProviderConversationId
@@ -115,6 +116,53 @@ class TerminalObservation:
     """
 
 
+class PromptOutcome(StrEnum):
+    """What `send_prompt` did with an owner's message (DEC-099)."""
+
+    SENT = "sent"
+    """Pasted, submitted with one `Enter`, and the composer was seen empty afterwards."""
+    REFUSED = "refused"
+    """Nothing was typed. `reason` says why."""
+    UNCONFIRMED = "unconfirmed"
+    """Something may have been typed, and it was not seen to land. Never retried: a double
+    submit is worse than an unconfirmed one."""
+
+
+class PromptReason(StrEnum):
+    """Why a message was refused or is unconfirmed -- a key, never a sentence (DEC-043)."""
+
+    EMPTY = "empty"
+    SHELL = "shell"
+    """It begins with `!`, which Claude and Codex run as a shell command (owner's ruling)."""
+    NOT_RUNNING = "not_running"
+    NO_COMPOSER = "no_composer"
+    """The agent declares no composer, so nothing can tell its idle screen from a turn."""
+    BUSY = "busy"
+    COMPOSING = "composing"
+    """The composer already holds text; a paste would be joined to it."""
+    DIALOG = "dialog"
+    UNRECOGNISED = "unrecognised"
+    DRAFT_NOT_SEEN = "draft_not_seen"
+    """After pasting, the composer did not show the text, so `Enter` was not pressed."""
+    MENU = "menu"
+    """A command menu offered something other than the command typed, so `Enter` was not
+    pressed."""
+    SUBMIT_NOT_SEEN = "submit_not_seen"
+    """`Enter` was pressed and the composer was not seen to empty."""
+    TIMEOUT = "timeout"
+    """tmux did not answer in time; whether anything landed is unknown."""
+    TMUX_ERROR = "tmux_error"
+    """tmux failed partway through; whether anything landed is unknown."""
+
+
+@dataclass(frozen=True, slots=True)
+class PromptDelivery:
+    """The outcome of one `send_prompt`, with its reason when it was not SENT."""
+
+    outcome: PromptOutcome
+    reason: PromptReason | None = None
+
+
 class TerminalPort(Protocol):
     async def managed_process_roots(self) -> tuple[int, ...]: ...
     # `remote_control` asks for the agent's reviewed remote-control launch, where it has one.
@@ -157,3 +205,4 @@ class TerminalPort(Protocol):
     ) -> TerminalObservation: ...
     async def cleanup(self, session_id: SessionId) -> None: ...
     async def force_stop(self, session_id: SessionId) -> TerminalObservation: ...
+    async def send_prompt(self, session_id: SessionId, text: str) -> PromptDelivery: ...

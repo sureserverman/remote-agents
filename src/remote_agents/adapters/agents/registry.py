@@ -411,6 +411,28 @@ def profile_trust_dialogs(
     return resolved
 
 
+def profile_composers(
+    descriptors: tuple[ProviderDescriptor, ...] | None = None,
+) -> dict[str, ProviderDescriptor]:
+    """Every curated profile that may be typed into, and the descriptor to read its pane with.
+
+    `profile_trust_dialogs`' fold, for the prompt relay (DEC-099): a profile is present exactly
+    when its vertical declares a `composer`, and absent otherwise, so a caller's `in` is the
+    whole question. Keyed like the trust mapping, through each profile's executable, so a
+    profile named for an alias reads its agent's declaration.
+    """
+    built = provider_descriptors() if descriptors is None else descriptors
+    by_provider = {str(descriptor.profile_id): descriptor for descriptor in built}
+    executables = {str(profile.profile_id): profile.executable for profile in closed_profiles()}
+    resolved = {}
+    for profile in closed_profiles():
+        name = str(profile.profile_id)
+        descriptor = by_provider.get(name) or by_provider.get(executables.get(name, ""))
+        if descriptor is not None and descriptor.composer is not None:
+            resolved[name] = descriptor
+    return resolved
+
+
 def profile_glyphs(descriptors: tuple[ProviderDescriptor, ...] | None = None) -> dict[str, str]:
     """Every curated profile's mark, as one mapping a composition can hand to a surface.
 

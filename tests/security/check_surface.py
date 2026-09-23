@@ -7,8 +7,11 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
+#: `send_prompt` left this list on 2026-09-23 under DEC-099, by name and without an exception
+#: (DEC-075): the bot may relay one owner-written message into an idle managed session, typed by
+#: the terminal only onto a verified empty composer and never into a dialog. Arbitrary
+#: keystrokes, shell commands and raw arguments stay forbidden, below.
 FORBIDDEN_REMOTE_SURFACES = (
-    "send_prompt",
     "send_keystroke",
     "shell_command",
     "raw_args",

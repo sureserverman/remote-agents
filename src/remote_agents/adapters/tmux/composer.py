@@ -10,11 +10,13 @@ the verticals' (`ProviderDescriptor.composer`); nothing here names a provider.
 from __future__ import annotations
 
 import re
+import unicodedata
 from enum import Enum
 
 from remote_agents.adapters.tmux.trust import classify_trust_capture
 from remote_agents.domain.trust import TrustState
 from remote_agents.ports.provider_descriptor import ComposerScreen, ProviderDescriptor
+from remote_agents.ports.terminal import PromptReason
 
 
 class PaneState(Enum):
@@ -90,3 +92,65 @@ def classify(capture: str, descriptor: ProviderDescriptor) -> PaneState:
     if _found(declared.busy, screen):
         return PaneState.BUSY
     return PaneState.COMPOSING if draft else PaneState.IDLE
+
+
+REFUSAL_FOR: dict[PaneState, PromptReason] = {
+    PaneState.BUSY: PromptReason.BUSY,
+    PaneState.COMPOSING: PromptReason.COMPOSING,
+    PaneState.DIALOG: PromptReason.DIALOG,
+    PaneState.UNKNOWN: PromptReason.UNRECOGNISED,
+}
+"""The reason a pane that is not IDLE gives for refusing a message."""
+
+
+def prompt_text(text: str) -> str:
+    """The owner's message as it may be pasted: newlines kept, every other control removed.
+
+    A bracketed paste is ended early by `ESC [201~`, and a CR or an ETX inside it would act as a
+    key in an agent that stopped honouring the brackets, so none of them reaches the buffer.
+    Line endings are folded to `\\n` first, so a CRLF from a phone keeps its line break.
+    """
+    folded = text.replace("\r\n", "\n").replace("\r", "\n")
+    kept = "".join(
+        character
+        for character in folded
+        if character == "\n" or unicodedata.category(character) != "Cc"
+    )
+    return kept.strip()
+
+
+def _same_text(draft: str, text: str) -> bool:
+    """Whether a composer's draft is the pasted text, allowing for how the pane wrapped it."""
+    return " ".join(draft.split()) == " ".join(text.split())
+
+
+def enter_refusal(capture: str, descriptor: ProviderDescriptor, text: str) -> PromptReason | None:
+    """Why `Enter` may not be pressed on this capture of a pasted `text`, or None if it may.
+
+    Pressed only when the composer shows exactly the draft (or the placeholder a long paste
+    folds into) and no dialog: every measured approval dialog opens on its yes option, so an
+    `Enter` on a dialog that arrived after the idle check would approve it (DEC-099). A message
+    beginning with `/` needs one thing more -- a command menu whose first entry is the command
+    typed, because `Enter` runs the menu's entry rather than the text.
+    """
+    declared = descriptor.composer
+    if declared is None:
+        return PromptReason.NO_COMPOSER
+    state = classify(capture, descriptor)
+    if state is PaneState.DIALOG:
+        return PromptReason.DIALOG
+    if state is not PaneState.COMPOSING:
+        return PromptReason.DRAFT_NOT_SEEN
+    screen = _normalised(capture)
+    draft = _draft(screen, declared) or ""
+    folded = any(re.fullmatch(pattern, draft) for pattern in declared.folded)
+    if not (folded or _same_text(draft, text)):
+        return PromptReason.DRAFT_NOT_SEEN
+    if text.startswith("/"):
+        if declared.command_menu is None:
+            return PromptReason.MENU
+        # Fails closed: a menu the pattern cannot read is not a menu that agreed with the text.
+        menu = re.search(declared.command_menu, screen, re.MULTILINE)
+        if menu is None or menu.group("first") != text.split()[0]:
+            return PromptReason.MENU
+    return None

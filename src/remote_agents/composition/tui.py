@@ -13,6 +13,7 @@ from functools import partial
 from pathlib import Path
 
 from remote_agents.adapters.agents.registry import (
+    profile_composers,
     profile_trust_dialogs,
     provider_descriptors,
 )
@@ -168,6 +169,9 @@ def _local_runtime(config, paths: ProductionPaths, project_paths, descriptors=No
         # evaluator found the gap by reading the call sites rather than the claim. What covers
         # them now is `test_every_production_composition_builds_one_descriptor_set`.
         trust_dialogs=profile_trust_dialogs(descriptors),
+        # The agents a relayed message may be typed into, and how each draws its composer
+        # (DEC-099) -- from the same descriptor set, for the same reason.
+        composers=profile_composers(descriptors),
     )
     return LocalRuntime(terminal, compatibility, gateway)
 
