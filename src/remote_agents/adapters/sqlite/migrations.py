@@ -378,6 +378,20 @@ UI_MIGRATIONS: tuple[tuple[int, str], ...] = (
         );
         """,
     ),
+    (
+        2,
+        # The prompt relay's queue (DEC-099): at most one waiting message per session, the
+        # newest. Here and not in the domain store for DEC-090's reason -- it is the bot's own
+        # bookkeeping, and a write to the watched file would redraw the bot on its own change.
+        """
+        CREATE TABLE queued_prompts (
+            session_id TEXT PRIMARY KEY,
+            text TEXT NOT NULL,
+            queued_at TEXT NOT NULL,
+            claimed_at TEXT
+        );
+        """,
+    ),
 )
 
 
