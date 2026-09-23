@@ -1,0 +1,24 @@
+
+
+  Cursor Agent
+  v2026.09.18-9a7762b
+  Tip: Use /plan to plan execution and reach the right outcome faster.
+
+
+
+
+  →  /status
+
+
+   → /status                   Show the current project's vault-context status
+     /statusline               Configure a custom status line in the CLI. Use…
+     /statusline               Wire, check, or remove the plan-execution…
+     /vault-context-status     Report the current project's vault-context…
+     /container-debug-workfl…  Use when a tor-socat, tor-haproxy, or similar…
+     /docs                     docs (living docs people share, comment on and…
+     /creating-subagents       Use whenever the user wants to create,…
+
+
+
+
+

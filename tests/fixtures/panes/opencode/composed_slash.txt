@@ -1,0 +1,24 @@
+
+  ┃
+  ┃  Run this exact shell command and nothing else: sleep 10
+  ┃
+
+     Thought · 439ms
+
+  ┃ /status                       View status                                ┃
+  ┃ /vault-context-status         Show the current project's vault-context s ┃
+  ┃ /gsd-debug                    Systematic debugging with persistent state ┃
+  ┃ /gsd-research-phase           Research how to implement a phase (standal ┃
+  ┃ /gsd-new-milestone            Start a new milestone cycle — update PROJE ┃
+  ┃ /gsd-discuss-phase            Gather phase context through adaptive ques ┃
+  ┃ /graphene-bootstrap           Set up a Pixel phone with GrapheneOS and p ┃
+  ┃ /vault-context-refresh        Re-scan the current project and rewrite th ┃
+  ┃ /gsd-health                   Diagnose planning directory health and opt ┃
+  ┃ /gsd-map-codebase             Analyze codebase with parallel mapper agen ┃
+  ┃
+  ┃  /status
+  ┃
+  ┃  Build · GPT-5.6 Terra OpenAI · medium
+  ╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+   /workspace                         8.1K (2%)  ctrl+p commands
+

@@ -1,0 +1,24 @@
+
+  Run this exact shell command and nothing
+  else: sleep 10
+
+
+  Running exactly sleep 10.
+
+
+  Retrying the same command.
+
+  $ sleep 10 4.9s
+
+ ⠘⠤ Running  105 tokens
+
+
+  → Add a follow-up               ctrl+c to stop
+
+
+  1 task
+  Auto · allowlist · /workspace ·
+  HEAD* · ctx 7%
+
+
+

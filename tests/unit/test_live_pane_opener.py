@@ -85,7 +85,7 @@ def test_the_opener_answers_claude_s_unnumbered_trust_prompt_from_a_real_capture
     trust = (
         Path(__file__).resolve().parents[1] / "fixtures" / "panes" / "claude" / "dialog_trust.txt"
     ).read_text(encoding="utf-8")
-    screens = _Screens(trust, f"  ⏵⏵ {CLAUDE_READY} on (shift+tab to cycle)")
+    screens = _Screens(trust, f"  ⏵⏵ {CLAUDE_READY[0]} (shift+tab to cycle)")
 
     open_to_composer(
         screens.capture, screens.press, ready=CLAUDE_READY, interstitials=CLAUDE_OPENING,
@@ -141,3 +141,23 @@ def test_the_highlight_is_the_last_glyph_line_not_a_transcript_echo() -> None:
 
     assert _select(approval, "No", pressed.append)
     assert pressed == ["Down", "Down", "Down", "Enter"], "`4. No` is three below `1. Yes`"
+
+
+def test_an_option_reading_exactly_the_words_beats_a_longer_one_above_it() -> None:
+    from agent_panes import _select
+
+    screen = (
+        "Approaching rate limits\n› 1. Keep current model (never show again)\n"
+        "  2. Keep current model\n  3. Switch to gpt-6-mini"
+    )
+    pressed: list[str] = []
+
+    assert _select(screen, "Keep current model", pressed.append)
+    assert pressed == ["Down", "Enter"]
+
+
+def test_claude_is_not_ready_while_its_approval_dialog_mentions_auto_mode() -> None:
+    approval = (_PANES / "claude" / "dialog_approval.txt").read_text(encoding="utf-8")
+
+    assert "auto mode" in approval, "the premise: the dialog carries the words"
+    assert not any(marker in approval for marker in CLAUDE_READY)

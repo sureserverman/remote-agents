@@ -1,0 +1,24 @@
+╰───────────────────────────────────────────╯
+
+  Tip: This is GPT-6, a new generation of intelligence. Astra is state-of-the-
+  art in coding, computer use, science, and professional work. Give it a hard
+  problem, a half-formed idea, or anything you've been meaning to build. See
+  where it takes you.
+
+• You have 1 usage limit reset available. Run /usage to use one.
+
+
+› Run this exact shell command and nothing else: sleep 10
+
+
+• I’ll run the exact command.
+
+• Ran sleep 10
+  └ (no output)
+
+  done 7:10 AM
+
+
+› [Pasted Content 2969 chars]
+
+  gpt-6-astra default · /workspace · Run sleep 10 command

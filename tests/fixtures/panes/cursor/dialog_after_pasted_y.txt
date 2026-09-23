@@ -1,0 +1,24 @@
+  Tip: Hit shift+tab to enable Plan Mode for
+  large or complex changes.
+
+
+  Run this exact shell command and nothing
+  else: sleep 10
+
+
+  Running exactly sleep 10.
+
+  $ sleep 10 Waiting for approval...
+
+──────────────────────────────────────────────────
+ $  sleep 10 in .
+
+ Run this command?
+ Not in allowlist: sleep
+  → Run (once) (y)
+    Add Shell(sleep) to allowlist? (tab)
+    Run Everything (shift+tab)
+    Skip & tell the agent what to do instead (esc
+  or n)
+
+

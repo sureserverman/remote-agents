@@ -48,7 +48,10 @@ CLAUDE_OPENING = (
     # 2.1.280 bundle's own ("Yes, I trust this folder" / "No, exit").
     Interstitial("Is this a project you created", "Yes, I trust this folder"),
 )
-CLAUDE_READY = "auto mode"
+# Either permission mode's status line: `auto mode` alone also appears inside Claude's approval
+# dialog ("auto mode handles these prompts for you"), and a host defaulting to manual mode is ready
+# too.
+CLAUDE_READY = ("auto mode on", "manual mode on")
 
 #: The glyph each TUI draws in front of the highlighted option. `>` is deliberately not one:
 #: Codex opens with `> You are in <dir>`, which is a line of prose, not a highlight.
@@ -84,6 +87,12 @@ def _options(lines: list[str]) -> tuple[list[int], int] | None:
     return list(range(first, last + 1)), cursor
 
 
+def _option_text(line: str) -> str:
+    """An option line's words, without the highlight glyph, its number or a trailing hotkey."""
+    words = re.sub(r"^\s*[›❯]?\s*(?:\d+\.\s*)?", "", line)
+    return re.sub(r"\s*\([a-z]\)\s*$", "", words).strip()
+
+
 def _select(text: str, choose: str, press: Callable[[str], None]) -> bool:
     """Move the highlight to the option carrying `choose`, then press Enter.
 
@@ -95,7 +104,10 @@ def _select(text: str, choose: str, press: Callable[[str], None]) -> bool:
     if found is None:
         return False
     options, cursor = found
-    target = next((index for index in options if choose in lines[index]), None)
+    # An option reading exactly `choose` beats a longer one that merely contains it:
+    # `Keep current model` must not land on `Keep current model (never show again)`.
+    exact = [index for index in options if _option_text(lines[index]) == choose]
+    target = exact[0] if exact else next((i for i in options if choose in lines[i]), None)
     if target is None:
         return False
     steps = options.index(target) - options.index(cursor)
@@ -109,7 +121,7 @@ def open_to_composer(
     capture: Callable[[], str],
     press: Callable[[str], None],
     *,
-    ready: str,
+    ready: str | tuple[str, ...],
     interstitials: tuple[Interstitial, ...],
     agent: str,
     timeout: float = 120.0,
@@ -140,7 +152,7 @@ def open_to_composer(
                 unanswerable = showing
                 sleep(poll)
             continue
-        if ready in text:
+        if any(marker in text for marker in ((ready,) if isinstance(ready, str) else ready)):
             return
         sleep(poll)
     if unanswerable is not None:
