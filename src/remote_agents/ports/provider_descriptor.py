@@ -110,8 +110,9 @@ class ComposerScreen:
     command_menu: str | None = None
     """A pattern (multiline) whose group `first` is the entry a command menu will run on
     `Enter`, found directly above the composer. None when the menu cannot be read -- then a
-    message beginning with `/` is pasted but never submitted, because `Enter` could run a
-    different command than the one typed (OpenCode's menu is fuzzy)."""
+    message beginning with `/` is refused before anything is pasted, because `Enter` could run a
+    different command than the one typed (OpenCode's menu is fuzzy), and a stranded draft would
+    refuse every later message."""
     draft_line: str = r"^\s*"
     """What is stripped from the start of each draft line before the lines are compared
     (OpenCode draws its composer inside a `┃` box)."""

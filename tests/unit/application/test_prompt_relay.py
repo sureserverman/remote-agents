@@ -94,12 +94,8 @@ def test_an_idle_session_is_sent_to_and_nothing_is_queued(world) -> None:
     assert world.terminal.prompts == [(session, "hello")]
 
 
-@pytest.mark.parametrize(
-    "reason",
-    [PromptReason.BUSY, PromptReason.DIALOG, PromptReason.COMPOSING, PromptReason.UNRECOGNISED,
-     PromptReason.KEYS_BUSY],
-)  # fmt: skip
-def test_a_session_that_is_not_idle_queues_the_message(world, reason) -> None:
+@pytest.mark.parametrize("reason", [PromptReason.BUSY, PromptReason.DIALOG])
+def test_a_working_or_asking_session_queues_the_message(world, reason) -> None:
     session = world.session()
     world.arm(PromptDelivery(PromptOutcome.REFUSED, reason))
 
@@ -123,9 +119,12 @@ def test_a_second_message_replaces_the_waiting_one_and_says_so(world) -> None:
 @pytest.mark.parametrize(
     "reason",
     [PromptReason.EMPTY, PromptReason.SHELL, PromptReason.MENU, PromptReason.NO_COMPOSER,
-     PromptReason.TMUX_ERROR],
+     PromptReason.TMUX_ERROR, PromptReason.COMPOSING, PromptReason.UNRECOGNISED,
+     PromptReason.KEYS_BUSY],
 )  # fmt: skip
 def test_a_refusal_waiting_cannot_fix_is_refused_not_queued(world, reason) -> None:
+    """COMPOSING, UNRECOGNISED and KEYS_BUSY included: they can sit on an idle agent that never
+    finishes again, and a message queued behind one would fire hours later, out of context."""
     session = world.session()
     world.arm(PromptDelivery(PromptOutcome.REFUSED, reason))
 
@@ -233,3 +232,75 @@ def test_the_sweep_drops_messages_for_sessions_that_stopped_or_ended(world, stat
 
     assert world.relay.pending(running).text == "stays"
     assert world.relay.pending(stopping) is None
+
+
+class _TypingTerminal(FakeTerminal):
+    """A terminal that runs `during` while it is typing -- the window a cancel can land in."""
+
+    def __init__(self, during) -> None:
+        super().__init__()
+        self.during = during
+
+    async def send_prompt(self, session_id, text):
+        delivery = await super().send_prompt(session_id, text)
+        if self.during is not None:
+            self.during()
+        return delivery
+
+
+def _typing_world(world, during) -> PromptRelay:
+    terminal = _TypingTerminal(during)
+    terminal.prompt_deliveries = [_SENT]
+    world.terminal = terminal
+    return PromptRelay(
+        terminal, world.queue, world.sessions, queues_for=lambda profile: str(profile) in _QUEUES
+    )
+
+
+def test_a_cancel_landing_while_the_retry_types_is_reported_as_overtaken(world) -> None:
+    session = world.session()
+    world.queue.queue(str(session), "hello")
+    relay = _typing_world(world, lambda: world.queue.cancel(str(session)))
+
+    result = asyncio.run(relay.retry(session))
+
+    assert (result.outcome, result.overtaken) == (RelayOutcome.SENT, True)
+    assert relay.pending(session) is None
+
+
+def test_a_newer_message_landing_while_the_retry_types_is_overtaken_and_still_waits(world) -> None:
+    session = world.session()
+    world.queue.queue(str(session), "older")
+    relay = _typing_world(world, lambda: world.queue.queue(str(session), "newer"))
+
+    result = asyncio.run(relay.retry(session))
+
+    assert (result.outcome, result.overtaken) == (RelayOutcome.SENT, True)
+    assert relay.pending(session).text == "newer"
+
+
+def test_a_retry_nobody_interrupted_is_not_overtaken(world) -> None:
+    session = world.session()
+    world.queue.queue(str(session), "hello")
+    relay = _typing_world(world, None)
+
+    assert asyncio.run(relay.retry(session)).overtaken is False
+
+
+def test_a_retry_cancelled_mid_delivery_drops_the_message_rather_than_retype_it(world) -> None:
+    """A deploy restart cancels the pass mid-paste; its claim must not be taken again later."""
+    from datetime import timedelta
+
+    session = world.session()
+    world.queue.queue(str(session), "hello")
+
+    def stop_the_service() -> None:
+        raise asyncio.CancelledError
+
+    relay = _typing_world(world, stop_the_service)
+
+    with pytest.raises(asyncio.CancelledError):
+        asyncio.run(relay.retry(session))
+
+    later = datetime.now(UTC) + timedelta(minutes=5)
+    assert world.queue.claim(str(session), now=later) is None, "it would be typed a second time"

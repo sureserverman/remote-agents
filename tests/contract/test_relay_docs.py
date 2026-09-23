@@ -37,7 +37,7 @@ def test_relay_runbook_says_what_each_outcome_means_and_what_it_never_does() -> 
     runbook = (_ROOT / "docs" / "operator-runbook.md").read_text(encoding="utf-8")
     section = runbook.split("## Sending a message to a session", 1)[1].split("\n## ", 1)[0]
 
-    for words in ("sent", "queued", "not sent", "couldn't confirm", "cancel queued message"):
+    for words in ("sent", "queued", "not sent", "not confirmed", "cancel queued message"):
         assert words in section.lower(), f"the runbook's relay section never says {words!r}"
     assert "never does" in section and "`!`" in section and "dialog" in section
 

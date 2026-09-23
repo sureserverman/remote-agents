@@ -67,7 +67,7 @@ def descriptor() -> ProviderDescriptor:
             busy=(r"^• [^\n]*esc to interrupt",),
             # A long paste folds to `[Pasted Content 2969 chars]` (`composed_long.txt`). Its
             # command menu is drawn *under* the composer, where it hides the model line, so a
-            # `/` message is pasted and not submitted (no `command_menu`).
+            # `/` message is refused before pasting (no `command_menu`).
             folded=(r"\[Pasted Content \d+ chars\]",),
             dialogs=(
                 r"^  Press enter to (?:confirm|continue)",

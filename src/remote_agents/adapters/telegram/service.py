@@ -2573,9 +2573,11 @@ class PrivateBotBoundary:
                 ),
             )
         elif result.outcome is RelayOutcome.UNCONFIRMED:
+            # Not "Sent": `Enter` may never have been pressed, and the text may be sitting in
+            # the agent's input, where the next `Enter` at the desk would submit it.
             text = (
-                f"Sent to {name}, but couldn't confirm it landed — {why}. "
-                "Check the session before sending it again."
+                f"Typed into {name}, but not confirmed — {why}. The text may still be in the "
+                "agent's input; check the session before sending it again."
             )
         else:
             text = f"Not sent — {why}."
@@ -2601,13 +2603,23 @@ class PrivateBotBoundary:
             return None
 
     def _unqueue_reply(self, session_value: str) -> RenderedMessage:
-        cancelled = self.message_relay is not None and self.message_relay.cancel(
-            SessionId.parse(session_value)
-        )
+        session_id = SessionId.parse(session_value)
+        # Read before cancelling: a claimed message is being typed right now, and removing its
+        # row cannot take back keys already sent. Saying "cancelled" there would be the one
+        # answer the owner could not trust.
+        waiting = self._waiting_message(session_id)
+        cancelled = self.message_relay is not None and self.message_relay.cancel(session_id)
+        if not cancelled:
+            text = "Nothing was waiting — the message had already been sent or dropped."
+        elif waiting is not None and waiting.claimed_at is not None:
+            text = (
+                "Cancelled, but it was already being typed in, so it may still arrive. "
+                "You'll be told if it does."
+            )
+        else:
+            text = "Queued message cancelled."
         return self._message(
-            "Queued message cancelled."
-            if cancelled
-            else "Nothing was waiting — the message had already been sent or dropped.",
+            text,
             back=self._callback("session.detail", session_value),
             back_label="Back to session",
         )
@@ -2632,11 +2644,17 @@ class PrivateBotBoundary:
             return
         name = await self._session_name(session_value)
         why = _RELAY_REASON_WORDS.get(result.reason, "") if result.reason else ""
+        late = (
+            " It was already being typed in when you cancelled or replaced it."
+            if result.overtaken
+            else ""
+        )
         if result.outcome is RelayOutcome.SENT:
-            text = f"{_MESSAGE_EMOJI} Sent queued message to {name}."
+            text = f"{_MESSAGE_EMOJI} Sent queued message to {name}.{late}"
         elif result.outcome is RelayOutcome.UNCONFIRMED:
             text = (
-                f"{_MESSAGE_EMOJI} Sent queued message to {name}, but couldn't confirm it — {why}."
+                f"{_MESSAGE_EMOJI} Typed queued message into {name}, but not confirmed — {why}. "
+                f"The text may still be in the agent's input.{late}"
             )
         else:
             text = f"{_MESSAGE_EMOJI} Dropped queued message for {name} — {why}."

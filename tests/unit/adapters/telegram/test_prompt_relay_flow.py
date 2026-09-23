@@ -207,7 +207,7 @@ async def test_a_reply_from_anyone_but_the_owner_is_dropped() -> None:
         (RelayResult(RelayOutcome.SENT), "Sent"),
         (RelayResult(RelayOutcome.REFUSED, PromptReason.SHELL), "Not sent"),
         (RelayResult(RelayOutcome.REFUSED, PromptReason.NOT_RUNNING), "isn't running"),
-        (RelayResult(RelayOutcome.UNCONFIRMED, PromptReason.SUBMIT_NOT_SEEN), "couldn't confirm"),
+        (RelayResult(RelayOutcome.UNCONFIRMED, PromptReason.DRAFT_NOT_SEEN), "not confirmed"),
         (RelayResult(RelayOutcome.QUEUED, PromptReason.BUSY), "Queued"),
     ],
     ids=["sent", "refused", "not-running", "unconfirmed", "queued"],
@@ -331,6 +331,62 @@ async def test_a_waiting_message_on_a_session_that_stopped_running_keeps_only_it
     labels = _labels(chat.messages[anchor])
     assert any(label.endswith("Cancel queued message") for label in labels)
     assert not any(label.endswith("Send message") for label in labels)
+
+
+@pytest.mark.asyncio
+async def test_an_unconfirmed_reply_never_opens_with_sent() -> None:
+    """`Enter` may never have been pressed; "Sent" would contradict the reason beside it."""
+    chat = FakeChat(chat_id=CHAT, owner_id=OWNER)
+    relay = _Relay(RelayResult(RelayOutcome.UNCONFIRMED, PromptReason.DRAFT_NOT_SEEN))
+
+    anchor = await _send(chat, _boundary(relay), "hello")
+
+    text = chat.messages[anchor].text
+    assert not text.startswith("Sent") and "may still be in the agent's input" in text
+
+
+@pytest.mark.asyncio
+async def test_cancelling_a_message_already_being_typed_says_it_may_still_arrive() -> None:
+    relay = _Relay()
+    relay.waiting = QueuedPrompt(
+        str(_SESSION), "hello", datetime.now(UTC), claimed_at=datetime.now(UTC)
+    )
+    chat = FakeChat(chat_id=CHAT, owner_id=OWNER)
+    boundary = _boundary(relay)
+    anchor = await _detail(chat, boundary)
+
+    await boundary.callback(
+        chat.press(_token(chat.messages[anchor], "Cancel queued message")), None
+    )
+
+    assert relay.cancelled == [_SESSION]
+    assert "may still arrive" in chat.messages[anchor].text
+
+
+@pytest.mark.asyncio
+async def test_cancelling_a_message_not_yet_being_typed_says_cancelled() -> None:
+    relay = _Relay()
+    relay.waiting = QueuedPrompt(str(_SESSION), "hello", datetime.now(UTC))
+    chat = FakeChat(chat_id=CHAT, owner_id=OWNER)
+    boundary = _boundary(relay)
+    anchor = await _detail(chat, boundary)
+
+    await boundary.callback(
+        chat.press(_token(chat.messages[anchor], "Cancel queued message")), None
+    )
+
+    assert "Queued message cancelled." in chat.messages[anchor].text
+
+
+@pytest.mark.asyncio
+async def test_a_delivery_that_overtook_a_cancel_says_so() -> None:
+    chat = FakeChat(chat_id=CHAT, owner_id=OWNER)
+    boundary = _boundary(_Relay())
+    boundary.attach_bot(chat.bot)
+
+    await boundary.announce_relayed(str(_SESSION), RelayResult(RelayOutcome.SENT, overtaken=True))
+
+    assert "already being typed in when you cancelled" in chat.bot_messages[-1].text
 
 
 @pytest.mark.parametrize("reason", list(PromptReason))

@@ -46,8 +46,16 @@ def test_a_claimed_message_is_delivered_once_and_settled_away(store) -> None:
 
     assert claimed is not None and claimed.text == "hello" and claimed.session_id == "s1"
     assert store.claim("s1") is None, "a message in flight cannot be claimed twice"
-    store.settle(claimed)
+    assert store.settle(claimed) is True
     assert store.pending("s1") is None
+
+
+def test_settling_a_claim_that_was_cancelled_meanwhile_says_so(store) -> None:
+    store.queue("s1", "hello")
+    claimed = store.claim("s1")
+    store.cancel("s1")
+
+    assert store.settle(claimed) is False
 
 
 def test_a_message_cancelled_while_in_flight_does_not_come_back(store) -> None:

@@ -5,10 +5,14 @@ bookkeeping: written into the watched file, every queued message would wake the 
 and redraw the bot on its own write -- the loop DEC-090 exists to prevent.
 
 **A delivery claims its row rather than deleting it.** The row stays, marked in flight
-(`claimed_at`), until the delivery settles it. So the owner's cancel still reaches a message
-whose delivery is under way, and a refused delivery's `restore` can only un-mark the very claim
-it made: a message cancelled or replaced meanwhile never comes back. A claim abandoned by a crash
-is claimable again once it is older than `_ABANDONED`.
+(`claimed_at`), until the delivery settles it. The owner's cancel removes it even then -- it
+cannot stop keys already being typed, but a refused delivery's `restore` can only un-mark the very
+claim it made, so a message cancelled or replaced meanwhile never comes back, and `settle` answers
+whether the claim was still there, so the delivery can say it was overtaken.
+
+A claim abandoned by a crash is claimable again once it is older than `_ABANDONED`. That is the
+one path left that can type a message twice -- a process killed mid-paste -- because a clean stop
+settles its claim on the way out (`PromptRelay.retry`).
 """
 
 from __future__ import annotations
@@ -75,16 +79,20 @@ class SQLiteQueuedPromptStore:
             )
         return cursor.rowcount == 1
 
-    def settle(self, prompt: QueuedPrompt) -> None:
-        """Remove a claimed message whose delivery is over -- sent, or never to be retried."""
+    def settle(self, prompt: QueuedPrompt) -> bool:
+        """Remove a claimed message whose delivery is over -- sent, or never to be retried.
+
+        False when this claim's row was already gone: cancelled or replaced during delivery.
+        """
         with self._connection:
-            self._connection.execute(
+            cursor = self._connection.execute(
                 """
                 DELETE FROM queued_prompts
                 WHERE session_id = ? AND queued_at = ? AND claimed_at = ?
                 """,
                 (prompt.session_id, prompt.queued_at.isoformat(), _claim(prompt)),
             )
+        return cursor.rowcount == 1
 
     def cancel(self, session_id: str) -> bool:
         with self._connection:

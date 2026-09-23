@@ -336,8 +336,11 @@ and the bot answers with one of four outcomes. *Sent* means the agent was idle, 
 in its input, and `Enter` cleared it. *Queued* means the agent was working or asking a question:
 the message waits, one per session with a newer one replacing it, and is typed in after that
 session's next "finished" event, when the pane is checked again. The session screen shows its
-first line with a Cancel. *Not sent* names the reason. *Sent, but couldn't confirm* means the
-text went in but the input was not seen to clear; it is never retried. The bot never types into
+first line with a Cancel. *Not sent* names the reason — including a half-typed draft already in
+the agent's input, which a later "finished" event would not clear. *Typed, but not confirmed*
+means the text went in and was not seen to be submitted, so it may still be sitting in the input;
+it is never retried. A Cancel that lands while a waiting message is already being typed cannot
+stop it, and the bot says so. The bot never types into
 a dialog and never presses `Enter` on one. A message starting with `!` is refused, because
 Claude and Codex would run it as a shell command. A `/` command is sent only to an agent whose
 command menu the project can read (Claude). An agent with no "finished" event (Cursor Agent)

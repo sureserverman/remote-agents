@@ -37,8 +37,9 @@ class QueuedPromptStore(Protocol):
         replaced meanwhile."""
         ...
 
-    def settle(self, prompt: QueuedPrompt) -> None:
-        """Remove a claimed message whose delivery is over, leaving any newer one waiting."""
+    def settle(self, prompt: QueuedPrompt) -> bool:
+        """Remove a claimed message whose delivery is over, leaving any newer one waiting --
+        False when the claim was already gone (cancelled or replaced meanwhile)."""
         ...
 
     def waiting(self) -> tuple[QueuedPrompt, ...]:

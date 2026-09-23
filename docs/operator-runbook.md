@@ -535,23 +535,28 @@ screen. Send Cancel or Back instead to leave the step without sending.
   The text is pasted as one bracketed paste, so a multi-line message arrives as one message.
   `Enter` is pressed only once the text shows in the composer and no dialog is on screen. The
   reply is *Sent*.
-- **Busy — queued.** Working, asking a question, holding a half-typed draft, a screen the
-  classifier does not recognise, or another sender holding the pane's keys: the message waits in
-  `ui.sqlite3`. There is one per session; a newer message replaces it, and the reply says so. It
+- **Busy — queued.** Working, or asking a question: the message waits in `ui.sqlite3`. Only
+  these two are queued, because only they end in a "finished" event. There is one per session; a newer message replaces it, and the reply says so. It
   is typed after that session's next "finished" event (Claude and Codex `Stop`, OpenCode
   `session.idle`), and the pane is checked again first. Still busy means it keeps waiting. The
   owner is told *Sent queued message to …* when it goes, or *Dropped queued message …* with the
-  reason when it can no longer go.
+  reason when the retry meets something waiting cannot fix (the session stopped, a draft in the
+  input, a tmux failure). A service stop that interrupts a retry drops the message rather than
+  risk typing it twice after the restart.
 - **Refused — not sent.** The reply names the reason: the session isn't running, the message was
-  empty, it starts with `!`, the agent has no readable composer, or a `/` command went to an agent
-  whose command menu cannot be read. An agent with no "finished" event (Cursor Agent; BL-106)
+  empty, it starts with `!`, the agent has no readable composer, a `/` command went to an agent
+  whose command menu cannot be read, the input already holds a half-typed draft, the screen was
+  not recognised, or another sender was typing into the pane. Those last three can sit on an idle
+  agent indefinitely, so a message queued behind one would fire hours later, out of context. An agent with no "finished" event (Cursor Agent; BL-106)
   refuses a busy send rather than queueing it, because nothing would deliver it.
 - **Unconfirmed.** The text was pasted but the composer was not seen to take it or clear. The
-  reply says *Sent, but couldn't confirm*. Check the session before sending again; it is never
+  reply says *Typed, but not confirmed*: the text may still be in the agent's input, where the
+  next `Enter` at the desk would submit it. Check the session before sending again; it is never
   retried, because a double submit is worse than an unconfirmed one.
 - **Cancel.** A queued reply carries **Cancel queued message**, and so does the session screen,
   under the waiting message's first line (`queued` fact). A stop or an end clears it too. There
-  is no expiry.
+  is no expiry. A Cancel that lands while the message is already being typed cannot stop it: the
+  reply says it may still arrive, and the delivery notice says it overtook the cancel.
 
 What the relay never does: type into a dialog, press `Enter` on one, send a keystroke or a key
 name, run a `!` shell command, or answer an approval. Slash commands are reachable where the

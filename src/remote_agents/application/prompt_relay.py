@@ -3,19 +3,26 @@
 The owner's rulings, in order:
 - **Typed now if the agent is idle.** The terminal decides that, from a fresh capture, and types
   only into an empty idle composer (`TerminalPort.send_prompt`).
-- **Otherwise queued -- one message per session, the newest replacing an older one** -- and
-  delivered after that session's next "finished" event, when the idle check runs again. Only a
-  refusal that waiting can resolve is queued: busy, a dialog, a composer holding text, a screen
-  not recognised, another sender holding the keys.
+- **Queued if the agent is working or asking a question -- one message per session, the newest
+  replacing an older one** -- and delivered after that session's next "finished" event, when the
+  idle check runs again. Only those two are queued, because only they end in a "finished" event:
+  a composer holding text, a screen not recognised, or another sender holding the keys can sit
+  on an idle agent indefinitely, and a message queued behind one would fire hours later, out of
+  context, on whatever turn next finished. Those are refused with their reason.
 - **An agent with no "finished" event this project drains refuses rather than queues**, because
   nothing would ever deliver the message. Which agents those are is the composition's to say
   (`queues_for`), read off what each provider installs -- never a provider's name here.
-- An unconfirmed delivery is never retried: a double submit is worse than an unconfirmed one.
+- An unconfirmed delivery is never retried: a double submit is worse than an unconfirmed one. A
+  retry interrupted mid-delivery -- the service stopping -- counts as unconfirmed, and so drops
+  the message rather than leaving its claim to be taken again after a restart.
+- A cancel or a newer message cannot stop a delivery already typing. The result says so
+  (`overtaken`), so a surface never reports a cancelled message as simply sent.
 """
 
 from __future__ import annotations
 
 from collections.abc import Callable
+from dataclasses import replace
 
 from remote_agents.domain.models import ProfileId, SessionId, SessionState
 from remote_agents.ports.message_relay import RelayOutcome, RelayResult
@@ -27,12 +34,9 @@ WAITABLE: frozenset[PromptReason] = frozenset(
     {
         PromptReason.BUSY,
         PromptReason.DIALOG,
-        PromptReason.COMPOSING,
-        PromptReason.UNRECOGNISED,
-        PromptReason.KEYS_BUSY,
     }
 )
-"""The refusals a later "finished" event can resolve -- the ones worth queueing for."""
+"""The refusals a later "finished" event resolves -- the only ones worth queueing for."""
 
 
 class PromptRelay:
@@ -75,14 +79,26 @@ class PromptRelay:
         if record is None or record.state is not SessionState.RUNNING:
             self._queue.settle(prompt)
             return RelayResult(RelayOutcome.REFUSED, PromptReason.NOT_RUNNING)
-        delivery = await self._terminal.send_prompt(session_id, prompt.text)
+        try:
+            delivery = await self._terminal.send_prompt(session_id, prompt.text)
+        except BaseException:
+            # Cancelled mid-delivery (the service stopping on a deploy) or failed: it may have
+            # been typed. Left claimed, it would be claimed again after `_ABANDONED` and typed a
+            # second time -- and a double submit is worse than a lost one.
+            self._queue.settle(prompt)
+            raise
         if delivery.outcome is PromptOutcome.REFUSED and delivery.reason in WAITABLE:
             # Still not idle: wait for the next "finished" -- unless the owner cancelled or
             # replaced it meanwhile, which `restore` answers by declining.
             self._queue.restore(prompt)
             return RelayResult(RelayOutcome.QUEUED, delivery.reason)
-        self._queue.settle(prompt)
-        return _result(delivery)
+        settled = self._queue.settle(prompt)
+        result = _result(delivery)
+        if delivery.outcome is PromptOutcome.REFUSED:
+            return result
+        # Typed, and the row was no longer this claim's: the owner cancelled or replaced it
+        # while it was being typed, too late to stop it.
+        return replace(result, overtaken=not settled)
 
     def cancel(self, session_id: SessionId) -> bool:
         return self._queue.cancel(str(session_id))

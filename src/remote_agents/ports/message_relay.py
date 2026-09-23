@@ -36,6 +36,9 @@ class RelayResult:
     reason: PromptReason | None = None
     replaced: bool = False
     """For QUEUED: an earlier waiting message was replaced by this one."""
+    overtaken: bool = False
+    """For a retry that typed: the owner cancelled or replaced the message while it was being
+    typed, too late to stop it."""
 
 
 class MessageRelay(Protocol):
