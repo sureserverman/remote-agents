@@ -146,6 +146,17 @@ def test_an_idle_pane_gets_the_text_through_a_buffer_then_one_enter() -> None:
     assert pane.keys == ["Enter"], "exactly one key, and it is Enter"
 
 
+def test_every_capture_the_relay_judges_by_keeps_its_styling() -> None:
+    """`-e`: Claude's suggested next message is told from a draft only by being drawn dim."""
+    pane = PromptPane(
+        [_screen("claude", "idle"), _screen("claude", "composed"), _screen("claude", "busy")]
+    )
+    assert _send(pane, _DRAFTED).outcome is PromptOutcome.SENT
+
+    captures = [call for call in pane.calls if "capture-pane" in call]
+    assert captures and all("-e" in call for call in captures), captures
+
+
 def test_the_text_is_never_an_argument_to_any_tmux_call() -> None:
     hostile = "Enter\nC-c\n$(rm -rf ~)\n; kill-server"
     pane = PromptPane([_screen("claude", "idle"), _screen("claude", "idle")])

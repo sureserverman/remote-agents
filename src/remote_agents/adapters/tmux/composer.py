@@ -34,14 +34,63 @@ class PaneState(Enum):
     """The screen is not recognisably this agent's composer. Never treated as idle."""
 
 
+_ESCAPE = re.compile(r"\x1b\[[0-9;:?]*[A-Za-z]")
+
+
 def _normalised(capture: str) -> str:
-    """The capture without trailing spaces or blank lines, so `\\Z` is the last drawn row.
+    """The capture without styling, trailing spaces or blank lines, so `\\Z` is the last drawn row.
 
     Blank rows carry no meaning to any of the patterns -- agents space their layout differently
     at different sizes (Codex draws one between its composer and model line) -- and a draft is
-    compared without its blank lines anyway.
+    compared without its blank lines anyway. A styled capture (`capture-pane -e`) reads the same
+    as a plain one here; only `_without_ghost` looks at the styling.
     """
-    return "\n".join(line.rstrip() for line in capture.splitlines() if line.strip())
+    plain = _ESCAPE.sub("", capture)
+    return "\n".join(line.rstrip() for line in plain.splitlines() if line.strip())
+
+
+def _without_ghost(capture: str) -> str:
+    """A styled capture with every dim (SGR 2) run removed, then its styling.
+
+    Claude 2.1.280 fills its empty composer with a suggested next message, drawn dim, after a
+    turn ends (`idle_suggestion.txt`). As plain text it is indistinguishable from a typed draft,
+    so every idle pane with a suggestion read COMPOSING and every relayed message was refused;
+    a typed or pasted draft is never dim. Only the draft is read from this: dim text elsewhere
+    (the status line's separators) changes nothing a pattern here needs.
+    """
+    kept: list[str] = []
+    dim = False
+    position = 0
+    for escape in _ESCAPE.finditer(capture):
+        if not dim:
+            kept.append(capture[position : escape.start()])
+        else:
+            kept.append("".join(c for c in capture[position : escape.start()] if c == "\n"))
+        position = escape.end()
+        sequence = escape.group()
+        if sequence.endswith("m"):
+            dim = _dim_after(sequence[2:-1], dim)
+    kept.append(capture[position:] if not dim else "")
+    return "".join(kept)
+
+
+def _dim_after(parameters: str, dim: bool) -> bool:
+    """Whether text after an SGR sequence with these `parameters` is dim."""
+    values = re.split(r"[;:]", parameters) if parameters else ["0"]
+    index = 0
+    while index < len(values):
+        value = values[index]
+        if value in ("", "0", "22"):
+            dim = False
+        elif value == "2":
+            dim = True
+        elif value in ("38", "48", "58") and index + 1 < len(values):
+            # An extended colour: its `2;r;g;b` or `5;n` are colour values, not "dim".
+            # `38;2;r;g;b` is five values and `38;5;n` three.
+            index += 5 if values[index + 1] == "2" else 3
+            continue
+        index += 1
+    return dim
 
 
 def _found(patterns: tuple[str, ...], screen: str) -> bool:
@@ -61,6 +110,16 @@ def _draft(screen: str, declared: ComposerScreen) -> str | None:
     return draft
 
 
+def _held(capture: str, declared: ComposerScreen) -> str | None:
+    """The composer's draft, with a dim suggestion read as the empty composer it sits in."""
+    draft = _draft(_normalised(capture), declared)
+    if draft and "\x1b[" in capture:
+        unghosted = _draft(_normalised(_without_ghost(capture)), declared)
+        if unghosted == "":
+            return ""
+    return draft
+
+
 def composer_draft(capture: str, descriptor: ProviderDescriptor) -> str | None:
     """What the composer holds, line for line -- `""` when empty -- or None when none is found.
 
@@ -70,7 +129,7 @@ def composer_draft(capture: str, descriptor: ProviderDescriptor) -> str | None:
     declared = descriptor.composer
     if declared is None:
         return None
-    return _draft(_normalised(capture), declared)
+    return _held(capture, declared)
 
 
 def classify(capture: str, descriptor: ProviderDescriptor) -> PaneState:
@@ -81,7 +140,7 @@ def classify(capture: str, descriptor: ProviderDescriptor) -> PaneState:
         return PaneState.UNKNOWN
     if _found(declared.dialogs, screen):
         return PaneState.DIALOG
-    draft = _draft(screen, declared)
+    draft = _held(capture, declared)
     if draft is None:
         # A live trust dialog replaces the composer; a leftover one (cursor-agent keeps the box
         # drawn above its composer after it is answered) sits over a composer that is found.
@@ -149,7 +208,7 @@ def enter_refusal(capture: str, descriptor: ProviderDescriptor, text: str) -> Pr
     if state is not PaneState.COMPOSING:
         return PromptReason.DRAFT_NOT_SEEN
     screen = _normalised(capture)
-    draft = _draft(screen, declared) or ""
+    draft = _held(capture, declared) or ""
     folded = any(re.fullmatch(pattern, draft) for pattern in declared.folded)
     if not (folded or _same_text(draft, text)):
         return PromptReason.DRAFT_NOT_SEEN

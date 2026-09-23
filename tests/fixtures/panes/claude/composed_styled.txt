@@ -1,0 +1,40 @@
+
+[38;5;174m ▐[48;5;16m▛███▛█[39m[49m   [1mClaude Code[0m [38;5;246mv2.1.280[39m
+[38;5;174m▝▜[48;5;16m█████[49m█▀[39m  [38;5;246mSonnet 5 with high effort · Claude Max[39m
+[38;5;174m  ▝▝ ▝▝  [39m  [38;5;246m/tmp/claude-1000/-home-user-dev-infra-remote-agents/5b607e6d-cd50-405b-9cb8-bca51e3b9df4/scratchpad/ws · [38;5;114m]8;id=1dr41sc;https://claude.ai/code/session_0177YnKJzHuRmCd6hmhsswUt?from=cli\/rc[39m]8;;\
+
+[38;5;246m  ⎿  SessionStart:startup says: [vault-context] No vault context for this project yet. Run `/vault-context:link` to scan your vault and surface [39m
+     [38;5;246mrelevant pages.[39m
+
+[38;5;239m[48;5;237m❯ [38;5;231mReply with exactly one word: ok. Then suggest I ask you about tmux.[39m
+
+[38;5;231m[49m●[39m ok
+
+  Ask me about tmux.
+
+[38;5;246m✻[39m [38;5;246mCooked for 1s · done 4:35 PM[39m
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+[38;5;244m──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+[39m❯ a draft I typed myself
+[38;5;244m──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+[39m  [38;5;39mSonnet 5[38;5;246m [2m|[0m[38;5;246m [38;5;73mws[2m[38;5;246m@[0m[38;5;34mHEAD[38;5;246m [2m|[0m[38;5;246m [38;5;216m51k/1m[38;5;246m [2m([0m[38;5;34m5%[2m[38;5;246m)[0m[38;5;246m [2m|[0m[38;5;246m effort: [38;5;34mhigh[38;5;246m [2m|[0m[38;5;246m [38;5;253m5h[38;5;246m [38;5;34m31%[38;5;246m [2m@17:10[0m[38;5;246m [2m|[0m[38;5;246m [38;5;253m7d[38;5;246m [38;5;34m4%[38;5;246m [2m@Thu Sep 24, 10:00[0m[38;5;246m [2m|[0m[38;5;246m [38;5;216mv2.1.280[39m
+  [38;5;220m⏵⏵ auto mode on[38;5;246m (shift+tab to cycle)[39m

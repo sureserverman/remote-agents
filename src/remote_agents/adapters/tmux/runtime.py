@@ -641,7 +641,7 @@ class TmuxTerminal:
         if descriptor is None:
             return False
         try:
-            capture = await self._gateway.capture(session_id)
+            capture = await self._gateway.capture(session_id, styled=True)
         except TerminalTargetMissing:
             return False
         return classify(capture, descriptor) is PaneState.COMPOSING

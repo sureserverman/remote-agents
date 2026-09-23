@@ -9,6 +9,7 @@ each dialog as DIALOG -- is what makes the relay useful rather than merely safe.
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 import pytest
@@ -170,3 +171,37 @@ def test_codex_is_busy_whatever_its_working_line_is_headed() -> None:
     assert planning != busy, "the busy fixture's working line moved"
 
     assert classify(planning, _descriptor("codex")) is PaneState.BUSY
+
+
+# --- Claude's suggested next message is not a draft -----------------------------------------
+
+
+def test_claude_s_dim_suggestion_reads_as_an_idle_composer_only_when_styled() -> None:
+    """After a turn Claude 2.1.280 fills its empty composer with a suggestion, drawn dim.
+
+    As plain text it is a draft like any other, which is why every relayed message to such a
+    pane was refused ("the agent's input already holds text") until the relay's captures kept
+    their styling (`capture-pane -e`). The fixture is the bottom of a real owner pane.
+    """
+    styled = (_PANES / "claude" / "idle_suggestion.txt").read_text(encoding="utf-8")
+    plain = re.sub(r"\x1b\[[0-9;:?]*[A-Za-z]", "", styled)
+
+    assert classify(styled, _descriptor("claude")) is PaneState.IDLE
+    assert classify(plain, _descriptor("claude")) is PaneState.COMPOSING
+
+
+def test_a_draft_in_a_truecolour_is_still_a_draft() -> None:
+    """`38;2;r;g;b` carries `2`s that are a colour model and a channel, not the dim attribute.
+
+    Closed with a full reset, so a misread `2` would strip only the draft and leave the composer
+    to be found empty -- IDLE -- rather than strip everything after it and fall back to the
+    plain draft by accident, which is how the first version of this test passed a broken parse.
+    """
+    styled = (_PANES / "claude" / "composed_styled.txt").read_text(encoding="utf-8")
+    coloured = styled.replace(
+        "a draft I typed myself", "\x1b[38;2;2;2;2ma draft I typed myself\x1b[0m"
+    )
+    assert coloured != styled, "the styled draft fixture moved"
+
+    assert classify(coloured, _descriptor("claude")) is PaneState.COMPOSING
+    assert composer_draft(coloured, _descriptor("claude")) == "a draft I typed myself"

@@ -421,14 +421,19 @@ class TmuxGateway:
             return exact_session_target(home)
         raise TerminalTargetMissing(f"managed target is gone: {home}")
 
-    async def capture(self, session_id: SessionId) -> str:
-        """Capture only one exact managed pane without tmux escape-sequence output."""
+    async def capture(self, session_id: SessionId, *, styled: bool = False) -> str:
+        """Capture only one exact managed pane, without escape sequences unless `styled`.
+
+        `styled` (`-e`) is for the composer classifier alone, which needs the dim attribute to
+        tell a suggestion from a typed draft; nothing styled is ever shown to anyone.
+        """
         target = await self._following_target(session_id)
         try:
             return await self._runner.run(
                 *self._base_argv(),
                 "capture-pane",
                 "-p",
+                *(("-e",) if styled else ()),
                 "-t",
                 target,
             )
@@ -503,7 +508,7 @@ class TmuxGateway:
             pasted = False
             try:
                 before = await self._runner.run(
-                    *self._base_argv(), "capture-pane", "-p", "-t", target
+                    *self._base_argv(), "capture-pane", "-p", "-e", "-t", target
                 )
                 if not may_paste(before):
                     return PromptSteps(before)
@@ -518,7 +523,7 @@ class TmuxGateway:
                 for _look in range(3):
                     await asyncio.sleep(settle)
                     after_paste = await self._runner.run(
-                        *self._base_argv(), "capture-pane", "-p", "-t", target
+                        *self._base_argv(), "capture-pane", "-p", "-e", "-t", target
                     )
                     if may_enter(after_paste):
                         break
@@ -527,7 +532,7 @@ class TmuxGateway:
                 await self._runner.run(*self._base_argv(), "send-keys", "-t", target, "Enter")
                 await asyncio.sleep(settle)
                 after_enter = await self._runner.run(
-                    *self._base_argv(), "capture-pane", "-p", "-t", target
+                    *self._base_argv(), "capture-pane", "-p", "-e", "-t", target
                 )
                 return PromptSteps(before, True, after_paste, True, after_enter)
             except RuntimeError as error:
