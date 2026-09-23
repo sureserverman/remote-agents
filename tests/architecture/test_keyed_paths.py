@@ -2,9 +2,10 @@
 
 `TmuxGateway.send_keys` types whatever it is given. Every sequence the runtime sends that ends in
 `Enter` can approve a dialog it lands on -- every measured approval dialog opens on its yes
-option (BL-055, DEC-063) -- so such a sequence goes through `send_keys_when`, which judges a
-styled capture under the key lock first. What still calls `send_keys` directly is listed here,
-each with the reason it may, and anything new fails this test until somebody writes its reason.
+option (BL-055; DEC-063's never-approve clause) -- so such a sequence goes through
+`send_keys_when`, which judges a styled capture under the key lock first. What still calls
+`send_keys` directly is listed here, each with the reason it may, and anything new fails this
+test until somebody writes its reason.
 The rule is DEC-103.
 """
 

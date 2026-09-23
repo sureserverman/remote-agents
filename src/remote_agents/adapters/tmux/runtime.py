@@ -805,7 +805,8 @@ class TmuxTerminal:
         if desired_state is RemoteControlState.ACTIVE:
             # `/remote-control` + `Enter` only onto an idle composer, judged from a styled capture
             # under the key lock (BL-055): on an approval dialog the `Enter` takes its resting yes
-            # option, an approval nobody gave (DEC-063); into a running turn it queues a command.
+            # option, an approval nobody gave (DEC-063's never-approve clause); into a running turn
+            # it queues a command.
             refused = await self._gateway.send_keys_when(
                 session_id,
                 REMOTE_CONTROL_ENABLE_KEYS,

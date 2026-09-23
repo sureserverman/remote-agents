@@ -908,6 +908,10 @@ def _release_state(repository: str = DEFAULT_REPOSITORY) -> dict[str, object]:
     )
 
 
+_FIRST_RESTARTING_RELEASE = "v0.48.0"
+"""The first release whose onboarding restarts a running service (BL-104)."""
+
+
 def _run_upgrade(arguments) -> int:
     """Re-install this tool at a newer pinned tag, then re-onboard, which restarts the daemon.
 
@@ -980,7 +984,19 @@ def _run_upgrade(arguments) -> int:
     # here would be run by the old version and arrive one upgrade late. Its own output says what
     # happened (`restarted: pid A -> B`, or the failure and the command to run), and its exit
     # status -- non-zero when the restart could not be proved -- is this command's.
-    print("Re-onboarding with the new version: re-registers the daemon and restarts it if running.")
+    if upgrade_available(target.removeprefix("v"), _FIRST_RESTARTING_RELEASE):
+        # A rollback below 0.48.0: that version's onboarding re-registers and never restarts, so
+        # the process serving now keeps serving. Said, with the command, rather than promised.
+        manual = " ".join(_supervisor_for_host().restart_command())
+        print(
+            f"Re-onboarding with {target}, which re-registers the daemon but does not restart it: "
+            f"run `{manual}` afterwards."
+        )
+    else:
+        print(
+            "Re-onboarding with the new version: "
+            "re-registers the daemon and restarts it if running."
+        )
     return _run_command((_installed_executable(), "onboard", "--install-daemon"))
 
 

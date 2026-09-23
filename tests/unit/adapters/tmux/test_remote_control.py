@@ -579,9 +579,10 @@ def test_the_enable_banner_is_read_from_the_tail_not_from_anywhere_on_screen() -
 # --- The toggle types only into an idle composer (BL-055) ----------------------------------------
 #
 # `/remote-control` + `Enter`, sent into an approval dialog, is an `Enter` on the dialog's resting
-# yes option: an approval nobody gave (DEC-063). Sent into a running turn it queues a command the
-# owner did not type. So both the enable keys and the open-menu keys go only onto a capture that
-# classifies IDLE -- taken under the key lock, styled, so Claude's dim suggestion is no draft.
+# yes option: an approval nobody gave (DEC-063's never-approve clause). Sent into a running turn
+# it queues a command the owner did not type. So both the enable keys and the open-menu keys go
+# only onto a capture that classifies IDLE -- taken under the key lock, styled, so Claude's dim
+# suggestion is no draft.
 
 
 @pytest.mark.parametrize("screen", ["dialog_approval", "busy", "busy_plan_status"])

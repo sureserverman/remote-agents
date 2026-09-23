@@ -127,7 +127,8 @@ It finds the newest release tag, installs it, and re-runs onboarding with the ne
 re-registers the daemon and **restarts the running service** — and proves it, printing
 `restarted: pid A -> B`. If it cannot show a new process it says so, names the command to run
 (`systemctl --user restart remote-agents.service`, or `launchctl kickstart -k …` on macOS), and
-exits non-zero; there is no restart to remember by hand. A service that was stopped is started,
+exits non-zero; there is no restart to remember by hand. The one exception is a rollback to a
+tag before 0.48.0, whose own onboarding does not restart: `upgrade` says so and names the command. A service that was stopped is started,
 not restarted. Managed agent sessions keep running across it. `--version vX.Y.Z` names a tag
 explicitly, which is also how you roll back off a bad release.
 

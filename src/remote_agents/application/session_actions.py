@@ -514,10 +514,11 @@ _GRACEFUL_FAILURES: dict[str, tuple[str, str]] = {
         "or force stop it.",
     ),
     COMPOSER_HOLDS_TEXT: (
-        "The stop was not sent: the agent's input holds text.",
-        "The exit keys end in Enter, which would have submitted that text as a message instead "
-        "of stopping the agent. Nothing was typed and the session is still running. Clear or "
-        "send the text in the session, then stop it again, or force stop it.",
+        "The stop was not sent: the agent's input holds text or is in shell mode.",
+        "The exit keys end in Enter, which would have submitted that text as a message -- or, in "
+        "shell mode, run the line as a command -- instead of stopping the agent. Nothing was "
+        "typed and the session is still running. Clear the input or leave shell mode in the "
+        "session, then stop it again, or force stop it.",
     ),
     KEYS_BUSY: (
         "The stop was not sent: something else was typing into the session.",

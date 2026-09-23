@@ -204,6 +204,8 @@ failed, the id did not change, no process is running — is reported with the co
 onboarding (and so `upgrade`) exits 1. A service that was stopped is started, not restarted. The
 managed agent sessions live on their own tmux server and keep running across the restart; the
 console's panes do not pick up the new code until `remote-agents console close` and re-entry.
+Rolling back to a tag before 0.48.0 runs *that* version's onboarding, which does not restart:
+`upgrade` says so and names the restart command to run.
 
 ### Uninstalling (DEC-051)
 

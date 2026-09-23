@@ -200,10 +200,10 @@ def _restarted(
         detail = "restarted, but the new pid could not be read"
     elif after == 0:
         detail = "restarted, but pid 0: no process is running"
-    elif before is None:
-        # Restarted, and something is running -- but with no id from before there is nothing to
-        # compare it with, so the restart is not proved (DEC-102), however likely it is.
-        detail = f"restarted to pid {after}, but the pid before could not be read, so not proved"
+    elif not before:
+        # Restarted, and something is running -- but with no id from before (unreadable, or 0)
+        # there is nothing to compare it with, so the restart is not proved (DEC-102).
+        detail = f"restarted to pid {after}, but there was no pid before to compare, so not proved"
     elif after == before:
         detail = f"same pid {after}: the service did not restart"
     if detail is not None:

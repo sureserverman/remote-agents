@@ -176,3 +176,27 @@ def test_an_upgrade_whose_restart_could_not_be_verified_exits_non_zero(
     _offering(monkeypatch, "v0.23.0", "v0.24.0")
 
     assert main(["upgrade"]) != 0
+
+
+def test_a_rollback_to_a_release_that_does_not_restart_says_so_and_names_the_command(
+    monkeypatch: pytest.MonkeyPatch, ran: list[tuple[str, ...]], capsys: pytest.CaptureFixture
+) -> None:
+    """Rolling back runs the *target's* onboarding, and before 0.48.0 that never restarted.
+
+    So the old process keeps serving, and "restarts it if running" would be the same false
+    promise BL-104 was about. Found by the close-out evaluator.
+    """
+
+    class Supervisor:
+        def restart_command(self) -> tuple[str, ...]:
+            return ("systemctl", "--user", "restart", "remote-agents.service")
+
+    monkeypatch.setattr(onboarding, "__version__", "0.48.0")
+    monkeypatch.setattr(onboarding, "_supervisor_for_host", Supervisor)
+
+    assert main(["upgrade", "--version", "v0.47.3"]) == 0
+
+    out = capsys.readouterr().out
+    assert "restarts it if running" not in out
+    assert "does not restart" in out
+    assert "systemctl --user restart remote-agents.service" in out

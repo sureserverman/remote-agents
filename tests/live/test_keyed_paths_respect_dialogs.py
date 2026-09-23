@@ -1,11 +1,11 @@
 """Live drill: a real approval dialog refuses Remote Control and a stop, and an idle pane stops.
 
 Both key sequences end in `Enter`, and a real Claude approval dialog opens on its yes option, so
-either one sent into it approves a command nobody approved (BL-055, DEC-063). The unit tests pin
-the guard against captured screens; this drives the real `TmuxTerminal` against a real Claude
-pane that is showing a real dialog, and checks that nothing reached it -- the dialog is still up
-and the command it asked about never ran. Then the drill declines the dialog itself, and at the
-idle composer the same `graceful_stop` exits the agent.
+either one sent into it approves a command nobody approved (BL-055; DEC-063's never-approve
+clause). The unit tests pin the guard against captured screens; this drives the real
+`TmuxTerminal` against a real Claude pane that is showing a real dialog, and checks that nothing
+reached it -- the dialog is still up and the command it asked about never ran. Then the drill
+declines the dialog itself, and at the idle composer the same `graceful_stop` exits the agent.
 
 **Not opt-in**, like `test_prompt_relay.py` and for its reason: it is a stage gate's command. It
 skips only for what the host lacks -- `claude`, `tmux`, or Claude's credentials. It spends one
@@ -35,6 +35,7 @@ from remote_agents.adapters.tmux.runtime import (
     TmuxTerminal,
 )
 from remote_agents.domain.models import ProfileId, SessionId
+from remote_agents.domain.profiles import closed_profiles
 from remote_agents.domain.remote_control import RemoteControlState
 from remote_agents.ports.terminal import AGENT_ASKING
 
@@ -117,7 +118,12 @@ def test_a_real_dialog_refuses_both_and_an_idle_pane_takes_the_stop(tmp_path: Pa
                     ("/usr/bin/claude",),
                     {},
                     None,
-                    graceful_keys=("/exit", "Enter"),
+                    # The curated profile's own keys, so a change there reaches this drill.
+                    graceful_keys=next(
+                        profile.graceful_keys
+                        for profile in closed_profiles()
+                        if profile.profile_id == _CLAUDE
+                    ),
                 )
             },
             startup_timeout=30.0,
