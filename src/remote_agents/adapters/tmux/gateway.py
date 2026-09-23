@@ -77,6 +77,15 @@ class PromptPartway(RuntimeError):
         self.touched = touched
 
 
+class KeysInterrupted(RuntimeError):
+    """A guarded sequence stopped partway: the screen before its next key failed the re-check."""
+
+    def __init__(self, capture: str, sent: int) -> None:
+        super().__init__(f"stopped after {sent} key(s): the screen changed under the sequence")
+        self.capture = capture
+        self.sent = sent
+
+
 @dataclass(frozen=True, slots=True)
 class PromptSteps:
     """What one relayed delivery did, capture by capture, for the caller to judge.
@@ -490,6 +499,8 @@ class TmuxGateway:
         session_id: SessionId,
         keys: tuple[str, ...],
         allowed: Callable[[str], bool],
+        *,
+        between: Callable[[str], bool] | None = None,
     ) -> str | None:
         """Send `keys` only onto a screen `allowed` accepts, judged and typed under one lock hold.
 
@@ -500,6 +511,11 @@ class TmuxGateway:
         accepted cost: the lock keeps other senders out, not the agent, which can still raise a
         dialog between the capture and the first key. Returns the capture that refused, or None
         once every key is sent.
+
+        `between`, when given, is asked of a fresh styled capture before every key after the
+        first, so a later `Enter` does not follow blind onto a dialog that came up while the
+        sequence was being typed (`/exit Enter Enter`); if it refuses, the rest is not sent and
+        `KeysInterrupted` says how many keys were.
         """
         if not keys:
             raise ValueError("a guarded key sequence must not be empty")
@@ -517,7 +533,15 @@ class TmuxGateway:
             # a `_keys_for` block to exist (`test_key_lock.py` parses this file for it).
             for index, key in enumerate(keys):
                 try:
+                    if index and between is not None:
+                        now = await self._runner.run(
+                            *self._base_argv(), "capture-pane", "-p", "-e", "-t", target
+                        )
+                        if not between(now):
+                            raise KeysInterrupted(now, index)
                     await self._runner.run(*self._base_argv(), "send-keys", "-t", target, key)
+                except KeysInterrupted:
+                    raise
                 except RuntimeError as error:
                     raise _target_missing_or(error, f"ra-{session_id}") from error
                 if index < len(keys) - 1:

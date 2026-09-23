@@ -188,3 +188,63 @@ def test_a_stop_refused_at_a_dialog_is_recorded_as_never_sent() -> None:
     from remote_agents.ports.terminal import AGENT_ASKING
 
     assert _STOP_EVENTS[AGENT_ASKING] is LifecycleEvent.GRACEFUL_STOP_NEVER_SENT
+
+
+def test_a_dialog_raised_partway_through_the_stop_gets_no_further_key() -> None:
+    import asyncio
+
+    from remote_agents.ports.terminal import AGENT_ASKING
+
+    from .test_send_prompt import PromptPane
+
+    fixtures = Path(__file__).resolve().parents[3] / "fixtures/panes/claude"
+    pane = PromptPane(
+        [(fixtures / "busy.txt").read_text(), (fixtures / "dialog_approval.txt").read_text()]
+    )
+
+    observation = asyncio.run(_composed_terminal(pane).graceful_stop(pane.session_id, _PROFILE))
+
+    assert pane.keys == ["/exit"], "the Enter would have approved the dialog that came up"
+    assert observation.detail == AGENT_ASKING and observation.live
+
+
+def test_a_stop_is_not_typed_into_shell_mode() -> None:
+    """`! <cmd>` + `/exit` + `Enter` runs `<cmd>/exit` as a shell command, outside approvals."""
+    import asyncio
+
+    from remote_agents.ports.terminal import COMPOSER_HOLDS_TEXT
+
+    pane = _claude_pane("composed_shell_mode")
+
+    observation = asyncio.run(_composed_terminal(pane).graceful_stop(pane.session_id, _PROFILE))
+
+    assert observation.detail == COMPOSER_HOLDS_TEXT
+    assert pane.keys == []
+
+
+def test_a_stop_that_submits_nothing_still_goes_to_a_dialog() -> None:
+    """OpenCode's `C-c` has no `Enter` to approve anything with, so no screen holds it back."""
+    import asyncio
+
+    from remote_agents.adapters.agents.registry import profile_composers
+
+    from .test_send_prompt import PromptPane
+
+    fixtures = Path(__file__).resolve().parents[3] / "fixtures/panes/opencode"
+    dialog = next(fixtures.glob("dialog_*.txt")).read_text(encoding="utf-8")
+    pane = PromptPane([dialog], profile="opencode")
+    terminal = TmuxTerminal(
+        TmuxGateway("remote-agents-test-graceful", pane),
+        {},
+        {
+            ProfileId("opencode"): LaunchProfile(
+                "/usr/bin/opencode", ("/usr/bin/opencode",), {}, None, graceful_keys=("C-c",)
+            )
+        },
+        startup_timeout=0.05,
+        composers=profile_composers(),
+    )
+
+    asyncio.run(terminal.graceful_stop(pane.session_id, ProfileId("opencode")))
+
+    assert pane.keys == ["C-c"]

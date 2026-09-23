@@ -245,3 +245,13 @@ def test_a_draft_in_a_truecolour_is_still_a_draft() -> None:
 
     assert classify(coloured, _descriptor("claude")) is PaneState.COMPOSING
     assert composer_draft(coloured, _descriptor("claude")) == "a draft I typed myself"
+
+
+def test_a_hyperlink_at_the_head_of_a_dialog_line_does_not_hide_the_dialog() -> None:
+    """Claude draws OSC 8 links; one opening a dialog's line must not unanchor its pattern."""
+    dialog = (_PANES / "claude" / "dialog_approval.txt").read_text(encoding="utf-8")
+    line = next(line for line in dialog.splitlines() if "Do you want to proceed?" in line)
+    linked = dialog.replace(line, "\x1b]8;;https://example.invalid\x1b\\" + line, 1)
+    assert linked != dialog
+
+    assert classify(linked, _descriptor("claude")) is PaneState.DIALOG

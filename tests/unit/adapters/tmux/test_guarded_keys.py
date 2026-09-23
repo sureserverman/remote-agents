@@ -152,3 +152,31 @@ def test_an_empty_sequence_is_refused_as_send_keys_refuses_it() -> None:
 
     with pytest.raises(ValueError):
         asyncio.run(_gateway(pane).send_keys_when(pane.session_id, (), lambda _: True))
+
+
+def test_a_screen_that_changes_partway_stops_the_rest_of_the_sequence() -> None:
+    """`/exit Enter Enter`: a later `Enter` does not follow blind onto a dialog raised meanwhile."""
+    from remote_agents.adapters.tmux.gateway import KeysInterrupted
+
+    screens = iter(["a composer", "a dialog"])
+
+    class Changing(_Pane):
+        async def run(self, *argv: str) -> str:
+            if "capture-pane" in argv:
+                self.calls.append(argv)
+                return next(screens)
+            return await super().run(*argv)
+
+    changing = Changing()
+    with pytest.raises(KeysInterrupted) as interrupted:
+        asyncio.run(
+            _gateway(changing).send_keys_when(
+                changing.session_id,
+                ("/exit", "Enter", "Enter"),
+                lambda _: True,
+                between=lambda screen: screen != "a dialog",
+            )
+        )
+
+    assert changing.keys == ["/exit"]
+    assert (interrupted.value.sent, interrupted.value.capture) == (1, "a dialog")

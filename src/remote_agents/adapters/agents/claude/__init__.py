@@ -107,6 +107,8 @@ def descriptor(
         # and an ellipsis (`✽ Puzzling…`); the finished line (`✻ Worked for 7s · done`) has none.
         composer=ComposerScreen(
             composer=r"^─{10,}\n❯ ?(?P<draft>[^\n]*(?:\n  [^\n]*)*?)\n─{10,}(?:\n[^\n]*){0,12}\Z",
+            # Shell mode puts `!` where `❯` was (`composed_shell_mode.txt`).
+            shell=r"^─{10,}\n![^\n]*(?:\n  [^\n]*)*?\n─{10,}(?:\n[^\n]*){0,12}\Z",
             busy=(r"^[✻✽✶✳✢·*] \S[^\n]*…",),
             dialogs=(r"^ \S[^\n]*\bEsc to cancel\b", r"^ Do you want to proceed\?"),
             # A long paste folds to `[Pasted text #1]` (`composed_long.txt`).

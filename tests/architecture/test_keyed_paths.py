@@ -19,19 +19,18 @@ _RUNTIME = Path(__file__).resolve().parents[2] / "src/remote_agents/adapters/tmu
 _ALLOWED: dict[tuple[str, str], tuple[int, str]] = {
     ("_remote_control", "REMOTE_CONTROL_DISMISS_MENU_KEYS"): (
         2,
-        "`Escape` alone: it dismisses a menu and does nothing at a prompt or to a dialog's choice",
-    ),
-    ("_remote_control", "REMOTE_CONTROL_DISCONNECT_KEYS"): (
-        1,
-        "`Up Up Enter` only after the menu reads open on two consecutive captures a settle apart",
+        "`Escape` alone approves nothing: it dismisses the menu our own `/remote-control` opened, "
+        "and at worst declines a dialog or interrupts a turn",
     ),
     ("answer_trust", "keys"): (
         1,
-        "types into the folder-trust dialog by design, keys planned from its reading (DEC-079)",
+        "types into the folder-trust dialog by design, keys planned from its reading (DEC-079); "
+        "read outside the send's lock hold, so only a second trust answer can race it",
     ),
     ("decline_trust", "keys"): (
         1,
-        "declines the folder-trust dialog by design, gated on its classification (DEC-078)",
+        "declines the folder-trust dialog by design, gated on its reading (DEC-078); read "
+        "outside the send's lock hold, so only a second trust answer can race it",
     ),
 }
 
@@ -79,3 +78,21 @@ def test_the_keyed_sweep_catches_an_unlisted_call() -> None:
     added = keyed_calls(mutant) - keyed_calls(source)
 
     assert added == Counter({("graceful_stop", "profile.graceful_keys"): 1})
+
+
+def test_every_agent_whose_stop_submits_declares_a_composer() -> None:
+    """A stop ending in `Enter` is judged by the agent's composer; without one it goes unchecked.
+
+    `TmuxTerminal.graceful_stop` sends an unguarded stop for an agent with no composer, which is
+    only safe while no such agent's stop submits anything. This is what keeps that true.
+    """
+    from remote_agents.adapters.agents.registry import profile_composers
+    from remote_agents.domain.profiles import closed_profiles
+
+    composers = profile_composers()
+    submitting = [
+        str(profile.profile_id) for profile in closed_profiles() if "Enter" in profile.graceful_keys
+    ]
+    assert submitting, "no stop submits anything, so this check would be vacuous"
+
+    assert [agent for agent in submitting if agent not in composers] == []

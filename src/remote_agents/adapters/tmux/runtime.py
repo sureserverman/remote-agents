@@ -7,7 +7,6 @@ import contextlib
 import json
 import logging
 import os
-import re
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -19,9 +18,16 @@ from remote_agents.adapters.tmux.composer import (
     classify,
     composer_draft,
     enter_refusal,
+    in_shell_mode,
     prompt_text,
 )
-from remote_agents.adapters.tmux.gateway import PromptPartway, TmuxGateway, TmuxRunner
+from remote_agents.adapters.tmux.composer import unstyled as _plain
+from remote_agents.adapters.tmux.gateway import (
+    KeysInterrupted,
+    PromptPartway,
+    TmuxGateway,
+    TmuxRunner,
+)
 from remote_agents.adapters.tmux.key_lock import KeysBusy
 from remote_agents.adapters.tmux.remote_control import (
     REMOTE_CONTROL_DISCONNECT_KEYS,
@@ -511,20 +517,35 @@ class TmuxTerminal:
                 session_id, live=False, preserved=False, detail=UNKNOWN_SESSION
             )
         descriptor = self._composers.get(str(observation.profile_id))
+        # Only a sequence that submits needs the screen checked. `Enter` into a draft submits
+        # `<draft>/exit` as a prompt, into shell mode runs it as a command, and into a dialog takes
+        # its resting yes option (BL-055); OpenCode's `C-c` does none of those. Every profile whose
+        # stop submits declares a composer (`tests/architecture/test_keyed_paths.py`).
+        guarded = descriptor is not None and "Enter" in profile.graceful_keys
 
         def stoppable(capture: str) -> bool:
-            # Every stop sequence ends in `Enter`. Into a draft it submits `<draft>/exit` as a
-            # prompt; into a dialog it takes the resting yes option (BL-055). Idle, a running turn
-            # and a screen nothing recognises all take the stop: it has to reach an agent mid-turn.
-            if descriptor is None:
+            # Idle, a running turn and a screen nothing recognises all take the stop: it has to
+            # reach an agent mid-turn. No title, deliberately: it only ever adds BUSY.
+            if not guarded:
                 return True
-            # No title, deliberately: it only ever adds BUSY, and a busy pane takes the stop.
+            if in_shell_mode(capture, descriptor):
+                return False
             return classify(capture, descriptor) not in (PaneState.COMPOSING, PaneState.DIALOG)
+
+        def unasked(capture: str) -> bool:
+            # Before each later key: the first `Enter` of `/exit Enter Enter` must not be followed
+            # blind onto a dialog that came up meanwhile. Only a dialog stops it -- between the
+            # keys the screen is a command menu or "Shutting down…" (measured, Codex 0.155.1).
+            return not guarded or classify(capture, descriptor) is not PaneState.DIALOG
 
         try:
             refused = await self._gateway.send_keys_when(
-                session_id, profile.graceful_keys, stoppable
+                session_id, profile.graceful_keys, stoppable, between=unasked
             )
+        except KeysInterrupted:
+            # Partway: a dialog came up, and the rest was not sent. Reported as never sent, which
+            # understates -- the first keys landed -- on DEC-038 accepted cost 2's reasoning.
+            return TerminalObservation(session_id, live=True, preserved=False, detail=AGENT_ASKING)
         except KeysBusy:
             return TerminalObservation(session_id, live=True, preserved=False, detail=KEYS_BUSY)
         except TerminalTargetMissing:
@@ -540,7 +561,7 @@ class TmuxTerminal:
             return TerminalObservation(
                 session_id, live=False, preserved=False, detail=UNKNOWN_SESSION
             )
-        if refused is not None and descriptor is not None:
+        if refused is not None and guarded:
             # Not sent, and said which (DEC-022): the owner's next step differs.
             asking = classify(refused, descriptor) is PaneState.DIALOG
             return TerminalObservation(
@@ -752,7 +773,9 @@ class TmuxTerminal:
         """
         try:
             return await self._remote_control(session_id, desired_state)
-        except KeysBusy:
+        except (KeysBusy, KeysInterrupted):
+            # Another sender held the keys, or a dialog came up between `/remote-control` and its
+            # `Enter`, which was then not sent.
             return RemoteControlState.UNKNOWN
 
     async def _remote_control(
@@ -772,7 +795,12 @@ class TmuxTerminal:
             return RemoteControlState.UNKNOWN
 
         def idle(capture: str) -> bool:
+            # No title: Claude, the one agent this toggles, marks nothing there (BL-108).
             return classify(capture, descriptor) is PaneState.IDLE
+
+        def unasked(capture: str) -> bool:
+            # Before the `Enter` after `/remote-control`: never onto a dialog raised meanwhile.
+            return classify(capture, descriptor) is not PaneState.DIALOG
 
         if desired_state is RemoteControlState.ACTIVE:
             # `/remote-control` + `Enter` only onto an idle composer, judged from a styled capture
@@ -784,6 +812,7 @@ class TmuxTerminal:
                 lambda capture: (
                     _remote_control_state(_plain(capture)) is not desired_state and idle(capture)
                 ),
+                between=unasked,
             )
             if refused is not None:
                 current = _remote_control_state(_plain(refused))
@@ -835,6 +864,7 @@ class TmuxTerminal:
                 and _remote_control_state(_plain(capture)) is not desired_state
                 and idle(capture)
             ),
+            between=unasked,
         )
         if refused is not None:
             plain = _plain(refused)
@@ -884,7 +914,18 @@ class TmuxTerminal:
             # state the session is really in, and the next press finds the menu and disables.
             # Found by the Stage 1 gate's Tier-2 review.
             return _remote_control_state(capture)
-        await self._gateway.send_keys(session_id, REMOTE_CONTROL_DISCONNECT_KEYS)
+
+        # The two reads prove a settled menu; this one, under the key lock with the arrows, proves
+        # it is still there when they go -- a stop from the other surface cannot come between.
+        # Re-checked before each key too, so no arrow follows a menu that went away.
+        def menu_up(capture: str) -> bool:
+            return remote_control_menu_is_open(_plain(capture))
+
+        refused = await self._gateway.send_keys_when(
+            session_id, REMOTE_CONTROL_DISCONNECT_KEYS, menu_up, between=menu_up
+        )
+        if refused is not None:
+            return _remote_control_state(_plain(refused))
         await asyncio.sleep(self._waits.remote_control_disable)
         return _remote_control_state(await self._gateway.capture(session_id))
 
@@ -1144,14 +1185,3 @@ class TmuxTerminal:
 
 def _remote_control_state(capture: str) -> RemoteControlState:
     return RemoteControlState(classify_remote_control_capture(capture).value)
-
-
-#: CSI sequences (colour, dim) and OSC sequences (Claude's hyperlinks), as `capture-pane -e`
-#: keeps them. An OSC left unterminated would survive, and a marker behind it would read as
-#: absent: the pane reads UNKNOWN, as an unreadable one always has (DEC-084).
-_STYLING = re.compile(r"\x1b\[[0-9;:?]*[A-Za-z]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)")
-
-
-def _plain(capture: str) -> str:
-    """A styled capture as the Remote Control markers read it: text only, every row kept."""
-    return _STYLING.sub("", capture)

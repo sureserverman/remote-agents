@@ -309,9 +309,10 @@ async def test_a_disable_whose_menu_is_already_open_does_not_ask_for_it_again() 
     left the menu up, the disable sent the open keys at an open menu and dismissed it, and the
     arrows then landed on the prompt.
     """
-    # Four captures: the first sees the menu; the second and third are the two consecutive
-    # proofs a settle apart (one frame is not proof); the fourth is the result.
-    runner = _ScriptedRunner(_pane(), [_MENU, _MENU, _MENU, _DISCONNECTED])
+    # The first sees the menu; the next two are the proofs a settle apart (one frame is not
+    # proof); the fourth is read under the key lock with the arrows, and the fifth and sixth
+    # before the second and third arrow; the seventh is the result.
+    runner = _ScriptedRunner(_pane(), [*[_MENU] * 6, _DISCONNECTED])
 
     result = await _terminal(runner).remote_control(_SESSION, DomainRemoteControlState.INACTIVE)
 
@@ -320,7 +321,9 @@ async def test_a_disable_whose_menu_is_already_open_does_not_ask_for_it_again() 
 
 
 async def test_a_disable_opens_the_menu_when_it_is_closed_and_then_uses_it() -> None:
-    runner = _ScriptedRunner(_pane(), [_NO_MENU, _MENU, _MENU, _DISCONNECTED])
+    # The prompt, then the prompt again before the open-menu `Enter`, then the menu for the two
+    # proofs, the locked read and the two reads between the arrows; then the result.
+    runner = _ScriptedRunner(_pane(), [_NO_MENU, _NO_MENU, *[_MENU] * 5, _DISCONNECTED])
 
     result = await _terminal(runner).remote_control(_SESSION, DomainRemoteControlState.INACTIVE)
 
@@ -688,3 +691,16 @@ async def test_an_idle_disconnected_pane_is_enabled_and_needs_no_tidying() -> No
 
     assert result is DomainRemoteControlState.ACTIVE
     assert runner.keys_typed == REMOTE_CONTROL_ENABLE_KEYS
+
+
+async def test_no_arrow_goes_to_a_menu_gone_by_the_read_taken_under_the_lock() -> None:
+    """Two reads proved the menu; the third, taken with the arrows under the key lock, did not.
+
+    A stop from the other surface landing between the proofs and the arrows would have closed
+    the menu, and `Up, Up, Enter` at the prompt submits the owner's last message.
+    """
+    runner = _ScriptedRunner(_pane(), [_MENU, _MENU, _MENU, _NO_MENU])
+
+    await _terminal(runner).remote_control(_SESSION, DomainRemoteControlState.INACTIVE)
+
+    assert REMOTE_CONTROL_DISCONNECT_KEYS[0] not in runner.keys_typed

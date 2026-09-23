@@ -61,6 +61,8 @@ def descriptor() -> ProviderDescriptor:
         # matched loosely: a false DIALOG holds a message, a missed one types into a prompt.
         composer=ComposerScreen(
             composer=r"^› (?P<draft>[^\n]*(?:\n  [^\n]*)*?)\n  [^\n]* · [^\n]*\Z",
+            # Shell mode puts `!` where `›` was (`composed_shell_mode.txt`).
+            shell=r"^![^\n]*(?:\n  [^\n]*)*?\n  [^\n]* · [^\n]*\Z",
             placeholders=(r"Ask Codex to do anything", r"Ask a follow-up question"),
             # Any column-0 bullet carrying `esc to interrupt`: Codex heads the line with its
             # reasoning summary (`• Planning edits (9s • esc to interrupt)`), not always `Working`.

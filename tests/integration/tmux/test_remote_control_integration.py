@@ -2,7 +2,7 @@ from pathlib import Path
 
 from remote_agents.adapters.agents.registry import profile_composers
 from remote_agents.adapters.tmux.codec import ManagedPane
-from remote_agents.adapters.tmux.gateway import TmuxInventory
+from remote_agents.adapters.tmux.gateway import KeysInterrupted, TmuxInventory
 from remote_agents.adapters.tmux.runtime import TmuxTerminal, _remote_control_state
 from remote_agents.domain.models import ProfileId, ProjectId, SessionId
 from remote_agents.domain.remote_control import RemoteControlState
@@ -70,10 +70,16 @@ class Gateway:
     async def send_keys(self, session_id, keys):
         self.sent.append((session_id, keys))
 
-    async def send_keys_when(self, session_id, keys, allowed):
+    async def send_keys_when(self, session_id, keys, allowed, *, between=None):
         capture = await self.capture(session_id)
         if not allowed(capture):
             return capture
+        # One re-read before each key after the first, as the gateway does.
+        for sent in range(1, len(keys)):
+            if between is not None:
+                now = await self.capture(session_id)
+                if not between(now):
+                    raise KeysInterrupted(now, sent)
         await self.send_keys(session_id, keys)
         return None
 
@@ -118,11 +124,12 @@ async def test_disable_opens_the_remote_control_menu_before_disconnect(monkeypat
             # the menu, then licenses the arrows on **two consecutive** reads a settle apart --
             # one frame is not proof, because a capture is a picture of a pane mid-repaint as
             # readily as of a settled one. The fourth is the result.
-            return {
-                1: _idle_showing(_ENABLED_BANNER),
-                2: _MENU,
-                3: _MENU,
-            }.get(self.capture_count, "Remote Control disconnected.")
+            # And more since the keys became guarded: a re-read before the open-menu `Enter`,
+            # one under the key lock with the arrows, and one before each later arrow.
+            opened = _idle_showing(_ENABLED_BANNER)
+            return {1: opened, 2: opened, 3: _MENU, 4: _MENU, 5: _MENU, 6: _MENU, 7: _MENU}.get(
+                self.capture_count, "Remote Control disconnected."
+            )
 
     gateway = ActiveGateway(session_id)
     terminal = TmuxTerminal(gateway, {}, {}, startup_timeout=1, composers=profile_composers())

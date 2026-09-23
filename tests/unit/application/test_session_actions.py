@@ -472,6 +472,9 @@ def test_every_detail_a_graceful_stop_can_return_has_its_own_words() -> None:
     assert len(details) >= 5, f"the sweep found too little to mean anything: {details}"
 
     assert details <= _GRACEFUL_FAILURES.keys(), details - _GRACEFUL_FAILURES.keys()
+    from remote_agents.application.services import _STOP_EVENTS
+
+    assert details <= _STOP_EVENTS.keys(), details - _STOP_EVENTS.keys()
     for detail in details:
         failure = stop_failure(_Observation(preserved=False, detail=detail))
         assert failure is not None

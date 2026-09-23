@@ -34,7 +34,18 @@ class PaneState(Enum):
     """The screen is not recognisably this agent's composer. Never treated as idle."""
 
 
-_ESCAPE = re.compile(r"\x1b\[[0-9;:?]*[A-Za-z]")
+_ESCAPE = re.compile(r"\x1b\[[0-9;:?]*[A-Za-z]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)")
+"""What `capture-pane -e` keeps: CSI sequences (colour, dim) and OSC ones (Claude's hyperlinks).
+
+OSC too, because Claude draws OSC 8 links into its screens, and one at the head of a dialog's
+line would hide the anchored dialog pattern -- reading a dialog as a screen nothing recognises,
+which a stop is allowed onto. An OSC left unterminated survives, and anything behind it on its
+line reads as absent."""
+
+
+def unstyled(capture: str) -> str:
+    """A styled capture with its escape sequences removed and every row kept."""
+    return _ESCAPE.sub("", capture)
 
 
 def _normalised(capture: str) -> str:
@@ -130,6 +141,18 @@ def composer_draft(capture: str, descriptor: ProviderDescriptor) -> str | None:
     if declared is None:
         return None
     return _held(capture, declared)
+
+
+def in_shell_mode(capture: str, descriptor: ProviderDescriptor) -> bool:
+    """Whether the agent's composer is in shell mode (`!`), empty or not.
+
+    Anything submitted there runs as a shell command, outside the agent's approvals, so a fixed
+    sequence ending in `Enter` -- a stop's `/exit` -- must not be typed into it.
+    """
+    declared = descriptor.composer
+    if declared is None or declared.shell is None:
+        return False
+    return re.search(declared.shell, _normalised(capture), re.MULTILINE) is not None
 
 
 def classify(capture: str, descriptor: ProviderDescriptor, title: str = "") -> PaneState:

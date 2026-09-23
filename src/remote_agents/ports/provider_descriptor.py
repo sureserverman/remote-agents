@@ -126,6 +126,10 @@ class ComposerScreen:
     draft_line: str = r"^\s*"
     """What is stripped from the start of each draft line before the lines are compared
     (OpenCode draws its composer inside a `┃` box)."""
+    shell: str | None = None
+    """A pattern (multiline) that matches, at the very end of the capture, the composer in shell
+    mode (`!`), where whatever is submitted runs as a shell command. None when the agent has no
+    such mode or it has not been measured."""
 
 
 @dataclass(frozen=True, slots=True)
