@@ -7,6 +7,7 @@ import contextlib
 import json
 import logging
 import os
+import re
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -739,8 +740,9 @@ class TmuxTerminal:
     ) -> RemoteControlState:
         """Run only the qualified Claude key sequences against one idle exact managed pane.
 
-        UNKNOWN, with nothing typed, when the composer holds text (the sequence's `Enter` would
-        submit it) or another sender holds the pane's keys (BL-056).
+        UNKNOWN, with nothing typed, unless a styled capture taken under the pane's key lock reads
+        an idle composer (BL-055) -- a draft, a running turn and a dialog all refuse, because the
+        sequence ends in `Enter` -- or when another sender holds the pane's keys (BL-056).
         """
         try:
             return await self._remote_control(session_id, desired_state)
@@ -757,15 +759,29 @@ class TmuxTerminal:
             or observation.profile_id != ProfileId("claude")
         ):
             return RemoteControlState.UNKNOWN
-        capture = await self._gateway.capture(session_id)
         descriptor = self._composers.get(str(observation.profile_id))
-        if descriptor is not None and classify(capture, descriptor) is PaneState.COMPOSING:
+        if descriptor is None:
+            # Nothing can tell an idle prompt from a dialog or a running turn, so nothing
+            # licenses the `Enter` these sequences end in (BL-055).
             return RemoteControlState.UNKNOWN
-        current = _remote_control_state(capture)
-        if current is desired_state:
-            return current
+
+        def idle(capture: str) -> bool:
+            return classify(capture, descriptor) is PaneState.IDLE
+
         if desired_state is RemoteControlState.ACTIVE:
-            await self._gateway.send_keys(session_id, REMOTE_CONTROL_ENABLE_KEYS)
+            # `/remote-control` + `Enter` only onto an idle composer, judged from a styled capture
+            # under the key lock (BL-055): on an approval dialog the `Enter` takes its resting yes
+            # option, an approval nobody gave (DEC-063); into a running turn it queues a command.
+            refused = await self._gateway.send_keys_when(
+                session_id,
+                REMOTE_CONTROL_ENABLE_KEYS,
+                lambda capture: (
+                    _remote_control_state(_plain(capture)) is not desired_state and idle(capture)
+                ),
+            )
+            if refused is not None:
+                current = _remote_control_state(_plain(refused))
+                return current if current is desired_state else RemoteControlState.UNKNOWN
             await asyncio.sleep(self._waits.remote_control_enable)
             capture = await self._gateway.capture(session_id)
             # `/remote-control` enables a disconnected pane and **opens the status menu** on a
@@ -803,8 +819,23 @@ class TmuxTerminal:
         # So: open the menu only if one is not already up -- asking twice is what closed it,
         # because `Enter` on the open menu selects its resting *Continue* row -- and send the
         # arrows only from a capture that proves a menu is there. No proof, no keys.
-        if not remote_control_menu_is_open(capture):
-            await self._gateway.send_keys(session_id, REMOTE_CONTROL_OPEN_MENU_KEYS)
+        # The open-menu keys are the enable keys, so they take the enable path's guard: only onto
+        # an idle composer (BL-055). A menu already up is not idle, and needs no keys.
+        refused = await self._gateway.send_keys_when(
+            session_id,
+            REMOTE_CONTROL_OPEN_MENU_KEYS,
+            lambda capture: (
+                not remote_control_menu_is_open(_plain(capture))
+                and _remote_control_state(_plain(capture)) is not desired_state
+                and idle(capture)
+            ),
+        )
+        if refused is not None:
+            plain = _plain(refused)
+            if _remote_control_state(plain) is desired_state:
+                return desired_state
+            if not remote_control_menu_is_open(plain):
+                return RemoteControlState.UNKNOWN
         # Settle and re-read in **both** branches, including the one that already saw a menu.
         # A capture is a picture of a pane mid-repaint as readily as of a settled one, so a
         # menu seen in the capture above may be one that has just been dismissed -- and the
@@ -1107,3 +1138,14 @@ class TmuxTerminal:
 
 def _remote_control_state(capture: str) -> RemoteControlState:
     return RemoteControlState(classify_remote_control_capture(capture).value)
+
+
+#: CSI sequences (colour, dim) and OSC sequences (Claude's hyperlinks), as `capture-pane -e`
+#: keeps them. An OSC left unterminated would survive, and a marker behind it would read as
+#: absent: the pane reads UNKNOWN, as an unreadable one always has (DEC-084).
+_STYLING = re.compile(r"\x1b\[[0-9;:?]*[A-Za-z]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)")
+
+
+def _plain(capture: str) -> str:
+    """A styled capture as the Remote Control markers read it: text only, every row kept."""
+    return _STYLING.sub("", capture)

@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 
+from remote_agents.adapters.agents.registry import profile_composers
 from remote_agents.adapters.tmux.gateway import TmuxGateway
 from remote_agents.adapters.tmux.remote_control import (
     REMOTE_CONTROL_DISCONNECT_KEYS,
@@ -18,7 +19,7 @@ from remote_agents.adapters.tmux.remote_control import (
     remote_control_menu_is_open,
     remote_control_was_enabled,
 )
-from remote_agents.adapters.tmux.runtime import LaunchProfile, TmuxTerminal
+from remote_agents.adapters.tmux.runtime import LaunchProfile, TmuxTerminal, _plain
 from remote_agents.domain.models import ProfileId, ProjectId, SessionId
 from remote_agents.domain.remote_control import RemoteControlState as DomainRemoteControlState
 
@@ -110,6 +111,9 @@ def _terminal(runner: _Runner) -> TmuxTerminal:
         {ProjectId("opaque-editor"): Path("/")},
         {_PROFILE: profile},
         startup_timeout=0.05,
+        # The composer is what tells an idle prompt from a dialog or a running turn, and the
+        # toggle types only onto an idle one (BL-055), as the relay does (DEC-099).
+        composers=profile_composers(),
     )
 
 
@@ -189,7 +193,9 @@ class _ScriptedRunner(_Runner):
         if "list-panes" in argv:
             return self._listing
         if "capture-pane" in argv:
-            return self._captures[0] if len(self._captures) == 1 else self._captures.pop(0)
+            screen = self._captures[0] if len(self._captures) == 1 else self._captures.pop(0)
+            # As tmux does: styling only when `-e` asks for it.
+            return screen if "-e" in argv else _plain(screen)
         return ""
 
     @property
@@ -216,7 +222,15 @@ _MENU = (
     "   ❯ Continue\n"
     "   Enter to select · Esc to continue\n"
 )
-_NO_MENU = "❯ \n  ⏵⏵ auto mode on (shift+tab to cycle) · ← for agents\n"
+_PANES = Path(__file__).resolve().parents[3] / "fixtures" / "panes" / "claude"
+
+
+def _claude(name: str) -> str:
+    return (_PANES / f"{name}.txt").read_text(encoding="utf-8")
+
+
+#: A real idle Claude pane: the only screen the toggle's `/remote-control` + `Enter` may land on.
+_NO_MENU = _claude("idle")
 _DISCONNECTED = "❯ /remote-control\n  ⎿  Remote Control disconnected.\n"
 
 
@@ -557,3 +571,120 @@ def test_the_enable_banner_is_read_from_the_tail_not_from_anywhere_on_screen() -
     assert "/remote-control is active" in source, "the short form is still searched for here"
     assert not remote_control_was_enabled(source), "and must not be mistaken for the banner"
     assert remote_control_was_enabled(_ENABLED)
+
+
+# --- The toggle types only into an idle composer (BL-055) ----------------------------------------
+#
+# `/remote-control` + `Enter`, sent into an approval dialog, is an `Enter` on the dialog's resting
+# yes option: an approval nobody gave (DEC-063). Sent into a running turn it queues a command the
+# owner did not type. So both the enable keys and the open-menu keys go only onto a capture that
+# classifies IDLE -- taken under the key lock, styled, so Claude's dim suggestion is no draft.
+
+
+@pytest.mark.parametrize("screen", ["dialog_approval", "busy", "busy_plan_status"])
+@pytest.mark.parametrize(
+    "desired", [DomainRemoteControlState.ACTIVE, DomainRemoteControlState.INACTIVE]
+)
+async def test_nothing_is_typed_at_a_dialog_or_busy_pane(
+    screen: str, desired: DomainRemoteControlState
+) -> None:
+    runner = _ScriptedRunner(_pane(), [_claude(screen)])
+
+    result = await _terminal(runner).remote_control(_SESSION, desired)
+
+    assert result is DomainRemoteControlState.UNKNOWN
+    assert runner.keys_typed == (), f"keys reached a pane showing {screen}"
+
+
+@pytest.mark.parametrize("screen", ["idle_suggestion", "idle_multiline_status"])
+async def test_an_idle_pane_with_a_suggestion_or_a_long_status_line_gets_the_enable_keys(
+    screen: str,
+) -> None:
+    """Both read COMPOSING or UNKNOWN from a plain capture before 0.47.x, and refused."""
+    runner = _ScriptedRunner(_pane(), [_claude(screen)])
+
+    await _terminal(runner).remote_control(_SESSION, DomainRemoteControlState.ACTIVE)
+
+    assert runner.keys_typed[: len(REMOTE_CONTROL_ENABLE_KEYS)] == REMOTE_CONTROL_ENABLE_KEYS
+
+
+async def test_the_screen_that_licenses_the_keys_is_a_styled_capture() -> None:
+    runner = _ScriptedRunner(_pane(), [_claude("idle_suggestion")])
+
+    await _terminal(runner).remote_control(_SESSION, DomainRemoteControlState.ACTIVE)
+
+    first_key = next(i for i, call in enumerate(runner.calls) if "send-keys" in call)
+    judged = [call for call in runner.calls[:first_key] if "capture-pane" in call]
+    assert judged and "-e" in judged[-1], "a dim suggestion is only told from a draft when styled"
+
+
+def test_a_terminal_without_a_composer_types_nothing_at_all() -> None:
+    """No composer means nothing can tell an idle prompt from a dialog, so nothing licenses keys."""
+    import asyncio
+
+    runner = _ScriptedRunner(_pane(), [_claude("idle")])
+    terminal = TmuxTerminal(
+        TmuxGateway("remote-agents-test-remote-control-read", runner),
+        {ProjectId("opaque-editor"): Path("/")},
+        {},
+        startup_timeout=0.05,
+    )
+
+    state = asyncio.run(terminal.remote_control(_SESSION, DomainRemoteControlState.ACTIVE))
+
+    assert state is DomainRemoteControlState.UNKNOWN
+    assert runner.keys_typed == ()
+
+
+# --- The markers read from real styled captures ---------------------------------------------------
+#
+# Captured 2026-09-23 on claude 2.1.280 (session ids redacted to zeros). The toggle now judges a
+# styled capture, and the banner's phrase is split by a colour change mid-marker
+# (`/remote-control is active\x1b[38;5;246m · Continue here`) and followed by an OSC 8 link, so
+# the markers are read from `_plain(capture)`. The menu fixture's footer is stored broken
+# (`Esc to {continue}`), as the acceptance document's is: a pane displaying this file must not
+# read as a menu (`test_no_window_of_any_tracked_file_reads_as_a_menu`).
+
+_REMOTE_CONTROL_PANES = Path(__file__).resolve().parents[3] / "fixtures" / "panes"
+
+
+def _real_menu() -> str:
+    stored = (_REMOTE_CONTROL_PANES / "remote_control" / "claude_menu.txt").read_text()
+    return stored.replace("Esc to {continue}", "Esc to continue")
+
+
+def test_the_real_banner_is_read_only_once_its_styling_is_removed() -> None:
+    styled = _claude("idle_remote_control_enabled")
+
+    assert not remote_control_was_enabled(styled), "the colour change splits the marker"
+    assert remote_control_was_enabled(_plain(styled))
+    assert classify_remote_control_capture(_plain(styled)) is RemoteControlState.ACTIVE
+
+
+def test_the_real_disconnected_line_and_menu_read_through_their_styling() -> None:
+    disconnected = _plain(_claude("idle_remote_control_disconnected"))
+
+    assert classify_remote_control_capture(disconnected) is RemoteControlState.INACTIVE
+    assert remote_control_menu_is_open(_plain(_real_menu()))
+
+
+async def test_an_idle_pane_already_showing_the_real_banner_is_left_alone() -> None:
+    """Already on: nothing typed, and the answer is what the pane says."""
+    runner = _ScriptedRunner(_pane(), [_claude("idle_remote_control_enabled")])
+
+    result = await _terminal(runner).remote_control(_SESSION, DomainRemoteControlState.ACTIVE)
+
+    assert result is DomainRemoteControlState.ACTIVE
+    assert runner.keys_typed == ()
+
+
+async def test_an_idle_disconnected_pane_is_enabled_and_needs_no_tidying() -> None:
+    runner = _ScriptedRunner(
+        _pane(),
+        [_claude("idle_remote_control_disconnected"), _claude("idle_remote_control_enabled")],
+    )
+
+    result = await _terminal(runner).remote_control(_SESSION, DomainRemoteControlState.ACTIVE)
+
+    assert result is DomainRemoteControlState.ACTIVE
+    assert runner.keys_typed == REMOTE_CONTROL_ENABLE_KEYS

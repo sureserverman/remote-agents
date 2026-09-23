@@ -1,3 +1,6 @@
+from pathlib import Path
+
+from remote_agents.adapters.agents.registry import profile_composers
 from remote_agents.adapters.tmux.codec import ManagedPane
 from remote_agents.adapters.tmux.gateway import TmuxInventory
 from remote_agents.adapters.tmux.runtime import TmuxTerminal, _remote_control_state
@@ -15,6 +18,21 @@ _ENABLED_BANNER = (
     "  /remote-control is active · Continue here, on your phone, or at\n"
     "  https://claude.ai/code/session_01example\n"
 )
+
+_IDLE = (
+    Path(__file__).resolve().parents[2] / "fixtures" / "panes" / "claude" / "idle.txt"
+).read_text(encoding="utf-8")
+
+
+def _idle_showing(transcript: str) -> str:
+    """A real idle Claude pane with `transcript` drawn just above its composer.
+
+    The toggle types only onto a screen that reads as an idle composer (BL-055), so the pane the
+    keys are aimed at has to be one; the banner sits where Claude prints it, near the bottom.
+    """
+    lines = _IDLE.splitlines(keepends=True)
+    at = next(index for index, line in enumerate(lines) if "/effort" in line)
+    return "".join(lines[:at]) + transcript + "".join(lines[at:])
 
 
 class Gateway:
@@ -47,16 +65,23 @@ class Gateway:
         # `remote_control_was_enabled` matches. The short form alone appears in the adapter's
         # own source, so matching on it would have made a pane displaying that source look
         # like a pane that had just been enabled.
-        return "Claude Code" if self.capture_count == 1 else _ENABLED_BANNER
+        return _IDLE if self.capture_count == 1 else _ENABLED_BANNER
 
     async def send_keys(self, session_id, keys):
         self.sent.append((session_id, keys))
+
+    async def send_keys_when(self, session_id, keys, allowed):
+        capture = await self.capture(session_id)
+        if not allowed(capture):
+            return capture
+        await self.send_keys(session_id, keys)
+        return None
 
 
 async def test_enable_waits_for_claude_to_report_active_after_the_fixed_interaction(monkeypatch):
     session_id = SessionId.new()
     gateway = Gateway(session_id)
-    terminal = TmuxTerminal(gateway, {}, {}, startup_timeout=1)
+    terminal = TmuxTerminal(gateway, {}, {}, startup_timeout=1, composers=profile_composers())
     waits = []
 
     async def record_wait(seconds):
@@ -94,13 +119,13 @@ async def test_disable_opens_the_remote_control_menu_before_disconnect(monkeypat
             # one frame is not proof, because a capture is a picture of a pane mid-repaint as
             # readily as of a settled one. The fourth is the result.
             return {
-                1: _ENABLED_BANNER,
+                1: _idle_showing(_ENABLED_BANNER),
                 2: _MENU,
                 3: _MENU,
             }.get(self.capture_count, "Remote Control disconnected.")
 
     gateway = ActiveGateway(session_id)
-    terminal = TmuxTerminal(gateway, {}, {}, startup_timeout=1)
+    terminal = TmuxTerminal(gateway, {}, {}, startup_timeout=1, composers=profile_composers())
     waits = []
 
     async def record_wait(seconds):
@@ -131,10 +156,10 @@ async def test_a_disable_never_sends_the_arrows_at_a_pane_showing_no_menu(monkey
     class SilentGateway(Gateway):
         async def capture(self, _session_id):
             self.capture_count += 1
-            return _ENABLED_BANNER
+            return _idle_showing(_ENABLED_BANNER)
 
     gateway = SilentGateway(session_id)
-    terminal = TmuxTerminal(gateway, {}, {}, startup_timeout=1)
+    terminal = TmuxTerminal(gateway, {}, {}, startup_timeout=1, composers=profile_composers())
 
     async def record_wait(seconds):
         del seconds

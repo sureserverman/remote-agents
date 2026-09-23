@@ -15,6 +15,7 @@ from pathlib import Path
 
 import pytest
 
+from remote_agents.adapters.agents.registry import profile_composers
 from remote_agents.adapters.tmux.gateway import TmuxGateway
 from remote_agents.adapters.tmux.profiles import build_launch_profile
 from remote_agents.adapters.tmux.runtime import AsyncTmuxRunner, TmuxTerminal
@@ -63,6 +64,8 @@ async def test_claude_remote_control_toggle_on_an_exact_disposable_managed_pane(
         {project_id: project_path},
         {definition.profile_id: profile},
         startup_timeout=20,
+        # The toggle types only onto an idle composer (BL-055); without one it refuses.
+        composers=profile_composers(),
     )
     try:
         launched = await terminal.launch(session_id, project_id, definition.profile_id)
