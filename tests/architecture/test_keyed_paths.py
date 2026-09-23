@@ -5,6 +5,7 @@
 option (BL-055, DEC-063) -- so such a sequence goes through `send_keys_when`, which judges a
 styled capture under the key lock first. What still calls `send_keys` directly is listed here,
 each with the reason it may, and anything new fails this test until somebody writes its reason.
+The rule is DEC-103.
 """
 
 from __future__ import annotations

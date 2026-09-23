@@ -544,7 +544,7 @@ class TmuxTerminal:
             )
         except KeysInterrupted:
             # Partway: a dialog came up, and the rest was not sent. Reported as never sent, which
-            # understates -- the first keys landed -- on DEC-038 accepted cost 2's reasoning.
+            # understates -- the first keys landed -- as DEC-103 records.
             return TerminalObservation(session_id, live=True, preserved=False, detail=AGENT_ASKING)
         except KeysBusy:
             return TerminalObservation(session_id, live=True, preserved=False, detail=KEYS_BUSY)

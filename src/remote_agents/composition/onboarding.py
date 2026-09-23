@@ -592,6 +592,21 @@ def _owner_id(value: str) -> int:
         raise argparse.ArgumentTypeError("must be an integer (the value is not shown)") from None
 
 
+def _stripped_environment() -> dict[str, str]:
+    """This process's environment without the Telegram credential, for every child it starts.
+
+    One function, because it is one rule: `sudo` scrubs the credential anyway under the default
+    `env_reset`, but `brew` does not -- a Homebrew formula is arbitrary Ruby running with whatever
+    it inherited -- and the dependency probe runs the agent CLIs' own `--version`, which are
+    third-party executables, while the README's unattended form puts the token in this process's
+    environment. Nothing onboarding runs has any use for it. Every `subprocess.run` in this module
+    passes it (`tests/security/test_onboarding_children_never_see_the_credential.py`).
+    """
+    return {
+        name: value for name, value in os.environ.items() if name not in TELEGRAM_SECRET_VARIABLES
+    }
+
+
 def _run_command(argv: tuple[str, ...]) -> int:
     """Run one fixed local command and return its exit status, without a shell.
 
@@ -600,16 +615,9 @@ def _run_command(argv: tuple[str, ...]) -> int:
     an installer needs when it has to report *how* something failed. Output is inherited rather
     than captured -- an operator watching `apt-get` or `systemctl` should see it work.
     """
-    # The credential is stripped from the child's environment. `sudo` scrubs it anyway under the
-    # default `env_reset`, but `brew` does not, and a Homebrew formula is arbitrary Ruby running
-    # with whatever it inherited -- while the README's own unattended form puts the token in this
-    # process's environment. Nothing this command runs has any use for it.
-    environment = {
-        name: value for name, value in os.environ.items() if name not in TELEGRAM_SECRET_VARIABLES
-    }
     try:
         return subprocess.run(
-            argv, check=False, stdin=subprocess.DEVNULL, timeout=600, env=environment
+            argv, check=False, stdin=subprocess.DEVNULL, timeout=600, env=_stripped_environment()
         ).returncode
     except (OSError, subprocess.SubprocessError):
         # Same shape as `_command_succeeds`: a command that could not start is a command that
@@ -621,11 +629,7 @@ def _read_command(argv: tuple[str, ...]) -> str | None:
     """Run one fixed local command and return its stdout, or None if it could not run or failed.
 
     For `ServiceSupervisor.pid_command()` alone -- the one verb whose output is read (DEC-102).
-    The credential is stripped from its environment exactly as `_run_command` strips it.
     """
-    environment = {
-        name: value for name, value in os.environ.items() if name not in TELEGRAM_SECRET_VARIABLES
-    }
     try:
         completed = subprocess.run(
             argv,
@@ -635,7 +639,7 @@ def _read_command(argv: tuple[str, ...]) -> str | None:
             stderr=subprocess.DEVNULL,
             text=True,
             timeout=30,
-            env=environment,
+            env=_stripped_environment(),
         )
     except (OSError, subprocess.SubprocessError):
         return None
@@ -714,6 +718,7 @@ def _dependency_probe():
                 stderr=subprocess.STDOUT,
                 text=True,
                 timeout=5,
+                env=_stripped_environment(),
             ).stdout
         ),
     )
@@ -883,6 +888,7 @@ def _remote_release_tags(repository: str, timeout: int = _RELEASE_CHECK_TIMEOUT)
             stderr=subprocess.DEVNULL,
             text=True,
             timeout=timeout,
+            env=_stripped_environment(),
         )
     except (OSError, subprocess.SubprocessError):
         return ()
@@ -995,6 +1001,7 @@ def _installed_executable() -> str:
             stderr=subprocess.DEVNULL,
             text=True,
             timeout=10,
+            env=_stripped_environment(),
         )
     except (OSError, subprocess.SubprocessError):
         return "remote-agents"

@@ -214,12 +214,13 @@ everything else on this machine is happy (DEC-058). The hop is outside that boun
 directions: declining it does not make the exit status non-zero, and installing it is not what
 makes onboarding succeed.
 
-One side effect of re-running is worth knowing: `--install-daemon` means "register
-and start", so if the service is down it will be brought up, including when you
-stopped it yourself. There is no way to ask a supervisor "is this registered?"
+Two side effects of re-running are worth knowing. `--install-daemon` means
+"register and start", so if the service is down it will be brought up, including
+when you stopped it yourself. There is no way to ask a supervisor "is this registered?"
 without either running the service or parsing output macOS documents as not being an
 interface, so a stopped service and an absent one look the same from here. Stop it
-again after onboarding, or use `--remove`.
+again after onboarding, or use `--remove`. And since 0.48.0 a service that is running
+is restarted and its new process proved, whether or not anything was upgraded.
 
 **On macOS the service runs only while you are logged in at the screen.** The
 LaunchAgent targets `gui/<uid>`, whose domain exists only after a console login — so a

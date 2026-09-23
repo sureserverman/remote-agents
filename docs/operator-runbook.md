@@ -116,8 +116,10 @@ is refused by argparse before anything is composed, rather than one of them sile
 **Re-running onboarding is safe, and re-running it is what an upgrade does.** It never clobbers
 what it did not write: a config you have edited and a credential you pasted are both kept, with a
 line saying so, and the daemon is rewritten only when the rendered definition actually changed.
-One side effect is worth knowing — `--install-daemon` means "register *and* start", so it will
-bring up a service you had deliberately stopped. Stop it again afterwards, or use `--remove`.
+Two side effects are worth knowing. `--install-daemon` means "register *and* start", so it will
+bring up a service you had deliberately stopped — stop it again afterwards, or use `--remove`. And
+since 0.48.0 it **restarts a service that is running**, upgrade or not, so a bot mid-conversation
+drops what it holds in memory (see [when notifications stop arriving](#when-notifications-stop-arriving-and-nothing-complains)).
 
 **Run in a terminal, onboarding offers the Claude status-line hop, and every gate between that
 offer and your `~/.claude/settings.json` is a skip rather than an assumed yes.** It is skipped
@@ -192,8 +194,8 @@ remote-agents onboard --install-daemon
 and that requirement is a pinned tag — so it prints "Nothing to upgrade" and exits 0 having done
 nothing, which is worse than no advice at all. Changing the tag is what moves the install. uv
 reuses one tool directory across versions, so the daemon definition usually does not change;
-re-running onboarding is cheap and idempotent either way, and it is what rewrites the definition
-on the upgrades that *do* relocate the executable.
+re-running onboarding is cheap and leaves the definition alone when nothing moved, and it is what
+rewrites the definition on the upgrades that *do* relocate the executable.
 
 **Re-onboarding restarts a running service and proves it** (BL-104, DEC-102). It reads the
 service's process id, restarts it (`systemctl --user restart`, `launchctl kickstart -k`), reads the
@@ -669,8 +671,9 @@ rather than folded into a blanket confirmation.
 
 ## Agent activity notifications
 
-> **Upgrading an existing host: edit the config before you upgrade** — the upgrade restarts the
-> service onto the new code (since 0.48.0), and it is that start which refuses the old config.
+> **Upgrading an existing host: edit the config before you upgrade.** Since 0.48.0 onboarding
+> checks the config against the new version before it touches the daemon, and refuses (exit 1)
+> leaving the old service running; before that, the new service's start refused it.
 > This feature added `activity_poll_seconds` to `[limits]`, and `config.py` validates that table
 > against an *exact* key set — unknown keys **and** missing ones are refused. So a config written
 > before this release makes the new service exit 1 on startup, and `Restart=on-failure` turns that

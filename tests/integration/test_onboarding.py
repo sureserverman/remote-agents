@@ -782,9 +782,17 @@ class TestTheDaemonInstall:
             (("100", "0"), {}, "pid 0"),
             (("100", None), {}, "could not be read"),
             ((None, "200"), {}, "pid before could not be read"),
+            (("100", "-1"), {}, "could not be read"),
             (("100", "200"), {"restart": 1}, "restart failed"),
         ],
-        ids=["same-pid", "pid-zero", "pid-unreadable", "pid-before-unreadable", "restart-failed"],
+        ids=[
+            "same-pid",
+            "pid-zero",
+            "pid-unreadable",
+            "pid-before-unreadable",
+            "pid-negative",
+            "restart-failed",
+        ],
     )
     def test_a_restart_that_cannot_be_proved_is_a_failure_naming_the_manual_command(
         self, tmp_path: Path, pids, codes, named: str

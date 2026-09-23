@@ -184,6 +184,9 @@ def _restarted(
 ) -> DaemonOutcome:
     """Restart a service that was running, and prove a new process runs: `pid A -> B`.
 
+    A point-in-time proof, not a health check: a new process that dies a moment later still
+    reads as restarted here, and it is onboarding's closing `doctor` that catches it.
+
     The manual command is named in every failure, because a service that could not be proved
     restarted is one whose operator has to do it -- and "restart it by hand" is only useful with
     the exact argv in front of them.
@@ -209,11 +212,12 @@ def _restarted(
 
 
 def _pid(output: str | None) -> int | None:
-    """The one integer `pid_command()` prints, or None for anything else (DEC-102)."""
+    """The one non-negative integer `pid_command()` prints, or None for anything else (DEC-102)."""
     try:
-        return int((output or "").strip())
+        value = int((output or "").strip())
     except ValueError:
         return None
+    return value if value >= 0 else None
 
 
 def remove_daemon(
