@@ -560,3 +560,19 @@ def test_the_title_is_read_inside_the_lock_right_before_the_pre_paste_capture(
     judged = [step(call) for call in pane.calls if step(call)]
     assert judged[:3] == ["lock-taken", "title", "capture"], judged
     assert judged[-1] == "lock-released", judged
+
+
+def test_a_title_read_that_fails_is_a_refusal_and_nothing_is_typed() -> None:
+    """The title read is the first tmux call under the lock; its failure touches nothing."""
+    pane = PromptPane([_screen("codex", "idle")], profile="codex", fail_on="#{pane_title}")
+
+    delivery = _send(pane, "hello")
+
+    assert (delivery.outcome, delivery.reason) == (PromptOutcome.REFUSED, PromptReason.TMUX_ERROR)
+    assert pane.typed == []
+
+
+def test_the_title_is_never_in_the_steps_repr() -> None:
+    from remote_agents.adapters.tmux.gateway import PromptSteps
+
+    assert "Count to 150" not in repr(PromptSteps("screen", title=_SPINNING))

@@ -105,7 +105,12 @@ class ComposerScreen:
     """Patterns any of which, matching the pane's title, means a turn is running -- for an agent
     that draws no busy line on screen for part of its turn but marks the whole turn in its title
     (Codex 0.155.1 streams its answer with no busy line, and spins a braille glyph at the head of
-    its title throughout). The title is only matched, never kept."""
+    its title throughout). The title is only matched, never kept.
+
+    Read once, with the capture the paste is judged by, under the same key-lock hold. The checks
+    after the paste do not read it: a composer showing the draft just pasted is one no turn has
+    taken yet. The title and the capture are two tmux calls, so one may be a frame newer than the
+    other; that can only add a BUSY, never an IDLE."""
     dialogs: tuple[str, ...] = ()
     """Patterns (multiline) any of which means a dialog is up. Checked before anything else: a
     dialog can be drawn over a composer that is still on screen."""

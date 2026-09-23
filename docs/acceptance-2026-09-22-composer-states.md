@@ -140,6 +140,12 @@ These rules come from the captures above; each names the trap it avoids.
   - **The empty composer stays drawn while busy.** An empty composer alone is not idle.
   - A finished turn leaves `✻ Worked for 7s · done 6:45 AM` — a glyph, a past-tense word and no
     ellipsis. That line stays on screen and must not read as busy.
+  - **Not busy on screen while it streams its answer** (measured 2026-09-23, BL-108): the spinner
+    line is drawn until text starts, then nothing marks the turn until it ends; the composer
+    region is that of a finished turn and the pane title is a static `✳ <topic>`. A message sent
+    in that window is typed into the running turn — an accepted cost of DEC-099. A command run
+    in the foreground keeps the spinner up for its whole length; a bare `sleep 30` was run as a
+    background shell, ending the turn after 8s with the sleep still running.
 - **Dialogs:**
   - Command approval (manual mode): `tests/fixtures/panes/claude/dialog_approval.txt` — `Do you want to
     proceed?` over a numbered `❯ 1. Yes` menu, footer `Esc to cancel · Tab to amend`. No empty
@@ -158,7 +164,19 @@ These rules come from the captures above; each names the trap it avoids.
 - **Busy:** `tests/fixtures/panes/codex/busy.txt`, `tests/fixtures/panes/codex/busy_tool.txt`
   (`• Working (6s • esc to interrupt) · 1 background terminal running …` while a command runs).
   - `• Working (2s • esc to interrupt)` above the composer.
+  - **The bullet is a spinner** (measured 2026-09-23): `•` and `◦` alternate frame by frame, so
+    half the frames of a running turn start `◦ Working …` —
+    `tests/fixtures/panes/codex/busy_hollow.txt` is one.
   - **The placeholder stays drawn while busy.** Idle requires no `esc to interrupt`.
+  - **While it streams its answer Codex draws no busy line at all** (measured 2026-09-23, a
+    "count 1 to 150" turn sampled every 0.5s): from the first streamed line until the turn ends
+    the composer rows are the bytes of a finished turn. Only the **pane title** says the turn is
+    running: it leads with a braille spinner for the whole turn (`⠋ renaming... ⠋ | workspace`,
+    then `⠋ Count to 150 | workspace`) and drops it when the turn ends (`Count to 150 |
+    workspace`). So busy is also a title starting with a braille glyph (`busy_title`), read with
+    the capture under the relay's key lock. Not verified: that only Codex's own chrome sets the
+    title — a tool's output reaching the terminal's title sequence could blank the spinner
+    mid-stream and read idle.
 - **Dialogs:**
   - Command approval: `tests/fixtures/panes/codex/dialog_approval.txt` — `Would you like to run the
     following command?`, a numbered `› 1. Yes, proceed (y)` menu, footer `Press enter to confirm or

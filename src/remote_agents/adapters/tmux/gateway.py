@@ -6,7 +6,7 @@ import asyncio
 import contextlib
 import sys
 from collections.abc import Callable, Iterator, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Protocol
 
@@ -91,8 +91,11 @@ class PromptSteps:
     after_paste: str | None = None
     entered: bool = False
     after_enter: str | None = None
-    title: str = ""
-    """The pane's title, read with `before`: an agent can mark a running turn only there."""
+    title: str = field(default="", repr=False)
+    """The pane's title, read with `before`: an agent can mark a running turn only there.
+
+    Kept out of the repr: it is session-derived text (Codex puts the turn's topic in it), matched
+    and never kept, so a log line that prints these steps must not carry it."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -512,6 +515,7 @@ class TmuxGateway:
                 # The title first, then the screen, both inside this hold: Codex draws no busy
                 # line while it streams its answer and marks the turn only in its title.
                 title = await self._runner.run(*self._base_argv(), *pane_title_args(target))
+                title = title.rstrip("\n")
                 before = await self._runner.run(
                     *self._base_argv(), "capture-pane", "-p", "-e", "-t", target
                 )

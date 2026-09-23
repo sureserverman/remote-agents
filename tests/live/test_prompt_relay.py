@@ -220,7 +220,7 @@ def _wait_until_idle(socket: str, pane: str, agent: str, seconds: float = 120.0)
         # Codex marks a turn while it streams its answer.
         title = _tmux(socket, "display-message", "-p", "-t", pane, "#{pane_title}").stdout
         text = _tmux(socket, "capture-pane", "-p", "-e", "-t", pane).stdout
-        if classify(text, descriptor, title.strip()) is PaneState.IDLE:
+        if classify(text, descriptor, title.rstrip("\n")) is PaneState.IDLE:
             return
         time.sleep(1.0)
     pytest.fail(f"{agent} never came back to an idle composer:\n{text}")
@@ -295,6 +295,7 @@ def test_a_codex_turn_streaming_its_answer_is_refused_by_its_title(tmp_path: Pat
         assert started.outcome is PromptOutcome.SENT, started
 
         deadline = time.monotonic() + 90.0
+        title = screen = ""
         while time.monotonic() < deadline:
             title = _tmux(socket, "display-message", "-p", "-t", pane, "#{pane_title}").stdout
             screen = _tmux(socket, "capture-pane", "-p", "-e", "-t", pane).stdout

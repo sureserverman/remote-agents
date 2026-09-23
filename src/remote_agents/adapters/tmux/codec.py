@@ -691,8 +691,9 @@ def display_message_args(text: str) -> tuple[str, ...]:
 def pane_title_args(target: str) -> tuple[str, ...]:
     """Return the fixed tmux query for one already-resolved pane title.
 
-    The format is a constant owned here, never title text supplied by the pane. The caller
-    classifies only an exact Codex marker without retaining this returned metadata.
+    The format is a constant owned here, never title text supplied by the pane. The callers only
+    match what comes back -- Codex's exact `Action Required` marker, and a composer's
+    `busy_title` spinner for the relay -- and never retain it.
     """
     if target.startswith("%"):
         checked = exact_pane_target(target)
