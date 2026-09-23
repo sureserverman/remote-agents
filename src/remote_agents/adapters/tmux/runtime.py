@@ -21,6 +21,7 @@ from remote_agents.adapters.tmux.composer import (
     prompt_text,
 )
 from remote_agents.adapters.tmux.gateway import PromptPartway, TmuxGateway, TmuxRunner
+from remote_agents.adapters.tmux.key_lock import KeysBusy
 from remote_agents.adapters.tmux.remote_control import (
     REMOTE_CONTROL_DISCONNECT_KEYS,
     REMOTE_CONTROL_DISMISS_MENU_KEYS,
@@ -631,6 +632,10 @@ class TmuxTerminal:
         descriptor = self._composers.get(str(observation.profile_id))
         if descriptor is None or descriptor.composer is None:
             return PromptDelivery(PromptOutcome.REFUSED, PromptReason.NO_COMPOSER)
+        if text.startswith("/") and descriptor.composer.command_menu is None:
+            # Pasted, it could never be submitted -- `Enter` would run whatever the unreadable
+            # menu offers -- and the stranded draft would refuse every later message.
+            return PromptDelivery(PromptOutcome.REFUSED, PromptReason.MENU)
         try:
             steps = await self._gateway.deliver_prompt(
                 session_id,
@@ -648,6 +653,12 @@ class TmuxTerminal:
             if not failure.touched:
                 return PromptDelivery(PromptOutcome.REFUSED, PromptReason.TMUX_ERROR)
             return PromptDelivery(PromptOutcome.UNCONFIRMED, PromptReason.TMUX_ERROR)
+        except KeysBusy:
+            return PromptDelivery(PromptOutcome.REFUSED, PromptReason.KEYS_BUSY)
+        except RuntimeError:
+            # Raised before the delivery began -- finding the pane -- so nothing was typed.
+            _LOG.exception("could not find %s's pane to relay a message", session_id)
+            return PromptDelivery(PromptOutcome.REFUSED, PromptReason.TMUX_ERROR)
         if not steps.pasted:
             state = classify(steps.before, descriptor)
             return PromptDelivery(PromptOutcome.REFUSED, REFUSAL_FOR[state])

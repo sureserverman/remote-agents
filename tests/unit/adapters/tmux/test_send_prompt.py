@@ -375,3 +375,67 @@ def test_a_cleanup_that_hangs_does_not_outlast_the_bound() -> None:
 
     assert delivery.reason is PromptReason.TIMEOUT
     assert time.monotonic() - started < 6, "the cleanup ran past the relay's time bound"
+
+
+# --- Stage 2 gate evaluator, Material (2026-09-23) -----------------------------------------
+
+
+def test_an_empty_shell_mode_composer_is_not_idle() -> None:
+    """Claude's `!` shell mode: anything pasted and submitted there runs as a shell command."""
+    shell = re.sub(r"^❯\s*$", "! ", _screen("claude", "idle"), count=1, flags=re.M)
+    assert shell != _screen("claude", "idle"), "the idle fixture's composer moved"
+    pane = PromptPane([shell])
+
+    delivery = _send(pane, "hello")
+
+    assert delivery.outcome is PromptOutcome.REFUSED
+    assert pane.typed == []
+
+
+def test_another_sender_holding_the_pane_is_a_refusal_not_an_exception(
+    monkeypatch, tmp_path
+) -> None:
+    from remote_agents.adapters.tmux import gateway as gateway_module
+    from remote_agents.adapters.tmux.key_lock import KeysBusy
+
+    class Held:
+        async def __aenter__(self):
+            raise KeysBusy("another process is still typing into this pane")
+
+        async def __aexit__(self, *_):
+            return None
+
+    monkeypatch.setattr(gateway_module.TmuxGateway, "_keys_for", lambda self, session: Held())
+    pane = PromptPane([_screen("claude", "idle")])
+
+    delivery = _send(pane, "hello")
+
+    assert (delivery.outcome, delivery.reason) == (PromptOutcome.REFUSED, PromptReason.KEYS_BUSY)
+    assert pane.typed == []
+
+
+def test_a_tmux_failure_finding_the_pane_is_a_refusal_not_an_exception(monkeypatch) -> None:
+    from remote_agents.adapters.tmux import gateway as gateway_module
+
+    async def broken(self, session_id):
+        raise RuntimeError("tmux command failed: something tmux has never said before")
+
+    monkeypatch.setattr(gateway_module.TmuxGateway, "_following_target", broken)
+    pane = PromptPane([_screen("claude", "idle")])
+
+    delivery = _send(pane, "hello")
+
+    assert (delivery.outcome, delivery.reason) == (PromptOutcome.REFUSED, PromptReason.TMUX_ERROR)
+    assert pane.typed == []
+
+
+@pytest.mark.parametrize("agent", ["codex", "opencode", "cursor"])
+def test_a_slash_command_is_refused_before_pasting_where_no_menu_can_be_read(agent: str) -> None:
+    """Pasted and never submitted, it would strand a draft that refuses every later message."""
+    profile = {"cursor": "cursor-agent"}.get(agent, agent)
+    pane = PromptPane([_screen(agent, "idle")], profile=profile)
+
+    delivery = _send(pane, "/status")
+
+    assert (delivery.outcome, delivery.reason) == (PromptOutcome.REFUSED, PromptReason.MENU)
+    assert pane.typed == []

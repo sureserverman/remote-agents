@@ -151,6 +151,8 @@ class PromptReason(StrEnum):
     """`Enter` was pressed and the composer was not seen to empty."""
     TIMEOUT = "timeout"
     """tmux did not answer in time; whether anything landed is unknown."""
+    KEYS_BUSY = "keys_busy"
+    """Another sender was typing into this pane and did not finish in time."""
     TMUX_ERROR = "tmux_error"
     """tmux failed partway through; whether anything landed is unknown."""
 

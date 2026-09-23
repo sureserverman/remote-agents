@@ -53,13 +53,14 @@ def descriptor() -> ProviderDescriptor:
             identifies_by="Working with untrusted contents",
         ),
         # Measured on 0.155.1 (`docs/acceptance-2026-09-22-composer-states.md`, captures in
-        # `tests/fixtures/panes/codex/`). The composer is the last `› ` line (`! ` in shell mode)
+        # `tests/fixtures/panes/codex/`). The composer is the last `› ` line (a `! ` line is shell
+        # mode, deliberately not matched, so it reads UNKNOWN)
         # with the model line (`<model> · <dir>`) under it. Its placeholder stays drawn while a
         # turn runs, so busy is `• Working (… esc to interrupt)`. The rate-limit and hook prompts
         # are from the binary's strings (not raised on screen) and are matched loosely: a false
         # DIALOG holds a message, a missed one types into a prompt.
         composer=ComposerScreen(
-            composer=r"^[›!] (?P<draft>[^\n]*(?:\n  [^\n]*)*?)\n  [^\n]* · [^\n]*\Z",
+            composer=r"^› (?P<draft>[^\n]*(?:\n  [^\n]*)*?)\n  [^\n]* · [^\n]*\Z",
             placeholders=(r"Ask Codex to do anything", r"Ask a follow-up question"),
             busy=(r"^• Working \([^\n]*esc to interrupt",),
             # A long paste folds to `[Pasted Content 2969 chars]` (`composed_long.txt`). Its

@@ -25,6 +25,10 @@ _PROFILE = {"claude": "claude", "codex": "codex", "opencode": "opencode", "curso
 #: the classifier cannot read a draft out of them either, so UNKNOWN is the honest answer.
 _MENU_OVER_COMPOSER = {"codex/composed_slash", "cursor/composed_space_slash"}
 
+#: Shell mode (`!`) is not the prompt composer -- anything submitted there runs as a command --
+#: so its composer is deliberately not matched and the screen reads UNKNOWN (Stage 2 gate).
+_SHELL_MODE = {"claude/composed_shell_mode", "codex/composed_shell_mode"}
+
 
 def _descriptor(agent: str):
     return next(
@@ -43,7 +47,7 @@ def _captures() -> list[tuple[str, str]]:
 
 
 def _expected(agent: str, name: str) -> PaneState:
-    if f"{agent}/{name}" in _MENU_OVER_COMPOSER:
+    if f"{agent}/{name}" in _MENU_OVER_COMPOSER | _SHELL_MODE:
         return PaneState.UNKNOWN
     for prefix, state in (
         ("idle", PaneState.IDLE),
