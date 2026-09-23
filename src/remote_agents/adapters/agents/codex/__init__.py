@@ -66,6 +66,10 @@ def descriptor() -> ProviderDescriptor:
             # reasoning summary (`• Planning edits (9s • esc to interrupt)`), not always `Working`.
             # The bullet is a spinner: `•` and `◦` alternate frame by frame (`busy_hollow.txt`).
             busy=(r"^[•◦] [^\n]*esc to interrupt",),
+            # While it streams its answer Codex draws no busy line at all, but its title leads with
+            # a braille spinner for the whole turn (`⠋ Count to 150 | workspace`), dropped when
+            # the turn ends (measured 2026-09-23).
+            busy_title=(r"^[\u2800-\u28ff] ",),
             # A long paste folds to `[Pasted Content 2969 chars]` (`composed_long.txt`). Its
             # command menu is drawn *under* the composer, where it hides the model line, so a
             # `/` message is refused before pasting (no `command_menu`).

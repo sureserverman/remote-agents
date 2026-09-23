@@ -132,8 +132,12 @@ def composer_draft(capture: str, descriptor: ProviderDescriptor) -> str | None:
     return _held(capture, declared)
 
 
-def classify(capture: str, descriptor: ProviderDescriptor) -> PaneState:
-    """IDLE only for an empty composer with no dialog and no running turn; see `PaneState`."""
+def classify(capture: str, descriptor: ProviderDescriptor, title: str = "") -> PaneState:
+    """IDLE only for an empty composer with no dialog and no running turn; see `PaneState`.
+
+    `title` is the pane's title, for an agent that marks a running turn there
+    (`ComposerScreen.busy_title`); a caller that has not read it passes nothing.
+    """
     declared = descriptor.composer
     screen = _normalised(capture)
     if declared is None or not screen.strip():
@@ -148,7 +152,9 @@ def classify(capture: str, descriptor: ProviderDescriptor) -> PaneState:
         if trust is not None and classify_trust_capture(screen, trust) is TrustState.AWAITING:
             return PaneState.DIALOG
         return PaneState.UNKNOWN
-    if _found(declared.busy, screen):
+    if _found(declared.busy, screen) or any(
+        re.search(pattern, title) for pattern in declared.busy_title
+    ):
         return PaneState.BUSY
     return PaneState.COMPOSING if draft else PaneState.IDLE
 

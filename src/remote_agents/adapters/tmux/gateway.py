@@ -91,6 +91,8 @@ class PromptSteps:
     after_paste: str | None = None
     entered: bool = False
     after_enter: str | None = None
+    title: str = ""
+    """The pane's title, read with `before`: an agent can mark a running turn only there."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -485,18 +487,18 @@ class TmuxGateway:
         session_id: SessionId,
         text: str,
         *,
-        may_paste: Callable[[str], bool],
+        may_paste: Callable[[str, str], bool],
         may_enter: Callable[[str], bool],
         settle: float,
     ) -> PromptSteps:
         """Paste `text` into one managed pane and press `Enter`, each only if the caller agrees.
 
-        Capture, then paste only if `may_paste` accepts it; capture again, then one `Enter` only
-        if `may_enter` accepts that; capture once more. All of it under the session's key lock,
-        so no other sender's keys land between the check and the keystroke (BL-056). The text
-        reaches tmux on `load-buffer`'s stdin, into a buffer named for the session, and is pasted
-        bracketed with its line feeds kept (`-p -r`) and the buffer deleted (`-d`) -- never as a
-        `send-keys` argument, so no word in it can act as a key name.
+        Read the title and capture, then paste only if `may_paste` accepts the two; capture again,
+        then one `Enter` only if `may_enter` accepts that; capture once more. All of it under the
+        session's key lock, so no other sender's keys land between the check and the keystroke
+        (BL-056). The text reaches tmux on `load-buffer`'s stdin, into a buffer named for the
+        session, and is pasted bracketed with its line feeds kept (`-p -r`) and the buffer deleted
+        (`-d`) -- never as a `send-keys` argument, so no word in it can act as a key name.
         """
         target = await self._following_target(session_id)
         buffer = f"ra-relay-{session_id}"
@@ -507,11 +509,14 @@ class TmuxGateway:
             loading = False
             pasted = False
             try:
+                # The title first, then the screen, both inside this hold: Codex draws no busy
+                # line while it streams its answer and marks the turn only in its title.
+                title = await self._runner.run(*self._base_argv(), *pane_title_args(target))
                 before = await self._runner.run(
                     *self._base_argv(), "capture-pane", "-p", "-e", "-t", target
                 )
-                if not may_paste(before):
-                    return PromptSteps(before)
+                if not may_paste(before, title):
+                    return PromptSteps(before, title=title)
                 loading = True
                 await self._runner.feed(text, *self._base_argv(), "load-buffer", "-b", buffer, "-")
                 await self._runner.run(
@@ -528,13 +533,13 @@ class TmuxGateway:
                     if may_enter(after_paste):
                         break
                 else:
-                    return PromptSteps(before, True, after_paste)
+                    return PromptSteps(before, True, after_paste, title=title)
                 await self._runner.run(*self._base_argv(), "send-keys", "-t", target, "Enter")
                 await asyncio.sleep(settle)
                 after_enter = await self._runner.run(
                     *self._base_argv(), "capture-pane", "-p", "-e", "-t", target
                 )
-                return PromptSteps(before, True, after_paste, True, after_enter)
+                return PromptSteps(before, True, after_paste, True, after_enter, title=title)
             except RuntimeError as error:
                 retyped = _target_missing_or(error, f"ra-{session_id}")
                 if isinstance(retyped, TerminalTargetMissing):

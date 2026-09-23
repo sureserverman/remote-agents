@@ -56,8 +56,10 @@ class PromptPane:
         listed: bool = True,
         hang_on: str | tuple[str, ...] | None = None,
         fail_on: str | None = None,
+        title: str = "",
     ) -> None:
         self.session_id = SessionId.new()
+        self._title = title
         self._screens = list(screens)
         self._profile = profile
         self._dead = dead
@@ -89,6 +91,8 @@ class PromptPane:
             return self._line() if self._listed else ""
         if "capture-pane" in argv:
             return self._screens.pop(0) if len(self._screens) > 1 else self._screens[0]
+        if "#{pane_title}" in argv:
+            return self._title
         return ""
 
     async def feed(self, data: str, *argv: str) -> str:
@@ -496,3 +500,63 @@ def test_invisible_format_characters_cannot_hide_a_command_prefix(text: str) -> 
     assert not any(ord(ch) in (0xFEFF, 0x200B, 0x202E, 0x2028) for ch in cleaned), repr(cleaned)
     if text.endswith("two"):
         assert cleaned == "one\ntwo"
+
+
+# --- a turn Codex draws only in its title ----------------------------------------------------
+#
+# Codex 0.155.1 draws no busy line while it streams its answer: the composer rows are the same
+# bytes as after the turn. Its pane title carries a braille spinner for the whole turn
+# (`⠋ Count to 150 | workspace`, measured 2026-09-23), so the relay reads the title too, under
+# the same lock hold as the capture it judges.
+
+_SPINNING = "⠋ Count to 150 | workspace"
+
+
+def test_a_codex_pane_whose_title_spins_is_refused_busy_and_nothing_is_typed() -> None:
+    pane = PromptPane([_screen("codex", "idle")], profile="codex", title=_SPINNING)
+
+    delivery = _send(pane, "hello")
+
+    assert (delivery.outcome, delivery.reason) == (PromptOutcome.REFUSED, PromptReason.BUSY)
+    assert pane.typed == []
+
+
+def test_a_codex_pane_whose_title_has_stopped_spinning_gets_the_text() -> None:
+    pane = PromptPane(
+        [_screen("codex", "idle"), _screen("codex", "composed"), _screen("codex", "idle")],
+        profile="codex",
+        title="Count to 150 | workspace",
+    )
+
+    assert _send(pane, "hello").outcome is not PromptOutcome.REFUSED
+    assert pane.stdin == ["hello"]
+
+
+def test_the_title_is_read_inside_the_lock_right_before_the_pre_paste_capture(
+    monkeypatch,
+) -> None:
+    from remote_agents.adapters.tmux import gateway as gateway_module
+
+    pane = PromptPane([_screen("codex", "idle")], profile="codex", title=_SPINNING)
+
+    class Recorded:
+        async def __aenter__(self):
+            pane.calls.append(("lock-taken",))
+
+        async def __aexit__(self, *_):
+            pane.calls.append(("lock-released",))
+
+    monkeypatch.setattr(gateway_module.TmuxGateway, "_keys_for", lambda self, session: Recorded())
+
+    _send(pane, "hello")
+
+    def step(call: tuple[str, ...]) -> str:
+        if call[0].startswith("lock"):
+            return call[0]
+        if "#{pane_title}" in call:
+            return "title"
+        return "capture" if "capture-pane" in call else ""
+
+    judged = [step(call) for call in pane.calls if step(call)]
+    assert judged[:3] == ["lock-taken", "title", "capture"], judged
+    assert judged[-1] == "lock-released", judged

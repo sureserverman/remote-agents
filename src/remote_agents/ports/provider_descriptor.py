@@ -101,6 +101,11 @@ class ComposerScreen:
     `Ask Codex to do anything`)."""
     busy: tuple[str, ...] = ()
     """Patterns (multiline) any of which, found on the screen, means a turn is running."""
+    busy_title: tuple[str, ...] = ()
+    """Patterns any of which, matching the pane's title, means a turn is running -- for an agent
+    that draws no busy line on screen for part of its turn but marks the whole turn in its title
+    (Codex 0.155.1 streams its answer with no busy line, and spins a braille glyph at the head of
+    its title throughout). The title is only matched, never kept."""
     dialogs: tuple[str, ...] = ()
     """Patterns (multiline) any of which means a dialog is up. Checked before anything else: a
     dialog can be drawn over a composer that is still on screen."""

@@ -661,7 +661,9 @@ class TmuxTerminal:
             steps = await self._gateway.deliver_prompt(
                 session_id,
                 text,
-                may_paste=lambda capture: classify(capture, descriptor) is PaneState.IDLE,
+                may_paste=lambda capture, title: (
+                    classify(capture, descriptor, title) is PaneState.IDLE
+                ),
                 may_enter=lambda capture: enter_refusal(capture, descriptor, text) is None,
                 settle=self._waits.prompt_settle,
             )
@@ -681,7 +683,7 @@ class TmuxTerminal:
             _LOG.exception("could not find %s's pane to relay a message", session_id)
             return PromptDelivery(PromptOutcome.REFUSED, PromptReason.TMUX_ERROR)
         if not steps.pasted:
-            state = classify(steps.before, descriptor)
+            state = classify(steps.before, descriptor, steps.title)
             return PromptDelivery(PromptOutcome.REFUSED, REFUSAL_FOR[state])
         if not steps.entered:
             reason = enter_refusal(steps.after_paste or "", descriptor, text)

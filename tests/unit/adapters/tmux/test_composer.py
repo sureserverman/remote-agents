@@ -186,6 +186,33 @@ def test_codex_is_busy_on_the_hollow_frame_of_its_spinner_too() -> None:
     assert classify(hollow, _descriptor("codex")) is PaneState.BUSY
 
 
+# --- a turn drawn only in the pane's title ----------------------------------------------------
+#
+# While Codex 0.155.1 streams its answer the screen is byte-identical to a finished turn, and only
+# the title says otherwise: a braille spinner leads it for the whole turn (measured 2026-09-23).
+
+
+def test_codex_with_a_spinning_title_is_busy_over_an_idle_composer() -> None:
+    idle = (_PANES / "codex" / "idle.txt").read_text(encoding="utf-8")
+
+    spinning = "⠋ Count to 150 | workspace"
+    assert classify(idle, _descriptor("codex"), spinning) is PaneState.BUSY
+    assert classify(idle, _descriptor("codex"), "Count to 150 | workspace") is PaneState.IDLE
+
+
+def test_claude_s_title_marks_nothing_so_its_idle_composer_stays_idle() -> None:
+    idle = (_PANES / "claude" / "idle.txt").read_text(encoding="utf-8")
+
+    assert classify(idle, _descriptor("claude"), "✳ Count 1 to 150") is PaneState.IDLE
+
+
+def test_a_dialog_still_wins_over_a_spinning_title() -> None:
+    dialog = (_PANES / "codex" / "dialog_approval.txt").read_text(encoding="utf-8")
+
+    spinning = "⠋ Run tests | workspace"
+    assert classify(dialog, _descriptor("codex"), spinning) is PaneState.DIALOG
+
+
 # --- Claude's suggested next message is not a draft -----------------------------------------
 
 
