@@ -513,11 +513,16 @@ class TmuxGateway:
                     *self._base_argv(), "paste-buffer", "-d", "-p", "-r", "-b", buffer, "-t", target
                 )
                 pasted = True
-                await asyncio.sleep(settle)
-                after_paste = await self._runner.run(
-                    *self._base_argv(), "capture-pane", "-p", "-t", target
-                )
-                if not may_enter(after_paste):
+                # Read up to three times: a paste can be drawn a frame late, and a draft left
+                # unsubmitted is a draft a later stop's Enter would submit.
+                for _look in range(3):
+                    await asyncio.sleep(settle)
+                    after_paste = await self._runner.run(
+                        *self._base_argv(), "capture-pane", "-p", "-t", target
+                    )
+                    if may_enter(after_paste):
+                        break
+                else:
                     return PromptSteps(before, True, after_paste)
                 await self._runner.run(*self._base_argv(), "send-keys", "-t", target, "Enter")
                 await asyncio.sleep(settle)

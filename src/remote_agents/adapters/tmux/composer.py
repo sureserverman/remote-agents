@@ -111,17 +111,24 @@ def prompt_text(text: str) -> str:
     Line endings are folded to `\\n` first, so a CRLF from a phone keeps its line break.
     """
     folded = text.replace("\r\n", "\n").replace("\r", "\n")
+    for separator in ("\u2028", "\u2029", "\u0085"):
+        folded = folded.replace(separator, "\n")
+    # Format characters too (Cf: BOM, zero-width space, bidi overrides): invisible, so they
+    # could stand in front of a `!` or `/` and hide it from the checks that refuse one, while
+    # an agent that trims them would still read the command.
     kept = "".join(
         character
         for character in folded
-        if character == "\n" or unicodedata.category(character) != "Cc"
+        if character == "\n" or unicodedata.category(character) not in ("Cc", "Cf")
     )
     return kept.strip()
 
 
 def _same_text(draft: str, text: str) -> bool:
     """Whether a composer's draft is the pasted text, allowing for how the pane wrapped it."""
-    return " ".join(draft.split()) == " ".join(text.split())
+    # All whitespace removed, not collapsed: a long token (a URL, a path) wraps in the pane with
+    # no space at the break, and a collapsed comparison would never match it.
+    return "".join(draft.split()) == "".join(text.split())
 
 
 def enter_refusal(capture: str, descriptor: ProviderDescriptor, text: str) -> PromptReason | None:

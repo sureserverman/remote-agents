@@ -62,7 +62,9 @@ def descriptor() -> ProviderDescriptor:
         composer=ComposerScreen(
             composer=r"^› (?P<draft>[^\n]*(?:\n  [^\n]*)*?)\n  [^\n]* · [^\n]*\Z",
             placeholders=(r"Ask Codex to do anything", r"Ask a follow-up question"),
-            busy=(r"^• Working \([^\n]*esc to interrupt",),
+            # Any column-0 bullet carrying `esc to interrupt`: Codex heads the line with its
+            # reasoning summary (`• Planning edits (9s • esc to interrupt)`), not always `Working`.
+            busy=(r"^• [^\n]*esc to interrupt",),
             # A long paste folds to `[Pasted Content 2969 chars]` (`composed_long.txt`). Its
             # command menu is drawn *under* the composer, where it hides the model line, so a
             # `/` message is pasted and not submitted (no `command_menu`).

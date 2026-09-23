@@ -46,6 +46,8 @@ from remote_agents.domain.trust import TrustState
 from remote_agents.ports.remote_control_default import RemoteControlDefaultPort
 from remote_agents.ports.session_store import ProjectUsage, SessionStore
 from remote_agents.ports.terminal import (
+    COMPOSER_HOLDS_TEXT,
+    KEYS_BUSY,
     NOT_AWAITING_TRUST,
     TERMINAL_NOT_LIVE,
     TerminalObservation,
@@ -76,6 +78,10 @@ _CONSOLE_HIDE_TIMEOUT_SECONDS = 2.0
 #: third detail must land somewhere that says so rather than somewhere that guesses.
 _STOP_EVENTS: dict[str, LifecycleEvent] = {
     UNKNOWN_SESSION: LifecycleEvent.GRACEFUL_STOP_NEVER_SENT,
+    # Not sent either, and the pane is still running: its composer held text the stop's Enter
+    # would have submitted as a prompt, or another sender held its keys (DEC-099, BL-056).
+    COMPOSER_HOLDS_TEXT: LifecycleEvent.GRACEFUL_STOP_NEVER_SENT,
+    KEYS_BUSY: LifecycleEvent.GRACEFUL_STOP_NEVER_SENT,
     GRACEFUL_TIMEOUT: LifecycleEvent.GRACEFUL_STOP_TIMED_OUT,
 }
 

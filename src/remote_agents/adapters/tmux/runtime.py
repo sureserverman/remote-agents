@@ -39,7 +39,9 @@ from remote_agents.domain.trust import TrustState
 from remote_agents.ports.private_directory import open_private_directory
 from remote_agents.ports.provider_descriptor import ProviderDescriptor, TrustDialog
 from remote_agents.ports.terminal import (
+    COMPOSER_HOLDS_TEXT,
     GRACEFUL_TIMEOUT,
+    KEYS_BUSY,
     NOT_AWAITING_TRUST,
     OWNERSHIP_LOST,
     TERMINAL_NOT_LIVE,
@@ -506,8 +508,16 @@ class TmuxTerminal:
             return TerminalObservation(
                 session_id, live=False, preserved=False, detail=UNKNOWN_SESSION
             )
+        if await self._composer_holds_text(session_id, observation.profile_id):
+            # The stop's own Enter would submit the draft as a prompt (`<draft>/exit`): the agent
+            # would not stop and the draft would start a turn. Not sent, and said so (DEC-022).
+            return TerminalObservation(
+                session_id, live=True, preserved=False, detail=COMPOSER_HOLDS_TEXT
+            )
         try:
             await self._gateway.send_keys(session_id, profile.graceful_keys)
+        except KeysBusy:
+            return TerminalObservation(session_id, live=True, preserved=False, detail=KEYS_BUSY)
         except TerminalTargetMissing:
             # The pane went while the sequence was in flight. Reported as never-sent, which
             # *understates* — a key may well have landed. **DEC-038 accepted cost 2** records
@@ -625,6 +635,17 @@ class TmuxTerminal:
         except TimeoutError:
             return PromptDelivery(PromptOutcome.UNCONFIRMED, PromptReason.TIMEOUT)
 
+    async def _composer_holds_text(self, session_id: SessionId, profile_id: ProfileId) -> bool:
+        """Whether this agent's composer is holding text, for an agent that declares one."""
+        descriptor = self._composers.get(str(profile_id))
+        if descriptor is None:
+            return False
+        try:
+            capture = await self._gateway.capture(session_id)
+        except TerminalTargetMissing:
+            return False
+        return classify(capture, descriptor) is PaneState.COMPOSING
+
     async def _deliver_prompt(self, session_id: SessionId, text: str) -> PromptDelivery:
         observation = await self.inspect(session_id)
         if observation is None or not observation.live:
@@ -714,7 +735,19 @@ class TmuxTerminal:
     async def remote_control(
         self, session_id: SessionId, desired_state: RemoteControlState
     ) -> RemoteControlState:
-        """Run only the qualified Claude key sequences against one idle exact managed pane."""
+        """Run only the qualified Claude key sequences against one idle exact managed pane.
+
+        UNKNOWN, with nothing typed, when the composer holds text (the sequence's `Enter` would
+        submit it) or another sender holds the pane's keys (BL-056).
+        """
+        try:
+            return await self._remote_control(session_id, desired_state)
+        except KeysBusy:
+            return RemoteControlState.UNKNOWN
+
+    async def _remote_control(
+        self, session_id: SessionId, desired_state: RemoteControlState
+    ) -> RemoteControlState:
         observation = await self.inspect(session_id)
         if (
             observation is None
@@ -723,6 +756,9 @@ class TmuxTerminal:
         ):
             return RemoteControlState.UNKNOWN
         capture = await self._gateway.capture(session_id)
+        descriptor = self._composers.get(str(observation.profile_id))
+        if descriptor is not None and classify(capture, descriptor) is PaneState.COMPOSING:
+            return RemoteControlState.UNKNOWN
         current = _remote_control_state(capture)
         if current is desired_state:
             return current
@@ -923,6 +959,10 @@ class TmuxTerminal:
             return TrustAnswer(pressed=False, observed=TrustState.AWAITING)
         try:
             await self._gateway.send_keys(session_id, keys)
+        except KeysBusy:
+            # Another sender held the pane's keys: nothing was pressed, and the question is
+            # still on screen for a retry.
+            return TrustAnswer(pressed=False, observed=TrustState.AWAITING)
         except TerminalTargetMissing:
             # **`pressed=False`, because of what tmux means by this error.** The target did
             # not exist, so `send-keys` delivered nothing -- a missing pane is not a pane that
@@ -996,7 +1036,12 @@ class TmuxTerminal:
         if dialog is not None:
             keys = plan_trust_keys(capture, dialog, accept=False)
             if keys is not None:
-                await self._gateway.send_keys(session_id, keys)
+                try:
+                    await self._gateway.send_keys(session_id, keys)
+                except KeysBusy:
+                    # The declining keys could not be sent; end it the way a dialog this
+                    # cannot read is ended, below.
+                    return await self.force_stop(session_id)
                 deadline = asyncio.get_running_loop().time() + self._waits.decline
                 while asyncio.get_running_loop().time() < deadline:
                     current = await self.inspect(session_id)

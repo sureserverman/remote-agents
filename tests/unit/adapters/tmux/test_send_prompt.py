@@ -439,3 +439,49 @@ def test_a_slash_command_is_refused_before_pasting_where_no_menu_can_be_read(age
 
     assert (delivery.outcome, delivery.reason) == (PromptOutcome.REFUSED, PromptReason.MENU)
     assert pane.typed == []
+
+
+# --- Stage 2 gate, adversarial second pass (2026-09-23) -------------------------------------
+
+
+def test_a_hard_wrapped_long_token_still_reads_back_as_the_draft() -> None:
+    """A URL longer than the pane wraps without a space; the draft must still match."""
+    url = "https://example.com/" + "a" * 150
+    composed = re.sub(
+        r"^❯\s*Count from[^\n]*\n\s+This second line[^\n]*$",
+        "❯ " + url[:100] + "\n  " + url[100:],
+        _screen("claude", "composed"),
+        flags=re.M,
+    )
+    pane = PromptPane([_screen("claude", "idle"), composed, _screen("claude", "busy")])
+
+    assert _send(pane, url).outcome is PromptOutcome.SENT
+    assert pane.keys == ["Enter"]
+
+
+def test_a_draft_drawn_a_frame_late_is_read_again_before_giving_up() -> None:
+    pane = PromptPane(
+        [
+            _screen("claude", "idle"),
+            _screen("claude", "idle"),  # the paste not yet drawn
+            _screen("claude", "composed"),
+            _screen("claude", "busy"),
+        ]
+    )
+
+    assert _send(pane, _DRAFTED).outcome is PromptOutcome.SENT
+    assert pane.keys == ["Enter"]
+
+
+@pytest.mark.parametrize(
+    "text", ["\ufeff/logout", "\u200b!rm -rf build", "a\u202eb", "one\u2028two"],
+    ids=["bom-slash", "zwsp-bang", "bidi", "line-separator"],
+)  # fmt: skip
+def test_invisible_format_characters_cannot_hide_a_command_prefix(text: str) -> None:
+    from remote_agents.adapters.tmux.composer import prompt_text
+
+    cleaned = prompt_text(text)
+
+    assert not any(ord(ch) in (0xFEFF, 0x200B, 0x202E, 0x2028) for ch in cleaned), repr(cleaned)
+    if text.endswith("two"):
+        assert cleaned == "one\ntwo"

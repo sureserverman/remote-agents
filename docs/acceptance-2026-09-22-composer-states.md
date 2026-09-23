@@ -108,9 +108,11 @@ These rules come from the captures above; each names the trap it avoids.
   ↓ 82 tokens)`); the finished line (`✻ Baked for 12s · done 7:07 AM`) has no ellipsis. Notices
   can sit between the spinner and the composer (a weekly-limit line, a `⎿ Tip:` line), so the
   spinner is not always the line above it.
-- **Anything unmatched is UNKNOWN, and UNKNOWN is not idle.** The mode and model lines are closed
-  lists as measured (`auto mode on` / `manual mode on`; `Build · …`); plan mode, accept-edits or
-  another agent profile reads UNKNOWN. That is the safe direction, but it holds a queued message.
+- **Anything unmatched is UNKNOWN, and UNKNOWN is not idle.** The status lines under a composer
+  are *not* read as a closed list: Claude's plan and accept-edits modes, and another OpenCode agent
+  (`Plan · …`), read IDLE, because text submitted there is still a prompt. Shell mode is the
+  exception that is excluded -- a `!` composer is not matched at all, since what is submitted there
+  runs as a command -- so it reads UNKNOWN.
 - **Geometry.** Measured at 160x40 and 80x24 for all four, and at 50 columns for cursor-agent,
   whose `ctrl+c to stop` hint and `Working`/`Running` spinner both survive at 50. Narrower panes
   are not measured; a classifier must not read a truncated footer as idle.

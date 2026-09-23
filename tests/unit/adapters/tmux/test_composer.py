@@ -159,3 +159,14 @@ def test_a_folded_long_paste_is_read_back_as_its_placeholder(agent: str, folded:
     screen = (_PANES / agent / "composed_long.txt").read_text(encoding="utf-8")
 
     assert composer_draft(screen, _descriptor(agent)) == folded
+
+
+def test_codex_is_busy_whatever_its_working_line_is_headed() -> None:
+    """Codex heads the line with its reasoning summary, not always `Working`."""
+    busy = (_PANES / "codex" / "busy.txt").read_text(encoding="utf-8")
+    planning = busy.replace(
+        "• Working (2s • esc to interrupt)", "• Planning edits (9s • esc to interrupt)"
+    )
+    assert planning != busy, "the busy fixture's working line moved"
+
+    assert classify(planning, _descriptor("codex")) is PaneState.BUSY

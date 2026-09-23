@@ -21,6 +21,7 @@ from __future__ import annotations
 import asyncio
 import fcntl
 import logging
+import os
 from pathlib import Path
 from typing import IO
 
@@ -89,7 +90,9 @@ class SessionKeyLock:
             return None
         try:
             self._path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-            handle = self._path.open("a+")
+            # O_NOFOLLOW: a link planted at the lock's name is refused, not followed.
+            descriptor = os.open(self._path, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+            handle = os.fdopen(descriptor, "a+")
         except OSError:
             _LOG.warning(
                 "cannot use %s to serialise keystrokes with the other surface; "
