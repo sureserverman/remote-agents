@@ -170,7 +170,7 @@ def _onboard(arguments) -> int:
         return 1
     if arguments.install_daemon:
         try:
-            outcome = install_daemon(supervisor, run=_run_command)
+            outcome = install_daemon(supervisor, run=_run_command, read=_read_command)
         except (DaemonInstallError, ValueError) as error:
             print(error, file=sys.stderr)
             return 1
@@ -617,6 +617,31 @@ def _run_command(argv: tuple[str, ...]) -> int:
         return 1
 
 
+def _read_command(argv: tuple[str, ...]) -> str | None:
+    """Run one fixed local command and return its stdout, or None if it could not run or failed.
+
+    For `ServiceSupervisor.pid_command()` alone -- the one verb whose output is read (DEC-102).
+    The credential is stripped from its environment exactly as `_run_command` strips it.
+    """
+    environment = {
+        name: value for name, value in os.environ.items() if name not in TELEGRAM_SECRET_VARIABLES
+    }
+    try:
+        completed = subprocess.run(
+            argv,
+            check=False,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+            timeout=30,
+            env=environment,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return completed.stdout if completed.returncode == 0 else None
+
+
 def _package_manager_for_host() -> PackageManager:
     """Which package manager installs system dependencies here.
 
@@ -878,7 +903,7 @@ def _release_state(repository: str = DEFAULT_REPOSITORY) -> dict[str, object]:
 
 
 def _run_upgrade(arguments) -> int:
-    """Re-install this tool at a newer pinned tag, then let the daemon pick it up.
+    """Re-install this tool at a newer pinned tag, then re-onboard, which restarts the daemon.
 
     **This is the verb the pin took away.** `uv tool upgrade` re-resolves the requirement the
     install recorded, and that requirement is an exact git rev, so it resolves to itself and
@@ -943,8 +968,13 @@ def _run_upgrade(arguments) -> int:
         return 1
     # The daemon is registered against a path, and an upgrade that relocates the executable
     # leaves the old one named in the unit. Re-running onboarding is what rewrites it, and it is
-    # idempotent when nothing moved -- the same reason `scripts/install.sh` ends this way.
-    print("Re-registering the daemon so it picks up the new code...")
+    # idempotent when nothing moved -- the same reason `scripts/install.sh` ends this way. It is
+    # also what restarts a running service and proves the new process (BL-104): run by the *new*
+    # executable, so the first upgrade into that behaviour already has it, where a restart placed
+    # here would be run by the old version and arrive one upgrade late. Its own output says what
+    # happened (`restarted: pid A -> B`, or the failure and the command to run), and its exit
+    # status -- non-zero when the restart could not be proved -- is this command's.
+    print("Re-onboarding with the new version: re-registers the daemon and restarts it if running.")
     return _run_command((_installed_executable(), "onboard", "--install-daemon"))
 
 

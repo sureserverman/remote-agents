@@ -372,6 +372,20 @@ class TestWhereTheSecretComesFrom:
         assert self._TOKEN not in str(raised.value)
 
 
+@pytest.fixture(autouse=True)
+def _pids_that_change(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Every PID read here answers a new id, so an `onboard` that restarts proves it did.
+
+    Stubbed for the whole file, as `_run_command` is by each test: nothing here may run a real
+    `systemctl show` against the host's service (DEC-102). A test about a failed proof passes
+    its own reader to `install_daemon`.
+    """
+    from remote_agents.composition import onboarding
+
+    pids = iter(range(1000, 100_000))
+    monkeypatch.setattr(onboarding, "_read_command", lambda argv: str(next(pids)))
+
+
 class _FakeSupervisor:
     """A supervisor whose verbs are recorded rather than run, plus one artifact it owns.
 
@@ -471,12 +485,27 @@ class TestTheDaemonInstall:
 
         return run
 
+    def _reader(self, supervisor: _FakeSupervisor, pids: tuple[str | None, ...] = ("100", "200")):
+        """Answer each PID read with the next of `pids`, the last one repeating.
+
+        Two different ids by default: the running service before the restart and its successor.
+        """
+        answers = list(pids)
+
+        def read(argv: tuple[str, ...]) -> str | None:
+            supervisor.calls.append(("read", *argv))
+            return answers.pop(0) if len(answers) > 1 else answers[0]
+
+        return read
+
     def test_the_daemon_artifact_is_written_and_then_registered(self, tmp_path: Path) -> None:
         from remote_agents.adapters.supervisor.installer import install_daemon
 
         supervisor = _FakeSupervisor(tmp_path)
 
-        outcome = install_daemon(supervisor, run=self._runner(supervisor))
+        outcome = install_daemon(
+            supervisor, run=self._runner(supervisor), read=self._reader(supervisor)
+        )
 
         assert supervisor.artifact_path.read_text(encoding="utf-8") == "unit-v1"
         assert ("run", "fake", "install") in supervisor.calls
@@ -498,7 +527,7 @@ class TestTheDaemonInstall:
         supervisor = _FakeSupervisor(tmp_path)
         assert not supervisor.log_directory.exists()
 
-        install_daemon(supervisor, run=self._runner(supervisor))
+        install_daemon(supervisor, run=self._runner(supervisor), read=self._reader(supervisor))
 
         assert supervisor.log_directory.is_dir()
         assert supervisor.artifact_path.parent.is_dir()
@@ -515,13 +544,17 @@ class TestTheDaemonInstall:
         from remote_agents.adapters.supervisor.installer import install_daemon
 
         supervisor = _FakeSupervisor(tmp_path)
-        install_daemon(supervisor, run=self._runner(supervisor))
+        install_daemon(supervisor, run=self._runner(supervisor), read=self._reader(supervisor))
         supervisor.calls.clear()
 
-        outcome = install_daemon(supervisor, run=self._runner(supervisor))
+        outcome = install_daemon(
+            supervisor, run=self._runner(supervisor), read=self._reader(supervisor)
+        )
 
-        assert not outcome.changed
         assert "already current" in outcome.summary
+        # A change nonetheless, since 0.48.0: the running service was restarted onto the code
+        # installed now (BL-104). Nothing was registered, which is what the rest pins.
+        assert outcome.changed and "restarted: pid" in outcome.summary
         assert ("run", "fake", "install") not in supervisor.calls
         assert ("run", "fake", "remove") not in supervisor.calls
         assert ("run", "fake", "liveness") in supervisor.calls
@@ -544,10 +577,12 @@ class TestTheDaemonInstall:
         from remote_agents.adapters.supervisor.installer import install_daemon
 
         supervisor = _FakeSupervisor(tmp_path)
-        install_daemon(supervisor, run=self._runner(supervisor))
+        install_daemon(supervisor, run=self._runner(supervisor), read=self._reader(supervisor))
         supervisor.calls.clear()
 
-        outcome = install_daemon(supervisor, run=self._runner(supervisor, {"liveness": 1}))
+        outcome = install_daemon(
+            supervisor, run=self._runner(supervisor, {"liveness": 1}), read=self._reader(supervisor)
+        )
 
         assert outcome.changed
         assert "started the already-current daemon" in outcome.summary
@@ -566,11 +601,13 @@ class TestTheDaemonInstall:
         from remote_agents.adapters.supervisor.installer import install_daemon
 
         supervisor = _FakeSupervisor(tmp_path)
-        install_daemon(supervisor, run=self._runner(supervisor))
+        install_daemon(supervisor, run=self._runner(supervisor), read=self._reader(supervisor))
         supervisor.calls.clear()
 
         outcome = install_daemon(
-            supervisor, run=self._runner(supervisor, {"liveness": 1, "start": 1})
+            supervisor,
+            run=self._runner(supervisor, {"liveness": 1, "start": 1}),
+            read=self._reader(supervisor),
         )
 
         assert outcome.changed
@@ -590,7 +627,9 @@ class TestTheDaemonInstall:
 
         supervisor = _FakeSupervisor(tmp_path)
 
-        outcome = install_daemon(supervisor, run=self._runner(supervisor, {"install": 1}))
+        outcome = install_daemon(
+            supervisor, run=self._runner(supervisor, {"install": 1}), read=self._reader(supervisor)
+        )
 
         assert not outcome.succeeded
         assert "refused to register" in outcome.summary
@@ -629,11 +668,13 @@ class TestTheDaemonInstall:
         from remote_agents.adapters.supervisor.installer import install_daemon
 
         supervisor = _FakeSupervisor(tmp_path)
-        install_daemon(supervisor, run=self._runner(supervisor))
+        install_daemon(supervisor, run=self._runner(supervisor), read=self._reader(supervisor))
         supervisor.calls.clear()
 
         outcome = install_daemon(
-            supervisor, run=self._runner(supervisor, {"liveness": 1, "start": 1, "install": 1})
+            supervisor,
+            run=self._runner(supervisor, {"liveness": 1, "start": 1, "install": 1}),
+            read=self._reader(supervisor),
         )
 
         assert not outcome.succeeded
@@ -658,7 +699,7 @@ class TestTheDaemonInstall:
         supervisor.log_directory.symlink_to(elsewhere)
 
         with pytest.raises(DaemonInstallError):
-            install_daemon(supervisor, run=self._runner(supervisor))
+            install_daemon(supervisor, run=self._runner(supervisor), read=self._reader(supervisor))
 
         assert not (elsewhere / "remote-agents.service").exists()
 
@@ -674,12 +715,12 @@ class TestTheDaemonInstall:
         from remote_agents.adapters.supervisor.installer import install_daemon
 
         supervisor = _FakeSupervisor(tmp_path)
-        install_daemon(supervisor, run=self._runner(supervisor))
+        install_daemon(supervisor, run=self._runner(supervisor), read=self._reader(supervisor))
         supervisor.calls.clear()
         upgraded = _FakeSupervisor(tmp_path, content="unit-v2")
         upgraded.calls = supervisor.calls
 
-        outcome = install_daemon(upgraded, run=self._runner(upgraded))
+        outcome = install_daemon(upgraded, run=self._runner(upgraded), read=self._reader(upgraded))
 
         assert upgraded.artifact_path.read_text(encoding="utf-8") == "unit-v2"
         assert outcome.changed
@@ -701,11 +742,102 @@ class TestTheDaemonInstall:
 
         supervisor = _FakeSupervisor(tmp_path)
 
-        install_daemon(supervisor, run=self._runner(supervisor))
+        install_daemon(supervisor, run=self._runner(supervisor), read=self._reader(supervisor))
 
         assert supervisor.calls.index(("run", "fake", "reload")) < supervisor.calls.index(
             ("run", "fake", "install")
         )
+
+    # --- A running service is restarted, and the new process proved (BL-104, DEC-102) -----------
+    #
+    # Re-registering an unchanged definition does nothing to the running process, so `upgrade`
+    # used to leave the old code serving while it exited 0 and `doctor` read healthy. Re-onboarding
+    # (the new version's code, DEC-057) now restarts a service that was running and reads its
+    # process id either side: a new, non-zero id is the proof, anything else is a failure that
+    # names the command to run by hand.
+
+    def test_a_running_daemon_is_restarted_and_its_new_process_reported(
+        self, tmp_path: Path
+    ) -> None:
+        from remote_agents.adapters.supervisor.installer import install_daemon
+
+        supervisor = _FakeSupervisor(tmp_path)
+        install_daemon(supervisor, run=self._runner(supervisor), read=self._reader(supervisor))
+        supervisor.calls.clear()
+
+        outcome = install_daemon(
+            supervisor, run=self._runner(supervisor), read=self._reader(supervisor, ("100", "200"))
+        )
+
+        assert outcome.succeeded and outcome.changed
+        assert "restarted: pid 100 -> 200" in outcome.summary
+        calls = supervisor.calls
+        assert calls.index(("read", "fake", "pid")) < calls.index(("run", "fake", "restart"))
+        assert calls.count(("read", "fake", "pid")) == 2
+
+    @pytest.mark.parametrize(
+        ("pids", "codes", "named"),
+        [
+            (("100", "100"), {}, "same pid 100"),
+            (("100", "0"), {}, "pid 0"),
+            (("100", None), {}, "could not be read"),
+            ((None, "200"), {}, "pid before could not be read"),
+            (("100", "200"), {"restart": 1}, "restart failed"),
+        ],
+        ids=["same-pid", "pid-zero", "pid-unreadable", "pid-before-unreadable", "restart-failed"],
+    )
+    def test_a_restart_that_cannot_be_proved_is_a_failure_naming_the_manual_command(
+        self, tmp_path: Path, pids, codes, named: str
+    ) -> None:
+        from remote_agents.adapters.supervisor.installer import install_daemon
+
+        supervisor = _FakeSupervisor(tmp_path)
+        install_daemon(supervisor, run=self._runner(supervisor), read=self._reader(supervisor))
+
+        outcome = install_daemon(
+            supervisor, run=self._runner(supervisor, codes), read=self._reader(supervisor, pids)
+        )
+
+        assert not outcome.succeeded
+        assert named in outcome.summary
+        assert "fake restart" in outcome.summary, "the operator is told what to run by hand"
+
+    def test_a_stopped_daemon_is_started_not_restarted(self, tmp_path: Path) -> None:
+        from remote_agents.adapters.supervisor.installer import install_daemon
+
+        supervisor = _FakeSupervisor(tmp_path)
+        install_daemon(supervisor, run=self._runner(supervisor), read=self._reader(supervisor))
+        supervisor.calls.clear()
+
+        outcome = install_daemon(
+            supervisor,
+            run=self._runner(supervisor, {"liveness": 1}),
+            read=self._reader(supervisor),
+        )
+
+        assert outcome.succeeded
+        assert ("run", "fake", "start") in supervisor.calls
+        assert ("run", "fake", "restart") not in supervisor.calls
+        assert not any(call[0] == "read" for call in supervisor.calls)
+
+    def test_a_changed_definition_on_a_running_daemon_is_restarted_after_the_register(
+        self, tmp_path: Path
+    ) -> None:
+        """The PID is read before the unregister stops the old process, or it proves nothing."""
+        from remote_agents.adapters.supervisor.installer import install_daemon
+
+        supervisor = _FakeSupervisor(tmp_path)
+        install_daemon(supervisor, run=self._runner(supervisor), read=self._reader(supervisor))
+        upgraded = _FakeSupervisor(tmp_path, content="unit-v2")
+
+        outcome = install_daemon(
+            upgraded, run=self._runner(upgraded), read=self._reader(upgraded, ("100", "300"))
+        )
+
+        assert outcome.succeeded and "restarted: pid 100 -> 300" in outcome.summary
+        calls = upgraded.calls
+        assert calls.index(("read", "fake", "pid")) < calls.index(("run", "fake", "remove"))
+        assert calls.index(("run", "fake", "install")) < calls.index(("run", "fake", "restart"))
 
     def test_removing_the_daemon_unregisters_it_and_deletes_what_it_owns(
         self, tmp_path: Path
@@ -713,7 +845,7 @@ class TestTheDaemonInstall:
         from remote_agents.adapters.supervisor.installer import install_daemon, remove_daemon
 
         supervisor = _FakeSupervisor(tmp_path)
-        install_daemon(supervisor, run=self._runner(supervisor))
+        install_daemon(supervisor, run=self._runner(supervisor), read=self._reader(supervisor))
         supervisor.calls.clear()
 
         outcome = remove_daemon(supervisor, run=self._runner(supervisor))
@@ -1445,7 +1577,7 @@ class TestTheDefencesNothingElsePins:
             victim
         )
 
-        install_daemon(supervisor, run=lambda argv: 0)
+        install_daemon(supervisor, run=lambda argv: 0, read=lambda argv: "4242")
 
         assert not victim.exists()
         assert not supervisor.artifact_path.is_symlink()

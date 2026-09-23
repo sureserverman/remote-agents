@@ -347,7 +347,7 @@ def test_the_launchd_ledger_covers_the_log_files_launchd_creates_itself(tmp_path
         uid=501,
         homebrew_prefix=lambda: None,
     )
-    install_daemon(supervisor, run=lambda argv: 0)
+    install_daemon(supervisor, run=lambda argv: 0, read=lambda argv: "4242")
     # What launchd does on its own behalf once the job is bootstrapped.
     for name in ("remote-agents.log", "remote-agents.err"):
         (supervisor.log_directory / name).write_text("job output", encoding="utf-8")

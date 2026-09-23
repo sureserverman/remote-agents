@@ -46,14 +46,31 @@ class DaemonOutcome:
     """
 
     changed: bool
+    """Whether anything changed -- a definition written or registered, or a running service
+    restarted onto the installed code. False only when there was nothing to do."""
     summary: str
     succeeded: bool = True
 
 
 def install_daemon(
-    supervisor: ServiceSupervisor, *, run: Callable[[tuple[str, ...]], int]
+    supervisor: ServiceSupervisor,
+    *,
+    run: Callable[[tuple[str, ...]], int],
+    read: Callable[[tuple[str, ...]], str | None],
 ) -> DaemonOutcome:
-    """Make the directories, write the definition, and register it -- in that order, idempotently.
+    """Make the directories, write the definition, register it, and restart a running service.
+
+    **A service that was running is restarted, and the new process proved** (BL-104, DEC-102).
+    Registering an unchanged definition does nothing to the running process, so an upgrade used
+    to leave the old code serving while every status read healthy. `read` runs one argv and
+    returns its stdout (None when it could not): the process id is read before anything is
+    touched and again after `restart_command()`, and only a new, non-zero id is success. Anything
+    else is a failure naming the command to run by hand. A service that was not running is
+    started as before, never restarted -- and no PID is read for it, because on launchd the
+    read would itself start the job. The managed tmux sessions survive the restart: they live on
+    their own server (`KillMode=process`, `AbandonProcessGroup`). So does the `upgrade` that asked
+    for it, run from a shell inside one of those sessions: only the service's main process is
+    signalled, and that shell is not its child.
 
     **An unchanged definition registers nothing, and that is not just tidiness.** `launchctl
     bootstrap` exits non-zero for a job that is already bootstrapped, so an installer that
@@ -104,8 +121,11 @@ def install_daemon(
     # login, a hand-run `bootout`) where the job is genuinely absent -- while the signal it used
     # also fires for a service the operator deliberately stopped.
     running = run(supervisor.liveness_command()) == 0
+    # Before anything is touched: a changed definition is unregistered below, which stops the
+    # process whose id this is, and a read taken after that proves nothing.
+    before = _pid(read(supervisor.pid_command())) if running else None
     if not changed and running:
-        return DaemonOutcome(False, f"daemon already current at {paths}")
+        return _restarted(supervisor, run, read, before, f"daemon already current at {paths}")
     if not changed:
         # The definition is current and the service is down, and this installer **cannot tell
         # "stopped" from "never registered"** -- so it tries the cheaper, more surgical verb
@@ -149,7 +169,51 @@ def install_daemon(
         # tells an operator to go and look at a file this run did not touch.
         wrote = f"wrote {written} but" if changed else f"the definition at {written} is current but"
         return DaemonOutcome(True, f"{wrote} {supervisor.kind.value} refused to register it", False)
-    return DaemonOutcome(True, f"{verb} the {supervisor.kind.value} daemon at {written}")
+    registered = f"{verb} the {supervisor.kind.value} daemon at {written}"
+    if running:
+        return _restarted(supervisor, run, read, before, registered)
+    return DaemonOutcome(True, registered)
+
+
+def _restarted(
+    supervisor: ServiceSupervisor,
+    run: Callable[[tuple[str, ...]], int],
+    read: Callable[[tuple[str, ...]], str | None],
+    before: int | None,
+    registered: str,
+) -> DaemonOutcome:
+    """Restart a service that was running, and prove a new process runs: `pid A -> B`.
+
+    The manual command is named in every failure, because a service that could not be proved
+    restarted is one whose operator has to do it -- and "restart it by hand" is only useful with
+    the exact argv in front of them.
+    """
+    manual = " ".join(supervisor.restart_command())
+    if run(supervisor.restart_command()) != 0:
+        return DaemonOutcome(True, f"{registered}; restart failed -- run `{manual}`", False)
+    after = _pid(read(supervisor.pid_command()))
+    detail = None
+    if after is None:
+        detail = "restarted, but the new pid could not be read"
+    elif after == 0:
+        detail = "restarted, but pid 0: no process is running"
+    elif before is None:
+        # Restarted, and something is running -- but with no id from before there is nothing to
+        # compare it with, so the restart is not proved (DEC-102), however likely it is.
+        detail = f"restarted to pid {after}, but the pid before could not be read, so not proved"
+    elif after == before:
+        detail = f"same pid {after}: the service did not restart"
+    if detail is not None:
+        return DaemonOutcome(True, f"{registered}; {detail} -- run `{manual}`", False)
+    return DaemonOutcome(True, f"{registered}; restarted: pid {before} -> {after}")
+
+
+def _pid(output: str | None) -> int | None:
+    """The one integer `pid_command()` prints, or None for anything else (DEC-102)."""
+    try:
+        return int((output or "").strip())
+    except ValueError:
+        return None
 
 
 def remove_daemon(

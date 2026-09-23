@@ -144,3 +144,35 @@ def test_the_release_check_is_bounded_and_never_raises(monkeypatch: pytest.Monke
     assert state["latest"] is None
     assert state["newer_available"] is False
     assert state["reason"] == "release_list_unavailable"
+
+
+def test_an_upgrade_says_the_daemon_is_restarted_and_not_that_it_picks_up_the_new_code(
+    monkeypatch: pytest.MonkeyPatch, ran: list[tuple[str, ...]], capsys: pytest.CaptureFixture
+) -> None:
+    """BL-104: "so it picks up the new code" was printed over a re-registration that did nothing.
+
+    Re-onboarding now restarts a running service and reports the outcome itself; `upgrade` says
+    what it is about to do, and claims nothing about the result.
+    """
+    monkeypatch.setattr(onboarding, "__version__", "0.23.0")
+    _offering(monkeypatch, "v0.23.0", "v0.24.0")
+
+    assert main(["upgrade"]) == 0
+
+    out = capsys.readouterr().out
+    assert "picks up the new code" not in out
+    assert "restart" in out
+
+
+def test_an_upgrade_whose_restart_could_not_be_verified_exits_non_zero(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
+) -> None:
+    """Re-onboarding exits 1 when it cannot prove the new process; the upgrade passes that on."""
+    monkeypatch.setattr(
+        onboarding, "_run_command", lambda argv: 1 if "--install-daemon" in argv else 0
+    )
+    monkeypatch.setattr(onboarding, "_installed_executable", lambda: "/opt/bin/remote-agents")
+    monkeypatch.setattr(onboarding, "__version__", "0.23.0")
+    _offering(monkeypatch, "v0.23.0", "v0.24.0")
+
+    assert main(["upgrade"]) != 0

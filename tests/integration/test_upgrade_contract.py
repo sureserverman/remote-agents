@@ -39,10 +39,18 @@ BEFORE = "/opt/tools/remote-agents-a/bin/python3"
 AFTER = "/opt/tools/remote-agents-b/bin/python3"
 
 
+def _successive_pids():
+    """A PID read that answers a new id each time: every restart here is a real one."""
+    pids = iter(range(100, 10_000))
+    return lambda argv: str(next(pids))
+
+
 def _install(home: Path, interpreter: str) -> tuple[SystemdSupervisor, list[tuple[str, ...]]]:
     supervisor = SystemdSupervisor(interpreter=Path(interpreter), home=home)
     ran: list[tuple[str, ...]] = []
-    install_daemon(supervisor, run=lambda argv: ran.append(tuple(argv)) or 0)
+    install_daemon(
+        supervisor, run=lambda argv: ran.append(tuple(argv)) or 0, read=_successive_pids()
+    )
     return supervisor, ran
 
 
