@@ -74,7 +74,7 @@ The same two steps without the fetched script:
 
 ```bash
 uv tool install --managed-python \
-  "remote-agents @ git+https://github.com/sureserverman/remote-agents@v0.47.2"
+  "remote-agents @ git+https://github.com/sureserverman/remote-agents@v0.47.3"
 remote-agents onboard --install-daemon
 ```
 
@@ -182,7 +182,7 @@ the repository and the version before installing anything:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/sureserverman/remote-agents/main/scripts/install.sh \
-  | REMOTE_AGENTS_VERSION=v0.47.2 bash
+  | REMOTE_AGENTS_VERSION=v0.47.3 bash
 remote-agents onboard --install-daemon
 ```
 
