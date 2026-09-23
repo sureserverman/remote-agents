@@ -3,7 +3,7 @@
 
 The stage gates will call this once the split is wired in — nothing invokes it at HEAD.
 It exists because the claims are about a **set** — every moved table, in both
-directions — and a check that names one table cannot fail on the other three. `UI_TABLES` is
+directions — and a check that names one table cannot fail on the other three. `MOVED_TABLES` is
 imported rather than restated here so the set has one definition (DEC-011); a table added to
 the migration and forgotten here would otherwise pass a verifier that never looked for it.
 
@@ -27,7 +27,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
-from remote_agents.adapters.sqlite.migrations import UI_TABLES  # noqa: E402
+from remote_agents.adapters.sqlite.migrations import MOVED_TABLES, UI_TABLES  # noqa: E402
 
 
 def _domain_tables(domain: Path) -> set[str]:
@@ -41,7 +41,7 @@ def _domain_tables(domain: Path) -> set[str]:
     # `schema_version` is excluded because each file legitimately carries its own: the two
     # stores version independently, which is the point. Deriving the set without this exclusion
     # reported it as "leaked into the UI store" on the first run.
-    return _tables(domain) - set(UI_TABLES) - {"schema_version"}
+    return _tables(domain) - set(MOVED_TABLES) - {"schema_version"}
 
 
 def _tables(path: Path) -> set[str]:
@@ -76,7 +76,7 @@ def _report(failures: list[str], claim: str) -> int:
         for line in failures:
             print(f"  {line}")
         return 1
-    print(f"OK {claim} — swept {len(UI_TABLES)} table(s): {', '.join(sorted(UI_TABLES))}")
+    print(f"OK {claim} — swept {len(MOVED_TABLES)} table(s): {', '.join(sorted(MOVED_TABLES))}")
     return 0
 
 
@@ -92,9 +92,9 @@ def _counts_claim(before: Path, after: Path, ui: Path) -> int:
     `after` stays in the signature because Stage 2's drop makes it the other half of the same
     claim, and it is reported when a row is in neither file.
     """
-    was = _counts(before, UI_TABLES)
+    was = _counts(before, MOVED_TABLES)
     failures = []
-    for table in UI_TABLES:
+    for table in MOVED_TABLES:
         expected = was.get(table, 0)
         landed = _counts(ui, (table,)).get(table, 0)
         if landed < expected:
@@ -114,12 +114,12 @@ def _idempotent_claim(domain: Path, ui: Path) -> int:
     """Running the split again changes nothing — it runs on every process start."""
     from remote_agents.adapters.sqlite.store_split import split_stores
 
-    before = _counts(ui, UI_TABLES)
+    before = _counts(ui, MOVED_TABLES)
     split_stores(domain)
-    after = _counts(ui, UI_TABLES)
+    after = _counts(ui, MOVED_TABLES)
     failures = [
         f"{table}: {before.get(table)} -> {after.get(table)}"
-        for table in UI_TABLES
+        for table in MOVED_TABLES
         if before.get(table) != after.get(table)
     ]
     return _report(failures, "a second split changes no count")
@@ -129,6 +129,8 @@ def _disjoint_claim(domain: Path, ui: Path) -> int:
     """Neither file carries the other's tables — the split is only worth anything if it is clean."""
     in_domain = _tables(domain)
     in_ui = _tables(ui)
+    # Every UI table, not only the moved ones: a table born in the UI store must not appear in
+    # the domain store either.
     failures = [f"{t} still in the domain store" for t in sorted(set(UI_TABLES) & in_domain)]
     # `handoff_intents` is unioned in explicitly. It is dropped by migration 14 rather than
     # moved, so it is in neither store — which means `_domain_tables(domain)` cannot contain it

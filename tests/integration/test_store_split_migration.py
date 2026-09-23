@@ -28,7 +28,7 @@ from remote_agents.adapters.sqlite.database import (
     open_ui_database,
     ui_database_path,
 )
-from remote_agents.adapters.sqlite.migrations import MIGRATIONS, UI_TABLES
+from remote_agents.adapters.sqlite.migrations import MIGRATIONS, MOVED_TABLES
 from remote_agents.adapters.sqlite.store_split import split_stores, unsplit_stores
 
 #: Everything up to but not including the drop, which Stage 2 adds as migration 14. Opening at
@@ -62,7 +62,7 @@ def _a_store_with_rows(path: Path) -> dict[str, int]:
         connection.commit()
         return {
             table: connection.execute(f'SELECT COUNT(*) FROM "{table}"').fetchone()[0]
-            for table in UI_TABLES
+            for table in MOVED_TABLES
         }
     finally:
         connection.close()
@@ -87,14 +87,14 @@ def _counts(path: Path, tables: tuple[str, ...]) -> dict[str, int]:
 
 
 def test_the_migration_moves_every_row_of_every_moved_table(tmp_path: Path) -> None:
-    """Swept over `UI_TABLES`. A spot check on one table cannot fail on the other five."""
+    """Swept over `MOVED_TABLES`. A spot check on one table cannot fail on the other five."""
     domain = tmp_path / "sessions.sqlite3"
     before = _a_store_with_rows(domain)
     assert all(before.values()), "a table with no rows proves nothing about moving rows"
 
     split_stores(domain)
 
-    after = _counts(ui_database_path(domain), UI_TABLES)
+    after = _counts(ui_database_path(domain), MOVED_TABLES)
     assert after == before
 
 
@@ -120,7 +120,7 @@ def test_the_migration_is_a_no_op_the_second_time(tmp_path: Path) -> None:
     split_stores(domain)
     split_stores(domain)
 
-    assert _counts(ui_database_path(domain), UI_TABLES) == before
+    assert _counts(ui_database_path(domain), MOVED_TABLES) == before
 
 
 def test_the_migration_leaves_a_backup_carrying_the_rows_the_drop_will_remove(
@@ -143,7 +143,7 @@ def test_the_migration_leaves_a_backup_carrying_the_rows_the_drop_will_remove(
 
     assert report.backup is not None
     assert report.backup.exists()
-    assert _counts(report.backup, UI_TABLES), "the backup predates the move, so it has the rows"
+    assert _counts(report.backup, MOVED_TABLES), "the backup predates the move, so it has the rows"
 
 
 def test_a_store_that_was_never_split_and_has_no_moved_tables_is_left_alone(
@@ -158,7 +158,7 @@ def test_a_store_that_was_never_split_and_has_no_moved_tables_is_left_alone(
     assert report.moved == {}
 
 
-@pytest.mark.parametrize("table", sorted(UI_TABLES))
+@pytest.mark.parametrize("table", sorted(MOVED_TABLES))
 def test_every_moved_table_is_reported_by_name(tmp_path: Path, table: str) -> None:
     """The report is what the gate's verifier will read, so it names the set rather than a total."""
     domain = tmp_path / "sessions.sqlite3"
@@ -237,7 +237,7 @@ def _drop_moved_tables(domain: Path) -> None:
     """The state Stage 2 leaves behind: the domain store no longer carries the moved set."""
     connection = sqlite3.connect(domain)
     try:
-        for table in UI_TABLES:
+        for table in MOVED_TABLES:
             connection.execute(f'DROP TABLE IF EXISTS "{table}"')
         connection.commit()
     finally:
@@ -258,16 +258,16 @@ def test_migration_rollback_puts_every_row_back(tmp_path: Path) -> None:
     # Simulate the state Stage 2 leaves: the domain store no longer carries them.
     stripped = sqlite3.connect(domain)
     try:
-        for table in UI_TABLES:
+        for table in MOVED_TABLES:
             stripped.execute(f'DROP TABLE IF EXISTS "{table}"')
         stripped.commit()
     finally:
         stripped.close()
-    assert _counts(domain, UI_TABLES) == {}
+    assert _counts(domain, MOVED_TABLES) == {}
 
     unsplit_stores(domain)
 
-    assert _counts(domain, UI_TABLES) == before
+    assert _counts(domain, MOVED_TABLES) == before
 
 
 def test_migration_rollback_is_safe_to_run_twice(tmp_path: Path) -> None:
@@ -279,7 +279,7 @@ def test_migration_rollback_is_safe_to_run_twice(tmp_path: Path) -> None:
     unsplit_stores(domain)
     unsplit_stores(domain)
 
-    assert _counts(domain, UI_TABLES) == before
+    assert _counts(domain, MOVED_TABLES) == before
 
 
 def test_migration_rollback_refuses_when_there_is_no_ui_store(tmp_path: Path) -> None:
@@ -328,7 +328,7 @@ def test_migration_rollback_run_twice_after_the_drop_is_still_a_no_op(tmp_path: 
     unsplit_stores(domain)
     unsplit_stores(domain)
 
-    assert _counts(domain, UI_TABLES) == before
+    assert _counts(domain, MOVED_TABLES) == before
 
 
 def test_migration_rollback_restores_the_indexes_too(tmp_path: Path) -> None:
@@ -400,7 +400,7 @@ def test_a_failed_rollback_reports_its_own_cause_not_a_locked_detach(
     real = module._refuse_drifted_table
 
     def fail_after_the_first_insert(connection: object, table: str) -> None:
-        if table == UI_TABLES[1]:
+        if table == MOVED_TABLES[1]:
             raise RuntimeError("the cause an operator needs to see")
         return real(connection, table)
 
@@ -419,7 +419,7 @@ def test_the_migration_leaves_the_domain_store_carrying_none_of_them(tmp_path: P
     split_stores(domain)
     open_database(domain).close()  # applies migration 14, which drops them
 
-    assert _counts(domain, UI_TABLES) == {}
+    assert _counts(domain, MOVED_TABLES) == {}
 
 
 def test_the_rows_survive_a_domain_open_that_applies_the_drop(tmp_path: Path) -> None:
@@ -435,7 +435,7 @@ def test_the_rows_survive_a_domain_open_that_applies_the_drop(tmp_path: Path) ->
     split_stores(domain)
     open_database(domain).close()
 
-    assert _counts(ui_database_path(domain), UI_TABLES) == before
+    assert _counts(ui_database_path(domain), MOVED_TABLES) == before
 
 
 def test_a_concurrent_split_does_not_crash_the_second_process(
@@ -477,7 +477,7 @@ def test_a_table_vanishing_mid_copy_is_skipped_rather_than_fatal(
     """The *second* race guard — the one around `INSERT OR IGNORE`, not the count.
 
     **The first version of this test was flaky by construction, and measurably so: 6 of 20
-    `PYTHONHASHSEED` values failed it.** It added a synthetic table to `UI_TABLES`, which
+    `PYTHONHASHSEED` values failed it.** It added a synthetic table to `MOVED_TABLES`, which
     `_already_copied` also iterates — over a *set*. Whichever member Python visited first decided
     whether the synthetic one raised (short-circuiting to "already copied") or a real one
     answered "not yet". Neither the code nor the test chose; the interpreter's hash seed did.
@@ -498,12 +498,12 @@ def test_a_table_vanishing_mid_copy_is_skipped_rather_than_fatal(
     monkeypatch.setattr(module, "_already_copied", lambda *_a, **_k: False)
     real = module._tables
     monkeypatch.setattr(module, "_tables", lambda c: real(c) | {"gone_from_under_us"})
-    monkeypatch.setattr(module, "UI_TABLES", (*UI_TABLES, "gone_from_under_us"))
+    monkeypatch.setattr(module, "MOVED_TABLES", (*MOVED_TABLES, "gone_from_under_us"))
 
     report = split_stores(domain)
 
     assert "gone_from_under_us" not in report.moved
-    assert set(report.moved) == set(UI_TABLES), (
+    assert set(report.moved) == set(MOVED_TABLES), (
         "the real tables must still copy; only the vanished one is skipped"
     )
 

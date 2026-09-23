@@ -312,14 +312,24 @@ honest.
 #: sessions page redrawing, minting and republishing its own change is what flood-banned the
 #: bot for six hours on 2026-09-13.
 #:
-#: Read by `UI_MIGRATIONS` below, by `scripts/verify-store-split.py`, and by `store_split`,
-#: which copies the rows — one set, three readers, so a table added here cannot be forgotten by
-#: one of them. `store_split` is deliberately not a migration; it says why.
-UI_TABLES: tuple[str, ...] = (
+#: Every table the UI store holds, read by the wiring and migration checks. `MOVED_TABLES` is the
+#: part of it the split moved, read by `scripts/verify-store-split.py` and by `store_split`, which
+#: copies the rows. `store_split` is deliberately not a migration; it says why.
+MOVED_TABLES: tuple[str, ...] = (
     "callback_states",
     "chat_views",
     "standing_notifications",
     "trust_notifications",
+)
+"""The tables the store split moved out of the domain store -- what `store_split` copies and
+restores, and what `scripts/verify-store-split.py` counts. A fixed, historical set: a table born
+in the UI store (below) was never in the domain store and has nothing to move."""
+
+UI_TABLES: tuple[str, ...] = (
+    *MOVED_TABLES,
+    # The prompt relay's queue (DEC-099), UI migration 2: born here, never moved. The bot writes
+    # it and its own service pass reads it; nothing else does.
+    "queued_prompts",
 )
 """Two candidates were removed from this set during Stage 1, each for its own reason, and both
 are recorded because the plan named six.

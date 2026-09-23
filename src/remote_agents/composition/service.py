@@ -17,7 +17,9 @@ from remote_agents.application.activity import CodexApprovalWatcher, drain_activ
 from remote_agents.application.backend import CLOSE_TIMEOUT_SECONDS
 from remote_agents.application.reconcile import ReconciliationService
 from remote_agents.config import TelegramSecrets
+from remote_agents.domain.models import SessionId
 from remote_agents.ports.agent_activity import ActivityConfidence, ActivityKind, AgentActivity
+from remote_agents.ports.message_relay import MessageRelay, RelayResult
 from remote_agents.ports.state_events import StoreChanged
 
 _LOG = logging.getLogger(__name__)
@@ -105,6 +107,16 @@ class ServiceComposition:
     are: `ServiceComposition` is constructed positionally in places, so a new field goes at the
     end with a default and names what it is in prose.
     """
+
+    prompt_relay: MessageRelay | None = None
+    """The relay whose waiting messages a "finished" activity retries (DEC-099), or None.
+
+    None where no relay is wired -- every composition but the bot's -- which is why it defaults
+    and sits at the end.
+    """
+
+    relay_announcer: Callable[[str, RelayResult], Awaitable[None]] | None = None
+    """What tells the owner a waiting message was delivered (or not), or None to stay silent."""
 
 
 async def _serve_with_reconciliation(
@@ -380,6 +392,41 @@ async def _watch_activity_once(composition: ServiceComposition) -> None:
         await composition.boundary.notifier.deliver(activities)
     except Exception:
         _LOG.exception("delivering activity notifications failed")
+    await _retry_waiting_messages(composition, activities)
+
+
+async def _retry_waiting_messages(
+    composition: ServiceComposition, activities: list[AgentActivity]
+) -> None:
+    """Deliver each finished session's waiting message, then drop those of ended sessions.
+
+    Only a COMPLETED activity retries -- the one "finished" event (Claude and Codex `Stop`,
+    OpenCode `session.idle`); a session waiting on an answer is exactly the one not to type into.
+    The relay checks the pane again before typing (DEC-099), so a retry that finds it still busy
+    leaves the message waiting for the next one. Guarded per session, like every step here: one
+    failure costs that session one pass.
+    """
+    relay = composition.prompt_relay
+    if relay is None:
+        return
+    finished = dict.fromkeys(
+        activity.session_id for activity in activities if activity.kind is ActivityKind.COMPLETED
+    )
+    for session_id in finished:
+        try:
+            result = await relay.retry(SessionId.parse(session_id))
+        except Exception:
+            _LOG.exception("delivering a waiting message to %s failed", session_id)
+            continue
+        if result is not None and composition.relay_announcer is not None:
+            try:
+                await composition.relay_announcer(session_id, result)
+            except Exception:
+                _LOG.exception("announcing a waiting message's delivery failed")
+    try:
+        await relay.sweep()
+    except Exception:
+        _LOG.exception("sweeping waiting messages failed")
 
 
 async def _reconcile_periodically(composition: ServiceComposition, interval: float) -> None:

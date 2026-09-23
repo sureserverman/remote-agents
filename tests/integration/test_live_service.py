@@ -2432,3 +2432,64 @@ def test_a_codex_permission_request_carries_its_command_from_the_hook_to_the_mes
     assert "whoami &gt; /tmp/ra-drill-probe.txt" in message.text, (
         "and the owner can finally tell this ask from any other one"
     )
+
+
+# --- the prompt relay's retry on "finished" (DEC-099) ----------------------------------------
+
+
+class _RecordingRelay:
+    def __init__(self) -> None:
+        self.retried: list[str] = []
+        self.sweeps = 0
+
+    async def retry(self, session_id):
+        from remote_agents.ports.message_relay import RelayOutcome, RelayResult
+
+        self.retried.append(str(session_id))
+        return RelayResult(RelayOutcome.SENT)
+
+    async def sweep(self) -> None:
+        self.sweeps += 1
+
+
+async def test_a_finished_activity_retries_that_sessions_waiting_message(tmp_path) -> None:
+    finished = _running("finished")
+    asking = _running("asking")
+    boundary, bot = _notified(finished, asking)
+    spool = tmp_path / "activity"
+    _spool(spool, str(finished.session_id))
+    _spool(spool, str(asking.session_id), event="PermissionRequest", stamp="000002")
+    relay = _RecordingRelay()
+    announced: list[tuple[str, object]] = []
+
+    async def announce(session_id, result) -> None:
+        announced.append((str(session_id), result))
+
+    composition = ServiceComposition(
+        boundary,
+        _SilentTerminal(),
+        _SilentReconciler(),
+        activity_directory=spool,
+        prompt_relay=relay,
+        relay_announcer=announce,
+    )
+
+    await _watch_activity_once(composition)
+
+    sent = " ".join(str(send["text"]) for send in bot.sends)
+    assert _named(asking) in sent, "the premise: the asking session's activity was delivered"
+    assert relay.retried == [str(finished.session_id)], "a retry runs only on a finished event"
+    assert [session for session, _ in announced] == [str(finished.session_id)]
+    assert relay.sweeps == 1
+
+
+async def test_a_pass_with_nothing_finished_still_sweeps_and_retries_nothing(tmp_path) -> None:
+    boundary, _bot = _notified(_running())
+    relay = _RecordingRelay()
+    composition = ServiceComposition(
+        boundary, _SilentTerminal(), _SilentReconciler(), prompt_relay=relay
+    )
+
+    await _watch_activity_once(composition)
+
+    assert relay.retried == [] and relay.sweeps == 1

@@ -415,3 +415,20 @@ def test_declining_trust_is_offered_without_consulting_the_profile_at_all() -> N
         record = SimpleNamespace(profile_id=ProfileId(profile), state=SessionState.UNTRUSTED)
 
         assert decline_trust_available(record)
+
+
+# --- the Send message action (DEC-099) --------------------------------------------------------
+
+
+@pytest.mark.parametrize("state", list(SessionState))
+def test_a_message_can_be_sent_only_to_a_running_session_whose_agent_declares_a_composer(
+    state: SessionState,
+) -> None:
+    from remote_agents.application.session_actions import message_available
+
+    relayable = frozenset({"claude"})
+
+    assert message_available(state, ProfileId("claude"), relayable) is (
+        state is SessionState.RUNNING
+    )
+    assert message_available(state, ProfileId("mystery-agent"), relayable) is False

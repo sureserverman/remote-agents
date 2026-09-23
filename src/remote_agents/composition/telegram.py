@@ -5,13 +5,16 @@ from __future__ import annotations
 from functools import partial
 
 from remote_agents.adapters.agents.registry import (
+    profile_composers,
     profile_glyphs,
     profile_trust_dialogs,
+    profiles_with_finished_events,
     provider_descriptors,
 )
 from remote_agents.adapters.sqlite.activity_store import SQLiteActivityStore
 from remote_agents.adapters.sqlite.callback_state_store import SQLiteCallbackStateStore
 from remote_agents.adapters.sqlite.chat_view_store import SQLiteChatViewStore
+from remote_agents.adapters.sqlite.queued_prompt_store import SQLiteQueuedPromptStore
 from remote_agents.adapters.sqlite.session_store import SQLiteSessionStore
 from remote_agents.adapters.sqlite.standing_notification_store import (
     SQLiteStandingNotificationStore,
@@ -20,6 +23,7 @@ from remote_agents.adapters.sqlite.trust_notifications import SQLiteTrustNotific
 from remote_agents.adapters.telegram import FRONTEND
 from remote_agents.adapters.telegram.service import build_private_bot
 from remote_agents.application.activity import CodexApprovalWatcher
+from remote_agents.application.prompt_relay import PromptRelay
 from remote_agents.application.reconcile import ReconciliationService, SessionLocks
 from remote_agents.composition.backend import (
     ProjectCatalogueProvider,
@@ -116,6 +120,13 @@ def _private_boundary(
     # Named rather than inlined, because the serve loop needs the pass the factory built: the
     # boundary owns it (it speaks through the live view and mints against the same callbacks),
     # and `ServiceComposition` is what puts it on a clock.
+    finishing = profiles_with_finished_events(descriptors)
+    relay = PromptRelay(
+        terminal,
+        SQLiteQueuedPromptStore(ui_connection),
+        store,
+        queues_for=lambda profile: str(profile) in finishing,
+    )
     boundary = build_private_bot(
         secrets.owner_user_id,
         secrets.owner_chat_id,
@@ -156,6 +167,11 @@ def _private_boundary(
         # Its absence is what a boundary without a trust pass looks like, so supplying it is
         # the whole of the wiring here.
         trust_store=SQLiteTrustNotificationStore(ui_connection),
+        # The prompt relay (DEC-099): its queue lives in the UI store (DEC-090), it types only
+        # through the terminal both surfaces share, and it queues only for agents whose
+        # "finished" event this service drains -- all read off the one descriptor set.
+        message_relay=relay,
+        relayable=frozenset(profile_composers(descriptors)),
     )
     return ServiceComposition(
         boundary,
@@ -175,4 +191,5 @@ def _private_boundary(
         SQLiteActivityStore(connection),
         trust_notifier=boundary.trust_notifier,
         limit_reset_notifier=boundary.limit_reset_notifier,
+        prompt_relay=relay,
     )

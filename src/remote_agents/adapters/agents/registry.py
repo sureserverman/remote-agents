@@ -433,6 +433,27 @@ def profile_composers(
     return resolved
 
 
+def profiles_with_finished_events(
+    descriptors: tuple[ProviderDescriptor, ...] | None = None,
+) -> frozenset[str]:
+    """The curated profiles whose agent reports a "finished" event this project drains.
+
+    Exactly those whose vertical declares `hooks`: the hook (or OpenCode's plugin) is what
+    spools `COMPLETED`. The prompt relay queues a message only for these (DEC-099) -- for any
+    other agent nothing would ever deliver it, so it refuses instead.
+    """
+    built = provider_descriptors() if descriptors is None else descriptors
+    by_provider = {str(descriptor.profile_id): descriptor for descriptor in built}
+    executables = {str(profile.profile_id): profile.executable for profile in closed_profiles()}
+    finishing = set()
+    for profile in closed_profiles():
+        name = str(profile.profile_id)
+        descriptor = by_provider.get(name) or by_provider.get(executables.get(name, ""))
+        if descriptor is not None and descriptor.hooks is not None:
+            finishing.add(name)
+    return frozenset(finishing)
+
+
 def profile_glyphs(descriptors: tuple[ProviderDescriptor, ...] | None = None) -> dict[str, str]:
     """Every curated profile's mark, as one mapping a composition can hand to a surface.
 

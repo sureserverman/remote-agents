@@ -51,7 +51,7 @@ strength of a *parseable managed tag with no store row*, and never reads `observ
 from __future__ import annotations
 
 import logging
-from collections.abc import Mapping
+from collections.abc import Collection, Mapping
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import Protocol
@@ -400,6 +400,19 @@ def decline_trust_available(record: _RemoteControllable) -> bool:
     which is the established route for an action that is not one.
     """
     return record.state is SessionState.UNTRUSTED
+
+
+def message_available(
+    state: SessionState, profile_id: ProfileId, relayable: Collection[str]
+) -> bool:
+    """Whether a surface should offer to relay a message into this session (DEC-099).
+
+    A live managed session -- RUNNING, nothing else -- whose agent declares a composer, so the
+    terminal can tell its idle screen from a turn or a dialog. `relayable` is that set of
+    profiles, read by the composition off the providers' declarations (DEC-070), never listed
+    here. Outside `available_actions` for `trust_available`'s reason (DEC-007): it is not a stop.
+    """
+    return state is SessionState.RUNNING and str(profile_id) in relayable
 
 
 def trust_available(

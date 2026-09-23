@@ -168,6 +168,7 @@ from remote_agents.domain.trust import answerable as trust_answerable
 from remote_agents.ports.agent_usage import ContextWindow
 from remote_agents.ports.callback_state import CallbackStatePort
 from remote_agents.ports.chat_view import ChatViewPort
+from remote_agents.ports.message_relay import MessageRelay
 from remote_agents.ports.standing_notification import StandingNotificationPort
 from remote_agents.ports.terminal import TerminalTargetMissing
 
@@ -633,6 +634,20 @@ class PrivateBotBoundary:
     Empty by default, which is the honest state for the many compositions that wire no
     registry at all: a profile with no mark renders exactly the label drawn before this
     field existed.
+    """
+    message_relay: MessageRelay | None = None
+    """What sends the owner's message into a session (DEC-099), or None where none is wired.
+
+    A port, named for messages, because this package may not name what it relays (DEC-075). None
+    is the honest state for every composition but the service's, and a session screen then
+    offers no Send message row.
+    """
+
+    relayable: frozenset[str] = frozenset()
+    """The curated profiles a message may be sent to -- those whose agent declares a composer.
+
+    Folded by the composition root off the registry, like `trust_dialogs` and for its reason:
+    the declarations belong to the verticals (DEC-070).
     """
     catalogue: tuple[CatalogProject, ...] = field(init=False)
     """The catalogue as currently drawn, seeded from the backend and re-ranked in place.

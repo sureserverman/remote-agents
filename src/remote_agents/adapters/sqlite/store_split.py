@@ -35,7 +35,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from remote_agents.adapters.sqlite.database import open_ui_database, ui_database_path
-from remote_agents.adapters.sqlite.migrations import UI_TABLES
+from remote_agents.adapters.sqlite.migrations import MOVED_TABLES
 from remote_agents.ports.private_directory import open_private_directory
 
 __all__ = ["RestoreReport", "SplitReport", "split_stores", "unsplit_stores"]
@@ -93,7 +93,7 @@ def _already_copied(connection: sqlite3.Connection, domain_path: Path) -> bool:
     ui = sqlite3.connect(f"file:{ui_path}?mode=ro", uri=True)
     try:
         landed = _tables(ui)
-        for table in _tables(connection) & set(UI_TABLES):
+        for table in _tables(connection) & set(MOVED_TABLES):
             if table not in landed:
                 return False
             try:
@@ -137,7 +137,7 @@ def split_stores(domain_path: Path) -> SplitReport:
     # tables this function exists to read.
     connection = sqlite3.connect(domain_path)
     try:
-        present = _tables(connection) & set(UI_TABLES)
+        present = _tables(connection) & set(MOVED_TABLES)
         if not present:
             return SplitReport(moved={}, backup=None)
 
@@ -156,7 +156,7 @@ def split_stores(domain_path: Path) -> SplitReport:
         connection.execute("ATTACH DATABASE ? AS ui", (str(ui_path),))
         try:
             moved: dict[str, int] = {}
-            for table in UI_TABLES:
+            for table in MOVED_TABLES:
                 if table not in present:
                     continue
                 try:
@@ -262,7 +262,7 @@ def unsplit_stores(domain_path: Path) -> RestoreReport:
         connection.execute("ATTACH DATABASE ? AS ui", (str(ui_path),))
         try:
             restored: dict[str, int] = {}
-            for table in UI_TABLES:
+            for table in MOVED_TABLES:
                 schema = connection.execute(
                     "SELECT type, sql FROM ui.sqlite_master "
                     "WHERE tbl_name = ? AND sql IS NOT NULL",

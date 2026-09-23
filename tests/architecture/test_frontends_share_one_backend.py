@@ -588,8 +588,10 @@ def test_rule_two_leaves_an_unrelated_getattr_alone() -> None:
 
 def test_the_shared_use_case_set_is_read_from_its_modules() -> None:
     names = _shared_use_case_names()
-    assert len(names) == 22, (
-        f"the shared use-case modules now define {len(names)} public names, not 22. Adding one "
+    # 22 -> 23 on 2026-09-23: `session_actions.message_available`, the Send message action's
+    # availability (DEC-099), is a shared rule like `trust_available`.
+    assert len(names) == 23, (
+        f"the shared use-case modules now define {len(names)} public names, not 23. Adding one "
         "is ordinary; this assertion exists so that adding one is *noticed*, because every "
         "name here is a name no adapter may define."
     )
