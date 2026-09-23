@@ -198,9 +198,7 @@ def test_a_spool_command_that_never_finishes_is_killed_and_the_session_moves_on(
     deliberately not taken, because unref'ing the child as well as the timer lets node exit with
     the delivery still pending, which loses the `session.idle` record the wait was added for.
     """
-    monkeypatch.setattr(
-        "remote_agents.adapters.agents.opencode.plugin._WAIT_MILLISECONDS", 300
-    )
+    monkeypatch.setattr("remote_agents.adapters.agents.opencode.plugin._WAIT_MILLISECONDS", 300)
 
     elapsed = _run(
         tmp_path,
@@ -232,9 +230,7 @@ def test_a_child_that_ignores_sigterm_does_not_hold_the_host_open(
         [
             "python3",
             "-c",
-            "import signal,time\n"
-            "signal.signal(signal.SIGTERM, signal.SIG_IGN)\n"
-            "time.sleep(30)\n",
+            "import signal,time\nsignal.signal(signal.SIGTERM, signal.SIG_IGN)\ntime.sleep(30)\n",
         ],
         session_id="sess-opencode",
         timeout=12,
@@ -244,7 +240,7 @@ def test_a_child_that_ignores_sigterm_does_not_hold_the_host_open(
 
 
 def test_the_handler_called_with_no_argument_does_not_throw(tmp_path: Path) -> None:
-    """"Every path is inside a try" has to include reading the argument.
+    """ "Every path is inside a try" has to include reading the argument.
 
     Destructuring in the parameter list runs before the try is entered, so a host calling this
     against its own documented `({ event })` signature would reject with a TypeError nothing

@@ -41,8 +41,21 @@ import typing
 #: the two existing rules are opposites and a reservation obeys neither: it carries a default,
 #: so it is not identity, and its default is a real answer rather than a declared absence, so
 #: it is not a capability either.
+#: It moved 9 -> 10 on 2026-09-23 by the plan
+#: `2026-09-22-steady-panes-and-prompt-relay-sub-02-prompt-relay-plan.md` (Task 2.1, DEC-099),
+#: which grew the capability half: `composer` is how an agent draws its composer, busy state and
+#: dialogs, which the prompt relay reads before it may type into a pane. A real `None` again: a
+#: provider that declares no composer is never typed into.
 _IDENTITY_FIELDS = ("profile_id", "glyph")
-_CAPABILITY_FIELDS = ("sessions", "usage", "hooks", "activity", "remote_control", "trust_dialog")
+_CAPABILITY_FIELDS = (
+    "sessions",
+    "usage",
+    "hooks",
+    "activity",
+    "remote_control",
+    "trust_dialog",
+    "composer",
+)
 _RESERVATION_FIELDS = ("reserved_keys",)
 
 
@@ -54,7 +67,7 @@ def _descriptor_fields() -> tuple[str, ...]:
 
 
 def test_the_descriptor_field_set_is_read_from_the_dataclass() -> None:
-    """Nine fields: two identity, six capabilities, one reservation. A tenth is a decision."""
+    """Ten fields: two identity, seven capabilities, one reservation. An eleventh is a decision."""
     fields = _descriptor_fields()
     expected = len(_IDENTITY_FIELDS) + len(_CAPABILITY_FIELDS) + len(_RESERVATION_FIELDS)
     assert len(fields) == expected, (

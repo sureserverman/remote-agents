@@ -10,7 +10,7 @@ from remote_agents.adapters.agents.claude.sessions import ClaudeSessionCatalogue
 from remote_agents.adapters.agents.claude.usage import ClaudeUsageReader
 from remote_agents.adapters.agents.claude.usage_api import ClaudeUsageApiReader
 from remote_agents.domain.models import ProfileId, ProjectId
-from remote_agents.ports.provider_descriptor import ProviderDescriptor, TrustDialog
+from remote_agents.ports.provider_descriptor import ComposerScreen, ProviderDescriptor, TrustDialog
 
 
 def _sessions(project_paths: Mapping[ProjectId, Path]) -> ClaudeSessionCatalogue:
@@ -92,5 +92,15 @@ def descriptor(
             # 2.1.263 with the rest of this declaration; if a later version drops the phrase
             # the parser stops recognising the dialog, which is the safe direction.
             identifies_by="Quick safety check",
+        ),
+        # Measured on 2.1.280 (`docs/acceptance-2026-09-22-composer-states.md`, captures in
+        # `tests/fixtures/panes/claude/`). The composer is the `❯ ` line between two full-width
+        # rules at the bottom (`!` in shell mode), with at most three status lines under it. The
+        # empty composer stays drawn while a turn runs, so busy is the spinner: a column-0 glyph
+        # and an ellipsis (`✽ Puzzling…`); the finished line (`✻ Worked for 7s · done`) has none.
+        composer=ComposerScreen(
+            composer=r"^─{10,}\n[❯!] ?(?P<draft>[^\n]*(?:\n  [^\n]*)*?)\n─{10,}(?:\n[^\n]*){0,3}\Z",
+            busy=(r"^[✻✽✶✳✢·*] \S[^\n]*…",),
+            dialogs=(r"^ \S[^\n]*\bEsc to cancel\b", r"^ Do you want to proceed\?"),
         ),
     )

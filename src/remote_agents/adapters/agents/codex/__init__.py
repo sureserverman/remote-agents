@@ -12,7 +12,7 @@ from remote_agents.adapters.agents.codex.sessions import (
     CodexSessionCatalogue,
 )
 from remote_agents.domain.models import ProfileId, ProjectId
-from remote_agents.ports.provider_descriptor import ProviderDescriptor, TrustDialog
+from remote_agents.ports.provider_descriptor import ComposerScreen, ProviderDescriptor, TrustDialog
 
 
 def _sessions(project_paths: Mapping[ProjectId, Path]) -> CodexSessionCatalogue:
@@ -51,5 +51,22 @@ def descriptor() -> ProviderDescriptor:
             # Not the affirmative, for the reason claude's declaration gives: this is the
             # sentence codex draws under its question, and it is no answer.
             identifies_by="Working with untrusted contents",
+        ),
+        # Measured on 0.155.1 (`docs/acceptance-2026-09-22-composer-states.md`, captures in
+        # `tests/fixtures/panes/codex/`). The composer is the last `› ` line (`! ` in shell mode)
+        # with the model line (`<model> · <dir>`) under it. Its placeholder stays drawn while a
+        # turn runs, so busy is `• Working (… esc to interrupt)`. The rate-limit and hook prompts
+        # are from the binary's strings (not raised on screen) and are matched loosely: a false
+        # DIALOG holds a message, a missed one types into a prompt.
+        composer=ComposerScreen(
+            composer=r"^[›!] (?P<draft>[^\n]*(?:\n  [^\n]*)*?)\n  [^\n]* · [^\n]*\Z",
+            placeholders=(r"Ask Codex to do anything", r"Ask a follow-up question"),
+            busy=(r"^• Working \([^\n]*esc to interrupt",),
+            dialogs=(
+                r"^  Press enter to (?:confirm|continue)",
+                r"^  Would you like to run the following command\?",
+                r"Approaching rate limits",
+                r"Hooks need review",
+            ),
         ),
     )

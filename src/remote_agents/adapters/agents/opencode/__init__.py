@@ -11,7 +11,7 @@ from remote_agents.adapters.agents.opencode.sessions import (
 )
 from remote_agents.adapters.agents.opencode.usage import OpenCodeUsageReader
 from remote_agents.domain.models import ProfileId, ProjectId
-from remote_agents.ports.provider_descriptor import ProviderDescriptor
+from remote_agents.ports.provider_descriptor import ComposerScreen, ProviderDescriptor
 
 
 def _sessions(project_paths: Mapping[ProjectId, Path]) -> OpenCodeSessionCatalogue:
@@ -64,4 +64,19 @@ def descriptor() -> ProviderDescriptor:
         # tmux's spelling, not Textual's: this set is handed to `tmux bind-key`/`send-keys`,
         # which knows `F2` and not `f2`.
         reserved_keys=frozenset({"F2"}),
+        # Measured on 1.18.30 and 1.18.32 (`docs/acceptance-2026-09-22-composer-states.md`,
+        # captures in `tests/fixtures/panes/opencode/`). The composer is the `┃` box closed by
+        # `╹▀▀▀`, whose last inner line is the agent/model line (`Build · <model>`); its text lines
+        # are the draft. The empty box stays drawn while a turn runs, so busy is the footer's
+        # `esc interrupt`.
+        composer=ComposerScreen(
+            composer=(
+                r"^(?P<draft>(?:[ \t]*┃[^\n]*\n)*?)[ \t]*┃[ \t]+\S+ · [^\n]*\n"
+                r"[ \t]*╹▀+[^\n]*(?:\n[^\n]*){0,4}\Z"
+            ),
+            placeholders=(r'Ask anything… ".*"',),
+            busy=(r"^[ \t]*\S+[ \t]+esc interrupt",),
+            dialogs=(r"△ Permission required", r"Allow once +Allow always +Reject"),
+            draft_line=r"^[ \t]*┃",
+        ),
     )

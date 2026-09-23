@@ -79,6 +79,37 @@ class TrustDialog:
 
 
 @dataclass(frozen=True, slots=True)
+class ComposerScreen:
+    """How one agent draws its composer, busy state and dialogs, so a capture can be classified.
+
+    Values only, like `TrustDialog`: the reading is `adapters/tmux/composer.py`'s. Every pattern
+    was taken from a real pane and is backed by a capture under `tests/fixtures/panes/<agent>/`,
+    recorded in `docs/acceptance-2026-09-22-composer-states.md` (DEC-099).
+
+    **Patterns, not strings, because the composer is a place on the screen.** Every idle marker
+    also appears in this project's own fixtures, so an agent that prints one puts it in its
+    transcript. `composer` therefore matches the composer *region at the bottom of the screen*
+    by its structure, anchored to the end of the capture, never a phrase anywhere on it.
+    """
+
+    composer: str
+    """A regular expression (multiline) that must match at the very end of the capture, with a
+    named group `draft` holding what the composer contains. No match means the screen is not
+    this agent's composer, which is UNKNOWN -- never idle."""
+    placeholders: tuple[str, ...] = ()
+    """Patterns a whole draft may fully match that mean the composer is empty (Codex's
+    `Ask Codex to do anything`)."""
+    busy: tuple[str, ...] = ()
+    """Patterns (multiline) any of which, found on the screen, means a turn is running."""
+    dialogs: tuple[str, ...] = ()
+    """Patterns (multiline) any of which means a dialog is up. Checked before anything else: a
+    dialog can be drawn over a composer that is still on screen."""
+    draft_line: str = r"^\s*"
+    """What is stripped from the start of each draft line before the lines are compared
+    (OpenCode draws its composer inside a `┃` box)."""
+
+
+@dataclass(frozen=True, slots=True)
 class ProviderDescriptor:
     """One provider's declared capability set, keyed by its profile.
 
@@ -135,6 +166,14 @@ class ProviderDescriptor:
 
     Typed, unlike its neighbours, because it carries no adapter: a `TrustDialog` is five
     strings, so naming it here pulls nothing into the ports layer that was not already here.
+    """
+
+    composer: ComposerScreen | None = None
+    """How this agent draws its composer, or None when it declares none.
+
+    What the prompt relay reads before it may type into a pane (DEC-099): a provider with no
+    declaration is never typed into, because nothing can tell its idle composer from a running
+    turn or a dialog. Typed, like `trust_dialog`, because it carries only strings.
     """
 
     remote_control: object | None = None

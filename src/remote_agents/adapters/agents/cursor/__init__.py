@@ -8,7 +8,7 @@ from pathlib import Path
 from remote_agents.adapters.agents.cursor.sessions import CursorSessionCatalogue
 from remote_agents.adapters.agents.cursor.usage import CursorUsageReader
 from remote_agents.domain.models import ProfileId, ProjectId
-from remote_agents.ports.provider_descriptor import ProviderDescriptor, TrustDialog
+from remote_agents.ports.provider_descriptor import ComposerScreen, ProviderDescriptor, TrustDialog
 
 
 def _sessions(project_paths: Mapping[ProjectId, Path]) -> CursorSessionCatalogue:  # noqa: ARG001
@@ -45,5 +45,27 @@ def descriptor() -> ProviderDescriptor:
             negative="Quit",
             cursor="▶",
             identifies_by="Workspace Trust Required",
+        ),
+        # Measured on 2026.09.18 (`docs/acceptance-2026-09-22-composer-states.md`, captures in
+        # `tests/fixtures/panes/cursor/`). The composer is the last `  → ` line, continued by
+        # four-space lines, with the status line (`Auto · allowlist · …`, which wraps in a narrow
+        # pane) under it. Its placeholder stays drawn while a turn runs; busy is `ctrl+c to stop`
+        # or the `Working`/`Running` spinner. **The busy hint disappears while an approval is up**
+        # and the "Tell the agent what to do instead" box is drawn where the composer is, so both
+        # are dialogs, checked first. The trust box stays drawn after it is answered; its live
+        # form is told by the navigation hint.
+        composer=ComposerScreen(
+            composer=(
+                r"^  → (?P<draft>[^\n]*(?:\n    [^\n]*)*?)"
+                r"\n(?:  (?! )[^\n]*\n){0,3}  (?! )[^\n]*·[^\n]*\Z"
+            ),
+            placeholders=(r"Plan, search, build anything", r"Add a follow-up"),
+            busy=(r"ctrl\+c to stop", r"^ \S+ (?:Working|Running)\b"),
+            dialogs=(
+                r"^ Run this command\?",
+                r"Skip & tell the agent what to do instead",
+                r"^  → Tell the agent what to do instead",
+                r"Use arrow keys to navigate, Enter to select",
+            ),
         ),
     )
