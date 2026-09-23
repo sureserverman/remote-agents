@@ -1,0 +1,40 @@
+
+  Another benefit is collaboration. Two people can attach to the same session, allowing both to observe commands and output directly. This can support
+  troubleshooting, demonstrations, or working through a problem together.
+
+  There is a learning curve: shortcuts, scrolling behavior, and nested sessions can initially feel awkward. However, you do not need to master every feature to
+  benefit. Learning how to create a session, open another window, detach, and reconnect is often enough. For anyone who spends substantial time in terminals,
+  those few habits can make work more resilient, orderly, and comfortable.
+
+  done 6:47 AM
+
+
+› Reply with the single word pong.
+  Second line: Enter and C-c.
+
+
+• pong
+  Enter and C-c.
+
+  done 6:47 AM
+
+
+› Run this exact shell command and nothing else: touch probe.txt
+
+
+• Running touch probe.txt
+
+
+  Would you like to run the following command?
+
+  Environment: local
+
+  Reason: Allow creating probe.txt? The read-only sandbox blocked the requested command.
+
+  $ touch probe.txt
+
+› 1. Yes, proceed (y)
+  2. Yes, and don't ask again for commands that start with `touch probe.txt` (p)
+  3. No, and tell Codex what to do differently (esc)
+
+  Press enter to confirm or esc to cancel

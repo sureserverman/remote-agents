@@ -1,0 +1,40 @@
+
+ ▐▛███▛█   Claude Code v2.1.280
+▝▜██████▀  Sonnet 5 with high effort · Claude Max
+  ▝▝ ▝▝    /workspace · /rc
+
+  ⎿  SessionStart:startup says: [vault-context] No vault context for this project yet. Run `/vault-context:link` to scan your vault and surface relevant pages.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+                                                                                                                                         ctrl+g to edit in Vim
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+❯ Count from 1 to 60, one number per line, then say the word pong.
+  This second line mentions Enter and C-c as plain words.
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  Sonnet 5 | claude@HEAD | 0/1m (0%) | effort: high | 5h 15% @11:00 | 7d 91% @Thu Sep 24, 10:00 | v2.1.280
+  ⏵⏵ auto mode on (shift+tab to cycle)

@@ -1,0 +1,40 @@
+  53
+  54
+  55
+  56
+  57
+  58
+  59
+  60
+  pong
+
+✻ Sautéed for 2s · done 6:44 AM
+
+❯ Write about 300 words on why terminal multiplexers are useful.
+  Second line, plain words: Enter and C-c.
+
+● Terminal multiplexers like tmux and screen solve a problem every developer runs into: a single terminal window can only show one shell at a time, but real
+  work rarely happens in just one context. A multiplexer lets you split a terminal into multiple panes and windows, each running its own shell, so you can watch
+  a log stream, edit a file, and run a test suite side by side without juggling separate terminal applications or losing track of what's running where.
+
+  The bigger win is session persistence. When you start a multiplexer session over SSH and the connection drops — a laptop closes, wifi hiccups, you switch
+  networks — everything running inside keeps going. You reconnect, reattach to the session, and your shells, running processes, and scrollback are exactly as
+  you left them. This matters enormously for long-running jobs: a build that takes an hour, a training run, a database migration. Without a multiplexer, a
+  dropped connection means Enter no longer reaches a process you meant to keep alive, and you're stuck deciding whether C-c is safe to send just to regain
+  control of a hung terminal. With one, you just detach cleanly and walk away.
+
+  Multiplexers also make remote work feel local. You can set up a consistent pane layout — editor on the left, shell on the right, logs on the bottom — and have
+  it waiting for you every time you connect to a server, rather than rebuilding your workspace from scratch each session. Keyboard-driven pane and window
+  switching is faster than alt-tabbing between terminal apps, and copy-mode lets you scroll and search scrollback without a mouse.
+
+  Finally, they're valuable for collaboration: two people can attach to the same session and see the same terminal in real time, which is useful for pairing or
+  live troubleshooting on a shared machine. For anyone doing serious command-line or server work, a multiplexer isn't a convenience — it's closer to a safety
+  net.
+
+✻ Worked for 7s · done 6:45 AM
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+❯ 
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  Sonnet 5 | claude@HEAD | 65k/1m (6%) | effort: high | 5h 15% @11:00 | 7d 91% @Thu Sep 24, 10:00 | v2.1.280
+  ⏸ manual mode on · ← for agents

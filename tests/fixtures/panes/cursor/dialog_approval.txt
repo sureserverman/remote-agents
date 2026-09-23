@@ -1,0 +1,40 @@
+  Terminal multiplexers earn their keep by turning a single shell into a durable workspace.
+
+  Enter and C-c.
+
+  A multiplexer such as tmux or screen sits between you and one or more shells. You create windows and panes, split the screen, and jump between tasks
+  without opening a pile of separate terminal tabs. That alone is handy on a laptop; it becomes essential on a remote server, where a dropped SSH session
+  would otherwise kill every running process. Detach, close the laptop, reconnect later, and the same session is still there—editors, builds, and long jobs
+  intact.
+
+  Persistence is only half the story. Multiplexers also improve how you work in the moment. You can keep logs scrolling in one pane while you edit in
+  another, watch a test suite beside a debugger, or park a monitoring command in a background window. Named sessions let you separate projects: one for
+  infrastructure, one for application work, one for scratch experiments. Sharing a session makes pair debugging practical over SSH without fighting over who
+  owns the connection.
+
+  Scripts and automation benefit too. You can start a named session from a deploy script, attach when something needs attention, and leave the rest running
+  unattended. Scrollback and copy mode give you a reliable buffer for output that would otherwise vanish when a program exits or the terminal resizes.
+  Layouts can be saved and restored so a familiar arrangement returns with a keystroke.
+
+  In short, a terminal multiplexer reduces fragility and friction. It keeps work alive across disconnects, organizes many shells in one place, and makes
+  remote and local CLI work feel continuous rather than constantly restarting from a blank prompt.
+
+
+  Run this exact shell command and nothing else: touch probe.txt
+
+
+  Running that exact command now.
+
+  $ touch probe.txt Waiting for approval...
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ $  touch probe.txt in .
+
+ Run this command?
+ Not in allowlist: touch
+  → Run (once) (y)
+    Add Shell(touch) to allowlist? (tab)
+    Run Everything (shift+tab)
+    Skip & tell the agent what to do instead (esc or n)
+
+

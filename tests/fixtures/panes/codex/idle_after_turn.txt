@@ -1,0 +1,40 @@
+
+  Another benefit is collaboration. Two people can attach to the same session, allowing both to observe commands and output directly. This can support
+  troubleshooting, demonstrations, or working through a problem together.
+
+  There is a learning curve: shortcuts, scrolling behavior, and nested sessions can initially feel awkward. However, you do not need to master every feature to
+  benefit. Learning how to create a session, open another window, detach, and reconnect is often enough. For anyone who spends substantial time in terminals,
+  those few habits can make work more resilient, orderly, and comfortable.
+
+  done 6:47 AM
+
+
+› Reply with the single word pong.
+  Second line: Enter and C-c.
+
+
+• pong
+  Enter and C-c.
+
+  done 6:47 AM
+
+
+› Run this exact shell command and nothing else: touch probe.txt
+
+
+✗ You canceled the request to run touch probe.txt
+
+• Ran touch probe.txt
+  └ (no output)
+
+■ Conversation interrupted - tell the model what to do differently. Something went wrong? Hit `/feedback` to report the issue.
+
+
+› Ask Codex to do anything
+
+  gpt-6-astra default · /workspace · Explain terminal multiplexer
+
+
+
+
+

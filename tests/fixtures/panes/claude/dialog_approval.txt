@@ -1,0 +1,40 @@
+  dropped connection means Enter no longer reaches a process you meant to keep alive, and you're stuck deciding whether C-c is safe to send just to regain
+  control of a hung terminal. With one, you just detach cleanly and walk away.
+
+  Multiplexers also make remote work feel local. You can set up a consistent pane layout — editor on the left, shell on the right, logs on the bottom — and have
+  it waiting for you every time you connect to a server, rather than rebuilding your workspace from scratch each session. Keyboard-driven pane and window
+  switching is faster than alt-tabbing between terminal apps, and copy-mode lets you scroll and search scrollback without a mouse.
+
+  Finally, they're valuable for collaboration: two people can attach to the same session and see the same terminal in real time, which is useful for pairing or
+  live troubleshooting on a shared machine. For anyone doing serious command-line or server work, a multiplexer isn't a convenience — it's closer to a safety
+  net.
+
+✻ Worked for 7s · done 6:45 AM
+
+❯ Run the bash command: ls -la
+
+  Listed 1 directory
+
+● The directory /workspace is a git repo with no tracked files yet — just an empty .git folder.
+
+✻ Cooked for 2s · done 6:45 AM
+
+❯ Run the bash command: touch probe.txt
+
+● Creating empty file probe.txt
+  ⎿  $ touch probe.txt
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ Bash command
+ Tip: auto mode handles these prompts for you — choose "switch to auto mode" below
+
+   touch probe.txt
+   Create empty file probe.txt
+
+ Do you want to proceed?
+ ❯ 1. Yes
+   2. Yes, and always allow access to /workspace from this project
+   3. Yes, and switch to auto mode · auto mode handles these prompts for you
+   4. No
+
+ Esc to cancel · Tab to amend
