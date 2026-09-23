@@ -31,7 +31,8 @@ _CAPTURES = {profile: capture(profile) for profile in measured_profiles()}
 
 def _dialogs() -> dict[str, object]:
     return {
-        str(descriptor.profile_id): descriptor.trust_dialog for descriptor in provider_descriptors()
+        str(descriptor.profile_id): descriptor.trust_dialog
+        for descriptor in provider_descriptors()
     }
 
 
@@ -90,7 +91,9 @@ def test_an_identifier_is_a_marker_of_its_own_and_not_a_restatement(descriptor) 
 
 
 def test_no_two_providers_identify_themselves_by_the_same_string() -> None:
-    declared = [(profile, dialog.identifies_by) for profile, dialog in _dialogs().items() if dialog]
+    declared = [
+        (profile, dialog.identifies_by) for profile, dialog in _dialogs().items() if dialog
+    ]
     identifiers = [identifier for _, identifier in declared]
     assert len(set(identifiers)) == len(identifiers), (
         f"two providers claim the same dialog: {declared}. One agent's parser would then "
