@@ -4,7 +4,8 @@ Measured 2026-09-23 on this host for the prompt relay (plan
 `2026-09-22-steady-panes-and-prompt-relay-sub-02`, Task 1.2). Each agent ran in a scratch tmux
 server (`remote-agents-test-measure`, 160x40), in a disposable git workspace, on its installed
 build. Every screen named below is committed as a capture under `tests/fixtures/panes/`, with the
-workspace path rewritten to `/workspace`.
+workspace path rewritten to `/workspace`. The rewrite is a string substitution, not a re-render, so a
+box border drawn after a path can sit a few cells off; the agent did not draw it that way.
 
 | Agent | Build |
 |---|---|
@@ -22,7 +23,10 @@ printf '<text>' | tmux load-buffer -b ra-relay-m -
 tmux paste-buffer -d -p [-r] -b ra-relay-m -t <pane>
 ```
 
-The measured text was two lines, the second containing the words `Enter` and `C-c`.
+The measured text was two lines, the second containing the words `Enter` and `C-c`. Those are
+words, not control bytes: this measured that the buffer carries text literally. A CR, ETX or an
+embedded bracketed-paste terminator (`ESC [201~`) in relayed text is not measured here; the relay
+strips control characters before pasting, and its own tests pin that.
 
 **Result, all four agents, with `-p` and with `-p -r`:**
 - Both lines land in the composer as one multi-line draft.
@@ -47,7 +51,9 @@ is refused like a busy one. Captures of that state: `tests/fixtures/panes/claude
 
 - **Idle:** `tests/fixtures/panes/claude/idle.txt` (auto mode),
   `tests/fixtures/panes/claude/idle_manual.txt` (manual mode),
-  `tests/fixtures/panes/claude/idle_after_turn.txt`.
+  `tests/fixtures/panes/claude/idle_after_turn.txt` (after Esc denied an approval),
+  `tests/fixtures/panes/claude/idle_after_long_turn.txt` (after a ~300-word answer filled the
+  screen: the composer and its rules stay pinned to the bottom rows).
   - The composer is a line `❯ ` with nothing after it, between two full-width `─` rules.
   - The status line below reads `auto mode on` or `manual mode on`.
 - **Busy:** `tests/fixtures/panes/claude/busy.txt`, `tests/fixtures/panes/claude/busy_starting.txt`.
@@ -66,7 +72,9 @@ is refused like a busy one. Captures of that state: `tests/fixtures/panes/claude
 
 ## Codex 0.155.1
 
-- **Idle:** `tests/fixtures/panes/codex/idle.txt`, `tests/fixtures/panes/codex/idle_after_turn.txt`.
+- **Idle:** `tests/fixtures/panes/codex/idle.txt`, `tests/fixtures/panes/codex/idle_after_turn.txt`
+  (the screen once Esc denied an approval: `✗ You canceled the request to run …` and
+  `■ Conversation interrupted`, with no `esc to interrupt` left up).
   - The composer is the placeholder line `› Ask Codex to do anything`.
 - **Busy:** `tests/fixtures/panes/codex/busy.txt`.
   - `• Working (2s • esc to interrupt)` above the composer.
@@ -104,6 +112,9 @@ is refused like a busy one. Captures of that state: `tests/fixtures/panes/claude
     `[a] Trust this workspace`). A trust marker alone does not mean the dialog is showing.
 - **Busy:** `tests/fixtures/panes/cursor/busy.txt`.
   - A braille spinner and `Working`, with `ctrl+c to stop` at the right of the composer line.
+  - After a submit the composer reads `→ Add a follow-up`, with `ctrl+c to stop` on the same line
+    while the turn runs — the same placeholder the idle screen shows, so `ctrl+c to stop` is what
+    tells them apart.
 - **Dialogs:**
   - Command approval: `tests/fixtures/panes/cursor/dialog_approval.txt` — `Run this command?`,
     `Not in allowlist: <cmd>`, options `→ Run (once) (y)` … `Skip & tell the agent what to do instead (esc
@@ -111,10 +122,12 @@ is refused like a busy one. Captures of that state: `tests/fixtures/panes/claude
     any busy test.
   - After a skip: `tests/fixtures/panes/cursor/dialog_instead.txt` — `→ Tell the agent what to do instead
     (Enter to send, empty to skip, Esc to cancel)`. It is drawn exactly where the composer is and
-    takes typed text. **It is a dialog, not a composer**: a relayed prompt typed there would answer
-    the skipped approval.
+    takes typed text, and `ctrl+c to stop` is drawn on its line. **It is a dialog, not a
+    composer**: a relayed prompt typed there would answer the skipped approval.
   - Workspace trust at launch: `tests/fixtures/panes/cursor/dialog_trust.txt` — `Do you trust the contents of
-    this directory?`, `▶ [a] Trust this workspace` / `[q] Quit`.
+    this directory?`, `▶ [a] Trust this workspace` / `[q] Quit`. Its highlight glyph is `▶`, which the
+    live drills' opener (`tests/support/agent_panes.py`, `›`/`❯` only) does not read; no drill
+    opens a cursor-agent pane today.
 
 ## What cursor-agent publishes (BL-051)
 

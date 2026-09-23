@@ -59,10 +59,15 @@ def _options(lines: list[str]) -> tuple[list[int], int] | None:
     """The option lines of the menu on screen, and which of them is highlighted.
 
     Options are found from the highlight outwards: every adjacent line whose text starts in the
-    highlighted line's text column. Numbered (Codex: `› 1. Yes, continue`) and unnumbered
-    (Claude 2.1.280: `❯ No, exit` over `  Yes, I trust this folder`) menus both have that shape.
+    highlighted line's text column. The highlight is the LAST glyph line on screen. Numbered
+    (Codex: `› 1. Yes, continue`) and unnumbered (Claude 2.1.280: `❯ No, exit` over
+    `  Yes, I trust this folder`) menus both have that shape.
     """
-    cursor = next((index for index, line in enumerate(lines) if _CURSOR.match(line)), None)
+    # From the bottom: the live menu is the last thing drawn, and the transcript above it can
+    # carry the same glyph (Claude echoes each prompt as `❯ <text>`).
+    cursor = next(
+        (index for index in range(len(lines) - 1, -1, -1) if _CURSOR.match(lines[index])), None
+    )
     if cursor is None:
         return None
     column = len(_CURSOR.match(lines[cursor]).group(1))
@@ -121,20 +126,28 @@ def open_to_composer(
     """
     deadline = clock() + timeout
     text = ""
+    unanswerable: Interstitial | None = None
     while clock() < deadline:
         text = capture()
         showing = next((item for item in interstitials if item.marker in text), None)
         if showing is not None:
-            if not _select(text, showing.choose, press):
-                pytest.fail(
-                    f"{agent} raised {showing.marker!r} but no option reading "
-                    f"{showing.choose!r} could be selected. The pane:\n{text}"
-                )
-            sleep(settle)
+            if _select(text, showing.choose, press):
+                unanswerable = None
+                sleep(settle)
+            else:
+                # The marker can be drawn a frame before its menu is; look again rather than
+                # fail on a half-drawn screen, and report it only if it never completes.
+                unanswerable = showing
+                sleep(poll)
             continue
         if ready in text:
             return
         sleep(poll)
+    if unanswerable is not None:
+        pytest.fail(
+            f"{agent} raised {unanswerable.marker!r} but no option reading "
+            f"{unanswerable.choose!r} could be selected within {timeout:.0f}s. The pane:\n{text}"
+        )
     pytest.fail(
         f"{agent} did not reach its composer ({ready!r}) within {timeout:.0f}s, and the drill "
         f"does not recognise what it is showing. The pane:\n{text}"

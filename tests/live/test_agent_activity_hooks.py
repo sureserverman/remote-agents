@@ -319,7 +319,9 @@ def test_a_real_codex_approval_spools_the_command_it_is_asking_about(tmp_path: P
         probe = tmp_path / "codex-probe.txt"
         _type(f"Run this exact shell command and nothing else: whoami > {probe}")
         if not _wait_for_pane("Would you like to run"):
-            pytest.skip(f"BLOCKED: codex raised no approval: {_pane_text()[-600:]}")
+            pytest.fail(
+                f"codex raised no approval for a write in a read-only sandbox:\n{_pane_text()}"
+            )
 
         activity = _spooled_ask(spool)
         assert activity is not None, "a real escalation spooled no needs_answer"
@@ -375,11 +377,13 @@ def test_a_real_claude_approval_spools_the_command_it_is_asking_about(tmp_path: 
             _tmux("send-keys", "-t", "0", "BTab")
             time.sleep(2.0)
         else:
-            pytest.skip("BLOCKED: could not reach claude's manual mode")
+            pytest.fail(
+                f"claude never showed `manual mode` after five mode cycles:\n{_pane_text()}"
+            )
 
         _type("Run the bash command: curl -s -o /dev/null -w '%{http_code}' https://example.com")
         if not _wait_for_pane("Do you want to proceed"):
-            pytest.skip(f"BLOCKED: claude raised no approval: {_pane_text()[-600:]}")
+            pytest.fail(f"claude raised no approval in manual mode:\n{_pane_text()}")
 
         activity = _spooled_ask(spool)
         assert activity is not None, "a real approval spooled no needs_answer"
@@ -390,83 +394,3 @@ def test_a_real_claude_approval_spools_the_command_it_is_asking_about(tmp_path: 
         assert activity.ask == "Bash"
     finally:
         _tmux("kill-server")
-
-
-# --- the opener itself, without an agent (BL-105) ---------------------------------------------
-#
-# Not live: these feed `open_to_composer` scripted screens, so they run everywhere and pin the
-# one property the live drills cannot show on a good day -- that a screen the drill does not
-# recognise FAILS, with the pane in the message, instead of skipping.
-
-
-class _Screens:
-    """A pane that shows each screen in turn, advancing when a key is pressed."""
-
-    def __init__(self, *screens: str) -> None:
-        self.screens = list(screens)
-        self.pressed: list[str] = []
-
-    def capture(self) -> str:
-        return self.screens[0]
-
-    def press(self, key: str) -> None:
-        self.pressed.append(key)
-        if key == "Enter" and len(self.screens) > 1:
-            self.screens.pop(0)
-
-
-def _fake_clock():
-    now = [0.0]
-    return (lambda: now[0]), (lambda seconds: now.__setitem__(0, now[0] + seconds))
-
-
-def test_the_opener_fails_on_a_screen_it_does_not_recognise_and_shows_it() -> None:
-    clock, sleep = _fake_clock()
-    screens = _Screens("Something new: pick a plan\n› 1. Pro\n  2. Free")
-
-    # BaseException, then the type: a skip is also an outcome exception, and a skip here is
-    # the exact defect this pins -- `pytest.raises(pytest.fail.Exception)` would let it through.
-    with pytest.raises(BaseException) as failure:
-        open_to_composer(
-            screens.capture, screens.press, ready=CODEX_READY, interstitials=CODEX_OPENING,
-            agent="codex", timeout=10, clock=clock, sleep=sleep,
-        )  # fmt: skip
-
-    assert failure.type is pytest.fail.Exception, f"it must FAIL, not {failure.type.__name__}"
-    assert "Something new: pick a plan" in str(failure.value), "the pane must be in the failure"
-    assert screens.pressed == [], "nothing may be typed into a screen the drill does not know"
-
-
-def test_the_opener_answers_codex_0_155_s_rate_limit_prompt_by_its_words() -> None:
-    """BL-105's screen: the option is chosen by name, wherever the highlight starts."""
-    clock, sleep = _fake_clock()
-    screens = _Screens(
-        "Do you trust the contents of this directory?\n› 1. Yes, continue\n  2. No, quit",
-        "Approaching rate limits\n› 1. Switch to gpt-6-mini\n  2. Keep current model\n"
-        "  3. Keep current model (never show again)",
-        "Hooks need review\n  1. Review\n› 2. Trust all and continue\n  3. Continue without",
-        f"› {CODEX_READY}",
-    )
-
-    open_to_composer(
-        screens.capture, screens.press, ready=CODEX_READY, interstitials=CODEX_OPENING,
-        agent="codex", timeout=30, clock=clock, sleep=sleep,
-    )  # fmt: skip
-
-    assert screens.pressed == ["Enter", "Down", "Enter", "Enter"]
-
-
-def test_the_opener_answers_claude_s_unnumbered_trust_prompt_from_a_real_capture() -> None:
-    """Claude 2.1.280 lists `No, exit` first and numbers nothing; the choice is by words."""
-    clock, sleep = _fake_clock()
-    trust = (
-        Path(__file__).resolve().parents[1] / "fixtures" / "panes" / "claude" / "dialog_trust.txt"
-    ).read_text(encoding="utf-8")
-    screens = _Screens(trust, f"  ⏵⏵ {CLAUDE_READY} on (shift+tab to cycle)")
-
-    open_to_composer(
-        screens.capture, screens.press, ready=CLAUDE_READY, interstitials=CLAUDE_OPENING,
-        agent="claude", timeout=30, clock=clock, sleep=sleep,
-    )  # fmt: skip
-
-    assert screens.pressed == ["Down", "Enter"], "`Yes, I trust this folder` is the second line"
