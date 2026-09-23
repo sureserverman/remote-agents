@@ -343,6 +343,10 @@ def test_a_real_claude_approval_spools_the_command_it_is_asking_about(tmp_path: 
     settings file this installs is inside the temporary workspace and goes with it.
     """
     _live_pane_requirements("claude")
+    if not (Path.home() / ".claude" / ".credentials.json").is_file():
+        # Decided before a pane opens, like every other skip here: a logged-out claude would
+        # show its login screen, which the opener does not answer and would report as a failure.
+        pytest.skip("BLOCKED: claude is not logged in (no ~/.claude/.credentials.json)")
 
     workspace = tmp_path / "workspace"
     (workspace / ".claude").mkdir(parents=True)

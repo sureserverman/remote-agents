@@ -25,8 +25,8 @@ tmux paste-buffer -d -p [-r] -b ra-relay-m -t <pane>
 
 The measured text was two lines, the second containing the words `Enter` and `C-c`. Those are
 words, not control bytes: this measured that the buffer carries text literally. A CR, ETX or an
-embedded bracketed-paste terminator (`ESC [201~`) in relayed text is not measured here; the relay
-strips control characters before pasting, and its own tests pin that.
+embedded bracketed-paste terminator (`ESC [201~`) in relayed text is not measured here. The relay
+is to strip control characters before pasting, and plan Task 2.3's tests are to pin that.
 
 **Result, all four agents, with `-p` and with `-p -r`:**
 - Both lines land in the composer as one multi-line draft.
@@ -42,7 +42,8 @@ enabling bracketed paste, a newline would not act as a submit halfway through th
 ## A paste cannot answer a dialog; an `Enter` can
 
 Measured in the second pass (80x24; cursor-agent at 50 columns): with each agent's approval dialog
-up, a pasted `y` and a pasted `1` changed nothing — no command ran, the menu stayed. Captures:
+up, a pasted `y` and then a pasted `1` changed nothing (the captures are after the `y`; the `1` was
+checked by eye and by the absence of the probe file) — no command ran, the menu stayed. Captures:
 `tests/fixtures/panes/claude/dialog_after_pasted_y.txt`,
 `tests/fixtures/panes/codex/dialog_after_pasted_y.txt`,
 `tests/fixtures/panes/opencode/dialog_after_pasted_y.txt`,
@@ -71,9 +72,13 @@ Measured per agent, pasting into an empty composer:
 | OpenCode | drawn as text, no shell sign | opens the command menu — `tests/fixtures/panes/opencode/composed_slash.txt` | plain prompt for `/` |
 | cursor-agent | drawn as text | opens the command menu | **still opens the menu** — `tests/fixtures/panes/cursor/composed_space_slash.txt` |
 
-One `Enter` after a leading `!` runs a shell command directly, outside the agent's approvals
-(Claude's shell mode runs even in manual mode); after a leading `/` it runs a slash command
-(`/logout`, `/clear`). A leading space is not a universal neutraliser: cursor-agent ignores it.
+The `Enter` was not pressed on these screens. What it would do is read from the agents' own UI:
+Claude's `! for shell mode` and Codex's `Shell mode` run the line as a shell command, outside the
+agent's approvals; a command menu runs its **highlighted** entry, which need not be the command
+typed (cursor-agent highlighted a skill named `/status` over the built-in one —
+`tests/fixtures/panes/cursor/composed_space_slash.txt`). The leading-space results for Claude and
+Codex, and OpenCode's and cursor-agent's plain `!`, were read off the pane and not captured. A
+leading space is not a universal neutraliser: cursor-agent ignores it.
 
 ## A composer holding text is not idle
 
@@ -161,7 +166,7 @@ These rules come from the captures above; each names the trap it avoids.
   - From the binary's strings, not raised on screen today: `Hooks need review` (`Trust all and
     continue`) and `Approaching rate limits` (`Keep current model`), the prompt BL-105 met.
 
-## OpenCode 1.18.30
+## OpenCode 1.18.30 / 1.18.32
 
 - **Idle:** `tests/fixtures/panes/opencode/idle.txt` (the home screen, placeholder
   `Ask anything… "<example>"`), `tests/fixtures/panes/opencode/idle_narrow.txt`,
