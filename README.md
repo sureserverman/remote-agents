@@ -3,10 +3,11 @@
 Remote Agents will be a private, single-owner Telegram control plane for curated agent
 sessions running in isolated tmux servers on this host.
 
-Its approved scope is limited to project browsing, project creation, and managed session
-lifecycle actions: launch, selected resume, list, inspect, Copy Attach, graceful stop,
-cleanup, confirmed force stop, and confirmed Claude Remote Control state changes. It does not
-provide remote shell access, prompt relay, raw agent arguments, arbitrary keystrokes, or
+Its approved scope is limited to project browsing, project creation, managed session
+lifecycle actions (launch, selected resume, list, inspect, Copy Attach, graceful stop,
+cleanup, confirmed force stop, and confirmed Claude Remote Control state changes), and one
+guarded message into a managed session's agent, typed only when the agent is idle (DEC-099).
+It does not provide remote shell access, raw agent arguments, arbitrary keystrokes, or
 arbitrary paths. Its only approved registry mutation is the append-only add-project entry
 described below; no existing registry entry is ever edited or removed.
 
@@ -326,8 +327,21 @@ gracefully. Each of them reports what the session actually did, and
 a graceful stop that did not take effect says which of two unrelated things went wrong: the stop
 was never sent, because no agent profile could be resolved on this host, or no clean exit was
 seen before the wait ran out. One is fixed with `doctor --profiles`, the other is waited out or
-forced, and both surfaces use the same words for them. The bot never relays arbitrary commands,
-agent text, shell access, or approval responses.
+forced, and both surfaces use the same words for them. Apart from Send message, below, the bot
+types nothing into a pane: no keystrokes, no shell commands, and no approval responses.
+
+**Send message** (DEC-099) sits on a running session's screen when its agent has a composer
+the project can read — Claude, Codex, OpenCode and Cursor Agent today. Reply in the box it opens,
+and the bot answers with one of four outcomes. *Sent* means the agent was idle, the text showed
+in its input, and `Enter` cleared it. *Queued* means the agent was working or asking a question:
+the message waits, one per session with a newer one replacing it, and is typed in after that
+session's next "finished" event, when the pane is checked again. The session screen shows its
+first line with a Cancel. *Not sent* names the reason. *Sent, but couldn't confirm* means the
+text went in but the input was not seen to clear; it is never retried. The bot never types into
+a dialog and never presses `Enter` on one. A message starting with `!` is refused, because
+Claude and Codex would run it as a shell command. A `/` command is sent only to an agent whose
+command menu the project can read (Claude). An agent with no "finished" event (Cursor Agent)
+refuses a busy send rather than queueing it, because nothing would ever deliver it.
 
 Resume uses a server-resolved catalogue selection. It may show a bounded provider-generated title
 or provider resume description (Claude's stored last prompt and Codex's thread preview when no

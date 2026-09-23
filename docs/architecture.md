@@ -276,6 +276,27 @@ Two consequences a reader should carry: the module is **clock-free but not side-
 caller's container), and encapsulation cannot enforce the split, so the guard is a test that
 sweeps for the *write into the container* rather than for the type of what is written.
 
+## DEC-099 — the one path that types an owner's text into a pane
+
+The Telegram adapter drives lifecycle actions and one message relay; it sends no keystrokes,
+paths, arguments or shell commands. The relay amends DEC-004, DEC-005 and ARCH-08 for that one
+action on managed panes, and is built so the bot never decides anything about a pane:
+
+- `adapters/telegram/service.py` asks `ports/message_relay.py` (`MessageRelay`). The port is
+  named for *messages* because `tests/architecture/check_telegram_actions.py` forbids the
+  word the rest of the code uses anywhere in the adapter package.
+- `application/prompt_relay.py` decides send, queue or refuse. It names no provider: which
+  agents can queue is read off the descriptors that install a "finished" hook
+  (`registry.profiles_with_finished_events`).
+- `TerminalPort.send_prompt` is the only way in, and `adapters/tmux/composer.py` is its judge.
+  Each vertical declares a `ComposerScreen` (idle composer, busy and dialog marks, optional
+  command menu); a vertical that declares none is never offered the button. The gateway pastes,
+  captures again, and presses `Enter` only on a draft with no dialog. Every key sender to a pane
+  holds its `SessionKeyLock`.
+- The queue is `queued_prompts` in `ui.sqlite3` (DEC-090), not the watched domain store. The
+  service's activity pass retries it on a `COMPLETED` activity only, then sweeps the rows of
+  sessions that stopped or ended.
+
 ## The process model — one `serve`, three pane processes, two SQLite files
 
 The processes that *serve* the owner all open the same **domain** database file and refuse to

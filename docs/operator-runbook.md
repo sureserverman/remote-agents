@@ -525,6 +525,43 @@ REMOTE_AGENTS_LIVE_ACCEPTANCE=1 \
   uv run --locked pytest -m live_acceptance tests/live/test_profiles_through_telegram.py -q
 ```
 
+## Sending a message to a session
+
+A running session's screen offers **✉️ Send message** when its agent declares a composer this
+project can read (DEC-099). Tap it, reply in the input box, and the bot answers on the same
+screen. Send Cancel or Back instead to leave the step without sending.
+
+- **Idle — sent.** The pane is captured fresh. Only an empty composer at rest counts as idle.
+  The text is pasted as one bracketed paste, so a multi-line message arrives as one message.
+  `Enter` is pressed only once the text shows in the composer and no dialog is on screen. The
+  reply is *Sent*.
+- **Busy — queued.** Working, asking a question, holding a half-typed draft, a screen the
+  classifier does not recognise, or another sender holding the pane's keys: the message waits in
+  `ui.sqlite3`. There is one per session; a newer message replaces it, and the reply says so. It
+  is typed after that session's next "finished" event (Claude and Codex `Stop`, OpenCode
+  `session.idle`), and the pane is checked again first. Still busy means it keeps waiting. The
+  owner is told *Sent queued message to …* when it goes, or *Dropped queued message …* with the
+  reason when it can no longer go.
+- **Refused — not sent.** The reply names the reason: the session isn't running, the message was
+  empty, it starts with `!`, the agent has no readable composer, or a `/` command went to an agent
+  whose command menu cannot be read. An agent with no "finished" event (Cursor Agent; BL-106)
+  refuses a busy send rather than queueing it, because nothing would deliver it.
+- **Unconfirmed.** The text was pasted but the composer was not seen to take it or clear. The
+  reply says *Sent, but couldn't confirm*. Check the session before sending again; it is never
+  retried, because a double submit is worse than an unconfirmed one.
+- **Cancel.** A queued reply carries **Cancel queued message**, and so does the session screen,
+  under the waiting message's first line (`queued` fact). A stop or an end clears it too. There
+  is no expiry.
+
+What the relay never does: type into a dialog, press `Enter` on one, send a keystroke or a key
+name, run a `!` shell command, or answer an approval. Slash commands are reachable where the
+agent shows a command menu (Claude). So a compromised Telegram account can `/clear`, `/logout`
+or `/exit` a Claude session; that is the accepted cost recorded in DEC-099.
+
+To drill it: send one message to an idle session and one to a busy one, and watch the busy one
+arrive after its turn ends. The automated drill is
+`uv run --locked pytest tests/live/test_prompt_relay.py -q`, on a scratch tmux server.
+
 ## Telegram credential denial and recovery drill
 
 The test suite exercises a known-invalid credential against Telegram without reading or replacing
