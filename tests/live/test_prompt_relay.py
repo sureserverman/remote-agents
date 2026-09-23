@@ -70,6 +70,10 @@ _LINE_ONE = "Reply with exactly one word: relayed."
 _LINE_TWO = "This second line belongs to the same message."
 _LONG_TURN = "Count from 1 to 150, one number per line, and nothing else."
 _QUEUED = "Reply with exactly one word: delivered."
+_LONGER_TURN = "Count from 1 to 600, one number per line, and nothing else."
+"""For the queue drill, which needs the turn still running after `send_prompt` has confirmed
+it: Sonnet counted to 150 before the second message arrived in one full run, and the relay then
+-- correctly -- typed it straight in."""
 
 
 def _tmux(socket: str, *arguments: str) -> subprocess.CompletedProcess[str]:
@@ -293,7 +297,7 @@ def test_queue_behind_a_real_turn_and_deliver_after_its_stop(agent: str, tmp_pat
         drain_activity(spool)
 
         # 1. A real turn is running, and a message sent meanwhile is queued, untyped.
-        started = asyncio.run(terminal.send_prompt(session_id, _LONG_TURN))
+        started = asyncio.run(terminal.send_prompt(session_id, _LONGER_TURN))
         assert started.outcome is PromptOutcome.SENT, started
         queued = asyncio.run(relay.submit(session_id, _QUEUED))
         assert queued.outcome is RelayOutcome.QUEUED, (

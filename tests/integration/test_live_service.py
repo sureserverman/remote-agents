@@ -61,6 +61,18 @@ from remote_agents.ports.session_store import ProjectUsage
 from remote_agents.ports.terminal import TerminalTargetMissing
 
 
+@pytest.fixture(autouse=True)
+def _log_levels_put_back(monkeypatch):
+    """`serve` sets the service's log levels for real (`_configure_service_logging`). Left
+    raised, every later test in the run that asserts a DEBUG line from `remote_agents` sees
+    nothing -- which is how `test_usage_api` failed only in a full run."""
+    import logging
+
+    for name in ("", "remote_agents"):
+        logger = logging.getLogger(name)
+        monkeypatch.setattr(logger, "level", logger.level)
+
+
 def test_private_bot_boundary_accepts_only_the_exact_configured_private_chat() -> None:
     boundary = build_private_bot(7, 11)
     trusted = SimpleNamespace(
@@ -559,7 +571,6 @@ def test_serve_command_loads_config_and_runs_the_injected_private_bot(
         encoding="utf-8",
     )
     received: list[TelegramSecrets] = []
-
     async def serve(secrets: TelegramSecrets, _boundary: PrivateBotBoundary) -> None:
         received.append(secrets)
 
