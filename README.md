@@ -123,9 +123,13 @@ Or, from an install that already exists, in one command:
 remote-agents upgrade            # --check to look without taking it
 ```
 
-It finds the newest release tag, installs it, and re-registers the daemon so the running service
-picks up the new code. `--version vX.Y.Z` names a tag explicitly, which is also how you roll back
-off a bad release.
+It finds the newest release tag, installs it, and re-runs onboarding with the new version, which
+re-registers the daemon and **restarts the running service** — and proves it, printing
+`restarted: pid A -> B`. If it cannot show a new process it says so, names the command to run
+(`systemctl --user restart remote-agents.service`, or `launchctl kickstart -k …` on macOS), and
+exits non-zero; there is no restart to remember by hand. A service that was stopped is started,
+not restarted. Managed agent sessions keep running across it. `--version vX.Y.Z` names a tag
+explicitly, which is also how you roll back off a bad release.
 
 Asking `uv` to upgrade the tool is **not** the path, and this is the reason `remote-agents
 upgrade` exists. `uv tool upgrade` re-resolves the requirement the tool was installed with; that

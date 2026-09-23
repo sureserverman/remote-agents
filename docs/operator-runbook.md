@@ -167,7 +167,9 @@ on stdout, under `onboarding complete. Still to do, and not part of onboarding:`
 
 ### Upgrading (DEC-057)
 
-Re-run the bootstrap at a newer tag, then re-run onboarding so the daemon picks up the new code:
+`remote-agents upgrade` does all of this in one command (`--version vX.Y.Z` to name a tag). By
+hand: re-run the bootstrap at a newer tag, then re-run onboarding, which re-registers the daemon
+and restarts it if it is running:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/sureserverman/remote-agents/main/scripts/install.sh \
@@ -192,6 +194,14 @@ nothing, which is worse than no advice at all. Changing the tag is what moves th
 reuses one tool directory across versions, so the daemon definition usually does not change;
 re-running onboarding is cheap and idempotent either way, and it is what rewrites the definition
 on the upgrades that *do* relocate the executable.
+
+**Re-onboarding restarts a running service and proves it** (BL-104, DEC-102). It reads the
+service's process id, restarts it (`systemctl --user restart`, `launchctl kickstart -k`), reads the
+id again, and prints `restarted: pid A -> B`. Anything short of a new, non-zero id — the restart
+failed, the id did not change, no process is running — is reported with the command to run, and
+onboarding (and so `upgrade`) exits 1. A service that was stopped is started, not restarted. The
+managed agent sessions live on their own tmux server and keep running across the restart; the
+console's panes do not pick up the new code until `remote-agents console close` and re-entry.
 
 ### Uninstalling (DEC-051)
 
@@ -659,11 +669,12 @@ rather than folded into a blanket confirmation.
 
 ## Agent activity notifications
 
-> **Upgrading an existing host: edit the config before you restart the service.** This feature
-> added `activity_poll_seconds` to `[limits]`, and `config.py` validates that table against an
-> *exact* key set — unknown keys **and** missing ones are refused. So a config written before this
-> release makes the new service exit 1 on startup, and `Restart=on-failure` turns that into a
-> crash-loop:
+> **Upgrading an existing host: edit the config before you upgrade** — the upgrade restarts the
+> service onto the new code (since 0.48.0), and it is that start which refuses the old config.
+> This feature added `activity_poll_seconds` to `[limits]`, and `config.py` validates that table
+> against an *exact* key set — unknown keys **and** missing ones are refused. So a config written
+> before this release makes the new service exit 1 on startup, and `Restart=on-failure` turns that
+> into a crash-loop:
 >
 > ```text
 > remote_agents.config.ConfigError: limits has unknown or missing keys:
