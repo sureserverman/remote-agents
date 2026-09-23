@@ -19,11 +19,15 @@ Claude with the owner's own HOME, because a fresh config directory demands an in
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import shutil
 import subprocess
+import sys
 import time
+from datetime import UTC, datetime
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from agent_panes import (
@@ -35,16 +39,37 @@ from agent_panes import (
     open_to_composer,
 )
 
-from remote_agents.adapters.agents.registry import profile_composers
+from remote_agents.adapters.agents.registry import (
+    install_agent_hooks,
+    profile_composers,
+    profiles_with_finished_events,
+    provider_descriptors,
+)
+from remote_agents.adapters.sqlite.database import open_ui_database
+from remote_agents.adapters.sqlite.queued_prompt_store import SQLiteQueuedPromptStore
 from remote_agents.adapters.tmux.composer import PaneState, classify
 from remote_agents.adapters.tmux.gateway import TmuxGateway
 from remote_agents.adapters.tmux.runtime import AsyncTmuxRunner, TerminalWaits, TmuxTerminal
-from remote_agents.domain.models import SessionId
+from remote_agents.application.activity import drain_activity
+from remote_agents.application.prompt_relay import PromptRelay
+from remote_agents.composition.service import _retry_waiting_messages
+from remote_agents.domain.models import (
+    ProfileId,
+    ProjectId,
+    SessionDisplayIdentity,
+    SessionId,
+    SessionRecord,
+    SessionState,
+)
+from remote_agents.ports.agent_activity import ActivityKind, AgentActivity
+from remote_agents.ports.message_relay import RelayOutcome, RelayResult
+from remote_agents.ports.session_identity import SESSION_ID_VARIABLE
 from remote_agents.ports.terminal import PromptOutcome, PromptReason
 
 _LINE_ONE = "Reply with exactly one word: relayed."
 _LINE_TWO = "This second line belongs to the same message."
 _LONG_TURN = "Count from 1 to 150, one number per line, and nothing else."
+_QUEUED = "Reply with exactly one word: delivered."
 
 
 def _tmux(socket: str, *arguments: str) -> subprocess.CompletedProcess[str]:
@@ -63,10 +88,25 @@ def _requirements(agent: str) -> None:
         pytest.skip("BLOCKED: codex is not logged in with ChatGPT")
 
 
-def _open_pane(agent: str, socket: str, workspace: Path) -> tuple[SessionId, list[str]]:
-    """A real agent pane on the scratch server, marked as a managed session, at its composer."""
+def _open_pane(
+    agent: str, socket: str, workspace: Path, *, spool: Path | None = None
+) -> tuple[SessionId, list[str]]:
+    """A real agent pane on the scratch server, marked as a managed session, at its composer.
+
+    With `spool`, the agent's real "finished" hook is installed for this pane only -- Claude's
+    through a `--settings` file, Codex's into its disposable home -- writing to that spool, and
+    the pane carries the managed-session variable the hook reads.
+    """
+    session_id = SessionId.new()
     command = ["claude", "--model", "sonnet"] if agent == "claude" else ["codex"]
     environment: list[str] = []
+    if spool is not None:
+        environment = ["-e", f"{SESSION_ID_VARIABLE}={session_id}"]
+    if agent == "claude" and spool is not None:
+        settings = workspace.parent / "claude-settings.json"
+        settings.write_text(json.dumps({"model": "sonnet"}) + "\n", encoding="utf-8")
+        install_agent_hooks(settings, executable=Path(sys.executable), activity_directory=spool)
+        command += ["--settings", str(settings)]
     if agent == "codex":
         codex_home = workspace / ".codex-home"
         codex_home.mkdir(mode=0o700)
@@ -74,9 +114,15 @@ def _open_pane(agent: str, socket: str, workspace: Path) -> tuple[SessionId, lis
         (codex_home / "config.toml").write_text(
             'approval_policy = "on-request"\nsandbox_mode = "read-only"\n', encoding="utf-8"
         )
-        environment = ["-e", f"CODEX_HOME={codex_home}"]
+        if spool is not None:
+            install_agent_hooks(
+                codex_home / "hooks.json",
+                executable=Path(sys.executable),
+                activity_directory=spool,
+                provider="codex",
+            )
+        environment += ["-e", f"CODEX_HOME={codex_home}"]
     subprocess.run(["git", "init", "-q"], cwd=workspace, check=False, timeout=30)
-    session_id = SessionId.new()
     _tmux(
         socket, "new-session", "-d", "-s", f"ra-{session_id}", "-x", "160", "-y", "40",
         "-c", str(workspace), *environment, *command,
@@ -189,4 +235,94 @@ def test_runtime_types_into_an_idle_pane_and_is_refused_by_a_busy_one(
         after = _tmux(socket, "capture-pane", "-p", "-J", "-S", "-400", "-t", pane).stdout
         assert "This must never be typed." not in after
     finally:
+        _tmux(socket, "kill-server")
+
+
+class _OneSession:
+    """The relay's one question of the store: is this session still running."""
+
+    def __init__(self, record: SessionRecord) -> None:
+        self.record = record
+
+    async def get(self, session_id: SessionId) -> SessionRecord | None:
+        return self.record if session_id == self.record.session_id else None
+
+
+def _wait_for_finished(spool: Path, session_id: SessionId, seconds: float = 240.0):
+    """Drain the spool the way the service pass does, until this session's turn has finished."""
+    deadline = time.monotonic() + seconds
+    drained: list[AgentActivity] = []
+    while time.monotonic() < deadline:
+        drained.extend(drain_activity(spool))
+        if any(
+            activity.session_id == str(session_id) and activity.kind is ActivityKind.COMPLETED
+            for activity in drained
+        ):
+            return drained
+        time.sleep(1.0)
+    pytest.fail(f"no finished event was spooled for the turn: {drained}")
+
+
+@pytest.mark.parametrize("agent", ["claude", "codex"])
+def test_queue_behind_a_real_turn_and_deliver_after_its_stop(agent: str, tmp_path: Path) -> None:
+    """Busy pane: the message queues; the real Stop hook's record delivers it, exactly once."""
+    _requirements(agent)
+    socket = f"remote-agents-test-relay-{SessionId.new().value.hex}"
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    spool = tmp_path / "activity"
+    connection = open_ui_database(tmp_path / "ui.sqlite3")
+    try:
+        session_id, (pane,) = _open_pane(agent, socket, workspace, spool=spool)
+        terminal = _terminal(socket, tmp_path / "locks")
+        record = SessionRecord(
+            session_id,
+            ProjectId("q" * 24),
+            ProfileId(agent),
+            SessionDisplayIdentity("Relay", agent, "regular", 1),
+            SessionState.RUNNING,
+            datetime.now(UTC),
+        )
+        finishing = profiles_with_finished_events(provider_descriptors())
+        relay = PromptRelay(
+            terminal,
+            SQLiteQueuedPromptStore(connection),
+            _OneSession(record),
+            queues_for=lambda profile: str(profile) in finishing,
+        )
+        drain_activity(spool)
+
+        # 1. A real turn is running, and a message sent meanwhile is queued, untyped.
+        started = asyncio.run(terminal.send_prompt(session_id, _LONG_TURN))
+        assert started.outcome is PromptOutcome.SENT, started
+        queued = asyncio.run(relay.submit(session_id, _QUEUED))
+        assert queued.outcome is RelayOutcome.QUEUED, (
+            queued,
+            _tmux(socket, "capture-pane", "-p", "-t", pane).stdout,
+        )
+
+        # 2. The turn ends; the service pass drains its real Stop record and retries.
+        activities = _wait_for_finished(spool, session_id)
+        announced: list[tuple[str, RelayResult]] = []
+
+        async def announce(session: str, result: RelayResult) -> None:
+            announced.append((session, result))
+
+        asyncio.run(
+            _retry_waiting_messages(
+                SimpleNamespace(prompt_relay=relay, relay_announcer=announce), activities
+            )
+        )
+
+        # 3. It was typed, it was submitted, and it appears exactly once.
+        assert [(session, result.outcome) for session, result in announced] == [
+            (str(session_id), RelayOutcome.SENT)
+        ], (announced, _tmux(socket, "capture-pane", "-p", "-t", pane).stdout)
+        assert relay.pending(session_id) is None
+        screen = _wait_for(socket, pane, _QUEUED)
+        assert sum(_QUEUED in line for line in screen.splitlines()) == 1, (
+            f"the queued message was typed more than once:\n{screen}"
+        )
+    finally:
+        connection.close()
         _tmux(socket, "kill-server")
