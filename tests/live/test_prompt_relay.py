@@ -21,6 +21,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -68,7 +69,16 @@ from remote_agents.ports.terminal import PromptOutcome, PromptReason
 
 _LINE_ONE = "Reply with exactly one word: relayed."
 _LINE_TWO = "This second line belongs to the same message."
-_LONG_TURN = "Count from 1 to 150, one number per line, and nothing else."
+_LONG_TURN = (
+    "Run the shell command `sleep 20` in the foreground, not in the background, then reply "
+    "with exactly one word: slept."
+)
+"""A turn that is busy on screen for its whole length. A counting turn is not: while an agent
+streams its answer, Claude 2.1.280 draws no busy line at all and Codex 0.155.1 marks it only in
+its title (measured 2026-09-23), so a refusal checked mid-stream reads an idle composer. Both draw
+their busy line for as long as a command runs (BL-108 records Claude's streaming gap) -- in the
+foreground: Claude 2.1.280 ran a bare `sleep 30` as a background shell and ended its turn after
+8s, with the sleep still running (measured 2026-09-23)."""
 _QUEUED = "Reply with exactly one word: delivered."
 _MULTILINE_STATUS = {
     "type": "command",
@@ -76,10 +86,13 @@ _MULTILINE_STATUS = {
         "printf 'Sonnet | relay@main\\n\u2699 some-plan 1/2\\n\u2514\u2500 \u2699 sub-plan 3/12\\n'"
     ),
 }
-_LONGER_TURN = "Count from 1 to 600, one number per line, and nothing else."
+_LONGER_TURN = (
+    "Run the shell command `sleep 30` in the foreground, not in the background, then reply "
+    "with exactly one word: slept."
+)
 """For the queue drill, which needs the turn still running after `send_prompt` has confirmed
-it: Sonnet counted to 150 before the second message arrived in one full run, and the relay then
--- correctly -- typed it straight in."""
+it. A counting turn was used until 2026-09-23: Sonnet counted to 150 before the second message
+arrived in one full run, and the relay then -- correctly -- typed it straight in."""
 
 
 def _tmux(socket: str, *arguments: str) -> subprocess.CompletedProcess[str]:
@@ -203,8 +216,11 @@ def _wait_until_idle(socket: str, pane: str, agent: str, seconds: float = 120.0)
     deadline = time.monotonic() + seconds
     text = ""
     while time.monotonic() < deadline:
-        text = _tmux(socket, "capture-pane", "-p", "-t", pane).stdout
-        if classify(text, descriptor) is PaneState.IDLE:
+        # Read as the relay reads it: styled, and with the pane's title, which is the only place
+        # Codex marks a turn while it streams its answer.
+        title = _tmux(socket, "display-message", "-p", "-t", pane, "#{pane_title}").stdout
+        text = _tmux(socket, "capture-pane", "-p", "-e", "-t", pane).stdout
+        if classify(text, descriptor, title.strip()) is PaneState.IDLE:
             return
         time.sleep(1.0)
     pytest.fail(f"{agent} never came back to an idle composer:\n{text}")
@@ -250,6 +266,51 @@ def test_runtime_types_into_an_idle_pane_and_is_refused_by_a_busy_one(
             _tmux(socket, "capture-pane", "-p", "-t", pane).stdout,
         )
         after = _tmux(socket, "capture-pane", "-p", "-J", "-S", "-400", "-t", pane).stdout
+        assert "This must never be typed." not in after
+    finally:
+        _tmux(socket, "kill-server")
+
+
+_STREAMING_TURN = "Count from 1 to 600, one number per line, and nothing else."
+_SPINNER = re.compile(r"^[\u2800-\u28ff] ")
+
+
+def test_a_codex_turn_streaming_its_answer_is_refused_by_its_title(tmp_path: Path) -> None:
+    """While Codex streams its answer its screen reads idle; only the title says the turn runs.
+
+    Measured on 0.155.1 (2026-09-23): no busy line is drawn while the answer streams, and the
+    composer rows are the bytes of a finished turn. The drill waits for exactly that state -- the
+    screen alone reads IDLE while the title spins -- and sends into it. Codex only: Claude draws
+    nothing in either place while it streams (BL-108).
+    """
+    _requirements("codex")
+    socket = f"remote-agents-test-relay-{SessionId.new().value.hex}"
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    descriptor = profile_composers()["codex"]
+    try:
+        session_id, (pane,) = _open_pane("codex", socket, workspace)
+        terminal = _terminal(socket, tmp_path / "locks")
+        started = asyncio.run(terminal.send_prompt(session_id, _STREAMING_TURN))
+        assert started.outcome is PromptOutcome.SENT, started
+
+        deadline = time.monotonic() + 90.0
+        while time.monotonic() < deadline:
+            title = _tmux(socket, "display-message", "-p", "-t", pane, "#{pane_title}").stdout
+            screen = _tmux(socket, "capture-pane", "-p", "-e", "-t", pane).stdout
+            if _SPINNER.match(title) and classify(screen, descriptor) is PaneState.IDLE:
+                break
+            time.sleep(0.2)
+        else:
+            pytest.fail(f"never caught Codex streaming with an idle-looking screen:\n{screen}")
+
+        refused = asyncio.run(terminal.send_prompt(session_id, "This must never be typed."))
+        assert (refused.outcome, refused.reason) == (PromptOutcome.REFUSED, PromptReason.BUSY), (
+            refused,
+            title,
+        )
+        _wait_until_idle(socket, pane, "codex")
+        after = _tmux(socket, "capture-pane", "-p", "-J", "-S", "-1000", "-t", pane).stdout
         assert "This must never be typed." not in after
     finally:
         _tmux(socket, "kill-server")
