@@ -387,3 +387,15 @@ def test_every_retired_plist_entry_is_swept_and_is_not_also_installed(tmp_path: 
 
     for relative in RETIRED_PLIST_PATHS:
         assert not (tmp_path / relative).exists(), f"{relative} was left stranded"
+
+
+def test_launchd_restart_and_pid_are_argv_the_caller_runs() -> None:
+    """`kickstart -k` kills a running instance before starting it again; `kickstart -p` prints
+    the PID of the running (or newly started) process. Never `launchctl print`, whose output is
+    not API (DEC-054) -- so a PID read here starts a job that is not running, and the caller asks
+    only after liveness says it is.
+    """
+    target = f"gui/501/{LABEL}"
+
+    assert ELSEWHERE.restart_command() == ("launchctl", "kickstart", "-k", target)
+    assert ELSEWHERE.pid_command() == ("launchctl", "kickstart", "-p", target)

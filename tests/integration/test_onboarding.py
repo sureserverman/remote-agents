@@ -443,6 +443,12 @@ class _FakeSupervisor:
     def start_command(self) -> tuple[str, ...]:
         return ("fake", "start")
 
+    def restart_command(self) -> tuple[str, ...]:
+        return ("fake", "restart")
+
+    def pid_command(self) -> tuple[str, ...]:
+        return ("fake", "pid")
+
     def liveness_command(self) -> tuple[str, ...]:
         return ("fake", "liveness")
 

@@ -6,7 +6,7 @@ versus an XML plist under `~/Library/LaunchAgents/` with no home specifier at al
 `enable --now` versus `bootstrap`, an inherited user-manager environment versus a
 `_PATH_STDPATH` that contains neither Homebrew's prefix nor `~/.local/bin`. None of those
 differences is a fact the installer or `doctor` needs to hold (DEC-001), and this module is
-what they hold instead: four verbs, and the two questions about ownership that DEC-051 makes
+what they hold instead: its verbs, and the two questions about ownership that DEC-051 makes
 an installer answer.
 
 **The verbs are argv, not methods that run.** A `ServiceSupervisor` hands back the command
@@ -90,7 +90,7 @@ class SupervisorArtifact:
 
 @runtime_checkable
 class ServiceSupervisor(Protocol):
-    """The four verbs and the two ownership questions, in one vocabulary.
+    """The verbs and the two ownership questions, in one vocabulary.
 
     Every member traces to something a caller needs: the goal names installing, removing,
     starting and observing; DEC-051 makes an installer name what it owns *and* what it used to
@@ -226,6 +226,29 @@ class ServiceSupervisor(Protocol):
         `enable --now` and launchd's `bootstrap` register, and a running process afterwards
         is `start` and `kickstart` respectively. A caller that only wants the service up
         should not have to re-register it to get there.
+        """
+        ...
+
+    def restart_command(self) -> tuple[str, ...]:
+        """Stop the running service and start it again, so it runs the code installed now.
+
+        Added for `upgrade` (BL-104, DEC-102): re-registering a definition that did not change
+        leaves the old process serving the old code, and `start_command` does nothing to a
+        service that is already running. systemd's `restart` and launchd's `kickstart -k` are
+        both documented to start a service that was not running, so the verb is safe to issue
+        either way -- but the installer asks only when liveness says the service is up.
+        """
+        ...
+
+    def pid_command(self) -> tuple[str, ...]:
+        """A command that prints the running service's process id, and nothing else, on stdout.
+
+        The one member whose *output* a caller reads, and a deliberate, narrow exception to the
+        exit-code-only rule above (DEC-102): a bare process id is documented output on both
+        sides -- `systemctl show -p MainPID --value` prints it (`0` when not running), and
+        `launchctl kickstart -p` prints it -- where `launchctl print`'s structure is not. It is
+        how a restart is proved: two reads either side of it must differ. On launchd the read
+        starts a job that is not running, so the installer asks only after liveness says it is.
         """
         ...
 

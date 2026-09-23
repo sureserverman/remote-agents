@@ -327,6 +327,14 @@ class SystemdSupervisor:
         """Start an already-registered unit, without re-enabling it to get there."""
         return ("systemctl", "--user", "start", UNIT_NAME)
 
+    def restart_command(self) -> tuple[str, ...]:
+        """`restart` stops and starts the unit, starting it if it was not running."""
+        return ("systemctl", "--user", "restart", UNIT_NAME)
+
+    def pid_command(self) -> tuple[str, ...]:
+        """`show -p MainPID --value` prints the bare main process id, `0` when not running."""
+        return ("systemctl", "--user", "show", "-p", "MainPID", "--value", UNIT_NAME)
+
     def liveness_command(self) -> tuple[str, ...]:
         """`is-active --quiet`: exit status only, with `--quiet` making that explicit.
 

@@ -402,3 +402,21 @@ def test_the_definition_path_answers_on_a_host_this_adapter_refuses_to_render_fo
         awkward.artifacts()
 
     assert awkward.definition_path() == Path("/home/t/.config/systemd/user/remote-agents.service")
+
+
+def test_systemd_restart_and_pid_are_argv_the_caller_runs() -> None:
+    """`restart` stops and starts a running unit (and starts a stopped one); `show -p MainPID
+    --value` prints the bare process id, `0` when it is not running (systemctl(1), systemd 255).
+    """
+    unit = "remote-agents.service"
+
+    assert ELSEWHERE.restart_command() == ("systemctl", "--user", "restart", unit)
+    assert ELSEWHERE.pid_command() == (
+        "systemctl",
+        "--user",
+        "show",
+        "-p",
+        "MainPID",
+        "--value",
+        unit,
+    )

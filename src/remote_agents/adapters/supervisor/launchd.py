@@ -403,6 +403,19 @@ class LaunchdSupervisor:
         """Start an already-bootstrapped service, without re-bootstrapping it to get there."""
         return ("launchctl", "kickstart", self.service_target)
 
+    def restart_command(self) -> tuple[str, ...]:
+        """`kickstart -k` kills the running instance before starting the job again."""
+        return ("launchctl", "kickstart", "-k", self.service_target)
+
+    def pid_command(self) -> tuple[str, ...]:
+        """`kickstart -p` prints the PID of the running (or just started) process.
+
+        Without `-k` it does not restart a running job, which is the case it is asked in; on a
+        job that is not running it would start it, which is why the installer asks it only
+        after liveness says the service is up.
+        """
+        return ("launchctl", "kickstart", "-p", self.service_target)
+
     def liveness_command(self) -> tuple[str, ...]:
         """Ask whether the service is **running**, by exit status alone.
 

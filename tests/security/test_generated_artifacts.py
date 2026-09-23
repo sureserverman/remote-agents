@@ -326,6 +326,12 @@ class _PoisonedSupervisor:
     def start_command(self) -> tuple[str, ...]:
         return ("true",)
 
+    def restart_command(self) -> tuple[str, ...]:
+        return ("true",)
+
+    def pid_command(self) -> tuple[str, ...]:
+        return ("true",)
+
     def liveness_command(self) -> tuple[str, ...]:
         return ("true",)
 

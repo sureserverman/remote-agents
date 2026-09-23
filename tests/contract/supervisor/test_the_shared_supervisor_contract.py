@@ -25,7 +25,14 @@ from remote_agents.ports.service_supervisor import (
     artifact_paths_to_remove,
 )
 
-_VERBS = ("install_command", "remove_command", "start_command", "liveness_command")
+_VERBS = (
+    "install_command",
+    "remove_command",
+    "start_command",
+    "liveness_command",
+    "restart_command",
+    "pid_command",
+)
 
 
 #: A home that exists on no machine, so an adapter built here cannot name a real file.
@@ -229,6 +236,12 @@ class _SupervisorWithHistory:
 
     def start_command(self) -> tuple[str, ...]:
         return ("fake", "start")
+
+    def restart_command(self) -> tuple[str, ...]:
+        return ("fake", "restart")
+
+    def pid_command(self) -> tuple[str, ...]:
+        return ("fake", "pid")
 
     def liveness_command(self) -> tuple[str, ...]:
         return ("fake", "liveness")
@@ -565,3 +578,15 @@ def test_the_definition_path_is_where_the_definition_is_actually_rendered(
     (artifact,) = supervisor.artifacts()
 
     assert supervisor.definition_path() == artifact.path
+
+
+@_PARAMS
+def test_every_adapter_can_restart_and_read_a_pid(supervisor: ServiceSupervisor) -> None:
+    """What re-onboarding needs to restart a running service and prove a new process runs."""
+    for verb in ("restart_command", "pid_command"):
+        argv = getattr(supervisor, verb)()
+        assert isinstance(argv, tuple) and argv, f"{supervisor.kind.value}.{verb}"
+        assert all(isinstance(word, str) and word for word in argv), argv
+    assert supervisor.restart_command() != supervisor.start_command(), (
+        "a start does nothing to a running service, which is the one a restart is for"
+    )
