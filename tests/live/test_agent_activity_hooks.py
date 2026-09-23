@@ -454,3 +454,19 @@ def test_the_opener_answers_codex_0_155_s_rate_limit_prompt_by_its_words() -> No
     )  # fmt: skip
 
     assert screens.pressed == ["Enter", "Down", "Enter", "Enter"]
+
+
+def test_the_opener_answers_claude_s_unnumbered_trust_prompt_from_a_real_capture() -> None:
+    """Claude 2.1.280 lists `No, exit` first and numbers nothing; the choice is by words."""
+    clock, sleep = _fake_clock()
+    trust = (
+        Path(__file__).resolve().parents[1] / "fixtures" / "panes" / "claude" / "dialog_trust.txt"
+    ).read_text(encoding="utf-8")
+    screens = _Screens(trust, f"  ⏵⏵ {CLAUDE_READY} on (shift+tab to cycle)")
+
+    open_to_composer(
+        screens.capture, screens.press, ready=CLAUDE_READY, interstitials=CLAUDE_OPENING,
+        agent="claude", timeout=30, clock=clock, sleep=sleep,
+    )  # fmt: skip
+
+    assert screens.pressed == ["Down", "Enter"], "`Yes, I trust this folder` is the second line"

@@ -50,9 +50,33 @@ CLAUDE_OPENING = (
 )
 CLAUDE_READY = "auto mode"
 
-#: The glyph each TUI draws in front of the highlighted option.
-_CURSOR = re.compile(r"^\s*[›❯>]\s*\d+\.")
-_OPTION = re.compile(r"^\s*(?:[›❯>]\s*)?\d+\.\s")
+#: The glyph each TUI draws in front of the highlighted option. `>` is deliberately not one:
+#: Codex opens with `> You are in <dir>`, which is a line of prose, not a highlight.
+_CURSOR = re.compile(r"^(\s*[›❯]\s+)\S")
+
+
+def _options(lines: list[str]) -> tuple[list[int], int] | None:
+    """The option lines of the menu on screen, and which of them is highlighted.
+
+    Options are found from the highlight outwards: every adjacent line whose text starts in the
+    highlighted line's text column. Numbered (Codex: `› 1. Yes, continue`) and unnumbered
+    (Claude 2.1.280: `❯ No, exit` over `  Yes, I trust this folder`) menus both have that shape.
+    """
+    cursor = next((index for index, line in enumerate(lines) if _CURSOR.match(line)), None)
+    if cursor is None:
+        return None
+    column = len(_CURSOR.match(lines[cursor]).group(1))
+
+    def is_option(line: str) -> bool:
+        return len(line) > column and not line[:column].strip() and line[column] != " "
+
+    first = cursor
+    while first > 0 and is_option(lines[first - 1]):
+        first -= 1
+    last = cursor
+    while last + 1 < len(lines) and is_option(lines[last + 1]):
+        last += 1
+    return list(range(first, last + 1)), cursor
 
 
 def _select(text: str, choose: str, press: Callable[[str], None]) -> bool:
@@ -62,10 +86,12 @@ def _select(text: str, choose: str, press: Callable[[str], None]) -> bool:
     report the screen rather than press keys into something it does not understand.
     """
     lines = text.splitlines()
-    options = [index for index, line in enumerate(lines) if _OPTION.match(line)]
-    cursor = next((index for index in options if _CURSOR.match(lines[index])), None)
+    found = _options(lines)
+    if found is None:
+        return False
+    options, cursor = found
     target = next((index for index in options if choose in lines[index]), None)
-    if cursor is None or target is None:
+    if target is None:
         return False
     steps = options.index(target) - options.index(cursor)
     for _ in range(abs(steps)):
