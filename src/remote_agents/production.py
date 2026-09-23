@@ -75,6 +75,18 @@ class ProductionPaths:
         return self.state_directory / "console.lock"
 
     @property
+    def key_lock_directory(self) -> Path:
+        """Where the per-session keystroke locks live (BL-056, DEC-099).
+
+        One file per managed session, `flock`ed by whichever surface is typing into its pane --
+        the bot's service or the local surface -- so two senders never interleave keys in one
+        pane. Nothing is read from the files. Created on first use, owner-only, like
+        `console_lock_path`'s file; a host where it cannot be created serialises within each
+        process only (`adapters/tmux/key_lock.py`).
+        """
+        return self.state_directory / "keys"
+
+    @property
     def claude_limits_path(self) -> Path:
         """Where the status-line hop records Claude's plan windows, and the reader reads them.
 

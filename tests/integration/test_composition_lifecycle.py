@@ -224,6 +224,9 @@ def test_the_service_composition_lets_the_bot_step_the_console_aside(tmp_path, m
         _console_composer(home=home)._links._path
         == ProductionPaths.for_home(home).console_lock_path
     )
+    # And the same keystroke locks the local surface's gateway takes (BL-056): the bot's
+    # terminal types into panes too, and a lock only one process knows excludes nothing.
+    assert launcher._terminal._gateway._key_lock_directory == paths.key_lock_directory
 
 
 # --- One backend, composed once per process (ARCH-B1, ARCH-B2) -----------------------

@@ -135,7 +135,12 @@ def _local_runtime(config, paths: ProductionPaths, project_paths, descriptors=No
                 definition, executable, allowed_environment
             )
     gateway = TmuxGateway(
-        "remote-agents", AsyncTmuxRunner(), intent_directory=paths.intent_directory
+        "remote-agents",
+        AsyncTmuxRunner(),
+        intent_directory=paths.intent_directory,
+        # Both surfaces' runtimes come from here, so both name the same lock files and their
+        # keystrokes into one pane are serialised across the two processes (BL-056).
+        key_lock_directory=paths.key_lock_directory,
     )
     terminal = TmuxTerminal(
         gateway,

@@ -38,6 +38,7 @@ from remote_agents.adapters.tmux.codec import (
     split_console_pane_args,
     swap_pane_args,
 )
+from remote_agents.adapters.tmux.key_lock import SessionKeyLock
 from remote_agents.domain.models import ProfileId, ProjectId, SessionId
 from remote_agents.ports.console import (
     ConsoleBindingAction,
@@ -187,12 +188,22 @@ class TmuxGateway:
         runner: TmuxRunner,
         *,
         intent_directory: Path = Path("/var/lib/remote-agents/intents"),
+        key_lock_directory: Path | None = None,
     ) -> None:
         if not is_our_socket(socket_name):
             raise ValueError("a dedicated socket name is required")
         self._socket_name = socket_name
         self._runner = runner
         self._intent_directory = intent_directory
+        self._key_lock_directory = key_lock_directory
+
+    def _keys_for(self, session_id: SessionId) -> SessionKeyLock:
+        """The lock every keystroke into this session's pane is sent under (BL-056).
+
+        Shared by name with the other process when the composition gave a directory; without
+        one, this process's senders are still serialised against each other.
+        """
+        return SessionKeyLock(self._key_lock_directory, session_id)
 
     async def inventory(self) -> TmuxInventory:
         """List panes only on the dedicated socket and quarantine malformed tags.
@@ -412,17 +423,20 @@ class TmuxGateway:
         if not keys:
             raise ValueError("graceful stop requires a fixed key sequence")
         target = await self._following_target(session_id)
-        for index, key in enumerate(keys):
-            try:
-                await self._runner.run(*self._base_argv(), "send-keys", "-t", target, key)
-            except RuntimeError as error:
-                # Retyped like every other single-target operation. A pane that vanishes
-                # between two keys left the caller a raw RuntimeError, so a stop interrupted
-                # by the agent exiting mid-sequence was indistinguishable from a broken
-                # tmux — and DEC-022 turns on telling those apart.
-                raise _target_missing_or(error, f"ra-{session_id}") from error
-            if index < len(keys) - 1:
-                await asyncio.sleep(0.15)
+        # The whole sequence under one hold, so no other sender's keys land between two of
+        # these (BL-056).
+        async with self._keys_for(session_id):
+            for index, key in enumerate(keys):
+                try:
+                    await self._runner.run(*self._base_argv(), "send-keys", "-t", target, key)
+                except RuntimeError as error:
+                    # Retyped like every other single-target operation. A pane that vanishes
+                    # between two keys left the caller a raw RuntimeError, so a stop interrupted
+                    # by the agent exiting mid-sequence was indistinguishable from a broken
+                    # tmux — and DEC-022 turns on telling those apart.
+                    raise _target_missing_or(error, f"ra-{session_id}") from error
+                if index < len(keys) - 1:
+                    await asyncio.sleep(0.15)
 
     async def pane_arrangement(self) -> tuple[HostedPane, ...]:
         """Every pane on the server, with where it is shown and whose it is.
@@ -591,9 +605,7 @@ class TmuxGateway:
     async def read_console_option(self, name: str) -> str:
         """One window option, empty when unset -- which is every console built before this."""
         try:
-            output = await self._runner.run(
-                *self._base_argv(), *console_option_args(name, None)
-            )
+            output = await self._runner.run(*self._base_argv(), *console_option_args(name, None))
         except RuntimeError as error:
             message = str(error)
             if _reports_absent_server(message) or _reports_absent_target(message):
