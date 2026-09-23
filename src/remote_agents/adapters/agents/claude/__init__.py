@@ -95,13 +95,18 @@ def descriptor(
         ),
         # Measured on 2.1.280 (`docs/acceptance-2026-09-22-composer-states.md`, captures in
         # `tests/fixtures/panes/claude/`). The composer is the `❯ ` line between two full-width
-        # rules at the bottom, with at most three status lines under it. In shell mode the line
+        # rules at the bottom, with up to twelve status lines under it: the owner's status line
+        # is a command and may print several (model and usage, then one line per plan in flight;
+        # four under the composer on 2026-09-23, `busy_plan_status.txt`), and the three this
+        # allowed until 0.47.1 read that pane as UNKNOWN, so every message was refused. Dialogs
+        # and the spinner are matched on their own, so the count bounds only how far below the
+        # composer the screen may end. In shell mode the line
         # starts `!` and anything submitted there runs as a command, so it is not matched: a
         # shell-mode screen reads UNKNOWN, never IDLE. The
         # empty composer stays drawn while a turn runs, so busy is the spinner: a column-0 glyph
         # and an ellipsis (`✽ Puzzling…`); the finished line (`✻ Worked for 7s · done`) has none.
         composer=ComposerScreen(
-            composer=r"^─{10,}\n❯ ?(?P<draft>[^\n]*(?:\n  [^\n]*)*?)\n─{10,}(?:\n[^\n]*){0,3}\Z",
+            composer=r"^─{10,}\n❯ ?(?P<draft>[^\n]*(?:\n  [^\n]*)*?)\n─{10,}(?:\n[^\n]*){0,12}\Z",
             busy=(r"^[✻✽✶✳✢·*] \S[^\n]*…",),
             dialogs=(r"^ \S[^\n]*\bEsc to cancel\b", r"^ Do you want to proceed\?"),
             # A long paste folds to `[Pasted text #1]` (`composed_long.txt`).

@@ -1,0 +1,45 @@
+  - The queue table exists in the live UI database.
+  - I ran console close, so re-enter with remote-agents.
+
+  Still for you (in the plan): from the phone, send one message to an idle session and one to a busy session, and confirm both arrive.
+
+✻ Churned for 4m 46s · done 9:50 AM
+
+❯ I sent one message from the phone to this chat but I don't see it here
+
+● Let me check what happened to it before guessing. First: is this session one the bot manages, and is the message sitting in the queue?
+
+  Ran 1 shell command
+
+● This session is managed (id 56f7c694…) and nothing is waiting in the queue. So the message was sent, refused, or delivered and dropped. Checking the service log and this session's
+  record.
+
+  Ran 2 shell commands
+
+● The journal's empty, so I'm relying on disk files instead—the key-lock folder and UI store both changed at 12:10, suggesting a pane-related edit then. I'll check the lock files and
+  this session's pane next.
+
+  Ran 1 shell command
+
+● The key lock for pane 56f7c694 was taken at 12:10:36, likely your send being typed in or refused since nothing was queued. I'll capture the pane now to check what happened.
+
+  Ran 2 shell commands
+
+● I see the likely cause: Claude's composer pattern allows at most three lines below the input, but this session shows four (status, two plan-progress lines, and "auto mode"), so the
+  relay likely flagged it as unrecognized and dropped your message. Confirming this against the real classifier on the exact capture now.
+
+  Classify this pane's real screen with the relay's classifier
+  ⎿  $ cd /home/user/dev/infra/remote-agents; tmux -L remote-agents capture-pane -p -t %4 >
+     /tmp/claude-1000/-home-user-dev-infra-remote-agents/5b607e6d-cd50-405b-9cb8-bca51e3b9df4/scratchpad/pane.txt; uv run --locked python - <<'EOF'
+     import re
+     from remote_agents.adapters.agents.registry import profile_…
+
+✽ Cogitating… (57s · ↓ 4.2k tokens)
+
+───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+❯ 
+───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  Opus 5.5 1M | remote-agents@main | 315k/1m (31%) | effort: high | 5h 1% @17:10 | 7d 99% @Thu Sep 24, 10:00 | v2.1.280
+  ⚙ 2026-09-22-steady-panes-and-prompt-relay-mast… ▐████████████████████▌ 2/2 (100%)
+  └─ ⚙ sub-02-prompt-relay                         ▐████████████████████▌ 12/12 (100%)
+  ⏵⏵ auto mode on (shift+tab to cycle) · ← for agents

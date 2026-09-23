@@ -1,0 +1,45 @@
+
+ ▐▛███▛█   Claude Code v2.1.280
+▝▜██████▀  Sonnet 5 with high effort · Claude Max
+  ▝▝ ▝▝    /tmp/claude-1000/-home-user-dev-infra-remote-agents/5b607e6d-cd50-405b-9cb8-bca51e3b9df4/scratchpad/ws · /rc
+
+  ⎿  SessionStart:startup says: [vault-context] No vault context for this project yet. Run `/vault-context:link` to scan your vault and surface relevant pages.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+                                                                                                                                                                     ● high · /effort
+───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+❯ 
+───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  Sonnet | project@main | 12k/200k
+  ⚙ some-plan ▐██▌ 1/2
+  └─ ⚙ sub-plan ▐██▌ 3/12
+  ⏵⏵ auto mode on (shift+tab to cycle) · ← for agents

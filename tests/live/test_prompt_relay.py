@@ -70,6 +70,12 @@ _LINE_ONE = "Reply with exactly one word: relayed."
 _LINE_TWO = "This second line belongs to the same message."
 _LONG_TURN = "Count from 1 to 150, one number per line, and nothing else."
 _QUEUED = "Reply with exactly one word: delivered."
+_MULTILINE_STATUS = {
+    "type": "command",
+    "command": (
+        "printf 'Sonnet | relay@main\\n\u2699 some-plan 1/2\\n\u2514\u2500 \u2699 sub-plan 3/12\\n'"
+    ),
+}
 _LONGER_TURN = "Count from 1 to 600, one number per line, and nothing else."
 """For the queue drill, which needs the turn still running after `send_prompt` has confirmed
 it: Sonnet counted to 150 before the second message arrived in one full run, and the relay then
@@ -106,10 +112,17 @@ def _open_pane(
     environment: list[str] = []
     if spool is not None:
         environment = ["-e", f"{SESSION_ID_VARIABLE}={session_id}"]
-    if agent == "claude" and spool is not None:
+    if agent == "claude":
+        # A status line of three lines, as the owner's is while a plan is in flight: with the
+        # mode line that is four under the composer, which read as UNKNOWN until 0.47.1 and had
+        # every message refused. No drill ran with more than one until then.
         settings = workspace.parent / "claude-settings.json"
-        settings.write_text(json.dumps({"model": "sonnet"}) + "\n", encoding="utf-8")
-        install_agent_hooks(settings, executable=Path(sys.executable), activity_directory=spool)
+        settings.write_text(
+            json.dumps({"model": "sonnet", "statusLine": _MULTILINE_STATUS}) + "\n",
+            encoding="utf-8",
+        )
+        if spool is not None:
+            install_agent_hooks(settings, executable=Path(sys.executable), activity_directory=spool)
         command += ["--settings", str(settings)]
     if agent == "codex":
         codex_home = workspace / ".codex-home"
