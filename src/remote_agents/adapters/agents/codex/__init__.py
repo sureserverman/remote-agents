@@ -56,15 +56,16 @@ def descriptor() -> ProviderDescriptor:
         # `tests/fixtures/panes/codex/`). The composer is the last `› ` line (a `! ` line is shell
         # mode, deliberately not matched, so it reads UNKNOWN)
         # with the model line (`<model> · <dir>`) under it. Its placeholder stays drawn while a
-        # turn runs, so busy is `• Working (… esc to interrupt)`. The rate-limit and hook prompts
-        # are from the binary's strings (not raised on screen) and are matched loosely: a false
-        # DIALOG holds a message, a missed one types into a prompt.
+        # turn runs, so busy is `• Working (… esc to interrupt)`, its bullet `•` or `◦`. The
+        # rate-limit and hook prompts are from the binary's strings (not raised on screen) and are
+        # matched loosely: a false DIALOG holds a message, a missed one types into a prompt.
         composer=ComposerScreen(
             composer=r"^› (?P<draft>[^\n]*(?:\n  [^\n]*)*?)\n  [^\n]* · [^\n]*\Z",
             placeholders=(r"Ask Codex to do anything", r"Ask a follow-up question"),
             # Any column-0 bullet carrying `esc to interrupt`: Codex heads the line with its
             # reasoning summary (`• Planning edits (9s • esc to interrupt)`), not always `Working`.
-            busy=(r"^• [^\n]*esc to interrupt",),
+            # The bullet is a spinner: `•` and `◦` alternate frame by frame (`busy_hollow.txt`).
+            busy=(r"^[•◦] [^\n]*esc to interrupt",),
             # A long paste folds to `[Pasted Content 2969 chars]` (`composed_long.txt`). Its
             # command menu is drawn *under* the composer, where it hides the model line, so a
             # `/` message is refused before pasting (no `command_menu`).

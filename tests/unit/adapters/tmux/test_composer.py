@@ -173,6 +173,19 @@ def test_codex_is_busy_whatever_its_working_line_is_headed() -> None:
     assert classify(planning, _descriptor("codex")) is PaneState.BUSY
 
 
+def test_codex_is_busy_on_the_hollow_frame_of_its_spinner_too() -> None:
+    """Codex 0.155.1 draws the working line's bullet as `•` and `◦` on alternate frames.
+
+    `busy_hollow.txt` is a real `◦` frame taken mid-turn. Matching `•` alone read every other
+    frame of a running turn as an idle composer, and the relay typed into it (the live drill's
+    Codex cases, 2026-09-23).
+    """
+    hollow = (_PANES / "codex" / "busy_hollow.txt").read_text(encoding="utf-8")
+    assert "◦" in hollow, "the fixture is the hollow frame"
+
+    assert classify(hollow, _descriptor("codex")) is PaneState.BUSY
+
+
 # --- Claude's suggested next message is not a draft -----------------------------------------
 
 
