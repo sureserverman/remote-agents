@@ -63,6 +63,8 @@ COMPOSER_HOLDS_TEXT = "composer_holds_text"
 """A fixed key sequence was not sent because the composer held text its `Enter` would submit."""
 KEYS_BUSY = "keys_busy"
 """A fixed key sequence was not sent because another sender held the pane's keys (BL-056)."""
+AGENT_ASKING = "agent_asking"
+"""A stop was not sent because a dialog was up: its `Enter` would have answered it (BL-055)."""
 OWNERSHIP_LOST = "ownership_lost"
 NOT_AWAITING_TRUST = "not_awaiting_trust"
 """A live pane that is no longer sitting on its folder-trust question.

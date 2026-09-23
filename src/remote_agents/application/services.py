@@ -46,6 +46,7 @@ from remote_agents.domain.trust import TrustState
 from remote_agents.ports.remote_control_default import RemoteControlDefaultPort
 from remote_agents.ports.session_store import ProjectUsage, SessionStore
 from remote_agents.ports.terminal import (
+    AGENT_ASKING,
     COMPOSER_HOLDS_TEXT,
     KEYS_BUSY,
     NOT_AWAITING_TRUST,
@@ -74,14 +75,16 @@ _CONSOLE_HIDE_TIMEOUT_SECONDS = 2.0
 #: Enumerated rather than "`unknown_session`, else a timeout", because the two are different
 #: claims about the same field and an `else` makes the weaker one a silent default. The
 #: exhaustiveness of this mapping rests on `TmuxRuntime.graceful_stop` emitting exactly these
-#: two details, which is a fact living in another file with nothing tying them together — so a
-#: third detail must land somewhere that says so rather than somewhere that guesses.
+#: details, a fact living in another file — `tests/unit/application/test_session_actions.py`
+#: sweeps that method's returns for the wording table, and a new detail must land here too.
 _STOP_EVENTS: dict[str, LifecycleEvent] = {
     UNKNOWN_SESSION: LifecycleEvent.GRACEFUL_STOP_NEVER_SENT,
     # Not sent either, and the pane is still running: its composer held text the stop's Enter
     # would have submitted as a prompt, or another sender held its keys (DEC-099, BL-056).
     COMPOSER_HOLDS_TEXT: LifecycleEvent.GRACEFUL_STOP_NEVER_SENT,
     KEYS_BUSY: LifecycleEvent.GRACEFUL_STOP_NEVER_SENT,
+    # Not sent: a dialog was up, and the stop's `Enter` would have answered it (BL-055).
+    AGENT_ASKING: LifecycleEvent.GRACEFUL_STOP_NEVER_SENT,
     GRACEFUL_TIMEOUT: LifecycleEvent.GRACEFUL_STOP_TIMED_OUT,
 }
 

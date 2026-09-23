@@ -111,3 +111,80 @@ async def test_a_live_pane_still_gets_its_sequence() -> None:
     await terminal(runner).graceful_stop(_SESSION, _PROFILE)
 
     assert [call[-1] for call in runner.keys_sent] == ["C-c"]
+
+
+# --- A stop is never sent into a dialog (BL-055) -----------------------------------------------
+#
+# Every profile's stop sequence ends in `Enter` (`/exit Enter`, `/quit Enter Enter`), and every
+# measured approval dialog opens on its yes option: a stop sent into one approves it. So the stop
+# is judged from a styled capture under the key lock, like the relay's paste: a dialog or a draft
+# refuses, and anything else -- idle, a running turn, a screen it cannot place -- still takes it,
+# because a stop has to reach an agent mid-turn.
+
+
+def _claude_pane(name: str):
+    from .test_send_prompt import PromptPane
+
+    fixtures = Path(__file__).resolve().parents[3] / "fixtures/panes/claude"
+    screen = (fixtures / f"{name}.txt").read_text(encoding="utf-8")
+    return PromptPane([screen])
+
+
+def _composed_terminal(pane) -> TmuxTerminal:
+    from remote_agents.adapters.agents.registry import profile_composers
+
+    profile = LaunchProfile(
+        "/usr/bin/claude", ("/usr/bin/claude",), {}, None, graceful_keys=("/exit", "Enter")
+    )
+    return TmuxTerminal(
+        TmuxGateway("remote-agents-test-graceful", pane),
+        {},
+        {_PROFILE: profile},
+        startup_timeout=0.05,
+        composers=profile_composers(),
+    )
+
+
+def test_a_graceful_stop_is_never_sent_into_a_dialog() -> None:
+    import asyncio
+
+    from remote_agents.ports.terminal import AGENT_ASKING
+
+    pane = _claude_pane("dialog_approval")
+
+    observation = asyncio.run(_composed_terminal(pane).graceful_stop(pane.session_id, _PROFILE))
+
+    assert observation.detail == AGENT_ASKING
+    assert observation.live and not observation.preserved
+    assert pane.keys == [], "the stop's Enter would have approved the dialog"
+
+
+def test_a_graceful_stop_still_reaches_a_busy_pane() -> None:
+    import asyncio
+
+    pane = _claude_pane("busy")
+
+    asyncio.run(_composed_terminal(pane).graceful_stop(pane.session_id, _PROFILE))
+
+    assert pane.keys == ["/exit", "Enter"]
+
+
+def test_a_graceful_stop_judges_a_styled_capture_taken_under_the_lock() -> None:
+    import asyncio
+
+    pane = _claude_pane("idle_suggestion")
+
+    asyncio.run(_composed_terminal(pane).graceful_stop(pane.session_id, _PROFILE))
+
+    assert pane.keys == ["/exit", "Enter"], "a dim suggestion is no draft"
+    first_key = next(i for i, call in enumerate(pane.calls) if "send-keys" in call)
+    captures = [call for call in pane.calls[:first_key] if "capture-pane" in call]
+    assert captures and all("-e" in call for call in captures)
+
+
+def test_a_stop_refused_at_a_dialog_is_recorded_as_never_sent() -> None:
+    from remote_agents.application.services import _STOP_EVENTS
+    from remote_agents.domain.state_machine import LifecycleEvent
+    from remote_agents.ports.terminal import AGENT_ASKING
+
+    assert _STOP_EVENTS[AGENT_ASKING] is LifecycleEvent.GRACEFUL_STOP_NEVER_SENT

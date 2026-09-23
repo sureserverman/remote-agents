@@ -40,6 +40,7 @@ from remote_agents.domain.trust import TrustState
 from remote_agents.ports.private_directory import open_private_directory
 from remote_agents.ports.provider_descriptor import ProviderDescriptor, TrustDialog
 from remote_agents.ports.terminal import (
+    AGENT_ASKING,
     COMPOSER_HOLDS_TEXT,
     GRACEFUL_TIMEOUT,
     KEYS_BUSY,
@@ -509,14 +510,21 @@ class TmuxTerminal:
             return TerminalObservation(
                 session_id, live=False, preserved=False, detail=UNKNOWN_SESSION
             )
-        if await self._composer_holds_text(session_id, observation.profile_id):
-            # The stop's own Enter would submit the draft as a prompt (`<draft>/exit`): the agent
-            # would not stop and the draft would start a turn. Not sent, and said so (DEC-022).
-            return TerminalObservation(
-                session_id, live=True, preserved=False, detail=COMPOSER_HOLDS_TEXT
-            )
+        descriptor = self._composers.get(str(observation.profile_id))
+
+        def stoppable(capture: str) -> bool:
+            # Every stop sequence ends in `Enter`. Into a draft it submits `<draft>/exit` as a
+            # prompt; into a dialog it takes the resting yes option (BL-055). Idle, a running turn
+            # and a screen nothing recognises all take the stop: it has to reach an agent mid-turn.
+            if descriptor is None:
+                return True
+            # No title, deliberately: it only ever adds BUSY, and a busy pane takes the stop.
+            return classify(capture, descriptor) not in (PaneState.COMPOSING, PaneState.DIALOG)
+
         try:
-            await self._gateway.send_keys(session_id, profile.graceful_keys)
+            refused = await self._gateway.send_keys_when(
+                session_id, profile.graceful_keys, stoppable
+            )
         except KeysBusy:
             return TerminalObservation(session_id, live=True, preserved=False, detail=KEYS_BUSY)
         except TerminalTargetMissing:
@@ -531,6 +539,15 @@ class TmuxTerminal:
             # to replace with an event that names its cause.
             return TerminalObservation(
                 session_id, live=False, preserved=False, detail=UNKNOWN_SESSION
+            )
+        if refused is not None and descriptor is not None:
+            # Not sent, and said which (DEC-022): the owner's next step differs.
+            asking = classify(refused, descriptor) is PaneState.DIALOG
+            return TerminalObservation(
+                session_id,
+                live=True,
+                preserved=False,
+                detail=AGENT_ASKING if asking else COMPOSER_HOLDS_TEXT,
             )
         deadline = asyncio.get_running_loop().time() + self._startup_timeout
         while asyncio.get_running_loop().time() < deadline:
@@ -635,17 +652,6 @@ class TmuxTerminal:
             )
         except TimeoutError:
             return PromptDelivery(PromptOutcome.UNCONFIRMED, PromptReason.TIMEOUT)
-
-    async def _composer_holds_text(self, session_id: SessionId, profile_id: ProfileId) -> bool:
-        """Whether this agent's composer is holding text, for an agent that declares one."""
-        descriptor = self._composers.get(str(profile_id))
-        if descriptor is None:
-            return False
-        try:
-            capture = await self._gateway.capture(session_id, styled=True)
-        except TerminalTargetMissing:
-            return False
-        return classify(capture, descriptor) is PaneState.COMPOSING
 
     async def _deliver_prompt(self, session_id: SessionId, text: str) -> PromptDelivery:
         observation = await self.inspect(session_id)

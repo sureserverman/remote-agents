@@ -60,7 +60,10 @@ from remote_agents.domain.models import OrphanProvenance, ProfileId, SessionReco
 from remote_agents.domain.remote_control import RemoteControlState
 from remote_agents.domain.trust import TrustState, answerable
 from remote_agents.ports.terminal import (
+    AGENT_ASKING,
+    COMPOSER_HOLDS_TEXT,
     GRACEFUL_TIMEOUT,
+    KEYS_BUSY,
     OWNERSHIP_LOST,
     UNKNOWN_SESSION,
     TerminalObservation,
@@ -509,6 +512,24 @@ _GRACEFUL_FAILURES: dict[str, tuple[str, str]] = {
         "nothing was recorded as stopped and nothing was removed. That is about the agent "
         "rather than this host's view of the session. Try again if it may still be finishing, "
         "or force stop it.",
+    ),
+    COMPOSER_HOLDS_TEXT: (
+        "The stop was not sent: the agent's input holds text.",
+        "The exit keys end in Enter, which would have submitted that text as a message instead "
+        "of stopping the agent. Nothing was typed and the session is still running. Clear or "
+        "send the text in the session, then stop it again, or force stop it.",
+    ),
+    KEYS_BUSY: (
+        "The stop was not sent: something else was typing into the session.",
+        "Another sender held this session's keys — a relayed message, the Remote Control "
+        "toggle, or a stop from the other surface — and did not finish in time. Nothing was "
+        "typed and the session is still running. Try again in a moment, or force stop it.",
+    ),
+    AGENT_ASKING: (
+        "The stop was not sent: the agent is asking a question.",
+        "A dialog is open in the session, and the exit keys end in Enter, which would have "
+        "answered it — an approval dialog opens on its yes option. Nothing was typed and the "
+        "session is still running. Answer it in the session, then stop again, or force stop it.",
     ),
 }
 """Deliberately worded so no two of them can be mistaken for each other.

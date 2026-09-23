@@ -13,7 +13,6 @@ from remote_agents.application.session_actions import (
     _GRACEFUL_FAILURES,
     GRACEFUL_TIMEOUT,
     OWNERSHIP_LOST,
-    UNKNOWN_SESSION,
     StopFailure,
     available_actions,
     decline_trust_available,
@@ -183,7 +182,7 @@ def test_a_preserved_stop_is_not_a_failure() -> None:
     )
 
 
-@pytest.mark.parametrize("detail", [UNKNOWN_SESSION, GRACEFUL_TIMEOUT])
+@pytest.mark.parametrize("detail", sorted(_GRACEFUL_FAILURES))
 def test_each_known_cause_gets_its_own_words(detail: str) -> None:
     failure = stop_failure(_Observation(preserved=False, detail=detail))
     assert failure is not None
@@ -204,17 +203,18 @@ def test_no_two_known_causes_share_wording() -> None:
     over a growing table only ever checks the pair somebody remembered to name.
     """
     graceful = [
-        stop_failure(_Observation(preserved=False, detail=cause))
-        for cause in (UNKNOWN_SESSION, GRACEFUL_TIMEOUT)
+        stop_failure(_Observation(preserved=False, detail=cause)) for cause in _GRACEFUL_FAILURES
     ]
     forced = [force_stop_failure(_Observation(preserved=False, detail=OWNERSHIP_LOST))]
     failures = [failure for failure in graceful + forced if failure is not None]
-    assert len(failures) == 3, "a cause stopped being recognised by its own reader"
+    assert len(failures) == len(_GRACEFUL_FAILURES) + 1, (
+        "a cause stopped being recognised by its own reader"
+    )
 
     summaries = {failure.summary for failure in failures}
     remedies = {failure.remedy for failure in failures}
-    assert len(summaries) == 3, f"two causes share a summary: {summaries}"
-    assert len(remedies) == 3, f"two causes share a remedy: {remedies}"
+    assert len(summaries) == len(failures), f"two causes share a summary: {summaries}"
+    assert len(remedies) == len(failures), f"two causes share a remedy: {remedies}"
 
 
 def test_neither_reader_can_reach_the_other_s_causes() -> None:
@@ -432,3 +432,47 @@ def test_a_message_can_be_sent_only_to_a_running_session_whose_agent_declares_a_
         state is SessionState.RUNNING
     )
     assert message_available(state, ProfileId("mystery-agent"), relayable) is False
+
+
+def _graceful_stop_details() -> set[str]:
+    """Every `detail=` the terminal's `graceful_stop` can return, read from its source."""
+    import ast
+    from pathlib import Path
+
+    from remote_agents.ports import terminal
+
+    runtime = Path(__file__).resolve().parents[3] / "src/remote_agents/adapters/tmux/runtime.py"
+    tree = ast.parse(runtime.read_text(encoding="utf-8"))
+    method = next(
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.AsyncFunctionDef) and node.name == "graceful_stop"
+    )
+    # Every port constant named anywhere in a `detail=` value, so a conditional detail
+    # (`AGENT_ASKING if asking else COMPOSER_HOLDS_TEXT`) yields both of its answers.
+    names = {
+        name.id
+        for node in ast.walk(method)
+        if isinstance(node, ast.Call)
+        for keyword in node.keywords
+        if keyword.arg == "detail"
+        for name in ast.walk(keyword.value)
+        if isinstance(name, ast.Name) and hasattr(terminal, name.id)
+    }
+    return {getattr(terminal, name) for name in names}
+
+
+def test_every_detail_a_graceful_stop_can_return_has_its_own_words() -> None:
+    """Swept from `graceful_stop`'s returns, so a new refusal cannot fall to the generic line.
+
+    `composer_holds_text` and `keys_busy` (0.47.0) did: the owner read "the terminal did not
+    report a clean exit" for a stop that was never sent at all.
+    """
+    details = _graceful_stop_details()
+    assert len(details) >= 5, f"the sweep found too little to mean anything: {details}"
+
+    assert details <= _GRACEFUL_FAILURES.keys(), details - _GRACEFUL_FAILURES.keys()
+    for detail in details:
+        failure = stop_failure(_Observation(preserved=False, detail=detail))
+        assert failure is not None
+        assert failure.summary != "The terminal did not report a clean exit.", detail
