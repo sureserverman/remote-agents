@@ -90,7 +90,7 @@ def test_telegram_action_audit_accepts_the_closed_adapter_surface() -> None:
 
     assert (
         "launch/resume/list/inspect/graceful/cleanup/force/create-project/trust/decline/"
-        "navigation" in completed.stdout
+        "message/navigation" in completed.stdout
     )
 
 
@@ -3055,3 +3055,101 @@ async def test_a_limits_block_whose_claude_default_read_raises_still_lists_the_s
     assert REMOTE_CONTROL_DEFAULT_TITLE not in text, text
     assert "Demo" in text, "the session rows survived a boundary that would not answer"
     assert "Plan limits" in text
+
+
+# --- the Send message flow, end to end (DEC-099) ----------------------------------------------
+
+
+class _OneSessionStore:
+    """The relay's one question of the store: is this session still running."""
+
+    def __init__(self, record: SessionRecord) -> None:
+        self.record = record
+
+    async def get(self, session_id: SessionId) -> SessionRecord | None:
+        return self.record if session_id == self.record.session_id else None
+
+
+async def test_relay_queue_then_finished_sends(tmp_path) -> None:
+    """Busy pane: the owner's message queues; the session's "finished" event delivers it.
+
+    Every piece is the real one except the terminal and Telegram: the bot's guided step, the
+    `PromptRelay`, the SQLite queue in the UI store, and the service's retry pass. The fake
+    terminal answers BUSY once and then SENT, which is what a real pane does across a turn.
+    """
+    from remote_agents.adapters.sqlite.queued_prompt_store import SQLiteQueuedPromptStore
+    from remote_agents.adapters.tmux.fake import FakeTerminal
+    from remote_agents.application.prompt_relay import PromptRelay
+    from remote_agents.composition.service import _retry_waiting_messages
+    from remote_agents.ports.terminal import PromptDelivery, PromptOutcome, PromptReason
+
+    record = SessionRecord(
+        SessionId(UUID(int=42)),
+        ProjectId("p" * 24),
+        ProfileId("claude"),
+        SessionDisplayIdentity("Relay", "Claude", "regular", 1),
+        SessionState.RUNNING,
+        datetime(2026, 9, 23, tzinfo=UTC),
+    )
+    terminal = FakeTerminal()
+    terminal.prompt_deliveries = [
+        PromptDelivery(PromptOutcome.REFUSED, PromptReason.BUSY),
+        PromptDelivery(PromptOutcome.SENT),
+    ]
+    connection = open_ui_database(tmp_path / "ui.sqlite3")
+    relay = PromptRelay(
+        terminal,
+        SQLiteQueuedPromptStore(connection),
+        _OneSessionStore(record),
+        queues_for=lambda profile: True,
+    )
+
+    class _Sessions(SessionUseCaseDouble):
+        async def list_sessions(self):
+            return [record]
+
+        async def refresh_readiness(self) -> None:
+            return None
+
+    chat = FakeChat(chat_id=11, owner_id=7)
+    boundary = build_private_bot(
+        7,
+        11,
+        backend=backend_for(sessions=_Sessions()),
+        profiles=(ProfileAvailability("claude", True, None),),
+        message_relay=relay,
+        relayable=frozenset({"claude"}),
+    )
+    boundary.attach_bot(chat.bot)
+    try:
+        await boundary.sessions_command(chat.message_update("/sessions"), None)
+        anchor = chat.bot_messages[0].message_id
+
+        def token(label: str) -> str:
+            for row in chat.messages[anchor].reply_markup.inline_keyboard:
+                for button in row:
+                    if unpadded(button.text).endswith(label):
+                        return button.callback_data
+            raise AssertionError(f"no {label!r} on the screen")
+
+        await boundary.callback(chat.press(token("Relay")), None)
+        await boundary.callback(chat.press(token("Send message")), None)
+        await boundary.text(chat.message_update("Run the suite"), None)
+
+        assert "Queued" in chat.messages[anchor].text
+        assert relay.pending(record.session_id).text == "Run the suite"
+
+        finished = AgentActivity(
+            str(record.session_id), ActivityKind.COMPLETED, None, datetime.now(UTC)
+        )
+        await _retry_waiting_messages(
+            SimpleNamespace(prompt_relay=relay, relay_announcer=boundary.announce_relayed),
+            [finished],
+        )
+
+        assert terminal.prompts == [(record.session_id, "Run the suite")] * 2
+        assert relay.pending(record.session_id) is None
+        assert "Sent queued message" in chat.bot_messages[-1].text
+        assert "Relay" in chat.bot_messages[-1].text
+    finally:
+        connection.close()

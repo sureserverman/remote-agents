@@ -15,6 +15,9 @@ from remote_agents.domain.models import SessionId
 from remote_agents.ports.queued_prompts import QueuedPrompt
 from remote_agents.ports.terminal import PromptReason
 
+WaitingMessage = QueuedPrompt
+"""A message queued for a session, under the name the Telegram adapter may use."""
+
 
 class RelayOutcome(StrEnum):
     """What became of a message the owner sent to a session."""
@@ -44,7 +47,7 @@ class MessageRelay(Protocol):
 
     def cancel(self, session_id: SessionId) -> bool: ...
 
-    def pending(self, session_id: SessionId) -> QueuedPrompt | None: ...
+    def pending(self, session_id: SessionId) -> WaitingMessage | None: ...
 
     async def sweep(self) -> None:
         """Drop waiting messages whose session is no longer running."""

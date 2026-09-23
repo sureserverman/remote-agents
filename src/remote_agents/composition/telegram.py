@@ -192,4 +192,5 @@ def _private_boundary(
         trust_notifier=boundary.trust_notifier,
         limit_reset_notifier=boundary.limit_reset_notifier,
         prompt_relay=relay,
+        relay_announcer=boundary.announce_relayed,
     )

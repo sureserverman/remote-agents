@@ -117,6 +117,7 @@ from remote_agents.application.session_actions import (
     available_actions,
     decline_trust_available,
     explain_state,
+    message_available,
     notifiable,
     pane_is_attachable,
     remote_control_available,
@@ -168,9 +169,14 @@ from remote_agents.domain.trust import answerable as trust_answerable
 from remote_agents.ports.agent_usage import ContextWindow
 from remote_agents.ports.callback_state import CallbackStatePort
 from remote_agents.ports.chat_view import ChatViewPort
-from remote_agents.ports.message_relay import MessageRelay
+from remote_agents.ports.message_relay import (
+    MessageRelay,
+    RelayOutcome,
+    RelayResult,
+    WaitingMessage,
+)
 from remote_agents.ports.standing_notification import StandingNotificationPort
-from remote_agents.ports.terminal import TerminalTargetMissing
+from remote_agents.ports.terminal import PromptReason, TerminalTargetMissing
 
 __all__ = [
     "PrivateBotBoundary",
@@ -241,16 +247,21 @@ _GUIDED_TEXT_ENTRY = {
         "Reply with a name for this session. Send Skip to clear it, or Cancel to leave it.",
         "Session name",
     ),
+    "session.message": (
+        "Reply with the message to type into this session. Send Cancel or Back to leave it.",
+        "Message",
+    ),
 }
 _ENTRY_INSTRUCTIONS = {
     "launch.search": "Reply below with a project name.",
     "resume.search": "Reply below with a project name.",
     "project.name": "Reply below with the new project name.",
     "session.rename": "Reply below with a name for this session.",
+    "session.message": "Reply below with the message to type into this session.",
 }
 _SEARCH_ACTIONS = {"launch.search": "launch", "resume.search": "resume"}
 _TEXT_ENTRY_ACTIONS = frozenset(
-    {"launch.search", "resume.search", "project.area", "session.rename"}
+    {"launch.search", "resume.search", "project.area", "session.rename", "session.message"}
 )
 """The actions that open a guided step, and so the only ones that may leave a box open."""
 
@@ -422,7 +433,30 @@ _REMOTE_EMOJI = "\U0001f4e1"  # 📡
 # between them and is not about Remote Control at all, so borrowing their emoji would group it
 # with the two settings it has nothing to do with.
 _LIMITS_EMOJI = "\U0001f4ca"  # 📊
+_MESSAGE_EMOJI = "\u2709\ufe0f"  # ✉️
 _BACK_TO_SESSIONS = "\u2039 Back to sessions"  # ‹ Back to sessions
+
+_RELAY_REASON_WORDS: dict[PromptReason, str] = {
+    PromptReason.EMPTY: "the message was empty",
+    PromptReason.SHELL: "a message starting with ! would run as a shell command",
+    PromptReason.NOT_RUNNING: "the session isn't running",
+    PromptReason.NO_COMPOSER: "this agent's input can't be read",
+    PromptReason.BUSY: "the agent is working",
+    PromptReason.COMPOSING: "the agent's input already holds text",
+    PromptReason.DIALOG: "the agent is asking a question",
+    PromptReason.UNRECOGNISED: "the agent's screen wasn't recognised",
+    PromptReason.DRAFT_NOT_SEEN: "the text never showed in the input, so Enter wasn't pressed",
+    PromptReason.MENU: "the agent's command menu couldn't confirm that / command",
+    PromptReason.SUBMIT_NOT_SEEN: "Enter was pressed, but the input wasn't seen to clear",
+    PromptReason.TIMEOUT: "tmux didn't answer in time",
+    PromptReason.KEYS_BUSY: "something else was typing into the session",
+    PromptReason.TMUX_ERROR: "tmux failed partway through",
+}
+"""Why a relayed message did not simply go, in the owner's words (DEC-099). Every reason has
+one, so a new reason fails the Send message flow tests rather than reaching the chat as a key."""
+
+_QUEUED_LINE_WIDTH = 48
+"""How much of a waiting message's first line the session screen shows."""
 
 _REMOTE_CONTROL_WORDS: dict[RemoteControlState, str] = {
     RemoteControlState.ACTIVE: "on",
@@ -572,6 +606,7 @@ def unmarked(label: str) -> str:
         _ATTACH_EMOJI,
         _REMOTE_EMOJI,
         _LIMITS_EMOJI,
+        _MESSAGE_EMOJI,
     }
     return rest if separator and head in marks else label
 
@@ -1095,6 +1130,47 @@ class PrivateBotBoundary:
                 _reply_arguments(await self._detail_reply(entry.entity_id)),
             )
             return
+        if entry.action == "session.message":
+            # The relay decides send, queue or refuse from a fresh look at the pane (DEC-099);
+            # this surface only says what it decided. A token drawn before a restart that
+            # dropped the relay still opens this step, so its absence is answered, not raised.
+            if self.message_relay is None:
+                await self._finish_entry(
+                    bot,
+                    entry,
+                    message,
+                    _reply_arguments(self._message("Sending messages is unavailable.")),
+                )
+                return
+            try:
+                result = await self.message_relay.submit(SessionId.parse(entry.entity_id), value)
+            except Exception:
+                # Raising here would leave the box open and every later reply raising again --
+                # Stage 2's Critical, for rename. Nothing can say whether the text reached the
+                # pane (a failed queue write after a send would look the same), so the answer
+                # sends the owner to look rather than claiming either way.
+                _LOG.exception("relaying a message to %s failed", entry.entity_id)
+                await self._finish_entry(
+                    bot,
+                    entry,
+                    message,
+                    _reply_arguments(
+                        self._message(
+                            "Something failed while sending. Check the session before sending "
+                            "it again.",
+                            back=self._callback("session.detail", entry.entity_id),
+                            back_label="Back to session",
+                        )
+                    ),
+                )
+                return
+            await self._finish_entry(
+                bot,
+                entry,
+                message,
+                _reply_arguments(await self._relay_reply(entry.entity_id, result)),
+            )
+            return
         # Every remaining text step returns above. A step that reaches here is one whose
         # action was added to `_TEXT_ENTRY_ACTIONS` without a branch to answer it, which would
         # otherwise consume the owner's reply and draw nothing.
@@ -1110,7 +1186,7 @@ class PrivateBotBoundary:
         One place rather than four call sites, because "Cancel" and "Back" arrive by typed
         text and by button and must agree about where they go.
         """
-        if entry.action == "session.rename":
+        if entry.action in {"session.rename", "session.message"}:
             return _reply_arguments(await self._detail_reply(entry.entity_id))
         if entry.action == "project.name":
             # `project.name` is what the *step* is called; `project.area` is the button that
@@ -1580,6 +1656,8 @@ class PrivateBotBoundary:
             return await self._decline_reply(entity_id, token, message_id)
         if action == "session.inspect":
             return _reply_arguments(await self._inspect_reply(entity_id))
+        if action == "session.unqueue":
+            return _reply_arguments(self._unqueue_reply(entity_id))
         return _reply_arguments(self._message("That action is no longer available."))
 
     async def _launch_reply(self, entity_id: str, token: str, message_id: int) -> dict[str, object]:
@@ -2353,6 +2431,28 @@ class PrivateBotBoundary:
             )
         if second:
             buttons.append(tuple(second))
+        # The relay's row (DEC-099): Send message where the relay can type into this agent,
+        # and Cancel beside it while a message waits. Above the trust and stop rows, and
+        # never in them: typing into a session is not answering its question or ending it.
+        waiting = self._waiting_message(record.session_id)
+        relay_row: list[Button] = []
+        if self.message_relay is not None and message_available(
+            record.state, record.profile_id, self.relayable
+        ):
+            relay_row.append(
+                Button(
+                    f"{_MESSAGE_EMOJI} Send message",
+                    self._callback("session.message", session_value),
+                )
+            )
+        if waiting is not None:
+            # Not a mutation token, unlike trust and decline: a second press of a cancel finds
+            # nothing waiting and says so, which is harmless where a replayed keypress is not.
+            relay_row.append(
+                Button("Cancel queued message", self._callback("session.unqueue", session_value))
+            )
+        if relay_row:
+            buttons.append(tuple(relay_row))
         # **The two answers share one row, and the row is still the trust row's own.** The
         # owner asked for the pair to sit side by side on 2026-09-11, which supersedes
         # DEC-032's clause that gave each answer a row of its own; what that clause was
@@ -2432,6 +2532,8 @@ class PrivateBotBoundary:
             )
         if attachable:
             facts.append(("pane", "attachable"))
+        if waiting is not None:
+            facts.append(("queued", _first_line(waiting.text)))
         fact_lines = "".join(
             f"\n<code>{label.ljust(_FACT_LABEL_WIDTH)} {escape(value)}</code>"
             for label, value in facts
@@ -2445,6 +2547,100 @@ class PrivateBotBoundary:
             back=self._sessions_back(),
             back_label=_BACK_TO_SESSIONS,
         )
+
+    async def _relay_reply(self, session_value: str, result: RelayResult) -> RenderedMessage:
+        """Say what became of the owner's message, and offer the way back to its session.
+
+        A queued reply carries its own Cancel, because the owner has just been told a message
+        will be typed in later and the moment to change their mind is now, not after finding
+        the session again.
+        """
+        name = await self._session_name(session_value)
+        why = _RELAY_REASON_WORDS.get(result.reason, "") if result.reason else ""
+        buttons: tuple[tuple[Button, ...], ...] = ()
+        if result.outcome is RelayOutcome.SENT:
+            text = f"Sent to {name}."
+        elif result.outcome is RelayOutcome.QUEUED:
+            text = f"Queued — {why}. It will be typed in when {name} next finishes."
+            if result.replaced:
+                text += " It replaced the message that was waiting."
+            buttons = (
+                (
+                    Button(
+                        "Cancel queued message",
+                        self._callback("session.unqueue", session_value),
+                    ),
+                ),
+            )
+        elif result.outcome is RelayOutcome.UNCONFIRMED:
+            text = (
+                f"Sent to {name}, but couldn't confirm it landed — {why}. "
+                "Check the session before sending it again."
+            )
+        else:
+            text = f"Not sent — {why}."
+        return self._message(
+            text,
+            buttons,
+            back=self._callback("session.detail", session_value),
+            back_label="Back to session",
+        )
+
+    def _waiting_message(self, session_id: SessionId) -> WaitingMessage | None:
+        """The session's waiting message, or None -- also when the UI store cannot answer.
+
+        A failed read costs the `queued` line and its Cancel, never the session screen: the
+        screen carries the stop buttons, and a locked `ui.sqlite3` must not take them away.
+        """
+        if self.message_relay is None:
+            return None
+        try:
+            return self.message_relay.pending(session_id)
+        except Exception:
+            _LOG.exception("reading the waiting message for %s failed", session_id)
+            return None
+
+    def _unqueue_reply(self, session_value: str) -> RenderedMessage:
+        cancelled = self.message_relay is not None and self.message_relay.cancel(
+            SessionId.parse(session_value)
+        )
+        return self._message(
+            "Queued message cancelled."
+            if cancelled
+            else "Nothing was waiting — the message had already been sent or dropped.",
+            back=self._callback("session.detail", session_value),
+            back_label="Back to session",
+        )
+
+    async def _session_name(self, session_value: str) -> str:
+        record = await self._record(session_value)
+        if record is None:
+            return "the session"
+        return f"<b>{escape(session_row_parts(record).identity)}</b>"
+
+    async def announce_relayed(self, session_value: str, result: RelayResult) -> None:
+        """Tell the owner what became of a waiting message once a "finished" event tried it.
+
+        Sent apart, like the limit-reset notices: it is news about a session, not a screen,
+        so it must not replace whatever the owner is looking at. A message still waiting is
+        not news -- the owner was told it was queued -- so nothing is said about it.
+        """
+        if self._bot is None or result.outcome is RelayOutcome.QUEUED:
+            return
+        if self.flood.held():
+            _LOG.debug("queued-message notice held by the chat's flood hold")
+            return
+        name = await self._session_name(session_value)
+        why = _RELAY_REASON_WORDS.get(result.reason, "") if result.reason else ""
+        if result.outcome is RelayOutcome.SENT:
+            text = f"{_MESSAGE_EMOJI} Sent queued message to {name}."
+        elif result.outcome is RelayOutcome.UNCONFIRMED:
+            text = (
+                f"{_MESSAGE_EMOJI} Sent queued message to {name}, but couldn't confirm it — {why}."
+            )
+        else:
+            text = f"{_MESSAGE_EMOJI} Dropped queued message for {name} — {why}."
+        await self.view.send_apart(self._bot, {"text": text, "parse_mode": ParseMode.HTML})
 
     async def _limit_block(self) -> str:
         """Each installed agent's rate-limit windows, as a monospace block under the rows.
@@ -4639,6 +4835,14 @@ def _tab(label: str, active: bool) -> str:
 
 def _button_rows(buttons: tuple[Button, ...], width: int = 2) -> tuple[tuple[Button, ...], ...]:
     return tuple(tuple(buttons[index : index + width]) for index in range(0, len(buttons), width))
+
+
+def _first_line(text: str) -> str:
+    """A waiting message as its first non-blank line, cut to fit the session screen."""
+    line = next((line.strip() for line in text.splitlines() if line.strip()), "")
+    if len(line) > _QUEUED_LINE_WIDTH:
+        return line[: _QUEUED_LINE_WIDTH - 1] + "…"
+    return line
 
 
 def _state_explanation(state: SessionState, orphan_provenance: OrphanProvenance | None) -> str:
