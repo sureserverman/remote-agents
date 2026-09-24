@@ -7,7 +7,7 @@ from pathlib import Path
 
 from remote_agents.adapters.agents.hook_settings import _HookProvider
 
-INSTALLED_EVENTS = ("Stop", "StopFailure", "Notification", "PermissionRequest")
+INSTALLED_EVENTS = ("Stop", "StopFailure", "Notification", "PermissionRequest", "UserPromptSubmit")
 """`PermissionRequest` joined 2026-09-19 (DEC-098).
 
 It is what makes a Claude ask say what it is asking: the `Notification` this service already
@@ -26,6 +26,12 @@ An earlier draft of this paragraph said such a host "will go on reporting throug
 the direction that matters: it describes graceful degradation where the real behaviour is the
 loss of the whole approval channel, which is the one this product exists for at 3am. Two
 independent reviews caught it.
+
+**`UserPromptSubmit` joined 2026-09-24 (BL-108, DEC-104)** and starts the session's turn marker;
+the hook reads the event name and never the prompt. Here, unlike `PermissionRequest`, a host
+that has not re-run the installer loses nothing: with no marker the relay reads the screen alone,
+as it did before. Claude reads its hooks when a session starts, so a running session gains the
+marker only once it is relaunched.
 """
 
 RETIRED_EVENTS = ("SessionEnd",)

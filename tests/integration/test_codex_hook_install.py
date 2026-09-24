@@ -29,19 +29,19 @@ def _hooks_file(directory: Path, document: object | None = None) -> Path:
     return path
 
 
-def test_codex_installs_only_stop_and_permission_request_and_restores_bytes(tmp_path: Path) -> None:
+def test_codex_installs_its_three_events_and_restores_bytes(tmp_path: Path) -> None:
     path = _hooks_file(tmp_path)
     before = path.read_bytes()
     path.chmod(0o600)
 
     install_agent_hooks(path, executable=Path("/old/python"), provider="codex")
     document = json.loads(path.read_text(encoding="utf-8"))
-    assert set(document["hooks"]) == {"Stop", "PermissionRequest"}
+    assert set(document["hooks"]) == {"Stop", "PermissionRequest", "UserPromptSubmit"}
     assert document["hooks"]["Stop"][0]["hooks"][0]["command"] == "echo foreign"
     assert "--provider codex" in document["hooks"]["Stop"][1]["hooks"][0]["command"]
 
     install_agent_hooks(path, executable=Path("/new/python"), provider="codex")
-    assert path.read_text(encoding="utf-8").count("/new/python") == 2
+    assert path.read_text(encoding="utf-8").count("/new/python") == 3
     assert "/old/python" not in path.read_text(encoding="utf-8")
     assert stat.S_IMODE(path.stat().st_mode) == 0o600
     remove_agent_hooks(path, provider="codex")
@@ -56,6 +56,7 @@ def test_codex_default_and_cli_provider_are_explicit(tmp_path: Path) -> None:
     assert set(json.loads(path.read_text(encoding="utf-8"))["hooks"]) == {
         "Stop",
         "PermissionRequest",
+        "UserPromptSubmit",
     }
 
 

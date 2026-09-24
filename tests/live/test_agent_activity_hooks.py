@@ -398,3 +398,56 @@ def test_a_real_claude_approval_spools_the_command_it_is_asking_about(tmp_path: 
         assert activity.ask == "Bash"
     finally:
         _tmux("kill-server")
+
+
+@pytest.mark.live_profile
+def test_a_real_claude_turn_starts_its_marker_and_its_stop_ends_it(tmp_path: Path) -> None:
+    """BL-108: `UserPromptSubmit` leaves `turns/<session>` while the turn runs; `Stop` removes it.
+
+    Against the real agent, because the whole design rests on Claude firing the submit hook
+    before its answer streams and the finished hook at its end -- measured once by hand
+    (2026-09-24), and re-proved here per Claude version.
+    """
+    _live_pane_requirements("claude")
+    if not (Path.home() / ".claude" / ".credentials.json").is_file():
+        pytest.skip("BLOCKED: claude is not logged in (no ~/.claude/.credentials.json)")
+
+    workspace = tmp_path / "workspace"
+    (workspace / ".claude").mkdir(parents=True)
+    spool = tmp_path / "activity"
+    install_agent_hooks(
+        workspace / ".claude" / "settings.local.json",
+        executable=Path(sys.executable),
+        activity_directory=spool,
+    )
+    session_id = SessionId.new()
+    marker = spool / "turns" / str(session_id)
+
+    _tmux("kill-server")
+    try:
+        _tmux(
+            "new-session", "-d", "-x", "200", "-y", "50", "-c", str(workspace),
+            "-e", f"{SESSION_ID_VARIABLE}={session_id}", "claude",
+        )  # fmt: skip
+        _open("claude", CLAUDE_READY, CLAUDE_OPENING)
+
+        _type("Count from 1 to 200, one number per line, and nothing else.")
+        deadline = time.monotonic() + 60.0
+        while not marker.is_file() and time.monotonic() < deadline:
+            time.sleep(0.2)
+        assert marker.is_file(), f"no marker while the turn ran:\n{_pane_text()}"
+        assert marker.read_bytes() == b""
+
+        deadline = time.monotonic() + 180.0
+        finished: list[AgentActivity] = []
+        while time.monotonic() < deadline:
+            finished.extend(drain_activity(spool))
+            if any(activity.kind is ActivityKind.COMPLETED for activity in finished):
+                break
+            time.sleep(1.0)
+        assert any(activity.kind is ActivityKind.COMPLETED for activity in finished), (
+            f"the turn never finished:\n{_pane_text()}"
+        )
+        assert not marker.exists(), "the turn's Stop left its marker behind"
+    finally:
+        _tmux("kill-server")

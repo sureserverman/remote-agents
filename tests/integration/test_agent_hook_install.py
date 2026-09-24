@@ -76,7 +76,9 @@ def _installed_commands(path: Path, event: str) -> list[str]:
     ]
 
 
-def test_install_adds_the_four_events_and_preserves_everything_unrelated(tmp_path: Path) -> None:
+def test_install_adds_every_installed_event_and_preserves_everything_unrelated(
+    tmp_path: Path,
+) -> None:
     path = _settings_file(tmp_path)
 
     install_agent_hooks(path)
@@ -933,3 +935,31 @@ def test_claude_installs_the_permission_request_event(tmp_path: Path) -> None:
 
     document = json.loads(settings.read_text(encoding="utf-8"))
     assert len(document["hooks"]["PermissionRequest"]) == 1
+
+
+def test_claude_installs_the_user_prompt_submit_event_beside_the_owners_own(tmp_path: Path) -> None:
+    """BL-108's turn marker starts on `UserPromptSubmit` (DEC-104); DEC-051 governs how it joins.
+
+    The owner may already run a `UserPromptSubmit` hook of their own. Ours goes beside it, and
+    `--remove` gives the file back byte for byte, theirs included.
+    """
+    assert "UserPromptSubmit" in INSTALLED_EVENTS
+    assert "UserPromptSubmit" not in RETIRED_EVENTS
+
+    settings = tmp_path / "settings.json"
+    owners = {"hooks": [{"type": "command", "command": "echo owners-own"}]}
+    settings.write_text(
+        json.dumps({"hooks": {"UserPromptSubmit": [owners]}}, indent=2) + "\n", encoding="utf-8"
+    )
+    before = settings.read_bytes()
+
+    install_agent_hooks(settings, executable=Path(sys.executable), activity_directory=tmp_path)
+
+    groups = json.loads(settings.read_text(encoding="utf-8"))["hooks"]["UserPromptSubmit"]
+    assert groups[0] == owners
+    assert len(groups) == 2
+    assert "remote_agents agent-event" in groups[1]["hooks"][0]["command"]
+
+    remove_agent_hooks(settings)
+
+    assert settings.read_bytes() == before
