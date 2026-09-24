@@ -53,7 +53,8 @@ def _stale_passages(text: str) -> list[int]:
 
     Prose wraps at a fixed width, so a sentence can split anywhere -- a line-by-line match only
     catches the ones that happened not to. The text is folded to one line with a map back to where
-    each piece began.
+    each piece began. Folding can also join the end of one bullet to the start of the next; that
+    errs towards a false failure, never a false pass, so narrow the fold rather than the patterns.
     """
     folded, starts = [], []
     for number, line in enumerate(text.splitlines(), 1):

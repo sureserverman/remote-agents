@@ -157,3 +157,76 @@ def test_a_real_dialog_refuses_both_and_an_idle_pane_takes_the_stop(tmp_path: Pa
         assert not (workspace / _MARKER).exists()
     finally:
         _tmux(socket, "kill-server")
+
+
+def test_a_real_cursor_agent_stop_gets_through_its_command_menu(tmp_path: Path) -> None:
+    """cursor-agent's stop is `/quit Enter Enter`, and between the keys it draws its command menu
+    over a trust box answered at launch -- which read as a trust dialog and stalled every such
+    stop in 0.48.0. Here a real cursor-agent, in a workspace trusted a moment ago so the answered
+    box is on screen, is stopped by the real `graceful_stop` and exits. No turn runs."""
+    if shutil.which("cursor-agent") is None or shutil.which("tmux") is None:
+        pytest.skip("BLOCKED: executable_missing: cursor-agent or tmux")
+    status = subprocess.run(
+        ["cursor-agent", "status"], capture_output=True, text=True, timeout=30, check=False
+    )
+    if "Logged in" not in status.stdout + status.stderr:
+        pytest.skip("BLOCKED: cursor-agent is not logged in")
+    session_id = SessionId.new()
+    socket = f"remote-agents-test-keyed-{session_id.value.hex}"
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    subprocess.run(["git", "init", "-q"], cwd=workspace, check=False, timeout=30)
+    cursor = ProfileId("cursor-agent")
+    try:
+        _tmux(
+            socket, "new-session", "-d", "-s", f"ra-{session_id}", "-x", "160", "-y", "40",
+            "-c", str(workspace), "cursor-agent",
+        )  # fmt: skip
+        pane_id = _tmux(socket, "list-panes", "-t", f"=ra-{session_id}:", "-F", "#{pane_id}")
+        pane_id = pane_id.stdout.strip()
+        for option, value in (
+            ("@remote_agents_schema", "2"),
+            ("@remote_agents_id", str(session_id)),
+            ("@remote_agents_project_id", "qualification"),
+            ("@remote_agents_profile", "cursor-agent"),
+            ("remain-on-exit", "on"),
+        ):
+            _tmux(socket, "set-option", "-p", "-t", pane_id, option, value)
+        deadline = time.monotonic() + 60.0
+        answered = False
+        screen = ""
+        while time.monotonic() < deadline:
+            screen = _tmux(socket, "capture-pane", "-p", "-t", pane_id).stdout
+            if not answered and "Trust this workspace" in screen:
+                _tmux(socket, "send-keys", "-t", pane_id, "a")
+                answered = True
+            if "Plan, search, build anything" in screen:
+                break
+            time.sleep(0.5)
+        else:
+            pytest.fail(f"cursor-agent never reached its composer:\n{screen}")
+        terminal = TmuxTerminal(
+            TmuxGateway(socket, AsyncTmuxRunner(), key_lock_directory=tmp_path / "locks"),
+            {},
+            {
+                cursor: LaunchProfile(
+                    "/usr/bin/cursor-agent",
+                    ("/usr/bin/cursor-agent",),
+                    {},
+                    None,
+                    graceful_keys=next(
+                        profile.graceful_keys
+                        for profile in closed_profiles()
+                        if profile.profile_id == cursor
+                    ),
+                )
+            },
+            startup_timeout=30.0,
+            composers=profile_composers(),
+        )
+
+        stopped = asyncio.run(terminal.graceful_stop(session_id, cursor))
+
+        assert stopped.preserved, (stopped, _screen(socket, pane_id))
+    finally:
+        _tmux(socket, "kill-server")

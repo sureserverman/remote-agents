@@ -255,3 +255,14 @@ def test_a_hyperlink_at_the_head_of_a_dialog_line_does_not_hide_the_dialog() -> 
     assert linked != dialog
 
     assert classify(linked, _descriptor("claude")) is PaneState.DIALOG
+
+
+@pytest.mark.parametrize("agent", ["claude", "codex", "cursor"])
+def test_every_live_trust_dialog_is_a_declared_dialog(agent: str) -> None:
+    """The check between a sequence's keys reads declared dialog patterns only, not the trust
+    fallback; a live trust dialog must still be one it sees."""
+    from remote_agents.adapters.tmux.composer import dialog_on_screen
+
+    trust = (_PANES / agent / "dialog_trust.txt").read_text(encoding="utf-8")
+
+    assert dialog_on_screen(trust, _descriptor(agent))

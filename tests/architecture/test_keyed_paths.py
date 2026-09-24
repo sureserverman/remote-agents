@@ -123,8 +123,8 @@ _GUARDED: dict[tuple[str, str], tuple[int, str]] = {
 
 def guarded_calls(
     source: str,
-) -> list[tuple[str, str, ast.expr, ast.FunctionDef | ast.AsyncFunctionDef]]:
-    """Every `self._gateway.send_keys_when(...)`: method, keys expression, check, and the method."""
+) -> list[tuple[str, str, ast.Call, ast.FunctionDef | ast.AsyncFunctionDef]]:
+    """Every `self._gateway.send_keys_when(...)`: method, keys expression, the call, the method."""
     found = []
     for method in ast.walk(ast.parse(source)):
         if not isinstance(method, (ast.FunctionDef, ast.AsyncFunctionDef)):
@@ -136,12 +136,15 @@ def guarded_calls(
                 and node.func.attr == "send_keys_when"
                 and ast.unparse(node.func.value) == "self._gateway"
             ):
-                found.append((method.name, ast.unparse(node.args[1]), node.args[2], method))
+                found.append((method.name, ast.unparse(node.args[1]), node, method))
     return found
 
 
 def _constant(check: ast.expr, method: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
-    """A check that decides nothing: a lambda of a constant, or a local function returning one."""
+    """A check that decides nothing: a constant, a lambda of one, or a local function or local
+    name bound to one. Syntactic, like the sweep: `lambda c: not False` would pass it."""
+    if isinstance(check, ast.Constant):
+        return True
     if isinstance(check, ast.Lambda):
         return isinstance(check.body, ast.Constant)
     if isinstance(check, ast.Name):
@@ -149,7 +152,15 @@ def _constant(check: ast.expr, method: ast.FunctionDef | ast.AsyncFunctionDef) -
             if isinstance(inner, ast.FunctionDef) and inner.name == check.id:
                 returns = [node for node in ast.walk(inner) if isinstance(node, ast.Return)]
                 return all(isinstance(ret.value, ast.Constant) for ret in returns)
+            if isinstance(inner, ast.Assign) and any(
+                isinstance(target, ast.Name) and target.id == check.id for target in inner.targets
+            ):
+                return _constant(inner.value, method)
     return False
+
+
+def _between(call: ast.Call) -> ast.expr | None:
+    return next((kw.value for kw in call.keywords if kw.arg == "between"), None)
 
 
 def test_every_guarded_send_is_listed_with_what_it_refuses() -> None:
@@ -167,11 +178,23 @@ def test_no_guarded_send_is_licensed_by_a_constant_check() -> None:
     """A guarded send with `lambda capture: True` is an unguarded send the first sweep misses."""
     constant = [
         (method, keys)
-        for method, keys, check, where in guarded_calls(_RUNTIME.read_text(encoding="utf-8"))
-        if _constant(check, where)
+        for method, keys, call, where in guarded_calls(_RUNTIME.read_text(encoding="utf-8"))
+        if _constant(call.args[2], where)
     ]
 
     assert constant == []
+
+
+def test_every_guarded_send_rechecks_before_its_later_keys() -> None:
+    """A guarded send with no `between=` -- or a constant one -- sends every key after the first
+    blind, which is the `/exit Enter Enter` a dialog raised meanwhile would take (DEC-103)."""
+    blind = [
+        (method, keys)
+        for method, keys, call, where in guarded_calls(_RUNTIME.read_text(encoding="utf-8"))
+        if _between(call) is None or _constant(_between(call), where)
+    ]
+
+    assert blind == []
 
 
 def test_the_guarded_sweep_catches_a_constant_check() -> None:
@@ -186,7 +209,32 @@ def test_the_guarded_sweep_catches_a_constant_check() -> None:
 
     flagged = [
         (method, keys)
-        for method, keys, check, where in guarded_calls(mutant)
-        if _constant(check, where)
+        for method, keys, call, where in guarded_calls(mutant)
+        if _constant(call.args[2], where)
     ]
     assert flagged == [("graceful_stop", "profile.graceful_keys")]
+
+
+def test_the_guarded_sweep_catches_a_blind_or_disguised_recheck() -> None:
+    """Mutants: no `between=`, and a local name bound to `lambda capture: True`."""
+    base = _RUNTIME.read_text(encoding="utf-8")
+    no_between = base + (
+        "\n\nclass _NoBetween:\n"
+        "    async def graceful_stop(self, session_id, profile):\n"
+        "        await self._gateway.send_keys_when(session_id, profile.graceful_keys, ok)\n"
+    )
+    disguised = base + (
+        "\n\nclass _Disguised:\n"
+        "    async def graceful_stop(self, session_id, profile):\n"
+        "        check = lambda capture: True\n"
+        "        await self._gateway.send_keys_when(\n"
+        "            session_id, profile.graceful_keys, check, between=check\n"
+        "        )\n"
+    )
+
+    for mutant in (no_between, disguised):
+        extra = guarded_calls(mutant)[len(guarded_calls(base)) :]
+        assert extra and all(
+            _between(call) is None or _constant(_between(call), where)
+            for _method, _keys, call, where in extra
+        )

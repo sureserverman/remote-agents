@@ -326,7 +326,11 @@ def test_a_cursor_stop_sends_every_key_over_its_command_menu() -> None:
     from .test_send_prompt import PromptPane
 
     pane = PromptPane(
-        _panes("cursor/idle.txt", "stop_sequence/cursor_after_quit_typed.txt"),
+        _panes(
+            "cursor/idle.txt",
+            "stop_sequence/cursor_after_quit_typed.txt",
+            "stop_sequence/cursor_after_first_enter.txt",
+        ),
         profile="cursor-agent",
     )
 

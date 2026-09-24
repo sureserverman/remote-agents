@@ -610,14 +610,15 @@ def _stripped_environment() -> dict[str, str]:
 _COMMAND_SECONDS = 600
 """The bound on one command onboarding runs -- a package install, a supervisor verb."""
 
-_ONBOARD_SECONDS = 6 * _COMMAND_SECONDS
-"""The bound on the `onboard --install-daemon` child `upgrade` runs. That child runs up to five
-supervisor commands in turn, each under `_COMMAND_SECONDS` (liveness, then remove, reload, register
-and restart, or start in place of restart), so under the same bound the parent could kill it while
-it was still going to report `restarted: pid A -> B` or the command to run."""
+_ONBOARD_SECONDS: int | None = None
+"""No bound on the `onboard --install-daemon` child `upgrade` runs: it bounds every command it
+runs itself (a dependency install, the supervisor verbs, the PID reads, the liveness waits, the
+closing `doctor`'s probes), so it always finishes, and a bound here could only cut off the report
+it was about to print -- `restarted: pid A -> B`, or the command to run. A count of those steps
+under a multiple of `_COMMAND_SECONDS` went stale twice in review."""
 
 
-def _run_command(argv: tuple[str, ...], timeout: int = _COMMAND_SECONDS) -> int:
+def _run_command(argv: tuple[str, ...], timeout: int | None = _COMMAND_SECONDS) -> int:
     """Run one fixed local command and return its exit status, without a shell.
 
     The sibling of `_command_succeeds`, and separate from it because the two answer different

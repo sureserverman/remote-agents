@@ -204,13 +204,13 @@ def test_a_rollback_to_a_release_that_does_not_restart_says_so_and_names_the_com
     assert "systemctl --user restart remote-agents.service" in out
 
 
-def test_the_onboard_child_is_bounded_longer_than_every_command_it_runs_in_turn(
+def test_the_onboard_child_is_not_cut_off_by_a_bound_of_its_own(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """`upgrade` runs `onboard --install-daemon`, which runs up to five supervisor commands in a
-    row (liveness, remove, reload, register, restart), each under `_COMMAND_SECONDS`. Given the
-    same bound, the parent could kill a child that was still going to report its outcome."""
-    bounds: dict[str, int] = {}
+    """`upgrade` runs `onboard --install-daemon`, which bounds every command it runs itself. Under a
+    bound of the parent's, a slow chain of them -- a dependency install, five supervisor verbs,
+    eight liveness waits -- could be killed before it reported whether the restart was proved."""
+    bounds: dict[str, int | None] = {}
 
     def run(argv, timeout=onboarding._COMMAND_SECONDS):
         bounds["onboard" if "--install-daemon" in argv else argv[0]] = timeout
@@ -223,4 +223,5 @@ def test_the_onboard_child_is_bounded_longer_than_every_command_it_runs_in_turn(
 
     assert main(["upgrade"]) == 0
 
-    assert bounds["onboard"] > 5 * onboarding._COMMAND_SECONDS, bounds
+    assert bounds["onboard"] is None, bounds
+    assert bounds["uv"] == onboarding._COMMAND_SECONDS, "the install itself stays bounded"

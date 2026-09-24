@@ -531,7 +531,9 @@ class TmuxTerminal:
                 return True
             if in_shell_mode(capture, descriptor) or remote_control_menu_is_open(_plain(capture)):
                 # The Remote Control menu is this project's own, and `Enter` on it selects the
-                # resting Continue: the menu closes and the agent keeps running. Not a declared
+                # resting Continue: the menu closes and the agent keeps running. Asked of every
+                # agent's screen deliberately: the predicate is structural (the footer last, the
+                # row just above it), so no other agent's screen reads as it. Not a declared
                 # dialog, because the relay queues a message a dialog refuses until the next turn
                 # finishes (DEC-099), and a menu ends no turn.
                 return False
@@ -571,9 +573,13 @@ class TmuxTerminal:
             )
         if refused is not None and guarded:
             # Not sent, and said which (DEC-022): the owner's next step differs.
+            # Which one, by what is on the screen: shell mode and a real dialog are exclusive (a
+            # dialog replaces the composer row the shell pattern needs). A composer hidden under
+            # the agent's own menu, with an answered trust box above, is held text -- `classify`
+            # would read the stale box as a question (`dialog_on_screen`).
             asking = not in_shell_mode(refused, descriptor) and (
                 remote_control_menu_is_open(_plain(refused))
-                or classify(refused, descriptor) is PaneState.DIALOG
+                or dialog_on_screen(refused, descriptor)
             )
             return TerminalObservation(
                 session_id,

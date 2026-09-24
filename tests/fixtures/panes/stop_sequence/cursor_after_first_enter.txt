@@ -1,0 +1,40 @@
+
+  [33m╭──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮[39m
+  [33m│[39m                                                                                                                                                          [33m│[39m
+  [33m│[39m  [1m[33m⚠ [39mWorkspace Trust Required[0m                                                                                                                              [33m│[39m
+  [33m│[39m                                                                                                                                                          [33m│[39m
+  [33m│[39m  Cursor Agent can execute code and access files in this directory.                                                                                       [33m│[39m
+  [33m│[39m                                                                                                                                                          [33m│[39m
+  [33m│[39m  Do you trust the contents of this directory?                                                                                                            [33m│[39m
+  [33m│[39m                                                                                                                                                          [33m│[39m
+  [33m│[39m    [1m[36m/tmp/tmp.7xDIfZmdJc/workspace[0m                                                                                                                         [33m│[39m
+  [33m│[39m                                                                                                                                                          [33m│[39m
+  [33m│[39m                                                                                                                                                          [33m│[39m
+  [33m│[39m  [2m  [a] Trust this workspace[0m                                                                                                                              [33m│[39m
+  [33m│[39m  [2m  [q] Quit[0m                                                                                                                                              [33m│[39m
+  [33m│[39m                                                                                                                                                          [33m│[39m
+  [33m│[39m  [34m⏳ Trusting workspace...[39m                                                                                                                                [33m│[39m
+  [33m│[39m                                                                                                                                                          [33m│[39m
+  [33m╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯[39m
+
+
+  Cursor Agent
+  [2mv2026.09.23-86fc751[0m
+  [2mTip: Use /debug to instrument and debug complex problems.[0m
+
+
+
+ [48;5;233m                                                                                                                                                              [49m
+ [48;5;233m [2m→ [0;7m[48;5;233mP[0;2m[48;5;233mlan, search, build anything[0m[48;5;233m                                                                                                                               [49m
+ [48;5;233m                                                                                                                                                              [49m
+
+  Auto · allowlist · /tmp/tmp.7xDIfZmdJc/workspace · HEAD*
+
+
+
+
+
+
+
+
+
