@@ -403,8 +403,12 @@ hook fires in every Claude session on the host — it starts a short-lived Pytho
 but it writes nothing and exits 0 unless the environment carries the session identifier this
 service injects into the panes it launches. Descendants of a managed pane inherit that identifier,
 so a `claude` started from inside one is the exception and spools under its parent's session.
-Codex can additionally install its own `Stop` and `PermissionRequest` hooks with
-`remote-agents install-agent-hooks --provider codex`. Native code-mode escalations currently do
+Codex can additionally install its own `Stop`, `PermissionRequest` and `UserPromptSubmit` hooks
+with `remote-agents install-agent-hooks --provider codex`. For Claude and Codex, `UserPromptSubmit`
+leaves an empty per-session marker, a turn started, that `Stop` removes (DEC-104). The prompt
+relay reads it, because Claude draws nothing busy while it streams an answer. **Upgrading to
+0.49.0 or later, re-run both installs**, then relaunch sessions to pick the hook up; without it
+the relay reads the screen alone, as before. Native code-mode escalations currently do
 not call `PermissionRequest`; for those, the managed tmux pane's content-free `Action Required`
 title produces one inferred `needs_answer` notification until it clears. Neither path exposes a
 remote approval action or retains the command, prompt, path, or transcript. A completed Codex

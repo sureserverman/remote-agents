@@ -836,6 +836,17 @@ uv run --locked remote-agents install-agent-hooks --provider opencode
 > do it for you — the installer is a separate command by design, because it writes into a file
 > outside this project's control.
 
+> **Upgrading to 0.49.0 or later: re-run the `claude` and `codex` lines.** Both gained a
+> `UserPromptSubmit` hook on 2026-09-24 (BL-108, DEC-104). On each submit it leaves an empty
+> marker file, `turns/<session id>` in the activity spool, and `Stop` removes it. The relay reads
+> that marker to know a turn is running while Claude streams its answer, when its screen shows
+> nothing busy. The hook reads the event's name and never the prompt.
+>
+> **If you do not re-run them, nothing breaks.** No marker is written, and the relay goes on
+> reading the screen alone, as before 0.49.0. A message sent while Claude streams can then still
+> be typed into the running turn. Agents read their hooks when a session starts, so sessions
+> already running pick the hook up only once they are relaunched.
+
 `--remove` takes any of them back out. For opencode that deletes the generated plugin file as
 well as its entry, and it deletes only a file carrying this project's own generated-file marker:
 anything else standing at that path is left alone. For claude the same install also wraps the
@@ -2046,7 +2057,13 @@ remote-agents doctor --json | python3 -m json.tool
 ```
 
 Rolling the *code* back is the upgrade path run at the earlier tag: re-run the installer with
-`REMOTE_AGENTS_VERSION` set to the tag you are returning to, then onboard again. Do not remove a
+`REMOTE_AGENTS_VERSION` set to the tag you are returning to, then onboard again. **Rolling back below
+0.49.0: remove the agent hooks first, while 0.49.0 is still installed**
+(`remote-agents install-agent-hooks --remove` and `--provider codex --remove`), then roll back and
+re-install them with the older version. An older `--remove` does not know the `UserPromptSubmit`
+group, so it would stay behind. It would be harmless: the older hook records the event's name
+alone, which its drain discards, and never the prompt. Removing it first just leaves nothing
+behind. Do not remove a
 managed tmux session until its ownership and output have been inspected.
 
 `remote-agents tui` keeps working while the service is disabled, because it needs neither the unit
