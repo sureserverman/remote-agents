@@ -46,7 +46,8 @@ MAXIMUM_PAYLOAD_BYTES = 32_768
 
 #: The event that starts a turn, and the events that end one (BL-108, DEC-104). Read from the
 #: payload's `hook_event_name` alone: a submit's payload also carries the owner's `prompt`, and
-#: nothing here reads it. Claude and Codex spell all three the same way.
+#: nothing here reads it. Claude and Codex both spell `UserPromptSubmit` and `Stop` this way; only
+#: Claude has a `StopFailure` (Codex fires nothing on a failed turn, `ports/agent_activity.py`).
 TURN_STARTED = "UserPromptSubmit"
 TURN_ENDED = frozenset({"Stop", "StopFailure"})
 
@@ -236,9 +237,13 @@ def spool_agent_event(
         if event == TURN_STARTED and provider != "opencode":
             turns.start(session_id)
             return 0
-        # Ungated, unlike the start: ending a marker that was never started is a no-op.
+        # Ungated, unlike the start: ending a marker that was never started is a no-op. Guarded
+        # on its own, so a marker that cannot be removed never costs the "finished" record.
         if event in TURN_ENDED:
-            turns.end(session_id)
+            try:
+                turns.end(session_id)
+            except Exception:
+                pass
         observed = _observed(document, session_id, now(), provider)
         if observed is not None:
             _write_privately(observed, activity_directory)

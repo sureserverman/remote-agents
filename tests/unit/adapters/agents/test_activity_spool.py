@@ -682,3 +682,11 @@ def test_opencode_never_starts_a_marker(tmp_path: Path) -> None:
     assert _run(_stream(_SUBMIT_PAYLOAD), directory, provider="opencode") == 0
 
     assert not (directory / "turns").exists()
+
+
+def test_a_marker_that_cannot_be_ended_still_leaves_the_finished_record(tmp_path: Path) -> None:
+    directory = _spool(tmp_path)
+
+    assert _run(_stream(_STOP_PAYLOAD), directory, markers=_Exploding()) == 0
+
+    assert len(_records(directory)) == 1

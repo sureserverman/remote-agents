@@ -57,7 +57,7 @@ def _submit(directory: Path, provider: str) -> int:
     )
 
 
-@pytest.mark.parametrize("provider", ["claude", "codex"])
+@pytest.mark.parametrize("provider", ["claude", "codex", "opencode"])
 def test_a_submitted_prompt_is_kept_nowhere_and_delivers_nothing(
     provider: str, tmp_path: Path
 ) -> None:
@@ -65,9 +65,13 @@ def test_a_submitted_prompt_is_kept_nowhere_and_delivers_nothing(
 
     assert _submit(directory, provider) == 0
     assert _SENTINEL.encode() not in _every_byte_under(directory)
-    # Not vacuous: since BL-108 the submit does write -- the empty marker -- and that file is
-    # inside the sweep above.
-    assert (directory / "turns" / "s-42").read_bytes() == b""
+    # Not vacuous: since BL-108 a Claude or Codex submit does write -- the empty marker -- and that
+    # file is inside the sweep above. OpenCode starts none (its "finished" would never end one).
+    marker = directory / "turns" / "s-42"
+    if provider == "opencode":
+        assert not marker.exists()
+    else:
+        assert marker.read_bytes() == b""
 
     assert drain_activity(directory) == ()
     assert _SENTINEL.encode() not in _every_byte_under(directory)
