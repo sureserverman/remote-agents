@@ -527,10 +527,12 @@ _GRACEFUL_FAILURES: dict[str, tuple[str, str]] = {
         "typed and the session is still running. Try again in a moment, or force stop it.",
     ),
     AGENT_ASKING: (
-        "The stop was not sent: the agent is asking a question.",
-        "A dialog is open in the session, and the exit keys end in Enter, which would have "
-        "answered it — an approval dialog opens on its yes option. Nothing was typed and the "
-        "session is still running. Answer it in the session, then stop again, or force stop it.",
+        "The stop was not sent: the agent is asking a question, or a menu is open.",
+        "A dialog or the Remote Control menu is open in the session, and the exit keys end in "
+        "Enter, which would have chosen for you — an approval dialog opens on its yes option, "
+        "and the menu's Enter keeps the agent running. Nothing was typed and the session is "
+        "still running. Answer the dialog or close the menu (Esc) in the session, then stop "
+        "again, or force stop it.",
     ),
 }
 """Deliberately worded so no two of them can be mistaken for each other.

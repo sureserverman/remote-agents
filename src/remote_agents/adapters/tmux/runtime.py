@@ -529,7 +529,11 @@ class TmuxTerminal:
             # reach an agent mid-turn. No title, deliberately: it only ever adds BUSY.
             if not guarded:
                 return True
-            if in_shell_mode(capture, descriptor):
+            if in_shell_mode(capture, descriptor) or remote_control_menu_is_open(_plain(capture)):
+                # The Remote Control menu is this project's own, and `Enter` on it selects the
+                # resting Continue: the menu closes and the agent keeps running. Not a declared
+                # dialog, because the relay queues a message a dialog refuses until the next turn
+                # finishes (DEC-099), and a menu ends no turn.
                 return False
             return classify(capture, descriptor) not in (PaneState.COMPOSING, PaneState.DIALOG)
 
@@ -537,7 +541,9 @@ class TmuxTerminal:
             # Before each later key: the first `Enter` of `/exit Enter Enter` must not be followed
             # blind onto a dialog that came up meanwhile. Only a dialog pattern stops it -- between
             # the keys the screen is a command menu or "Shutting down…" (measured: Codex 0.155.1,
-            # cursor-agent 2026.09.18), which `classify` can misread (`dialog_on_screen`).
+            # cursor-agent 2026.09.18), which `classify` can misread (`dialog_on_screen`). No
+            # Remote Control menu check here: only this project opens that menu, and it would need
+            # the key lock this sequence holds from its first capture to its last key.
             return not guarded or not dialog_on_screen(capture, descriptor)
 
         try:
@@ -565,9 +571,9 @@ class TmuxTerminal:
             )
         if refused is not None and guarded:
             # Not sent, and said which (DEC-022): the owner's next step differs.
-            asking = (
-                not in_shell_mode(refused, descriptor)
-                and classify(refused, descriptor) is PaneState.DIALOG
+            asking = not in_shell_mode(refused, descriptor) and (
+                remote_control_menu_is_open(_plain(refused))
+                or classify(refused, descriptor) is PaneState.DIALOG
             )
             return TerminalObservation(
                 session_id,

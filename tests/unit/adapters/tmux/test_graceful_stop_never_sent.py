@@ -372,3 +372,24 @@ def test_a_cursor_stop_gets_no_further_key_once_a_real_approval_comes_up() -> No
 
     assert pane.keys == ["/quit"]
     assert observation.detail == AGENT_ASKING
+
+
+def test_a_stop_is_never_sent_into_the_open_remote_control_menu() -> None:
+    """`/exit Enter` into Claude's Remote Control menu selects its resting Continue: the menu
+    closes and the stop reports `graceful_timeout` over an agent still running. The real menu
+    (`fixtures/panes/remote_control/claude_menu.txt`, footer stored broken) refuses the stop."""
+    import asyncio
+
+    from remote_agents.ports.terminal import AGENT_ASKING
+
+    from .test_send_prompt import PromptPane
+
+    menu = _panes("remote_control/claude_menu.txt")[0].replace(
+        "Esc to {continue}", "Esc to continue"
+    )
+    pane = PromptPane([menu])
+
+    observation = asyncio.run(_composed_terminal(pane).graceful_stop(pane.session_id, _PROFILE))
+
+    assert observation.detail == AGENT_ASKING
+    assert pane.keys == []
