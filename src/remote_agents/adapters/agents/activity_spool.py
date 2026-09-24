@@ -36,11 +36,19 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import IO
 
+from remote_agents.adapters.agents.turn_markers import FileTurnMarkers
 from remote_agents.ports.agent_activity import bounded_detail_line
 from remote_agents.ports.private_directory import open_private_directory
 from remote_agents.ports.session_identity import SESSION_ID_VARIABLE, safe_session_id
+from remote_agents.ports.turn_markers import TurnMarkers
 
 MAXIMUM_PAYLOAD_BYTES = 32_768
+
+#: The event that starts a turn, and the events that end one (BL-108, DEC-104). Read from the
+#: payload's `hook_event_name` alone: a submit's payload also carries the owner's `prompt`, and
+#: nothing here reads it. Claude and Codex spell all three the same way.
+TURN_STARTED = "UserPromptSubmit"
+TURN_ENDED = frozenset({"Stop", "StopFailure"})
 
 _PLAIN_TOKEN = re.compile(r"[A-Za-z0-9_-]{1,64}")
 #: The field each event discriminates on, as the installed agent actually spells them.
@@ -207,13 +215,31 @@ def spool_agent_event(
     environment: Mapping[str, str] = os.environ,
     now: Callable[[], datetime] = lambda: datetime.now(UTC),
     provider: str = "claude",
+    markers: TurnMarkers | None = None,
 ) -> int:
-    """Record one hook event privately, and always report success to the agent."""
+    """Record one hook event privately, and always report success to the agent.
+
+    A submit starts the session's turn marker and records nothing else; a finished turn ends
+    the marker and is then recorded as before.
+    """
     try:
         session_id = safe_session_id(environment.get(SESSION_ID_VARIABLE))
         if session_id is None:
             return 0
-        observed = _observed_event(payload, session_id, now(), provider)
+        document = _payload_document(payload)
+        if document is None:
+            return 0
+        event = document.get("hook_event_name")
+        turns = FileTurnMarkers(activity_directory) if markers is None else markers
+        # Not OpenCode's: its plugin forwards only its own two events, and its "finished" is
+        # `session.idle`, which is not in `TURN_ENDED` -- a marker started there would never end.
+        if event == TURN_STARTED and provider != "opencode":
+            turns.start(session_id)
+            return 0
+        # Ungated, unlike the start: ending a marker that was never started is a no-op.
+        if event in TURN_ENDED:
+            turns.end(session_id)
+        observed = _observed(document, session_id, now(), provider)
         if observed is not None:
             _write_privately(observed, activity_directory)
     except Exception:
@@ -230,6 +256,12 @@ def _observed_event(
     payload: IO[bytes], session_id: str, moment: datetime, provider: str = "claude"
 ) -> ObservedAgentEvent | None:
     """Read a bounded payload and keep only the fields a notification is built from."""
+    document = _payload_document(payload)
+    return None if document is None else _observed(document, session_id, moment, provider)
+
+
+def _payload_document(payload: IO[bytes]) -> dict | None:
+    """The payload as a JSON object, read once and bounded, or None."""
     raw = payload.read(MAXIMUM_PAYLOAD_BYTES + 1)
     if not raw or len(raw) > MAXIMUM_PAYLOAD_BYTES:
         return None
@@ -237,8 +269,13 @@ def _observed_event(
         document = json.loads(raw)
     except (UnicodeDecodeError, ValueError):
         return None
-    if not isinstance(document, dict):
-        return None
+    return document if isinstance(document, dict) else None
+
+
+def _observed(
+    document: dict, session_id: str, moment: datetime, provider: str = "claude"
+) -> ObservedAgentEvent | None:
+    """Keep only the fields a notification is built from."""
     if provider == "opencode":
         return _observed_opencode_event(document, session_id, moment)
     event = _plain_token(document.get("hook_event_name"))

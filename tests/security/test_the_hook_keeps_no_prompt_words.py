@@ -65,18 +65,23 @@ def test_a_submitted_prompt_is_kept_nowhere_and_delivers_nothing(
 
     assert _submit(directory, provider) == 0
     assert _SENTINEL.encode() not in _every_byte_under(directory)
+    # Not vacuous: since BL-108 the submit does write -- the empty marker -- and that file is
+    # inside the sweep above.
+    assert (directory / "turns" / "s-42").read_bytes() == b""
 
     assert drain_activity(directory) == ()
     assert _SENTINEL.encode() not in _every_byte_under(directory)
 
 
-def test_codex_writes_nothing_at_all_for_a_submit(tmp_path: Path) -> None:
-    """Codex's branch admits only `Stop` and `PermissionRequest`; a submit leaves no file."""
+@pytest.mark.parametrize("provider", ["claude", "codex"])
+def test_a_submit_writes_the_empty_marker_and_nothing_else(provider: str, tmp_path: Path) -> None:
+    """The marker is the whole of what a submit leaves: no record, and a file with no bytes."""
     directory = _spool(tmp_path)
 
-    _submit(directory, "codex")
+    _submit(directory, provider)
 
-    assert [path for path in directory.rglob("*") if path.is_file()] == []
+    written = [path.relative_to(directory) for path in directory.rglob("*") if path.is_file()]
+    assert written == [Path("turns") / "s-42"]
 
 
 def test_the_sentinel_detector_can_fire(tmp_path: Path) -> None:

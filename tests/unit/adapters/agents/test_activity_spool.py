@@ -579,3 +579,106 @@ def test_a_claude_permission_request_with_an_unreadable_tool_input_is_still_a_re
     assert record["detail"] is None
     assert record["ask"] == "Read"
     assert record["event"] == "PermissionRequest"
+
+
+# --- The "a turn started" marker (BL-108, DEC-104) ---------------------------------------------
+
+_SUBMIT_PAYLOAD: dict[str, Any] = {
+    "session_id": "f4020001-e712-4832-9fc8-dd28d38d5b8a",
+    "transcript_path": "/home/user/.claude/projects/infra/f4020001.jsonl",
+    "cwd": "/tmp/scratch",
+    "permission_mode": "auto",
+    "hook_event_name": "UserPromptSubmit",
+    "prompt": "count to ten",
+}
+
+
+def _marker(directory: Path, session_id: str = "s-42") -> Path:
+    return directory / "turns" / session_id
+
+
+def _records(directory: Path) -> list[Path]:
+    return sorted(directory.glob("*.json"))
+
+
+@pytest.mark.parametrize("provider", ["claude", "codex"])
+def test_a_submit_starts_a_marker_and_spools_no_record(provider: str, tmp_path: Path) -> None:
+    directory = _spool(tmp_path)
+
+    assert _run(_stream(_SUBMIT_PAYLOAD), directory, provider=provider) == 0
+
+    assert _marker(directory).is_file()
+    assert _marker(directory).read_bytes() == b""
+    assert _records(directory) == []
+
+
+@pytest.mark.parametrize(
+    ("provider", "event"), [("claude", "Stop"), ("claude", "StopFailure"), ("codex", "Stop")]
+)
+def test_a_finished_turn_ends_the_marker_and_still_spools(
+    provider: str, event: str, tmp_path: Path
+) -> None:
+    directory = _spool(tmp_path)
+    _run(_stream(_SUBMIT_PAYLOAD), directory, provider=provider)
+
+    finished = {**_STOP_PAYLOAD, "hook_event_name": event, "error": "rate_limit"}
+    assert _run(_stream(finished), directory, provider=provider) == 0
+
+    assert not _marker(directory).exists()
+    assert len(_records(directory)) == 1
+
+
+def test_an_event_that_neither_starts_nor_ends_a_turn_leaves_the_marker(tmp_path: Path) -> None:
+    directory = _spool(tmp_path)
+    _run(_stream(_SUBMIT_PAYLOAD), directory)
+
+    notification = {**_STOP_PAYLOAD, "hook_event_name": "Notification"}
+    _run(_stream(notification), directory)
+
+    assert _marker(directory).is_file()
+
+
+@pytest.mark.parametrize("session_id", [None, "../escape", "a b"])
+def test_an_unmanaged_or_malformed_session_starts_no_marker(
+    session_id: str | None, tmp_path: Path
+) -> None:
+    directory = _spool(tmp_path)
+
+    assert _run(_stream(_SUBMIT_PAYLOAD), directory, session_id=session_id) == 0
+
+    assert not (directory / "turns").exists()
+    assert list(tmp_path.rglob("escape")) == []
+
+
+def test_a_payload_that_is_not_json_starts_no_marker(tmp_path: Path) -> None:
+    directory = _spool(tmp_path)
+
+    assert _run(io.BytesIO(b"UserPromptSubmit"), directory) == 0
+
+    assert not (directory / "turns").exists()
+
+
+class _Exploding:
+    def start(self, session_id: str) -> None:
+        raise RuntimeError("disk on fire")
+
+    def end(self, session_id: str) -> None:
+        raise RuntimeError("disk on fire")
+
+
+@pytest.mark.parametrize("payload", [_SUBMIT_PAYLOAD, _STOP_PAYLOAD])
+def test_a_marker_that_cannot_be_written_never_fails_the_hook(
+    payload: dict[str, Any], tmp_path: Path
+) -> None:
+    directory = _spool(tmp_path)
+
+    assert _run(_stream(payload), directory, markers=_Exploding()) == 0
+
+
+def test_opencode_never_starts_a_marker(tmp_path: Path) -> None:
+    """Its "finished" is `session.idle`, which ends no marker, so one started there would stick."""
+    directory = _spool(tmp_path)
+
+    assert _run(_stream(_SUBMIT_PAYLOAD), directory, provider="opencode") == 0
+
+    assert not (directory / "turns").exists()
