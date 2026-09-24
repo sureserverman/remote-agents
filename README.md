@@ -75,7 +75,7 @@ find `uv`, verify it, and sequence what follows, not to install anything differe
 
 ```bash
 uv tool install --managed-python \
-  "remote-agents @ git+https://github.com/sureserverman/remote-agents@v0.48.0"
+  "remote-agents @ git+https://github.com/sureserverman/remote-agents@v0.48.1"
 remote-agents onboard --install-daemon
 ```
 
