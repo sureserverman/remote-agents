@@ -705,3 +705,40 @@ async def test_no_arrow_goes_to_a_menu_gone_by_the_read_taken_under_the_lock() -
     await _terminal(runner).remote_control(_SESSION, DomainRemoteControlState.INACTIVE)
 
     assert REMOTE_CONTROL_DISCONNECT_KEYS[0] not in runner.keys_typed
+
+
+class _OldMarker:
+    """A turn marker started long ago: the hook said a turn is running, nothing ended it."""
+
+    def start(self, session_id: str) -> None: ...
+
+    def end(self, session_id: str) -> None: ...
+
+    def started_at(self, session_id: str):
+        from datetime import UTC, datetime, timedelta
+
+        return datetime.now(UTC) - timedelta(seconds=60)
+
+    def sessions(self) -> tuple[str, ...]:
+        return ()
+
+
+async def test_nothing_is_typed_into_a_marked_turn_still_streaming() -> None:
+    """BL-108 for the toggle: Claude streams with an idle-looking screen; its marker says busy."""
+    streaming = (_PANES.parent / "turn_states" / "claude" / "streaming_answer.txt").read_text(
+        encoding="utf-8"
+    )
+    runner = _ScriptedRunner(_pane(), [streaming])
+    terminal = TmuxTerminal(
+        TmuxGateway("remote-agents-test-remote-control-read", runner),
+        {},
+        {},
+        startup_timeout=0.05,
+        composers=profile_composers(),
+        turn_markers=_OldMarker(),
+    )
+
+    result = await terminal.remote_control(_SESSION, DomainRemoteControlState.ACTIVE)
+
+    assert result is DomainRemoteControlState.UNKNOWN
+    assert runner.keys_typed == ()

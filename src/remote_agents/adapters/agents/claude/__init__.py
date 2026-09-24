@@ -111,8 +111,14 @@ def descriptor(
             shell=r"^─{10,}\n![^\n]*(?:\n  [^\n]*)*?\n─{10,}(?:\n[^\n]*){0,12}\Z",
             busy=(r"^[✻✽✶✳✢·*] \S[^\n]*…",),
             # The footer a finished turn leaves, and the line an Esc leaves (it fires no hook);
-            # `turn_states/claude/{finished_footer,interrupted}.txt`, Claude 2.1.282.
-            turn_ended=(r"^✻ \S+ for (?:\d+[hm] )*\d+s · done\b", r"^\s*⎿\s+Interrupted\b"),
+            # `turn_states/claude/{finished_footer,interrupted}.txt`, Claude 2.1.282. Both are
+            # matched as Claude draws them, whole: the footer at column 0, where answer text never
+            # starts, and the interrupt line with its exact indent and wording, so an answer that
+            # merely mentions one does not end its own turn (DEC-104's residual names the rest).
+            turn_ended=(
+                r"^✻ \S+ for (?:\d+[hm] )*\d+s · done\b",
+                r"^  ⎿\s+Interrupted · What should Claude do instead\?$",
+            ),
             dialogs=(r"^ \S[^\n]*\bEsc to cancel\b", r"^ Do you want to proceed\?"),
             # A long paste folds to `[Pasted text #1]` (`composed_long.txt`).
             folded=(r"\[Pasted text #\d+[^\]]*\]",),

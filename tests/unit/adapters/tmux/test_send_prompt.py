@@ -689,3 +689,75 @@ def test_the_marker_is_read_after_the_capture_and_before_anything_is_typed() -> 
     assert not any(
         {"load-buffer", "paste-buffer", "send-keys"} & set(call) for call in markers.read_after
     )
+
+
+class _Clock:
+    def __init__(self) -> None:
+        self.now = 1000.0
+
+    def __call__(self) -> float:
+        return self.now
+
+
+def _clocked_terminal(pane: PromptPane, markers: _Markers, clock: _Clock) -> TmuxTerminal:
+    composers = {
+        str(descriptor.profile_id): descriptor
+        for descriptor in provider_descriptors()
+        if descriptor.composer is not None
+    }
+    return TmuxTerminal(
+        TmuxGateway("remote-agents-test-prompt", pane),
+        {},
+        {},
+        startup_timeout=1.0,
+        composers=composers,
+        waits=_WAITS,
+        turn_markers=markers,
+        clock=clock,
+    )
+
+
+def test_a_marked_turn_whose_transcript_stands_still_long_enough_is_over() -> None:
+    """After an Esc and a `/clear`, no end line is left; a static screen still shows no turn."""
+    cleared = _screen("claude", "idle")
+    pane = PromptPane([cleared, cleared, _screen("claude", "composed"), _screen("claude", "busy")])
+    markers = _Markers(pane, 600.0)
+    clock = _Clock()
+    terminal = _clocked_terminal(pane, markers, clock)
+
+    first = asyncio.run(terminal.send_prompt(pane.session_id, _DRAFTED))
+    clock.now += 25.0
+    second = asyncio.run(terminal.send_prompt(pane.session_id, _DRAFTED))
+
+    assert first.reason is PromptReason.BUSY
+    assert second.outcome is PromptOutcome.SENT
+    assert markers.ended == [str(pane.session_id)]
+
+
+def test_a_transcript_that_moved_is_not_standing_still() -> None:
+    pane = PromptPane([_turn_state("streaming_answer"), _turn_state("streaming_below_old_footer")])
+    markers = _Markers(pane, 600.0)
+    clock = _Clock()
+    terminal = _clocked_terminal(pane, markers, clock)
+
+    asyncio.run(terminal.send_prompt(pane.session_id, _DRAFTED))
+    clock.now += 25.0
+    second = asyncio.run(terminal.send_prompt(pane.session_id, _DRAFTED))
+
+    assert second.reason is PromptReason.BUSY
+    assert markers.ended == []
+
+
+def test_a_transcript_still_for_less_than_the_window_is_not_over() -> None:
+    cleared = _screen("claude", "idle")
+    pane = PromptPane([cleared])
+    markers = _Markers(pane, 600.0)
+    clock = _Clock()
+    terminal = _clocked_terminal(pane, markers, clock)
+
+    asyncio.run(terminal.send_prompt(pane.session_id, _DRAFTED))
+    clock.now += 10.0
+    second = asyncio.run(terminal.send_prompt(pane.session_id, _DRAFTED))
+
+    assert second.reason is PromptReason.BUSY
+    assert markers.ended == []

@@ -407,3 +407,38 @@ def test_a_marker_from_the_future_is_not_trusted_over_the_screen() -> None:
     ended = _turn_state("claude", "finished_footer")
     assert classify(ended, claude, turn_started_at=far_future, now=_NOW) is PaneState.IDLE
     assert classify(ended, claude, turn_started_at=near_future, now=_NOW) is PaneState.BUSY
+
+
+@pytest.mark.parametrize(
+    "spoof",
+    [
+        "  ⎿  Interrupted",  # the start of Claude's line, as an answer could print it
+        "  ⎿  Interrupted by the user",
+        "  ✻ Worked for 3s · done 9:25 PM",  # a footer, indented as answer text always is
+        "● ✻ Worked for 3s · done 9:25 PM",
+    ],
+)
+def test_a_line_the_agent_prints_does_not_read_as_its_turn_ending(spoof: str) -> None:
+    """Answer text is indented or bulleted; Claude's own end lines are drawn exactly (DEC-104)."""
+    finished = _turn_state("claude", "finished_footer")
+    box = finished.index("\n────")
+    streaming = f"{finished[:box]}\n{spoof}{finished[box:]}"
+
+    assert turn_ended(streaming, _descriptor("claude")) is False
+
+
+def test_every_declared_end_pattern_is_backed_by_a_captured_screen() -> None:
+    """A pattern with no real screen behind it is a guess about how the agent draws its end."""
+    for agent in ("claude", "codex", "opencode", "cursor"):
+        declared = _descriptor(agent).composer
+        if declared is None:
+            continue
+        screens = (
+            [path.read_text(encoding="utf-8") for path in (_TURN_STATES / agent).glob("*.txt")]
+            if (_TURN_STATES / agent).is_dir()
+            else []
+        )
+        for pattern in declared.turn_ended:
+            assert any(
+                re.search(pattern, line) for screen in screens for line in screen.splitlines()
+            ), f"{agent}: no captured screen draws {pattern!r}"

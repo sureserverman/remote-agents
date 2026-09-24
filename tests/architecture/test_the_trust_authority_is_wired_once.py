@@ -156,3 +156,9 @@ def test_the_production_terminal_reads_the_turn_markers_the_hook_writes() -> Non
     markers = next((k.value for k in call.keywords if k.arg == "turn_markers"), None)
     assert markers is not None, "the production terminal is not handed the turn markers"
     assert "activity_directory" in ast.dump(markers), ast.dump(markers)
+
+
+def test_the_bot_hands_the_turn_markers_to_its_relay_and_its_service() -> None:
+    """The relay's sweep ends markers of gone sessions; the service's fast check reads them."""
+    for callee in ("PromptRelay", "ServiceComposition"):
+        assert "turn_markers" in _keywords_of("telegram", callee), callee

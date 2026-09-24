@@ -7,6 +7,7 @@ import contextlib
 import json
 import logging
 import os
+import time
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
@@ -23,6 +24,7 @@ from remote_agents.adapters.tmux.composer import (
     in_shell_mode,
     marker_is_young,
     prompt_text,
+    transcript_above_box,
     turn_ended,
 )
 from remote_agents.adapters.tmux.composer import unstyled as _plain
@@ -202,6 +204,13 @@ class LaunchProfile:
             raise ValueError("profile executable and argv must be fixed and absolute")
 
 
+_STILL_SECONDS = 20.0
+"""How long a marked session's transcript must stand still, unbusy, to count as its turn over
+(DEC-104) when no end line says so. Twenty seconds against a streaming answer that redraws many
+times a second: long enough that a stalled stream is not mistaken for an ended one, short enough
+that a message queued after an Esc and a `/clear` is not held until the next turn."""
+
+
 class TmuxTerminal:
     """Resolve typed IDs locally, then report tmux observation rather than database liveness."""
 
@@ -221,6 +230,7 @@ class TmuxTerminal:
         composers: Mapping[str, ProviderDescriptor] | None = None,
         waits: TerminalWaits | None = None,
         turn_markers: TurnMarkers | None = None,
+        clock: Callable[[], float] = time.monotonic,
     ) -> None:
         # Which profiles can be asked the folder-trust question, and the dialog to read each
         # one with. **Injected, not imported**: this is an adapter, the answer is a provider
@@ -242,6 +252,10 @@ class TmuxTerminal:
         # with the capture the relay judges by, under the same key-lock hold. None reads the
         # screen alone, as before the marker existed.
         self._turn_markers = turn_markers
+        # Per session, the transcript last judged under a marker and since when (on `clock`), so
+        # a marked turn whose screen has stood still long enough can be seen to be over.
+        self._clock = clock
+        self._still: dict[str, tuple[str, float]] = {}
         self._waits = waits or _DEFAULT_WAITS
         self._gateway = gateway
         self._project_paths = project_paths
@@ -767,16 +781,42 @@ class TmuxTerminal:
         """
         if self._turn_markers is None:
             return classify(capture, descriptor, title)
+        key = str(session_id)
         now = datetime.now(UTC)
-        started = self._turn_markers.started_at(str(session_id))
-        state = classify(capture, descriptor, title, turn_started_at=started, now=now)
-        if (
-            started is not None
-            and not marker_is_young(started, now)
-            and turn_ended(capture, descriptor, title)
+        started = self._turn_markers.started_at(key)
+        if started is None:
+            self._still.pop(key, None)
+        elif not marker_is_young(started, now) and (
+            turn_ended(capture, descriptor, title)
+            or self._stood_still(key, capture, descriptor, title)
         ):
-            self._turn_markers.end(str(session_id))
-        return state
+            self._turn_markers.end(key)
+            self._still.pop(key, None)
+            started = None
+        return classify(capture, descriptor, title, turn_started_at=started, now=now)
+
+    def _stood_still(
+        self, key: str, capture: str, descriptor: ProviderDescriptor, title: str
+    ) -> bool:
+        """Whether a marked session's transcript has not moved for `_STILL_SECONDS`, with nothing
+        on screen or in its title saying busy -- a turn that ended with no end line left to read.
+
+        After an Esc followed by `/clear`, or by a local command whose output is now the last
+        line, no hook fired and no end line is drawn, and the marker would otherwise hold the
+        session busy until its next turn. A streaming answer moves the transcript continuously,
+        and every other part of a turn draws a busy line. So a transcript standing still that
+        long, unbusy, has no turn running in it.
+        """
+        transcript = transcript_above_box(capture, descriptor)
+        if transcript is None or classify(capture, descriptor, title) is PaneState.BUSY:
+            self._still.pop(key, None)
+            return False
+        seen = self._still.get(key)
+        moment = self._clock()
+        if seen is None or seen[0] != transcript:
+            self._still[key] = (transcript, moment)
+            return False
+        return moment - seen[1] >= _STILL_SECONDS
 
     async def capture(self, session_id: SessionId) -> str:
         """Return one managed pane's output for the presentation boundary to sanitize."""
@@ -853,8 +893,10 @@ class TmuxTerminal:
             return RemoteControlState.UNKNOWN
 
         def idle(capture: str) -> bool:
-            # No title: Claude, the one agent this toggles, marks nothing there (BL-108).
-            return classify(capture, descriptor) is PaneState.IDLE
+            # No title: Claude, the one agent this toggles, marks nothing there. Its turn marker
+            # does (BL-108, DEC-104), and is read here under this hold as the relay reads it: the
+            # screen alone reads a streaming answer as idle.
+            return self._judged(session_id, capture, descriptor, "") is PaneState.IDLE
 
         def unasked(capture: str) -> bool:
             # Before the `Enter` after `/remote-control`: never onto a dialog raised meanwhile.

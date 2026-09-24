@@ -178,7 +178,9 @@ Right after a submit the hook has fired but the agent has not yet drawn the new 
 *previous* turn's footer is still the last line above the input box and the screen alone would
 say "ended". Measured 2026-09-24 on Claude 2.1.282 (four turns, sampled every 20 ms): the screen
 stopped reading "ended" 10-22 ms after `UserPromptSubmit` fired. Two seconds is far beyond that on
-a loaded host, and erring long is safe: a young marker can only make the relay wait."""
+a loaded host, and erring long is safe: a young marker can only make the relay wait. Applied to
+Codex too, where the gap to its title spinner was not measured separately; there it covers the
+submit before the spinner starts, and a longer gap would only mean a turn read busy late."""
 
 
 def classify(
@@ -251,6 +253,20 @@ def turn_running(
 _RIGHT_ALIGNED = 20
 """A line indented this far is a right-aligned hint the agent draws beside its layout (Claude's
 `● high · /effort`, its tmux scrolling tip), not a line of the transcript."""
+
+
+def transcript_above_box(capture: str, descriptor: ProviderDescriptor) -> str | None:
+    """The screen above the agent's input box, unstyled -- the part a running turn draws into --
+    or None when no box is found. The status lines below the box are left out: a clock there
+    moves without any turn running."""
+    declared = descriptor.composer
+    if declared is None:
+        return None
+    screen = _normalised(capture)
+    box = None
+    for box in re.finditer(declared.composer, screen, re.MULTILINE):
+        pass
+    return None if box is None else screen[: box.start()]
 
 
 def turn_ended(capture: str, descriptor: ProviderDescriptor, title: str = "") -> bool:
