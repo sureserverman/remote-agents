@@ -19,6 +19,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from remote_agents.adapters.tmux.gateway import TmuxGateway
 from remote_agents.adapters.tmux.runtime import LaunchProfile, TmuxTerminal
 from remote_agents.application.session_actions import UNKNOWN_SESSION
@@ -286,3 +288,87 @@ def test_a_codex_stop_sends_every_key_over_the_screens_between_them() -> None:
     asyncio.run(terminal.graceful_stop(pane.session_id, ProfileId("codex")))
 
     assert pane.keys == list(keys)
+
+
+# --- cursor-agent, measured 2026-09-24 on 2026.09.18-9a7762b (`fixtures/panes/stop_sequence/`) ---
+
+
+def _cursor_terminal(pane) -> TmuxTerminal:
+    from remote_agents.adapters.agents.registry import profile_composers
+    from remote_agents.domain.profiles import closed_profiles
+
+    keys = next(p.graceful_keys for p in closed_profiles() if str(p.profile_id) == "cursor-agent")
+    return TmuxTerminal(
+        TmuxGateway("remote-agents-test-graceful", pane),
+        {},
+        {
+            ProfileId("cursor-agent"): LaunchProfile(
+                "/usr/bin/cursor-agent", ("/usr/bin/cursor-agent",), {}, None, graceful_keys=keys
+            )
+        },
+        startup_timeout=0.05,
+        composers=profile_composers(),
+    )
+
+
+def _panes(*names: str) -> list[str]:
+    root = Path(__file__).resolve().parents[3] / "fixtures/panes"
+    return [(root / name).read_text(encoding="utf-8") for name in names]
+
+
+def test_a_cursor_stop_sends_every_key_over_its_command_menu() -> None:
+    """After `/quit` cursor draws its command menu under the composer, which hides the status
+    line; with the answered trust box still drawn above, the screen read as a trust dialog and
+    the check before the next `Enter` refused every such stop (0.48.0). Only a dialog *pattern*
+    on screen stops a sequence partway; a trust dialog is never raised mid-stop."""
+    import asyncio
+
+    from .test_send_prompt import PromptPane
+
+    pane = PromptPane(
+        _panes("cursor/idle.txt", "stop_sequence/cursor_after_quit_typed.txt"),
+        profile="cursor-agent",
+    )
+
+    asyncio.run(_cursor_terminal(pane).graceful_stop(pane.session_id, ProfileId("cursor-agent")))
+
+    assert pane.keys == ["/quit", "Enter", "Enter"]
+
+
+@pytest.mark.parametrize("screen", ["cursor_shell_mode_empty", "cursor_shell_mode_command"])
+def test_a_cursor_stop_is_not_typed_into_shell_mode(screen: str) -> None:
+    """cursor-agent has a `!` shell mode too: `! Run a command — e.g., git status`."""
+    import asyncio
+
+    from remote_agents.ports.terminal import COMPOSER_HOLDS_TEXT
+
+    from .test_send_prompt import PromptPane
+
+    pane = PromptPane(_panes(f"stop_sequence/{screen}.txt"), profile="cursor-agent")
+
+    observation = asyncio.run(
+        _cursor_terminal(pane).graceful_stop(pane.session_id, ProfileId("cursor-agent"))
+    )
+
+    assert observation.detail == COMPOSER_HOLDS_TEXT
+    assert pane.keys == []
+
+
+def test_a_cursor_stop_gets_no_further_key_once_a_real_approval_comes_up() -> None:
+    """`Run this command?` arriving after `/quit`: a declared dialog pattern, so the rest waits."""
+    import asyncio
+
+    from remote_agents.ports.terminal import AGENT_ASKING
+
+    from .test_send_prompt import PromptPane
+
+    pane = PromptPane(
+        _panes("cursor/idle.txt", "cursor/dialog_approval.txt"), profile="cursor-agent"
+    )
+
+    observation = asyncio.run(
+        _cursor_terminal(pane).graceful_stop(pane.session_id, ProfileId("cursor-agent"))
+    )
+
+    assert pane.keys == ["/quit"]
+    assert observation.detail == AGENT_ASKING

@@ -60,6 +60,11 @@ def descriptor() -> ProviderDescriptor:
                 r"\n(?:  (?! )[^\n]*\n){0,3}  (?! )[^\n]*·[^\n]*\Z"
             ),
             placeholders=(r"Plan, search, build anything", r"Add a follow-up"),
+            # Shell mode puts `!` where `→` was (`stop_sequence/cursor_shell_mode_*.txt`).
+            shell=(
+                r"^  ! [^\n]*(?:\n    [^\n]*)*?"
+                r"\n(?:  (?! )[^\n]*\n){0,3}  (?! )[^\n]*·[^\n]*\Z"
+            ),
             busy=(r"ctrl\+c to stop", r"^ \S+ (?:Working|Running)\b"),
             dialogs=(
                 r"^ Run this command\?",

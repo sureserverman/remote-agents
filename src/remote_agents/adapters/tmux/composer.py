@@ -143,6 +143,19 @@ def composer_draft(capture: str, descriptor: ProviderDescriptor) -> str | None:
     return _held(capture, declared)
 
 
+def dialog_on_screen(capture: str, descriptor: ProviderDescriptor) -> bool:
+    """Whether one of the agent's dialog patterns is on the screen -- the check between the keys
+    of a sequence, where `classify` is the wrong question.
+
+    Partway through `/quit Enter Enter` the agent's own command menu can hide the composer, and
+    then `classify` falls back to the folder-trust reading, which a trust box answered at launch
+    and still drawn above satisfies (cursor-agent 2026.09.18). A trust dialog is only ever raised
+    at launch, so between the keys only the declared dialogs -- an approval coming up -- count.
+    """
+    declared = descriptor.composer
+    return declared is not None and _found(declared.dialogs, _normalised(capture))
+
+
 def in_shell_mode(capture: str, descriptor: ProviderDescriptor) -> bool:
     """Whether the agent's composer is in shell mode (`!`), empty or not.
 

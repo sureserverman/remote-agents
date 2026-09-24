@@ -17,6 +17,7 @@ from remote_agents.adapters.tmux.composer import (
     PaneState,
     classify,
     composer_draft,
+    dialog_on_screen,
     enter_refusal,
     in_shell_mode,
     prompt_text,
@@ -534,9 +535,10 @@ class TmuxTerminal:
 
         def unasked(capture: str) -> bool:
             # Before each later key: the first `Enter` of `/exit Enter Enter` must not be followed
-            # blind onto a dialog that came up meanwhile. Only a dialog stops it -- between the
-            # keys the screen is a command menu or "Shutting down…" (measured, Codex 0.155.1).
-            return not guarded or classify(capture, descriptor) is not PaneState.DIALOG
+            # blind onto a dialog that came up meanwhile. Only a dialog pattern stops it -- between
+            # the keys the screen is a command menu or "Shutting down…" (measured: Codex 0.155.1,
+            # cursor-agent 2026.09.18), which `classify` can misread (`dialog_on_screen`).
+            return not guarded or not dialog_on_screen(capture, descriptor)
 
         try:
             refused = await self._gateway.send_keys_when(
@@ -563,7 +565,10 @@ class TmuxTerminal:
             )
         if refused is not None and guarded:
             # Not sent, and said which (DEC-022): the owner's next step differs.
-            asking = classify(refused, descriptor) is PaneState.DIALOG
+            asking = (
+                not in_shell_mode(refused, descriptor)
+                and classify(refused, descriptor) is PaneState.DIALOG
+            )
             return TerminalObservation(
                 session_id,
                 live=True,
@@ -800,7 +805,7 @@ class TmuxTerminal:
 
         def unasked(capture: str) -> bool:
             # Before the `Enter` after `/remote-control`: never onto a dialog raised meanwhile.
-            return classify(capture, descriptor) is not PaneState.DIALOG
+            return not dialog_on_screen(capture, descriptor)
 
         if desired_state is RemoteControlState.ACTIVE:
             # `/remote-control` + `Enter` only onto an idle composer, judged from a styled capture
