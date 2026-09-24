@@ -304,3 +304,51 @@ def test_a_retry_cancelled_mid_delivery_drops_the_message_rather_than_retype_it(
 
     later = datetime.now(UTC) + timedelta(minutes=5)
     assert world.queue.claim(str(session), now=later) is None, "it would be typed a second time"
+
+
+# --- turn markers of sessions that are gone (BL-108) -----------------------------------------
+
+
+class _Markers:
+    def __init__(self, *sessions: str) -> None:
+        self.present = set(sessions)
+        self.ended: list[str] = []
+
+    def start(self, session_id: str) -> None:
+        self.present.add(session_id)
+
+    def end(self, session_id: str) -> None:
+        self.ended.append(session_id)
+        self.present.discard(session_id)
+
+    def started_at(self, session_id: str):
+        return None
+
+    def sessions(self) -> tuple[str, ...]:
+        return tuple(sorted(self.present))
+
+
+def test_the_sweep_ends_the_turn_markers_of_sessions_that_are_not_running(world) -> None:
+    from remote_agents.domain.state_machine import LifecycleEvent
+
+    running = world.session()
+    stopping = world.session()
+    asyncio.run(world.sessions.record_event(stopping, LifecycleEvent.GRACEFUL_STOP_REQUESTED))
+    unknown = str(SessionId.new())
+    markers = _Markers(str(running), str(stopping), unknown, "not-a-session-id")
+    relay = PromptRelay(
+        world.terminal,
+        world.queue,
+        world.sessions,
+        queues_for=lambda profile: str(profile) in _QUEUES,
+        turn_markers=markers,
+    )
+
+    asyncio.run(relay.sweep())
+
+    assert markers.present == {str(running)}
+    assert sorted(markers.ended) == sorted([str(stopping), unknown, "not-a-session-id"])
+
+
+def test_the_sweep_without_markers_is_unchanged(world) -> None:
+    asyncio.run(world.relay.sweep())

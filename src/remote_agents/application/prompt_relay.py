@@ -29,6 +29,7 @@ from remote_agents.ports.message_relay import RelayOutcome, RelayResult
 from remote_agents.ports.queued_prompts import QueuedPrompt, QueuedPromptStore
 from remote_agents.ports.session_store import SessionStore
 from remote_agents.ports.terminal import PromptDelivery, PromptOutcome, PromptReason, TerminalPort
+from remote_agents.ports.turn_markers import TurnMarkers
 
 WAITABLE: frozenset[PromptReason] = frozenset(
     {
@@ -49,11 +50,13 @@ class PromptRelay:
         sessions: SessionStore,
         *,
         queues_for: Callable[[ProfileId], bool],
+        turn_markers: TurnMarkers | None = None,
     ) -> None:
         self._terminal = terminal
         self._queue = queue
         self._sessions = sessions
         self._queues_for = queues_for
+        self._turn_markers = turn_markers
 
     async def submit(self, session_id: SessionId, text: str) -> RelayResult:
         record = await self._sessions.get(session_id)
@@ -107,11 +110,21 @@ class PromptRelay:
         return self._queue.pending(str(session_id))
 
     async def sweep(self) -> None:
-        """Drop every waiting message whose session stopped, ended or is gone."""
+        """Drop every waiting message, and every turn marker, whose session stopped, ended or is
+        gone -- a marker left behind would only ever read a later session busy (DEC-104)."""
         for waiting in self._queue.waiting():
             record = await self._sessions.get(SessionId.parse(waiting.session_id))
             if record is None or record.state is not SessionState.RUNNING:
                 self._queue.clear(waiting.session_id)
+        if self._turn_markers is None:
+            return
+        for marked in self._turn_markers.sessions():
+            try:
+                record = await self._sessions.get(SessionId.parse(marked))
+            except ValueError:
+                record = None
+            if record is None or record.state is not SessionState.RUNNING:
+                self._turn_markers.end(marked)
 
 
 def _result(delivery: PromptDelivery) -> RelayResult:

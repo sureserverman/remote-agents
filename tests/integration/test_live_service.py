@@ -42,7 +42,12 @@ from remote_agents.bootstrap import (
     _resolve_profile_executable,
     main,
 )
-from remote_agents.composition.service import ServiceComposition, _watch_activity_once
+from remote_agents.composition.service import (
+    _JUST_FINISHED_SECONDS,
+    ServiceComposition,
+    _check_waiting_turns_once,
+    _watch_activity_once,
+)
 from remote_agents.config import ConfigError, TelegramSecrets
 from remote_agents.domain.models import (
     ProfileId,
@@ -2504,3 +2509,200 @@ async def test_a_pass_with_nothing_finished_still_sweeps_and_retries_nothing(tmp
     await _watch_activity_once(composition)
 
     assert relay.retried == [] and relay.sweeps == 1
+
+
+# --- the fast check: a marked turn's end, or a "finished" the screen had not drawn (BL-108) ----
+
+
+class _WaitingRelay:
+    """A relay with scripted retries: each session's results in order, the last one repeating."""
+
+    def __init__(self, waiting: dict[str, list[object]]) -> None:
+        self.waiting = {session: list(results) for session, results in waiting.items()}
+        self.retried: list[str] = []
+        self.pending_asked: list[str] = []
+
+    def pending(self, session_id):
+        self.pending_asked.append(str(session_id))
+        return object() if str(session_id) in self.waiting else None
+
+    async def retry(self, session_id):
+        from remote_agents.ports.message_relay import RelayOutcome, RelayResult
+        from remote_agents.ports.terminal import PromptReason
+
+        key = str(session_id)
+        self.retried.append(key)
+        script = self.waiting[key]
+        result = script.pop(0) if len(script) > 1 else script[0]
+        if isinstance(result, Exception):
+            raise result
+        if result is RelayOutcome.QUEUED:
+            return RelayResult(RelayOutcome.QUEUED, PromptReason.BUSY)
+        del self.waiting[key]
+        return RelayResult(result)
+
+    async def sweep(self) -> None:
+        return None
+
+
+class _MarkedSessions:
+    def __init__(self, *sessions: str) -> None:
+        self.present = list(sessions)
+
+    def sessions(self) -> tuple[str, ...]:
+        return tuple(self.present)
+
+
+def _fast_composition(relay, markers=None, announced=None):
+    boundary, _bot = _notified(_running())
+
+    async def announce(session_id, result) -> None:
+        if announced is not None:
+            announced.append((str(session_id), result.outcome))
+
+    return ServiceComposition(
+        boundary,
+        _SilentTerminal(),
+        _SilentReconciler(),
+        prompt_relay=relay,
+        relay_announcer=announce,
+        turn_markers=markers,
+    )
+
+
+async def test_fast_check_delivers_a_marked_sessions_message_once_its_turn_has_ended() -> None:
+    from remote_agents.ports.message_relay import RelayOutcome
+
+    session = str(SessionId.new())
+    relay = _WaitingRelay({session: [RelayOutcome.SENT]})
+    announced: list[tuple[str, object]] = []
+    composition = _fast_composition(relay, _MarkedSessions(session), announced)
+
+    await _check_waiting_turns_once(composition)
+
+    assert relay.retried == [session]
+    assert announced == [(session, RelayOutcome.SENT)]
+
+
+async def test_fast_check_leaves_a_still_running_turn_queued_and_says_nothing() -> None:
+    from remote_agents.ports.message_relay import RelayOutcome
+
+    session = str(SessionId.new())
+    relay = _WaitingRelay({session: [RelayOutcome.QUEUED]})
+    announced: list[tuple[str, object]] = []
+    composition = _fast_composition(relay, _MarkedSessions(session), announced)
+
+    for _ in range(3):
+        await _check_waiting_turns_once(composition)
+
+    assert relay.retried == [session] * 3
+    assert announced == [], "a tick that changes nothing must not message the owner"
+
+
+async def test_fast_check_never_retries_a_waiting_session_with_no_marker() -> None:
+    """The screen alone reads Claude's streaming answer as idle; without a marker, wait for Stop."""
+    from remote_agents.ports.message_relay import RelayOutcome
+
+    session = str(SessionId.new())
+    relay = _WaitingRelay({session: [RelayOutcome.SENT]})
+    composition = _fast_composition(relay, _MarkedSessions())
+
+    await _check_waiting_turns_once(composition)
+
+    assert relay.retried == [] and relay.pending_asked == []
+
+
+async def test_fast_check_with_nothing_waiting_takes_no_capture() -> None:
+    session = str(SessionId.new())
+    relay = _WaitingRelay({})
+    composition = _fast_composition(relay, _MarkedSessions(session))
+
+    await _check_waiting_turns_once(composition)
+
+    assert relay.retried == []
+
+
+async def test_fast_check_a_retry_that_raises_costs_that_session_one_tick() -> None:
+    from remote_agents.ports.message_relay import RelayOutcome
+
+    broken, fine = str(SessionId.new()), str(SessionId.new())
+    relay = _WaitingRelay({broken: [RuntimeError("tmux gone")], fine: [RelayOutcome.SENT]})
+    announced: list[tuple[str, object]] = []
+    composition = _fast_composition(relay, _MarkedSessions(broken, fine), announced)
+
+    await _check_waiting_turns_once(composition)
+
+    assert announced == [(fine, RelayOutcome.SENT)]
+
+
+async def test_fast_check_retries_a_finished_turn_whose_screen_still_read_busy(tmp_path) -> None:
+    """Claude draws "(running Stop hooks…)" until every Stop hook has run (measured 2026-09-24).
+
+    A retry on the "finished" activity inside that window reads BUSY and re-queues; with no
+    marker left (its Stop removed it), only the just-finished window brings it back.
+    """
+    from remote_agents.ports.message_relay import RelayOutcome
+
+    finished = _running("finished")
+    session = str(finished.session_id)
+    boundary, _bot = _notified(finished)
+    spool = tmp_path / "activity"
+    _spool(spool, session)
+    relay = _WaitingRelay({session: [RelayOutcome.QUEUED, RelayOutcome.SENT]})
+    announced: list[tuple[str, object]] = []
+
+    async def announce(session_id, result) -> None:
+        announced.append((str(session_id), result.outcome))
+
+    composition = ServiceComposition(
+        boundary,
+        _SilentTerminal(),
+        _SilentReconciler(),
+        activity_directory=spool,
+        prompt_relay=relay,
+        relay_announcer=announce,
+        turn_markers=_MarkedSessions(),
+    )
+
+    await _watch_activity_once(composition)
+    assert relay.retried == [session], "the retry on the finished activity itself"
+
+    await _check_waiting_turns_once(composition)
+
+    assert relay.retried == [session, session]
+    assert announced[-1] == (session, RelayOutcome.SENT)
+
+
+async def test_fast_check_forgets_a_finished_turn_after_its_window(tmp_path) -> None:
+    from remote_agents.ports.message_relay import RelayOutcome
+
+    session = str(SessionId.new())
+    relay = _WaitingRelay({session: [RelayOutcome.SENT]})
+    composition = _fast_composition(relay, _MarkedSessions())
+    composition.relay_rechecks[session] = 0.0
+
+    await _check_waiting_turns_once(composition, now=_JUST_FINISHED_SECONDS + 1.0)
+
+    assert relay.retried == []
+    assert session not in composition.relay_rechecks
+
+
+async def test_fast_check_a_waiting_read_that_raises_costs_only_that_session() -> None:
+    from remote_agents.ports.message_relay import RelayOutcome
+
+    broken, fine = str(SessionId.new()), str(SessionId.new())
+    relay = _WaitingRelay({fine: [RelayOutcome.SENT]})
+    original = relay.pending
+
+    def pending(session_id):
+        if str(session_id) == broken:
+            raise OSError("the queue store is unreadable")
+        return original(session_id)
+
+    relay.pending = pending
+    announced: list[tuple[str, object]] = []
+    composition = _fast_composition(relay, _MarkedSessions(broken, fine), announced)
+
+    await _check_waiting_turns_once(composition)
+
+    assert announced == [(fine, RelayOutcome.SENT)]

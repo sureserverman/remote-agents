@@ -11,6 +11,7 @@ from remote_agents.adapters.agents.registry import (
     profiles_with_finished_events,
     provider_descriptors,
 )
+from remote_agents.adapters.agents.turn_markers import FileTurnMarkers
 from remote_agents.adapters.sqlite.activity_store import SQLiteActivityStore
 from remote_agents.adapters.sqlite.callback_state_store import SQLiteCallbackStateStore
 from remote_agents.adapters.sqlite.chat_view_store import SQLiteChatViewStore
@@ -121,11 +122,15 @@ def _private_boundary(
     # boundary owns it (it speaks through the live view and mints against the same callbacks),
     # and `ServiceComposition` is what puts it on a clock.
     finishing = profiles_with_finished_events(descriptors)
+    # The markers the agents' hooks write into the spool (BL-108, DEC-104): the relay's sweep
+    # ends those of sessions that are gone, and the service's fast check reads which to re-check.
+    turn_markers = FileTurnMarkers(paths.activity_directory)
     relay = PromptRelay(
         terminal,
         SQLiteQueuedPromptStore(ui_connection),
         store,
         queues_for=lambda profile: str(profile) in finishing,
+        turn_markers=turn_markers,
     )
     boundary = build_private_bot(
         secrets.owner_user_id,
@@ -193,4 +198,5 @@ def _private_boundary(
         limit_reset_notifier=boundary.limit_reset_notifier,
         prompt_relay=relay,
         relay_announcer=boundary.announce_relayed,
+        turn_markers=turn_markers,
     )

@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from remote_agents.adapters.sqlite.activity_store import SQLiteActivityStore
@@ -19,8 +20,9 @@ from remote_agents.application.reconcile import ReconciliationService
 from remote_agents.config import TelegramSecrets
 from remote_agents.domain.models import SessionId
 from remote_agents.ports.agent_activity import ActivityConfidence, ActivityKind, AgentActivity
-from remote_agents.ports.message_relay import MessageRelay, RelayResult
+from remote_agents.ports.message_relay import MessageRelay, RelayOutcome, RelayResult
 from remote_agents.ports.state_events import StoreChanged
+from remote_agents.ports.turn_markers import TurnMarkers
 
 _LOG = logging.getLogger(__name__)
 
@@ -47,6 +49,18 @@ _TRUST_POLL_SECONDS = 5.0
 #: asked for, and the grace is how far ahead of its published instant a wipe must be to count
 #: as early. A scheduled rollover is silent whatever either of them is set to.
 _LIMITS_POLL_SECONDS = 300.0
+#: How often a waiting message is re-checked while its session's turn may have ended with no
+#: "finished" event to say so (BL-108): an Esc fires no hook, and a turn a limit killed fires
+#: none on Codex. The owner accepted 2-3 s. A tick does nothing -- no capture, no store read
+#: beyond the marker listing -- unless a marked or just-finished session has a message waiting.
+_FAST_CHECK_SECONDS = 2.5
+#: How long after a "finished" activity a waiting message whose retry still read BUSY is
+#: re-checked. Claude draws "(running Stop hooks...)" until every Stop hook has run, and ours
+#: is one of them, so a retry on its record can land while that is still on screen: measured
+#: 2026-09-24, the screen turned idle 0-60 ms after the record appeared, with the owner's other
+#: Stop hooks taking longer on a busier host. Its Stop has already removed the marker, so without
+#: this the message would wait for another turn.
+_JUST_FINISHED_SECONDS = 15.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -118,6 +132,19 @@ class ServiceComposition:
     relay_announcer: Callable[[str, RelayResult], Awaitable[None]] | None = None
     """What tells the owner a waiting message was delivered (or not), or None to stay silent."""
 
+    turn_markers: TurnMarkers | None = None
+    """Which sessions' hooks said a turn started (DEC-104), for the fast check, or None where no
+    relay is wired."""
+
+    relay_rechecks: dict[str, float] = field(default_factory=dict, repr=False, compare=False)
+    """Sessions whose retry on a "finished" activity still read BUSY, by when (monotonic), for
+    the fast check's just-finished window. Mutable state on a frozen composition, deliberately:
+    it is shared by the activity pass that fills it and the fast check that drains it.
+
+    It protects nothing by itself. A new turn the owner starts inside the window is kept from
+    being typed into by the retry's own capture, which reads that turn's fresh marker (its
+    `UserPromptSubmit` fired before it started) and refuses as busy."""
+
 
 async def _serve_with_reconciliation(
     secrets: TelegramSecrets,
@@ -163,6 +190,13 @@ async def _serve_with_reconciliation(
         # the whole pass on the watcher would have delivered none of it.
         periodic.append(
             asyncio.create_task(_watch_activity_periodically(composition, activity_interval))
+        )
+    if composition.prompt_relay is not None:
+        # Its own clock, a fast one, for what a 30 s pass cannot see soon enough: a turn the
+        # owner interrupted (no hook fires) and one whose "finished" landed before its screen
+        # caught up. Idle unless a marked or just-finished session has a message waiting.
+        periodic.append(
+            asyncio.create_task(_check_waiting_turns_periodically(composition, _FAST_CHECK_SECONDS))
         )
     if composition.trust_notifier is not None:
         # Its own task on its own clock, for the reason the activity watch has one: a pass
@@ -418,6 +452,8 @@ async def _retry_waiting_messages(
         except Exception:
             _LOG.exception("delivering a waiting message to %s failed", session_id)
             continue
+        if result is not None and result.outcome is RelayOutcome.QUEUED:
+            composition.relay_rechecks[session_id] = time.monotonic()
         if result is not None and composition.relay_announcer is not None:
             try:
                 await composition.relay_announcer(session_id, result)
@@ -427,6 +463,62 @@ async def _retry_waiting_messages(
         await relay.sweep()
     except Exception:
         _LOG.exception("sweeping waiting messages failed")
+
+
+async def _check_waiting_turns_periodically(
+    composition: ServiceComposition, interval: float
+) -> None:
+    while True:
+        await asyncio.sleep(interval)
+        try:
+            await _check_waiting_turns_once(composition)
+        except Exception:
+            _LOG.exception("the waiting-message fast check failed")
+
+
+async def _check_waiting_turns_once(
+    composition: ServiceComposition, now: float | None = None
+) -> None:
+    """Retry the waiting message of each marked or just-finished session (BL-108, DEC-104).
+
+    A marked session's turn may have ended with no hook: the retry's own capture, under the key
+    lock, reads the marker and the screen, and types only on an idle composer with the turn
+    shown over. A session with no marker is left for its "finished" event, because the screen
+    alone reads Claude's streaming answer as idle. A just-finished one is retried until its
+    screen catches up with its Stop. A result that is still QUEUED is said to nobody: the owner
+    was told it was queued, and a tick that changes nothing must not message them again.
+    """
+    relay = composition.prompt_relay
+    if relay is None:
+        return
+    moment = time.monotonic() if now is None else now
+    rechecks = composition.relay_rechecks
+    for session_id, since in list(rechecks.items()):
+        if moment - since > _JUST_FINISHED_SECONDS:
+            del rechecks[session_id]
+    marked = composition.turn_markers.sessions() if composition.turn_markers is not None else ()
+    # A snapshot of both, deliberately: the loop pops from `rechecks` as it goes.
+    for session_id in dict.fromkeys((*marked, *rechecks)):
+        try:
+            session = SessionId.parse(session_id)
+        except ValueError:
+            continue
+        try:
+            if relay.pending(session) is None:
+                rechecks.pop(session_id, None)
+                continue
+            result = await relay.retry(session)
+        except Exception:
+            _LOG.exception("re-checking a waiting message for %s failed", session_id)
+            continue
+        if result is None or result.outcome is RelayOutcome.QUEUED:
+            continue
+        rechecks.pop(session_id, None)
+        if composition.relay_announcer is not None:
+            try:
+                await composition.relay_announcer(session_id, result)
+            except Exception:
+                _LOG.exception("announcing a waiting message's delivery failed")
 
 
 async def _reconcile_periodically(composition: ServiceComposition, interval: float) -> None:
