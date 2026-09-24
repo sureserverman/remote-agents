@@ -9,6 +9,7 @@ import logging
 import os
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, replace
+from datetime import UTC, datetime
 from pathlib import Path
 
 from remote_agents.adapters.tmux.codec import attach_command
@@ -20,7 +21,9 @@ from remote_agents.adapters.tmux.composer import (
     dialog_on_screen,
     enter_refusal,
     in_shell_mode,
+    marker_is_young,
     prompt_text,
+    turn_ended,
 )
 from remote_agents.adapters.tmux.composer import unstyled as _plain
 from remote_agents.adapters.tmux.gateway import (
@@ -62,6 +65,7 @@ from remote_agents.ports.terminal import (
     TerminalTargetMissing,
     TrustAnswer,
 )
+from remote_agents.ports.turn_markers import TurnMarkers
 
 _LOG = logging.getLogger(__name__)
 
@@ -216,6 +220,7 @@ class TmuxTerminal:
         trust_dialogs: Mapping[str, TrustDialog] | None = None,
         composers: Mapping[str, ProviderDescriptor] | None = None,
         waits: TerminalWaits | None = None,
+        turn_markers: TurnMarkers | None = None,
     ) -> None:
         # Which profiles can be asked the folder-trust question, and the dialog to read each
         # one with. **Injected, not imported**: this is an adapter, the answer is a provider
@@ -233,6 +238,10 @@ class TmuxTerminal:
         # (DEC-099). Injected like `trust_dialogs`, for its reason: this adapter must not import
         # the provider packages.
         self._composers = dict(composers or {})
+        # Which sessions' agents said, through their own hooks, that a turn started (DEC-104). Read
+        # with the capture the relay judges by, under the same key-lock hold. None reads the
+        # screen alone, as before the marker existed.
+        self._turn_markers = turn_markers
         self._waits = waits or _DEFAULT_WAITS
         self._gateway = gateway
         self._project_paths = project_paths
@@ -703,13 +712,17 @@ class TmuxTerminal:
             # Pasted, it could never be submitted -- `Enter` would run whatever the unreadable
             # menu offers -- and the stranded draft would refuse every later message.
             return PromptDelivery(PromptOutcome.REFUSED, PromptReason.MENU)
+        judged: list[PaneState] = []
+
+        def may_paste(capture: str, title: str) -> bool:
+            judged.append(self._judged(session_id, capture, descriptor, title))
+            return judged[-1] is PaneState.IDLE
+
         try:
             steps = await self._gateway.deliver_prompt(
                 session_id,
                 text,
-                may_paste=lambda capture, title: (
-                    classify(capture, descriptor, title) is PaneState.IDLE
-                ),
+                may_paste=may_paste,
                 may_enter=lambda capture: enter_refusal(capture, descriptor, text) is None,
                 settle=self._waits.prompt_settle,
             )
@@ -729,7 +742,11 @@ class TmuxTerminal:
             _LOG.exception("could not find %s's pane to relay a message", session_id)
             return PromptDelivery(PromptOutcome.REFUSED, PromptReason.TMUX_ERROR)
         if not steps.pasted:
-            state = classify(steps.before, descriptor, steps.title)
+            # The state the paste was refused on -- marker included -- not a fresh reading of the
+            # screen alone, which would call a marked, streaming turn idle. The gateway calls
+            # `may_paste` before it can decline to paste, so `judged` is set here; the fallback
+            # only covers a gateway that stopped doing so.
+            state = judged[-1] if judged else classify(steps.before, descriptor, steps.title)
             return PromptDelivery(PromptOutcome.REFUSED, REFUSAL_FOR[state])
         if not steps.entered:
             reason = enter_refusal(steps.after_paste or "", descriptor, text)
@@ -737,6 +754,29 @@ class TmuxTerminal:
         if composer_draft(steps.after_enter or "", descriptor) == "":
             return PromptDelivery(PromptOutcome.SENT)
         return PromptDelivery(PromptOutcome.UNCONFIRMED, PromptReason.SUBMIT_NOT_SEEN)
+
+    def _judged(
+        self, session_id: SessionId, capture: str, descriptor: ProviderDescriptor, title: str
+    ) -> PaneState:
+        """Classify a capture with the session's turn marker, ending a marker the screen outlived.
+
+        Called inside the key-lock hold the capture was taken under. A marker past its grace on a
+        screen that shows the turn over (an Esc, or a turn a limit killed, fires no hook) is
+        ended here, so a later screen that shows no end line -- a cleared one -- is not held busy
+        by a turn that is already over.
+        """
+        if self._turn_markers is None:
+            return classify(capture, descriptor, title)
+        now = datetime.now(UTC)
+        started = self._turn_markers.started_at(str(session_id))
+        state = classify(capture, descriptor, title, turn_started_at=started, now=now)
+        if (
+            started is not None
+            and not marker_is_young(started, now)
+            and turn_ended(capture, descriptor, title)
+        ):
+            self._turn_markers.end(str(session_id))
+        return state
 
     async def capture(self, session_id: SessionId) -> str:
         """Return one managed pane's output for the presentation boundary to sanitize."""

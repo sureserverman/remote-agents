@@ -17,6 +17,7 @@ from remote_agents.adapters.agents.registry import (
     profile_trust_dialogs,
     provider_descriptors,
 )
+from remote_agents.adapters.agents.turn_markers import FileTurnMarkers
 from remote_agents.adapters.sqlite.activity_store import SQLiteActivityStore
 from remote_agents.adapters.tmux.codec import attach_argv
 from remote_agents.adapters.tmux.gateway import TmuxGateway
@@ -172,6 +173,9 @@ def _local_runtime(config, paths: ProductionPaths, project_paths, descriptors=No
         # The agents a relayed message may be typed into, and how each draws its composer
         # (DEC-099) -- from the same descriptor set, for the same reason.
         composers=profile_composers(descriptors),
+        # What each managed agent's own hook said about a turn it started (BL-108, DEC-104),
+        # over the spool the hook writes into -- read by the relay with the capture it judges.
+        turn_markers=FileTurnMarkers(paths.activity_directory),
     )
     return LocalRuntime(terminal, compatibility, gateway)
 

@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import asyncio
 import re
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -576,3 +577,115 @@ def test_the_title_is_never_in_the_steps_repr() -> None:
     from remote_agents.adapters.tmux.gateway import PromptSteps
 
     assert "Count to 150" not in repr(PromptSteps("screen", title=_SPINNING))
+
+
+# --- the turn marker, read under the same hold as the capture (BL-108) -----------------------
+
+_TURN_STATES = _PANES / "turn_states"
+
+
+def _turn_state(name: str) -> str:
+    return (_TURN_STATES / "claude" / f"{name}.txt").read_text(encoding="utf-8")
+
+
+class _Markers:
+    """A `TurnMarkers` that records when it was read, against the pane's calls so far."""
+
+    def __init__(self, pane: PromptPane, age: float | None) -> None:
+        self._pane = pane
+        self._started = None if age is None else datetime.now(UTC) - timedelta(seconds=age)
+        self.read_after: list[tuple[str, ...]] | None = None
+        self.ended: list[str] = []
+
+    def start(self, session_id: str) -> None:
+        raise AssertionError("the terminal never starts a turn")
+
+    def end(self, session_id: str) -> None:
+        self.ended.append(session_id)
+        self._started = None
+
+    def started_at(self, session_id: str) -> datetime | None:
+        assert session_id == str(self._pane.session_id)
+        self.read_after = list(self._pane.calls)
+        return self._started
+
+    def sessions(self) -> tuple[str, ...]:
+        return () if self._started is None else (str(self._pane.session_id),)
+
+
+def _marked_send(pane: PromptPane, markers: _Markers, text: str = _DRAFTED):
+    composers = {
+        str(descriptor.profile_id): descriptor
+        for descriptor in provider_descriptors()
+        if descriptor.composer is not None
+    }
+    terminal = TmuxTerminal(
+        TmuxGateway("remote-agents-test-prompt", pane),
+        {},
+        {},
+        startup_timeout=1.0,
+        composers=composers,
+        waits=_WAITS,
+        turn_markers=markers,
+    )
+    return asyncio.run(terminal.send_prompt(pane.session_id, text))
+
+
+@pytest.mark.parametrize("age", [0.2, 60.0])
+def test_a_marked_turn_still_streaming_is_refused_as_busy_and_nothing_is_typed(age: float) -> None:
+    pane = PromptPane([_turn_state("streaming_answer")])
+    markers = _Markers(pane, age)
+
+    delivery = _marked_send(pane, markers)
+
+    assert delivery.outcome is PromptOutcome.REFUSED
+    assert delivery.reason is PromptReason.BUSY
+    assert pane.typed == []
+    assert markers.ended == []
+
+
+def test_an_interrupted_turn_older_than_the_grace_is_typed_into_and_its_marker_ended() -> None:
+    pane = PromptPane(
+        [_turn_state("interrupted"), _screen("claude", "composed"), _screen("claude", "busy")]
+    )
+    markers = _Markers(pane, 60.0)
+
+    delivery = _marked_send(pane, markers)
+
+    assert delivery.outcome is PromptOutcome.SENT
+    assert markers.ended == [str(pane.session_id)]
+
+
+def test_an_interrupted_screen_under_a_fresh_marker_waits() -> None:
+    pane = PromptPane([_turn_state("interrupted")])
+    markers = _Markers(pane, 0.2)
+
+    delivery = _marked_send(pane, markers)
+
+    assert delivery.reason is PromptReason.BUSY
+    assert pane.typed == []
+    assert markers.ended == []
+
+
+def test_no_marker_reads_the_screen_alone_as_before() -> None:
+    pane = PromptPane(
+        [_turn_state("streaming_answer"), _screen("claude", "composed"), _screen("claude", "busy")]
+    )
+    markers = _Markers(pane, None)
+
+    assert _marked_send(pane, markers).outcome is PromptOutcome.SENT
+    assert markers.ended == []
+
+
+def test_the_marker_is_read_after_the_capture_and_before_anything_is_typed() -> None:
+    """Inside the one key-lock hold the capture is taken under (DEC-103), never beside it."""
+    pane = PromptPane([_turn_state("streaming_answer")])
+    markers = _Markers(pane, 60.0)
+
+    _marked_send(pane, markers)
+
+    assert markers.read_after is not None
+    assert any("capture-pane" in call for call in markers.read_after)
+    assert not any(
+        {"load-buffer", "paste-buffer", "send-keys"} & set(call) for call in markers.read_after
+    )

@@ -129,3 +129,30 @@ def test_every_production_composition_builds_one_descriptor_set() -> None:
                 f"{module}.{entry} folds {fold.func.id} without the descriptors it already "  # type: ignore[attr-defined]
                 "built, so it builds a second set"
             )
+
+
+def test_the_production_terminal_reads_the_turn_markers_the_hook_writes() -> None:
+    """BL-108: a relay built without the marker store reads Claude's streaming answer as idle.
+
+    Every unit test hands its own `TmuxTerminal` a fake store, so only the source can say the
+    production one gets the real store, over the same spool directory the hook writes into.
+    """
+    import ast
+    import pathlib
+
+    source = (
+        pathlib.Path(__file__).resolve().parents[2]
+        / "src"
+        / "remote_agents"
+        / "composition"
+        / "tui.py"
+    )
+    tree = ast.parse(source.read_text(encoding="utf-8"))
+    call = next(
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call) and getattr(node.func, "id", None) == "TmuxTerminal"
+    )
+    markers = next((k.value for k in call.keywords if k.arg == "turn_markers"), None)
+    assert markers is not None, "the production terminal is not handed the turn markers"
+    assert "activity_directory" in ast.dump(markers), ast.dump(markers)

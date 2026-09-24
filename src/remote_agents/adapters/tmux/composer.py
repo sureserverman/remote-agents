@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import re
 import unicodedata
+from datetime import UTC, datetime
 from enum import Enum
 
 from remote_agents.adapters.tmux.trust import classify_trust_capture
@@ -170,11 +171,33 @@ def in_shell_mode(capture: str, descriptor: ProviderDescriptor) -> bool:
     return re.search(declared.shell, _normalised(capture), re.MULTILINE) is not None
 
 
-def classify(capture: str, descriptor: ProviderDescriptor, title: str = "") -> PaneState:
+TURN_GRACE_SECONDS = 2.0
+"""How long a freshly started turn marker reads busy whatever the screen shows (BL-108).
+
+Right after a submit the hook has fired but the agent has not yet drawn the new prompt, so the
+*previous* turn's footer is still the last line above the input box and the screen alone would
+say "ended". Measured 2026-09-24 on Claude 2.1.282 (four turns, sampled every 20 ms): the screen
+stopped reading "ended" 10-22 ms after `UserPromptSubmit` fired. Two seconds is far beyond that on
+a loaded host, and erring long is safe: a young marker can only make the relay wait."""
+
+
+def classify(
+    capture: str,
+    descriptor: ProviderDescriptor,
+    title: str = "",
+    *,
+    turn_started_at: datetime | None = None,
+    now: datetime | None = None,
+) -> PaneState:
     """IDLE only for an empty composer with no dialog and no running turn; see `PaneState`.
 
     `title` is the pane's title, for an agent that marks a running turn there
     (`ComposerScreen.busy_title`); a caller that has not read it passes nothing.
+
+    `turn_started_at` is when the session's hook last marked a turn started, if its marker is
+    there (DEC-104). A marked turn is BUSY while the marker is younger than `TURN_GRACE_SECONDS`,
+    and after that until the screen shows the turn ended (`turn_ended`). It can only add a BUSY:
+    it is consulted after the dialog and composer checks, and never makes a screen IDLE.
     """
     declared = descriptor.composer
     screen = _normalised(capture)
@@ -190,11 +213,39 @@ def classify(capture: str, descriptor: ProviderDescriptor, title: str = "") -> P
         if trust is not None and classify_trust_capture(screen, trust) is TrustState.AWAITING:
             return PaneState.DIALOG
         return PaneState.UNKNOWN
-    if _found(declared.busy, screen) or any(
-        re.search(pattern, title) for pattern in declared.busy_title
+    if (
+        _found(declared.busy, screen)
+        or any(re.search(pattern, title) for pattern in declared.busy_title)
+        or turn_running(capture, descriptor, title, turn_started_at, now)
     ):
         return PaneState.BUSY
     return PaneState.COMPOSING if draft else PaneState.IDLE
+
+
+def marker_is_young(turn_started_at: datetime, now: datetime | None = None) -> bool:
+    """Whether a turn marker is still inside `TURN_GRACE_SECONDS`, when the hook outranks the
+    screen.
+
+    Bounded on both sides: a marker time further in the future than the grace (the clock stepped
+    back after it was written) is not young, so the screen decides. Trusting the sign would hold
+    the session busy for as long as the step, whatever the screen showed.
+    """
+    moment = datetime.now(UTC) if now is None else now
+    age = (moment - turn_started_at).total_seconds()
+    return -TURN_GRACE_SECONDS < age < TURN_GRACE_SECONDS
+
+
+def turn_running(
+    capture: str,
+    descriptor: ProviderDescriptor,
+    title: str,
+    turn_started_at: datetime | None,
+    now: datetime | None = None,
+) -> bool:
+    """A marked turn still running: its marker is young, or the screen does not show it ended."""
+    if turn_started_at is None:
+        return False
+    return marker_is_young(turn_started_at, now) or not turn_ended(capture, descriptor, title)
 
 
 _RIGHT_ALIGNED = 20

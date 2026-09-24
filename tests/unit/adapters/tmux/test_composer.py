@@ -10,6 +10,7 @@ each dialog as DIALOG -- is what makes the relay useful rather than merely safe.
 from __future__ import annotations
 
 import re
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -347,3 +348,62 @@ def test_codex_turn_ended_is_its_screen_and_title_reading_not_busy(agent: str, n
 def test_a_screen_with_no_composer_has_not_ended() -> None:
     assert turn_ended("", _descriptor("claude")) is False
     assert turn_ended("$ ls\n", _descriptor("codex")) is False
+
+
+# --- The busy rule with a turn marker (BL-108) -----------------------------------------------
+
+_NOW = datetime(2026, 9, 24, 22, 0, tzinfo=UTC)
+_FRESH = _NOW - timedelta(seconds=0.5)
+_OLD = _NOW - timedelta(seconds=30)
+
+
+@pytest.mark.parametrize(
+    ("name", "started", "state"),
+    [
+        ("streaming_answer", None, PaneState.IDLE),  # the gap: the screen alone reads idle
+        ("streaming_answer", _FRESH, PaneState.BUSY),
+        ("streaming_answer", _OLD, PaneState.BUSY),
+        ("streaming_below_old_footer", _OLD, PaneState.BUSY),
+        ("interrupted", None, PaneState.IDLE),
+        ("interrupted", _FRESH, PaneState.BUSY),  # younger than the grace: the hook wins
+        ("interrupted", _OLD, PaneState.IDLE),
+        ("finished_footer", _OLD, PaneState.IDLE),
+    ],
+)
+def test_a_marked_claude_turn_is_busy_until_its_screen_shows_the_end(
+    name: str, started: datetime | None, state: PaneState
+) -> None:
+    screen = _turn_state("claude", name)
+
+    assert classify(screen, _descriptor("claude"), turn_started_at=started, now=_NOW) is state
+
+
+def test_a_marked_codex_turn_is_busy_only_within_the_grace_when_its_screen_is_idle() -> None:
+    idle = (_PANES / "codex" / "idle.txt").read_text(encoding="utf-8")
+    codex = _descriptor("codex")
+
+    assert classify(idle, codex, turn_started_at=_FRESH, now=_NOW) is PaneState.BUSY
+    assert classify(idle, codex, turn_started_at=_OLD, now=_NOW) is PaneState.IDLE
+
+
+@pytest.mark.parametrize(("agent", "name"), _captures(), ids=lambda value: value)
+def test_a_marker_never_turns_a_non_idle_capture_idle(agent: str, name: str) -> None:
+    """The marker can only add a BUSY: every capture reads the same or busier with one."""
+    screen = (_PANES / agent / f"{name}.txt").read_text(encoding="utf-8")
+    descriptor = _descriptor(agent)
+    without = classify(screen, descriptor)
+
+    for started in (_FRESH, _OLD):
+        marked = classify(screen, descriptor, turn_started_at=started, now=_NOW)
+        assert marked is without or marked is PaneState.BUSY, (started, without, marked)
+
+
+def test_a_marker_from_the_future_is_not_trusted_over_the_screen() -> None:
+    """A clock stepped back must not hold a finished turn busy for as long as the step."""
+    far_future = _NOW + timedelta(minutes=10)
+    near_future = _NOW + timedelta(seconds=1)
+    claude = _descriptor("claude")
+
+    ended = _turn_state("claude", "finished_footer")
+    assert classify(ended, claude, turn_started_at=far_future, now=_NOW) is PaneState.IDLE
+    assert classify(ended, claude, turn_started_at=near_future, now=_NOW) is PaneState.BUSY
