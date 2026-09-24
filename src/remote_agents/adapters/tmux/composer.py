@@ -197,6 +197,40 @@ def classify(capture: str, descriptor: ProviderDescriptor, title: str = "") -> P
     return PaneState.COMPOSING if draft else PaneState.IDLE
 
 
+_RIGHT_ALIGNED = 20
+"""A line indented this far is a right-aligned hint the agent draws beside its layout (Claude's
+`● high · /effort`, its tmux scrolling tip), not a line of the transcript."""
+
+
+def turn_ended(capture: str, descriptor: ProviderDescriptor, title: str = "") -> bool:
+    """Whether the screen shows the running turn over, for a session whose hook marked it started.
+
+    With declared `turn_ended` patterns, the last transcript line above the input box must match
+    one; otherwise the turn has ended when the composer is found and nothing says busy -- neither
+    a busy line on screen nor the agent's title. A screen with no composer has not ended.
+    """
+    declared = descriptor.composer
+    if declared is None:
+        return False
+    screen = _normalised(capture)
+    box = None
+    for box in re.finditer(declared.composer, screen, re.MULTILINE):
+        pass
+    if box is None:
+        return False
+    if not declared.turn_ended:
+        return not (
+            _found(declared.busy, screen)
+            or any(re.search(pattern, title) for pattern in declared.busy_title)
+        )
+    above = [
+        line
+        for line in screen[: box.start()].splitlines()
+        if line.strip() and len(line) - len(line.lstrip()) < _RIGHT_ALIGNED
+    ]
+    return bool(above) and any(re.search(pattern, above[-1]) for pattern in declared.turn_ended)
+
+
 REFUSAL_FOR: dict[PaneState, PromptReason] = {
     PaneState.BUSY: PromptReason.BUSY,
     PaneState.COMPOSING: PromptReason.COMPOSING,

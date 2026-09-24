@@ -130,6 +130,17 @@ class ComposerScreen:
     """A pattern (multiline) that matches, at the very end of the capture, the composer in shell
     mode (`!`), where whatever is submitted runs as a shell command. None when the agent has no
     such mode or it has not been measured."""
+    turn_ended: tuple[str, ...] = ()
+    """Patterns any of which, matching the **last line above the input box**, means the turn a
+    hook marked as started is over (BL-108, DEC-104): Claude's `✻ … for 4s · done` footer, and
+    its `⎿  Interrupted` line, which an Esc leaves without firing any hook.
+
+    Only the last line counts, because the previous turn's footer stays on screen above the next
+    prompt while that turn streams (`turn_states/claude/streaming_below_old_footer.txt`). Blank
+    lines, and right-aligned hints (Claude's tmux and `/effort` tips), are not lines of the
+    transcript and are skipped. Empty means the agent draws no end line, and its turn has ended
+    when nothing on screen or in its title says busy -- Codex, whose title spinner runs for the
+    whole turn."""
 
 
 @dataclass(frozen=True, slots=True)

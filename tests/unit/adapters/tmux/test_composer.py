@@ -15,7 +15,7 @@ from pathlib import Path
 import pytest
 
 from remote_agents.adapters.agents.registry import provider_descriptors
-from remote_agents.adapters.tmux.composer import PaneState, classify, composer_draft
+from remote_agents.adapters.tmux.composer import PaneState, classify, composer_draft, turn_ended
 
 _PANES = Path(__file__).resolve().parents[3] / "fixtures" / "panes"
 
@@ -266,3 +266,84 @@ def test_every_live_trust_dialog_is_a_declared_dialog(agent: str) -> None:
     trust = (_PANES / agent / "dialog_trust.txt").read_text(encoding="utf-8")
 
     assert dialog_on_screen(trust, _descriptor(agent))
+
+
+# --- Has the running turn ended? (BL-108) -------------------------------------------------------
+#
+# Captured 2026-09-24 from a real Claude 2.1.282 pane on the owner's own settings. Kept apart from
+# the per-agent directories above, whose names say what the *screen alone* reads: a streaming
+# answer reads IDLE there, which is the very gap the turn marker closes.
+_TURN_STATES = _PANES / "turn_states"
+
+
+def _turn_state(agent: str, name: str) -> str:
+    return (_TURN_STATES / agent / f"{name}.txt").read_text(encoding="utf-8")
+
+
+@pytest.mark.parametrize(
+    ("name", "ended"),
+    [
+        ("finished_footer", True),
+        ("interrupted", True),
+        ("streaming_answer", False),
+        # The previous turn's footer is still on screen, above the new prompt and its answer:
+        # only the last line above the input box counts.
+        ("streaming_below_old_footer", False),
+    ],
+)
+def test_claude_turn_ended_reads_the_last_line_above_the_box(name: str, ended: bool) -> None:
+    assert turn_ended(_turn_state("claude", name), _descriptor("claude")) is ended
+
+
+@pytest.mark.parametrize(
+    ("name", "ended"),
+    [
+        ("idle_after_turn", True),
+        ("idle_after_long_turn", True),
+        ("idle_suggestion", True),
+        ("composed_long", True),
+        # A fresh session, and one whose last output is a slash command's: nothing says a turn
+        # ended there, so a marker on such a screen (which no measured path leaves) holds.
+        ("idle", False),
+        ("idle_remote_control_disconnected", False),
+        ("busy_plan_status", False),
+        ("busy_starting", False),
+    ],
+)
+def test_claude_turn_ended_on_the_existing_captures(name: str, ended: bool) -> None:
+    screen = (_PANES / "claude" / f"{name}.txt").read_text(encoding="utf-8")
+
+    assert turn_ended(screen, _descriptor("claude")) is ended
+
+
+def test_a_right_aligned_hint_below_the_end_line_does_not_hide_it() -> None:
+    """The interrupted capture has a right-aligned tmux tip between its end line and the box."""
+    screen = _turn_state("claude", "interrupted")
+    assert "tmux detected" in screen
+
+    assert turn_ended(screen, _descriptor("claude")) is True
+
+
+def test_an_end_line_that_is_not_last_does_not_count() -> None:
+    finished = _turn_state("claude", "finished_footer")
+    box = finished.index("\n────")
+    streaming = f"{finished[:box]}\n● and one more line still streaming{finished[box:]}"
+
+    assert turn_ended(streaming, _descriptor("claude")) is False
+
+
+@pytest.mark.parametrize(("agent", "name"), [c for c in _captures() if c[0] == "codex"])
+def test_codex_turn_ended_is_its_screen_and_title_reading_not_busy(agent: str, name: str) -> None:
+    """Codex declares no end line: it has ended when nothing on screen or in the title says busy."""
+    screen = (_PANES / agent / f"{name}.txt").read_text(encoding="utf-8")
+    descriptor = _descriptor(agent)
+
+    busy = classify(screen, descriptor) is PaneState.BUSY
+    found = composer_draft(screen, descriptor) is not None
+    assert turn_ended(screen, descriptor) is (found and not busy)
+    assert turn_ended(screen, descriptor, title="⠋ codex") is False
+
+
+def test_a_screen_with_no_composer_has_not_ended() -> None:
+    assert turn_ended("", _descriptor("claude")) is False
+    assert turn_ended("$ ls\n", _descriptor("codex")) is False
