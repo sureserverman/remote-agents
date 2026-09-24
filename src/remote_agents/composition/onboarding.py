@@ -615,7 +615,8 @@ _ONBOARD_SECONDS: int | None = None
 runs itself (a dependency install, the supervisor verbs, the PID reads, the liveness waits, the
 closing `doctor`'s probes), so it always finishes, and a bound here could only cut off the report
 it was about to print -- `restarted: pid A -> B`, or the command to run. A count of those steps
-under a multiple of `_COMMAND_SECONDS` went stale twice in review."""
+under a multiple of `_COMMAND_SECONDS` went stale twice in review; that every child is bounded is
+swept instead (`tests/architecture/test_every_child_process_is_bounded.py`)."""
 
 
 def _run_command(argv: tuple[str, ...], timeout: int | None = _COMMAND_SECONDS) -> int:

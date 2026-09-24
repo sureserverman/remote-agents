@@ -95,9 +95,16 @@ def _panes_splittable(base: tuple[str, ...], working_directory: Path) -> bool:
         return False
 
 
+_TMUX_SECONDS = 10
+"""Each probe command is one tmux call that answers at once; a stuck tmux must not hang `doctor`,
+and through it the `onboard` that `upgrade` runs without a bound of its own."""
+
+
 def _run(*arguments: str, check: bool = True) -> str:
     """Run a fixed tmux argv and decode its text-only contract output."""
-    result = subprocess.run(arguments, check=check, text=True, capture_output=True)
+    result = subprocess.run(
+        arguments, check=check, text=True, capture_output=True, timeout=_TMUX_SECONDS
+    )
     return result.stdout
 
 

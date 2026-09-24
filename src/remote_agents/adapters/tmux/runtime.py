@@ -543,9 +543,10 @@ class TmuxTerminal:
             # Before each later key: the first `Enter` of `/exit Enter Enter` must not be followed
             # blind onto a dialog that came up meanwhile. Only a dialog pattern stops it -- between
             # the keys the screen is a command menu or "Shutting down…" (measured: Codex 0.155.1,
-            # cursor-agent 2026.09.18), which `classify` can misread (`dialog_on_screen`). No
-            # Remote Control menu check here: only this project opens that menu, and it would need
-            # the key lock this sequence holds from its first capture to its last key.
+            # cursor-agent 2026.09.18 and .23), which `classify` can misread (`dialog_on_screen`).
+            # No Remote Control menu check here: this project opens that menu only under the key
+            # lock this sequence holds; the owner opening it by hand in an attached pane inside a
+            # 150 ms gap is the one way in, and its `Enter` would keep the agent running.
             return not guarded or not dialog_on_screen(capture, descriptor)
 
         try:

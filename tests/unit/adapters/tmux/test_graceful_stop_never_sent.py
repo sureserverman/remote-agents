@@ -290,7 +290,8 @@ def test_a_codex_stop_sends_every_key_over_the_screens_between_them() -> None:
     assert pane.keys == list(keys)
 
 
-# --- cursor-agent, measured 2026-09-24 on 2026.09.18-9a7762b (`fixtures/panes/stop_sequence/`) ---
+# --- cursor-agent, measured 2026-09-24 (`fixtures/panes/stop_sequence/`): 2026.09.18-9a7762b, ---
+# --- and cursor_after_first_enter.txt on 2026.09.23-86fc751, the build the live drill runs on ---
 
 
 def _cursor_terminal(pane) -> TmuxTerminal:

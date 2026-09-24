@@ -101,24 +101,31 @@ def test_every_agent_whose_stop_submits_declares_a_composer() -> None:
 
 
 #: (method, keys expression) -> how many such guarded calls, and what their check refuses.
-_GUARDED: dict[tuple[str, str], tuple[int, str]] = {
+_GUARDED: dict[tuple[str, str], tuple[str, str, str]] = {
     ("graceful_stop", "profile.graceful_keys"): (
-        1,
+        "stoppable",
+        "unasked",
         "a draft, shell mode, a dialog or the open Remote Control menu; a dialog between keys",
     ),
     ("_remote_control", "REMOTE_CONTROL_ENABLE_KEYS"): (
-        1,
+        "lambda",
+        "unasked",
         "anything but an idle composer not already on; a dialog between keys",
     ),
     ("_remote_control", "REMOTE_CONTROL_OPEN_MENU_KEYS"): (
-        1,
+        "lambda",
+        "unasked",
         "anything but an idle composer with no menu up and not already off; a dialog between keys",
     ),
     ("_remote_control", "REMOTE_CONTROL_DISCONNECT_KEYS"): (
-        1,
+        "menu_up",
+        "menu_up",
         "a screen whose menu is not open, before the first arrow and each after it",
     ),
 }
+"""(method, keys expression) -> (the check, the between-key check, what they refuse). One row per
+call; the checks are named so that repointing either is a change to this table, not a silent one.
+A lambda is listed as `lambda`: its body is what `_constant` reads."""
 
 
 def guarded_calls(
@@ -165,13 +172,26 @@ def _between(call: ast.Call) -> ast.expr | None:
 
 def test_every_guarded_send_is_listed_with_what_it_refuses() -> None:
     calls = guarded_calls(_RUNTIME.read_text(encoding="utf-8"))
-    found = Counter((method, keys) for method, keys, _check, _where in calls)
-    listed = Counter({key: count for key, (count, _reason) in _GUARDED.items()})
+    found = Counter((method, keys) for method, keys, _call, _where in calls)
+    listed = Counter({key: 1 for key in _GUARDED})
 
     assert not found - listed, f"guarded sends nobody has described: {dict(found - listed)}"
     assert not listed - found, (
         f"described guarded sends that no longer exist: {dict(listed - found)}"
     )
+
+
+def _named(check: ast.expr | None) -> str:
+    return "lambda" if isinstance(check, ast.Lambda) else ast.unparse(check) if check else "none"
+
+
+def test_every_guarded_send_uses_the_checks_listed_for_it() -> None:
+    uses = {
+        (method, keys): (_named(call.args[2]), _named(_between(call)))
+        for method, keys, call, _where in guarded_calls(_RUNTIME.read_text(encoding="utf-8"))
+    }
+
+    assert uses == {key: (check, between) for key, (check, between, _why) in _GUARDED.items()}
 
 
 def test_no_guarded_send_is_licensed_by_a_constant_check() -> None:

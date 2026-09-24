@@ -149,9 +149,9 @@ def dialog_on_screen(capture: str, descriptor: ProviderDescriptor) -> bool:
 
     Partway through `/quit Enter Enter` the agent's own command menu can hide the composer, and
     then `classify` falls back to the folder-trust reading, which a trust box answered at launch
-    and still drawn above satisfies (cursor-agent 2026.09.18). What that fallback adds is only the
-    stale box: a *live* trust dialog matches each agent's own declared dialog patterns too, which
-    every `dialog_trust.txt` capture does (`test_every_live_trust_dialog_is_a_declared_dialog`).
+    and still drawn above satisfies (cursor-agent 2026.09.18/.23). What that fallback adds is only
+    the stale box: a *live* trust dialog matches each agent's own declared dialog patterns too,
+    as every `dialog_trust.txt` capture does (test_every_live_trust_dialog_is_a_declared_dialog).
     Whether an agent can raise one mid-session has not been measured; if it did, this catches it.
     """
     declared = descriptor.composer
