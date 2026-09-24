@@ -607,7 +607,17 @@ def _stripped_environment() -> dict[str, str]:
     }
 
 
-def _run_command(argv: tuple[str, ...]) -> int:
+_COMMAND_SECONDS = 600
+"""The bound on one command onboarding runs -- a package install, a supervisor verb."""
+
+_ONBOARD_SECONDS = 6 * _COMMAND_SECONDS
+"""The bound on the `onboard --install-daemon` child `upgrade` runs. That child runs up to five
+supervisor commands in turn, each under `_COMMAND_SECONDS` (liveness, then remove, reload, register
+and restart, or start in place of restart), so under the same bound the parent could kill it while
+it was still going to report `restarted: pid A -> B` or the command to run."""
+
+
+def _run_command(argv: tuple[str, ...], timeout: int = _COMMAND_SECONDS) -> int:
     """Run one fixed local command and return its exit status, without a shell.
 
     The sibling of `_command_succeeds`, and separate from it because the two answer different
@@ -617,7 +627,11 @@ def _run_command(argv: tuple[str, ...]) -> int:
     """
     try:
         return subprocess.run(
-            argv, check=False, stdin=subprocess.DEVNULL, timeout=600, env=_stripped_environment()
+            argv,
+            check=False,
+            stdin=subprocess.DEVNULL,
+            timeout=timeout,
+            env=_stripped_environment(),
         ).returncode
     except (OSError, subprocess.SubprocessError):
         # Same shape as `_command_succeeds`: a command that could not start is a command that
@@ -997,7 +1011,9 @@ def _run_upgrade(arguments) -> int:
             "Re-onboarding with the new version: "
             "re-registers the daemon and restarts it if running."
         )
-    return _run_command((_installed_executable(), "onboard", "--install-daemon"))
+    return _run_command(
+        (_installed_executable(), "onboard", "--install-daemon"), timeout=_ONBOARD_SECONDS
+    )
 
 
 def _installed_executable() -> str:

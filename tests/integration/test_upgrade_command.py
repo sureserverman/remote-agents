@@ -14,7 +14,9 @@ from remote_agents.composition import onboarding
 def ran(monkeypatch: pytest.MonkeyPatch) -> list[tuple[str, ...]]:
     """Record every command the upgrade would run, and run none of them."""
     recorded: list[tuple[str, ...]] = []
-    monkeypatch.setattr(onboarding, "_run_command", lambda argv: recorded.append(tuple(argv)) or 0)
+    monkeypatch.setattr(
+        onboarding, "_run_command", lambda argv, **_: recorded.append(tuple(argv)) or 0
+    )
     monkeypatch.setattr(onboarding, "_installed_executable", lambda: "/opt/bin/remote-agents")
     return recorded
 
@@ -68,7 +70,7 @@ def test_an_install_that_failed_does_not_touch_the_daemon(
     monkeypatch.setattr(
         onboarding,
         "_run_command",
-        lambda argv: attempted.append(tuple(argv)) or (1 if argv[0] == "uv" else 0),
+        lambda argv, **_: attempted.append(tuple(argv)) or (1 if argv[0] == "uv" else 0),
     )
 
     assert main(["upgrade"]) == 1
@@ -169,7 +171,7 @@ def test_an_upgrade_whose_restart_could_not_be_verified_exits_non_zero(
 ) -> None:
     """Re-onboarding exits 1 when it cannot prove the new process; the upgrade passes that on."""
     monkeypatch.setattr(
-        onboarding, "_run_command", lambda argv: 1 if "--install-daemon" in argv else 0
+        onboarding, "_run_command", lambda argv, **_: 1 if "--install-daemon" in argv else 0
     )
     monkeypatch.setattr(onboarding, "_installed_executable", lambda: "/opt/bin/remote-agents")
     monkeypatch.setattr(onboarding, "__version__", "0.23.0")
@@ -200,3 +202,25 @@ def test_a_rollback_to_a_release_that_does_not_restart_says_so_and_names_the_com
     assert "restarts it if running" not in out
     assert "does not restart" in out
     assert "systemctl --user restart remote-agents.service" in out
+
+
+def test_the_onboard_child_is_bounded_longer_than_every_command_it_runs_in_turn(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`upgrade` runs `onboard --install-daemon`, which runs up to five supervisor commands in a
+    row (liveness, remove, reload, register, restart), each under `_COMMAND_SECONDS`. Given the
+    same bound, the parent could kill a child that was still going to report its outcome."""
+    bounds: dict[str, int] = {}
+
+    def run(argv, timeout=onboarding._COMMAND_SECONDS):
+        bounds["onboard" if "--install-daemon" in argv else argv[0]] = timeout
+        return 0
+
+    monkeypatch.setattr(onboarding, "_run_command", run)
+    monkeypatch.setattr(onboarding, "_installed_executable", lambda: "/opt/bin/remote-agents")
+    monkeypatch.setattr(onboarding, "__version__", "0.48.0")
+    _offering(monkeypatch, "v0.48.0", "v0.48.1")
+
+    assert main(["upgrade"]) == 0
+
+    assert bounds["onboard"] > 5 * onboarding._COMMAND_SECONDS, bounds
