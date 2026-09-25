@@ -811,3 +811,149 @@ def test_the_pairing_modal_cannot_be_photographed_by_the_command_palette() -> No
     assert "ctrl+p" in keys, "the command palette can still open over a live secret"
     assert keys["ctrl+p"].priority is True
     assert keys["ctrl+p"].action == "dismiss_code"
+
+
+# --- console facelift sub-plan 2 Task 2.3: the limits pane gives the console bar its words -------
+
+
+class _StoredDefault:
+    """Claude's stored Remote Control default, settable per test."""
+
+    def __init__(self, value) -> None:
+        self.value = value
+
+    async def read(self):
+        return self.value
+
+
+class _BarWords:
+    def __init__(self) -> None:
+        self.published: list[tuple | None] = []
+
+    async def publish(self, marks, palette) -> None:
+        self.published.append(None if marks is None else (tuple(marks), palette))
+
+
+def _bar_context(control, stored, bar: _BarWords) -> TuiContext:
+    return TuiContext(
+        backend=backend_for(
+            sessions=_Launcher((_record(),)),  # type: ignore[arg-type]
+            projects=object(),  # type: ignore[arg-type]
+            refresh_catalogue=lambda: (_PROJECT,),
+            catalogue=(_PROJECT,),
+            host_remote_control=control,
+            claude_remote_control_default=stored,
+        ),
+        profiles=(ProfileAvailability("claude", True),),
+        attach_argv=lambda session_id: ("tmux", "attach-session", "-t", f"={session_id}"),
+        console_publish_remote_control=bar.publish,
+    )
+
+
+def _drawn_words(app: RemoteAgentsTui) -> dict[str, str]:
+    """The two Remote Control lines' state words, as the pane drew them."""
+    pane = app.screen.query_one("#limits-pane", OptionList)
+    rows = [str(pane.get_option_at_index(index).prompt) for index in range(pane.option_count)]
+    words = {}
+    for row in rows:
+        if "Remote Control · " in row:
+            title, word = row.split(" · ", 1)
+            words[title.split()[0].lower()] = word
+    return words
+
+
+async def _settle(app: RemoteAgentsTui, pilot) -> None:
+    await pilot.pause()
+    await app.workers.wait_for_complete()
+
+
+async def test_the_limits_pane_publishes_the_words_it_draws_for_every_reading() -> None:
+    from remote_agents.domain.remote_control import RemoteControlDefault
+    from remote_agents.ports.console import RemoteControlTone
+
+    control = FakeHostRemoteControl(HostConnection.CONNECTED)
+    stored = _StoredDefault(RemoteControlDefault.ON)
+    bar = _BarWords()
+    app = RemoteAgentsTui(_bar_context(control, stored, bar))
+    seen = []
+
+    async with app.run_test() as pilot:
+        await app.push_screen(LimitsPaneScreen())
+        for connection, value in (
+            (HostConnection.CONNECTED, RemoteControlDefault.ON),
+            (HostConnection.DISABLED, RemoteControlDefault.OFF),
+            (HostConnection.UNREACHABLE, RemoteControlDefault.PROVIDER_DEFAULT),
+            (HostConnection.ERRORED, RemoteControlDefault.OFF),
+        ):
+            control.connection = connection
+            stored.value = value
+            await app.screen._reload_limits()
+            await _settle(app, pilot)
+            marks, _palette = bar.published[-1]
+            seen.append(({m.provider: m.word for m in marks}, _drawn_words(app), marks))
+
+    for published, drawn, _marks in seen:
+        assert published == drawn, (published, drawn)
+    tones = [{m.provider: m.tone for m in marks} for *_, marks in seen]
+    assert tones == [
+        {"claude": RemoteControlTone.ON, "codex": RemoteControlTone.ON},
+        {"claude": RemoteControlTone.OFF, "codex": RemoteControlTone.OFF},
+        {"claude": RemoteControlTone.UNKNOWN, "codex": RemoteControlTone.UNKNOWN},
+        {"claude": RemoteControlTone.OFF, "codex": RemoteControlTone.BROKEN},
+    ]
+    assert [m.provider for m in seen[0][2]] == ["claude", "codex"], "the design's order"
+
+
+async def test_an_unwired_capability_publishes_unavailable_as_unknown() -> None:
+    from remote_agents.ports.console import RemoteControlTone
+
+    bar = _BarWords()
+    app = RemoteAgentsTui(_bar_context(None, None, bar))
+    async with app.run_test() as pilot:
+        await app.push_screen(LimitsPaneScreen())
+        await _settle(app, pilot)
+        marks, _ = bar.published[-1]
+
+    assert {m.provider: (m.word, m.tone) for m in marks} == {
+        "claude": ("unavailable", RemoteControlTone.UNKNOWN),
+        "codex": ("unavailable", RemoteControlTone.UNKNOWN),
+    }
+
+
+async def test_leaving_the_limits_pane_publishes_the_unset() -> None:
+    """A dead limits pane must leave no stale claim on the bar."""
+    bar = _BarWords()
+    app = RemoteAgentsTui(_bar_context(FakeHostRemoteControl(HostConnection.CONNECTED), None, bar))
+    async with app.run_test() as pilot:
+        await app.push_screen(LimitsPaneScreen())
+        await _settle(app, pilot)
+        assert bar.published and bar.published[-1] is not None
+
+    assert bar.published[-1] is None
+
+
+async def test_the_dashboard_publishes_nothing_to_the_bar() -> None:
+    """Bare `tui`'s dashboard draws its own Remote Control rows; the bar is the console's."""
+    bar = _BarWords()
+    app = RemoteAgentsTui(_bar_context(FakeHostRemoteControl(HostConnection.CONNECTED), None, bar))
+    async with app.run_test() as pilot:
+        await _settle(app, pilot)
+        assert isinstance(app.screen, DashboardScreen)
+
+    assert bar.published == []
+
+
+async def test_a_theme_switch_publishes_the_words_again_in_the_new_colours() -> None:
+    from remote_agents.adapters.tui.theme import THEMES, status_bar_palette
+
+    bar = _BarWords()
+    app = RemoteAgentsTui(_bar_context(FakeHostRemoteControl(HostConnection.CONNECTED), None, bar))
+    async with app.run_test() as pilot:
+        await app.push_screen(LimitsPaneScreen())
+        await _settle(app, pilot)
+        app.theme = "relay-day"
+        await _settle(app, pilot)
+
+    palettes = [entry[1] for entry in bar.published if entry is not None]
+    assert palettes[0] == status_bar_palette(THEMES[0])
+    assert palettes[-1] == status_bar_palette(THEMES[1])

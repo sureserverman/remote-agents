@@ -694,6 +694,12 @@ class RemoteAgentsTui(App[AttachRequest | None]):
         self._typing_pending = True
         self.run_worker(self._write_typing(), name="publish-typing", exit_on_error=False)
 
+    async def _settle_typing(self, typing: bool | None) -> None:
+        """Write *typing* now, behind any write in flight, and return once it is written."""
+        self._typing_wanted = typing
+        self._typing_pending = True
+        await self._write_typing()
+
     async def _write_typing(self) -> None:
         """Write the newest typing value, from a console pane only, one write at a time.
 
@@ -732,9 +738,7 @@ class RemoteAgentsTui(App[AttachRequest | None]):
         # And unset the typing flag this process published, awaited because nothing runs after
         # this: a pane that exits mid-rename must not leave the bar saying `esc cancels`.
         if self._typing_written is not None:
-            self._typing_wanted = None
-            self._typing_pending = True
-            await self._write_typing()
+            await self._settle_typing(None)
         close = self.services.backend.close_usage_readers
         if close is None:
             return

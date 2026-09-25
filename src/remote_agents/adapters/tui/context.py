@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -10,7 +10,7 @@ from remote_agents.application.backend import Backend
 from remote_agents.application.console import RecoveryReport
 from remote_agents.application.profiles import ProfileAvailability
 from remote_agents.domain.models import SessionId
-from remote_agents.ports.console import StatusBarPalette
+from remote_agents.ports.console import RemoteControlMark, StatusBarPalette
 
 #: How many observations the feed shows and its reader fetches — one number, imported by
 #: both the composition root (the reader's LIMIT) and the dashboard (the render slice), so
@@ -141,6 +141,10 @@ class TuiContext:
     # only; the sessions pane is the one writer of the first, a commitment screen of the second.
     console_publish_session_selected: Callable[[bool | None], Awaitable[None]] | None = None
     console_publish_typing: Callable[[bool | None], Awaitable[None]] | None = None
+    # The Remote Control readings the console's limits pane draws, for the bar's right end.
+    console_publish_remote_control: (
+        Callable[[Sequence[RemoteControlMark] | None, StatusBarPalette], Awaitable[None]] | None
+    ) = None
     console_recovery: RecoveryReport | None = None
     # Where this surface remembers the one thing it remembers -- which order the projects
     # pane opens in. A *path*, wired by the composition root (DEC-046), rather than a

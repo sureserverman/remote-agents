@@ -24,6 +24,7 @@ screen's auxiliary panes.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from collections.abc import Iterable
 from dataclasses import replace
@@ -62,6 +63,7 @@ from remote_agents.adapters.tui.screens.feed import (
 from remote_agents.adapters.tui.screens.launch import PROJECTS_HINT, ProfilesScreen, ProjectsScreen
 from remote_agents.adapters.tui.screens.resume import advance_to_resume_profiles
 from remote_agents.adapters.tui.screens.sessions import SessionKeyHintRow, sessions_title
+from remote_agents.adapters.tui.theme import status_bar_palette
 from remote_agents.application.host_remote_control import (
     HOST_REMOTE_CONTROL_TITLE,
     host_remote_control_directions,
@@ -78,6 +80,7 @@ from remote_agents.application.remote_control_default import (
 )
 from remote_agents.application.remote_control_default import (
     remote_control_default_line,
+    remote_control_default_word,
 )
 from remote_agents.application.session_views import LimitRow, limit_rows, session_row_parts
 from remote_agents.domain.models import ProfileId, SessionRecord
@@ -88,6 +91,7 @@ from remote_agents.domain.remote_control import (
     RemoteControlState,
 )
 from remote_agents.ports.agent_usage import AgentLimits, LimitsAbsence
+from remote_agents.ports.console import RemoteControlMark, RemoteControlTone, StatusBarPalette
 from remote_agents.ports.state_events import StoreChanged, Unsubscribe
 
 _LOG = logging.getLogger(__name__)
@@ -289,6 +293,49 @@ def host_remote_control_line(status: HostRemoteControlStatus | None) -> str:
     return f"{HOST_REMOTE_CONTROL_TITLE} · {word}"
 
 
+#: How the console bar marks each host reading (R6). Only a live link is `on` and only an
+#: unenrolled host is `off`; a link the daemon reports broken is its own mark, and every
+#: reading that means "not known" -- connecting, no daemon, unreachable -- is `?`, for the
+#: reason `DAEMON_ABSENT` is not worded "off" above.
+_HOST_CONNECTION_TONES: dict[HostConnection, RemoteControlTone] = {
+    HostConnection.CONNECTED: RemoteControlTone.ON,
+    HostConnection.DISABLED: RemoteControlTone.OFF,
+    HostConnection.ERRORED: RemoteControlTone.BROKEN,
+}
+
+#: How the console bar marks Claude's stored default. `Claude's default` is not `off`
+#: (`REMOTE_CONTROL_DEFAULT_LABELS` says why), so it is `?`.
+_CLAUDE_DEFAULT_TONES: dict[RemoteControlDefault, RemoteControlTone] = {
+    RemoteControlDefault.ON: RemoteControlTone.ON,
+    RemoteControlDefault.OFF: RemoteControlTone.OFF,
+}
+
+
+def remote_control_marks(
+    host: HostRemoteControlStatus | None, claude: RemoteControlDefault | None
+) -> tuple[RemoteControlMark, ...]:
+    """The two Remote Control readings as the console bar draws them: `claude …  · codex …`.
+
+    The words are the ones the pane's own lines end in -- `remote_control_default_word` and
+    `_HOST_CONNECTION_WORDS` -- so the bar and the pane cannot disagree (DEC-084/DEC-085).
+    """
+    host_word = _HOST_UNAVAILABLE if host is None else _HOST_CONNECTION_WORDS[host.connection]
+    host_tone = (
+        RemoteControlTone.UNKNOWN
+        if host is None
+        else _HOST_CONNECTION_TONES.get(host.connection, RemoteControlTone.UNKNOWN)
+    )
+    claude_tone = (
+        RemoteControlTone.UNKNOWN
+        if claude is None
+        else _CLAUDE_DEFAULT_TONES.get(claude, RemoteControlTone.UNKNOWN)
+    )
+    return (
+        RemoteControlMark("claude", remote_control_default_word(claude), claude_tone),
+        RemoteControlMark("codex", host_word, host_tone),
+    )
+
+
 class HostPairAction(Message):
     """Posted by the pairing key so the code is minted on this screen's own pump.
 
@@ -331,6 +378,75 @@ class LimitsRegion:
     three separate processes that never mount it. Copying the method into a fourth would have
     been the second renderer DEC-043 exists to prevent.
     """
+
+    #: Whether this position gives the console's status bar its Remote Control words
+    #: (DEC-105). The console's limits pane alone: the dashboard is bare `tui`'s, which has no
+    #: bar and draws its own rows -- the same screen-type gate `_publish_selection` uses.
+    publishes_remote_control = False
+
+    #: What the bar was last given, as `(marks, palette)`, or `None` before anything was.
+    _remote_control_written: tuple[tuple[RemoteControlMark, ...], StatusBarPalette] | None = None
+    _remote_control_wanted: tuple[tuple[RemoteControlMark, ...], StatusBarPalette] | None = None
+    _remote_control_pending = False
+    _remote_control_lock: asyncio.Lock | None = None
+
+    def _publish_remote_control(self) -> None:
+        """Give the bar the readings this pane draws, in the active theme's colours.
+
+        Scheduled, and coalesced through a lock and a latest-value slot for the reason
+        `SessionsPaneScreen._publish_selection` gives in full: independent tmux writes finish
+        in any order, and the last one written is what the bar says until the next.
+        """
+        if not self.publishes_remote_control:
+            return
+        if self.services.console_publish_remote_control is None:
+            return
+        marks = remote_control_marks(self._host_status, self._claude_default)
+        wanted = (marks, status_bar_palette(self.app.current_theme))
+        if wanted == self._remote_control_wanted:
+            return
+        self._remote_control_wanted = wanted
+        self._remote_control_pending = True
+        self.run_worker(
+            self._write_remote_control(), name="publish-remote-control", exit_on_error=False
+        )
+
+    async def _write_remote_control(self) -> None:
+        publish = self.services.console_publish_remote_control
+        if publish is None:
+            return
+        if self._remote_control_lock is None:
+            self._remote_control_lock = asyncio.Lock()
+        async with self._remote_control_lock:
+            while self._remote_control_pending:
+                self._remote_control_pending = False
+                wanted = self._remote_control_wanted
+                if wanted == self._remote_control_written:
+                    continue
+                # Unset or not, one call: `wanted` carries the marks, or `None` for the unset.
+                marks, palette = wanted or (None, status_bar_palette(self.app.current_theme))
+                try:
+                    await publish(marks, palette)
+                except Exception:
+                    _LOG.debug(
+                        "the console's Remote Control words were not published", exc_info=True
+                    )
+                else:
+                    self._remote_control_written = wanted
+
+    async def _unpublish_remote_control(self) -> None:
+        """Unset the bar's words, awaited: a limits pane that is gone makes no claim."""
+        if self._remote_control_written is None:
+            return
+        await self._settle_remote_control(None)
+
+    async def _settle_remote_control(
+        self, wanted: tuple[tuple[RemoteControlMark, ...], StatusBarPalette] | None
+    ) -> None:
+        """Write *wanted* now, behind any write in flight; `None` unsets the bar's words."""
+        self._remote_control_wanted = wanted
+        self._remote_control_pending = True
+        await self._write_remote_control()
 
     async def _reload_limits(self) -> None:
         """Redraw the account-wide limits, or leave whatever is drawn exactly as it is.
@@ -523,6 +639,7 @@ class LimitsRegion:
         lines read from the intention down to the observation, and so the pane's last line goes
         on being the one it has always been.
         """
+        self._publish_remote_control()
         found = self.query("#limits-pane")
         if not found:
             return
@@ -718,6 +835,7 @@ class LimitsPaneScreen(LimitsRegion, ChoiceScreen):
     empty_state = NO_LIMITS
 
     position = "LIMITS_PANE"
+    publishes_remote_control = True
     can_refresh = True
     crumb = "Agent limits"
     status = "What each agent has spent against its plan, for the whole account."
@@ -802,6 +920,12 @@ class LimitsPaneScreen(LimitsRegion, ChoiceScreen):
 
     async def populate(self) -> None:
         self.hide_entry()
+        if self._timer is None:
+            # Once, beside the timer: the bar's words carry the theme's colours, so a theme
+            # switch owes the bar a rewrite (DEC-105).
+            self.app.theme_changed_signal.subscribe(
+                self, lambda _theme: self._publish_remote_control()
+            )
         await self._reload_limits()
         # The same one-liner `FeedScreen.populate` carries, and the second instance of the
         # defect its comment describes: `hide_entry` hides `#filter` and `#choices` -- composed
@@ -845,6 +969,9 @@ class LimitsPaneScreen(LimitsRegion, ChoiceScreen):
     def on_screen_resume(self) -> None:
         if self._timer is not None:
             self._timer.resume()
+
+    async def on_unmount(self) -> None:
+        await self._unpublish_remote_control()
 
 
 class DashboardScreen(LimitsRegion, FeedRegion, ProjectsPaneScreen):
