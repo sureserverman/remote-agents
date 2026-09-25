@@ -593,6 +593,18 @@ The rest of the keyboard is what it is everywhere else: `j` `k` `g` `G` move wit
 `Ctrl+P` open the command palette (k9s; Textual), and Escape, Enter and the arrows are
 unchanged.
 
+**Inside the console the row is drawn once, on tmux's status line** at the bottom of the window
+(DEC-105): `1 help  2 settings  3 inspect … 10 close console  11 terminal  12 projects`, with
+`Remote Control  claude on · codex on` and the session name at the right end. It belongs to the
+window rather than to a pane, so it stays on screen while an agent fills the left slot. Below
+161 columns it compacts to `1help 2setup 3view …` and `RC` with one mark per agent — `●` on,
+`○` off, `?` unknown. The session keys dim while the sessions pane has no row selected; while a
+text entry is open (the rename box, a new project's name) `F2`, `F7`, `F8` and `F9` dim and the
+right end reads `esc cancels`. Its colours follow the theme you choose. With tmux's default
+`status on` it takes the row tmux's own status line already used, so no pane is shorter for it.
+A console built before 0.51.0 gets it the next time `remote-agents` is run from a plain shell
+(`remote-agents console close`, then `remote-agents`).
+
 **The footer does not draw all eleven**, and that is a width decision rather than a statement
 about which keys exist — every one of them is bound on every position that answers for it. The
 footer is a single clipping line: measured on the inspect screen at 80 columns, five app
