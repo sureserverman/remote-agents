@@ -96,6 +96,10 @@ class FunctionKey(NamedTuple):
     `show`, so every key here is in it, which is what the key is borrowed from htop *for*. The
     five session-shaped keys are left out because the pane's own hint row names them, and F2,
     F5 and F12 because `,`, `ctrl+r` and the palette already do.
+
+    `short` is the one word the console's compact status bar draws (DEC-105), where `label`
+    would not fit: `1help 2setup 3view …`. Where it differs from `label` it is the borrowed
+    source's own word (DEC-095) -- htop's Setup and Kill, mc's View.
     """
 
     key: str
@@ -103,22 +107,40 @@ class FunctionKey(NamedTuple):
     label: str
     borrowed_from: str
     footer: bool
+    short: str
 
 
 #: The F-key row, owner-validated. F1-F10 and F12; F11 deliberately not here.
 FUNCTION_KEYS: tuple[FunctionKey, ...] = (
-    FunctionKey("f1", "help", "help", "htop, mc", footer=True),
-    FunctionKey("f2", "settings", "settings", "htop Setup", footer=False),
-    FunctionKey("f3", "session_key('inspect')", "inspect", "mc View", footer=False),
-    FunctionKey("f4", "session_key('detail')", "detail", "mc Edit", footer=False),
-    FunctionKey("f5", "refresh", "refresh", "browsers, k9s", footer=False),
-    FunctionKey("f6", "session_key('rename')", "rename", "mc RenMov", footer=False),
-    FunctionKey("f7", "add_project", "add project", "mc Mkdir", footer=True),
-    FunctionKey("f8", "session_key('graceful')", "stop", "mc Delete", footer=False),
-    FunctionKey("f9", "session_key('force')", "force", "htop Kill", footer=False),
-    FunctionKey("f10", "quit", "quit", "htop, mc", footer=True),
-    FunctionKey("f12", "projects_home", "projects", "existing root key", footer=False),
+    FunctionKey("f1", "help", "help", "htop, mc", footer=True, short="help"),
+    FunctionKey("f2", "settings", "settings", "htop Setup", footer=False, short="setup"),
+    FunctionKey("f3", "session_key('inspect')", "inspect", "mc View", footer=False, short="view"),
+    FunctionKey("f4", "session_key('detail')", "detail", "mc Edit", footer=False, short="detail"),
+    FunctionKey("f5", "refresh", "refresh", "browsers, k9s", footer=False, short="refresh"),
+    FunctionKey("f6", "session_key('rename')", "rename", "mc RenMov", footer=False, short="rename"),
+    FunctionKey("f7", "add_project", "add project", "mc Mkdir", footer=True, short="addproj"),
+    FunctionKey("f8", "session_key('graceful')", "stop", "mc Delete", footer=False, short="stop"),
+    FunctionKey(
+        "f9", "session_key('force')", "force stop", "htop Kill", footer=False, short="kill"
+    ),
+    FunctionKey("f10", "quit", "quit", "htop, mc", footer=True, short="close"),
+    FunctionKey(
+        "f12", "projects_home", "projects", "existing root key", footer=False, short="projects"
+    ),
 )
+
+
+#: F11 as the console's status bar draws it: dim, labelled, and **bound nowhere** (DEC-093).
+#:
+#: Drawn so the owner reading `10 close console  12 projects` does not wonder where 11 went;
+#: kept out of `FUNCTION_KEYS` so no binding list built from that table can ever reach it --
+#: which is the construction the module docstring argues for, unchanged. `action` is empty
+#: because there is nothing to run. The compact bar drops it first.
+TERMINAL_KEY = FunctionKey("f11", "", "terminal", "the terminal", footer=False, short="terminal")
+
+
+#: Every key the console's status bar draws, in key order: the bound table plus F11.
+BAR_KEYS: tuple[FunctionKey, ...] = (*FUNCTION_KEYS[:10], TERMINAL_KEY, *FUNCTION_KEYS[10:])
 
 
 #: What a **console** surface pane calls each footer entry whose meaning depends on its host,

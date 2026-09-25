@@ -991,3 +991,48 @@ async def test_every_screen_answers_every_f_key_or_refuses_it_with_a_sentence() 
                 await pilot.pause()
 
     assert not dropped, f"these positions drop F1 or F10: {dropped}"
+
+
+# --- console facelift sub-plan 2 Task 1.3: the bar's words --------------------------------
+
+
+def test_every_entry_carries_a_one_word_short_label() -> None:
+    """The compact bar prints `1help 2setup …`, so a short with a space would split a cell."""
+    for entry in FUNCTION_KEYS:
+        assert entry.short, f"{entry.key} has no short label"
+        assert " " not in entry.short, f"{entry.key}: {entry.short!r} is not one word"
+
+
+def test_the_shorts_are_the_borrowed_sources_own_words() -> None:
+    """DEC-095: `setup`, `view`, `kill` are htop's and mc's words, not ones invented here."""
+    shorts = " ".join(entry.short for entry in FUNCTION_KEYS)
+
+    assert shorts == "help setup view detail refresh rename addproj stop kill close projects"
+
+
+def test_f9_reads_force_stop_as_the_design_draws_it() -> None:
+    """The full bar is `… 8 stop  9 force stop …`, from the table's own label."""
+    labels = {entry.key: entry.label for entry in FUNCTION_KEYS}
+
+    assert labels["f9"] == "force stop"
+
+
+def test_f11_is_drawn_on_the_bar_and_bound_nowhere() -> None:
+    """DEC-093: the bar may show F11 so nobody wonders where it went; nothing may bind it."""
+    from remote_agents.adapters.tmux.codec import console_binding_args
+    from remote_agents.adapters.tui.keys import BAR_KEYS, TERMINAL_KEY
+    from remote_agents.application.console import CONSOLE_BINDINGS
+    from remote_agents.ports.console import ConsoleBindingAction
+
+    assert TERMINAL_KEY.key == "f11"
+    assert TERMINAL_KEY.label == "terminal"
+    assert TERMINAL_KEY in BAR_KEYS
+    assert "f11" not in {binding.key for binding in function_key_bindings()}
+    assert "f11" not in {binding.key for binding in RemoteAgentsTui.BINDINGS}
+    assert "F11" not in {binding.key for binding in CONSOLE_BINDINGS}
+    try:
+        console_binding_args("F11", ConsoleBindingAction.FORWARD_FUNCTION_KEY, reserved_keys={})
+    except ValueError:
+        pass
+    else:  # pragma: no cover - the refusal is the assertion
+        raise AssertionError("console_binding_args agreed to bind F11")

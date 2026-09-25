@@ -24,7 +24,7 @@ from pathlib import Path
 from textual.binding import Binding
 
 from remote_agents.adapters.tui.app import RemoteAgentsTui
-from remote_agents.adapters.tui.keys import FUNCTION_KEYS, SESSION_KEYS
+from remote_agents.adapters.tui.keys import BAR_KEYS, FUNCTION_KEYS, SESSION_KEYS
 from remote_agents.adapters.tui.screens.sessions import (
     _DETAIL_KEY,
     ROW_KEY_LETTERS,
@@ -39,6 +39,19 @@ def _function_key_bindings() -> list[Binding]:
         for binding in RemoteAgentsTui.BINDINGS
         if binding.key.startswith("f") and binding.key[1:].isdigit()
     ]
+
+
+def test_the_bar_draws_the_bound_table_and_only_f11_besides() -> None:
+    """The status bar (DEC-105) and the bindings are one table, with one drawn-only extra.
+
+    `BAR_KEYS` is what `codec.status_format_args` draws. Every bound key is on it in key order,
+    and the one entry that is not bound is F11 — drawn dim so the owner can see it is the
+    terminal's, and bound nowhere (DEC-093).
+    """
+    assert [entry.key for entry in BAR_KEYS] == [f"f{n}" for n in range(1, 13)]
+    assert [entry for entry in BAR_KEYS if entry.key != "f11"] == list(FUNCTION_KEYS)
+    bound = {binding.key for binding in _function_key_bindings()}
+    assert {entry.key for entry in BAR_KEYS} - bound == {"f11"}
 
 
 def test_every_session_shaped_key_names_a_row_key_the_sessions_pane_binds() -> None:
