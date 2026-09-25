@@ -25,6 +25,7 @@ from typing import NamedTuple
 from textual.binding import Binding
 
 from remote_agents.application.session_actions import ACTION_LABELS, FORCE, GRACEFUL
+from remote_agents.ports.console import StatusBarKey
 
 
 class SessionKey(NamedTuple):
@@ -180,6 +181,41 @@ CONSOLE_FOOTER_LABELS: dict[str, str] = {
 SESSION_KEY_HINT = " ".join(
     entry.key.upper() for entry in FUNCTION_KEYS if entry.action.startswith("session_key(")
 )
+
+
+#: The keys, besides the stops, that a text-entry screen refuses: F2 (settings) and F7 (add
+#: project) would each open a screen over a half-typed name. The console bar dims them there.
+_REFUSED_WHILE_TYPING = frozenset({"settings", "add_project"})
+
+
+def status_bar_keys() -> tuple[StatusBarKey, ...]:
+    """`BAR_KEYS` as the console's status bar draws them (DEC-105), one table with the bindings.
+
+    The bar only exists under console hosting, so the console's own labels apply
+    (`CONSOLE_FOOTER_LABELS`: F10 reads `close console`, DEC-096). Which keys dim is derived
+    here from what each one runs rather than listed for the bar: a session key needs a
+    selection, and a stop key -- `SESSION_STOP_KEYS`, the set `_offers_session_key` refuses on
+    a commitment screen -- is refused while typing.
+    """
+    keys = []
+    for entry in BAR_KEYS:
+        named = (
+            session_key(entry.action.removeprefix("session_key('").removesuffix("')"))
+            if entry.action.startswith("session_key(")
+            else None
+        )
+        keys.append(
+            StatusBarKey(
+                number=int(entry.key[1:]),
+                label=CONSOLE_FOOTER_LABELS.get(entry.key, entry.label),
+                short=entry.short,
+                needs_selection=named is not None,
+                refused_while_typing=entry.action in _REFUSED_WHILE_TYPING
+                or (named is not None and named.row_key in SESSION_STOP_KEYS),
+                bound=entry is not TERMINAL_KEY,
+            )
+        )
+    return tuple(keys)
 
 
 def function_key_bindings() -> list[Binding]:

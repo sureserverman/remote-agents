@@ -10,9 +10,15 @@ from pathlib import Path
 
 from remote_agents.domain.models import ProfileId, ProjectId, SessionId
 from remote_agents.ports.console import (
+    REMOTE_CONTROL_COMPACT_OPTION,
+    REMOTE_CONTROL_OPTION,
+    SESSION_SELECTED_OPTION,
+    TYPING_OPTION,
     ConsoleBindingAction,
     ConsoleKeyTable,
     ConsolePaneSlot,
+    StatusBarKey,
+    StatusBarPalette,
 )
 
 _DELIMITER = "|"
@@ -797,6 +803,84 @@ def console_option_args(name: str, value: str | None) -> tuple[str, ...]:
     if value is None:
         return ("show-options", "-w", "-q", "-v", "-t", console_target(), name)
     return ("set-option", "-w", "-t", console_target(), name, value)
+
+
+#: The column count above which the bar draws its full words (handoff README § 2).
+_FULL_BAR_ABOVE = 160
+
+#: What the bar's right end says while a text entry holds the keyboard.
+_TYPING_HINT = "esc cancels"
+
+
+def _bar_entry(key: StatusBarKey, palette: StatusBarPalette, *, full: bool) -> str:
+    """One key as the bar draws it: its number in the key colour, its words in the text colour,
+    or both dim while the key would be refused."""
+    words = f" {key.label}" if full else key.short
+    lit = f"#[fg={palette.key}]{key.number}#[fg={palette.text}]{words}"
+    dim = f"#[fg={palette.dim}]{key.number}{words}"
+    if not key.bound:
+        return dim
+    refusals = []
+    if key.needs_selection:
+        refusals.append(f"#{{!=:#{{{SESSION_SELECTED_OPTION}}},1}}")
+    if key.refused_while_typing:
+        refusals.append(f"#{{==:#{{{TYPING_OPTION}}},1}}")
+    if not refusals:
+        return lit
+    condition = refusals[0] if len(refusals) == 1 else f"#{{||:{refusals[0]},{refusals[1]}}}"
+    return f"#{{?{condition},{dim},{lit}}}"
+
+
+def status_format_args(
+    keys: Sequence[StatusBarKey], palette: StatusBarPalette
+) -> tuple[tuple[str, ...], ...]:
+    """Return the argv suffixes that give the console session its function-key bar (DEC-105).
+
+    One status line, drawn by tmux, so it belongs to the window rather than to any pane and
+    survives an agent being exchanged into the left slot (DEC-040) -- which is exactly when the
+    Textual footers vanish. Built from the key table the bindings come from, never spelled.
+
+    **Session options on the console session, not `-w` and never `-g`.** `status`,
+    `status-style` and `status-format` are session options in tmux; measured on 3.4
+    (`test_status_bar_probe.py`), `-w` silently lands them on the target session anyway, so
+    the scope is stated rather than left to that. An agent's own `ra-<uuid>` session keeps
+    tmux's default bar.
+
+    **The width switch compares numbers.** `#{>:…}` compares strings, and on 3.4
+    `#{>:99,160}` is `1`, so a 99-column client would get the 200-column bar. `e|>|` is the
+    numeric form (R4).
+
+    **`status-interval 0`.** A change to an option the format reads redraws the row at once
+    (probed: ~7 ms), and nothing here depends on the clock, so a timed redraw buys nothing.
+
+    **Nothing in the format shells out**, for the reason `display_message_args` records:
+    `#(...)` runs a command. What the panes publish is interpolated as a value, and a value is
+    never expanded again.
+    """
+    by_width = []
+    for full in (True, False):
+        drawn = [key for key in keys if key.bound or full]
+        gap = "  " if full else " "
+        left = gap.join(_bar_entry(key, palette, full=full) for key in drawn)
+        published = REMOTE_CONTROL_OPTION if full else REMOTE_CONTROL_COMPACT_OPTION
+        remote = f"#{{?#{{{published}}},#{{{published}}}{gap if full else ''},}}"
+        tail = "#{session_name}" if full else ""
+        right = (
+            f"#[fg={palette.muted}]"
+            f"#{{?#{{==:#{{{TYPING_OPTION}}},1}},{_TYPING_HINT}{gap if full else ''},{remote}}}"
+            f"{tail}"
+        )
+        by_width.append(f"{left}#[align=right]{right}")
+    full_bar, compact_bar = by_width
+    status_format = f"#{{?#{{e|>|:#{{client_width}},{_FULL_BAR_ABOVE}}},{full_bar},{compact_bar}}}"
+    target = console_target()
+    return (
+        ("set-option", "-t", target, "status", "on"),
+        ("set-option", "-t", target, "status-position", "bottom"),
+        ("set-option", "-t", target, "status-interval", "0"),
+        ("set-option", "-t", target, "status-style", f"bg={palette.bar},fg={palette.text}"),
+        ("set-option", "-t", target, "status-format[0]", status_format),
+    )
 
 
 #: The tmux **server** options this project may set, by name. An allowlist rather than a

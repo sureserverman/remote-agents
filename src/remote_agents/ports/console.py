@@ -222,6 +222,104 @@ requires a user option to begin with `@`, and the rest says whose.
 """
 
 
+SESSION_SELECTED_OPTION = "@remote_agents_session_selected"
+"""`1` while the sessions pane's cursor rests on a row, `0` or unset otherwise (DEC-094 (2)).
+
+Read by the console's status bar (DEC-105) to dim the session keys. A flag beside the selection
+option rather than a test of it, because the bar's format can only compare, and an empty
+selection and a stale one must both read as "nothing to act on"."""
+
+TYPING_OPTION = "@remote_agents_typing"
+"""`1` while a text entry holds the keyboard (the rename box, a new project's name).
+
+The bar dims the keys `_offers_session_key` and the entry screens refuse there, and its right
+end says how to get out: `esc cancels`."""
+
+REMOTE_CONTROL_OPTION = "@remote_agents_remote_control"
+"""The full bar's Remote Control words, styled, exactly as the limits pane reads them."""
+
+REMOTE_CONTROL_COMPACT_OPTION = "@remote_agents_remote_control_compact"
+"""The compact bar's `RC` and one mark per provider (R6: `●` on, `○` off, `?` unknown)."""
+
+#: Every option the status bar reads and a pane publishes. A publisher must also clear what it
+#: set, or the bar goes on stating a fact the pane that knew it is no longer there to correct.
+STATUS_BAR_OPTIONS = (
+    SESSION_SELECTED_OPTION,
+    TYPING_OPTION,
+    REMOTE_CONTROL_OPTION,
+    REMOTE_CONTROL_COMPACT_OPTION,
+)
+
+
+@dataclass(frozen=True, slots=True)
+class StatusBarKey:
+    """One function key as the console's status bar draws it (DEC-105).
+
+    A port value because the bar is built by the tmux adapter from the key table the TUI
+    adapter owns, and adapters do not import each other: the composition root hands the table
+    across in this shape.
+    """
+
+    number: int
+    label: str
+    """The full bar's words, with the console's own labels applied (`close console`)."""
+    short: str
+    """The compact bar's one word."""
+    needs_selection: bool
+    """Dimmed while the sessions cursor rests on nothing (F3 F4 F6 F8 F9)."""
+    refused_while_typing: bool
+    """Dimmed while a text entry holds the keyboard (F2 F7 F8 F9)."""
+    bound: bool = True
+    """False for F11 alone: drawn dim on the full bar, dropped from the compact one."""
+
+
+_HEX_COLOUR = frozenset("0123456789abcdefABCDEF")
+
+
+@dataclass(frozen=True, slots=True)
+class StatusBarPalette:
+    """The bar's colours, resolved from the active theme to `#RRGGBB`.
+
+    tmux cannot read a Textual variable, so the theme is resolved on the TUI side and the
+    values travel here. Each is checked, because each is interpolated into a tmux style.
+    """
+
+    bar: str
+    text: str
+    key: str
+    dim: str
+    muted: str
+    on: str
+    off: str
+
+    def __post_init__(self) -> None:
+        for name in ("bar", "text", "key", "dim", "muted", "on", "off"):
+            value = getattr(self, name)
+            if len(value) != 7 or value[0] != "#" or not set(value[1:]) <= _HEX_COLOUR:
+                raise ValueError(f"a status bar colour is #RRGGBB, got {name}={value!r}")
+
+
+class RemoteControlTone(Enum):
+    """How one provider's Remote Control reading is marked on the bar (R6, DEC-010).
+
+    The glyph carries the state and the colour repeats it, so neither is the only signal.
+    """
+
+    ON = "on"
+    OFF = "off"
+    BROKEN = "broken"
+    UNKNOWN = "unknown"
+
+
+@dataclass(frozen=True, slots=True)
+class RemoteControlMark:
+    """One provider's Remote Control reading, in the limits pane's own words."""
+
+    provider: str
+    word: str
+    tone: RemoteControlTone
+
+
 @runtime_checkable
 class ConsolePort(Protocol):
     """Window-level operations on the one console session."""

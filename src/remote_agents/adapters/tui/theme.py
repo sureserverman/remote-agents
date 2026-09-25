@@ -20,7 +20,10 @@ surface writes.
 
 from __future__ import annotations
 
+from textual.color import Color, ColorParseError
 from textual.theme import Theme
+
+from remote_agents.ports.console import StatusBarPalette
 
 RELAY_NIGHT = "relay-night"
 RELAY_DAY = "relay-day"
@@ -95,3 +98,51 @@ VARIABLE_DEFAULTS: dict[str, str] = {
     "selection": "#3a3a3a 40%",
     "text-dim": "#808080",
 }
+
+
+def status_bar_palette(theme: Theme) -> StatusBarPalette:
+    """The console status bar's colours under *theme*, as `#RRGGBB` for tmux (DEC-105).
+
+    The bar sits on `panel`, one step lighter than the window; keys take `warning`, words
+    `foreground`, and the three greys and two state colours are the same variables the panes
+    use. A theme that leaves one unset -- Textual's built-ins have no `panel` or `text-dim` of
+    ours -- falls back through the design system Textual derives for it, so any theme the
+    palette offers yields a bar rather than an error. The ANSI themes name the terminal's own
+    colours, which have no `#RRGGBB` to hand tmux; their bar takes the default theme's.
+    """
+    try:
+        return _status_bar_palette(theme)
+    except ColorParseError:
+        return _status_bar_palette(THEMES[0])
+
+
+def _status_bar_palette(theme: Theme) -> StatusBarPalette:
+    derived = theme.to_color_system().generate()
+
+    def resolve(value: str | None, variable: str) -> str:
+        chosen = value or theme.variables.get(variable) or VARIABLE_DEFAULTS.get(variable)
+        if chosen is None:
+            chosen = derived[variable]
+        colour, _, alpha = chosen.partition(" ")
+        if colour == "auto":
+            # Textual's "readable text over this background, at this strength", flattened onto
+            # the bar, since tmux has no alpha.
+            colour = text
+        parsed = Color.parse(colour)
+        if alpha:
+            parsed = Color.parse(bar).blend(parsed, float(alpha.rstrip("%")) / 100)
+        return parsed.hex[:7]
+
+    # The two a grey is flattened onto resolve first; neither of them is ever an `auto`.
+    bar = text = ""
+    bar = resolve(theme.panel, "panel")
+    text = resolve(theme.foreground, "foreground")
+    return StatusBarPalette(
+        bar=bar,
+        text=text,
+        key=resolve(theme.warning, "warning"),
+        dim=resolve(None, "text-dim"),
+        muted=resolve(None, "text-muted"),
+        on=resolve(theme.success, "success"),
+        off=resolve(theme.error, "error"),
+    )
