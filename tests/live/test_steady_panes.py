@@ -191,11 +191,22 @@ async def test_the_feed_holds_still_an_arrival_takes_the_cursor_and_limits_keep_
         assert backgrounds[0], "the arrival is not the highlighted row"
         assert not any(backgrounds[1:]), f"more than one row is highlighted: {backgrounds}"
 
-        # 3. Every limits row draws `5h` then `wk`, whatever it read (here: nothing).
+        # 3. Every limits row draws `5h` then `wk`, whatever it read (here: nothing). On the
+        #    one-line layout the header row names the columns once (DEC-106), so there the
+        #    header carries `5h` then `week` and every row carries both bars under them.
         limits = [
             _ANSI.sub("", _inner(line)) for line in _region(await _capture(socket), "Plan limits")
         ]
         text = "\n".join(limits)
+        header = next((line for line in limits if "expected" in line.split()), None)
+        if header is not None:
+            assert header.index("5h") < header.index("week"), text
+            rows = [line for line in limits if line.split()[:1] in (["claude"], ["codex"])]
+            assert rows, text
+            for row in rows:
+                bars = [match.start() for match in re.finditer(r"[█░┃]+", row)]
+                assert bars == [header.index("5h"), header.index("week")], f"{row}\n{text}"
+            return
         # Each agent's own block: from its name to the next line that starts a new row (a name
         # or a Remote Control line), so one agent's labels cannot satisfy another's check.
         starts = [i for i, line in enumerate(limits) if line.strip() and not line.startswith("  ")]

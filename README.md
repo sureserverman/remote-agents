@@ -300,6 +300,19 @@ Claude and Codex; OpenCode and Cursor publish none, ever, so they get no row rat
 permanent line saying nothing will appear there. Columns are keyed by window kind, so a weekly
 window is always under the weekly column and never under somebody else's five-hour one.
 
+**The week carries its pace.** Where a weekly (or daily) window has a live reading and a reset
+time, the pane shows where an even spend would stand today. A `┃` tick sits in the week bar at
+that point: fill past it is overspend. Where the pane is wide enough for one line per agent, a
+header row names the columns, and two more follow the week: `expected` (the even-spend share,
+`14%`) and `vs pace` (`on pace`, `▲ 14 over` or `▼ 7 under`). Where the pane stacks, one line
+under the week bar says the same thing: `↻ 6d · exp 14%  ▼ 7 under`. A five-hour window has
+no pace, and neither does a stale reading. From 70 cells wide the week bar doubles to sixteen
+cells, and the pane's bottom border explains the tick.
+
+**One dim line under the rows says where each reading came from and how old it is**: for
+example `claude · status line · as of 4m        codex · live`. A stale reading's date lives
+there rather than on its row, so a row never shows both a countdown and a date.
+
 A reporting agent with no figure keeps its row and says which silence it is rather than
 leaving a blank: *no reading yet* (it does publish limits and none was found — including a
 Claude cache older than its freshness bound) or *unreadable* (the read itself failed). Those
