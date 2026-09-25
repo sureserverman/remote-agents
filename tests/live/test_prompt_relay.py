@@ -46,6 +46,7 @@ from remote_agents.adapters.agents.registry import (
     profiles_with_finished_events,
     provider_descriptors,
 )
+from remote_agents.adapters.agents.turn_markers import FileTurnMarkers
 from remote_agents.adapters.sqlite.database import open_ui_database
 from remote_agents.adapters.sqlite.queued_prompt_store import SQLiteQueuedPromptStore
 from remote_agents.adapters.tmux.composer import PaneState, classify
@@ -53,7 +54,10 @@ from remote_agents.adapters.tmux.gateway import TmuxGateway
 from remote_agents.adapters.tmux.runtime import AsyncTmuxRunner, TerminalWaits, TmuxTerminal
 from remote_agents.application.activity import drain_activity
 from remote_agents.application.prompt_relay import PromptRelay
-from remote_agents.composition.service import _retry_waiting_messages
+from remote_agents.composition.service import (
+    _check_waiting_turns_once,
+    _retry_waiting_messages,
+)
 from remote_agents.domain.models import (
     ProfileId,
     ProjectId,
@@ -92,7 +96,12 @@ _LONGER_TURN = (
 )
 """For the queue drill, which needs the turn still running after `send_prompt` has confirmed
 it. A counting turn was used until 2026-09-23: Sonnet counted to 150 before the second message
-arrived in one full run, and the relay then -- correctly -- typed it straight in."""
+arrived in one full run, and the relay then -- correctly -- typed it straight in. Claude 2.1.282
+no longer runs it as written: its own harness blocks a long foreground `sleep` ("The harness
+blocked the foreground sleep 30"), and the turn ends after about 5 s with that refusal
+(measured 2026-09-24). The queue still holds, because the refusal is drawn busy, but the drills
+that need a turn running longer stream a count instead and rely on the turn marker
+(`_STREAMING_TURN`)."""
 
 
 def _tmux(socket: str, *arguments: str) -> subprocess.CompletedProcess[str]:
@@ -189,7 +198,9 @@ def _answer(
     )
 
 
-def _terminal(socket: str, locks: Path) -> TmuxTerminal:
+def _terminal(socket: str, locks: Path, *, spool: Path | None = None) -> TmuxTerminal:
+    """The runtime as the service builds it; with `spool`, it reads the turn markers the pane's
+    installed hook writes there, as the service reads the ones under its activity directory."""
     return TmuxTerminal(
         TmuxGateway(socket, AsyncTmuxRunner(), key_lock_directory=locks),
         {},
@@ -197,6 +208,7 @@ def _terminal(socket: str, locks: Path) -> TmuxTerminal:
         startup_timeout=1.0,
         composers=profile_composers(),
         waits=TerminalWaits(prompt_settle=1.0, prompt_bound=45.0),
+        turn_markers=None if spool is None else FileTurnMarkers(spool),
     )
 
 
@@ -398,6 +410,191 @@ def test_queue_behind_a_real_turn_and_deliver_after_its_stop(agent: str, tmp_pat
             (str(session_id), RelayOutcome.SENT)
         ], (announced, _tmux(socket, "capture-pane", "-p", "-t", pane).stdout)
         assert relay.pending(session_id) is None
+        screen = _wait_for(socket, pane, _QUEUED)
+        assert sum(_QUEUED in line for line in screen.splitlines()) == 1, (
+            f"the queued message was typed more than once:\n{screen}"
+        )
+    finally:
+        connection.close()
+        _tmux(socket, "kill-server")
+
+
+_COUNTED = re.compile(r"^\W*\d+\s*$")
+_INTERRUPTED = {"claude": "Interrupted"}
+"""What each agent draws above its box once Esc has stopped a turn (from the real-pane captures
+under `tests/fixtures/panes/turn_states/`)."""
+
+
+def _relay(agent: str, session_id: SessionId, terminal: TmuxTerminal, connection) -> PromptRelay:
+    record = SessionRecord(
+        session_id,
+        ProjectId("q" * 24),
+        ProfileId(agent),
+        SessionDisplayIdentity("Relay", agent, "regular", 1),
+        SessionState.RUNNING,
+        datetime.now(UTC),
+    )
+    finishing = profiles_with_finished_events(provider_descriptors())
+    return PromptRelay(
+        terminal,
+        SQLiteQueuedPromptStore(connection),
+        _OneSession(record),
+        queues_for=lambda profile: str(profile) in finishing,
+    )
+
+
+def _wait_until_streaming(
+    socket: str, pane: str, agent: str, markers: FileTurnMarkers, session_id: SessionId
+) -> None:
+    """Until the answer is streaming, its turn is marked, and the screen alone reads idle.
+
+    That last reading is the gap this drill exists for (BL-108): without the marker the relay
+    would type into this turn. Waiting for it, rather than for a fixed time, is what makes the
+    queueing below a proof rather than a race won by the turn's start.
+    """
+    descriptor = profile_composers()[agent]
+    deadline = time.monotonic() + 90.0
+    plain = ""
+    while time.monotonic() < deadline:
+        plain = _tmux(socket, "capture-pane", "-p", "-t", pane).stdout
+        styled = _tmux(socket, "capture-pane", "-p", "-e", "-t", pane).stdout
+        counted = sum(bool(_COUNTED.match(line)) for line in plain.splitlines())
+        if (
+            counted >= 10
+            and markers.started_at(str(session_id)) is not None
+            and classify(styled, descriptor) is PaneState.IDLE
+        ):
+            return
+        time.sleep(0.2)
+    pytest.fail(f"never caught {agent} streaming a marked turn, screen reading idle:\n{plain}")
+
+
+@pytest.mark.parametrize("agent", ["claude"])
+def test_a_streaming_answer_queues_the_message_until_its_stop(agent: str, tmp_path: Path) -> None:
+    """Mid-stream, the screen reads idle and only the marker says the turn runs (DEC-104).
+
+    The message queues; the fast check, ticking through the rest of the turn, never types it;
+    the real Stop record then delivers it, exactly once.
+    """
+    _requirements(agent)
+    socket = f"remote-agents-test-relay-{SessionId.new().value.hex}"
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    spool = tmp_path / "activity"
+    markers = FileTurnMarkers(spool)
+    connection = open_ui_database(tmp_path / "ui.sqlite3")
+    announced: list[tuple[str, RelayResult]] = []
+
+    async def announce(session: str, result: RelayResult) -> None:
+        announced.append((session, result))
+
+    try:
+        session_id, (pane,) = _open_pane(agent, socket, workspace, spool=spool)
+        terminal = _terminal(socket, tmp_path / "locks", spool=spool)
+        relay = _relay(agent, session_id, terminal, connection)
+        composition = SimpleNamespace(
+            prompt_relay=relay, relay_announcer=announce, turn_markers=markers, relay_rechecks={}
+        )
+        drain_activity(spool)
+
+        # 1. A marked turn streams with an idle-looking screen; a message sent now is queued.
+        started = asyncio.run(terminal.send_prompt(session_id, _STREAMING_TURN))
+        assert started.outcome is PromptOutcome.SENT, started
+        _wait_until_streaming(socket, pane, agent, markers, session_id)
+        queued = asyncio.run(relay.submit(session_id, _QUEUED))
+        assert queued.outcome is RelayOutcome.QUEUED, (
+            queued,
+            _tmux(socket, "capture-pane", "-p", "-t", pane).stdout,
+        )
+
+        # 2. The fast check ticks through the rest of the turn and types nothing.
+        drained: list[AgentActivity] = []
+        deadline = time.monotonic() + 240.0
+        while not any(
+            activity.session_id == str(session_id) and activity.kind is ActivityKind.COMPLETED
+            for activity in drained
+        ):
+            if time.monotonic() > deadline:
+                pytest.fail(f"no finished event was spooled for the turn: {drained}")
+            asyncio.run(_check_waiting_turns_once(composition))
+            assert relay.pending(session_id) is not None, (
+                "the fast check typed into a running turn",
+                announced,
+                _tmux(socket, "capture-pane", "-p", "-t", pane).stdout,
+            )
+            time.sleep(0.5)
+            drained.extend(drain_activity(spool))
+        before = _tmux(socket, "capture-pane", "-p", "-J", "-S", "-2000", "-t", pane).stdout
+        assert _QUEUED not in before, f"the message was typed before the turn's Stop:\n{before}"
+
+        # 3. The Stop record retries it, and the fast check covers the Stop-hooks spinner.
+        asyncio.run(_retry_waiting_messages(composition, drained))
+        deadline = time.monotonic() + 20.0
+        while relay.pending(session_id) is not None and time.monotonic() < deadline:
+            time.sleep(0.5)
+            asyncio.run(_check_waiting_turns_once(composition))
+        delivered = [result.outcome for _, result in announced]
+        assert [outcome for outcome in delivered if outcome is not RelayOutcome.QUEUED] == [
+            RelayOutcome.SENT
+        ], (announced, _tmux(socket, "capture-pane", "-p", "-t", pane).stdout)
+        assert relay.pending(session_id) is None
+        screen = _wait_for(socket, pane, _QUEUED)
+        assert sum(_QUEUED in line for line in screen.splitlines()) == 1, (
+            f"the queued message was typed more than once:\n{screen}"
+        )
+    finally:
+        connection.close()
+        _tmux(socket, "kill-server")
+
+
+@pytest.mark.parametrize("agent", ["claude"])
+def test_an_interrupted_turn_releases_its_queued_message(agent: str, tmp_path: Path) -> None:
+    """Esc fires no hook; the fast check reads the end line and delivers within about 3 s."""
+    _requirements(agent)
+    socket = f"remote-agents-test-relay-{SessionId.new().value.hex}"
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    spool = tmp_path / "activity"
+    markers = FileTurnMarkers(spool)
+    connection = open_ui_database(tmp_path / "ui.sqlite3")
+    announced: list[tuple[str, RelayResult]] = []
+
+    async def announce(session: str, result: RelayResult) -> None:
+        announced.append((session, result))
+
+    try:
+        session_id, (pane,) = _open_pane(agent, socket, workspace, spool=spool)
+        terminal = _terminal(socket, tmp_path / "locks", spool=spool)
+        relay = _relay(agent, session_id, terminal, connection)
+        composition = SimpleNamespace(
+            prompt_relay=relay, relay_announcer=announce, turn_markers=markers, relay_rechecks={}
+        )
+
+        started = asyncio.run(terminal.send_prompt(session_id, _STREAMING_TURN))
+        assert started.outcome is PromptOutcome.SENT, started
+        _wait_until_streaming(socket, pane, agent, markers, session_id)
+        queued = asyncio.run(relay.submit(session_id, _QUEUED))
+        assert queued.outcome is RelayOutcome.QUEUED, queued
+
+        _tmux(socket, "send-keys", "-t", pane, "Escape")
+        interrupted_at: float | None = None
+        deadline = time.monotonic() + 30.0
+        while relay.pending(session_id) is not None and time.monotonic() < deadline:
+            if (
+                interrupted_at is None
+                and _INTERRUPTED[agent] in _tmux(socket, "capture-pane", "-p", "-t", pane).stdout
+            ):
+                interrupted_at = time.monotonic()
+            asyncio.run(_check_waiting_turns_once(composition))
+            time.sleep(0.5)
+        delivered_at = time.monotonic()
+        screen = _tmux(socket, "capture-pane", "-p", "-t", pane).stdout
+
+        assert interrupted_at is not None, f"Esc drew no interrupt line:\n{screen}"
+        assert [(session, result.outcome) for session, result in announced] == [
+            (str(session_id), RelayOutcome.SENT)
+        ], (announced, screen)
+        assert delivered_at - interrupted_at <= 6.0, (delivered_at - interrupted_at, screen)
         screen = _wait_for(socket, pane, _QUEUED)
         assert sum(_QUEUED in line for line in screen.splitlines()) == 1, (
             f"the queued message was typed more than once:\n{screen}"
