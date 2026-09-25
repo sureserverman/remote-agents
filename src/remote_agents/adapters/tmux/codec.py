@@ -933,6 +933,11 @@ def status_format_args(
         ("set-option", "-t", target, "status-interval", "0"),
         ("set-option", "-t", target, "status-style", f"bg={palette.bar},fg={palette.text}"),
         ("set-option", "-t", target, "status-format[0]", status_format),
+        # tmux's own dividers between the panes, which untuned draw in ANSI green and grey.
+        # The panes carry their own frames since the facelift, so the gutters take the bar's
+        # panel colour and recede; window options, on the console window only.
+        ("set-option", "-w", "-t", target, "pane-border-style", f"fg={palette.bar}"),
+        ("set-option", "-w", "-t", target, "pane-active-border-style", f"fg={palette.bar}"),
     )
 
 

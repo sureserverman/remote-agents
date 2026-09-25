@@ -289,3 +289,15 @@ def test_status_right_end_is_whole_or_absent_at_every_width(console, width, word
     assert right in _whole_right_ends(full, typing, words), (width, row)
     if full and not typing and width >= len(keys) + 2 + len(words) + 2 + len(CONSOLE_SESSION_NAME):
         assert right == f"{words}  {CONSOLE_SESSION_NAME}", "the words fit and were not drawn"
+
+
+def test_the_console_window_s_pane_dividers_take_the_bar_s_colour() -> None:
+    """tmux draws its own dividers between the panes; untuned they are ANSI green and grey
+    (the Stage 2 fidelity finding M2, round 2). They take the bar's panel colour, as window
+    options on the console window, so the gutters recede as the mock draws them."""
+    args = status_format_args(status_bar_keys(), _NIGHT)
+    for option in ("pane-border-style", "pane-active-border-style"):
+        found = [argv for argv in args if option in argv]
+        assert found == [("set-option", "-w", "-t", "ra-console:", option, f"fg={_NIGHT.bar}")], (
+            found
+        )

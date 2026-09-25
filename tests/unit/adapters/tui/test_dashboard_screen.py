@@ -1349,3 +1349,13 @@ async def test_each_console_pane_carries_its_border_title_on_a_round_border(pane
         )
         # No idle sentence above the rows: the title already says what it said.
         assert not app.screen.query_one("#status").display, f"{pane}: an idle status is drawn"
+        # One pane background, `$surface`, behind every row inside the frame (fidelity M1, round 2).
+        surface = app.current_theme.surface.upper()
+        # The *rendered* background: a transparent row shows the screen through it, and a
+        # focused list is tinted; `styles.background` would see neither.
+        tones = {
+            f"{node.id or type(node).__name__}": node.background_colors[1].hex.upper()
+            for node in (widget, *widget.query("*"))
+            if node.display and node.region.area
+        }
+        assert set(tones.values()) == {surface}, f"{pane}: {tones}"

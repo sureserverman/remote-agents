@@ -262,6 +262,12 @@ class RemoteAgentsTui(App[AttachRequest | None]):
     }
     ChoiceScreen.-framed #choices, ChoiceScreen.-framed #limits-pane,
     ChoiceScreen.-framed #feed-pane { border: none; }
+    /* One pane background inside the frame, `$surface`, as the mock draws it: the rows are
+       otherwise transparent over the window's `$background`, and a focused list is tinted. */
+    ChoiceScreen.-framed #body, ChoiceScreen.-framed #body * { background: $surface; }
+    ChoiceScreen.-framed #body OptionList, ChoiceScreen.-framed #body OptionList:focus {
+        background-tint: $foreground 0%;
+    }
     ChoiceScreen.-projects-pane #filter, ChoiceScreen.-projects-pane #filter:focus {
         height: 1; border: none;
     }
