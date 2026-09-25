@@ -137,8 +137,9 @@ class FileTurnMarkers:
 def _owner_of(descriptor: int) -> str | None:
     """The agent id a marker holds, or None when it holds none that reads as one; never raises.
 
-    Only a regular file is read: `pread` on a FIFO or a directory at the name fails anyway, and
-    this says so rather than leaning on each caller to catch it.
+    Only a regular file is read: a FIFO, directory or socket at the name is answered None
+    before any read. Both opens are non-blocking, so reaching here never waited on a FIFO --
+    measured on Linux and on macOS (Darwin 25.6.0, 2026-09-25).
     """
     try:
         if not stat.S_ISREG(os.fstat(descriptor).st_mode):
