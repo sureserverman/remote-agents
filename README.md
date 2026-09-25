@@ -598,7 +598,7 @@ unchanged.
 `Remote Control  claude on · codex on` and the session name at the right end. It belongs to the
 window rather than to a pane, so it stays on screen while an agent fills the left slot. Below
 161 columns it compacts to `1help 2setup 3view …` and `RC` with one mark per agent — `●` on,
-`○` off, `?` unknown. The session keys dim while the sessions pane has no row selected; while a
+`○` off, `!` a broken link, `?` unknown. The session keys dim while the sessions pane has no row selected; while a
 text entry is open (the rename box, a new project's name) `F2`, `F7`, `F8` and `F9` dim and the
 right end reads `esc cancels`. Its colours follow the theme you choose. With tmux's default
 `status on` it takes the row tmux's own status line already used, so no pane is shorter for it.

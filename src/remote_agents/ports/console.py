@@ -239,7 +239,7 @@ REMOTE_CONTROL_OPTION = "@remote_agents_remote_control"
 """The full bar's Remote Control words, styled, exactly as the limits pane reads them."""
 
 REMOTE_CONTROL_COMPACT_OPTION = "@remote_agents_remote_control_compact"
-"""The compact bar's `RC` and one mark per provider (R6: `●` on, `○` off, `?` unknown)."""
+"""The compact bar's `RC` and one mark per provider: `●` on, `○` off, `?` unknown, `!` broken."""
 
 #: Every option the status bar reads and a pane publishes. A publisher must also clear what it
 #: set, or the bar goes on stating a fact the pane that knew it is no longer there to correct.

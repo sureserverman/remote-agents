@@ -969,10 +969,12 @@ def typing_args(typing: bool | None) -> tuple[str, ...]:
 
 
 #: One glyph per Remote Control tone (R6, DEC-010): the state is readable with colour off.
+#: A broken link is `!` rather than R6's `?`: it is a failure, and `?` in another colour would
+#: leave colour alone telling it from "not known" (the Stage 2 gate evaluator's finding).
 _REMOTE_CONTROL_GLYPHS: dict[RemoteControlTone, str] = {
     RemoteControlTone.ON: "●",
     RemoteControlTone.OFF: "○",
-    RemoteControlTone.BROKEN: "?",
+    RemoteControlTone.BROKEN: "!",
     RemoteControlTone.UNKNOWN: "?",
 }
 

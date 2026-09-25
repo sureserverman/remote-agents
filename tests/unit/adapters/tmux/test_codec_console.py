@@ -705,7 +705,7 @@ def test_remote_control_words_mark_each_tone_with_its_own_glyph() -> None:
     assert glyphs == {
         RemoteControlTone.ON: "●",
         RemoteControlTone.OFF: "○",
-        RemoteControlTone.BROKEN: "?",
+        RemoteControlTone.BROKEN: "!",
         RemoteControlTone.UNKNOWN: "?",
     }
 

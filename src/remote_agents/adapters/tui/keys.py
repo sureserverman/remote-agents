@@ -99,8 +99,8 @@ class FunctionKey(NamedTuple):
     F5 and F12 because `,`, `ctrl+r` and the palette already do.
 
     `short` is the one word the console's compact status bar draws (DEC-105), where `label`
-    would not fit: `1help 2setup 3view …`. Where it differs from `label` it is the borrowed
-    source's own word (DEC-095) -- htop's Setup and Kill, mc's View.
+    would not fit: `1help 2setup 3view …`. Three are the borrowed sources' own words
+    (DEC-095) -- htop's Setup and Kill, mc's View; the rest are the label, shortened.
     """
 
     key: str
