@@ -214,7 +214,13 @@ class RemoteAgentsTui(App[AttachRequest | None]):
     CSS = """
     Screen { layout: vertical; background: $background; }
     #body { height: 1fr; }
-    ChoiceScreen #status { height: 2; padding: 0 1; text-overflow: ellipsis; color: $foreground; }
+    ChoiceScreen #status {
+        height: auto; max-height: 2; padding: 0 1; text-overflow: ellipsis; color: $foreground;
+    }
+    /* An empty status takes no rows (the console facelift): the region gives its rows back to
+       the list rather than drawing a blank band. `set_status` and every compose site keep the
+       class true. */
+    ChoiceScreen #status.-empty { display: none; }
     /* The hint row under the status: what the keys do here, muted, and absent when a screen
        has nothing to hint. Facts on the line above, hints on this one -- the redesign's split
        of the region that used to carry both in one voice. Its own widget rather than a second
@@ -270,7 +276,11 @@ class RemoteAgentsTui(App[AttachRequest | None]):
     # would eat a row top and bottom of the pane and redraw itself on focus. `height: 1fr`
     # keeps it filling `#output-pane` exactly, so the container never scrolls on top of the
     # `TextArea`'s own scrolling.
-    # `#status` is **two rows high and wraps**, and the difference between that and one row is
+    # `#status` is **at most two rows high and wraps**; since the console facelift it is as tall
+    # as its text and hidden when empty, where it used to be two rows fixed so the rows beneath
+    # never moved. The cap is what the paragraph below argues for, and it still holds.
+    #
+    # The difference between two rows and one is
     # a defect a gate evaluator caught by driving the real thing at 80 columns. The contract is
     # unchanged — one *logical* line, enforced by `__init_subclass__`, the AST sweep over the
     # call sites, and `set_status`'s own runtime guard — and `height` is still fixed, so the

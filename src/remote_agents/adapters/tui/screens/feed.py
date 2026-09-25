@@ -28,6 +28,7 @@ from remote_agents.adapters.tui.screens.base import (
     ChoiceScreen,
     held_option_id,
     restore_highlight_by_id,
+    status_classes,
 )
 from remote_agents.application.relative_time import age_short
 from remote_agents.application.session_views import session_identity
@@ -669,7 +670,9 @@ class FeedScreen(FeedRegion, ChoiceScreen):
         Two rows of a pane that holds one observation per row, which is what they cost.
         """
         with Vertical(id="body"):
-            yield Static(self.status, id="status", markup=False)
+            yield Static(
+                self.status, id="status", classes=status_classes(self.status), markup=False
+            )
             yield Static("", id="hint", classes="-empty", markup=False)
             yield Input(placeholder="", id="filter")
             yield OptionList(id="choices", markup=False)

@@ -871,16 +871,13 @@ async def test_the_list_title_names_the_counts_and_is_not_truncated(width: int) 
     assert "…" not in drawn, f"the title was elided at {width} columns: {drawn!r}"
 
 
-async def test_the_sessions_status_is_two_fixed_rows_and_a_hint() -> None:
-    """The region's shape, and the property that shape may not cost.
+async def test_the_sessions_status_is_at_most_two_rows_and_a_hint() -> None:
+    """The region's shape since the console facelift, and the bound on what it may cost.
 
-    `test_status_region.py` pins two rows for the app in general and the reason: the region is
-    *fixed*, so the list beneath it never moves as a message changes. The sessions positions
-    took a third row for their keymap until the redesign moved the letters into the list's
-    title; what is left is the two-row status carrying the counts and the one-row muted hint
-    under it, both fixed -- which is the half worth testing, because `height: auto` is the
-    obvious way to have made room and is the exact defect the region split was introduced to
-    fix.
+    It was two rows *fixed* so the list beneath never moved; the facelift collapses rows that
+    hold nothing, so the region is as tall as its text, capped at two. What that trades is
+    stated here as a measurement rather than left implicit: a status that wraps moves the list
+    by exactly the row it adds, and never by more.
     """
     from textual.widgets import Static
 
@@ -888,23 +885,20 @@ async def test_the_sessions_status_is_two_fixed_rows_and_a_hint() -> None:
     async with app.run_test(size=(100, 30)) as pilot:
         await pilot.pause()
         rows = app.screen.query_one("#choices", OptionList)
-        before = rows.region
+        status = app.screen.query_one("#status", Static)
 
         app.screen.set_status("short")
         await pilot.pause()
-        after_short = rows.region
+        short = (status.region.height, rows.region.y)
 
         app.screen.set_status("a much longer status line " * 6)
         await pilot.pause()
-        after_long = rows.region
-        height = app.screen.query_one("#status", Static).region.height
+        long = (status.region.height, rows.region.y)
         hint = app.screen.query_one("#hint", Static).region.height
 
-    assert height == 2, f"the sessions status region is {height} rows high, not 2"
+    assert (short[0], long[0]) == (1, 2), (short, long)
+    assert long[1] - short[1] == 1, f"the list moved {long[1] - short[1]} rows for one wrapped row"
     assert hint == 1, f"the hint row is {hint} rows high, not 1"
-    assert before == after_short == after_long, (
-        "the list moved when the status grew, so the region is not fixed"
-    )
 
 
 # One key returns the projects surface to the console's left slot -------------------------------

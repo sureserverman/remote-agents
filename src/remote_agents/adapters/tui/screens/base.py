@@ -231,6 +231,11 @@ def _is_from_a_replaced_fill(event: OptionList.OptionSelected) -> bool:
 _FUNCTION_KEYS = frozenset(entry.key for entry in BAR_KEYS)
 
 
+def status_classes(status: str) -> str:
+    """The status region's classes at compose time: hidden while it has nothing to say."""
+    return "" if status else "-empty"
+
+
 def footer_key_words(screen: Screen[object]) -> str:
     """The keys a Textual Footer would draw on *screen*, less the function keys, as one line.
 
@@ -374,7 +379,9 @@ class ChoiceScreen(Screen[None]):
             # `record.display.rendered`, which interpolates the owner's custom label, and an
             # unbalanced bracket in either raised `MarkupError` — text this app echoes from
             # another program could take down the screen showing it.
-            yield Static(self.status, id="status", markup=False)
+            yield Static(
+                self.status, id="status", classes=status_classes(self.status), markup=False
+            )
             # The hint row: what the keys do here, muted, under the facts. Hidden by the
             # `-empty` class until a screen gives it words (`set_hint`).
             yield Static("", id="hint", classes="-empty", markup=False)
@@ -972,6 +979,7 @@ class ChoiceScreen(Screen[None]):
             _LOG.warning("a multi-line status was truncated to its first line: %r", plain)
             text = plain.split("\n", 1)[0]
         region = self.query_one("#status", Static)
+        region.set_class(not (text if isinstance(text, str) else text.plain), "-empty")
         region.set_class(severity == "error", "-error")
         region.set_class(severity == "warning", "-warning")
         region.update(text)

@@ -193,44 +193,60 @@ async def test_the_attach_command_renders_whole_at_eighty_columns() -> None:
     )
 
 
-async def test_a_long_status_does_not_move_the_rows_beneath_it() -> None:
-    """The reflow, asserted directly rather than through anything that produces one.
+async def test_a_status_takes_its_content_height_and_never_more_than_two_rows() -> None:
+    """The region is as tall as what it says, up to two rows (the console facelift).
 
-    A status four lines long and a status one line long must leave `#choices` in the same
-    place. Driven by writing straight to `set_status` because the point is the *region*, not
-    any particular caller: this stays true however the call sites are later reworded, and it
-    fails the moment `height: 1` is relaxed back to `auto`.
+    It was two rows *fixed* until the facelift, so the rows beneath never moved; the design
+    trades that for giving the rows back when there is nothing to say. What is kept is the cap:
+    two rows still hold the 93-character attach command at 60 columns, the one payload here
+    the owner has to copy whole. A multi-line status is still cut to its first line by
+    `set_status`'s own guard, so it takes one row, not four.
     """
+    app = RemoteAgentsTui(_context())
+
+    async with app.run_test(size=(60, 30)) as pilot:
+        await pilot.pause()
+        region = app.screen.query_one("#status", Static)
+
+        app.screen.set_status("one line")
+        await pilot.pause()
+        one_line = region.region.height
+
+        app.screen.set_status("first\nsecond\nthird\nfourth")
+        await pilot.pause()
+        cut = region.region.height
+
+        app.screen.set_status(
+            "Attach with: tmux -L remote-agents attach-session -t ra-" + "0" * 36 + ":"
+        )
+        await pilot.pause()
+        wrapped = region.region.height
+
+    assert (one_line, cut, wrapped) == (1, 1, 2), (one_line, cut, wrapped)
+
+
+async def test_an_empty_status_takes_no_rows_and_text_brings_it_back() -> None:
     app = RemoteAgentsTui(_context())
 
     async with app.run_test(size=(100, 30)) as pilot:
         await pilot.pause()
-        rows = app.screen.query_one("#choices", OptionList)
-        before = rows.region
+        region = app.screen.query_one("#status", Static)
 
-        app.screen.set_status("one line")
+        app.screen.set_status("")
         await pilot.pause()
-        one_line = rows.region
+        empty = (region.display, region.region.height)
 
-        app.screen.set_status("first\nsecond\nthird\nfourth")
+        app.screen.set_status("something to say")
         await pilot.pause()
-        four_lines = rows.region
-        height = app.screen.query_one("#status", Static).region.height
+        shown = (region.display, region.region.height)
 
-    assert one_line == four_lines == before, (
-        "the rows moved when the status grew, which is the reflow the region split fixes"
-    )
-    # Two rows, and *fixed* is the property that matters — the rows beneath never move. The
-    # second row is there so one long logical line wraps instead of being cut; it is not a
-    # licence for a second sentence, which `test_no_call_site_writes_a_multi_line_status` and
-    # `set_status`'s own guard still refuse.
-    #
-    # Two is this app's general figure, not a universal one: the sessions positions take three,
-    # because they carry a whole keymap in this region and seven row keys do not fit in two rows
-    # at 60 columns. Fixed-height is what both have in common and is what this asserts; the
-    # exception is pinned by `test_the_sessions_status_is_three_fixed_rows`. This screen is the
-    # projects position, so the figure here is the general one.
-    assert height == 2, f"the status region is {height} rows high, not 2"
+        app.screen.set_status("")
+        await pilot.pause()
+        cleared = (region.display, region.region.height)
+
+    assert empty == (False, 0), empty
+    assert shown == (True, 1), shown
+    assert cleared == (False, 0), cleared
 
 
 # The literals -------------------------------------------------------------------

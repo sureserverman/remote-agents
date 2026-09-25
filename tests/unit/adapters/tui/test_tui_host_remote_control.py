@@ -967,9 +967,7 @@ def _pane_rows(app: RemoteAgentsTui) -> list[str]:
     return [str(pane.get_option_at_index(index).prompt) for index in range(pane.option_count)]
 
 
-async def test_under_console_hosting_the_limits_pane_draws_no_remote_control_but_the_bar_hears_it() -> (
-    None
-):
+async def test_under_console_hosting_the_rows_leave_limits_and_the_bar_hears_them() -> None:
     from dataclasses import replace
 
     from remote_agents.domain.remote_control import RemoteControlDefault
