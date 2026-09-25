@@ -150,8 +150,12 @@ def _open_pane(
         codex_home = workspace / ".codex-home"
         codex_home.mkdir(mode=0o700)
         os.symlink(Path.home() / ".codex" / "auth.json", codex_home / "auth.json")
+        # The model nudge is hidden because an account near its weekly limit raises it after
+        # every turn, and the relay rightly refuses a dialog (measured 2026-09-25, Codex 0.155.1).
         (codex_home / "config.toml").write_text(
-            'approval_policy = "on-request"\nsandbox_mode = "read-only"\n', encoding="utf-8"
+            'approval_policy = "on-request"\nsandbox_mode = "read-only"\n'
+            "[notice]\nhide_rate_limit_model_nudge = true\n",
+            encoding="utf-8",
         )
         if spool is not None:
             install_agent_hooks(
@@ -420,9 +424,10 @@ def test_queue_behind_a_real_turn_and_deliver_after_its_stop(agent: str, tmp_pat
 
 
 _COUNTED = re.compile(r"^\W*\d+\s*$")
-_INTERRUPTED = {"claude": "Interrupted"}
-"""What each agent draws above its box once Esc has stopped a turn (from the real-pane captures
-under `tests/fixtures/panes/turn_states/`)."""
+_INTERRUPTED = {"claude": "Interrupted", "codex": "Conversation interrupted"}
+"""What each agent draws above its box once Esc has stopped a turn: Claude's from the real-pane
+captures under `tests/fixtures/panes/turn_states/`, Codex's measured on 0.155.1 (2026-09-25),
+where Esc fires no hook and stops the title spinner."""
 
 
 def _relay(agent: str, session_id: SessionId, terminal: TmuxTerminal, connection) -> PromptRelay:
@@ -469,12 +474,13 @@ def _wait_until_streaming(
     pytest.fail(f"never caught {agent} streaming a marked turn, screen reading idle:\n{plain}")
 
 
-@pytest.mark.parametrize("agent", ["claude"])
+@pytest.mark.parametrize("agent", ["claude", "codex"])
 def test_a_streaming_answer_queues_the_message_until_its_stop(agent: str, tmp_path: Path) -> None:
     """Mid-stream, the screen reads idle and only the marker says the turn runs (DEC-104).
 
-    The message queues; the fast check, ticking through the rest of the turn, never types it;
-    the real Stop record then delivers it, exactly once.
+    On Codex the title spinner says so too, so there the marker is a second witness rather than
+    the only one. The message queues; the fast check, ticking through the rest of the turn, never
+    types it; the real Stop record then delivers it, exactly once.
     """
     _requirements(agent)
     socket = f"remote-agents-test-relay-{SessionId.new().value.hex}"
@@ -547,7 +553,7 @@ def test_a_streaming_answer_queues_the_message_until_its_stop(agent: str, tmp_pa
         _tmux(socket, "kill-server")
 
 
-@pytest.mark.parametrize("agent", ["claude"])
+@pytest.mark.parametrize("agent", ["claude", "codex"])
 def test_an_interrupted_turn_releases_its_queued_message(agent: str, tmp_path: Path) -> None:
     """Esc fires no hook; the fast check reads the end line and delivers within about 3 s."""
     _requirements(agent)
@@ -576,26 +582,34 @@ def test_an_interrupted_turn_releases_its_queued_message(agent: str, tmp_path: P
         queued = asyncio.run(relay.submit(session_id, _QUEUED))
         assert queued.outcome is RelayOutcome.QUEUED, queued
 
+        # Timed from the key, not from the line: Codex stops its spinner as Esc lands, and the
+        # fast check can deliver before a capture here has caught the line being drawn.
         _tmux(socket, "send-keys", "-t", pane, "Escape")
-        interrupted_at: float | None = None
-        deadline = time.monotonic() + 30.0
-        while relay.pending(session_id) is not None and time.monotonic() < deadline:
-            if (
-                interrupted_at is None
-                and _INTERRUPTED[agent] in _tmux(socket, "capture-pane", "-p", "-t", pane).stdout
-            ):
-                interrupted_at = time.monotonic()
+        escaped_at = time.monotonic()
+        delivered_at: float | None = None
+        while time.monotonic() < escaped_at + 30.0:
             asyncio.run(_check_waiting_turns_once(composition))
+            if relay.pending(session_id) is None:
+                delivered_at = time.monotonic()
+                break
             time.sleep(0.5)
-        delivered_at = time.monotonic()
         screen = _tmux(socket, "capture-pane", "-p", "-t", pane).stdout
 
-        assert interrupted_at is not None, f"Esc drew no interrupt line:\n{screen}"
         assert [(session, result.outcome) for session, result in announced] == [
             (str(session_id), RelayOutcome.SENT)
         ], (announced, screen)
-        assert delivered_at - interrupted_at <= 6.0, (delivered_at - interrupted_at, screen)
+        assert delivered_at is not None and delivered_at - escaped_at <= 6.0, (
+            None if delivered_at is None else delivered_at - escaped_at,
+            screen,
+        )
+        # Delivered because the turn ended: its interrupt line stands above the message.
         screen = _wait_for(socket, pane, _QUEUED)
+        lines = screen.splitlines()
+        interrupted = [index for index, line in enumerate(lines) if _INTERRUPTED[agent] in line]
+        delivered = [index for index, line in enumerate(lines) if _QUEUED in line]
+        assert interrupted and delivered and interrupted[-1] < delivered[0], (
+            f"the message did not follow an interrupt line:\n{screen}"
+        )
         assert sum(_QUEUED in line for line in screen.splitlines()) == 1, (
             f"the queued message was typed more than once:\n{screen}"
         )

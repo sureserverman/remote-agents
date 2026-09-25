@@ -284,8 +284,12 @@ def test_a_real_codex_approval_spools_the_command_it_is_asking_about(tmp_path: P
     # Never opened, copied or serialized here -- only linked, so the ordinary ChatGPT
     # entitlement is used instead of separate API billing.
     os.symlink(owner_auth, codex_home / "auth.json")
+    # Hidden for the reason `test_prompt_relay._open_pane` gives: near the weekly limit Codex
+    # raises this model nudge after every turn.
     (codex_home / "config.toml").write_text(
-        'approval_policy = "on-request"\nsandbox_mode = "read-only"\n', encoding="utf-8"
+        'approval_policy = "on-request"\nsandbox_mode = "read-only"\n'
+        "[notice]\nhide_rate_limit_model_nudge = true\n",
+        encoding="utf-8",
     )
     install_agent_hooks(
         codex_home / "hooks.json",

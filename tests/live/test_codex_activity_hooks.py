@@ -23,6 +23,7 @@ from pathlib import Path
 import pytest
 
 from remote_agents.adapters.agents.registry import install_agent_hooks
+from remote_agents.adapters.agents.turn_markers import TURNS_DIRECTORY, FileTurnMarkers
 from remote_agents.application.activity import drain_activity
 from remote_agents.domain.models import SessionId
 from remote_agents.ports.agent_activity import MAXIMUM_DETAIL_CHARACTERS, ActivityKind
@@ -105,7 +106,7 @@ def _run_codex(workspace: Path, environment: dict[str, str]) -> None:
 
 
 @pytest.mark.live_profile
-def test_a_managed_codex_turn_spools_its_own_stop(tmp_path: Path) -> None:
+def test_a_managed_codex_turn_spools_its_own_stop_and_ends_its_marker(tmp_path: Path) -> None:
     workspace, spool = _requirements(tmp_path)
     session_id = SessionId.new()
 
@@ -129,6 +130,10 @@ def test_a_managed_codex_turn_spools_its_own_stop(tmp_path: Path) -> None:
     )
     assert "spooled" in activity.detail.casefold()
     assert len(activity.detail) <= MAXIMUM_DETAIL_CHARACTERS
+    # The turn's `UserPromptSubmit` started a marker and its `Stop` ended it (DEC-104). Only the
+    # hook's `start` creates the markers' directory, so its presence is the start's trace.
+    assert (spool / TURNS_DIRECTORY).is_dir(), "the turn's UserPromptSubmit never started a marker"
+    assert FileTurnMarkers(spool).started_at(str(session_id)) is None
 
 
 @pytest.mark.live_profile
