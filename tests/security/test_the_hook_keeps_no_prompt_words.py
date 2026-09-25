@@ -71,21 +71,23 @@ def test_a_submitted_prompt_is_kept_nowhere_and_delivers_nothing(
 
     assert _submit(directory, provider) == 0
     assert _SENTINEL.encode() not in _every_byte_under(directory)
-    # Not vacuous: since BL-108 a Claude or Codex submit does write -- the empty marker -- and that
-    # file is inside the sweep above. OpenCode starts none (its "finished" would never end one).
+    # Not vacuous: since BL-108 a Claude or Codex submit does write -- the marker, holding only
+    # the agent's own id for its session -- and that file is inside the sweep above. OpenCode
+    # starts none (its "finished" would never end one).
     marker = directory / "turns" / "s-42"
     if provider == "opencode":
         assert not marker.exists()
     else:
-        assert marker.read_bytes() == b""
+        assert marker.read_bytes() == str(_SUBMIT["session_id"]).encode()
 
     assert drain_activity(directory) == ()
     assert _SENTINEL.encode() not in _every_byte_under(directory)
 
 
 @pytest.mark.parametrize("provider", ["claude", "codex"])
-def test_a_submit_writes_the_empty_marker_and_nothing_else(provider: str, tmp_path: Path) -> None:
-    """The marker is the whole of what a submit leaves: no record, and a file with no bytes."""
+def test_a_submit_writes_the_marker_and_nothing_else(provider: str, tmp_path: Path) -> None:
+    """The marker is the whole of what a submit leaves: no record, and a file holding only the
+    agent's own id for its session (asserted above)."""
     directory = _spool(tmp_path)
 
     _submit(directory, provider)
@@ -129,7 +131,7 @@ def test_a_prompt_past_the_bound_is_kept_nowhere(provider: str, tmp_path: Path) 
         provider=provider,
     )
 
-    assert (directory / "turns" / "s-42").read_bytes() == b""
+    assert (directory / "turns" / "s-42").read_bytes() == str(_SUBMIT["session_id"]).encode()
     assert _SENTINEL.encode() not in _every_byte_under(directory)
 
 

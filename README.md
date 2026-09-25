@@ -405,7 +405,7 @@ service injects into the panes it launches. Descendants of a managed pane inheri
 so a `claude` started from inside one is the exception and spools under its parent's session.
 Codex can additionally install its own `Stop`, `PermissionRequest` and `UserPromptSubmit` hooks
 with `remote-agents install-agent-hooks --provider codex`. For Claude and Codex, `UserPromptSubmit`
-leaves an empty per-session marker, a turn started, that `Stop` removes (DEC-104). The prompt
+leaves a per-session marker, a turn started, that the same agent's `Stop` removes (DEC-104). The prompt
 relay reads it, because Claude draws nothing busy while it streams an answer. **Upgrading to
 0.49.0 or later, re-run both installs**, then relaunch sessions to pick the hook up; without it
 the relay reads the screen alone, as before. Native code-mode escalations currently do

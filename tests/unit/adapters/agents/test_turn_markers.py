@@ -139,3 +139,69 @@ def test_sessions_lists_only_marker_files_with_session_names(tmp_path: Path) -> 
     (turns / ".hidden").write_bytes(b"")
 
     assert sorted(markers.sessions()) == ["s-1", "s-2"]
+
+
+def _marker_bytes(tmp_path: Path, session_id: str = "s-42") -> bytes:
+    return (tmp_path / "activity" / "turns" / session_id).read_bytes()
+
+
+def test_a_marker_holds_the_id_of_the_agent_that_started_it_and_nothing_else(
+    tmp_path: Path,
+) -> None:
+    markers = _markers(tmp_path)
+
+    markers.start("s-42", owner="agent-a")
+
+    assert _marker_bytes(tmp_path) == b"agent-a"
+
+
+def test_a_nested_agent_neither_takes_the_marker_nor_ends_it(tmp_path: Path) -> None:
+    """An agent started inside a managed pane inherits its session id (DEC-104): its submit and
+    its `Stop` land on the parent's marker. Only the agent that started the marker ends it."""
+    markers = _markers(tmp_path)
+    markers.start("s-42", owner="parent")
+    path = tmp_path / "activity" / "turns" / "s-42"
+    os.utime(path, (time.time() - 60, time.time() - 60))
+    stale = markers.started_at("s-42")
+
+    markers.start("s-42", owner="child")
+    assert _marker_bytes(tmp_path) == b"parent"
+    refreshed = markers.started_at("s-42")
+    assert stale is not None and refreshed is not None and refreshed > stale
+
+    markers.end("s-42", owner="child")
+    assert markers.started_at("s-42") is not None
+
+    markers.end("s-42", owner="parent")
+    assert markers.started_at("s-42") is None
+
+
+def test_an_end_without_an_owner_is_the_screens_and_always_ends(tmp_path: Path) -> None:
+    markers = _markers(tmp_path)
+    markers.start("s-42", owner="parent")
+
+    markers.end("s-42")
+
+    assert markers.started_at("s-42") is None
+
+
+@pytest.mark.parametrize("owner", [None, "../escape", "a\nb", "x" * 129])
+def test_a_marker_with_no_usable_owner_is_ended_by_any_stop(
+    tmp_path: Path, owner: str | None
+) -> None:
+    """No owner recorded means no owner to protect: it behaves as before owners existed."""
+    markers = _markers(tmp_path)
+
+    markers.start("s-42", owner=owner)
+    assert _marker_bytes(tmp_path) == b""
+    markers.end("s-42", owner="anyone")
+
+    assert markers.started_at("s-42") is None
+
+
+def test_the_owner_that_started_a_marker_can_restart_it(tmp_path: Path) -> None:
+    markers = _markers(tmp_path)
+    markers.start("s-42")
+    markers.start("s-42", owner="agent-a")
+
+    assert _marker_bytes(tmp_path) == b"agent-a"

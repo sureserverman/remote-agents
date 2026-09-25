@@ -840,10 +840,12 @@ uv run --locked remote-agents install-agent-hooks --provider opencode
 > outside this project's control.
 
 > **Upgrading to 0.49.0 or later: re-run the `claude` and `codex` lines.** Both gained a
-> `UserPromptSubmit` hook on 2026-09-24 (BL-108, DEC-104). On each submit it leaves an empty
-> marker file, `turns/<session id>` in the activity spool, and `Stop` removes it. The relay reads
+> `UserPromptSubmit` hook on 2026-09-24 (BL-108, DEC-104). On each submit it leaves a marker
+> file, `turns/<session id>` in the activity spool, holding only the agent's own id for its
+> session, and that agent's `Stop` removes it. The relay reads
 > that marker to know a turn is running while Claude streams its answer, when its screen shows
-> nothing busy. The hook reads the event's name and never the prompt.
+> nothing busy. The hook reads the event's name and the agent's own session id, never the
+> prompt.
 >
 > **If you do not re-run them, nothing breaks.** No marker is written, and the relay goes on
 > reading the screen alone, as before 0.49.0. A message sent while Claude streams can then still

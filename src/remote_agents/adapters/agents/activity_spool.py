@@ -45,8 +45,9 @@ from remote_agents.ports.turn_markers import TurnMarkers
 MAXIMUM_PAYLOAD_BYTES = 32_768
 
 #: The event that starts a turn, and the events that end one (BL-108, DEC-104). Read from the
-#: payload's `hook_event_name` alone: a submit's payload also carries the owner's `prompt`, and
-#: nothing here reads it. Claude and Codex both spell `UserPromptSubmit` and `Stop` this way; only
+#: payload's `hook_event_name`, beside the agent's own `session_id` that the marker keeps as its
+#: owner: a submit's payload also carries the owner's `prompt`, and nothing here reads it.
+#: Claude and Codex both spell `UserPromptSubmit` and `Stop` this way; only
 #: Claude has a `StopFailure` (Codex fires nothing on a failed turn, `ports/agent_activity.py`).
 TURN_STARTED = "UserPromptSubmit"
 TURN_ENDED = frozenset({"Stop", "StopFailure"})
@@ -235,23 +236,27 @@ def spool_agent_event(
         raw = payload.read(MAXIMUM_PAYLOAD_BYTES + 1)
         document = _document(raw)
         if document is not None:
-            event = document.get("hook_event_name")
+            fields: Mapping[str, object] = document
         elif len(raw) > MAXIMUM_PAYLOAD_BYTES:
             # Past the bound nothing is recorded, as before; but a long pasted prompt is still a
-            # turn, and a long final answer still ends one, so the event name is recovered from
-            # the prefix already read.
-            event = _event_in_prefix(raw)
+            # turn, and a long final answer still ends one, so the two fields the marker needs
+            # are recovered from the prefix already read.
+            fields = _fields_in_prefix(raw, _MARKER_FIELDS)
         else:
             return 0
+        event = fields.get("hook_event_name")
+        # The agent's own id for its session, not the pane's: an agent started inside a managed
+        # pane inherits the pane's id, and only this tells its hooks from its parent's.
+        owner = fields.get("session_id")
         turns = FileTurnMarkers(activity_directory) if markers is None else markers
         if event == TURN_STARTED and provider in MARKED_PROVIDERS:
-            turns.start(session_id)
+            turns.start(session_id, owner=owner if isinstance(owner, str) else None)
             return 0
         # Ungated, unlike the start: ending a marker that was never started is a no-op. Guarded
         # on its own, so a marker that cannot be removed never costs the "finished" record.
         if event in TURN_ENDED:
             try:
-                turns.end(session_id)
+                turns.end(session_id, owner=owner if isinstance(owner, str) else None)
             except Exception:
                 pass
         if document is None:
@@ -295,40 +300,47 @@ def _document(raw: bytes) -> dict | None:
 
 _DECODER = json.JSONDecoder()
 _BLANK = re.compile(r"[ \t\n\r]*")
+#: What the marker step reads from a payload: the event, and the agent's own id for its session.
+_MARKER_FIELDS = ("hook_event_name", "session_id")
 
 
-def _event_in_prefix(raw: bytes) -> str | None:
-    """The top-level `hook_event_name` of a payload cut at the bound, or None.
+def _fields_in_prefix(raw: bytes, names: tuple[str, ...]) -> dict[str, object]:
+    """The named top-level fields of a payload cut at the bound, as far as the cut allows.
 
     Walks the object's top-level keys in order, decoding each value whole with the standard
-    decoder and discarding it, so text inside a value -- a prompt that spells the key -- is
-    never read as a key. The walk stops at the first value the cut leaves incomplete: an event
-    name that comes after the long field is not in the prefix, and is not guessed.
+    decoder and discarding the ones not named, so text inside a value -- a prompt that spells a
+    key -- is never read as a key. The walk stops at the first value the cut leaves incomplete:
+    a field that comes after the long one is not in the prefix, and is not guessed. Claude
+    2.1.282 and Codex 0.155.1 both send `session_id` and `hook_event_name` before `prompt` and
+    `last_assistant_message` (measured 2026-09-25).
     """
+    found: dict[str, object] = {}
     text = raw.decode("utf-8", errors="replace")
     try:
         position = _BLANK.match(text, 0).end()
         if text[position] != "{":
-            return None
+            return found
         position += 1
         while True:
             position = _BLANK.match(text, position).end()
             if text[position] != '"':
-                return None
+                return found
             key, position = _DECODER.raw_decode(text, position)
             position = _BLANK.match(text, position).end()
             if text[position] != ":":
-                return None
+                return found
             position = _BLANK.match(text, position + 1).end()
             value, position = _DECODER.raw_decode(text, position)
-            if key == "hook_event_name":
-                return value if isinstance(value, str) else None
+            if key in names:
+                found[key] = value
+                if len(found) == len(names):
+                    return found
             position = _BLANK.match(text, position).end()
             if text[position] != ",":
-                return None
+                return found
             position += 1
     except (IndexError, ValueError):
-        return None
+        return found
 
 
 def _observed(

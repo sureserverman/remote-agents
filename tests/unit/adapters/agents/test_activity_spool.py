@@ -608,7 +608,7 @@ def test_a_submit_starts_a_marker_and_spools_no_record(provider: str, tmp_path: 
     assert _run(_stream(_SUBMIT_PAYLOAD), directory, provider=provider) == 0
 
     assert _marker(directory).is_file()
-    assert _marker(directory).read_bytes() == b""
+    assert _marker(directory).read_bytes() == _SUBMIT_PAYLOAD["session_id"].encode()
     assert _records(directory) == []
 
 
@@ -762,3 +762,33 @@ def test_only_claude_and_codex_start_a_marker(provider: str, tmp_path: Path) -> 
     assert _run(_stream(_SUBMIT_PAYLOAD), directory, provider=provider) == 0
 
     assert not (directory / "turns").exists()
+
+
+def _as(agent: str, payload: dict[str, Any]) -> io.BytesIO:
+    return _stream({**payload, "session_id": agent})
+
+
+@pytest.mark.parametrize("provider", ["claude", "codex"])
+def test_a_nested_agents_stop_leaves_its_parents_marker(provider: str, tmp_path: Path) -> None:
+    """A `claude -p` or `codex exec` run by a tool call inherits the pane's session id, so its
+    hooks fire against the parent's marker. Its `Stop` must not end the parent's running turn."""
+    directory = _spool(tmp_path)
+    _run(_as("parent", _SUBMIT_PAYLOAD), directory, provider=provider)
+
+    _run(_as("child", _SUBMIT_PAYLOAD), directory, provider=provider)
+    _run(_as("child", _STOP_PAYLOAD), directory, provider=provider)
+    assert _marker(directory).is_file()
+
+    _run(_as("parent", _STOP_PAYLOAD), directory, provider=provider)
+    assert not _marker(directory).exists()
+
+
+def test_an_over_bound_stop_from_the_owner_still_ends_its_marker(tmp_path: Path) -> None:
+    directory = _spool(tmp_path)
+    _run(_as("parent", _SUBMIT_PAYLOAD), directory)
+
+    _run(_as("child", {**_STOP_PAYLOAD, "last_assistant_message": _LONG}), directory)
+    assert _marker(directory).is_file()
+    _run(_as("parent", {**_STOP_PAYLOAD, "last_assistant_message": _LONG}), directory)
+
+    assert not _marker(directory).exists()
