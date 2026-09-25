@@ -723,8 +723,8 @@ def _note(row: LimitRow, columns: _LimitColumns) -> tuple[Content, Content]:
     # lapsed, which is the ordinary idle host.
     if row.absence:
         return Content(" " * _GROUP_GUTTER), _absence_cell(row, columns)
-    if row.stale_for is not None:
-        return Content.assemble((" · ", DIM)), Content.assemble((f"as of {row.stale_for}", DIM))
+    # A stale reading's date is the source stamp's since R3 (`limit_stamp_content`), so a row
+    # never carries both a countdown and a date.
     return Content(""), Content("")
 
 
@@ -788,6 +788,49 @@ def limit_row_content(
         else:
             lines.append(indent + words)
     return lines
+
+
+#: The gap between two agents on the source stamp line, as the handoff draws it.
+_STAMP_GAP = 8
+
+#: What the wide limits pane's bottom border says, so the tick and the arrow are explained once.
+LIMITS_BORDER_FOOTER = f"{PACE_TICK} where an even week would be today · ↻ resets in"
+
+
+def limits_border_footer(width: int | None) -> str | None:
+    """The border footer for a pane `width` cells wide: only where the week bar has its tick
+    resolution (`_WIDE_PANE`), and None below it."""
+    return LIMITS_BORDER_FOOTER if width is not None and width >= _WIDE_PANE else None
+
+
+def _stamp_entry(row: LimitRow) -> str:
+    source = f" · {row.borrowed}" if row.borrowed else ""
+    age = "live" if row.stale_for is None else f"as of {row.stale_for}"
+    return f"{row.profile}{source} · {age}"
+
+
+def limit_stamp_content(rows: Sequence[LimitRow], width: int | None = None) -> list[Content]:
+    """Where each reading came from and how old it is: `claude · status line · as of 4m`.
+
+    One dim line under the rows (R3, amending DEC-100's trailer clause). It carries what the
+    per-row `· as of` trailer did, and the borrowed source DEC-061 asks presentation to name,
+    which the rows lost in 2026-09-03 for want of room. A row with no reading has nothing to
+    stamp -- its own absence phrase says so. The entries share a line where they fit and take
+    one each where they do not, so a date is never the part the pane cuts off.
+
+    On the one-line layout a blank line sets the stamp off from the table, as the handoff draws
+    it; a stacked pane is short of rows and spends none on it.
+    """
+    entries = [_stamp_entry(row) for row in rows if row.windows]
+    if not entries:
+        return []
+    joined = (" " * _STAMP_GAP).join(entries)
+    if width is None or width <= 0 or Content(joined).cell_length <= width:
+        lines = [Content.assemble((joined, DIM))]
+    else:
+        lines = [Content.assemble((entry, DIM)) for entry in entries]
+    stacked = width is not None and width > 0 and _table_width(_limit_columns(rows, width)) > width
+    return lines if stacked else [Content(""), *lines]
 
 
 def limit_rows_content(rows: Sequence[LimitRow], width: int | None = None) -> list[Content]:

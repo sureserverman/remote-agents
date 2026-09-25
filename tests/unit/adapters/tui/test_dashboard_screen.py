@@ -24,6 +24,7 @@ from remote_agents.adapters.tui.context import TuiContext
 from remote_agents.adapters.tui.screens.dashboard import (
     _CLAUDE_REMOTE_CONTROL_ROW,
     _HOST_REMOTE_CONTROL_ROW,
+    _LIMITS_STAMP_PREFIX,
     NO_LIMITS,
     DashboardScreen,
 )
@@ -323,6 +324,7 @@ def _limit_lines(pane: OptionList) -> list[str]:
         str(pane.get_option_at_index(index).prompt)
         for index in range(pane.option_count)
         if pane.get_option_at_index(index).id not in _NOT_A_LIMIT
+        and not (pane.get_option_at_index(index).id or "").startswith(_LIMITS_STAMP_PREFIX)
     ]
 
 
@@ -1214,3 +1216,50 @@ async def test_the_dashboard_pane_stops_listening_while_another_screen_is_on_top
         await pilot.press("escape")
         await pilot.pause()
         assert events.listeners, "and must take the subscription back on the way in"
+
+
+# --- the source stamp and the border footer (R3, DEC-106) ----------------------------------
+
+
+def _stale_claude_live_codex():
+    later = datetime.now(UTC) + timedelta(days=3)
+    return _limits_reader(
+        AgentLimits(
+            ProfileId("claude"),
+            (UsageWindow("5h", 4.0), UsageWindow("week", 49.0, resets_at=later)),
+            observed_at=datetime.now(UTC) - timedelta(hours=3),
+            stale_source="status line",
+        ),
+        AgentLimits(ProfileId("codex"), (UsageWindow("week", 61.0, resets_at=later),)),
+    )
+
+
+def _stamp_lines(pane: OptionList) -> list[str]:
+    return [
+        str(pane.get_option_at_index(index).prompt)
+        for index in range(pane.option_count)
+        if (pane.get_option_at_index(index).id or "").startswith(_LIMITS_STAMP_PREFIX)
+    ]
+
+
+async def test_the_limits_pane_draws_the_source_stamp_under_its_rows() -> None:
+    app = RemoteAgentsTui(_context(limits=_stale_claude_live_codex()))
+    async with app.run_test(size=(200, 50)) as pilot:
+        await pilot.pause()
+        await pilot.pause()
+        pane = app.screen.query_one("#limits-pane", OptionList)
+        assert _stamp_lines(pane) == ["", "claude · status line · as of 3h        codex · live"]
+        assert not any("as of" in line for line in _limit_lines(pane)), _limit_lines(pane)
+
+
+@pytest.mark.parametrize(("size", "footer"), [((200, 50), True), ((100, 30), False)])
+async def test_the_limits_border_footer_is_drawn_only_on_a_wide_pane(size, footer: bool) -> None:
+    app = RemoteAgentsTui(_context(limits=_stale_claude_live_codex()))
+    async with app.run_test(size=size) as pilot:
+        await pilot.pause()
+        await pilot.pause()
+        pane = app.screen.query_one("#limits-pane", OptionList)
+        width = pane.scrollable_content_region.width
+        assert (width >= 70) is footer, width
+        expected = "┃ where an even week would be today · ↻ resets in" if footer else ""
+        assert str(pane.border_subtitle or "") == expected

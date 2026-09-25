@@ -41,6 +41,8 @@ from textual.widgets.option_list import Option
 from remote_agents.adapters.tui.model import _BACK, LaunchSelection
 from remote_agents.adapters.tui.rows import (
     limit_rows_content,
+    limit_stamp_content,
+    limits_border_footer,
     session_contents,
     session_counts_content,
 )
@@ -116,6 +118,9 @@ _EMPTY_LIMITS_ROW = "limits:none"
 """A stable id for the empty row, so a redraw can tell it from an agent's row."""
 
 _LIMITS_ROW_PREFIX = "limits:"
+
+_LIMITS_STAMP_PREFIX = "limits-stamp:"
+"""The blank line and the source stamp under the rows (R3): about the rows, not an agent's row."""
 
 LIMITS_TITLE = "Plan limits"
 
@@ -551,9 +556,14 @@ class LimitsRegion:
         contents = limit_rows_content(rows, width or None)
         for index, content in enumerate(contents):
             pane.add_option(Option(content, id=f"{_LIMITS_ROW_PREFIX}{index}", disabled=True))
+        stamp = limit_stamp_content(rows, width or None)
+        if stamp:
+            for index, content in enumerate(stamp):
+                pane.add_option(Option(content, id=f"{_LIMITS_STAMP_PREFIX}{index}", disabled=True))
+        pane.border_subtitle = limits_border_footer(width or None) or ""
         self._add_claude_row(pane, claude_line)
         self._add_host_row(pane, host_line)
-        _fit_to_content(pane, (*contents, claude_line, host_line))
+        _fit_to_content(pane, (*contents, *stamp, claude_line, host_line))
 
     def _add_host_row(self, pane: OptionList, line: Content) -> None:
         """The host line, disabled like every other row here.

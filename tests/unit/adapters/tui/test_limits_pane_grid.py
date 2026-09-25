@@ -54,6 +54,8 @@ from remote_agents.adapters.tui.context import TuiContext
 from remote_agents.adapters.tui.rows import (
     limit_gauge_content,
     limit_rows_content,
+    limit_stamp_content,
+    limits_border_footer,
     pace_style,
     pace_text,
 )
@@ -429,11 +431,12 @@ def test_a_row_that_says_it_has_no_reading_does_not_also_date_one() -> None:
     assert "no reading yet" in codex
     assert "as of" not in codex, f"the row dates a reading it says it does not have: {codex!r}"
 
-    # And the trailer is not simply gone from the render: a row that *does* have a stale
-    # figure still says how old it is, which is the behaviour this must not have broken.
+    # And the date is not simply gone from the render: a row that *does* have a stale figure
+    # still says how old it is -- on the source stamp since R3, not on its row.
     dated = (LimitRow("claude", (LimitWindow("5h", 34, None),), None, "3d"),)
-    _header, (line,) = _grid(dated)
-    assert "as of 3d" in line
+    assert any("as of 3d" in line.plain for line in limit_stamp_content(dated, WIDE))
+    codex_stamp = limit_stamp_content(rows, WIDE)
+    assert all("codex" not in line.plain for line in codex_stamp), "no reading, nothing to stamp"
 
 
 # --- the Claude row: a stored intention, drawn above the machine's own ----------------------
@@ -912,3 +915,55 @@ def test_the_readme_example_rows_at_width_80() -> None:
         "claude  ███░░░░░ 28% ↻ 1h  ██┃░░░░░░░░░░░░░  7% ↻ 6d       14%  ▼ 7 under",
         "codex   ██░░░░░░ 18% ↻ 1h  █████████┃██░░░░ 71% ↻ 3d       57%  ▲ 14 over",
     ]
+
+
+# --- the source stamp (R3, amends DEC-100's trailer clause) ---------------------------------
+
+
+def _stamped_rows() -> tuple[LimitRow, ...]:
+    return (
+        LimitRow(
+            "claude",
+            (LimitWindow("5h", 34, "2h"), LimitWindow("week", 61, "3d")),
+            "status line",
+            "4m",
+        ),
+        LimitRow("codex", (LimitWindow("5h", 3, "4h"), LimitWindow("week", 9, "5d")), None, None),
+        LimitRow("opencode", (), None, None, absence="no reading yet"),
+    )
+
+
+def test_the_source_stamp_says_live_or_as_of_in_dim() -> None:
+    """One line under the rows: each reading's agent, its source when borrowed, and its age.
+
+    An agent with no reading has nothing to stamp; its row already says so.
+    """
+    blank, stamp = limit_stamp_content(_stamped_rows(), 80)
+    assert blank.plain == "", "the one-line layout sets the stamp off with a blank line"
+    assert stamp.plain == "claude · status line · as of 4m        codex · live", stamp.plain
+    assert {str(span.style) for span in stamp.spans} == {"$text-dim"}
+
+
+def test_no_stale_row_line_carries_a_countdown_or_a_date() -> None:
+    """The date moved to the stamp: a row never carries both a countdown and a date."""
+    for width in (WIDE, 80, 38):
+        for content in limit_rows_content(_stamped_rows(), width):
+            assert "as of" not in content.plain, (width, content.plain)
+            assert not ("↻" in content.plain and "as of" in content.plain)
+
+
+def test_absence_phrases_still_trail_the_bars_beside_the_stamp() -> None:
+    """DEC-061's absence words stay on their rows, as distinct words; only the date moved."""
+    _header, lines = _grid(_stamped_rows())
+    (opencode,) = [line for line in lines if line.startswith("opencode")]
+    assert opencode.rstrip().endswith("no reading yet"), opencode
+
+
+def test_the_limits_border_footer_is_wide_only() -> None:
+    assert limits_border_footer(70) == "┃ where an even week would be today · ↻ resets in"
+    assert limits_border_footer(69) is None
+
+
+def test_a_stacked_pane_spends_no_row_on_the_blank_before_the_stamp() -> None:
+    lines = [line.plain for line in limit_stamp_content(_stamped_rows(), 38)]
+    assert lines == ["claude · status line · as of 4m", "codex · live"], lines

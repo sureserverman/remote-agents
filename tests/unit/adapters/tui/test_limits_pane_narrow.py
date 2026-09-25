@@ -40,7 +40,7 @@ from textual.widgets import OptionList
 
 from remote_agents.adapters.tui.app import RemoteAgentsTui
 from remote_agents.adapters.tui.context import TuiContext
-from remote_agents.adapters.tui.rows import limit_rows_content
+from remote_agents.adapters.tui.rows import limit_rows_content, limit_stamp_content
 from remote_agents.adapters.tui.screens.dashboard import LimitsPaneScreen
 from remote_agents.application.profiles import ProfileAvailability
 from remote_agents.application.project_catalog import CatalogProject
@@ -118,8 +118,10 @@ def test_the_staleness_stamp_survives_the_narrow_layout() -> None:
     The countdown is the part a narrow pane may lose; the date is not. It is what stops a
     number read two hours ago being read as current.
     """
-    lines = [content.plain for content in limit_rows_content((_stale_row(),), NARROW)]
+    lines = [content.plain for content in limit_stamp_content((_stale_row(),), NARROW)]
     assert any("as of 2h" in line for line in lines), lines
+    for content in limit_stamp_content((_stale_row(), _fresh_row()), NARROW):
+        assert cell_len(content.plain) <= NARROW, content.plain
 
 
 def test_no_narrow_line_ends_in_the_padding_that_aligns_the_wide_one() -> None:
@@ -318,7 +320,14 @@ def test_each_absence_trails_empty_bars_in_both_layouts() -> None:
     )
     for row, phrase in cases:
         for width in (120, NARROW):
-            text = "\n".join(content.plain for content in limit_rows_content((row,), width))
+            # The pane draws the rows, then the source stamp under them (R3).
+            text = "\n".join(
+                content.plain
+                for content in (
+                    *limit_rows_content((row,), width),
+                    *limit_stamp_content((row,), width),
+                )
+            )
             # Stacked cells carry their labels; the one-line layout names them once, in its
             # header row (DEC-106), over each bar.
             if width == NARROW:
