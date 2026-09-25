@@ -104,12 +104,13 @@ def _rows(app: RemoteAgentsTui) -> list[str]:
 
 
 def _names(app: RemoteAgentsTui) -> list[str]:
-    """The project each row names -- its first token -- on the two-column projects list.
+    """The project each row names -- its first token after any marker -- on the projects list.
 
     The redesign's row is the project's name padded out to a last-launch age against the right
     edge, so the whole string depends on the pane's width; the name is what a test is about.
     """
-    return [row.split()[0] for row in _rows(app)]
+    # The cursor row leads with the `▸` marker (the console facelift), which is not a name.
+    return [row.removeprefix("▸").split()[0] for row in _rows(app)]
 
 
 async def _type_filter(pilot, text: str) -> None:
@@ -913,7 +914,8 @@ async def test_down_arrow_enters_the_filtered_rows_and_not_the_stale_ones() -> N
         await pilot.pause()
         names = _names(app)
         choices = app.screen.query_one("#choices", OptionList)
-        resting = str(choices.get_option_at_index(choices.highlighted).prompt).split()[0]
+        prompt = str(choices.get_option_at_index(choices.highlighted).prompt)
+        resting = prompt.removeprefix("▸").split()[0]
 
     assert names == ["other-thing"], "the pending filter was not applied"
     assert resting == "other-thing"
