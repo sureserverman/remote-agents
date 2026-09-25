@@ -284,6 +284,12 @@ async def test_a_bare_terminal_keeps_both_chrome_widgets(screen_type: type[Scree
 async def test_the_console_hint_row_names_every_key_the_footer_drew(
     screen_type: type[Screen],
 ) -> None:
+    if getattr(screen_type, "frames_body_on_console", False):
+        # A framed console pane draws what the mock draws: its keys on its own line inside the
+        # frame (the projects footer line, the sessions action line and hint), and no
+        # `^p palette` / `esc back`. `esc` is inert on a pane's resting position anyway, and
+        # `:` or `ctrl+p` still open the palette (the Stage 2 fidelity finding M1).
+        return
     bare = await _read(screen_type, console_hosted=False)
     console = await _read(screen_type, console_hosted=True)
     assert console.hint is not None, f"{screen_type.__name__} has no hint row"
@@ -292,3 +298,28 @@ async def test_the_console_hint_row_names_every_key_the_footer_drew(
             f"{screen_type.__name__}: the bare footer drew `{key} {word}`, and under console "
             f"hosting the hint row does not name it: {console.hint!r}"
         )
+
+
+@pytest.mark.parametrize(
+    ("screen_type", "line", "words"),
+    [
+        (ProjectsPaneScreen, "#projects-footer", "enter choose · / filter · o order · F7 add"),
+        (SessionsPaneScreen, "#hint", "enter open · d detail"),
+    ],
+    ids=["projects", "sessions"],
+)
+async def test_a_framed_pane_names_its_own_keys_inside_its_frame(
+    screen_type: type[Screen], line: str, words: str
+) -> None:
+    app = RemoteAgentsTui(_context(console_hosted=True))
+    async with app.run_test(size=(200, 40)) as pilot:
+        await pilot.pause()
+        await app.push_screen(_ARRANGED[screen_type]())
+        await pilot.pause()
+        await pilot.pause()
+        widget = app.screen.query_one(line, Static)
+        drawn = str(widget.render())
+        body = app.screen.query_one("#body").region
+        inside = body.contains_region(widget.region)
+    assert words in drawn, drawn
+    assert inside, "the key line is outside the pane's frame"

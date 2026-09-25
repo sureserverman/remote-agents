@@ -21,6 +21,7 @@ from textual.css.query import NoMatches
 from textual.notifications import SeverityLevel
 from textual.screen import Screen
 from textual.validation import ValidationResult, Validator
+from textual.widget import Widget
 from textual.widgets import Footer, Header, Input, OptionList, Static, TextArea
 from textual.widgets.option_list import Option
 
@@ -425,6 +426,30 @@ class ChoiceScreen(Screen[None]):
         if self.draws_textual_chrome:
             yield Footer()
 
+    #: Whether this position, as a console pane, draws its whole body inside one round border
+    #: carrying its title (the console facelift: status, filter, rows and footer line sit
+    #: inside the box, as the mock draws them). Only the four console panes set it.
+    frames_body_on_console: ClassVar[bool] = False
+    #: The list whose title the frame carries.
+    framed_list: ClassVar[str] = "#choices"
+
+    @property
+    def framed(self) -> bool:
+        """Whether this screen draws its body as one titled frame: a console pane, hosted."""
+        return self.frames_body_on_console and self.services.console_hosted
+
+    def set_pane_title(self, widget: Widget, title: str | Content) -> None:
+        """Title *widget*, and the frame too when this screen draws one."""
+        widget.border_title = title
+        if self.framed:
+            self.query_one("#body").border_title = title
+
+    def set_pane_subtitle(self, widget: Widget, subtitle: str | Content) -> None:
+        """The bottom-border line of *widget*, and of the frame when this screen draws one."""
+        widget.border_subtitle = subtitle
+        if self.framed:
+            self.query_one("#body").border_subtitle = subtitle
+
     @property
     def draws_textual_chrome(self) -> bool:
         """Whether this screen composes a Textual Header and Footer (DEC-105, R9).
@@ -454,7 +479,17 @@ class ChoiceScreen(Screen[None]):
             self._draw_hint()
         entry = self.query_one("#filter", Input)
         entry.display = self.filter_placeholder is not None
-        if self.status:
+        if self.framed:
+            # The title says what the idle status said, so a framed pane starts without one;
+            # a failure still writes to it. Set directly: a resting pane is not yet `showing`.
+            self.add_class("-framed")
+            status = self.query_one("#status", Static)
+            status.update("")
+            status.add_class("-empty")
+            listing = self.query(self.framed_list)
+            if listing:
+                self.query_one("#body").border_title = listing.first().border_title
+        elif self.status:
             self.set_status(self.status)
         await self.populate()
 
@@ -1020,7 +1055,7 @@ class ChoiceScreen(Screen[None]):
         if not self.showing:
             return
         text = self._own_hint
-        if not self.draws_textual_chrome:
+        if not self.draws_textual_chrome and not self.framed:
             keys = footer_key_words(self)
             if keys:
                 text = Content.assemble(text, " · ", keys) if text else keys

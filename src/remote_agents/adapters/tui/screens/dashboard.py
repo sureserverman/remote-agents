@@ -658,7 +658,7 @@ class LimitsRegion:
         remote_control = () if self.services.console_hosted else (claude_line, host_line)
         rows = self._limit_rows
         # The wide footer explains the tick; with nothing drawn it has nothing to explain.
-        pane.border_subtitle = ""
+        self.set_pane_subtitle(pane, "")
         if not rows:
             # Reached only by a host that offers no agents at all -- the one state in which
             # there is genuinely nothing to lay out. It is still a *declared* empty state
@@ -689,7 +689,7 @@ class LimitsRegion:
         if stamp:
             for index, content in enumerate(stamp):
                 pane.add_option(Option(content, id=f"{_LIMITS_STAMP_PREFIX}{index}", disabled=True))
-        pane.border_subtitle = limits_border_footer(width or None) or ""
+        self.set_pane_subtitle(pane, limits_border_footer(width or None) or "")
         self._add_remote_control_rows(pane, remote_control)
         _fit_to_content(pane, (*contents, *stamp, *remote_control), on_measured=self._fit_own_pane)
 
@@ -752,6 +752,7 @@ class ProjectsPaneScreen(ProjectsScreen):
     #: Whether this position draws that line and the flat filter row. The dashboard, which
     #: subclasses this pane, keeps its own arrangement.
     draws_pane_footer = True
+    frames_body_on_console = True
 
     DEFAULT_CSS = """
     ProjectsPaneScreen #projects-footer {
@@ -888,14 +889,16 @@ class LimitsPaneScreen(LimitsRegion, ChoiceScreen):
     #: directory sweep per interval in a process that exists to be glanced at.
     _LIMITS_AUTO_REFRESH = 60.0
 
+    frames_body_on_console = True
+    framed_list = "#limits-pane"
+
     DEFAULT_CSS = """
     LimitsPaneScreen #filter { display: none; }
     LimitsPaneScreen #choices { display: none; }
-    /* The status region is two rows fixed (`ChoiceScreen #status`, sized for a sentence that
-       wraps on a narrow terminal) and this pane's status never changes and is never written
-       to: `_reload_limits` reports a failed read to the log, and the empty read to the list
-       itself, so nothing here has ever put a word in it. Two rows to restate a heading, on a
-       pane whose content is two lines. */
+    /* This pane's status never changes and is never written to: `_reload_limits` reports a
+       failed read to the log, and the empty read to the list itself, so nothing here has ever
+       put a word in it. Hidden outright rather than left to collapse when empty, which
+       `ChoiceScreen #status` now also does. */
     LimitsPaneScreen #status { display: none; }
     /* A round `$secondary` border with `Plan limits · account-wide` on it, like the other three
        panes (the console facelift). It was dropped once because a title cost two rows on a pane
@@ -938,7 +941,8 @@ class LimitsPaneScreen(LimitsRegion, ChoiceScreen):
             for child in body.children
             if child.display and child.id != "limits-pane"
         )
-        wanted = height + others
+        # Plus the frame's own border when the body carries it (`framed`).
+        wanted = height + others + body.gutter.height
         if wanted != self.app.size.height:
             # Not exclusive (DEC-008 forbids a worker cancelling one in flight): a repeated fit
             # asks for the same rows, and tmux answers it the same way.
@@ -1049,6 +1053,7 @@ class DashboardScreen(LimitsRegion, FeedRegion, ProjectsPaneScreen):
 
     position = "DASHBOARD"
     draws_pane_footer = False
+    frames_body_on_console = False
 
     BINDINGS = [
         # Hidden from the footer: the bar is shared with every inherited binding and the
@@ -1150,8 +1155,7 @@ class DashboardScreen(LimitsRegion, FeedRegion, ProjectsPaneScreen):
                     yield OptionList(id="choices", markup=False)
                 with Vertical(id="dashboard-right"):
                     sessions = OptionList(id="sessions-pane", markup=False)
-                    # The count is written in by every draw; the letters are the row keys,
-                    # advertised on the frame of the list they act on.
+                    # The count and the counts sentence are written in by every draw.
                     sessions.border_title = sessions_title(())
                     yield sessions
                     # Between the sessions and the notifications, which is where the owner

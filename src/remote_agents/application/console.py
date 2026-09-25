@@ -675,7 +675,7 @@ class ConsoleComposer:
                 (spec for spec in CONSOLE_LAYOUT if spec.slot is ConsolePaneSlot.PROJECTS), None
             )
             if column and projects is not None:
-                await self._console.normalize_console_layout(projects.percent, column)
+                await self._relayout(projects.percent, column)
         return tuple(
             f"the console has more than one {slot} pane; nothing here removes one, so kill "
             f"the console and run `remote-agents` again to rebuild it"
@@ -1352,10 +1352,24 @@ class ConsoleComposer:
         column = _column_resizes(arrangement)
         if not column:
             return
-        await self._console.normalize_console_layout(
+        await self._relayout(
             next(spec.percent for spec in CONSOLE_LAYOUT if spec.slot is ConsolePaneSlot.PROJECTS),
             column,
         )
+
+    async def _relayout(self, main_percent: int, column: tuple[tuple[str, int], ...]) -> None:
+        """Normalize the window, then re-issue the layout hooks with the ids it has now.
+
+        The hooks name the sessions pane by id, so every path that can renumber it -- a
+        rebuild, a reclaim -- re-issues them, or each later resize would aim its `resize-pane`
+        at a pane that is gone (found by the Stage 2 gate's review). A hook tmux refuses is
+        logged, as in `ensure`.
+        """
+        await self._console.normalize_console_layout(main_percent, column)
+        try:
+            await self._console.install_layout_hooks(main_percent, column)
+        except Exception:
+            _LOG.exception("the console layout hooks could not be re-issued; resize by hand")
 
     async def _adopt_surface(self) -> tuple[str, ...]:
         """Mark the left slot as the console's surface, once, for a console that lacks one.

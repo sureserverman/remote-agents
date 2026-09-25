@@ -254,6 +254,14 @@ class RemoteAgentsTui(App[AttachRequest | None]):
     /* The console's projects pane draws its filter as the design's first row: one line, no
        rule (the facelift). Here rather than on the screen, because app CSS outranks a
        screen's DEFAULT_CSS whatever the selector. */
+    /* A console pane's frame is its whole body (the facelift): one round border with the
+       title, and nothing inside draws a second box. */
+    ChoiceScreen.-framed #body {
+        border: round $secondary; border-title-color: $text; border-title-style: none;
+        border-subtitle-color: $text-muted;
+    }
+    ChoiceScreen.-framed #choices, ChoiceScreen.-framed #limits-pane,
+    ChoiceScreen.-framed #feed-pane { border: none; }
     ChoiceScreen.-projects-pane #filter, ChoiceScreen.-projects-pane #filter:focus {
         height: 1; border: none;
     }

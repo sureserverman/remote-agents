@@ -639,6 +639,9 @@ class FeedScreen(FeedRegion, ChoiceScreen):
     #: The same cadence the sessions pane keeps: one glance-level surface, one interval.
     _FEED_AUTO_REFRESH = 10.0
 
+    frames_body_on_console = True
+    framed_list = "#feed-pane"
+
     DEFAULT_CSS = """
     FeedScreen #filter { display: none; }
     FeedScreen #choices { display: none; }

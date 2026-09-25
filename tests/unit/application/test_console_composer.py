@@ -1583,3 +1583,16 @@ async def test_layout_hooks_that_will_not_install_cost_the_hooks_and_not_the_con
 
     assert await _composer(Refuses(arrangement=_three_pane_console())).ensure() is True
     assert "layout" in caplog.text
+
+
+async def test_a_rebuild_re_issues_the_layout_hooks_with_the_new_pane_ids() -> None:
+    projects = ConsolePaneSlot.PROJECTS.value
+    survivors = tuple(pane for pane in _three_pane_console() if pane.console_slot != projects)
+    console = _HookedConsole(arrangement=survivors)
+
+    await _composer(console).ensure()
+
+    hooks = [call for call in console.calls if call[0] == "install_layout_hooks"]
+    normalized = [call for call in console.calls if call[0] == "normalize_console_layout"]
+    assert normalized and hooks, console.calls
+    assert hooks[0][1:] == normalized[0][1:]

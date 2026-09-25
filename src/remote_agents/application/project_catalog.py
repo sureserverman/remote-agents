@@ -26,6 +26,12 @@ class UsageReporting(Protocol):
     async def project_usage(self) -> Iterable[ProjectUsage]: ...
 
 
+#: The two groups a catalogue entry belongs to: in the registry, or only discovered on disk.
+#: Named so a surface asks by value rather than by matching the word it happens to be.
+REGISTERED_GROUP = "Registered"
+UNREGISTERED_GROUP = "Unregistered"
+
+
 @dataclass(frozen=True, slots=True)
 class CatalogProject:
     opaque_id: str
@@ -51,7 +57,7 @@ def build_catalogue(
     """Merge canonical paths while preserving registry-first presentation."""
     used_paths: set[Path] = set()
     entries: list[CatalogProject] = []
-    for project, group in ((item, "Registered") for item in registered):
+    for project, group in ((item, REGISTERED_GROUP) for item in registered):
         canonical = project.path.resolve(strict=False)
         if canonical not in used_paths:
             used_paths.add(canonical)
@@ -61,7 +67,7 @@ def build_catalogue(
         canonical = project.path.resolve(strict=False)
         if canonical not in used_paths:
             used_paths.add(canonical)
-            unregistered.append(_entry(project, "Unregistered", canonical))
+            unregistered.append(_entry(project, UNREGISTERED_GROUP, canonical))
     return tuple(
         entries
         + sorted(unregistered, key=lambda entry: (entry.area.casefold(), entry.name.casefold()))

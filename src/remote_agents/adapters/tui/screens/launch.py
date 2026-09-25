@@ -55,7 +55,7 @@ from remote_agents.adapters.tui.screens.base import (
     NEVER_EMPTY,
     ChoiceScreen,
 )
-from remote_agents.application.project_catalog import search_catalogue
+from remote_agents.application.project_catalog import REGISTERED_GROUP, search_catalogue
 
 #: What the status line says about each order, on the positions that describe the list in
 #: their status (the dashboard puts the sessions' counts there instead). The sentence names the
@@ -207,8 +207,9 @@ class ProjectsScreen(ChoiceScreen):
         entry.display = True
         entry.placeholder = PROJECTS_PLACEHOLDER
         choices = self.query_one("#choices", OptionList)
-        choices.border_title = (
-            f"Projects[$text-muted] {len(projects)} · {_ORDER_TITLE[self.tui.project_order]}[/]"
+        self.set_pane_title(
+            choices,
+            f"Projects[$text-muted] {len(projects)} · {_ORDER_TITLE[self.tui.project_order]}[/]",
         )
         width = choices.scrollable_content_region.width or None
         last_used = self.tui.project_last_used
@@ -219,7 +220,7 @@ class ProjectsScreen(ChoiceScreen):
                     project.opaque_id,
                     project_row_content(
                         project.name,
-                        project.group == "Registered",
+                        project.group == REGISTERED_GROUP,
                         last_used.get(project.opaque_id),
                         width,
                     ),
@@ -239,12 +240,13 @@ class ProjectsScreen(ChoiceScreen):
         fact about the list rather than a condition to report. `DashboardScreen` overrides
         this to say nothing -- its status carries the sessions' counts.
         """
+        if self.framed:
+            # The frame's title carries the count and the order, and the footer line the keys.
+            self.set_status("", hint="")
+            return
         order = _ORDER_SENTENCE[self.tui.project_order]
         self.set_status(
             f"Choose a project — {count} available, {order}",
-            # Through the seam rather than the constant: on the console's projects pane this
-            # line also carries the F-key row, and `_describe_projects` runs on every redraw --
-            # so a pane that appended the F-keys once would lose them at the next render.
             hint=PROJECTS_HINT,
         )
 

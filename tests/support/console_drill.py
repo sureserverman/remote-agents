@@ -151,7 +151,15 @@ class Drill:
         self.home = home
         self.session_id = session_id
         self.outer = f"remote-agents-test-bar-{session_id.value.hex}"
-        self.env = {**os.environ, "TMUX_TMPDIR": str(root / "sock"), "HOME": str(home)}
+        # COLORTERM as the owner's own console server carries it (`show-environment -g`), so
+        # the panes render truecolour here as they do there; without it Textual rounds every
+        # theme colour to the 256-colour cube (the Stage 2 fidelity finding M2).
+        self.env = {
+            **os.environ,
+            "TMUX_TMPDIR": str(root / "sock"),
+            "HOME": str(home),
+            "COLORTERM": "truecolor",
+        }
         self.env.pop("TMUX", None)
 
     def inner(self, *args: str) -> str:

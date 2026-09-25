@@ -69,6 +69,7 @@ class RecordingConsole:
         self.swaps: list[tuple[str, str]] = []
         self.rejoined: list[tuple[str, str, bool, int, bool]] = []
         self.normalized: list[tuple[int, tuple[tuple[str, int], ...]]] = []
+        self.hooked: list[tuple[int, tuple[tuple[str, int], ...]]] = []
 
     async def kill_console(self) -> None:
         self.calls.append(("kill_console",))
@@ -155,6 +156,9 @@ class RecordingConsole:
     async def normalize_console_layout(self, main_percent: int, column) -> None:
         self.normalized.append((main_percent, tuple(column)))
 
+    async def install_layout_hooks(self, main_percent: int, column) -> None:
+        self.hooked.append((main_percent, tuple(column)))
+
 
 def _composer(console: RecordingConsole) -> ConsoleComposer:
     return ConsoleComposer(
@@ -227,6 +231,9 @@ async def test_the_reclaimed_console_is_put_back_in_its_declared_proportions() -
     await _composer(console).sync((_record(_A, SessionState.ENDED),))
 
     assert console.normalized == [(60, (("%2", 31),))]
+    # The hooks name the sessions pane by id, so a reclaim that renumbered it re-issues them;
+    # otherwise every later resize would aim its `resize-pane` at a pane that is gone.
+    assert console.hooked == console.normalized
 
 
 async def test_a_session_that_is_still_being_shown_is_left_completely_alone() -> None:

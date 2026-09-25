@@ -1380,7 +1380,7 @@ class SessionsScreen(_SessionActionKeys, ChoiceScreen):
         # this change's Tier-1 review.
         self._drawn = {str(record.session_id): record for record in records}
         choices = self.query_one("#choices", OptionList)
-        choices.border_title = sessions_title(records)
+        self.set_pane_title(choices, sessions_title(records))
         if not records:
             self.show_choices(())
             self.set_status(self.empty_status, hint="")
@@ -1407,7 +1407,9 @@ class SessionsScreen(_SessionActionKeys, ChoiceScreen):
         self._has_drawn = True
         # The counts are the facts; the keys are the hint. Both from the tuple the rows are drawn
         # from -- one read (the rule `_sessions_reply` states for its own header).
-        self.set_status(session_counts_content(records), hint=self.listing_hint)
+        # The counts are the frame's title on a framed pane, so the status says nothing idle.
+        counts = "" if self.framed else session_counts_content(records)
+        self.set_status(counts, hint=self.listing_hint)
         parts = [
             session_row_parts(record, self.tui.context_window_for(record.session_id))
             for record in records
@@ -1568,7 +1570,8 @@ class SessionsScreen(_SessionActionKeys, ChoiceScreen):
         # position the owner is already on, about a state now on screen — and on the console
         # pane it would blank that pane's keymap line until the next tick.
         if self._drawn:
-            self.set_status(session_counts_content(tuple(self._drawn.values())))
+            drawn = tuple(self._drawn.values())
+            self.set_status("" if self.framed else session_counts_content(drawn))
 
 
 class SessionsPaneScreen(SessionsScreen):
@@ -1608,6 +1611,7 @@ class SessionsPaneScreen(SessionsScreen):
     #: Inherited unchanged, both sentences named the other surface's keys. Found by driving
     #: the real pane at the Stage 1 gate, which is the only place a false status shows.
     listing_hint = "enter open · d detail · p projects · F12 from inside an agent"
+    frames_body_on_console = True
     offers_projects_key = True
     empty_status = (
         "No managed sessions on this host. Launching one starts it here. "

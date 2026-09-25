@@ -1328,12 +1328,16 @@ async def test_each_console_pane_carries_its_border_title_on_a_round_border(pane
     async with app.run_test(size=(120, 30)) as pilot:
         await pilot.pause()
         await pilot.pause()
-        widget = app.screen.query_one(selector)
-        drawn = widget.border_title
+        # The frame is the pane's whole body, as the mock draws it: the filter, the footer
+        # line and the action line sit inside it (the Stage 2 gate's fidelity finding M1).
+        widget = app.screen.query_one("#body")
+        inner = app.screen.query_one(selector)
+        drawn = widget.border_title or ""
         plain = drawn.plain if isinstance(drawn, Content) else Content.from_markup(drawn).plain
         assert plain == title, f"{pane}: the border title reads {plain!r}"
         edge, colour = widget.styles.border_top
         assert edge == "round", f"{pane}: the border is {edge!r}, not round"
+        assert inner.styles.border_top[0] in ("", "none"), f"{pane}: the list draws a second box"
         secondary = app.current_theme.secondary
         assert colour.hex.upper() == str(secondary).upper()[:7], (
             f"{pane}: the border is {colour.hex}, not $secondary {secondary}"
@@ -1343,3 +1347,5 @@ async def test_each_console_pane_carries_its_border_title_on_a_round_border(pane
         assert widget.styles.border_title_color.hex.upper() != app.current_theme.primary.upper(), (
             f"{pane}: the title is still drawn in $primary"
         )
+        # No idle sentence above the rows: the title already says what it said.
+        assert not app.screen.query_one("#status").display, f"{pane}: an idle status is drawn"
