@@ -638,6 +638,12 @@ class LimitsRegion:
         pane launched here will come up as. Above rather than below, so the two Remote Control
         lines read from the intention down to the observation, and so the pane's last line goes
         on being the one it has always been.
+
+        **Under console hosting neither line is drawn** (R10, the console facelift): both are
+        host facts, and the console's status bar carries them at its right end from the words
+        `_publish_remote_control` hands it -- which is why that publish runs first and runs
+        regardless. Settings keeps the full wording. Bare `remote-agents tui` has no bar, so it
+        keeps both lines here.
         """
         self._publish_remote_control()
         found = self.query("#limits-pane")
@@ -647,6 +653,8 @@ class LimitsRegion:
         pane.clear_options()
         host_line = Content(host_remote_control_line(self._host_status))
         claude_line = Content(remote_control_default_line(self._claude_default))
+        # The rows a bare surface appends, and none on a console, where the bar has them.
+        remote_control = () if self.services.console_hosted else (claude_line, host_line)
         rows = self._limit_rows
         # The wide footer explains the tick; with nothing drawn it has nothing to explain.
         pane.border_subtitle = ""
@@ -662,9 +670,8 @@ class LimitsRegion:
             # that raised. The raising read leaves the last figures drawn, up in
             # `_reload_limits`; this branch is the other one.
             pane.add_option(Option(NO_LIMITS, id=_EMPTY_LIMITS_ROW, disabled=True))
-            self._add_claude_row(pane, claude_line)
-            self._add_host_row(pane, host_line)
-            _fit_to_content(pane, (Content(NO_LIMITS), claude_line, host_line))
+            self._add_remote_control_rows(pane, remote_control)
+            _fit_to_content(pane, (Content(NO_LIMITS), *remote_control))
             return
         width = pane.scrollable_content_region.width
         if width <= 0:
@@ -680,9 +687,15 @@ class LimitsRegion:
             for index, content in enumerate(stamp):
                 pane.add_option(Option(content, id=f"{_LIMITS_STAMP_PREFIX}{index}", disabled=True))
         pane.border_subtitle = limits_border_footer(width or None) or ""
-        self._add_claude_row(pane, claude_line)
-        self._add_host_row(pane, host_line)
-        _fit_to_content(pane, (*contents, *stamp, claude_line, host_line))
+        self._add_remote_control_rows(pane, remote_control)
+        _fit_to_content(pane, (*contents, *stamp, *remote_control))
+
+    def _add_remote_control_rows(self, pane: OptionList, lines: tuple[Content, ...]) -> None:
+        """Claude's default, then the host line, when this surface draws them at all."""
+        if lines:
+            claude_line, host_line = lines
+            self._add_claude_row(pane, claude_line)
+            self._add_host_row(pane, host_line)
 
     def _add_host_row(self, pane: OptionList, line: Content) -> None:
         """The host line, disabled like every other row here.

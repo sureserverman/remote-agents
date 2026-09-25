@@ -263,11 +263,12 @@ def _fg_at(styled_row: str, text: str) -> str:
     return colours["".join(plain).index(text)]
 
 
-def _limits_words(screen: str) -> dict[str, str]:
-    """The Remote Control lines' state words as the limits pane drew them."""
+def _remote_control_words(screen: str) -> dict[str, str]:
+    """The Remote Control lines' state words as a pane drew them (Settings, since the facelift)."""
     words = {}
     for line in screen.splitlines():
-        found = re.search(r"(Claude|Codex) Remote Control · (.+?)\s*(?:│|$)", line)
+        # Stops at whichever edge the pane draws: a round border's `│` or a tall one's `▎`.
+        found = re.search(r"(Claude|Codex) Remote Control · (.+?)\s*(?:[│▎▕]|$)", line)
         if found:
             words[found.group(1).lower()] = found.group(2).strip()
     return words
@@ -299,17 +300,31 @@ def _published(row: str) -> str | None:
     return row if ("Remote Control  claude" in row or " RC " in row) else None
 
 
-def test_the_bar_s_remote_control_words_equal_the_limits_pane_lines(drill) -> None:
+def test_the_bar_s_remote_control_words_equal_the_settings_lines(drill) -> None:
+    """The bar and Settings agree, and the limits pane no longer draws either line (R10).
+
+    Settings reads the two facts on its own path and keeps their full wording under console
+    hosting (DEC-084/DEC-085), so it is the independent witness the limits pane was until the
+    console facelift moved these lines off it.
+    """
     drill.resize(240, 50)
+    assert _wait(lambda: "Remote Control  claude" in drill.bar() or None), drill.bar()
+    assert not _remote_control_words(drill.screen()), (
+        f"the limits pane still draws a Remote Control line: {drill.screen()}"
+    )
 
-    def both() -> str | None:
+    drill.focus("feed")
+    drill.press("F2")
+
+    def settings_open() -> str | None:
         screen = drill.screen()
-        return screen if "Remote Control  claude" in drill.bar() and _limits_words(screen) else None
+        return screen if len(_remote_control_words(screen)) == 2 else None
 
-    screen = _wait(both)
+    screen = _wait(settings_open)
     assert screen, drill.screen()
-    words = _limits_words(screen)
+    words = _remote_control_words(screen)
     bar = drill.bar()
+    drill.press("Escape")
 
     assert f"Remote Control  claude {words['claude']} · codex {words['codex']}  " in bar, (
         bar,

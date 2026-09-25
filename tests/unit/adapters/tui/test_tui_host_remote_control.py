@@ -957,3 +957,65 @@ async def test_a_theme_switch_publishes_the_words_again_in_the_new_colours() -> 
     palettes = [entry[1] for entry in bar.published if entry is not None]
     assert palettes[0] == status_bar_palette(THEMES[0])
     assert palettes[-1] == status_bar_palette(THEMES[1])
+
+
+# --- console facelift sub-plan 3 Task 2.1: under console hosting the rows leave Plan limits ---
+
+
+def _pane_rows(app: RemoteAgentsTui) -> list[str]:
+    pane = app.screen.query_one("#limits-pane", OptionList)
+    return [str(pane.get_option_at_index(index).prompt) for index in range(pane.option_count)]
+
+
+async def test_under_console_hosting_the_limits_pane_draws_no_remote_control_but_the_bar_hears_it() -> (
+    None
+):
+    from dataclasses import replace
+
+    from remote_agents.domain.remote_control import RemoteControlDefault
+
+    control = FakeHostRemoteControl(HostConnection.CONNECTED)
+    stored = _StoredDefault(RemoteControlDefault.ON)
+    bare_bar, console_bar = _BarWords(), _BarWords()
+
+    bare = RemoteAgentsTui(_bar_context(control, stored, bare_bar))
+    async with bare.run_test() as pilot:
+        await bare.push_screen(LimitsPaneScreen())
+        await _settle(bare, pilot)
+        bare_rows = _pane_rows(bare)
+        bare_marks, _ = bare_bar.published[-1]
+
+    console = RemoteAgentsTui(
+        replace(_bar_context(control, stored, console_bar), console_hosted=True)
+    )
+    async with console.run_test() as pilot:
+        await console.push_screen(LimitsPaneScreen())
+        await _settle(console, pilot)
+        console_rows = _pane_rows(console)
+        console_marks, _ = console_bar.published[-1]
+
+    assert any("Remote Control" in row for row in bare_rows), "bare tui keeps both rows"
+    assert not any("Remote Control" in row for row in console_rows), console_rows
+    assert [(m.provider, m.word) for m in console_marks] == [
+        (m.provider, m.word) for m in bare_marks
+    ], "the bar hears the same readings the bare pane draws"
+
+
+async def test_settings_keeps_the_full_remote_control_wording_under_console_hosting() -> None:
+    from dataclasses import replace
+
+    from remote_agents.adapters.tui.screens.settings import SettingsScreen
+    from remote_agents.domain.remote_control import RemoteControlDefault
+
+    control = FakeHostRemoteControl(HostConnection.CONNECTED)
+    stored = _StoredDefault(RemoteControlDefault.ON)
+    app = RemoteAgentsTui(replace(_bar_context(control, stored, _BarWords()), console_hosted=True))
+    async with app.run_test(size=(120, 30)) as pilot:
+        await app.push_screen(SettingsScreen())
+        await _settle(app, pilot)
+        choices = app.screen.query_one("#choices", OptionList)
+        rows = [str(choices.get_option_at_index(i).prompt) for i in range(choices.option_count)]
+    # Settings keeps both lines whole under console hosting (DEC-084/DEC-085): the limits pane
+    # gave them up to the bar, so this is where the full wording lives.
+    assert "Claude Remote Control · on" in rows, rows
+    assert "Codex Remote Control · on" in rows, rows
