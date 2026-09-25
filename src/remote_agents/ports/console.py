@@ -497,3 +497,17 @@ class ConsolePort(Protocol):
         them, which is the shape that lets a caller reach the wrong one.
         """
         ...
+
+    async def publish_session_selected(self, selected: bool | None) -> None:
+        """Tell the status bar whether the sessions cursor rests on a row; `None` unsets it."""
+        ...
+
+    async def publish_typing(self, typing: bool | None) -> None:
+        """Tell the status bar whether a text entry holds the keyboard; `None` unsets it."""
+        ...
+
+    async def publish_remote_control(
+        self, marks: Sequence[RemoteControlMark] | None, palette: StatusBarPalette
+    ) -> None:
+        """Give the status bar the Remote Control readings, styled; `None` unsets them."""
+        ...

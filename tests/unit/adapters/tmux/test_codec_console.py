@@ -16,6 +16,8 @@ leaves the home session running.
 
 from __future__ import annotations
 
+import re
+
 import pytest
 
 from remote_agents.adapters.tmux.codec import (
@@ -603,3 +605,144 @@ def test_no_console_binding_script_carries_a_raw_control_character() -> None:
         f"these binding scripts carry a raw control character, which never survives as the "
         f"format or argument it was meant to be: {offenders}"
     )
+
+
+# --- console facelift sub-plan 2 Task 1.5: what the panes publish to the bar -------------------
+
+
+def test_the_selected_flag_is_a_console_window_option_and_none_unsets_it() -> None:
+    from remote_agents.adapters.tmux.codec import session_selected_args
+    from remote_agents.ports.console import SESSION_SELECTED_OPTION
+
+    target = console_target()
+    assert session_selected_args(True) == (
+        "set-option",
+        "-w",
+        "-t",
+        target,
+        SESSION_SELECTED_OPTION,
+        "1",
+    )
+    assert session_selected_args(False) == (
+        "set-option",
+        "-w",
+        "-t",
+        target,
+        SESSION_SELECTED_OPTION,
+        "0",
+    )
+    assert session_selected_args(None) == (
+        "set-option",
+        "-w",
+        "-u",
+        "-t",
+        target,
+        SESSION_SELECTED_OPTION,
+    )
+
+
+def test_the_typing_flag_is_a_console_window_option_and_none_unsets_it() -> None:
+    from remote_agents.adapters.tmux.codec import typing_args
+    from remote_agents.ports.console import TYPING_OPTION
+
+    target = console_target()
+    assert typing_args(True) == ("set-option", "-w", "-t", target, TYPING_OPTION, "1")
+    assert typing_args(False) == ("set-option", "-w", "-t", target, TYPING_OPTION, "0")
+    assert typing_args(None) == ("set-option", "-w", "-u", "-t", target, TYPING_OPTION)
+
+
+def _marks(*readings):
+    from remote_agents.ports.console import RemoteControlMark
+
+    return tuple(RemoteControlMark(provider, word, tone) for provider, word, tone in readings)
+
+
+def test_remote_control_words_publish_the_full_and_compact_values() -> None:
+    from bar_console import NIGHT
+
+    from remote_agents.adapters.tmux.codec import remote_control_words_args
+    from remote_agents.ports.console import (
+        REMOTE_CONTROL_COMPACT_OPTION,
+        REMOTE_CONTROL_OPTION,
+        RemoteControlTone,
+    )
+
+    full, compact = remote_control_words_args(
+        _marks(
+            ("claude", "on", RemoteControlTone.ON),
+            ("codex", "off", RemoteControlTone.OFF),
+        ),
+        NIGHT,
+    )
+
+    assert full[:5] == ("set-option", "-w", "-t", console_target(), REMOTE_CONTROL_OPTION)
+    assert full[5] == (
+        f"Remote Control  claude #[fg={NIGHT.on}]on#[fg={NIGHT.muted}]"
+        f" · codex #[fg={NIGHT.off}]off#[fg={NIGHT.muted}]"
+    )
+    assert compact[:5] == (
+        "set-option",
+        "-w",
+        "-t",
+        console_target(),
+        REMOTE_CONTROL_COMPACT_OPTION,
+    )
+    assert compact[5] == f"RC #[fg={NIGHT.on}]●#[fg={NIGHT.off}]○#[fg={NIGHT.muted}]"
+
+
+def test_remote_control_words_mark_each_tone_with_its_own_glyph() -> None:
+    """R6 / DEC-010: the glyph carries the state, the colour repeats it."""
+    from bar_console import NIGHT
+
+    from remote_agents.adapters.tmux.codec import remote_control_words_args
+    from remote_agents.ports.console import RemoteControlTone
+
+    glyphs = {}
+    for tone in RemoteControlTone:
+        _, compact = remote_control_words_args(_marks(("codex", "x", tone)), NIGHT)
+        glyphs[tone] = re.sub(r"#\[[^]]*\]", "", compact[5]).removeprefix("RC ")
+
+    assert glyphs == {
+        RemoteControlTone.ON: "●",
+        RemoteControlTone.OFF: "○",
+        RemoteControlTone.BROKEN: "?",
+        RemoteControlTone.UNKNOWN: "?",
+    }
+
+
+def test_remote_control_words_none_unsets_both_values() -> None:
+    from bar_console import NIGHT
+
+    from remote_agents.adapters.tmux.codec import remote_control_words_args
+    from remote_agents.ports.console import REMOTE_CONTROL_COMPACT_OPTION, REMOTE_CONTROL_OPTION
+
+    assert remote_control_words_args(None, NIGHT) == (
+        ("set-option", "-w", "-u", "-t", console_target(), REMOTE_CONTROL_OPTION),
+        ("set-option", "-w", "-u", "-t", console_target(), REMOTE_CONTROL_COMPACT_OPTION),
+    )
+
+
+def test_remote_control_words_with_tmux_metacharacters_draw_literally() -> None:
+    """A word carrying `#`, `,` or `}` reaches the owner's screen as typed, never as a format.
+
+    Drawn by a real client: `display-message -p` does not run the draw pass where `##` and
+    `#[` are interpreted, so only the status row itself can show the escape is right.
+    """
+    from bar_console import NIGHT, BarConsole
+
+    from remote_agents.adapters.tmux.codec import remote_control_words_args
+    from remote_agents.ports.console import RemoteControlTone
+
+    word = "a#[fg=red]b,c}d#{e}"
+    bar = BarConsole(200)
+    try:
+        bar.start()
+        full, _ = remote_control_words_args(
+            _marks(("co#dex", word, RemoteControlTone.UNKNOWN)), NIGHT
+        )
+        bar.run(full)
+        row = bar.settled_row(lambda row: "Remote Control" in row)
+    finally:
+        bar.close()
+
+    assert f"Remote Control  co#dex {word}  {CONSOLE_SESSION_NAME}" in row, repr(row)

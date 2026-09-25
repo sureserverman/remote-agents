@@ -36,8 +36,11 @@ from remote_agents.adapters.tmux.codec import (
     publish_selection_args,
     read_selection_args,
     rejoin_console_pane_args,
+    remote_control_words_args,
+    session_selected_args,
     split_console_pane_args,
     swap_pane_args,
+    typing_args,
 )
 from remote_agents.adapters.tmux.key_lock import SessionKeyLock
 from remote_agents.domain.models import ProfileId, ProjectId, SessionId
@@ -46,6 +49,8 @@ from remote_agents.ports.console import (
     ConsoleKeyTable,
     ConsolePaneSlot,
     HostedPane,
+    RemoteControlMark,
+    StatusBarPalette,
 )
 from remote_agents.ports.terminal import TerminalTargetMissing
 from remote_agents.ports.tmux_server import is_our_socket
@@ -872,6 +877,25 @@ class TmuxGateway:
         the action — plus the fact that the next successful publication corrects it.
         """
         await self._runner.run(*self._base_argv(), *publish_selection_args(session_id))
+
+    async def publish_session_selected(self, selected: bool | None) -> None:
+        """Publish whether the sessions cursor rests on a row, for the bar (DEC-105).
+
+        Raises, like `publish_selection` beside it and for its reason: the caller is a cursor
+        move with nothing useful to do about a tmux that will not answer, so it logs.
+        """
+        await self._runner.run(*self._base_argv(), *session_selected_args(selected))
+
+    async def publish_typing(self, typing: bool | None) -> None:
+        """Publish whether a text entry holds the keyboard, for the bar. Raises."""
+        await self._runner.run(*self._base_argv(), *typing_args(typing))
+
+    async def publish_remote_control(
+        self, marks: Sequence[RemoteControlMark] | None, palette: StatusBarPalette
+    ) -> None:
+        """Publish the Remote Control readings for the bar's right end, full and compact."""
+        for arguments in remote_control_words_args(marks, palette):
+            await self._runner.run(*self._base_argv(), *arguments)
 
     async def read_selection(self) -> SessionId | None:
         """Read the published selection back, refusing anything that is not a session id.

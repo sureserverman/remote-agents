@@ -464,3 +464,33 @@ async def test_kill_console_lets_a_real_tmux_failure_through() -> None:
     broken = RecordingRunner(error=RuntimeError("lost server"))
     with pytest.raises(RuntimeError, match="lost server"):
         await gateway(broken).kill_console()
+
+
+# --- console facelift sub-plan 2 Task 1.5: the bar's three publications -----------------------
+
+
+async def test_the_bar_publications_are_issued_on_our_socket_through_the_codec() -> None:
+    from bar_console import NIGHT
+
+    from remote_agents.adapters.tmux.codec import (
+        remote_control_words_args,
+        session_selected_args,
+        typing_args,
+    )
+    from remote_agents.ports.console import RemoteControlMark, RemoteControlTone
+
+    marks = (RemoteControlMark("codex", "on", RemoteControlTone.ON),)
+    runner = RecordingRunner()
+    tmux = gateway(runner)
+
+    await tmux.publish_session_selected(True)
+    await tmux.publish_typing(None)
+    await tmux.publish_remote_control(marks, NIGHT)
+    await tmux.publish_remote_control(None, NIGHT)
+
+    assert runner.calls == [
+        (*_BASE, *session_selected_args(True)),
+        (*_BASE, *typing_args(None)),
+        *((*_BASE, *argv) for argv in remote_control_words_args(marks, NIGHT)),
+        *((*_BASE, *argv) for argv in remote_control_words_args(None, NIGHT)),
+    ]

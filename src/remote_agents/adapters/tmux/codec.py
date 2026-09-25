@@ -17,6 +17,8 @@ from remote_agents.ports.console import (
     ConsoleBindingAction,
     ConsoleKeyTable,
     ConsolePaneSlot,
+    RemoteControlMark,
+    RemoteControlTone,
     StatusBarKey,
     StatusBarPalette,
 )
@@ -880,6 +882,96 @@ def status_format_args(
         ("set-option", "-t", target, "status-interval", "0"),
         ("set-option", "-t", target, "status-style", f"bg={palette.bar},fg={palette.text}"),
         ("set-option", "-t", target, "status-format[0]", status_format),
+    )
+
+
+def console_option_unset_args(name: str) -> tuple[str, ...]:
+    """Return the argv suffix removing one console window option, so a reader sees it unset.
+
+    The other half of `console_option_args` for the options the status bar reads: a pane
+    that published a fact clears it when it stops knowing it, rather than leaving the bar to
+    state it on the pane's behalf.
+    """
+    if not name.startswith("@"):
+        raise ValueError("a tmux user option is namespaced with a leading @")
+    return ("set-option", "-w", "-u", "-t", console_target(), name)
+
+
+def _flag_args(name: str, value: bool | None) -> tuple[str, ...]:
+    if value is None:
+        return console_option_unset_args(name)
+    return console_option_args(name, "1" if value else "0")
+
+
+def session_selected_args(selected: bool | None) -> tuple[str, ...]:
+    """Publish whether the sessions cursor rests on a row, for the bar's session keys.
+
+    `None` unsets it: the bar then dims the session keys, which is the honest reading of a
+    console whose sessions pane is gone.
+    """
+    return _flag_args(SESSION_SELECTED_OPTION, selected)
+
+
+def typing_args(typing: bool | None) -> tuple[str, ...]:
+    """Publish whether a text entry holds the keyboard, for the bar's stop keys and hint."""
+    return _flag_args(TYPING_OPTION, typing)
+
+
+#: One glyph per Remote Control tone (R6, DEC-010): the state is readable with colour off.
+_REMOTE_CONTROL_GLYPHS: dict[RemoteControlTone, str] = {
+    RemoteControlTone.ON: "●",
+    RemoteControlTone.OFF: "○",
+    RemoteControlTone.BROKEN: "?",
+    RemoteControlTone.UNKNOWN: "?",
+}
+
+
+def _tone_colour(tone: RemoteControlTone, palette: StatusBarPalette) -> str:
+    if tone is RemoteControlTone.ON:
+        return palette.on
+    if tone in (RemoteControlTone.OFF, RemoteControlTone.BROKEN):
+        return palette.off
+    return palette.dim
+
+
+def _literal(text: str) -> str:
+    """*text* as the status line must draw it: `#` doubled, so no `#[` or `#{` is honoured.
+
+    An interpolated option value is not expanded again, but the draw pass still reads `#[`
+    as a style and `##` as `#`. `,` and `}` need nothing: they only mean something inside a
+    format being expanded, and a value is past that (both measured on 3.4).
+    """
+    return text.replace("#", "##")
+
+
+def remote_control_words_args(
+    marks: Sequence[RemoteControlMark] | None, palette: StatusBarPalette
+) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    """Publish the Remote Control readings for the bar's right end, full and compact.
+
+    The words are the limits pane's own (DEC-084/DEC-085: the existing state words, never a
+    pairing code). Each state word is coloured by its tone and every mark carries its own
+    glyph, so colour is never the only signal (DEC-010). `None` unsets both values, which the
+    bar reads as nothing to claim.
+    """
+    if marks is None:
+        return (
+            console_option_unset_args(REMOTE_CONTROL_OPTION),
+            console_option_unset_args(REMOTE_CONTROL_COMPACT_OPTION),
+        )
+    rest = f"#[fg={palette.muted}]"
+    words = " · ".join(
+        f"{_literal(mark.provider)} #[fg={_tone_colour(mark.tone, palette)}]"
+        f"{_literal(mark.word)}{rest}"
+        for mark in marks
+    )
+    glyphs = "".join(
+        f"#[fg={_tone_colour(mark.tone, palette)}]{_REMOTE_CONTROL_GLYPHS[mark.tone]}"
+        for mark in marks
+    )
+    return (
+        console_option_args(REMOTE_CONTROL_OPTION, f"Remote Control  {words}"),
+        console_option_args(REMOTE_CONTROL_COMPACT_OPTION, f"RC {glyphs}{rest}"),
     )
 
 

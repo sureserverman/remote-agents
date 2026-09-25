@@ -12,11 +12,9 @@ real client has a `client_width`, and only its terminal shows the status row.
 from __future__ import annotations
 
 import re
-import subprocess
-import time
-from uuid import uuid4
 
 import pytest
+from bar_console import BarConsole
 
 from remote_agents.adapters.tmux.codec import CONSOLE_SESSION_NAME, status_format_args
 from remote_agents.adapters.tui.keys import BAR_KEYS, FUNCTION_KEYS, status_bar_keys
@@ -137,66 +135,6 @@ def test_stop_keys_dim_while_typing() -> None:
 # --- a real tmux client ----------------------------------------------------------------------
 
 
-class _Console:
-    """A scratch `ra-console` session wearing the bar, shown by a client in an outer pane."""
-
-    def __init__(self, width: int) -> None:
-        tag = uuid4().hex
-        self.inner = f"remote-agents-bar-in-{tag}"
-        self.outer = f"remote-agents-bar-out-{tag}"
-        self.width = width
-
-    def tmux(self, *args: str) -> str:
-        return _tmux(self.inner, *args)
-
-    def start(self, palette=_NIGHT) -> None:
-        self.tmux(
-            "new-session", "-d", "-s", CONSOLE_SESSION_NAME, "-x", "80", "-y", "24", "sleep 600"
-        )
-        for argv in status_format_args(status_bar_keys(), palette):
-            self.tmux(*argv)
-        attach = f"env -u TMUX tmux -L {self.inner} attach-session -t {CONSOLE_SESSION_NAME}:"
-        _tmux(self.outer, "new-session", "-d", "-s", "o", "-x", str(self.width), "-y", "10", attach)
-        assert _wait_for(lambda: self.status_row().strip() != ""), "the client never drew"
-
-    def set(self, name: str, value: str) -> None:
-        self.tmux("set-option", "-w", "-t", f"{CONSOLE_SESSION_NAME}:", name, value)
-
-    def status_row(self) -> str:
-        screen = _tmux(self.outer, "capture-pane", "-p", "-t", "o:")
-        return screen.rstrip("\n").split("\n")[-1]
-
-    def settled_row(self, wanted) -> str:
-        _wait_for(lambda: wanted(self.status_row()))
-        return self.status_row()
-
-    def expanded(self) -> str:
-        """The format as this client expands it, styles still in: what each span is drawn in."""
-        client = self.tmux("list-clients", "-F", "#{client_name}").split()[0]
-        return self.tmux(
-            "display-message", "-p", "-c", client, "-t", f"{CONSOLE_SESSION_NAME}:", _format()
-        )
-
-    def close(self) -> None:
-        for socket in (self.outer, self.inner):
-            subprocess.run(["tmux", "-L", socket, "kill-server"], capture_output=True, check=False)
-
-
-def _tmux(socket: str, *args: str) -> str:
-    return subprocess.run(
-        ["tmux", "-L", socket, *args], capture_output=True, text=True, check=True
-    ).stdout
-
-
-def _wait_for(ready, bound: float = 5.0) -> bool:
-    deadline = time.monotonic() + bound
-    while time.monotonic() < deadline:
-        if ready():
-            return True
-        time.sleep(0.02)
-    return False
-
-
 def _style_of(expanded: str, number: int, words: str) -> str:
     """The `fg=` a key's number is drawn in, in an expanded format.
 
@@ -210,10 +148,10 @@ def _style_of(expanded: str, number: int, words: str) -> str:
 
 @pytest.fixture
 def console():
-    made: list[_Console] = []
+    made: list[BarConsole] = []
 
-    def make(width: int) -> _Console:
-        made.append(_Console(width))
+    def make(width: int) -> BarConsole:
+        made.append(BarConsole(width))
         return made[-1]
 
     yield make
@@ -253,9 +191,9 @@ def test_status_session_keys_take_the_dim_colour_with_nothing_selected(console, 
     full = width > 160
 
     bar.set(SESSION_SELECTED_OPTION, "0")
-    unselected = bar.expanded()
+    unselected = bar.expanded(_format())
     bar.set(SESSION_SELECTED_OPTION, "1")
-    selected = bar.expanded()
+    selected = bar.expanded(_format())
 
     for entry in status_bar_keys():
         if not entry.bound and not full:
@@ -276,7 +214,7 @@ def test_status_typing_dims_f2_f7_f8_f9_and_says_esc_cancels(console, width) -> 
     bar.set(TYPING_OPTION, "1")
 
     row = bar.settled_row(lambda row: "esc cancels" in row)
-    expanded = bar.expanded()
+    expanded = bar.expanded(_format())
 
     assert "esc cancels" in row
     assert "Remote Control" not in row and "RC" not in row
