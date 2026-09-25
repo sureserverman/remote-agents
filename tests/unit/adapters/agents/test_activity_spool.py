@@ -659,10 +659,13 @@ def test_a_payload_that_is_not_json_starts_no_marker(tmp_path: Path) -> None:
 
 
 class _Exploding:
-    def start(self, session_id: str) -> None:
+    def start(self, session_id: str, owner: str | None = None) -> None:
         raise RuntimeError("disk on fire")
 
     def end(self, session_id: str) -> None:
+        raise RuntimeError("disk on fire")
+
+    def end_if_owned_by(self, session_id: str, owner: object) -> None:
         raise RuntimeError("disk on fire")
 
 
@@ -792,3 +795,13 @@ def test_an_over_bound_stop_from_the_owner_still_ends_its_marker(tmp_path: Path)
     _run(_as("parent", {**_STOP_PAYLOAD, "last_assistant_message": _LONG}), directory)
 
     assert not _marker(directory).exists()
+
+
+def test_a_stop_whose_payload_names_no_agent_leaves_an_owned_marker(tmp_path: Path) -> None:
+    directory = _spool(tmp_path)
+    _run(_as("parent", _SUBMIT_PAYLOAD), directory)
+    anonymous = {key: value for key, value in _STOP_PAYLOAD.items() if key != "session_id"}
+
+    _run(_stream(anonymous), directory)
+
+    assert _marker(directory).is_file()

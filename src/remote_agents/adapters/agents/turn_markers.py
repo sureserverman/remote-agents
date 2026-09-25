@@ -31,9 +31,11 @@ from remote_agents.ports.session_identity import safe_session_id
 
 TURNS_DIRECTORY = "turns"
 
-_CLOEXEC = getattr(os, "O_CLOEXEC", 0)
-_CREATE = os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | _CLOEXEC
-_READ = os.O_RDONLY | os.O_NOFOLLOW | _CLOEXEC
+#: Non-blocking, both: a read-only open of a FIFO planted at a marker's name waits for a writer,
+#: and a hook waiting there hangs the owner's live session. On a regular file it changes nothing.
+_FLAGS = os.O_NOFOLLOW | os.O_NONBLOCK | getattr(os, "O_CLOEXEC", 0)
+_CREATE = os.O_RDWR | os.O_CREAT | _FLAGS
+_READ = os.O_RDONLY | _FLAGS
 #: One byte past the longest id `safe_session_id` accepts, so an over-long file reads as no owner.
 _OWNER_BYTES = 129
 
@@ -71,25 +73,28 @@ class FileTurnMarkers:
         finally:
             os.close(descriptor)
 
-    def end(self, session_id: str, owner: str | None = None) -> None:
+    def end_if_owned_by(self, session_id: str, owner: object) -> None:
         name = safe_session_id(session_id)
         if name is None or not self._is_real_directory():
             return
-        if owner is not None:
-            # A hook's end: only the agent that started the marker ends it. A marker with no
-            # owner recorded has none to protect, and ends as before owners existed.
-            try:
-                descriptor = os.open(self._directory / name, _READ)
-            except OSError:
-                return
-            try:
-                current = _owner_of(descriptor)
-            except OSError:
-                current = None
-            finally:
-                os.close(descriptor)
-            if current is not None and current != safe_session_id(owner):
-                return
+        # A hook's end: only the agent that started the marker ends it, and an end that names
+        # no usable agent ends none that has an owner. A marker with no owner recorded has none
+        # to protect, and ends as before owners existed.
+        try:
+            descriptor = os.open(self._directory / name, _READ)
+        except OSError:
+            return
+        try:
+            current = _owner_of(descriptor)
+        finally:
+            os.close(descriptor)
+        if current is None or current == safe_session_id(owner):
+            self.end(session_id)
+
+    def end(self, session_id: str) -> None:
+        name = safe_session_id(session_id)
+        if name is None or not self._is_real_directory():
+            return
         try:
             # `unlink` removes a link rather than what it points at, so a planted one is only
             # ever deleted, never followed.
@@ -130,12 +135,17 @@ class FileTurnMarkers:
 
 
 def _owner_of(descriptor: int) -> str | None:
-    """The agent id a marker holds, or None when it holds none that reads as one."""
+    """The agent id a marker holds, or None when it holds none that reads as one; never raises.
+
+    Only a regular file is read: `pread` on a FIFO or a directory at the name fails anyway, and
+    this says so rather than leaning on each caller to catch it.
+    """
     try:
-        text = os.pread(descriptor, _OWNER_BYTES, 0).decode("ascii")
-    except UnicodeDecodeError:
+        if not stat.S_ISREG(os.fstat(descriptor).st_mode):
+            return None
+        return safe_session_id(os.pread(descriptor, _OWNER_BYTES, 0).decode("ascii"))
+    except (OSError, UnicodeDecodeError):
         return None
-    return safe_session_id(text)
 
 
 def _is_regular(entry: os.DirEntry[str]) -> bool:

@@ -169,10 +169,10 @@ def test_a_nested_agent_neither_takes_the_marker_nor_ends_it(tmp_path: Path) -> 
     refreshed = markers.started_at("s-42")
     assert stale is not None and refreshed is not None and refreshed > stale
 
-    markers.end("s-42", owner="child")
+    markers.end_if_owned_by("s-42", "child")
     assert markers.started_at("s-42") is not None
 
-    markers.end("s-42", owner="parent")
+    markers.end_if_owned_by("s-42", "parent")
     assert markers.started_at("s-42") is None
 
 
@@ -194,7 +194,7 @@ def test_a_marker_with_no_usable_owner_is_ended_by_any_stop(
 
     markers.start("s-42", owner=owner)
     assert _marker_bytes(tmp_path) == b""
-    markers.end("s-42", owner="anyone")
+    markers.end_if_owned_by("s-42", "anyone")
 
     assert markers.started_at("s-42") is None
 
@@ -205,3 +205,42 @@ def test_the_owner_that_started_a_marker_can_restart_it(tmp_path: Path) -> None:
     markers.start("s-42", owner="agent-a")
 
     assert _marker_bytes(tmp_path) == b"agent-a"
+
+
+@pytest.mark.parametrize("call", ["start", "end_if_owned_by", "end", "started_at"])
+def test_a_fifo_planted_at_the_marker_never_blocks_the_hook(tmp_path: Path, call: str) -> None:
+    """A read-only open of a FIFO blocks until a writer comes, and a hook blocked here hangs the
+    owner's live session; every method must return promptly and quietly instead."""
+    import threading
+
+    markers = _markers(tmp_path)
+    markers.start("s-other")
+    os.mkfifo(tmp_path / "activity" / "turns" / "s-42", 0o600)
+    arguments = {"end_if_owned_by": ("s-42", "agent-a")}.get(call, ("s-42",))
+    outcome: list[object] = []
+    worker = threading.Thread(
+        target=lambda: outcome.append(getattr(markers, call)(*arguments)), daemon=True
+    )
+
+    worker.start()
+    worker.join(timeout=5.0)
+
+    assert not worker.is_alive(), f"{call} blocked on a FIFO at the marker's name"
+    assert outcome and outcome[0] in (None, ())
+
+
+@pytest.mark.parametrize("owner", [None, "", 42, "a\nb"])
+def test_a_hook_end_that_names_no_usable_owner_never_ends_an_owned_marker(
+    tmp_path: Path, owner: object
+) -> None:
+    """A `Stop` whose payload carries no usable id is not the terminal's unconditional end: an
+    owned marker stays for its owner or the screen, and an unowned one ends as before."""
+    markers = _markers(tmp_path)
+    markers.start("s-42", owner="parent")
+    markers.start("s-43")
+
+    markers.end_if_owned_by("s-42", owner)
+    markers.end_if_owned_by("s-43", owner)
+
+    assert markers.started_at("s-42") is not None
+    assert markers.started_at("s-43") is None

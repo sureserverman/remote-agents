@@ -256,7 +256,7 @@ def spool_agent_event(
         # on its own, so a marker that cannot be removed never costs the "finished" record.
         if event in TURN_ENDED:
             try:
-                turns.end(session_id, owner=owner if isinstance(owner, str) else None)
+                turns.end_if_owned_by(session_id, owner)
             except Exception:
                 pass
         if document is None:
