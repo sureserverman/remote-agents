@@ -494,3 +494,32 @@ async def test_the_bar_publications_are_issued_on_our_socket_through_the_codec()
         *((*_BASE, *argv) for argv in remote_control_words_args(marks, NIGHT)),
         *((*_BASE, *argv) for argv in remote_control_words_args(None, NIGHT)),
     ]
+
+
+async def test_status_bar_install_sets_the_console_session_options_and_nothing_wider() -> None:
+    """Sub-plan 2 Task 2.1: the bar is issued on our socket, on the console session only."""
+    from bar_console import NIGHT
+
+    from remote_agents.adapters.tmux.codec import status_format_args
+    from remote_agents.adapters.tui.keys import status_bar_keys
+
+    runner = RecordingRunner()
+    await gateway(runner).install_status_bar(status_bar_keys(), NIGHT)
+
+    assert runner.calls == [
+        (*_BASE, *argv) for argv in status_format_args(status_bar_keys(), NIGHT)
+    ]
+    for call in runner.calls:
+        assert "-g" not in call
+        assert call[call.index("-t") + 1] == "ra-console:"
+
+
+async def test_status_bar_install_lets_a_tmux_failure_through_for_the_composer_to_log() -> None:
+    from bar_console import NIGHT
+
+    from remote_agents.adapters.tui.keys import status_bar_keys
+
+    with pytest.raises(RuntimeError):
+        await gateway(RecordingRunner(error=RuntimeError("tmux said no"))).install_status_bar(
+            status_bar_keys(), NIGHT
+        )

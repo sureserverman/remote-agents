@@ -26,7 +26,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
@@ -40,6 +40,8 @@ from remote_agents.ports.console import (
     ConsolePaneSlot,
     ConsolePort,
     HostedPane,
+    StatusBarKey,
+    StatusBarPalette,
 )
 
 _LOG = logging.getLogger(__name__)
@@ -394,6 +396,7 @@ class ConsoleComposer:
         bindings: tuple[ConsoleBinding, ...] = CONSOLE_BINDINGS,
         reserved_keys: Mapping[str, frozenset[str]] | None = None,
         arrangement_lock: Path | None = None,
+        status_bar: Callable[[], tuple[Sequence[StatusBarKey], StatusBarPalette]] | None = None,
     ) -> None:
         self._console = console
         self._dashboard_command = dashboard_command
@@ -468,6 +471,12 @@ class ConsoleComposer:
         # an untidy screen. Without a path it is the in-process lock this always was, which is
         # what every test and every scratch composition gets.
         self._links = ConsoleArrangementLock(arrangement_lock)
+        # The function-key bar (DEC-105): what to draw, asked for when `ensure` installs it.
+        # A callable rather than values because both halves are the surface's -- the key table
+        # and the owner's theme -- and the composition root that knows them is also the one the
+        # bot composes through, which must never load the terminal library to build a composer
+        # it only hides with. `None` draws nothing, which is every composer but the console's.
+        self._status_bar = status_bar
 
     async def ensure(self) -> bool:
         """Make the console exist, with its panes and its keys; say whether it is usable.
@@ -538,6 +547,14 @@ class ConsoleComposer:
             await self._console.write_console_server_option("mouse", "on")
         except Exception:
             _LOG.exception("the console mouse setting could not be applied; clicks may not land")
+        # The bar, outside the answer for the mouse's reason: a status format tmux will not
+        # take costs the owner the bar, never the console. Re-issued on every `ensure`, so a
+        # console built before the bar existed wears it from the next entry on.
+        if self._status_bar is not None:
+            try:
+                await self._console.install_status_bar(*self._status_bar())
+            except Exception:
+                _LOG.exception("the console status bar could not be installed; keys still work")
         return True
 
     async def _build_panes(self) -> tuple[str, ...]:

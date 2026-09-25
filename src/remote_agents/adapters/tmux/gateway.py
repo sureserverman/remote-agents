@@ -39,6 +39,7 @@ from remote_agents.adapters.tmux.codec import (
     remote_control_words_args,
     session_selected_args,
     split_console_pane_args,
+    status_format_args,
     swap_pane_args,
     typing_args,
 )
@@ -50,6 +51,7 @@ from remote_agents.ports.console import (
     ConsolePaneSlot,
     HostedPane,
     RemoteControlMark,
+    StatusBarKey,
     StatusBarPalette,
 )
 from remote_agents.ports.terminal import TerminalTargetMissing
@@ -877,6 +879,18 @@ class TmuxGateway:
         the action — plus the fact that the next successful publication corrects it.
         """
         await self._runner.run(*self._base_argv(), *publish_selection_args(session_id))
+
+    async def install_status_bar(
+        self, keys: Sequence[StatusBarKey], palette: StatusBarPalette
+    ) -> None:
+        """Set the console session's status options: the function-key bar (DEC-105).
+
+        Idempotent, so every `ensure` and every theme switch may issue it again. Raises; the
+        composer and the theme switch each log, because a bar that will not draw costs the
+        owner the bar and never the console.
+        """
+        for arguments in status_format_args(keys, palette):
+            await self._runner.run(*self._base_argv(), *arguments)
 
     async def publish_session_selected(self, selected: bool | None) -> None:
         """Publish whether the sessions cursor rests on a row, for the bar (DEC-105).

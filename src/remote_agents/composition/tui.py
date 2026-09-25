@@ -279,6 +279,10 @@ def _console_composer(gateway=None, home: Path | None = None):
         # One process per pane. Which entry point each pane runs is composition policy, the
         # same as which entry point *is* the dashboard, so it is decided here rather than
         # spelled inside the composer that arranges them.
+        # The function-key bar (DEC-105), asked for only when `ensure` installs it. Deferred
+        # for this function's own reason: the bot builds a composer here too, and the key table
+        # and the themes are Textual's.
+        status_bar=partial(_status_bar, home if home is not None else Path.home()),
         pane_commands={
             slot: (sys.executable, "-m", "remote_agents", "pane", name)
             for slot, name in (
@@ -289,6 +293,21 @@ def _console_composer(gateway=None, home: Path | None = None):
             )
         },
     )
+
+
+def _status_bar(home: Path):
+    """The bar's keys and the owner's remembered theme's colours, for `ConsoleComposer.ensure`.
+
+    The theme is the one the surface remembers (`preferences.read_theme`), so a console built
+    by `remote-agents` from a bare shell wears the same colours its panes are drawn in.
+    """
+    from remote_agents.adapters.tui.keys import status_bar_keys
+    from remote_agents.adapters.tui.preferences import read_theme
+    from remote_agents.adapters.tui.theme import THEMES, status_bar_palette
+
+    chosen = read_theme(ProductionPaths.for_home(home).preferences_path)
+    theme = next((theme for theme in THEMES if theme.name == chosen), THEMES[0])
+    return status_bar_keys(), status_bar_palette(theme)
 
 
 def _console_notes(composer, resident_pane: str | None) -> RecoveryReport | None:
@@ -368,6 +387,7 @@ def local_context(config, connection, paths: ProductionPaths):
     console_publish_selection = None
     console_read_selection = None
     console_holds_slot = None
+    console_status_bar = None
     hide_in_console = None
     console_recovery = None
     # The classification itself, kept as a value rather than left inside the `if`: the surface
@@ -437,6 +457,11 @@ def local_context(config, connection, paths: ProductionPaths):
         pane_id = os.environ.get("TMUX_PANE")
         if pane_id:
             console_holds_slot = partial(runtime.gateway.holds_console_slot, pane_id)
+        # The bar is re-issued on a theme switch with the key table bound in here, so the
+        # surface hands over only the palette it alone knows (DEC-105).
+        from remote_agents.adapters.tui.keys import status_bar_keys
+
+        console_status_bar = partial(runtime.gateway.install_status_bar, status_bar_keys())
         # The stop paths ask the console to step out of the way before a pane is destroyed.
         # Wired only where a composer exists: elsewhere `SessionService` keeps the destruction
         # contract it has always had. The bot builds a composer of its own for this one
@@ -492,6 +517,7 @@ def local_context(config, connection, paths: ProductionPaths):
         console_publish_selection=console_publish_selection,
         console_read_selection=console_read_selection,
         console_holds_slot=console_holds_slot,
+        console_status_bar=console_status_bar,
         console_recovery=console_recovery,
         # The declared boundary's answer to where a surface preference lives, not this
         # surface's own (DEC-046): the path is wired here and read through a total reader.

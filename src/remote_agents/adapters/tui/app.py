@@ -69,7 +69,7 @@ from remote_agents.adapters.tui.screens.launch import ProjectsScreen
 from remote_agents.adapters.tui.screens.palette import NavigationCommands
 from remote_agents.adapters.tui.screens.sessions import perform_row_action
 from remote_agents.adapters.tui.screens.settings import SettingsScreen
-from remote_agents.adapters.tui.theme import THEMES, VARIABLE_DEFAULTS
+from remote_agents.adapters.tui.theme import THEMES, VARIABLE_DEFAULTS, status_bar_palette
 from remote_agents.application.backend import CLOSE_TIMEOUT_SECONDS
 from remote_agents.application.commands import (
     LaunchCommand,
@@ -114,6 +114,7 @@ from remote_agents.domain.models import (
 )
 from remote_agents.domain.remote_control import RemoteControlState
 from remote_agents.ports.agent_usage import ContextWindow
+from remote_agents.ports.console import StatusBarPalette
 
 _LOG = logging.getLogger(__name__)
 
@@ -501,6 +502,37 @@ class RemoteAgentsTui(App[AttachRequest | None]):
         """Write the chosen theme beside the project order, or forget it (`write_theme`)."""
         write_theme(self._services.preferences_path, theme.name)
 
+    def _restyle_console_bar(self, theme: Theme) -> None:
+        """Recolour the console's status bar in the theme just chosen (DEC-105).
+
+        tmux cannot read a Textual variable, so the bar is re-issued with the new theme's
+        values. Scheduled, because the theme signal is not a place to wait on tmux.
+        """
+        if self._services.console_status_bar is None:
+            return
+        self.run_worker(
+            self._issue_console_bar(status_bar_palette(theme)),
+            name="restyle-console-bar",
+            exit_on_error=False,
+        )
+
+    async def _issue_console_bar(self, palette: StatusBarPalette) -> None:
+        """Issue the bar from a console pane only, and log a tmux that will not take it.
+
+        Gated on `console_holds_slot` for the reason `SessionsScreen._publish_selection`
+        records: hosting is decided by the socket name, so a stray `remote-agents tui` on the
+        console's server is classified CONSOLE too, and its theme is not the console's.
+        """
+        restyle = self._services.console_status_bar
+        holds_slot = self._services.console_holds_slot
+        if restyle is None or holds_slot is None:
+            return
+        try:
+            if await holds_slot():
+                await restyle(palette)
+        except Exception:
+            _LOG.exception("the console status bar could not be restyled")
+
     def check_action(self, action: str, parameters: tuple[object, ...]) -> bool | None:
         """Ask the position on screen whether one of *these* bindings applies to it.
 
@@ -672,6 +704,7 @@ class RemoteAgentsTui(App[AttachRequest | None]):
         # The palette's theme command is the switch; this is what makes the switch stick. The
         # signal fires on every change, and `write_theme` keeps only the two relay names.
         self.theme_changed_signal.subscribe(self, self._remember_theme)
+        self.theme_changed_signal.subscribe(self, self._restyle_console_bar)
 
     def get_default_screen(self) -> Screen[None]:
         """The project list, installed as the bottom of the stack rather than pushed.

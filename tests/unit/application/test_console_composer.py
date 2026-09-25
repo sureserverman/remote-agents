@@ -806,9 +806,7 @@ async def test_showing_unzooms_before_it_slides_back() -> None:
 
     widths = _slide_widths(gateway)
     assert len(widths) == 8, widths
-    assert widths == sorted(widths, reverse=True), (
-        f"the slide must come back inward: {widths}"
-    )
+    assert widths == sorted(widths, reverse=True), f"the slide must come back inward: {widths}"
     assert widths[-1] == 109, f"it lands on the declared projects width: {widths}"
 
     names = [call[0] for call in gateway.calls]
@@ -1081,9 +1079,7 @@ def _showing_an_agent() -> tuple[HostedPane, ...]:
     """The console with an agent in its left slot and the surface parked in that agent's own
     window -- the arrangement `show_projects` exists to undo."""
     projects = ConsolePaneSlot.PROJECTS.value
-    return tuple(
-        pane for pane in _three_pane_console() if pane.console_slot != projects
-    ) + (
+    return tuple(pane for pane in _three_pane_console() if pane.console_slot != projects) + (
         HostedPane(
             host=None,
             on_console=True,
@@ -1443,7 +1439,7 @@ async def test_close_writes_no_record_because_the_composer_holds_no_store() -> N
 
 
 async def test_close_refuses_for_an_agent_anywhere_in_the_console_window() -> None:
-    """"Any pane" of the console window, which is the half a slot-shaped check would miss.
+    """ "Any pane" of the console window, which is the half a slot-shaped check would miss.
 
     Added because a mutant survived: narrowing `_displayed_agents` to `pane_index == 0` passed
     all 778 application tests, so nothing was holding the property the design actually states.
@@ -1487,3 +1483,65 @@ async def test_close_survives_a_console_that_vanishes_before_the_verify() -> Non
 
     assert report.outcome is CloseOutcome.CLOSED
     assert report.reason is None
+
+
+# --- console facelift sub-plan 2 Task 2.1: the console wears the function-key bar ----------------
+
+
+def _status_bar():
+    from remote_agents.ports.console import StatusBarKey, StatusBarPalette
+
+    keys = (StatusBarKey(1, "help", "help", needs_selection=False, refused_while_typing=False),)
+    palette = StatusBarPalette(*(["#000000"] * 7))
+    return keys, palette
+
+
+def _barred_composer(console: RecordingConsole) -> ConsoleComposer:
+    return ConsoleComposer(
+        console,
+        ("remote-agents", "tui"),
+        Path("/tmp"),
+        projects_command=_PROJECTS_COMMAND,
+        pane_commands=_PANE_COMMANDS,
+        reserved_keys={},
+        status_bar=_status_bar,
+    )
+
+
+class _BarConsole(RecordingConsole):
+    async def install_status_bar(self, keys, palette) -> None:
+        self.calls.append(("install_status_bar", keys, palette))
+
+
+async def test_ensure_installs_the_status_bar_after_the_panes() -> None:
+    console = _BarConsole(exists=False)
+
+    assert await _barred_composer(console).ensure() is True
+
+    names = [call[0] for call in console.calls]
+    assert ("install_status_bar", *_status_bar()) in console.calls
+    assert names.index("install_status_bar") > names.index("create_console")
+
+
+async def test_a_status_bar_that_will_not_install_costs_the_bar_and_not_the_console(
+    caplog,
+) -> None:
+    """The mouse's shape (BL-098): a refused setting is logged, never an unusable console."""
+
+    class RefusesTheBar(_BarConsole):
+        async def install_status_bar(self, keys, palette) -> None:
+            self.calls.append(("install_status_bar", keys, palette))
+            raise RuntimeError("tmux refused the status format")
+
+    console = RefusesTheBar()
+
+    assert await _barred_composer(console).ensure() is True
+    assert any("status bar" in record.getMessage() for record in caplog.records)
+
+
+async def test_a_composer_with_no_status_bar_installs_none() -> None:
+    """The bot's hide-only composer and every scratch composition: nothing to draw, no call."""
+    console = _BarConsole()
+
+    assert await _composer(console).ensure() is True
+    assert not named(console, "install_status_bar")

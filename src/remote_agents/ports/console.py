@@ -498,6 +498,12 @@ class ConsolePort(Protocol):
         """
         ...
 
+    async def install_status_bar(
+        self, keys: Sequence[StatusBarKey], palette: StatusBarPalette
+    ) -> None:
+        """Give the console session its function-key bar (DEC-105). Raises; the composer logs."""
+        ...
+
     async def publish_session_selected(self, selected: bool | None) -> None:
         """Tell the status bar whether the sessions cursor rests on a row; `None` unsets it."""
         ...

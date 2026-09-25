@@ -10,6 +10,7 @@ from remote_agents.application.backend import Backend
 from remote_agents.application.console import RecoveryReport
 from remote_agents.application.profiles import ProfileAvailability
 from remote_agents.domain.models import SessionId
+from remote_agents.ports.console import StatusBarPalette
 
 #: How many observations the feed shows and its reader fetches — one number, imported by
 #: both the composition root (the reader's LIMIT) and the dashboard (the render slice), so
@@ -131,6 +132,10 @@ class TuiContext:
     # different questions and the gate must be askable *before* the read: a process that is not
     # one of the console's panes makes no claim on the console's selection at all.
     console_holds_slot: Callable[[], Awaitable[bool]] | None = None
+    # Re-issues the console's status bar in a theme's colours (DEC-105), wired under console
+    # hosting only. The key table is bound in by the composition root, so the surface hands
+    # over the one thing it alone knows: which theme the owner just chose.
+    console_status_bar: Callable[[StatusBarPalette], Awaitable[None]] | None = None
     console_recovery: RecoveryReport | None = None
     # Where this surface remembers the one thing it remembers -- which order the projects
     # pane opens in. A *path*, wired by the composition root (DEC-046), rather than a
