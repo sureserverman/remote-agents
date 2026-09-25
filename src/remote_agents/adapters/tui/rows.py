@@ -356,6 +356,40 @@ _WIDE_WEEK_GAUGE = 16
 #: The pace tick: where an even spend would stand today, drawn inside the bar it measures.
 PACE_TICK = "┃"
 
+#: The window whose pace the wide layout's two trailing columns carry. A `day` window keeps its
+#: tick; the columns are the week's, which is the question the owner asks of the pane.
+_PACE_WINDOW = "week"
+_EXPECTED_HEADING = "expected"
+_PACE_HEADING = "vs pace"
+
+
+def pace_text(delta: int) -> str:
+    """`on pace`, `▲ 14 over` or `▼ 7 under`: the surface's words for `pace_delta` (DEC-043).
+
+    The arrow and the word carry the direction, so the colour `pace_style` adds is a second
+    signal and never the only one (DEC-010).
+    """
+    if delta == 0:
+        return "on pace"
+    return f"▲ {delta} over" if delta > 0 else f"▼ {-delta} under"
+
+
+def pace_style(delta: int) -> str:
+    """On or under pace `$success`; over by up to 25 points `$warning`; further `$error`."""
+    if delta <= 0:
+        return "$success"
+    if delta <= 25:
+        return "$warning"
+    return "$error"
+
+
+def _week_pace(row: LimitRow):
+    """The row's window that owns the pace columns, when it has pace; else None."""
+    window = next((w for w in row.windows if w.label == _PACE_WINDOW), None)
+    if window is None or window.expected_percent is None or window.pace_delta is None:
+        return None
+    return window
+
 
 @dataclass(frozen=True, slots=True)
 class _LimitColumns:
@@ -375,6 +409,10 @@ class _LimitColumns:
     labels: tuple[str, ...] = LIMIT_COLUMNS
     week_gauge: int = _GAUGE_WIDTH
     """How many cells the week column's bar is drawn in: `_WIDE_WEEK_GAUGE` on a wide pane."""
+    expected: int = len(_EXPECTED_HEADING)
+    """The `expected` column: its heading, which is wider than any `100%`."""
+    pace: int = len(_PACE_HEADING)
+    """The `vs pace` column: the widest of its heading and every row's pace words."""
     """Which window kinds the table has a column for, left to right: `_column_labels`.
 
     A column is a *window kind*, not a position. Positional layout was BL-046: an agent that
@@ -418,6 +456,11 @@ def _limit_columns(rows: Sequence[LimitRow], width: int | None = None) -> _Limit
     profile = max((len(row.profile) for row in rows), default=0)
     # The absence phrase is deliberately *not* measured into any column width. It trails the
     # row's last column, so nothing is drawn after it and it aligns nothing.
+    paces = [_week_pace(row) for row in rows]
+    pace = max(
+        (len(pace_text(window.pace_delta)) for window in paces if window is not None),
+        default=0,
+    )
     return _LimitColumns(
         profile=_capped_profile(profile, width, label=label, percent=percent, reset=reset),
         label=label,
@@ -425,6 +468,7 @@ def _limit_columns(rows: Sequence[LimitRow], width: int | None = None) -> _Limit
         reset=reset,
         labels=labels,
         week_gauge=_WIDE_WEEK_GAUGE if width is not None and width >= _WIDE_PANE else _GAUGE_WIDTH,
+        pace=max(len(_PACE_HEADING), pace),
     )
 
 
@@ -490,7 +534,9 @@ def _reset_text(row: LimitRow, window) -> str:
     return f"↻ {window.resets_in}"
 
 
-def _window_content(row: LimitRow, window, columns: _LimitColumns, *, last: bool) -> Content:
+def _window_content(
+    row: LimitRow, window, columns: _LimitColumns, *, last: bool, labelled: bool = True
+) -> Content:
     """`5h ███░░░░░  34% ↻ 2h` -- one window's cell, laid out to the table's columns.
 
     Dated instead of counted down when stale. The space after the arrow is deliberate:
@@ -507,10 +553,13 @@ def _window_content(row: LimitRow, window, columns: _LimitColumns, *, last: bool
     follows it, so the padding buys no alignment — and it would count toward the row's
     `cell_length`, tipping a row that fits into the narrow branch on the strength of spaces
     the owner cannot see.
+
+    `labelled=False` is the one-line layout's cell: its header row names the column once, so
+    the cell starts at its bar.
     """
+    label = [(_window_label(window).ljust(columns.label), MUTED), (" ", None)] if labelled else []
     cell = Content.assemble(
-        (_window_label(window).ljust(columns.label), MUTED),
-        (" ", None),
+        *label,
         limit_gauge_content(
             window.percent, _gauge_cells(window.label, columns), window.expected_percent
         ),
@@ -525,15 +574,17 @@ def _window_content(row: LimitRow, window, columns: _LimitColumns, *, last: bool
     return cell + Content.assemble((f" {padded}", MUTED))
 
 
-def _empty_window_content(label: str, columns: _LimitColumns, *, last: bool) -> Content:
+def _empty_window_content(
+    label: str, columns: _LimitColumns, *, last: bool, labelled: bool = True
+) -> Content:
     """A window this row did not publish: its label and an empty bar, the figures left blank.
 
     Blank at their widths rather than dropped, so the next column starts where it does on
     every other row. DEC-010: the missing figure is told by the absent percent, not a colour.
     """
+    named = [(_WINDOW_LABELS.get(label, label).ljust(columns.label), MUTED), (" ", None)]
     cell = Content.assemble(
-        (_WINDOW_LABELS.get(label, label).ljust(columns.label), MUTED),
-        (" ", None),
+        *(named if labelled else []),
         (percent_gauge(0, _gauge_cells(label, columns)), "$secondary"),
         (" " * (1 + columns.percent), None),
     )
@@ -575,17 +626,48 @@ def _one_line(row: LimitRow, columns: _LimitColumns) -> Content:
     """
     line = _name(row, columns)
     published = _row_windows(row)
-    for index, label in enumerate(columns.labels):
-        last = index == len(columns.labels) - 1
+    for label in columns.labels:
         window = published.get(label)
         if window is None:
-            cell = _empty_window_content(label, columns, last=last)
+            cell = _empty_window_content(label, columns, last=False, labelled=False)
         else:
-            cell = _window_content(row, window, columns, last=last)
+            cell = _window_content(row, window, columns, last=False, labelled=False)
         line = line + Content(" " * _GROUP_GUTTER) + cell
+    # The pace columns (DEC-106): blank at their widths for a row with no week pace.
+    paced = _week_pace(row)
+    gutter = " " * _GROUP_GUTTER
+    if paced is not None:
+        line = line + Content.assemble(
+            (gutter, None),
+            (f"{paced.expected_percent}%".rjust(columns.expected), MUTED),
+            (gutter, None),
+            (pace_text(paced.pace_delta), pace_style(paced.pace_delta)),
+        )
     # Trailing blanks align nothing, and they would count toward the length that decides
     # whether the note fits beside the bars.
     return line.rstrip()
+
+
+def _cell_width(label: str, columns: _LimitColumns) -> int:
+    """One window's cell in the one-line layout, unlabelled: bar, percent and reset."""
+    cell = _gauge_cells(label, columns) + 1 + columns.percent
+    if columns.reset:
+        cell += 1 + columns.reset
+    return cell
+
+
+def _header_line(columns: _LimitColumns) -> Content:
+    """The one-line layout's column names: `5h`, `week`, `expected` and `vs pace`, muted.
+
+    Named once over the table rather than in every row: two agents' rows repeating `5h` and
+    `wk` said the same thing twice, and the two new columns need names somewhere.
+    """
+    parts = [" " * columns.profile]
+    for label in columns.labels:
+        parts.append(" " * _GROUP_GUTTER + label.ljust(_cell_width(label, columns)))
+    parts.append(" " * _GROUP_GUTTER + _EXPECTED_HEADING.rjust(columns.expected))
+    parts.append(" " * _GROUP_GUTTER + _PACE_HEADING)
+    return Content.assemble(("".join(parts), MUTED))
 
 
 def _table_width(columns: _LimitColumns) -> int:
@@ -596,11 +678,9 @@ def _table_width(columns: _LimitColumns) -> int:
     date, an absence phrase -- takes a line of its own when it does not fit, rather than
     flipping the whole pane between layouts as a reading ages.
     """
-    cell = columns.label + 1 + 1 + columns.percent
-    if columns.reset:
-        cell += 1 + columns.reset
-    gauges = sum(_gauge_cells(label, columns) for label in columns.labels)
-    return columns.profile + len(columns.labels) * (_GROUP_GUTTER + cell) + gauges
+    windows = sum(_GROUP_GUTTER + _cell_width(label, columns) for label in columns.labels)
+    pace = _GROUP_GUTTER + columns.expected + _GROUP_GUTTER + columns.pace
+    return columns.profile + windows + pace
 
 
 def _note(row: LimitRow, columns: _LimitColumns) -> tuple[Content, Content]:
@@ -691,7 +771,8 @@ def limit_rows_content(rows: Sequence[LimitRow], width: int | None = None) -> li
     # does not, so one row carries countdowns and the other carries a date. Since 0.46.0 it is
     # made from the column set alone (`_table_width`), so no row's data can flip it.
     stack = width is not None and width > 0 and _table_width(columns) > width
-    return [line for row in rows for line in limit_row_content(row, columns, width, stack=stack)]
+    lines = [line for row in rows for line in limit_row_content(row, columns, width, stack=stack)]
+    return lines if stack else [_header_line(columns), *lines]
 
 
 # --- feed ---------------------------------------------------------------------------------

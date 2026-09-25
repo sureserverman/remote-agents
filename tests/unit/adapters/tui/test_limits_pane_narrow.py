@@ -142,7 +142,8 @@ def test_the_wide_layout_is_still_one_line_per_agent() -> None:
     Guards the repair direction: making the narrow case correct by always stacking would pass
     every assertion above and destroy the table the grid work just built.
     """
-    lines = limit_rows_content((_stale_row(), _fresh_row()), 120)
+    header, *lines = limit_rows_content((_stale_row(), _fresh_row()), 120)
+    assert header.plain.split()[0] == "5h", header.plain
     assert len(lines) == 2, [content.plain for content in lines]
 
 
@@ -318,7 +319,18 @@ def test_each_absence_trails_empty_bars_in_both_layouts() -> None:
     for row, phrase in cases:
         for width in (120, NARROW):
             text = "\n".join(content.plain for content in limit_rows_content((row,), width))
-            assert _labels_in(text.splitlines()) == ["5h", "wk"], f"at {width}:\n{text}"
+            # Stacked cells carry their labels; the one-line layout names them once, in its
+            # header row (DEC-106), over each bar.
+            if width == NARROW:
+                labels = _labels_in(text.splitlines())
+            else:
+                header, *rows = text.splitlines()
+                labels = [
+                    header[run.start() :].split()[0]
+                    for line in rows
+                    for run in _GAUGE_RUN.finditer(line)
+                ]
+            assert labels == ["5h", ("wk" if width == NARROW else "week")], f"at {width}:\n{text}"
             assert phrase in text, f"at {width} {phrase!r} fell off:\n{text}"
             last_bar = max(
                 m.end() + sum(len(above) + 1 for above in text.splitlines()[:i])

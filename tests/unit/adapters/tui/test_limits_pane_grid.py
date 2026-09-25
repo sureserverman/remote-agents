@@ -51,7 +51,12 @@ from textual.widgets import OptionList
 
 from remote_agents.adapters.tui.app import RemoteAgentsTui
 from remote_agents.adapters.tui.context import TuiContext
-from remote_agents.adapters.tui.rows import limit_gauge_content, limit_rows_content
+from remote_agents.adapters.tui.rows import (
+    limit_gauge_content,
+    limit_rows_content,
+    pace_style,
+    pace_text,
+)
 from remote_agents.adapters.tui.screens.dashboard import (
     _CLAUDE_REMOTE_CONTROL_ROW,
     _EMPTY_LIMITS_ROW,
@@ -107,28 +112,40 @@ def _percent_ends(line: str) -> list[int]:
     return ends
 
 
-def _labelled_gauges(line: str) -> dict[str, tuple[int, int]]:
+def _grid(rows, width: int = WIDE) -> tuple[str, list[str]]:
+    """The one-line layout as (header, row lines).
+
+    Since DEC-106 the column names are a header row over the table rather than a label in
+    every cell, so a column's label is read off the header, not off the row.
+    """
+    header, *lines = [content.plain for content in limit_rows_content(rows, width)]
+    assert header.split()[0] == "5h", f"the first line is not the header: {header!r}"
+    return header, lines
+
+
+def _labelled_gauges(header: str, line: str) -> dict[str, tuple[int, int]]:
     """Each drawn window's gauge span, keyed by the label naming the column it sits in.
 
     Keyed by label rather than by position because that is what a column now *is* (BL-046).
-    The label is read back off the line -- it is the token immediately before the gauge, which
-    is how `_window_content` assembles a cell -- so these assertions follow the layout instead
-    of restating its arithmetic.
+    The label is the header word that begins where the gauge does -- the header names each
+    column over its bar -- so these assertions follow the layout instead of restating its
+    arithmetic. A gauge under no header word has no column, and is reported as `?`.
     """
     found = {}
     for start, end in _gauge_spans(line):
-        found[line[:start].rstrip().split()[-1]] = (start, end)
+        word = header[start:].split()[0] if header[start : start + 1].strip() else "?"
+        found[word] = (start, end)
     return found
 
 
-def _column_offsets(lines: list[str]) -> dict[str, set[int]]:
+def _column_offsets(header: str, lines: list[str]) -> dict[str, set[int]]:
     """Every offset each window kind was drawn at, across the whole render.
 
     A grid is exactly the claim that each of these sets has one member.
     """
     offsets: dict[str, set[int]] = {}
     for line in lines:
-        for label, (start, _end) in _labelled_gauges(line).items():
+        for label, (start, _end) in _labelled_gauges(header, line).items():
             offsets.setdefault(label, set()).add(start)
     return offsets
 
@@ -173,13 +190,13 @@ def test_a_window_kind_begins_at_one_offset_across_the_whole_render() -> None:
     did not -- the routine case, since Codex publishes whatever its rollout carried -- the
     positional version was satisfied by drawing a weekly window under a five-hour one.
     """
-    lines = [content.plain for content in limit_rows_content(_rows(), WIDE)]
+    header, lines = _grid(_rows())
     assert len(lines) == len(_rows()), "each row should occupy exactly one line at this width"
 
-    offsets = _column_offsets(lines)
-    # Read back as drawn: the pane abbreviates `week` to `wk` (`_WINDOW_LABELS`), and these
-    # assertions are about what the owner sees rather than about the key behind it.
-    assert set(offsets) == {"5h", "wk", "day"}, offsets
+    offsets = _column_offsets(header, lines)
+    # Read back as drawn: the header names the week column `week` (the stacked layout's cells
+    # abbreviate it to `wk`), and these assertions are about what the owner sees.
+    assert set(offsets) == {"5h", "week", "day"}, offsets
     for label, starts in offsets.items():
         assert len(starts) == 1, (
             f"{label} is drawn at {sorted(starts)}; a column is one offset.\n" + "\n".join(lines)
@@ -189,7 +206,7 @@ def test_a_window_kind_begins_at_one_offset_across_the_whole_render() -> None:
     # any other kind by duration -- so a row's windows cannot be permuted into somebody else's
     # columns while still "aligning".
     ordered = [label for label, _ in sorted(offsets.items(), key=lambda pair: min(pair[1]))]
-    assert ordered == ["5h", "wk", "day"], ordered
+    assert ordered == ["5h", "week", "day"], ordered
 
 
 def test_a_window_kind_ends_its_percent_at_one_offset() -> None:
@@ -199,10 +216,10 @@ def test_a_window_kind_ends_its_percent_at_one_offset() -> None:
     starts alone still lets `3%` and `100%` push the following cell apart, which is the defect
     one column over rather than the defect fixed.
     """
-    lines = [content.plain for content in limit_rows_content(_rows(), WIDE)]
+    header, lines = _grid(_rows())
     ends: dict[str, set[int]] = {}
     for line in lines:
-        for label, (_start, gauge_end) in _labelled_gauges(line).items():
+        for label, (_start, gauge_end) in _labelled_gauges(header, line).items():
             marker = line.find("%", gauge_end)
             if line[_start:gauge_end].strip("░"):
                 ends.setdefault(label, set()).add(marker + 1)
@@ -237,9 +254,9 @@ def test_the_columns_are_a_property_of_the_set_not_of_the_first_row(
         LimitRow(profiles[0], first.windows, first.borrowed, first.stale_for),
         LimitRow(profiles[1], second.windows, second.borrowed, second.stale_for),
     )
-    lines = [content.plain for content in limit_rows_content(reordered, WIDE)]
+    header, lines = _grid(reordered)
 
-    for label, starts in _column_offsets(lines).items():
+    for label, starts in _column_offsets(header, lines).items():
         assert len(starts) == 1, (
             f"{label} is drawn at {sorted(starts)} for {profiles}.\n" + "\n".join(lines)
         )
@@ -271,7 +288,7 @@ def test_rows_with_different_window_counts_still_agree_on_window_zero() -> None:
             None,
         ),
     )
-    lines = [content.plain for content in limit_rows_content(rows, WIDE)]
+    _header, lines = _grid(rows)
     per_row = [_gauge_spans(line) for line in lines]
     assert [len(spans) for spans in per_row] == [3, 3], lines
 
@@ -328,17 +345,20 @@ def test_a_window_lands_under_the_same_window_and_not_under_the_same_position() 
     names the column; a gauge that happened to line up while the labels did not would be the
     same defect drawn more carefully.
     """
-    lines = [content.plain for content in limit_rows_content(_asymmetric(), WIDE)]
+    header, lines = _grid(_asymmetric())
     assert len(lines) == 2, "\n".join(lines)
-    claude, codex = lines
+    claude, codex = (_labelled_gauges(header, line) for line in lines)
 
-    assert claude.index("wk") == codex.index("wk"), (
+    assert claude["week"] == codex["week"], (
         "the weekly window sits in two different columns, so the grid reads one agent's week "
-        "against another's five hours.\n" + "\n".join(lines)
+        "against another's five hours.\n" + "\n".join((header, *lines))
     )
-    assert codex.index("wk") > claude.index("5h"), (
-        "codex's only window has been pulled into the column 5h owns.\n" + "\n".join(lines)
-    )
+    # Codex's only window is its week: the bar under `week` carries a figure, and the bar under
+    # `5h` is empty -- its week has not been pulled into the column 5h owns.
+    week_start, week_end = codex["week"]
+    five_start, five_end = codex["5h"]
+    assert set(lines[1][five_start:five_end]) == {"░"}, "\n".join((header, *lines))
+    assert "█" in lines[1][week_start:week_end], "\n".join((header, *lines))
 
 
 def test_a_column_a_row_does_not_publish_keeps_its_label_and_an_empty_bar() -> None:
@@ -348,17 +368,17 @@ def test_a_column_a_row_does_not_publish_keeps_its_label_and_an_empty_bar() -> N
     present, so the label stays and the bar is drawn empty; the missing figure is told by the
     absent percent (DEC-010: no colour carries it).
     """
-    lines = [content.plain for content in limit_rows_content(_asymmetric(), WIDE)]
-    claude, codex = lines
+    header, lines = _grid(_asymmetric())
+    _claude, codex = lines
 
-    # The span claude's five-hour cell occupies: from where the first window begins to where
-    # the second does. Measured off claude's row rather than written down, so the assertion
-    # follows the layout instead of restating it.
-    cell = slice(claude.index("5h"), claude.index("wk"))
+    # The span the five-hour column occupies: from where the header names it to where it names
+    # the next one. Read off the header rather than written down, so the assertion follows the
+    # layout instead of restating it. The label is the header's since DEC-106.
+    cell = slice(header.index("5h"), header.index("week"))
     drawn = codex[cell]
-    assert drawn.split()[:2] == ["5h", "░" * 8], (
-        f"codex's five-hour column should be its label and an empty bar -- found {drawn!r}.\n"
-        + "\n".join(lines)
+    assert drawn.split()[:1] == ["░" * 8], (
+        f"codex's five-hour column should be an empty bar under its label -- found {drawn!r}.\n"
+        + "\n".join((header, *lines))
     )
     figures = drawn[drawn.index("░") :]
     assert not re.search(r"[0-9%]", figures), f"an unpublished window shows a figure: {drawn!r}"
@@ -377,7 +397,7 @@ def test_a_row_with_no_windows_draws_empty_bars_then_says_which_silence_it_is() 
         LimitRow("opencode", (), None, None, absence="no reading yet"),
         LimitRow("codex", (), None, None, absence="unreadable"),
     )
-    lines = [content.plain for content in limit_rows_content(rows, WIDE)]
+    _header, lines = _grid(rows)
     assert len(lines) == 4, "\n".join(lines)
 
     for line, phrase in zip(lines[1:], ("never reported", "no reading yet", "unreadable")):
@@ -403,7 +423,7 @@ def test_a_row_that_says_it_has_no_reading_does_not_also_date_one() -> None:
         LimitRow("claude", (LimitWindow("5h", 34, "2h"),), None, None),
         LimitRow("codex", (), None, "3d", absence="no reading yet"),
     )
-    lines = [content.plain for content in limit_rows_content(rows, WIDE)]
+    _header, lines = _grid(rows)
     _claude, codex = lines
 
     assert "no reading yet" in codex
@@ -412,7 +432,7 @@ def test_a_row_that_says_it_has_no_reading_does_not_also_date_one() -> None:
     # And the trailer is not simply gone from the render: a row that *does* have a stale
     # figure still says how old it is, which is the behaviour this must not have broken.
     dated = (LimitRow("claude", (LimitWindow("5h", 34, None),), None, "3d"),)
-    (line,) = [content.plain for content in limit_rows_content(dated, WIDE)]
+    _header, (line,) = _grid(dated)
     assert "as of 3d" in line
 
 
@@ -654,20 +674,26 @@ def test_codex_order_does_not_follow_claude(width: int) -> None:
         for content in limit_rows_content(_claude_week_only_beside_codex_both(), width)
     ]
     text = "\n".join(lines)
-    codex = text[text.index("codex") :]
-    assert codex.index("5h") < codex.index("wk"), f"at width {width}:\n{text}"
+    if lines[0].split()[0] == "5h":
+        # One-line layout: the header names the columns, and codex's 5h figure (3%) sits under
+        # `5h`, left of its week figure (40%) under `week`.
+        header, codex = lines[0], next(line for line in lines if line.startswith("codex"))
+        assert header.index("5h") < header.index("week"), f"at width {width}:\n{text}"
+        assert codex.index("3%") < codex.index("40%"), f"at width {width}:\n{text}"
+    else:
+        codex = text[text.index("codex") :]
+        assert codex.index("5h") < codex.index("wk"), f"at width {width}:\n{text}"
 
 
 def test_a_missing_window_draws_its_label_and_an_empty_bar() -> None:
     """Claude's lapsed five-hour window is its label, an empty bar, and no figure at all."""
-    claude, codex = [
-        content.plain for content in limit_rows_content(_claude_week_only_beside_codex_both(), WIDE)
-    ]
-    cell = claude[claude.index("5h") : claude.index("wk")]
+    header, (claude, codex) = _grid(_claude_week_only_beside_codex_both())
+    cell = claude[header.index("5h") : header.index("week")]
     assert "░" * 8 in cell, f"the missing window has no empty bar: {claude!r}"
     figures = cell[cell.index("░") :]
     assert not re.search(r"[0-9%]", figures), f"the missing window shows a figure: {cell!r}"
-    assert claude.index("5h") == codex.index("5h") and claude.index("wk") == codex.index("wk")
+    assert _labelled_gauges(header, claude).keys() == _labelled_gauges(header, codex).keys()
+    assert _gauge_spans(claude) == _gauge_spans(codex)
 
 
 _KINDS = ((), ("5h",), ("week",), ("5h", "week"))
@@ -682,17 +708,13 @@ def test_every_row_draws_every_column(first: tuple[str, ...], second: tuple[str,
         windows = tuple(LimitWindow(kind, 50, "1h") for kind in kinds)
         return LimitRow(profile, windows, None, None, absence=None if windows else "no reading yet")
 
-    lines = [
-        content.plain
-        for content in limit_rows_content((row("claude", first), row("codex", second)), WIDE)
-    ]
+    header, lines = _grid((row("claude", first), row("codex", second)))
     assert len(lines) == 2, "\n".join(lines)
-    offsets = _column_offsets(lines)
-    assert list(offsets) == ["5h", "wk"], "\n".join(lines)
+    offsets = _column_offsets(header, lines)
+    assert list(offsets) == ["5h", "week"], "\n".join((header, *lines))
     for label, starts in offsets.items():
         assert len(starts) == 1, f"{label} is drawn at {sorted(starts)}.\n" + "\n".join(lines)
-    for line in lines:
-        assert line.index("5h") < line.index("wk"), line
+    assert header.index("5h") < header.index("week"), header
 
 
 # --- the pace tick (DEC-106) ----------------------------------------------------------------
@@ -787,3 +809,106 @@ def test_the_pace_tick_styles() -> None:
     before, after = _style_at(content, tick - 1), _style_at(content, tick + 1)
     assert before == after == "$warning"
     assert _style_at(content, len(bar) - 1) == "$secondary"
+
+
+# --- the header row and the pace columns (DEC-106, DEC-100) ---------------------------------
+
+
+def _readme_rows() -> tuple[LimitRow, ...]:
+    """The handoff README's two example rows."""
+    return (
+        LimitRow(
+            "claude",
+            (
+                LimitWindow("5h", 28, "1h"),
+                LimitWindow("week", 7, "6d", expected_percent=14, pace_delta=-7),
+            ),
+            None,
+            None,
+        ),
+        LimitRow(
+            "codex",
+            (
+                LimitWindow("5h", 18, "1h"),
+                LimitWindow("week", 71, "3d", expected_percent=57, pace_delta=14),
+            ),
+            None,
+            None,
+        ),
+    )
+
+
+def test_the_pace_columns_are_a_property_of_the_set() -> None:
+    """Widths measured across rows: a row with no pace leaves both cells blank at their widths,
+    and every row's column offsets are identical."""
+    paced, _codex = _readme_rows()
+    unpaced = LimitRow(
+        "a-longer-name",
+        (LimitWindow("5h", 3, "4h"), LimitWindow("week", 100, "1d")),
+        None,
+        None,
+    )
+    for rows in ((paced, unpaced), (unpaced, paced)):
+        header, *lines = [content.plain for content in limit_rows_content(rows, WIDE)]
+        assert len(lines) == 2, lines
+        starts = {line.index("%") for line in lines}
+        assert len(starts) == 1, "\n".join((header, *lines))
+        (paced_line,) = [line for line in lines if line.startswith("claude")]
+        (unpaced_line,) = [line for line in lines if not line.startswith("claude")]
+        expected_end = header.index("expected") + len("expected")
+        assert paced_line[expected_end - 3 : expected_end] == "14%", paced_line
+        assert paced_line[header.index("vs pace") :] == "▼ 7 under", paced_line
+        assert unpaced_line.rstrip() == unpaced_line[: header.index("expected")].rstrip(), (
+            "a row with no pace draws nothing in either pace column"
+        )
+
+
+def test_pace_text_words() -> None:
+    assert pace_text(0) == "on pace"
+    assert pace_text(14) == "▲ 14 over"
+    assert pace_text(-7) == "▼ 7 under"
+
+
+def test_pace_style_thresholds() -> None:
+    assert [pace_style(delta) for delta in (-30, -1, 0)] == ["$success"] * 3
+    assert [pace_style(delta) for delta in (1, 25)] == ["$warning"] * 2
+    assert pace_style(26) == "$error"
+
+
+def test_the_header_row_labels_each_column() -> None:
+    """`5h` and `week` over their bars, `expected` right-aligned over its figures, `vs pace` over
+    its words -- and the rows below carry no labels of their own."""
+    header, claude, codex = [content.plain for content in limit_rows_content(_readme_rows(), 80)]
+    for line in (claude, codex):
+        gauges = [match.start() for match in _TICKED_GAUGE.finditer(line)]
+        assert gauges == [header.index("5h"), header.index("week")], (header, line)
+        assert header.index("expected") + len("expected") == line.index("%", gauges[1] + 20) + 1
+        assert line[header.index("vs pace")] in "▲▼o", (header, line)
+        assert " 5h " not in line and " wk " not in line, line
+    (styles,) = {str(span.style) for span in limit_rows_content(_readme_rows(), 80)[0].spans}
+    assert styles == "$text-muted"
+
+
+def test_table_width_counts_the_pace_columns() -> None:
+    """The stack decision flips at exactly the width of the header row."""
+    header = limit_rows_content(_readme_rows(), WIDE)[0].plain
+    width = len(header.rstrip()) + len("▲ 14 over") - len("vs pace")
+    assert len(limit_rows_content(_readme_rows(), width)) == 3, "fits: header and two rows"
+    stacked = [content.plain for content in limit_rows_content(_readme_rows(), width - 1)]
+    assert "expected" not in stacked[0], stacked
+
+
+def test_the_readme_example_rows_at_width_80() -> None:
+    """The handoff's two rows, cell for cell as this pane draws them.
+
+    Two things differ from the README's hand-typed text, both on purpose and recorded in the
+    plan: the percent and reset columns keep widths measured across the set (`3` and `4` here,
+    where the mock reserves `100%` and `↻ 59m`), and the fill counts are `percent_gauge`'s own
+    rounding-up, which the mock's hand-drawn bars do not follow consistently.
+    """
+    lines = [content.plain for content in limit_rows_content(_readme_rows(), 80)]
+    assert lines == [
+        "        5h                 week                       expected  vs pace",
+        "claude  ███░░░░░ 28% ↻ 1h  ██┃░░░░░░░░░░░░░  7% ↻ 6d       14%  ▼ 7 under",
+        "codex   ██░░░░░░ 18% ↻ 1h  █████████┃██░░░░ 71% ↻ 3d       57%  ▲ 14 over",
+    ]
