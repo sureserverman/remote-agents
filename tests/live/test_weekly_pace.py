@@ -135,7 +135,13 @@ async def _drawn_limits(tmp_path: Path, width: int, height: int) -> list[str]:
                 limits = _limits(await _capture(socket))
             except StopIteration:
                 return None
-            return limits if any("7%" in line for line in limits) else None
+            claude = [line for line in limits if line.split()[:1] == ["claude"]]
+            return (
+                limits
+                if any(" 7%" in line for line in claude)
+                or any(" 7%" in line for line in limits if " wk " in line)
+                else None
+            )
 
         limits = await _until(paced, 40.0)
         assert limits, "\n".join(await _capture(socket))

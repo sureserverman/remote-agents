@@ -1270,3 +1270,17 @@ async def test_the_limits_border_footer_is_drawn_only_on_a_wide_pane(size, foote
         assert (width >= 70) is footer, width
         expected = "┃ where an even week would be today · ↻ resets in" if footer else ""
         assert str(pane.border_subtitle or "") == expected
+
+
+async def test_the_limits_border_footer_goes_when_the_pane_empties() -> None:
+    """Wide with readings, then a redraw with no agents: the footer must not outlive its tick."""
+    app = RemoteAgentsTui(_context(limits=_stale_claude_live_codex()))
+    async with app.run_test(size=(200, 50)) as pilot:
+        await pilot.pause()
+        await pilot.pause()
+        pane = app.screen.query_one("#limits-pane", OptionList)
+        assert str(pane.border_subtitle or ""), "precondition: the wide footer is drawn"
+        app.screen._limit_rows = ()
+        app.screen._draw_limits()
+        await pilot.pause()
+        assert str(pane.border_subtitle or "") == ""

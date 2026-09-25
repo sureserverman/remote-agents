@@ -533,7 +533,7 @@ def _reset_text(row: LimitRow, window) -> str:
     """`↻ 2h`, or nothing when the provider published no reset or the reading is stale.
 
     A countdown on a stale number is a claim about the present made from the past, which is why
-    the trailer replaces every countdown with one dim `· as of 2h` instead.
+    a stale row draws none, and its date is on the source stamp line (`limit_stamp_content`).
     """
     if window.resets_in is None or row.stale_for is not None:
         return ""
@@ -715,7 +715,7 @@ def _note(row: LimitRow, columns: _LimitColumns) -> tuple[Content, Content]:
     DEC-061's absences trail the bars rather than replacing them, so a row with no reading
     still draws every column. The borrowed-source stamp DEC-061 asks for is not drawn here --
     it cost the console's 73-column pane its one-line row (removed 2026-09-03 on the owner's
-    ask); the bot still says it.
+    ask) -- but under the rows, on the source stamp line (`limit_stamp_content`, R3).
     """
     # A row saying *no reading yet* must not also say *· as of 3d*: the date is a reading's,
     # so beside a phrase denying there is one it contradicts the row it trails. Reachable --
@@ -735,9 +735,9 @@ def limit_row_content(
 
     The gauge's fill takes the threshold colour -- under half `$success`, up to 85 `$warning`,
     past it `$error` -- and its empty track `$secondary`. The reset countdown is muted; a
-    reading older than the staleness bound replaces every countdown with one dim `· as of 2h`,
-    because a countdown on a stale number is a claim about the present made from the past. A
-    borrowed figure names its source, dim, as DEC-061 requires of presentation.
+    reading older than the staleness bound draws no countdown, because a countdown on a stale
+    number is a claim about the present made from the past. Its date, and a borrowed figure's
+    source (DEC-061), are on the source stamp line under the rows (`limit_stamp_content`).
 
     One grid row where the pane is wide enough for it; where it is not -- the dashboard's right
     column at 100 columns is 38 cells, and two windows with countdowns run to 46 -- each window

@@ -531,6 +531,8 @@ class LimitsRegion:
         host_line = Content(host_remote_control_line(self._host_status))
         claude_line = Content(remote_control_default_line(self._claude_default))
         rows = self._limit_rows
+        # The wide footer explains the tick; with nothing drawn it has nothing to explain.
+        pane.border_subtitle = ""
         if not rows:
             # Reached only by a host that offers no agents at all -- the one state in which
             # there is genuinely nothing to lay out. It is still a *declared* empty state
