@@ -59,7 +59,7 @@ NARROW = 38
 #: is the failure this file's first assertion is about.
 GAUGE_CELLS = 8
 
-_GAUGE_RUN = re.compile(r"[█░]+")
+_GAUGE_RUN = re.compile(r"[█░┃]+")
 
 
 def _stale_row() -> LimitRow:
@@ -362,3 +362,84 @@ def test_no_line_outgrows_the_pane_where_the_week_gauge_widens() -> None:
         for width in range(60, 90):
             for content in limit_rows_content(rows, width):
                 assert cell_len(content.plain) <= width, f"{length} at {width}: {content.plain!r}"
+
+
+# --- the stacked pace line (DEC-106) --------------------------------------------------------
+
+#: The dashboard's right region at a 100-column terminal, per the handoff's cell budget.
+DASHBOARD_RIGHT = 39
+
+
+def _paced_rows() -> tuple[LimitRow, ...]:
+    """The handoff README's two agents, with their week pace."""
+    return (
+        LimitRow(
+            "claude",
+            (
+                LimitWindow("5h", 28, "1h"),
+                LimitWindow("week", 7, "6d", expected_percent=14, pace_delta=-7),
+            ),
+            None,
+            None,
+        ),
+        LimitRow(
+            "codex",
+            (
+                LimitWindow("5h", 18, "1h"),
+                LimitWindow("week", 71, "3d", expected_percent=57, pace_delta=14),
+            ),
+            None,
+            None,
+        ),
+    )
+
+
+def test_a_paced_week_line_is_followed_by_its_pace_line() -> None:
+    """The week's reset moves under its bar, beside the expected share and the pace words."""
+    lines = [c.plain for c in limit_rows_content(_paced_rows()[:1], DASHBOARD_RIGHT)]
+    week = next(line for line in lines if " wk " in line)
+    pace = lines[lines.index(week) + 1]
+    assert "↻" not in week, week
+    gauge_column = _GAUGE_RUN.search(week).start()
+    assert pace == " " * gauge_column + "↻ 6d · exp 14%  ▼ 7 under", lines
+
+
+def test_the_pace_line_is_muted_and_its_words_carry_the_pace_colour() -> None:
+    contents = limit_rows_content(_paced_rows()[1:], DASHBOARD_RIGHT)
+    (pace,) = [c for c in contents if "exp" in c.plain]
+    styles = {pace.plain[s.start : s.end].strip(): str(s.style) for s in pace.spans}
+    assert styles == {"↻ 3d · exp 57%": "$text-muted", "▲ 14 over": "$warning"}, styles
+
+
+def test_a_row_without_week_pace_keeps_its_reset_and_has_no_pace_line() -> None:
+    rows = (
+        LimitRow("codex", (LimitWindow("5h", 3, "4h"), LimitWindow("week", 61, "3d")), None, None),
+    )
+    lines = [c.plain for c in limit_rows_content(rows, DASHBOARD_RIGHT)]
+    assert len(lines) == 2, lines
+    assert lines[1].endswith("↻ 3d"), lines
+    assert not any("exp" in line for line in lines), lines
+
+
+def test_no_gauge_line_exceeds_37_cells_in_the_dashboard_right_region() -> None:
+    for content in limit_rows_content(_paced_rows(), DASHBOARD_RIGHT):
+        if _GAUGE_RUN.search(content.plain):
+            assert cell_len(content.plain) <= 37, content.plain
+
+
+def test_the_readme_stacked_example() -> None:
+    """The handoff's stacked example as this pane draws it.
+
+    As in the wide layout, the bars are `percent_gauge`'s own rounding-up at eight cells, and a
+    label is followed by one space (the README's hand-typed example uses two and draws its week
+    bars nine and ten cells wide).
+    """
+    lines = [c.plain for c in limit_rows_content(_paced_rows(), DASHBOARD_RIGHT)]
+    assert lines == [
+        "claude  5h ███░░░░░ 28% ↻ 1h",
+        "        wk █┃░░░░░░  7%",
+        "           ↻ 6d · exp 14%  ▼ 7 under",
+        "codex   5h ██░░░░░░ 18% ↻ 1h",
+        "        wk █████┃░░ 71%",
+        "           ↻ 3d · exp 57%  ▲ 14 over",
+    ]

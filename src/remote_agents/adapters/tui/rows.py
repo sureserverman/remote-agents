@@ -541,7 +541,13 @@ def _reset_text(row: LimitRow, window) -> str:
 
 
 def _window_content(
-    row: LimitRow, window, columns: _LimitColumns, *, last: bool, labelled: bool = True
+    row: LimitRow,
+    window,
+    columns: _LimitColumns,
+    *,
+    last: bool,
+    labelled: bool = True,
+    reset: bool = True,
 ) -> Content:
     """`5h ███░░░░░  34% ↻ 2h` -- one window's cell, laid out to the table's columns.
 
@@ -561,7 +567,8 @@ def _window_content(
     the owner cannot see.
 
     `labelled=False` is the one-line layout's cell: its header row names the column once, so
-    the cell starts at its bar.
+    the cell starts at its bar. `reset=False` is the stacked week cell whose reset moved onto
+    its pace line.
     """
     label = [(_window_label(window).ljust(columns.label), MUTED), (" ", None)] if labelled else []
     cell = Content.assemble(
@@ -573,8 +580,8 @@ def _window_content(
     )
     if not columns.reset:
         return cell
-    reset = _reset_text(row, window)
-    padded = reset if last else reset.ljust(columns.reset)
+    countdown = _reset_text(row, window) if reset else ""
+    padded = countdown if last else countdown.ljust(columns.reset)
     if not padded:
         return cell
     return cell + Content.assemble((f" {padded}", MUTED))
@@ -652,6 +659,19 @@ def _one_line(row: LimitRow, columns: _LimitColumns) -> Content:
     # Trailing blanks align nothing, and they would count toward the length that decides
     # whether the note fits beside the bars.
     return line.rstrip()
+
+
+def _pace_line(row: LimitRow, window) -> Content:
+    """`↻ 6d · exp 14%  ▼ 7 under`: the stacked layout's line under a paced week bar."""
+    reset = _reset_text(row, window)
+    muted = (
+        f"{reset} · exp {window.expected_percent}%" if reset else f"exp {window.expected_percent}%"
+    )
+    return Content.assemble(
+        (muted, MUTED),
+        ("  ", None),
+        (pace_text(window.pace_delta), pace_style(window.pace_delta)),
+    )
 
 
 def _cell_width(label: str, columns: _LimitColumns) -> int:
@@ -748,8 +768,17 @@ def limit_row_content(
             ).rstrip()
             for label in columns.labels
         ]
+        paced = _week_pace(row)
+        if paced is not None:
+            # The week's reset moves onto its pace line, so the bar's own line stays short
+            # enough for the dashboard's 39-cell right region (DEC-106).
+            at = columns.labels.index(_PACE_WINDOW)
+            cells[at] = _window_content(row, paced, columns, last=True, reset=False).rstrip()
         lines = [_name(row, columns) + Content(" " * _GROUP_GUTTER) + cells[0]]
         lines.extend(indent + cell for cell in cells[1:])
+        if paced is not None:
+            gauge = Content(" " * (columns.profile + _GROUP_GUTTER + columns.label + 1))
+            lines.insert(at + 1, gauge + _pace_line(row, paced))
     else:
         lines = [_one_line(row, columns)]
     separator, words = _note(row, columns)
