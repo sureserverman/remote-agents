@@ -294,17 +294,27 @@ PROJECT_REGISTRATION_WIDTH = 12
 
 
 def project_row_content(
-    name: str, registered: bool, last_used: datetime | None, width: int | None
+    name: str,
+    registered: bool,
+    last_used: datetime | None,
+    width: int | None,
+    *,
+    marked: bool = False,
 ) -> Content:
-    """`name` taking the slack, `registered`/`unregistered` in a 12-cell column, then its
+    """`▸ name` taking the slack, `registered`/`unregistered` in a 12-cell column, then its
     last-launch age, muted, against the right edge; an em dash, dim, for a project never
-    launched. The catalogue entry already carries the registration, as its group."""
+    launched. The catalogue entry already carries the registration, as its group.
+
+    `marked` draws the cursor's `▸` in the sessions list's marker style; every other row keeps
+    the two cells blank, so the names stay in one column as the cursor moves."""
     from remote_agents.application.relative_time import age
 
     registration = text("registered", MUTED) if registered else text("unregistered", DIM)
     used = text(age(last_used), MUTED) if last_used is not None else text(NO_GAUGE, DIM)
+    marker = text(ACTIVE_MARKER, ACTIVE_STYLE) if marked else Content(" ")
+    named = Content.assemble(marker, " ", Content(name))
     return columns(
-        [(Content(name), None), (registration, PROJECT_REGISTRATION_WIDTH), (used, None)],
+        [(named, None), (registration, PROJECT_REGISTRATION_WIDTH), (used, None)],
         width,
         flexible=0,
     )

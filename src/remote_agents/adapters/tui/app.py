@@ -264,10 +264,21 @@ class RemoteAgentsTui(App[AttachRequest | None]):
     ChoiceScreen.-framed #feed-pane { border: none; }
     /* One pane background inside the frame, `$surface`, as the mock draws it: the rows are
        otherwise transparent over the window's `$background`, and a focused list is tinted. */
-    ChoiceScreen.-framed #body, ChoiceScreen.-framed #body * { background: $surface; }
+    /* By widget type, never `*`: a universal selector also matches Textual's component-class
+       nodes, and with `#body` in it outranks `.option-list--option-highlighted` -- it drew
+       the cursor row flat (found by the follow-up's highlight test). */
+    ChoiceScreen.-framed #body, ChoiceScreen.-framed #body Static,
+    ChoiceScreen.-framed #body Input, ChoiceScreen.-framed #body OptionList,
+    ChoiceScreen.-framed #body Horizontal, ChoiceScreen.-framed #body VerticalScroll,
+    ChoiceScreen.-framed #body TextArea { background: $surface; }
     ChoiceScreen.-framed #body OptionList, ChoiceScreen.-framed #body OptionList:focus {
         background-tint: $foreground 0%;
+        padding: 0;
     }
+    /* The list's padding moves onto each option, so the cursor row's highlight spans the pane
+       with its text one cell in (the handoff's `margin 0 -1`); rows are laid out to
+       `row_width`, which subtracts it. */
+    ChoiceScreen.-framed #body OptionList > .option-list--option { padding: 0 1; }
     ChoiceScreen.-projects-pane #filter, ChoiceScreen.-projects-pane #filter:focus {
         height: 1; border: none;
     }

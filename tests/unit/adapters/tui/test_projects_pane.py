@@ -820,3 +820,37 @@ async def test_the_projects_filter_row_has_no_border_and_the_design_placeholder_
         height = entry.region.height
     assert placeholder == "filter projects"
     assert bottom in ("", "none") and height == 1, (bottom, height)
+
+
+# --- the cursor row's ▸ marker, as the sessions list draws it (the facelift, follow-up) -------
+
+
+def _prompts(app) -> list[str]:
+    choices = app.screen.query_one("#choices", OptionList)
+    return [str(choices.get_option_at_index(i).prompt) for i in range(choices.option_count)]
+
+
+async def test_the_projects_cursor_row_carries_the_marker_and_it_follows_the_cursor() -> None:
+    app = ProjectsPane(_context())
+    async with app.run_test(size=(120, 30)) as pilot:
+        await pilot.pause()
+        await pilot.pause()
+        first = _prompts(app)
+        await pilot.press("down")
+        await pilot.pause()
+        moved = _prompts(app)
+
+    assert first[0].startswith("▸ ") and first[1].startswith("  "), first[:2]
+    assert moved[0].startswith("  ") and moved[1].startswith("▸ "), moved[:2]
+
+
+def test_the_marker_is_drawn_in_the_sessions_marker_s_style() -> None:
+    from remote_agents.adapters.tui.rows import ACTIVE_MARKER, ACTIVE_STYLE, project_row_content
+
+    marked = project_row_content("infra", True, None, 60, marked=True)
+    plain = project_row_content("infra", True, None, 60, marked=False)
+    assert marked.plain.startswith(f"{ACTIVE_MARKER} infra")
+    assert plain.plain.startswith("  infra")
+    assert len(marked.plain) == len(plain.plain) == 60
+    styles = {marked.plain[s.start : s.end]: str(s.style) for s in marked.spans}
+    assert styles.get(ACTIVE_MARKER) == str(ACTIVE_STYLE), styles

@@ -36,13 +36,16 @@ names them in the past tense and no code enforces either.
 
 from __future__ import annotations
 
+import contextlib
 from dataclasses import replace
 from typing import cast
 
 from textual import events
 from textual.binding import Binding
+from textual.content import Content
 from textual.timer import Timer
 from textual.widgets import Input, OptionList
+from textual.widgets.option_list import OptionDoesNotExist
 
 from remote_agents.adapters.tui.model import _BACK, LaunchSelection
 from remote_agents.adapters.tui.preferences import (
@@ -54,8 +57,13 @@ from remote_agents.adapters.tui.rows import project_row_content
 from remote_agents.adapters.tui.screens.base import (
     NEVER_EMPTY,
     ChoiceScreen,
+    row_width,
 )
-from remote_agents.application.project_catalog import REGISTERED_GROUP, search_catalogue
+from remote_agents.application.project_catalog import (
+    REGISTERED_GROUP,
+    CatalogProject,
+    search_catalogue,
+)
 
 #: What the status line says about each order, on the positions that describe the list in
 #: their status (the dashboard puts the sessions' counts there instead). The sentence names the
@@ -211,26 +219,58 @@ class ProjectsScreen(ChoiceScreen):
             choices,
             f"Projects[$text-muted] {len(projects)} · {_ORDER_TITLE[self.tui.project_order]}[/]",
         )
-        width = choices.scrollable_content_region.width or None
-        last_used = self.tui.project_last_used
+        self._project_width = row_width(choices) or None
+        self._drawn_projects = {project.opaque_id: project for project in projects}
+        self._marked_project = None
         self._describe_projects(len(projects))
         self.show_choices(
-            tuple(
-                (
-                    project.opaque_id,
-                    project_row_content(
-                        project.name,
-                        project.group == REGISTERED_GROUP,
-                        last_used.get(project.opaque_id),
-                        width,
-                    ),
-                )
-                for project in projects
-            ),
+            tuple((project.opaque_id, self._project_prompt(project)) for project in projects),
             focus=not keep_focus,
         )
+        self._repaint_project_marker()
         if not keep_focus:
             entry.value = ""
+
+    #: What the last draw laid out, so the cursor's marker can be moved without a refill.
+    _drawn_projects: dict[str, CatalogProject] = {}  # noqa: RUF012
+    _project_width: int | None = None
+    _marked_project: str | None = None
+
+    def _project_prompt(self, project: CatalogProject, *, marked: bool = False) -> Content:
+        return project_row_content(
+            project.name,
+            project.group == REGISTERED_GROUP,
+            self.tui.project_last_used.get(project.opaque_id),
+            self._project_width,
+            marked=marked,
+        )
+
+    def _repaint_project_marker(self) -> None:
+        """Move the `▸` onto the row the cursor is on, in place, as the sessions list does.
+
+        Only the two rows that change are re-rendered (`replace_option_prompt`), so the list is
+        never refilled from a highlight handler and the cursor never moves under the owner.
+        """
+        if not self.showing:
+            return
+        choices = self.query_one("#choices", OptionList)
+        index = choices.highlighted
+        key = choices.get_option_at_index(index).id if index is not None else None
+        if key == self._marked_project:
+            return
+        for row, marked in ((self._marked_project, False), (key, True)):
+            project = self._drawn_projects.get(row or "")
+            if project is None:
+                continue
+            # A row this screen drew may not be in the list any more: a repeated key is
+            # dropped on fill, and a later fill replaces the list outright.
+            with contextlib.suppress(OptionDoesNotExist):
+                choices.replace_option_prompt(row, self._project_prompt(project, marked=marked))
+        self._marked_project = key if key in self._drawn_projects else None
+
+    def on_option_list_option_highlighted(self, event: OptionList.OptionHighlighted) -> None:
+        if event.option_list.id == "choices":
+            self._repaint_project_marker()
 
     def _describe_projects(self, count: int) -> None:
         """The status and hint for a position whose whole content is the project list.

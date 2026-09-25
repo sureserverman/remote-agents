@@ -31,7 +31,12 @@ from textual.widgets import Input, OptionList, Static, TextArea
 
 from remote_agents.adapters.tui.model import _BACK, label_or_error
 from remote_agents.adapters.tui.rows import session_contents, session_counts_content
-from remote_agents.adapters.tui.screens.base import NEVER_EMPTY, ChoiceScreen, held_option_id
+from remote_agents.adapters.tui.screens.base import (
+    NEVER_EMPTY,
+    ChoiceScreen,
+    held_option_id,
+    row_width,
+)
 from remote_agents.adapters.tui.screens.confirm import (
     ForceConfirmModal,
     RemoteControlConfirmModal,
@@ -1414,7 +1419,7 @@ class SessionsScreen(_SessionActionKeys, ChoiceScreen):
             session_row_parts(record, self.tui.context_window_for(record.session_id))
             for record in records
         ]
-        width = choices.scrollable_content_region.width or None
+        width = row_width(choices) or None
         # Recorded so `on_resize` can tell a width change from the several same-width resizes a
         # single layout pass emits. Set on every fill rather than only in `on_resize`, because
         # a fill is also a lay-out and leaving it stale would make the next genuine width
@@ -1513,7 +1518,7 @@ class SessionsScreen(_SessionActionKeys, ChoiceScreen):
         if not (self.showing and self._drawn):
             return
         choices = self.query_one("#choices", OptionList)
-        width = choices.scrollable_content_region.width or None
+        width = row_width(choices) or None
         if width == self._laid_out_width:
             return
         self._laid_out_width = width

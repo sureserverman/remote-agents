@@ -52,6 +52,7 @@ from remote_agents.adapters.tui.screens.base import (
     ChoiceScreen,
     held_option_id,
     restore_highlight_by_id,
+    row_width,
     status_classes,
 )
 from remote_agents.adapters.tui.screens.confirm import HostRemoteControlConfirmModal
@@ -676,7 +677,7 @@ class LimitsRegion:
                 pane, (Content(NO_LIMITS), *remote_control), on_measured=self._fit_own_pane
             )
             return
-        width = pane.scrollable_content_region.width
+        width = row_width(pane)
         if width <= 0:
             # Drawn inside `populate`, before the pane has been laid out: the lines are built
             # for an unknown width now and rebuilt for the real one after the first refresh --
@@ -1588,7 +1589,7 @@ class DashboardScreen(LimitsRegion, FeedRegion, ProjectsPaneScreen):
             session_row_parts(record, self.tui.context_window_for(record.session_id))
             for record in records
         ]
-        contents = session_contents(parts, pane.scrollable_content_region.width or None)
+        contents = session_contents(parts, row_width(pane) or None)
         for record, content in zip(records, contents, strict=True):
             pane.add_option(
                 Option(
@@ -1654,7 +1655,7 @@ def _fit_to_content(
     rows = tuple(lines)
 
     def measure() -> None:
-        width = pane.scrollable_content_region.width
+        width = row_width(pane)
         if width <= 0:
             return
         # A lost row here would be unreachable rather than untidy: every option is disabled, so

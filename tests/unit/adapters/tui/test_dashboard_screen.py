@@ -1359,3 +1359,38 @@ async def test_each_console_pane_carries_its_border_title_on_a_round_border(pane
             if node.display and node.region.area
         }
         assert set(tones.values()) == {surface}, f"{pane}: {tones}"
+
+
+@pytest.mark.parametrize("pane", ["projects", "sessions"])
+async def test_a_framed_pane_s_highlight_spans_the_whole_pane_width(pane: str) -> None:
+    """The cursor row's background runs border to border, with its text one cell in (the
+    handoff's `margin 0 -1`): the list's own padding moves onto each option."""
+    from backends import tui_context_for
+    from textual.geometry import Region
+
+    from remote_agents.adapters.tui import panes
+
+    app_name, selector, _title = _TITLED_PANES[pane]
+    other = CatalogProject("opaque-other", "other", "infra", "Registered")
+    context = tui_context_for(
+        sessions=_TitledLauncher(),
+        projects=object(),
+        profiles=(ProfileAvailability("claude", True),),
+        refresh_catalogue=lambda: (_PROJECT, other),
+        attach_argv=lambda session_id: ("true",),
+        catalogue=(_PROJECT, other),
+        console_hosted=True,
+    )
+    app = getattr(panes, app_name)(context)
+    async with app.run_test(size=(120, 30)) as pilot:
+        await pilot.pause()
+        await pilot.pause()
+        listing = app.screen.query_one(selector)
+        row = listing.render_lines(Region(0, 0, listing.size.width, 1))[0]
+        cells = [(segment.text, segment.style) for segment in row if segment.text]
+        body = app.screen.query_one("#body").background_colors[1]
+
+    first_style, last_style = cells[0][1], cells[-1][1]
+    assert first_style.bgcolor == last_style.bgcolor, (first_style, last_style)
+    assert first_style.bgcolor.triplet.hex.upper() != body.hex.upper(), "no highlight at the edge"
+    assert "".join(text for text, _ in cells).startswith(" ▸"), cells[:3]

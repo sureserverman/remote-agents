@@ -28,6 +28,7 @@ from remote_agents.adapters.tui.screens.base import (
     ChoiceScreen,
     held_option_id,
     restore_highlight_by_id,
+    row_width,
     status_classes,
 )
 from remote_agents.application.relative_time import age_short
@@ -415,7 +416,7 @@ class FeedRegion:
             return
         pane = found.first(OptionList)
         activities, names = self._feed_drawn
-        measured = pane.scrollable_content_region.width
+        measured = row_width(pane)
         try:
             self._draw_feed(
                 pane,
@@ -580,7 +581,7 @@ class FeedRegion:
             # The pane's own width, for wrapping an expanded detail. Reported as 0 before the
             # first layout, which `_continuation_rows` falls back on -- and an expansion only
             # ever happens on a keypress, by which time the pane has certainly been laid out.
-            measured = pane.scrollable_content_region.width
+            measured = row_width(pane)
             names = await self._session_names()
             rows = feed_rows(
                 activities,

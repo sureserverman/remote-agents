@@ -237,6 +237,17 @@ def status_classes(status: str) -> str:
     return "" if status else "-empty"
 
 
+def row_width(listing: Widget) -> int:
+    """The cells a row may use in *listing*: its content width, less its options' own padding.
+
+    A framed console pane moves the list's padding onto each option, so the cursor row's
+    highlight runs border to border with its text still one cell in (the handoff's
+    `margin 0 -1`). Rows laid out to the bare content width would then overrun by that padding.
+    """
+    padding = listing.get_component_styles("option-list--option").padding
+    return max(listing.scrollable_content_region.width - padding.width, 0)
+
+
 def footer_key_words(screen: Screen[object]) -> str:
     """The keys a Textual Footer would draw on *screen*, less the function keys, as one line.
 
