@@ -1071,7 +1071,8 @@ class DashboardScreen(LimitsRegion, FeedRegion, ProjectsPaneScreen):
         widget classes — the machinery in `ChoiceScreen` queries them by id and must find
         exactly what it expects. Only their arrangement is new.
         """
-        yield Header()
+        if self.draws_textual_chrome:
+            yield Header()
         with Vertical(id="body"):
             yield Static(self.status, id="status", markup=False)
             yield Static("", id="hint", classes="-empty", markup=False)
@@ -1117,7 +1118,8 @@ class DashboardScreen(LimitsRegion, FeedRegion, ProjectsPaneScreen):
                 yield TextArea(
                     "", id="output", read_only=True, soft_wrap=True, highlight_cursor_line=False
                 )
-        yield Footer()
+        if self.draws_textual_chrome:
+            yield Footer()
 
     async def choose(self, key: str) -> None:
         """A session row opens the session itself; anything else is a project row.

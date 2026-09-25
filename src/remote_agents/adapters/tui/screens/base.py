@@ -24,6 +24,7 @@ from textual.validation import ValidationResult, Validator
 from textual.widgets import Footer, Header, Input, OptionList, Static, TextArea
 from textual.widgets.option_list import Option
 
+from remote_agents.adapters.tui.keys import BAR_KEYS
 from remote_agents.adapters.tui.model import _BACK, _EMPTY
 from remote_agents.adapters.tui.screens.confirm import ForceConfirmModal
 from remote_agents.application.session_actions import (
@@ -226,6 +227,32 @@ def _is_from_a_replaced_fill(event: OptionList.OptionSelected) -> bool:
         return True
 
 
+#: Every function key the tmux bar draws, F11 included; the hint row leaves these to the bar.
+_FUNCTION_KEYS = frozenset(entry.key for entry in BAR_KEYS)
+
+
+def footer_key_words(screen: Screen[object]) -> str:
+    """The keys a Textual Footer would draw on *screen*, less the function keys, as one line.
+
+    Read from `active_bindings` exactly as `Footer.compose` reads it: a refused action is
+    absent, a shown binding is listed once per action, and the command palette entry is added
+    though its binding is not shown. The function keys are the tmux bar's (DEC-105).
+    """
+    app = screen.app
+    active = screen.active_bindings
+    seen: set[str] = set()
+    words: list[str] = []
+    for _node, binding, _enabled, _tooltip in active.values():
+        if not binding.show or binding.key in _FUNCTION_KEYS or binding.action in seen:
+            continue
+        seen.add(binding.action)
+        words.append(f"{app.get_key_display(binding)} {binding.description}")
+    palette = active.get(app.COMMAND_PALETTE_BINDING) if app.ENABLE_COMMAND_PALETTE else None
+    if palette is not None and palette.binding.action not in seen:
+        words.append(f"{app.get_key_display(palette.binding)} {palette.binding.description}")
+    return " · ".join(words)
+
+
 class ChoiceScreen(Screen[None]):
     """A status line, an optional filter, a list of choices, and an output pane.
 
@@ -339,7 +366,8 @@ class ChoiceScreen(Screen[None]):
         self._last_rejection: str | None = None
 
     def compose(self) -> ComposeResult:
-        yield Header()
+        if self.draws_textual_chrome:
+            yield Header()
         with Vertical(id="body"):
             # `markup=False` for the reason given at `#choices` below: `#status` is handed the
             # conversation description (`_resolve_resume_conversation`) and
@@ -387,7 +415,18 @@ class ChoiceScreen(Screen[None]):
                 yield TextArea(
                     "", id="output", read_only=True, soft_wrap=True, highlight_cursor_line=False
                 )
-        yield Footer()
+        if self.draws_textual_chrome:
+            yield Footer()
+
+    @property
+    def draws_textual_chrome(self) -> bool:
+        """Whether this screen composes a Textual Header and Footer (DEC-105, R9).
+
+        Not under console hosting: tmux draws the function keys once, on the console window's
+        status line, and each pane's border carries its title. A bare `remote-agents tui` has
+        no tmux bar, so it keeps both.
+        """
+        return not self.services.console_hosted
 
     async def on_mount(self) -> None:
         """Set the chrome this screen asked for, then let it fill itself.
@@ -401,6 +440,11 @@ class ChoiceScreen(Screen[None]):
         and a screen that never calls `show_output` needs no line of code to stay on the list.
         """
         self.show_breadcrumb()
+        if not self.draws_textual_chrome:
+            # The keys the Footer would have drawn follow the bindings the way the Footer did:
+            # a focused filter, a refused action and a greyed one all change them.
+            self.bindings_updated_signal.subscribe(self, lambda _screen: self._draw_hint())
+            self._draw_hint()
         entry = self.query_one("#filter", Input)
         entry.display = self.filter_placeholder is not None
         if self.status:
@@ -952,6 +996,26 @@ class ChoiceScreen(Screen[None]):
         if isinstance(text, str) and "\n" in text:
             _LOG.warning("a multi-line hint was truncated to its first line: %r", text)
             text = text.split("\n", 1)[0]
+        self._own_hint = text
+        self._draw_hint()
+
+    #: The screen's own words for the hint row, as `set_hint` last gave them.
+    _own_hint: str | Content = ""
+
+    def _draw_hint(self) -> None:
+        """The screen's own hint, then -- under console hosting -- the Footer's keys.
+
+        With no Footer on a console screen (R9), a key the Footer drew that is not a function
+        key would be drawn nowhere: `/ Find` and `^end End` on the output, `esc back` on every
+        pushed screen, `^p palette` everywhere. So they follow the screen's own hint on its row.
+        """
+        if not self.showing:
+            return
+        text = self._own_hint
+        if not self.draws_textual_chrome:
+            keys = footer_key_words(self)
+            if keys:
+                text = Content.assemble(text, " · ", keys) if text else keys
         region = self.query_one("#hint", Static)
         region.set_class(not text, "-empty")
         region.update(text)

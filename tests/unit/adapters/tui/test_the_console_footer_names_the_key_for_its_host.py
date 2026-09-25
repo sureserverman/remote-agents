@@ -1,4 +1,9 @@
-"""What the footer *calls* an entry depends on where the surface is hosted — BL-097, DEC-096.
+"""What the key row *calls* an entry depends on where the surface is hosted — BL-097, DEC-096.
+
+**Since DEC-105 the console's key row is the tmux bar, not a Textual Footer** (R9, signed off
+2026-09-25): under console hosting no screen composes a Footer, and the bar is built from
+`status_bar_keys()`. So the console side of each claim below reads the bar's table, and the
+bare side still reads the rendered Footer.
 
 `F10` is `quit`. In a bare terminal that means "leave the app" and the footer is right to say
 so. In a **console surface pane** it closes the whole console: four panes go, the shell comes
@@ -37,7 +42,11 @@ from textual.widgets._key_panel import BindingsTable
 
 from remote_agents.adapters.tui.app import RemoteAgentsTui
 from remote_agents.adapters.tui.context import TuiContext
-from remote_agents.adapters.tui.keys import CONSOLE_FOOTER_LABELS, FUNCTION_KEYS
+from remote_agents.adapters.tui.keys import (
+    CONSOLE_FOOTER_LABELS,
+    FUNCTION_KEYS,
+    status_bar_keys,
+)
 from remote_agents.application.profiles import ProfileAvailability
 from remote_agents.application.project_catalog import CatalogProject
 from remote_agents.domain.models import (
@@ -169,25 +178,25 @@ def test_the_console_relabels_exactly_the_footer_entries_whose_meaning_its_host_
 
 
 async def test_both_hostings_draw_every_footer_key_the_table_declares() -> None:
-    """The console withholds nothing any more, and that is the assertion worth keeping.
+    """Neither hosting withholds a key the table offers, and that is the assertion worth keeping.
 
-    This is the inverted form of what this file asserted before DEC-096. The console's footer
-    used to be the table's footer entries *minus* the quitting ones; it is now the table's
-    footer entries, full stop. Both hostings are read so that a key dropped from the footer
-    everywhere -- a removal wearing this change's clothes -- cannot pass.
+    Off a console the Footer draws the table's footer entries. Under console hosting the
+    Footer is gone (R9) and the tmux bar draws every key in the table, so a key dropped from
+    the console's row everywhere -- a removal wearing this change's clothes -- cannot pass.
     """
     bare = await _reading(console_hosted=False)
     console = await _reading(console_hosted=True)
+    on_the_bar = {f"f{key.number}" for key in status_bar_keys()}
 
+    assert console.drawn == frozenset(), (
+        f"under console hosting the tmux bar is the key row; a Footer drew {sorted(console.drawn)}"
+    )
     for entry in FUNCTION_KEYS:
         assert (entry.key in bare.drawn) is entry.footer, (
             f"off a console the footer draws what the table says: {entry.key} has "
             f"footer={entry.footer} and is {'drawn' if entry.key in bare.drawn else 'absent'}"
         )
-        assert (entry.key in console.drawn) is entry.footer, (
-            f"under console hosting the footer draws what the table says: {entry.key} has "
-            f"footer={entry.footer} and is {'drawn' if entry.key in console.drawn else 'absent'}"
-        )
+        assert entry.key in on_the_bar, f"the console's bar does not draw {entry.key}"
 
 
 async def test_the_console_footer_says_close_console_where_a_bare_terminal_says_quit() -> None:
@@ -195,22 +204,23 @@ async def test_the_console_footer_says_close_console_where_a_bare_terminal_says_
 
     Deliberately not derived from `CONSOLE_FOOTER_LABELS` on the bare side: `quit` is the word
     a terminal-owning app must offer, and `close console` is the word it must not. Stating both
-    literally is what catches a mapping that is correct and applied to the wrong hosting.
+    literally is what catches a mapping that is correct and applied to the wrong hosting. The
+    console's words are the bar's, since the bar is its only key row (DEC-105).
     """
     bare = await _reading(console_hosted=False)
-    console = await _reading(console_hosted=True)
+    bar_labels = {key.label for key in status_bar_keys()}
 
     assert "quit" in bare.drawn_labels, "off a console the footer still offers quit"
     assert "close console" not in bare.drawn_labels, (
         f"a bare terminal has no console to close: {sorted(bare.drawn_labels)}"
     )
 
-    assert "close console" in console.drawn_labels, (
-        f"the console footer does not say what F10 now does: {sorted(console.drawn_labels)}"
+    assert "close console" in bar_labels, (
+        f"the console's bar does not say what F10 now does: {sorted(bar_labels)}"
     )
-    assert "quit" not in console.drawn_labels, (
-        "the console footer still reads `quit`, which understates a press that closes four "
-        f"panes: {sorted(console.drawn_labels)}"
+    assert "quit" not in bar_labels, (
+        "the console's bar still reads `quit`, which understates a press that closes four "
+        f"panes: {sorted(bar_labels)}"
     )
 
 
