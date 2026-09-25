@@ -338,3 +338,27 @@ def test_each_absence_trails_empty_bars_in_both_layouts() -> None:
                 for m in _GAUGE_RUN.finditer(line)
             )
             assert text.index(phrase) > last_bar, f"at {width} {phrase!r} precedes a bar:\n{text}"
+
+
+def test_no_line_outgrows_the_pane_where_the_week_gauge_widens() -> None:
+    """The profile cap makes room for the widest window, which from 70 cells is the week's.
+
+    Found at the Stage 1 gate (DEC-106): the cap still reserved an eight-cell bar, so a long
+    profile at a 70-cell pane stacked into a 71-cell week line and the pane cut its figure off.
+    """
+    widest = LimitRow(
+        "codex", (LimitWindow("5h", 100, "59m"), LimitWindow("week", 100, "6d")), None, None
+    )
+    for length in (40, 50, 60):
+        rows = (
+            LimitRow(
+                "x" * length,
+                (LimitWindow("5h", 3, "4h"), LimitWindow("week", 61, "3d")),
+                None,
+                None,
+            ),
+            widest,
+        )
+        for width in range(60, 90):
+            for content in limit_rows_content(rows, width):
+                assert cell_len(content.plain) <= width, f"{length} at {width}: {content.plain!r}"

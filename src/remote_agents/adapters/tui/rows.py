@@ -407,12 +407,6 @@ class _LimitColumns:
     percent: int
     reset: int
     labels: tuple[str, ...] = LIMIT_COLUMNS
-    week_gauge: int = _GAUGE_WIDTH
-    """How many cells the week column's bar is drawn in: `_WIDE_WEEK_GAUGE` on a wide pane."""
-    expected: int = len(_EXPECTED_HEADING)
-    """The `expected` column: its heading, which is wider than any `100%`."""
-    pace: int = len(_PACE_HEADING)
-    """The `vs pace` column: the widest of its heading and every row's pace words."""
     """Which window kinds the table has a column for, left to right: `_column_labels`.
 
     A column is a *window kind*, not a position. Positional layout was BL-046: an agent that
@@ -420,6 +414,12 @@ class _LimitColumns:
     hours, so the grid invited the owner to read one agent's week against another's afternoon,
     with both labels truthful. Every row draws every one of these columns.
     """
+    week_gauge: int = _GAUGE_WIDTH
+    """How many cells the week column's bar is drawn in: `_WIDE_WEEK_GAUGE` on a wide pane."""
+    expected: int = len(_EXPECTED_HEADING)
+    """The `expected` column: its heading, which is wider than any `100%`."""
+    pace: int = len(_PACE_HEADING)
+    """The `vs pace` column: the widest of its heading and every row's pace words."""
 
 
 #: The narrowest the profile column is ever squeezed to before the name is ellipsised rather
@@ -461,13 +461,16 @@ def _limit_columns(rows: Sequence[LimitRow], width: int | None = None) -> _Limit
         (len(pace_text(window.pace_delta)) for window in paces if window is not None),
         default=0,
     )
+    week_gauge = _WIDE_WEEK_GAUGE if width is not None and width >= _WIDE_PANE else _GAUGE_WIDTH
     return _LimitColumns(
-        profile=_capped_profile(profile, width, label=label, percent=percent, reset=reset),
+        profile=_capped_profile(
+            profile, width, label=label, gauge=week_gauge, percent=percent, reset=reset
+        ),
         label=label,
         percent=percent,
         reset=reset,
         labels=labels,
-        week_gauge=_WIDE_WEEK_GAUGE if width is not None and width >= _WIDE_PANE else _GAUGE_WIDTH,
+        week_gauge=week_gauge,
         pace=max(len(_PACE_HEADING), pace),
     )
 
@@ -503,7 +506,7 @@ def limit_gauge_content(percent: int, cells: int, expected: int | None) -> Conte
 
 
 def _capped_profile(
-    profile: int, width: int | None, *, label: int, percent: int, reset: int
+    profile: int, width: int | None, *, label: int, gauge: int, percent: int, reset: int
 ) -> int:
     """Shrink the profile column until one whole window fits beside it, never below the floor.
 
@@ -511,10 +514,13 @@ def _capped_profile(
     have what they want it is the name that gives way -- the same order of preference
     `activity_text` applies when a session's display name and an agent's words compete for a
     message budget.
+
+    `gauge` is the widest bar a window draws -- the week's, which widens on a wide pane
+    (DEC-106) -- so the window that fits is the widest one, not the eight-cell one.
     """
     if width is None or width <= 0:
         return profile
-    window = label + 1 + _GAUGE_WIDTH + 1 + percent + (1 + reset if reset else 0)
+    window = label + 1 + gauge + 1 + percent + (1 + reset if reset else 0)
     room = width - _GROUP_GUTTER - window
     return max(_MINIMUM_PROFILE_COLUMN, min(profile, room))
 
