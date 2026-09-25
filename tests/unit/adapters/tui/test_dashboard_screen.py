@@ -674,7 +674,7 @@ def _stale_beside_unread() -> tuple[AgentLimits, ...]:
     )
 
 
-@pytest.mark.parametrize("size", [(80, 24), (100, 30)])
+@pytest.mark.parametrize("size", [(80, 24), (100, 30), (120, 40), (200, 50)])
 @pytest.mark.parametrize(
     "readings",
     [_both_read, _claude_unread, _both_unread, _stale_beside_unread],
@@ -707,8 +707,15 @@ async def test_the_limits_pane_fits_every_column_at_ordinary_terminal_sizes(
         await pilot.pause()
         pane = app.screen.query_one("#limits-pane", OptionList)
         feed = app.screen.query_one("#feed-pane", OptionList)
-        agents = [line.split()[0] for line in _limit_lines(pane) if not line.startswith(" ")]
+        agents = [
+            line.split()[0]
+            for line in _limit_lines(pane)
+            if not line.startswith(" ") and line.split()[0] in ("claude", "codex")
+        ]
         assert agents == ["claude", "codex"], _limit_lines(pane)
+        # The source stamp (R3) is drawn whenever an agent has a reading, and fits too.
+        stamped = any(entry.windows for entry in readings())
+        assert any(_stamp_lines(pane)) is stamped, _stamp_lines(pane)
 
         assert pane.max_scroll_y == 0, (
             f"at {size} the pane scrolls by {pane.max_scroll_y} row(s) that no key can reach:\n"

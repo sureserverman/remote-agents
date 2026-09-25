@@ -80,7 +80,7 @@ import asyncio
 import os
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field, replace
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -154,9 +154,13 @@ _THEME = "relay-night"
 # every pane at once. `(theme, width, height)`, each committed as `DASHBOARD_<theme>_<w>x<h>`.
 _THEMED_DASHBOARDS = (
     ("relay-night", 80, 24),
+    ("relay-night", 100, 30),
     ("relay-night", 120, 40),
+    ("relay-night", 200, 50),
     ("relay-day", 80, 24),
+    ("relay-day", 100, 30),
     ("relay-day", 120, 40),
+    ("relay-day", 200, 50),
 )
 
 
@@ -894,7 +898,42 @@ async def _to_resume_profiles_revealed(app: RemoteAgentsTui, pilot) -> None:
     await app.action_back()
 
 
+def _stale_claude_paced_codex_reader():
+    """Claude's borrowed reading gone stale beside a live Codex with week pace (DEC-106, R3).
+
+    The stale row has no pace and no countdown, and its date is on the source stamp; the live
+    row has its tick, `expected` and `vs pace`. The reset is an hour past three days so the
+    captured `↻ 3d` and `57%` hold for the minutes a run takes.
+    """
+
+    async def read() -> tuple[AgentLimits, ...]:
+        later = datetime.now(UTC) + timedelta(days=3, hours=1)
+        return (
+            AgentLimits(
+                ProfileId("claude"),
+                (
+                    UsageWindow("5h", 4.0, resets_at=later),
+                    UsageWindow("week", 49.0, resets_at=later),
+                ),
+                observed_at=datetime.now(UTC) - timedelta(hours=3),
+                stale_source="status line",
+            ),
+            AgentLimits(
+                ProfileId("codex"),
+                (UsageWindow("5h", 12.0), UsageWindow("week", 71.0, resets_at=later)),
+            ),
+        )
+
+    return read
+
+
 _STATES = (
+    _State(
+        "LIMITS_PANE_STALE_CLAUDE",
+        "LIMITS_PANE",
+        lambda: _context(limits=_stale_claude_paced_codex_reader()),
+        _to_limits_pane,
+    ),
     _State(
         "LIMITS_PANE_CLAUDE_WEEK_ONLY",
         "LIMITS_PANE",
