@@ -218,6 +218,19 @@ def test_no_further_capability_leaked_into_the_context() -> None:
         # target. Given what the paragraph above says about these carrying a session id, this
         # is the field that decides who may be handed one.
         "console_holds_slot",
+        # Added by the console facelift's sub-plan 2 (DEC-105): the function-key bar on the
+        # console's tmux status line. Same family as `console_publish_selection` -- console
+        # hosting's alone, `None` in a bare terminal, wired rather than probed for (DEC-046) --
+        # and four fields rather than one handle for that field's reason: each has exactly one
+        # kind of writer. The sessions pane alone publishes `selected` (inside its selection
+        # lock), a commitment screen `typing`, the console's limits pane the Remote Control
+        # words, and the app re-issues the bar on a theme switch. None of them carries a session
+        # id; each writes a fact the bar draws, and each is cleared by whoever set it
+        # (`tests/architecture/test_bar_options_are_cleared.py`).
+        "console_status_bar",
+        "console_publish_session_selected",
+        "console_publish_typing",
+        "console_publish_remote_control",
         # Added by Stage 5's Task 5.2, and listed here because that is what this test is for.
         # It is *not* the console family above: it is wired on every host, not only a hosted
         # one, and it is a **path** rather than a callable -- the declared writable boundary's
