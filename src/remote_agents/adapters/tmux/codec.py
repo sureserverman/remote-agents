@@ -848,9 +848,9 @@ def status_format_args(
     the scope is stated rather than left to that. An agent's own `ra-<uuid>` session keeps
     tmux's default bar.
 
-    **The width switch compares numbers.** `#{>:…}` compares strings, and on 3.4
-    `#{>:99,160}` is `1`, so a 99-column client would get the 200-column bar. `e|>|` is the
-    numeric form (R4).
+    **The width switch compares numbers.** tmux's plain `>` comparison compares strings, and
+    on 3.4 it calls 99 greater than 160, so a 99-column client would get the 200-column bar.
+    `e|>|` is the numeric form (R4); the stage gate greps the tree for the plain one.
 
     **`status-interval 0`.** A change to an option the format reads redraws the row at once
     (probed: ~7 ms), and nothing here depends on the clock, so a timed redraw buys nothing.
