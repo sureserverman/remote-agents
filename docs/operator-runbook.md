@@ -552,7 +552,10 @@ screen. Send Cancel or Back instead to leave the step without sending.
 - **Busy — queued.** Working, or asking a question: the message waits in `ui.sqlite3`. Only
   these two are queued, because only they end in a "finished" event. There is one per session; a newer message replaces it, and the reply says so. It
   is typed after that session's next "finished" event (Claude and Codex `Stop`, OpenCode
-  `session.idle`), and the pane is checked again first. Still busy means it keeps waiting. The
+  `session.idle`), and the pane is checked again first. Still busy means it keeps waiting. On
+  Claude and Codex, since 0.49.0 and once the hooks are re-installed, a turn that is streaming
+  its answer counts as busy too, and a message queued behind a turn stopped with Esc -- which
+  fires no "finished" event -- is typed within about 3 s of the stop (DEC-104). The
   owner is told *Sent queued message to …* when it goes, or *Dropped queued message …* with the
   reason when the retry meets something waiting cannot fix (the session stopped, a draft in the
   input, a tmux failure). A service stop that interrupts a retry drops the message rather than
@@ -862,7 +865,8 @@ Trust affects only local Codex execution; Telegram cannot approve, deny, or othe
 
 With no arguments this writes to `~/.claude/settings.json` — the owner's global agent
 configuration, which this project does not own — and adds one matcherless group to each of
-`Stop`, `StopFailure`, `Notification` and `SessionEnd`, each holding one command:
+`Stop`, `StopFailure`, `Notification`, `PermissionRequest` and `UserPromptSubmit` (the
+`INSTALLED_EVENTS` of `adapters/agents/claude/hooks.py`), each holding one command:
 
 ```json
 {
@@ -882,8 +886,8 @@ because nothing reports it. Re-run the install after moving or rebuilding that v
 is recognised by the parsed words after the interpreter, so a stale entry is replaced rather than
 joined by a second one.
 
-**It merges, and it only ever adds those four groups.** Every other key, every other event, and
-every other group under those four events is copied across untouched — including a `SessionEnd`
+**It merges, and it only ever adds those five groups.** Every other key, every other event, and
+every other group under those five events is copied across untouched — including a `SessionEnd`
 hook of your own, which is the case this host's real settings file presents. **It is idempotent:**
 a second run reports `agent hooks already current in <path>` and writes nothing. If an entry
 already runs this subcommand in a form the installer does not recognise — a wrapper, a hand-edit,
@@ -899,7 +903,7 @@ line 2 column 1 (char 19)); it has been left untouched
 ```
 
 The same refusal, always without writing, covers a `hooks` key that is not a JSON object, one of
-those four events whose value is not a JSON array, a file whose exact formatting cannot be
+those five events whose value is not a JSON array, a file whose exact formatting cannot be
 reproduced (so a later `--remove` would reformat the rest of it), an empty `"hooks": {}` block
 that removal could not tell apart from no `hooks` key at all, and a file that changed on disk
 while the command was preparing its edit. Each prints its reason on standard error and exits 1.
@@ -914,13 +918,13 @@ anywhere else in production means the hooks spool where the service does not rea
 
 ### Verifying the install
 
-Confirm the four groups are present:
+Confirm the five groups are present:
 
 ```bash
 python3 -m json.tool ~/.claude/settings.json | grep -c 'remote_agents agent-event'
 ```
 
-That must report `4`. Then confirm the guard, which is what makes a global hook safe to install —
+That must report `5` (`4` before 0.49.0, which added `UserPromptSubmit`). Then confirm the guard, which is what makes a global hook safe to install —
 the hook writes nothing and exits 0 when `REMOTE_AGENTS_SESSION_ID` is absent from its
 environment, so a Claude session started outside a managed pane notifies nobody:
 
