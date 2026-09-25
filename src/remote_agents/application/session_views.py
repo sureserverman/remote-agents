@@ -502,6 +502,36 @@ class LimitWindow:
     label: str
     percent: int
     resets_in: str | None
+    expected_percent: int | None = None
+    """Where an even spend would stand today, in whole percent, or None when there is no pace.
+
+    Only a window `_PACED_WINDOWS` names a duration for has pace, and only on a live reading
+    with a reset time (DEC-106): a figure hours old says nothing about where the account is
+    *today*, the same reason `_stale_for` dates it. Defaulted so a fixture that builds a window
+    positionally keeps meaning "no pace".
+    """
+    pace_delta: int | None = None
+    """`percent - expected_percent`: positive is ahead of an even spend. A value, never a word
+    (DEC-043) -- how it is said, and in which colour, is the surface's."""
+
+
+_PACED_WINDOWS = {"week": timedelta(days=7), "day": timedelta(days=1)}
+"""How long a window lasts, by the provider's own label (DEC-106).
+
+From the label because `UsageWindow` carries no duration: Codex's reader turns its
+`window_minutes` into the label and stops there. A 5h window has no pace -- it is gone before
+an even spend means anything -- and an unknown label is left without one rather than guessed.
+"""
+
+
+def _pace(window: UsageWindow, percent: int, live: bool) -> tuple[int | None, int | None]:
+    """A window's expected share and how far `percent` is from it; (None, None) for no pace."""
+    duration = _PACED_WINDOWS.get(window.label)
+    if duration is None or window.resets_at is None or not live:
+        return None, None
+    elapsed = duration - (window.resets_at - datetime.now(UTC))
+    expected = min(100, max(0, round(100 * elapsed / duration)))
+    return expected, percent - expected
 
 
 @dataclass(frozen=True, slots=True)
@@ -623,19 +653,22 @@ def limit_rows(
         if not windows:
             declared = entry.absence if entry is not None else None
             absence = _ABSENCE_WORDS[declared] if declared is not None else NO_READING
+        stale_for = _stale_for(entry.observed_at) if entry is not None else None
         rows.append(
             LimitRow(
                 profile=name,
                 windows=tuple(
                     LimitWindow(
                         window.label,
-                        whole_percent(window.used_percent),
+                        percent,
                         None if window.resets_at is None else until(window.resets_at),
+                        *_pace(window, percent, live=stale_for is None),
                     )
                     for window in windows
+                    for percent in (whole_percent(window.used_percent),)
                 ),
                 borrowed=entry.stale_source if entry is not None else None,
-                stale_for=_stale_for(entry.observed_at) if entry is not None else None,
+                stale_for=stale_for,
                 absence=absence,
             )
         )

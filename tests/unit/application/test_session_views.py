@@ -32,6 +32,7 @@ from remote_agents.application.session_views import (
     NO_READING,
     NOT_REPORTED,
     UNREADABLE,
+    LimitWindow,
     StateGroup,
     _window_phrase,
     context_gauge,
@@ -954,3 +955,60 @@ def test_an_agent_whose_read_failed_keeps_its_row_and_says_so() -> None:
 
     assert [row.profile for row in rows] == ["codex"]
     assert rows[0].absence == UNREADABLE
+
+
+# --- weekly pace (DEC-106) ----------------------------------------------------------------
+
+
+def _paced(label: str, percent: float, resets_in: timedelta | None, **kwargs) -> LimitWindow:
+    resets = None if resets_in is None else datetime.now(UTC) + resets_in
+    (row,) = limit_rows((_account("claude", UsageWindow(label, percent, resets_at=resets), **kwargs),))
+    (window,) = row.windows
+    return window
+
+
+def test_pace_is_the_elapsed_share_of_the_window() -> None:
+    """A week with six days left is one day in: an even spend would be at 14% today."""
+    window = _paced("week", 7.0, timedelta(days=6))
+    assert window.expected_percent == 14
+
+
+def test_a_day_window_has_pace() -> None:
+    window = _paced("day", 30.0, timedelta(hours=12))
+    assert window.expected_percent == 50
+
+
+def test_five_hour_windows_have_no_pace() -> None:
+    window = _paced("5h", 40.0, timedelta(hours=2))
+    assert window.expected_percent is None
+    assert window.pace_delta is None
+
+
+def test_stale_reading_has_no_pace() -> None:
+    """DEC-061: a reading hours old makes no claim about where the account is today."""
+    window = _paced(
+        "week", 7.0, timedelta(days=6), observed=datetime.now(UTC) - timedelta(hours=8)
+    )
+    assert window.expected_percent is None
+    assert window.pace_delta is None
+
+
+def test_a_window_with_no_reset_has_no_pace() -> None:
+    window = _paced("week", 7.0, None)
+    assert window.expected_percent is None
+    assert window.pace_delta is None
+
+
+def test_pace_delta_is_percent_minus_expected() -> None:
+    behind = _paced("week", 7.0, timedelta(days=6))
+    ahead = _paced("week", 71.0, timedelta(days=3))
+    assert behind.pace_delta == 7 - 14 == -7
+    assert ahead.expected_percent == 57
+    assert ahead.pace_delta == 71 - 57 == 14
+
+
+def test_pace_expected_is_clamped_to_0_100() -> None:
+    too_far = _paced("week", 1.0, timedelta(days=9))
+    already_reset = _paced("week", 99.0, -timedelta(hours=1))
+    assert too_far.expected_percent == 0
+    assert already_reset.expected_percent == 100
