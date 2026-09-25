@@ -23,3 +23,4 @@ docs/plans/
 plans/
 # test fixtures are committed data, not local plan scratch
 !**/tests/fixtures/**/plans/
+build/

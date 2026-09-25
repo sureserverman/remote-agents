@@ -79,11 +79,23 @@ def _limits_screen(console: Drill) -> list[str]:
 
 
 def _settled(console: Drill, width: int, height: int) -> dict[str, tuple[int, int]]:
+    """The geometry once the layout hooks have run *and* the limits pane has fitted itself.
+
+    Stable-for-a-second alone is not settled: straight after start the limits process may not
+    have drawn yet, and a pane that has not drawn holds still at whatever share the layout gave
+    it. Measured: one run in four read 15 limits rows that way, where the pane fits to 7 once
+    it has drawn. So the pane must show its stamp line first, then hold still.
+    """
     console.resize(width, height)
+
+    def drawn() -> bool:
+        return "live" in "\n".join(_limits_screen(console))
+
+    assert wait(drawn, bound=30.0), _limits_screen(console)
 
     def stable() -> dict[str, tuple[int, int]] | None:
         first = _geometry(console)
-        time.sleep(1.0)
+        time.sleep(1.5)
         second = _geometry(console)
         return second if first == second and "limits" in second else None
 
@@ -120,4 +132,71 @@ def test_cell_budget_at_100x30(console: Drill) -> None:
     assert "claude" in drawn and "live" in drawn, (
         f"the limits pane is clipped: its stamp line is not on screen: {limits}"
     )
+    console.resize(200, 50)
+
+
+# --- captures beside the mock, and the two cross-plan checks (Task 2.4) ------------------------
+
+_CAPTURES = Path(__file__).resolve().parents[2] / "build" / "facelift-captures" / "live"
+
+
+def _capture(console: Drill, name: str) -> str:
+    """The whole outer pane, bar included, written as text and as an SVG for the evaluator."""
+    from rich.console import Console
+    from rich.text import Text
+
+    plain = console.screen()
+    styled = console.screen(styled=True)
+    _CAPTURES.mkdir(parents=True, exist_ok=True)
+    (_CAPTURES / f"{name}.txt").write_text(plain, encoding="utf-8")
+    width = max(len(line) for line in plain.splitlines())
+    recorder = Console(record=True, width=width, file=open("/dev/null", "w"))  # noqa: SIM115
+    recorder.print(Text.from_ansi(styled), end="")
+    recorder.save_svg(str(_CAPTURES / f"{name}.svg"), title=f"ra-console {name}")
+    return plain
+
+
+def test_one_key_row(console: Drill) -> None:
+    """In the 200x50 capture the function keys are a row once, on the bar, and nowhere else."""
+    _settled(console, 200, 50)
+    screen = wait(
+        lambda: (lambda s: s if "Plan limits" in s and "12 projects" in s else None)(
+            console.screen()
+        ),
+        bound=20.0,
+    )
+    assert screen, console.screen()
+    _capture(console, "200x50")
+    rows = screen.rstrip("\n").split("\n")
+    key_rows = [
+        index
+        for index, row in enumerate(rows)
+        if "help" in row and "settings" in row and "projects" in row
+    ]
+    assert key_rows == [len(rows) - 1], (key_rows, len(rows))
+    assert not any("F3 F4" in row or "^r refresh" in row for row in rows), screen
+
+
+def test_pace_survives_chrome(console: Drill) -> None:
+    """The limits pane, inside its border, still shows its header, `expected`, `vs pace`, and
+    the source stamp."""
+    _settled(console, 200, 50)
+    limits = wait(
+        lambda: (lambda lines: lines if "expected" in "\n".join(lines) else None)(
+            _limits_screen(console)
+        ),
+        bound=20.0,
+    )
+    assert limits, _limits_screen(console)
+    drawn = "\n".join(limits)
+    assert limits[0].startswith("╭─ Plan limits"), limits
+    assert "expected" in drawn and "vs pace" in drawn, limits
+    assert "claude · status line" in drawn and "live" in drawn, limits
+
+
+def test_the_narrow_console_is_captured(console: Drill) -> None:
+    _settled(console, 100, 30)
+    screen = wait(lambda: console.screen() if "12projects" in console.bar() else None, bound=20.0)
+    assert screen, console.screen()
+    _capture(console, "100x30")
     console.resize(200, 50)

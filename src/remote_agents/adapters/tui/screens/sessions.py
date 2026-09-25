@@ -688,7 +688,7 @@ class SessionsScreen(_SessionActionKeys, ChoiceScreen):
     }
     SessionsScreen #actions { height: 1; padding: 0 1; }
     SessionsScreen #actions-keys { width: 1fr; text-wrap: nowrap; text-overflow: ellipsis; }
-    SessionsScreen #actions-projects { width: auto; color: $text-dim; }
+    SessionsScreen #actions-projects { width: auto; margin-left: 2; color: $text-dim; }
     """
 
     #: Whether `p` returns the console's projects pane from here. Only the pane binds it.
@@ -1119,7 +1119,7 @@ class SessionsScreen(_SessionActionKeys, ChoiceScreen):
         self._draw_action_line(selected=self.highlighted_session() is not None)
 
     def _draw_action_line(self, *, selected: bool) -> None:
-        """`a attach  i inspect  …  m remote`, or `No session is selected · j k to choose one`.
+        """`a attach i inspect … m remote`, or `No session is selected · j k to choose one`.
 
         Built from `SESSION_ACTION_KEYS` at draw time, never spelled: the letter `$warning`, the
         word `$text-muted` (DEC-010: the letter and the word, not a colour). `p projects` is
@@ -1142,7 +1142,9 @@ class SessionsScreen(_SessionActionKeys, ChoiceScreen):
         pieces: list[Content] = []
         for index, (key, word) in enumerate(entries):
             if index:
-                pieces.append(Content("  "))
+                # One cell between entries, as the handoff's prose says: two (its example)
+                # ran the line into `p projects` in the 80-cell right column (measured live).
+                pieces.append(Content(" "))
             pieces.append(Content.assemble((key, "$warning"), (f" {word}", "$text-muted")))
         keys.update(Content.assemble(*pieces))
         projects.update("p projects")
