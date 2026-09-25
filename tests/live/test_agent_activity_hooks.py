@@ -42,7 +42,7 @@ from remote_agents.adapters.agents.registry import install_agent_hooks
 from remote_agents.application.activity import drain_activity
 from remote_agents.domain.models import SessionId
 from remote_agents.ports.agent_activity import ActivityKind, AgentActivity
-from remote_agents.ports.session_identity import SESSION_ID_VARIABLE
+from remote_agents.ports.session_identity import SESSION_ID_VARIABLE, safe_session_id
 
 _TURN = "Reply with exactly the word: spooled"
 
@@ -440,7 +440,11 @@ def test_a_real_claude_turn_starts_its_marker_and_its_stop_ends_it(tmp_path: Pat
         while not marker.is_file() and time.monotonic() < deadline:
             time.sleep(0.2)
         assert marker.is_file(), f"no marker while the turn ran:\n{_pane_text()}"
-        assert marker.read_bytes() == b""
+        # Its owner is Claude's own id for the session, not the pane's: that is what lets only
+        # this agent's `Stop` end it. The removal below then proves the real `Stop` carries the
+        # same id as the real submit.
+        owner = marker.read_bytes().decode("ascii")
+        assert safe_session_id(owner) == owner and owner != str(session_id), owner
 
         deadline = time.monotonic() + 180.0
         finished: list[AgentActivity] = []
