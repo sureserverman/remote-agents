@@ -1389,11 +1389,9 @@ class RemoteAgentsTui(App[AttachRequest | None]):
         **The argument for each, and both gates, live in `_resolve_session`.** This is a thin
         reader over it that drops the refusal wording — read that method rather than this one.
 
-        **Two production callers, and they run on different clocks.** `action_session_key`
-        reaches `_resolve_session` directly, because it needs the refusal wording too; this
-        method is called by `SessionKeyHintRow.refresh_session_key_hint`, on a timer, on every
-        console pane that draws the hint row — so the resolver runs without anyone pressing
-        anything, and its cost is not only paid per keypress.
+        `action_session_key` reaches `_resolve_session` directly, because it needs the refusal
+        wording too. This reader's timer-driven caller, the panes' F-key hint row, went with
+        that row in the console facelift (DEC-105): the tmux bar dims the session keys itself.
 
         Each flag is read with `getattr(..., False)` because not every screen is a
         `ChoiceScreen` — the modals in `confirm.py` are `ModalScreen`s outside that hierarchy —

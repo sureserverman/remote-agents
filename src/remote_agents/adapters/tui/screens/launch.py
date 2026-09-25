@@ -238,7 +238,7 @@ class ProjectsScreen(ChoiceScreen):
             # Through the seam rather than the constant: on the console's projects pane this
             # line also carries the F-key row, and `_describe_projects` runs on every redraw --
             # so a pane that appended the F-keys once would lose them at the next render.
-            hint=self.hint_content(PROJECTS_HINT),
+            hint=PROJECTS_HINT,
         )
 
     def action_focus_filter(self) -> None:

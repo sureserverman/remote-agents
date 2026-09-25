@@ -1038,16 +1038,6 @@ class ChoiceScreen(Screen[None]):
         was, self._left_by_excursion = self._left_by_excursion, False
         return was
 
-    def hint_content(self, base: str) -> str | Content:
-        """What this position's hint row actually says, given the keys it wants to advertise.
-
-        A seam, and the base answer is "exactly what you asked for". It exists so a console pane
-        can add the F-key layer to its own keys without every call site knowing about it, and
-        without this module -- which `screens/sessions.py` imports -- having to know the layer's
-        vocabulary that lives there. The pane mixin overrides it; nothing else does.
-        """
-        return base
-
     async def refuse(
         self, message: str | None = None, *, severity: SeverityLevel = "warning"
     ) -> None:

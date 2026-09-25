@@ -170,19 +170,6 @@ CONSOLE_FOOTER_LABELS: dict[str, str] = {
 }
 
 
-#: The session-shaped F-keys as a pane advertises them: `F3 F4 F6 F8 F9`.
-#:
-#: Built from the table so the row of keys the owner reads is the row that works. **Keys alone,
-#: no words**, which is a width decision and not a taste one: the hint shares one line with the
-#: pane's own keys, that line is `text-overflow: ellipsis` rather than wrapped, and the
-#: committed baselines go down to 60 columns -- so `F3 inspect · F8 stop · …` would be elided
-#: exactly where the stops are. The footer carries the words now, which the Alt layer this
-#: replaces could not do: a hidden chord had nowhere else to be explained.
-SESSION_KEY_HINT = " ".join(
-    entry.key.upper() for entry in FUNCTION_KEYS if entry.action.startswith("session_key(")
-)
-
-
 #: The keys, besides the stops, that a text-entry screen refuses: F2 (settings) and F7 (add
 #: project) would each open a screen over a half-typed name. The console bar dims them there.
 _REFUSED_WHILE_TYPING = frozenset({"settings", "add_project"})

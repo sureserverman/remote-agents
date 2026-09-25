@@ -1451,12 +1451,13 @@ async def test_the_function_keys_reach_the_pane_the_owner_is_in_and_the_agent_th
         # --- DEC-073(3): the same row pressed from a plain agent attach ------------------
         listing = await draws(sessions_pane, "qualification", seconds=30.0)
         assert "qualification" in listing, f"the sessions pane lists no session: {listing!r}"
-        # The marker, validated against the pane it is about to be asserted of. A quiet
-        # sessions pane names no stop: its hint row carries the session keys as bare glyphs
-        # (`SESSION_KEY_HINT`) and its footer carries help and quit. A word that were always
-        # absent would make the assertion below unfalsifiable, so it is checked here first.
-        assert "stop" not in listing.lower(), (
-            f"the quiet sessions pane already names a stop, so it cannot be the marker: {listing!r}"
+        # The marker, validated against the pane it is about to be asserted of. A delivered
+        # graceful stop puts the row in `stop_requested` (`state_word`); the word `stop` alone
+        # is no marker since the facelift, because the action line names `s stop` whenever a
+        # row is highlighted. A word that were always absent would make the assertion below
+        # unfalsifiable, so it is checked here first.
+        assert "stop_requested" not in listing, (
+            f"the quiet sessions pane already shows a stop, so it cannot be the marker: {listing!r}"
         )
         await attach_client(attach_socket, production_client(attach_argv(session_id)))
         # **The precondition, asserted rather than assumed.** `attach_client` returns as soon as
@@ -1473,7 +1474,7 @@ async def test_the_function_keys_reach_the_pane_the_owner_is_in_and_the_agent_th
         await _type(attach_socket, "F8")
         # Watched for at least as long as the arrivals above were given to happen in: this
         # asserts an *absence*, and a shorter window would be a race this host happens to win.
-        reacted = await never_draws(sessions_pane, "stop", seconds=10.0)
+        reacted = await never_draws(sessions_pane, "stop_requested", seconds=10.0)
         assert reacted is None, (
             "an unconfirmed graceful stop (DEC-018) was delivered to the sessions pane by a "
             "client attached to the agent rather than to the console, which is exactly the "

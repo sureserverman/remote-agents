@@ -60,9 +60,9 @@ from remote_agents.adapters.tui.screens.feed import (
     NO_NOTIFICATIONS,
     FeedRegion,
 )
-from remote_agents.adapters.tui.screens.launch import PROJECTS_HINT, ProfilesScreen, ProjectsScreen
+from remote_agents.adapters.tui.screens.launch import ProfilesScreen, ProjectsScreen
 from remote_agents.adapters.tui.screens.resume import advance_to_resume_profiles
-from remote_agents.adapters.tui.screens.sessions import SessionKeyHintRow, sessions_title
+from remote_agents.adapters.tui.screens.sessions import sessions_title
 from remote_agents.adapters.tui.theme import status_bar_palette
 from remote_agents.application.host_remote_control import (
     HOST_REMOTE_CONTROL_TITLE,
@@ -706,7 +706,7 @@ class LimitsRegion:
         pane.add_option(Option(line, id=_CLAUDE_REMOTE_CONTROL_ROW, disabled=True))
 
 
-class ProjectsPaneScreen(SessionKeyHintRow, ProjectsScreen):
+class ProjectsPaneScreen(ProjectsScreen):
     """The projects position with the chooser in front of the wizard — the console's left pane.
 
     The projects picker on its own sends a chosen project straight into the agent list. This
@@ -720,9 +720,6 @@ class ProjectsPaneScreen(SessionKeyHintRow, ProjectsScreen):
     copies would only have to disagree once.
     """
 
-    #: This pane's own keys, which `hint_content` appends the F-key layer to on a console.
-    session_key_hint_base = PROJECTS_HINT
-
     def __init__(self) -> None:
         super().__init__()
         #: What the console's start-only repair could not put right, held so it can be
@@ -732,7 +729,6 @@ class ProjectsPaneScreen(SessionKeyHintRow, ProjectsScreen):
     async def populate(self) -> None:
         await super().populate()
         self._report_console_recovery()
-        self.start_session_key_hint()
 
     def render_projects(self, query: str = "", *, keep_focus: bool = False) -> None:
         super().render_projects(query, keep_focus=keep_focus)

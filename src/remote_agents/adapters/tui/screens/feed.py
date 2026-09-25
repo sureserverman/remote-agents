@@ -29,7 +29,6 @@ from remote_agents.adapters.tui.screens.base import (
     held_option_id,
     restore_highlight_by_id,
 )
-from remote_agents.adapters.tui.screens.sessions import SessionKeyHintRow
 from remote_agents.application.relative_time import age_short
 from remote_agents.application.session_views import session_identity
 from remote_agents.domain.models import SessionRecord
@@ -616,7 +615,7 @@ class FeedRegion:
                 _LOG.exception("the status flash failed; the feed row is the record")
 
 
-class FeedScreen(SessionKeyHintRow, FeedRegion, ChoiceScreen):
+class FeedScreen(FeedRegion, ChoiceScreen):
     """The console's right-bottom pane: the feed and nothing else.
 
     A `ChoiceScreen` because that is what carries this surface's chrome — the status region,
@@ -642,13 +641,12 @@ class FeedScreen(SessionKeyHintRow, FeedRegion, ChoiceScreen):
     DEFAULT_CSS = """
     FeedScreen #filter { display: none; }
     FeedScreen #choices { display: none; }
-    /* No `border` here: `OptionList` draws its own, which is where this pane's
-       `▔ Feed ▔` chrome comes from -- inherited rather than chosen, and stated
-       because the `Static` this replaced drew none and the dashboard's twin sets one
-       explicitly. `text-wrap`/`text-overflow` are load-bearing: they are the whole of
-       one-observation-one-row. */
+    /* A round `$secondary` border, like the other three console panes (the facelift). It
+       used to inherit `OptionList`'s own tall border by leaving this unset. `text-wrap` and
+       `text-overflow` are load-bearing: they are the whole of one-observation-one-row. */
     FeedScreen #feed-pane {
-        height: 1fr; border: round $secondary; text-wrap: nowrap; text-overflow: ellipsis; scrollbar-gutter: stable;
+        height: 1fr; border: round $secondary; text-wrap: nowrap; text-overflow: ellipsis;
+        scrollbar-gutter: stable;
     }
     """
 
@@ -711,17 +709,6 @@ class FeedScreen(SessionKeyHintRow, FeedRegion, ChoiceScreen):
         self.query_one("#feed-pane", OptionList).focus()
         if self._timer is None:
             self._timer = self.set_interval(self._FEED_AUTO_REFRESH, self._auto_reload)
-        # Read-only, so the hint row is the session-key row alone -- and this is that row's
-        # least obvious home, because the pane shows notifications *about* sessions while
-        # owning none of them.
-        #
-        # **What the row says is "these keys work here", not "they act on the notification you
-        # are reading".** They act on whatever the *sessions pane* has selected, which need not
-        # be the session this row is about, and two of them end it without asking (DEC-018). An
-        # earlier version of this comment said the opposite, which is the one misreading of this
-        # pane with an irreversible consequence.
-        self.set_hint(self.hint_content(self.session_key_hint_base))
-        self.start_session_key_hint()
 
     async def on_reveal(self) -> None:
         await self._reload_feed()

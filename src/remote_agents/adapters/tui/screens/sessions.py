@@ -23,12 +23,12 @@ from types import MappingProxyType
 
 from textual import events
 from textual.binding import Binding
+from textual.containers import Horizontal
 from textual.content import Content
 from textual.message import Message
 from textual.timer import Timer
-from textual.widgets import Input, OptionList, TextArea
+from textual.widgets import Input, OptionList, Static, TextArea
 
-from remote_agents.adapters.tui.keys import SESSION_KEY_HINT
 from remote_agents.adapters.tui.model import _BACK, label_or_error
 from remote_agents.adapters.tui.rows import session_contents, session_counts_content
 from remote_agents.adapters.tui.screens.base import NEVER_EMPTY, ChoiceScreen, held_option_id
@@ -101,20 +101,6 @@ def remote_control_entries(record) -> tuple[tuple[str, str], ...]:
 #: rather than frozen. Lengthened rather than deleted for exactly that, and lengthened *to*
 #: sixty because a fallback short enough to keep doing the work would hide a broken watcher.
 _SESSIONS_AUTO_REFRESH = 60.0
-
-#: How often a console pane re-reads the *sessions pane's cursor* to decide whether its
-#: session-key hint is lit. Its own constant since 2026-09-12, where it borrowed
-#: `_SESSIONS_AUTO_REFRESH`.
-#:
-#: The borrowing was argued rather than accidental -- "reading it faster would only find the
-#: same answer sooner than the thing being watched can change it" -- and that argument held
-#: exactly as long as the sessions pane changed on a ten-second tick. It follows the store
-#: now, so the watched cursor can move at any moment and a hint on the fallback's cadence
-#: would lag it by up to a minute. Kept at the number it has always effectively had.
-#:
-#: Found by measurement, not by reading: lengthening the shared constant took one test from
-#: about twenty seconds to 144, and the whole suite from 100 s to 197 s.
-_SESSION_KEY_HINT_REFRESH = 10.0
 
 
 class RowStopAction(Message):
@@ -248,8 +234,8 @@ SESSION_ACTION_KEYS: tuple[tuple[str, str, str, str], ...] = (
     ("i", "inspect", "Inspect output", "inspect"),
     ("r", "rename", "Rename", "rename"),
     ("s", GRACEFUL, ACTION_LABELS[GRACEFUL], "stop"),
-    ("c", CLEANUP, ACTION_LABELS[CLEANUP], "clean"),
     ("f", FORCE, ACTION_LABELS[FORCE], "force"),
+    ("c", CLEANUP, ACTION_LABELS[CLEANUP], "clean up"),
 )
 
 #: The actions a key carries **without asking**: exactly the branch of
@@ -281,6 +267,8 @@ _CLEARS_VANISHED_CURSOR = True
 #: The Remote Control key, kept out of the table above because it is the one key whose action
 #: is not known until the record is read -- see `action_row_remote_control`.
 _REMOTE_CONTROL_KEY = "m"
+#: Its word on the action line, beside the table's words (the detail's fact line says `remote`).
+_REMOTE_CONTROL_WORD = "remote"
 
 #: The row keys a sessions position binds, space-separated, built from the table rather than
 #: written beside it: `a i r s c f m`. The pane title advertised them until the console
@@ -357,132 +345,6 @@ _SHOW_PROJECTS_BINDING = Binding("p", "show_projects_pane", "Projects", show=Fal
 #: Named here because the F-key table in `keys.py` carries it for F4, and a literal spelled in
 #: two places is the drift `test_the_function_keys_are_one_table.py` exists to catch.
 _DETAIL_KEY = "d"
-
-
-def session_key_hint_content(base: str, *, live: bool) -> Content:
-    """The hint row for a console pane: its own keys, then the F-keys, dim when they are inert.
-
-    **Two emphases on one line, which is why this returns `Content` rather than a string.** The
-    row is `$text-muted` already; the F-keys go one step further to `$text-disabled` when the
-    sessions pane's cursor rests on nothing, because in that state every one of them warns and
-    does nothing (DEC-027). A key that is drawn identically whether or not it will work is the
-    "dead-end key" complaint this surface keeps refusing elsewhere -- offering it and greying it
-    is the honest middle, since what is missing is a *selection* rather than the capability.
-    """
-    keys = (SESSION_KEY_HINT, None if live else "$text-disabled")
-    if not base:
-        return Content.assemble(keys)
-    return Content.assemble((base, None), (" · ", None), keys)
-
-
-class SessionKeyHintRow:
-    """The hint row's account of the F-key layer, for a pane whose own keys are not the row keys.
-
-    Mixed into the console panes that carry a cursor over something other than sessions. Today
-    that is the projects pane and the feed; the limits pane is deliberately excluded and says so
-    in its own CSS, and `DashboardScreen` inherits this by subclassing `ProjectsPaneScreen`
-    without being a console pane at all -- which is why `advertises_session_keys` asks about the
-    position rather than trusting the mixin's presence.
-
-    The sessions pane is not one of them either: its title already advertises the same letters
-    bare (`sessions_title`), and saying them twice on one small pane, once with a modifier and
-    once without, would describe two key sets where there is one.
-
-    **The live/dim state is cached rather than read at render time.** Rendering is synchronous
-    and the answer is a tmux read, so the read happens on the pane's own reload cycle and this
-    holds what it last learned. The cost of the cache is a hint that can lag the other pane's
-    cursor by one tick; the cost of not having one would be a `show-options` on every redraw of
-    every pane, and a hint row that cannot be drawn without awaiting.
-    """
-
-    #: The pane's own keys, which the F-keys are appended to. Empty on a pane that has none.
-    session_key_hint_base: str = ""
-
-    #: What the last read found. `False` until one has happened, so a pane that has never read
-    #: draws the layer dim rather than promising something it has not checked.
-    _session_keys_live: bool = False
-
-    #: This pane's own timer for the read above, or `None` off a console. Its own rather than
-    #: borrowed, because the panes that carry this hint do not all reload anything: the limits
-    #: and feed panes poll their own content, the projects pane polls nothing at all, and the
-    #: fact being watched belongs to none of them -- it is the *other* pane's cursor.
-    _hint_timer: Timer | None = None
-
-    def start_session_key_hint(self) -> None:
-        """Take the first reading and keep it current. Called from a pane's `populate`.
-
-        Ten seconds, on `_SESSION_KEY_HINT_REFRESH`. This used to borrow the sessions pane's reload
-        interval on the argument that reading faster than the watched thing can change is
-        wasted -- true while that pane was on a ten-second tick, and false since it began
-        following the store: the cursor it watches can move at any moment now, so sharing the
-        *fallback* interval would have left this hint up to a minute stale.
-        """
-        if not self.advertises_session_keys() or self._hint_timer is not None:
-            return
-        self._hint_timer = self.set_interval(_SESSION_KEY_HINT_REFRESH, self._hint_tick)
-        self.call_after_refresh(self._hint_tick)
-
-    async def _hint_tick(self) -> None:
-        if self.showing:
-            await self.refresh_session_key_hint()
-
-    def advertises_session_keys(self) -> bool:
-        """Whether *this* position should draw the layer — which is not "is this a console".
-
-        **One screen inherits this mixin without being a console pane, and it is the one that
-        must not draw the row.** `DashboardScreen` subclasses `ProjectsPaneScreen`, so it
-        inherits the hint; but it owns a sessions cursor and binds none of the row keys, so
-        `_offers_session_key` refuses it every one of them (that refusal was a Critical). The
-        mixin's own carriers are the projects pane and the feed — the limits pane was removed
-        from it when its `#hint { display: none; }` came to light.
-
-        Drawing a lit `F3 F4 F6 F8 F9` there would advertise five keys the app answers `False`
-        for, two of which end a session — the dead-end key this surface keeps refusing, in its
-        worst form: not merely inert, but inert *and* about stopping agents.
-
-        So the row mirrors the layer's own gate rather than the hosting: a position that owns a
-        sessions cursor draws no hint, because either it carries the bare letters already (and
-        its title says so) or it is refused the layer entirely.
-        """
-        return self.tui.services.console_holds_slot is not None and not getattr(
-            self, "owns_session_cursor", False
-        )
-
-    def hint_content(self, base: str) -> str | Content:
-        if not self.advertises_session_keys():
-            # Not a console pane, so there is no layer to advertise. `hosting_mode` gates the
-            # capability, so its absence is the declared absence of the whole feature (DEC-046)
-            # -- exactly the condition `check_action` uses to refuse the keys themselves.
-            return base
-        return session_key_hint_content(base, live=self._session_keys_live)
-
-    async def refresh_session_key_hint(self) -> None:
-        """Re-read whether anything is selected, and redraw the row if the answer changed.
-
-        Asks `selected_session`, not the raw option: on the positions that draw this row it is
-        the same question the F-key asks, so a pane whose slot mark says it may not read the
-        selection draws the layer dim rather than bright-and-refused. (It is *not* the same
-        question on a cursor-owning screen, which resolves from its own list -- one more reason
-        `advertises_session_keys` keeps this row off those positions.)
-
-        Guarded like every other post-await continuation here: this runs from a timer, and the
-        owner can leave between the read and the redraw.
-        """
-        if not self.advertises_session_keys():
-            return
-        try:
-            live = await self.tui.selected_session() is not None
-        except Exception:  # pragma: no cover - `selected_session` catches its own
-            return
-        if not self.showing:
-            # Stored *and* returned would leave the row claiming whatever it last drew while
-            # every later tick compares equal and never repaints -- on the feed pane nothing
-            # else redraws the hint, so it would say so until the answer changed again.
-            return
-        if live == self._session_keys_live:
-            return
-        self._session_keys_live = live
-        self.set_hint(self.hint_content(self.session_key_hint_base))
 
 
 async def perform_row_action(action: str, session_value: str, *, screen: ChoiceScreen) -> None:
@@ -824,7 +686,13 @@ class SessionsScreen(_SessionActionKeys, ChoiceScreen):
     SessionsScreen #choices {
         border: round $secondary; text-wrap: nowrap; text-overflow: ellipsis;
     }
+    SessionsScreen #actions { height: 1; padding: 0 1; }
+    SessionsScreen #actions-keys { width: 1fr; text-wrap: nowrap; text-overflow: ellipsis; }
+    SessionsScreen #actions-projects { width: auto; color: $text-dim; }
     """
+
+    #: Whether `p` returns the console's projects pane from here. Only the pane binds it.
+    offers_projects_key = False
 
     #: What this position tells the owner a row does, and where an empty list sends them.
     #: Class attributes rather than literals at the call site because the console's sessions
@@ -877,6 +745,7 @@ class SessionsScreen(_SessionActionKeys, ChoiceScreen):
 
     async def populate(self) -> None:
         self.hide_entry()
+        await self._mount_action_line()
         # `keep_cursor=False` spelled out, though it is the default. This is the screen's first
         # fill: there is no cursor to keep, so row 0 is right — and saying so is what
         # `test_sessions_redraws_keep_the_cursor.py` asks of every exit. The check is not that
@@ -1227,8 +1096,57 @@ class SessionsScreen(_SessionActionKeys, ChoiceScreen):
         A hook rather than a capability check, because "am I one of the console's panes" is a
         question about which screen this is, and the screen is the thing that knows. Checking
         the wiring instead would answer "is a console reachable", which is true in both cases.
+
+        What it does on every position is redraw the action line, because every cursor move
+        passes through here.
         """
-        return None
+        self._draw_action_line(selected=session_value is not None)
+
+    async def _mount_action_line(self) -> None:
+        """One row under the list naming each row key with its word (R11, the facelift).
+
+        Mounted rather than composed because the body is `ChoiceScreen`'s, shared with every
+        position; this is the only one that has row keys to name.
+        """
+        if self.query("#actions"):
+            return
+        line = Horizontal(
+            Static("", id="actions-keys", markup=False),
+            Static("", id="actions-projects", markup=False),
+            id="actions",
+        )
+        await self.query_one("#body").mount(line, after=self.query_one("#choices"))
+        self._draw_action_line(selected=self.highlighted_session() is not None)
+
+    def _draw_action_line(self, *, selected: bool) -> None:
+        """`a attach  i inspect  …  m remote`, or `No session is selected · j k to choose one`.
+
+        Built from `SESSION_ACTION_KEYS` at draw time, never spelled: the letter `$warning`, the
+        word `$text-muted` (DEC-010: the letter and the word, not a colour). `p projects` is
+        right-aligned and `$text-dim`, on the pane only.
+        """
+        found = self.query("#actions")
+        if not found or not self.showing:
+            return
+        keys = self.query_one("#actions-keys", Static)
+        projects = self.query_one("#actions-projects", Static)
+        if not selected:
+            sentence = "No session is selected · j k to choose one"
+            if self.offers_projects_key:
+                sentence += " · p projects"
+            keys.update(Content.styled(sentence, "$text-dim"))
+            projects.display = False
+            return
+        entries = [(key, word) for key, _action, _label, word in SESSION_ACTION_KEYS]
+        entries.append((_REMOTE_CONTROL_KEY, _REMOTE_CONTROL_WORD))
+        pieces: list[Content] = []
+        for index, (key, word) in enumerate(entries):
+            if index:
+                pieces.append(Content("  "))
+            pieces.append(Content.assemble((key, "$warning"), (f" {word}", "$text-muted")))
+        keys.update(Content.assemble(*pieces))
+        projects.update("p projects")
+        projects.display = self.offers_projects_key
 
     def _draw_listing(
         self,
@@ -1688,6 +1606,7 @@ class SessionsPaneScreen(SessionsScreen):
     #: Inherited unchanged, both sentences named the other surface's keys. Found by driving
     #: the real pane at the Stage 1 gate, which is the only place a false status shows.
     listing_hint = "enter open · d detail · p projects · F12 from inside an agent"
+    offers_projects_key = True
     empty_status = (
         "No managed sessions on this host. Launching one starts it here. "
         "p returns the projects pane (or F12 from inside an agent)."
@@ -1769,6 +1688,8 @@ class SessionsPaneScreen(SessionsScreen):
     def _publish_selection(self, session_value: str | None) -> None:
         """This pane owns the console's cursor, so this pane is the one writer of it.
 
+        The action line is redrawn first, as on every position (`SessionsScreen`).
+
         Scheduled rather than awaited. Publishing is a side effect of the cursor moving, not a
         step in answering a key, and the callers are a message handler and a redraw branch —
         neither may block on a tmux round trip while the owner is still holding an arrow down.
@@ -1812,6 +1733,7 @@ class SessionsPaneScreen(SessionsScreen):
         contract rather than to this method. Named here so Stage 3 inherits a known residual
         rather than an assumption.
         """
+        self._draw_action_line(selected=session_value is not None)
         publish = self.services.console_publish_selection
         if publish is None:
             return

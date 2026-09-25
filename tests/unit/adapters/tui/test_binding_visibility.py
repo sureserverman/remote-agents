@@ -28,10 +28,8 @@ from tui_filter import settle_filter
 
 from remote_agents.adapters.tui.app import RemoteAgentsTui
 from remote_agents.adapters.tui.context import TuiContext
-from remote_agents.adapters.tui.keys import SESSION_KEY_HINT
 from remote_agents.adapters.tui.panes import FeedPane, LimitsPane, ProjectsPane, SessionsPane
 from remote_agents.adapters.tui.screens import ALL_SCREENS
-from remote_agents.adapters.tui.screens.sessions import _SESSION_KEY_HINT_REFRESH
 from remote_agents.application.profiles import ProfileAvailability
 from remote_agents.application.project_catalog import CatalogProject
 from remote_agents.domain.conversations import (
@@ -859,17 +857,11 @@ async def test_only_the_console_panes_that_navigate_draw_the_app_chrome(
 
 
 @pytest.mark.parametrize("width", [60, 80])
-async def test_the_session_key_hint_is_drawn_whole_at_the_committed_widths(width: int) -> None:
-    """Measured, not assumed — the plan's own instruction, and the row that can silently lose it.
+async def test_the_projects_hint_is_drawn_whole_at_the_committed_widths(width: int) -> None:
+    """Measured, not assumed: `#hint` is one row with `text-overflow: ellipsis`.
 
-    `#hint` is one row with `text-overflow: ellipsis`, so a hint too long for the pane is not
-    wrapped or scrolled: the tail is replaced by `…`. The tail is exactly where the chord
-    letters are, so an over-long line would advertise `⌥ a i r s` and quietly drop `c f m d` —
-    four keys, two of which end a session.
-
-    60 and 80 because those are the widths this suite already commits to elsewhere (the attach
-    command is measured at 80, the status region at 60), and because the projects pane's own
-    keys plus the layer is the longest of the three hints by some margin.
+    The session F-keys (`F3 F4 F6 F8 F9`) that used to follow these keys left the hint rows in
+    the console facelift: the tmux bar names and dims them now (DEC-105).
     """
     console = SelectionConsole(selected=SessionId.new())
     app = ProjectsPane(
@@ -886,108 +878,19 @@ async def test_the_session_key_hint_is_drawn_whole_at_the_committed_widths(width
         drawn = "".join(hint.render_line(row).text for row in range(hint.size.height))
 
     assert "…" not in drawn, f"the hint was elided at {width} columns: {drawn!r}"
-    for name in SESSION_KEY_HINT.split():
-        assert name in drawn, f"session key {name!r} is not on screen at {width} columns: {drawn!r}"
-
-
-async def test_the_session_key_hint_dims_with_nothing_selected_and_lights_once_it_is() -> None:
-    """The two states, read off the rendered styles rather than off the text.
-
-    Both states draw the identical letters, so a test asserting on text alone cannot tell them
-    apart — which is the whole point of the distinction. `$text-disabled` against the row's own
-    `$text-muted` is what says "these keys are here and there is nothing for them to act on";
-    every one of them warns and does nothing in that state (DEC-027).
-    """
-    console = SelectionConsole(selected=None)
-    app = ProjectsPane(
-        replace(
-            _context(),
-            console_read_selection=console.read,
-            console_holds_slot=console.holds_console_slot,
-        )
-    )
-
-    def session_key_styles(screen) -> set[str]:
-        content = screen.query_one("#hint", Static).content
-        return {
-            str(span.style)
-            for span in content.spans
-            if SESSION_KEY_HINT[2:] in content.plain[span.start : span.end]
-        }
-
-    async with app.run_test(size=(120, 30)) as pilot:
-        await pilot.pause()
-        # The hint's **own** clock. This waited on `_SESSIONS_AUTO_REFRESH` while the two were
-        # one constant; when that one was lengthened to sixty as a fallback, this test's two
-        # sleeps went from twelve seconds each to seventy-two and took the whole suite from
-        # 100 s to 197 s -- the coupling made visible by a stopwatch rather than by reading.
-        await pilot.pause(_SESSION_KEY_HINT_REFRESH * 1.2)
-        dim = session_key_styles(app.screen)
-
-        console.selected = SessionId.new()
-        await pilot.pause(_SESSION_KEY_HINT_REFRESH * 1.2)
-        lit = session_key_styles(app.screen)
-
-    assert dim == {"$text-disabled"}, f"the layer was not dimmed with nothing selected: {dim}"
-    assert lit != dim, "the hint looks the same whether or not a chord would do anything"
-
-
-async def test_no_session_key_hint_appears_off_a_console() -> None:
-    """The layer is not offered there, so advertising it would be a lie in the quietest place."""
-    app = ProjectsPane(_context())
-
-    async with app.run_test(size=(120, 30)) as pilot:
-        await pilot.pause()
-        drawn = str(app.screen.query_one("#hint", Static).content)
-
-    assert "⌥" not in drawn, f"an off-console pane advertised the Alt layer: {drawn!r}"
-
-
-async def test_the_sessions_pane_does_not_repeat_the_letters_its_title_already_carries() -> None:
-    """One key set, described once. The pane's border title is `Sessions 6 · a i r s c f m`.
-
-    Adding `⌥ a i r s c f m d` beneath it would put the same letters on the same small pane
-    twice, once with a modifier and once without, and read as two key sets rather than as one
-    set reachable two ways.
-    """
-    app = SessionsPane(_context())
-
-    async with app.run_test(size=(120, 30)) as pilot:
-        await pilot.pause()
-        drawn = str(app.screen.query_one("#hint", Static).content)
-
-    assert "⌥" not in drawn, f"the sessions pane repeated its own letters as chords: {drawn!r}"
+    assert "enter choose · / filter · o order" in drawn, drawn
 
 
 @pytest.mark.parametrize(
-    ("surface", "advertises"),
-    [
-        (ProjectsPane, True),
-        (FeedPane, True),
-        (LimitsPane, False),
-        (SessionsPane, False),
-        (RemoteAgentsTui, False),
-    ],
+    "surface", [ProjectsPane, FeedPane, LimitsPane, SessionsPane, RemoteAgentsTui]
 )
-async def test_which_surfaces_draw_the_session_key_hint(
-    surface: type[RemoteAgentsTui], advertises: bool
+async def test_no_surface_draws_the_session_function_keys_on_its_hint_row(
+    surface: type[RemoteAgentsTui],
 ) -> None:
-    """Which positions *say* the layer exists, as one table — and it is not "every console pane".
+    """The bar is the one place the session F-keys are named and dimmed (DEC-105).
 
-    Three exclusions, each for its own reason, and each previously untested:
-
-    * **the sessions pane** already advertises the same letters bare in its border title, so a
-      second row would describe two key sets where there is one;
-    * **the limits pane** hides `#hint` in its own CSS — the pane's whole design is two lines
-      with no status and no border, and a third row for a keymap is the same argument again.
-      It still *offers* the chords; it does not name them (Task 4.3's docs do);
-    * **`RemoteAgentsTui`** rests on `DashboardScreen`, which inherits the hint mixin by
-      subclassing `ProjectsPaneScreen` while being refused every chord. Drawing a lit
-      `⌥ a i r s c f m d` there would advertise eight keys the app answers `False` for, two of
-      them unconfirmed stops — the dead-end key in its worst form.
-
-    Wired as a console throughout, so a `False` row means the position declined rather than
-    that there was nothing to declare.
+    Wired as a console throughout, so an absence means the row declined rather than that there
+    was no console to advertise.
     """
     console = SelectionConsole(selected=SessionId.new())
     app = surface(
@@ -1000,23 +903,10 @@ async def test_which_surfaces_draw_the_session_key_hint(
 
     async with app.run_test(size=(120, 30)) as pilot:
         await pilot.pause()
-        # Driven rather than waited for. Sleeping through the poll costs twelve seconds per row
-        # and — on the dashboard — measures the wrong thing: its own `_draw_session_rows` rewrites
-        # the hint on the next tick, so a settled reading is identical whether or not the layer
-        # was ever drawn there. The transient is the defect, so the refresh is called directly.
-        refresh = getattr(app.screen, "refresh_session_key_hint", None)
-        if refresh is not None:
-            await refresh()
-        await pilot.pause()
         drawn = str(app.screen.query_one("#hint", Static).content)
-        declared = getattr(app.screen, "advertises_session_keys", lambda: False)()
 
-    assert (SESSION_KEY_HINT in drawn) is advertises, (
-        f"{surface.__name__} hint row is {drawn!r}, which does not match advertises={advertises}"
-    )
-    assert declared is advertises, (
-        f"{surface.__name__} declares advertises_session_keys()={declared}, not {advertises}"
-    )
+    for name in ("F3", "F4", "F6", "F8", "F9"):
+        assert name not in drawn, f"{surface.__name__} hint row names {name}: {drawn!r}"
 
 
 @pytest.mark.parametrize("screen_type", ALL_SCREENS, ids=lambda c: c.__name__)

@@ -1806,32 +1806,6 @@ async def test_a_host_that_wires_no_watcher_still_lists_sessions() -> None:
         assert launcher.reads >= 1
 
 
-def test_the_session_key_hint_keeps_its_own_ten_second_clock() -> None:
-    """Two timers, and they stopped being the same number on 2026-09-12.
-
-    The hint borrowed the sessions reload's interval on the argument that reading faster than
-    the watched thing can change is wasted work. That held while the sessions pane ticked
-    every ten seconds. It follows the store now, so its cursor can move at any moment and the
-    interval it kept is a *fallback* — sharing it would leave this hint up to a minute stale.
-
-    Pinned because the coupling was invisible until it was measured: lengthening the shared
-    constant took one test from about twenty seconds to 144, and the suite from 100 s to 197 s.
-    """
-    from remote_agents.adapters.tui.screens.sessions import (
-        _SESSION_KEY_HINT_REFRESH,
-        _SESSIONS_AUTO_REFRESH,
-    )
-
-    assert _SESSION_KEY_HINT_REFRESH == 10.0
-    assert _SESSIONS_AUTO_REFRESH == 60.0
-    assert _SESSION_KEY_HINT_REFRESH != _SESSIONS_AUTO_REFRESH, (
-        "one clock for two unrelated cadences is how the first of them got six times slower"
-    )
-
-
-# --- console facelift sub-plan 2 Task 2.2: the selection flag the console bar dims by -------------
-
-
 async def test_the_pane_publishes_selected_on_a_row_off_a_vanished_one_and_unset_on_exit() -> None:
     console = SelectionConsole()
     flags: list[bool | None] = []
@@ -1887,3 +1861,97 @@ async def test_the_full_sessions_position_publishes_no_selected_flag() -> None:
         await pilot.pause()
 
     assert flags == []
+
+
+# --- the named action line under the list (sub-plan 3 Task 1.4, R11) -------------------------
+
+
+def _action_line(app) -> tuple[str, str]:
+    """The action line's left text and its right-aligned end, as drawn."""
+    from textual.widgets import Static
+
+    left = app.screen.query_one("#actions-keys", Static)
+    right = app.screen.query_one("#actions-projects", Static)
+    return str(left.render()), str(right.render()) if right.display else ""
+
+
+async def test_the_action_line_names_every_row_key_with_its_word() -> None:
+    app = SessionsPane(_context((_record(),)))
+    async with app.run_test(size=(120, 30)) as pilot:
+        await pilot.pause()
+        await pilot.pause()
+        left, right = _action_line(app)
+    assert left == "a attach  i inspect  r rename  s stop  f force  c clean up  m remote"
+    assert right == "p projects"
+
+
+async def test_the_action_line_says_no_session_is_selected_with_no_row() -> None:
+    app = SessionsPane(_context(()))
+    async with app.run_test(size=(120, 30)) as pilot:
+        await pilot.pause()
+        await pilot.pause()
+        left, right = _action_line(app)
+    assert left == "No session is selected · j k to choose one · p projects"
+    assert right == ""
+
+
+async def test_the_action_line_off_the_pane_offers_no_projects_key() -> None:
+    from remote_agents.adapters.tui.screens.sessions import SessionsScreen
+
+    app = RemoteAgentsTui(_context((_record(),)))
+    async with app.run_test(size=(120, 30)) as pilot:
+        await pilot.pause()
+        await app.push_screen(SessionsScreen())
+        await pilot.pause()
+        await pilot.pause()
+        left, right = _action_line(app)
+    assert left.startswith("a attach  i inspect")
+    assert right == ""
+
+
+async def test_the_action_line_is_built_from_the_table(monkeypatch) -> None:
+    from remote_agents.adapters.tui.screens import sessions
+
+    table = tuple(
+        (key, action, label, "look" if key == "i" else word)
+        for key, action, label, word in sessions.SESSION_ACTION_KEYS
+    )
+    monkeypatch.setattr(sessions, "SESSION_ACTION_KEYS", table)
+    app = SessionsPane(_context((_record(),)))
+    async with app.run_test(size=(120, 30)) as pilot:
+        await pilot.pause()
+        await pilot.pause()
+        left, _right = _action_line(app)
+    assert "i look" in left and "i inspect" not in left
+
+
+async def test_the_action_line_colours_the_letter_and_the_word_apart() -> None:
+    from textual.widgets import Static
+
+    app = SessionsPane(_context((_record(),)))
+    async with app.run_test(size=(120, 30)) as pilot:
+        await pilot.pause()
+        await pilot.pause()
+        content = app.screen.query_one("#actions-keys", Static).visual
+        styles = {content.plain[span.start : span.end]: str(span.style) for span in content.spans}
+    assert styles.get("a") == "$warning", styles
+    assert styles.get(" attach") == "$text-muted", styles
+
+
+async def test_no_hint_row_names_the_session_function_keys() -> None:
+    """The bar names and dims F3 F4 F6 F8 F9 now (DEC-105); a hint row repeating them is gone."""
+    from textual.widgets import Static
+
+    from remote_agents.adapters.tui.panes import FeedPane, ProjectsPane
+
+    for pane in (SessionsPane, ProjectsPane, FeedPane):
+        app = pane(_context((_record(),), console_holds_slot=lambda: _true()))
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            await pilot.pause()
+            hint = str(app.screen.query_one("#hint", Static).render())
+        assert "F3" not in hint and "F8" not in hint, f"{pane.__name__}: {hint!r}"
+
+
+async def _true() -> bool:
+    return True

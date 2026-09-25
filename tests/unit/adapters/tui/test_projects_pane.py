@@ -29,7 +29,6 @@ from tui_positions import position
 from remote_agents.adapters.tui.context import TuiContext
 from remote_agents.adapters.tui.keys import (
     FUNCTION_KEYS,
-    SESSION_KEY_HINT,
     SESSION_STOP_KEYS,
     session_key,
 )
@@ -612,8 +611,8 @@ async def test_a_host_that_wired_no_preferences_path_still_switches(tmp_path: Pa
         assert list(tmp_path.iterdir()) == []
 
 
-async def test_the_hint_row_carries_this_pane_s_own_keys_and_the_console_wide_layer() -> None:
-    """One line, two key sets, and the pane's own keys come first.
+async def test_the_hint_row_carries_this_pane_s_own_keys_first() -> None:
+    """The pane's own keys lead the row. The session F-keys that followed them are the bar's now.
 
     The order is the argument: `enter choose · / filter · o order` are what this pane does to
     the thing the owner is looking at, and the F-keys act on a session in another pane. A
@@ -632,16 +631,12 @@ async def test_the_hint_row_carries_this_pane_s_own_keys_and_the_console_wide_la
         drawn = str(app.screen.query_one("#hint", Static).content)
 
     assert drawn.startswith(PROJECTS_HINT), f"the pane's own keys are not first: {drawn!r}"
-    assert SESSION_KEY_HINT in drawn, f"the F-keys are missing from the hint row: {drawn!r}"
+    assert "F3" not in drawn, f"the session F-keys are the bar's since DEC-105: {drawn!r}"
 
 
-async def test_the_hint_row_keeps_the_layer_across_a_redraw() -> None:
-    """`_describe_projects` runs on every render, so the F-keys have to survive one.
-
-    This is the failure the `hint_content` seam exists for: appending the keys once, at mount,
-    would lose them the first time the owner typed into the filter — the pane redraws, the status
-    is rewritten from the catalogue, and the hint goes back to the pane's own keys alone.
-    """
+async def test_the_hint_row_keeps_its_keys_across_a_redraw() -> None:
+    """`_describe_projects` runs on every render, so the hint has to survive one: typing into
+    the filter redraws the pane and rewrites the status from the catalogue."""
     console = SelectionConsole(selected=SessionId.new())
     app = ProjectsPane(
         _context(console_read_selection=console.read, console_holds_slot=console.holds_console_slot)
@@ -654,7 +649,7 @@ async def test_the_hint_row_keeps_the_layer_across_a_redraw() -> None:
         await settle_filter(pilot)
         drawn = str(app.screen.query_one("#hint", Static).content)
 
-    assert SESSION_KEY_HINT in drawn, f"a redraw dropped the F-keys from the hint row: {drawn!r}"
+    assert drawn.startswith(PROJECTS_HINT), f"a redraw lost the pane's own keys: {drawn!r}"
 
 
 async def test_a_session_key_excursion_returns_to_the_filter_the_owner_typed() -> None:
