@@ -833,6 +833,62 @@ def _bar_entry(key: StatusBarKey, palette: StatusBarPalette, *, full: bool) -> s
     return f"#{{?{condition},{dim},{lit}}}"
 
 
+def _key_text(key: StatusBarKey, *, full: bool) -> str:
+    return f"{key.number} {key.label}" if full else f"{key.number}{key.short}"
+
+
+def _fits(width: str, beside: int) -> str:
+    """A tmux condition: *width* cells (a format) fit in what is left of the row."""
+    return f"#{{e|<=|:#{{e|+|:{width},{beside}}},#{{client_width}}}}"
+
+
+def _first_that_fits(candidates: Sequence[tuple[str, str]], beside: int) -> str:
+    """The first `(text, width)` whose width fits beside the keys, else nothing at all."""
+    chosen = ""
+    for text, width in reversed(candidates):
+        chosen = f"#{{?{_fits(width, beside)},{text},{chosen}}}"
+    return chosen
+
+
+def _right_end(beside: int, *, full: bool) -> str:
+    """The bar's right end: the longest whole version that fits, never a clipped one.
+
+    Measured by the Task 2.4 live drill: tmux gives the keys priority and cuts an overlong
+    right end from its *left*, so `Claude's default · codex unreachable` beside the 141-cell
+    full keys drew `12 projectsol  claude …`. So each right end is offered in descending
+    length -- the words, then the compact marks, then nothing -- and the first whose width
+    (`#{w:…}` counts cells and skips styles) fits is drawn whole.
+    """
+    session = "#{session_name}"
+    session_width = "#{w:session_name}"
+    words = f"#{{{REMOTE_CONTROL_OPTION}}}"
+    words_width = f"#{{w:{REMOTE_CONTROL_OPTION}}}"
+    marks = f"#{{{REMOTE_CONTROL_COMPACT_OPTION}}}"
+    marks_width = f"#{{w:{REMOTE_CONTROL_COMPACT_OPTION}}}"
+    hint = str(len(_TYPING_HINT))
+    if full:
+        typing = [
+            (f"{_TYPING_HINT}  {session}", f"#{{e|+|:{session_width},{len(_TYPING_HINT) + 2}}}"),
+            (_TYPING_HINT, hint),
+        ]
+        reading = [
+            (f"{words}  {session}", f"#{{e|+|:{words_width},#{{e|+|:{session_width},2}}}}"),
+            (f"{marks}  {session}", f"#{{e|+|:{marks_width},#{{e|+|:{session_width},2}}}}"),
+            (marks, marks_width),
+        ]
+        unread = [(session, session_width)]
+    else:
+        typing = [(_TYPING_HINT, hint)]
+        reading = [(marks, marks_width)]
+        unread = []
+    # Whether a reading was published at all, asked of the option this variant draws first.
+    guard = REMOTE_CONTROL_OPTION if full else REMOTE_CONTROL_COMPACT_OPTION
+    published = f"#{{?#{{{guard}}},{_first_that_fits(reading, beside)}," + (
+        f"{_first_that_fits(unread, beside)}}}"
+    )
+    return f"#{{?#{{==:#{{{TYPING_OPTION}}},1}},{_first_that_fits(typing, beside)},{published}}}"
+
+
 def status_format_args(
     keys: Sequence[StatusBarKey], palette: StatusBarPalette
 ) -> tuple[tuple[str, ...], ...]:
@@ -864,15 +920,10 @@ def status_format_args(
         drawn = [key for key in keys if key.bound or full]
         gap = "  " if full else " "
         left = gap.join(_bar_entry(key, palette, full=full) for key in drawn)
-        published = REMOTE_CONTROL_OPTION if full else REMOTE_CONTROL_COMPACT_OPTION
-        remote = f"#{{?#{{{published}}},#{{{published}}}{gap if full else ''},}}"
-        tail = "#{session_name}" if full else ""
-        right = (
-            f"#[fg={palette.muted}]"
-            f"#{{?#{{==:#{{{TYPING_OPTION}}},1}},{_TYPING_HINT}{gap if full else ''},{remote}}}"
-            f"{tail}"
-        )
-        by_width.append(f"{left}#[align=right]{right}")
+        # The keys' own width, in cells: what the right end has to fit beside.
+        taken = sum(len(_key_text(key, full=full)) for key in drawn) + len(gap) * (len(drawn) - 1)
+        right = _right_end(taken + len(gap), full=full)
+        by_width.append(f"{left}#[align=right]#[fg={palette.muted}]{right}")
     full_bar, compact_bar = by_width
     status_format = f"#{{?#{{e|>|:#{{client_width}},{_FULL_BAR_ABOVE}}},{full_bar},{compact_bar}}}"
     target = console_target()

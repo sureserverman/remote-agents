@@ -12,6 +12,7 @@ real client has a `client_width`, and only its terminal shows the status row.
 from __future__ import annotations
 
 import re
+import time
 
 import pytest
 from bar_console import BarConsole
@@ -244,3 +245,47 @@ def test_status_nothing_published_draws_no_remote_control_claim(console) -> None
 
     assert "Remote Control" not in row
     assert row.rstrip().endswith(CONSOLE_SESSION_NAME)
+
+
+# --- the right end always fits (found by the Task 2.4 live drill) --------------------------------
+
+_RC_LONG_FULL = "Remote Control  claude Claude's default · codex unreachable"
+
+
+def _whole_right_ends(full: bool, typing: bool, words: str) -> set[str]:
+    """Every right end the bar may draw: whole versions only, longest first, or nothing."""
+    session = CONSOLE_SESSION_NAME
+    if typing:
+        return {f"esc cancels  {session}", "esc cancels", ""} if full else {"esc cancels", ""}
+    if full:
+        return {f"{words}  {session}", f"RC ??  {session}", "RC ??", session, ""}
+    return {"RC ??", ""}
+
+
+@pytest.mark.parametrize("width", [84, 100, 130, 160, 161, 165, 170, 185, 200, 215, 240])
+@pytest.mark.parametrize("words", [_RC_ON_FULL, _RC_LONG_FULL])
+@pytest.mark.parametrize("typing", [False, True])
+def test_status_right_end_is_whole_or_absent_at_every_width(console, width, words, typing) -> None:
+    """At any width the right end is one whole candidate, never a fragment clipped at its left.
+
+    The live drill found `12 projectsol  claude …`: at 200 columns the full keys take 145 cells,
+    and `Claude's default · codex unreachable` does not fit beside them, so tmux cut the right
+    end from the left. The class is every right end against every width, so it is swept here.
+    """
+    full = width > 160
+    bar = console(width)
+    bar.start()
+    bar.set(REMOTE_CONTROL_OPTION, words)
+    bar.set(REMOTE_CONTROL_COMPACT_OPTION, "RC ??")
+    bar.set(TYPING_OPTION, "1" if typing else "0")
+
+    keys = _FULL_KEYS if full else _COMPACT_KEYS
+    bar.settled_row(lambda row: row.startswith(keys))
+    time.sleep(0.05)  # the three option writes each redraw; read after the last
+    row = bar.status_row()
+
+    assert row.startswith(keys), row
+    right = row[len(keys) :].strip()
+    assert right in _whole_right_ends(full, typing, words), (width, row)
+    if full and not typing and width >= len(keys) + 2 + len(words) + 2 + len(CONSOLE_SESSION_NAME):
+        assert right == f"{words}  {CONSOLE_SESSION_NAME}", "the words fit and were not drawn"
