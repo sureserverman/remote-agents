@@ -73,3 +73,25 @@ async def test_a_process_outside_the_console_panes_leaves_the_bar_alone() -> Non
         await app.workers.wait_for_complete()
 
     assert issued == []
+
+
+def test_a_translucent_panel_is_flattened_onto_the_window_not_swapped_for_night() -> None:
+    from textual.theme import Theme
+
+    theme = Theme(
+        name="translucent-panel",
+        primary="#ffffff",
+        background="#000000",
+        foreground="#eeeeee",
+        warning="#ffcc00",
+        success="#00ff00",
+        error="#ff0000",
+        # Textual refuses a strength on `panel=` itself; a variable is how one arrives.
+        variables={"panel": "#ffffff 50%"},
+    )
+
+    palette = status_bar_palette(theme)
+
+    assert palette.bar in {"#7F7F7F", "#808080"}
+    assert palette.text == "#EEEEEE"
+    assert palette != status_bar_palette(THEMES[0])

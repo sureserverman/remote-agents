@@ -134,8 +134,9 @@ def _status_bar_palette(theme: Theme) -> StatusBarPalette:
             parsed = Color.parse(bar).blend(parsed, float(alpha.rstrip("%")) / 100)
         return parsed.hex[:7]
 
-    # The bar resolves first: a grey with a strength is flattened onto it.
-    bar = ""
+    # The bar resolves first: a grey with a strength is flattened onto it. The bar's own
+    # strength, if its panel carries one, is flattened onto the window beneath it.
+    bar = (theme.background or derived["background"]).partition(" ")[0]
     bar = resolve(theme.panel, "panel")
     text = resolve(theme.foreground, "foreground")
     return StatusBarPalette(
