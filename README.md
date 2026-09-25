@@ -75,7 +75,7 @@ find `uv`, verify it, and sequence what follows, not to install anything differe
 
 ```bash
 uv tool install --managed-python \
-  "remote-agents @ git+https://github.com/sureserverman/remote-agents@v0.51.0"
+  "remote-agents @ git+https://github.com/sureserverman/remote-agents@v0.52.0"
 remote-agents onboard --install-daemon
 ```
 
@@ -605,9 +605,12 @@ right end reads `esc cancels`. Its colours follow the theme you choose. With tmu
 A console built before 0.51.0 gets it the next time `remote-agents` is run from a plain shell
 (`remote-agents console close`, then `remote-agents`).
 
-**The footer does not draw all eleven**, and that is a width decision rather than a statement
-about which keys exist — every one of them is bound on every position that answers for it. The
-footer is a single clipping line: measured on the inspect screen at 80 columns, five app
+**Outside the console, in `remote-agents tui`, Textual's footer draws the row instead**, since
+there is no tmux status line there; inside the console no screen draws a Textual header or
+footer at all, and each pane carries its title on its own round border. **The footer does not
+draw all eleven**, and that is a width decision rather than a statement about which keys exist —
+every one of them is bound on every position that answers for it. The footer is a single
+clipping line: measured on the inspect screen at 80 columns, five app
 entries fit and six do not. So it draws `F1`, `F7` and `F10` beside Escape and the palette, and
 **`F1` opens a panel listing every key**, which is what that key is borrowed from htop for.
 
@@ -615,8 +618,8 @@ entries fit and six do not. So it draws `F1`, `F7` and `F10` beside Escape and t
 by the console is not a standalone app that owns its terminal, so "leave the program" cannot mean
 "leave this pane": it means leave remote-agents. One press closes the **whole console** — the
 `ra-console` session is removed and you get back the shell you entered from — and every managed
-agent session keeps running (DEC-096). The footer says so: under console hosting that entry reads
-`close console` rather than `quit`. Outside the console — `remote-agents tui` in an ordinary
+agent session keeps running (DEC-096). The bar says so: it reads `10 close console` rather than
+`quit`. Outside the console — `remote-agents tui` in an ordinary
 terminal — the key exits the app and the footer draws `quit`, because there leaving the program
 is leaving this process. `Ctrl+Q`, and `q` at the resting position, mean whatever `F10` means.
 
@@ -633,9 +636,8 @@ builds the panes back on the version that is installed, but an owner who meant "
 pane" has no key for that.
 
 The
-five session-shaped keys are left out of the footer because the console's projects and feed
-panes name them on their own hint row, and `F2`, `F5` and `F12` because `,`, `Ctrl+R` and the
-palette already say the same acts.
+five session-shaped keys are left out of the bare footer, and `F2`, `F5` and `F12` because `,`,
+`Ctrl+R` and the palette already say the same acts.
 
 **The five session keys act from any pane on the session the sessions pane has highlighted** —
 the row it marks `▸` in yellow, which is in a pane you are not focused on. `F3` Inspect output,
@@ -651,16 +653,11 @@ reading a session: Copy attach, Clean up and Claude Remote Control stay on their
 owner reaches for from another pane.
 
 Function keys rather than bare letters, because the projects pane's filter holds the keyboard by
-construction. Bare letters still type into the filter; the F-keys act. The projects pane and
-the feed pane name them on their muted hint row as `F3 F4 F6 F8 F9` — keys alone, no words,
-because that line is shared with the pane's own keys and is elided rather than wrapped at the
-narrow end of the supported widths — drawn dim whenever nothing is selected. Two surfaces carry
-them without naming them, and both omissions are deliberate: the sessions pane, because its own
-border title already lists the same acts as bare letters and saying them twice on one small pane
-reads as two key sets, and the limits pane, because it draws no hint row at all — it hides its
-status and its border too, on the argument that two rows to restate a heading is too much on a
-pane whose content is two lines. The session detail and the rename screen carry them silently for
-the same reason as the sessions pane: the detail names each action in full already.
+construction. Bare letters still type into the filter; the F-keys act. The bar names them and
+dims them whenever nothing is selected. The sessions pane names its own row letters, each with
+its word, on the action line under its list (`a attach i inspect r rename s stop f force
+c clean up m remote`, with `p projects` at its right end), or says `No session is selected ·
+j k to choose one` when the cursor rests on nothing.
 
 **From inside a displayed agent there is nothing extra to press.** An agent in the left pane
 receives every key you type, but not these: the row is bound at the tmux *root*, so tmux takes
@@ -783,11 +780,13 @@ would be the worse answer. It does take unsaved work with it.
 
 The surface has three places to say something and each one says a different kind of thing. The
 header carries a breadcrumb — `Projects › infra/existing` — which is where you are and what you
-chose to get there. Below it is a single line of status: what to do here,
+chose to get there (in `remote-agents tui`; inside the console there is no header, and each
+pane's title is on its border). Below it is a single line of status: what to do here,
 or the result you still need, such as the attach command for a session that did not come up.
-It is exactly one *sentence*, and its region is a fixed height — two rows, or three on the
-sessions positions, which carry a whole keymap there — so the list beneath it never moves as a
-message changes. Anything
+It is exactly one *sentence*, at most two rows high, and it takes no rows at all when it has
+nothing to say, so the list beneath it moves only when a message appears or goes. Inside the
+console the panes say nothing there at rest: the pane's title already carries the count and the
+order. Anything
 that did not happen — a stop that raised, an agent that cannot be launched, a project the
 catalogue no longer has — is a notification in the corner instead, because it is about the
 action you just took rather than about the position you are standing on, which outlives it.
