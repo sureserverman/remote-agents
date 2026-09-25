@@ -1748,3 +1748,30 @@ async def test_an_arrival_whose_draw_fails_leaves_the_open_row_open(surface, mon
 
         assert _feed_rows(app) == before, "the drawn rows must be left alone"
         assert app.screen.opened_notification == key, "the state no longer matches the pane"
+
+
+# --- the feed's columns, as the facelift draws them (sub-plan 3 Task 1.5) --------------------
+
+
+async def test_a_long_feed_message_is_truncated_with_an_ellipsis_and_never_wraps() -> None:
+    long = "Shall I rewrite every migration in the repository and force-push the result? " * 4
+
+    async def feed():
+        return (_activity(ActivityKind.NEEDS_ANSWER, minutes_ago=3, detail=long),)
+
+    app = FeedPane(_context(feed))
+    async with app.run_test(size=(100, 20)) as pilot:
+        await pilot.pause()
+        pane = _feed_pane(app)
+        row = pane.get_option_at_index(0).prompt
+        room = pane.scrollable_content_region.width
+    assert row.cell_length <= room, (row.cell_length, room)
+    assert "…" in row.plain, row.plain
+    assert row.plain.rstrip().endswith("3m"), row.plain
+
+
+def test_needs_answer_fits_the_twelve_cell_kind_column() -> None:
+    from remote_agents.adapters.tui.screens.feed import FEED_AGE_WIDTH, FEED_KIND_WIDTH, KIND_WORDS
+
+    assert FEED_KIND_WIDTH == 12 == len(KIND_WORDS[ActivityKind.NEEDS_ANSWER])
+    assert FEED_AGE_WIDTH == 3

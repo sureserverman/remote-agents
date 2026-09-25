@@ -245,6 +245,12 @@ class RemoteAgentsTui(App[AttachRequest | None]):
         border: none; border-bottom: solid $secondary;
     }
     ChoiceScreen #filter:focus { border-bottom: solid $primary; }
+    /* The console's projects pane draws its filter as the design's first row: one line, no
+       rule (the facelift). Here rather than on the screen, because app CSS outranks a
+       screen's DEFAULT_CSS whatever the selector. */
+    ChoiceScreen.-projects-pane #filter, ChoiceScreen.-projects-pane #filter:focus {
+        height: 1; border: none;
+    }
     /* Pane borders and their titles: every list this surface frames is framed the same way,
        the title in `$text`, plain, and what follows it muted (markup in the title itself). The
        console facelift's rule; the titles were `$primary` bold before it. */

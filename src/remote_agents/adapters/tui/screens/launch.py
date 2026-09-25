@@ -76,7 +76,7 @@ _ORDER_TITLE = PROJECT_ORDER_LABELS
 PROJECTS_HINT = "enter choose · / filter · o order"
 """The keymap under the status on the projects positions."""
 
-PROJECTS_PLACEHOLDER = "/ filter projects"
+PROJECTS_PLACEHOLDER = "filter projects"
 
 #: How long the filter waits for the typing to stop before it re-searches the catalogue.
 #: Every keystroke used to run `search_catalogue` over the whole catalogue and rebuild every
@@ -215,7 +215,12 @@ class ProjectsScreen(ChoiceScreen):
             tuple(
                 (
                     project.opaque_id,
-                    project_row_content(project.name, last_used.get(project.opaque_id), width),
+                    project_row_content(
+                        project.name,
+                        project.group == "Registered",
+                        last_used.get(project.opaque_id),
+                        width,
+                    ),
                 )
                 for project in projects
             ),

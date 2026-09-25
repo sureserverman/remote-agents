@@ -763,3 +763,60 @@ async def test_every_navigating_session_key_marks_the_position_it_leaves(key: st
         f"{key} took the owner off the projects pane without marking it, so the return "
         "will discard the filter they typed"
     )
+
+
+# --- the registered column, the footer line and the filter row (sub-plan 3 Task 1.5) --------
+
+_LOOSE = CatalogProject("opaque-loose", "loose-folder", "dev-area", "Unregistered")
+
+
+async def test_the_registered_column_is_twelve_cells_between_name_and_age() -> None:
+    app = ProjectsPane(
+        _context(catalogue=(_INFRA, _LOOSE), refresh_catalogue=lambda: (_INFRA, _LOOSE))
+    )
+    async with app.run_test(size=(120, 30)) as pilot:
+        await pilot.pause()
+        choices = app.screen.query_one("#choices", OptionList)
+        rows = {
+            str(choices.get_option_at_index(i).id): choices.get_option_at_index(i).prompt
+            for i in range(choices.option_count)
+        }
+    registered, loose = rows["opaque-infra"], rows["opaque-loose"]
+    assert "[Registered]" not in registered.plain
+    name_end = registered.plain.index("remote-agents") + len("remote-agents")
+    column = registered.plain[registered.plain.index("registered") :][:12]
+    assert column == "registered  ", repr(registered.plain)
+    assert registered.plain.index("registered") > name_end
+    assert loose.plain[loose.plain.index("unregistered") :][:12] == "unregistered"
+    styles = {registered.plain[s.start : s.end].strip(): str(s.style) for s in registered.spans}
+    assert styles.get("registered") == "$text-muted", styles
+    loose_styles = {loose.plain[s.start : s.end].strip(): str(s.style) for s in loose.spans}
+    assert loose_styles.get("unregistered") == "$text-dim", loose_styles
+
+
+async def test_the_projects_pane_draws_its_footer_line_under_the_list() -> None:
+    app = ProjectsPane(_context())
+    async with app.run_test(size=(160, 30)) as pilot:
+        await pilot.pause()
+        line = app.screen.query_one("#projects-footer", Static)
+        drawn = str(line.render())
+        below = line.region.y > app.screen.query_one("#choices", OptionList).region.y
+    assert drawn == (
+        "enter choose · / filter · o order · F7 add · "
+        "a session opens in this slot, F12 brings Projects back"
+    )
+    assert below, "the footer line is not under the list"
+
+
+async def test_the_projects_filter_row_has_no_border_and_the_design_placeholder_footer_line() -> (
+    None
+):
+    app = ProjectsPane(_context())
+    async with app.run_test(size=(120, 30)) as pilot:
+        await pilot.pause()
+        entry = app.screen.query_one("#filter", Input)
+        placeholder = entry.placeholder
+        bottom, _colour = entry.styles.border_bottom
+        height = entry.region.height
+    assert placeholder == "filter projects"
+    assert bottom in ("", "none") and height == 1, (bottom, height)

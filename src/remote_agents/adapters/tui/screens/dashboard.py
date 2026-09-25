@@ -720,6 +720,22 @@ class ProjectsPaneScreen(ProjectsScreen):
     copies would only have to disagree once.
     """
 
+    #: The design's line under the list (the console facelift): the pane's keys, then what
+    #: happens to this slot when a session opens. `$text-dim`, one row, never wrapped.
+    FOOTER_LINE = (
+        "enter choose · / filter · o order · F7 add · "
+        "a session opens in this slot, F12 brings Projects back"
+    )
+    #: Whether this position draws that line and the flat filter row. The dashboard, which
+    #: subclasses this pane, keeps its own arrangement.
+    draws_pane_footer = True
+
+    DEFAULT_CSS = """
+    ProjectsPaneScreen #projects-footer {
+        height: 1; padding: 0 1; color: $text-dim; text-wrap: nowrap; text-overflow: ellipsis;
+    }
+    """
+
     def __init__(self) -> None:
         super().__init__()
         #: What the console's start-only repair could not put right, held so it can be
@@ -727,6 +743,12 @@ class ProjectsPaneScreen(ProjectsScreen):
         self._blocked: tuple[str, ...] = ()
 
     async def populate(self) -> None:
+        if self.draws_pane_footer and not self.query("#projects-footer"):
+            self.add_class("-projects-pane")
+            await self.query_one("#body").mount(
+                Static(self.FOOTER_LINE, id="projects-footer", markup=False),
+                after=self.query_one("#choices"),
+            )
         await super().populate()
         self._report_console_recovery()
 
@@ -978,6 +1000,7 @@ class DashboardScreen(LimitsRegion, FeedRegion, ProjectsPaneScreen):
     it cost no provider read at all."""
 
     position = "DASHBOARD"
+    draws_pane_footer = False
 
     BINDINGS = [
         # Hidden from the footer: the bar is shared with every inherited binding and the

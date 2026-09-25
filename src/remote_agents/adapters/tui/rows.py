@@ -289,13 +289,25 @@ def session_counts_content(records: Sequence[SessionRecord]) -> Content:
 # --- projects -----------------------------------------------------------------------------
 
 
-def project_row_content(name: str, last_used: datetime | None, width: int | None) -> Content:
-    """`name` taking the slack and its last-launch age, muted, against the right edge; an em
-    dash, dim, for a project never launched."""
+#: The registered column's width: `unregistered`, the longer of its two words.
+PROJECT_REGISTRATION_WIDTH = 12
+
+
+def project_row_content(
+    name: str, registered: bool, last_used: datetime | None, width: int | None
+) -> Content:
+    """`name` taking the slack, `registered`/`unregistered` in a 12-cell column, then its
+    last-launch age, muted, against the right edge; an em dash, dim, for a project never
+    launched. The catalogue entry already carries the registration, as its group."""
     from remote_agents.application.relative_time import age
 
+    registration = text("registered", MUTED) if registered else text("unregistered", DIM)
     used = text(age(last_used), MUTED) if last_used is not None else text(NO_GAUGE, DIM)
-    return columns([(Content(name), None), (used, None)], width, flexible=0)
+    return columns(
+        [(Content(name), None), (registration, PROJECT_REGISTRATION_WIDTH), (used, None)],
+        width,
+        flexible=0,
+    )
 
 
 # --- plan limits --------------------------------------------------------------------------
