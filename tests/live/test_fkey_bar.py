@@ -164,6 +164,11 @@ class _Drill:
 
     def start(self, width: int, height: int) -> None:
         (self.root / "sock").mkdir()
+        # Isolation proven *before* any surface runs, not only by the teardown comparison: the
+        # private server is started first and must answer from inside this drill's directory.
+        self.inner("new-session", "-d", "-s", "drill-guard", "sleep", "600")
+        socket_path = self.inner("display-message", "-p", "-t", "drill-guard:", "#{socket_path}")
+        assert Path(socket_path.strip()).is_relative_to(self.root), socket_path
         entry = (
             f"env -u TMUX HOME={self.home} TMUX_TMPDIR={self.root / 'sock'} "
             f"{_PYTHON} -m remote_agents"

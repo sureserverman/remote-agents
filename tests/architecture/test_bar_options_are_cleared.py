@@ -30,10 +30,18 @@ PUBLISHERS = frozenset(
 _TUI = Path("src/remote_agents/adapters/tui")
 
 
-def _functions(tree: ast.AST) -> list[ast.FunctionDef | ast.AsyncFunctionDef]:
-    return [
-        node for node in ast.walk(tree) if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef)
+def _scopes(tree: ast.Module) -> list[list[ast.FunctionDef | ast.AsyncFunctionDef]]:
+    """The functions `self.` can reach one another within: each class's methods, and the
+    module's own functions. Scoped so that a same-named helper in another class of the same
+    module can never stand in for this one's unset (a gate review's finding)."""
+    kinds = ast.FunctionDef | ast.AsyncFunctionDef
+    scopes = [[node for node in tree.body if isinstance(node, kinds)]]
+    scopes += [
+        [node for node in cls.body if isinstance(node, kinds)]
+        for cls in ast.walk(tree)
+        if isinstance(cls, ast.ClassDef)
     ]
+    return scopes
 
 
 def _reads_publisher(node: ast.AST) -> set[str]:
@@ -55,14 +63,8 @@ def _self_calls(node: ast.AST) -> set[str]:
     }
 
 
-def uncleared_publishers(source: str) -> set[str]:
-    """The publisher capabilities this module reads and never reaches with a `None`."""
-    tree = ast.parse(source)
-    read = _reads_publisher(tree)
-    if not read:
-        return set()
-    functions = _functions(tree)
-    # Which capabilities each function reaches, closed over `self.` calls within the module.
+def _cleared_within(functions: list[ast.FunctionDef | ast.AsyncFunctionDef]) -> set[str]:
+    """The capabilities one scope reaches with a literal `None`, closed over its `self.` calls."""
     reaches = {function.name: _reads_publisher(function) for function in functions}
     calls = {function.name: _self_calls(function) for function in functions}
     changed = True
@@ -93,8 +95,22 @@ def uncleared_publishers(source: str) -> set[str]:
             if isinstance(callee, ast.Name) and callee.id in bound:
                 cleared |= bound[callee.id]
             elif isinstance(callee, ast.Attribute):
-                cleared |= reaches.get(callee.attr, set())
-                cleared |= _reads_publisher(callee) & PUBLISHERS
+                is_self = isinstance(callee.value, ast.Name) and callee.value.id == "self"
+                if is_self:
+                    cleared |= reaches.get(callee.attr, set())
+                cleared |= _reads_publisher(callee)
+    return cleared
+
+
+def uncleared_publishers(source: str) -> set[str]:
+    """The publisher capabilities this module reads and never reaches with a `None`."""
+    tree = ast.parse(source)
+    read = _reads_publisher(tree)
+    if not read:
+        return set()
+    cleared: set[str] = set()
+    for functions in _scopes(tree):
+        cleared |= _cleared_within(functions)
     return read - cleared
 
 
@@ -135,3 +151,24 @@ class Pane:
         await self._write(None)
 """
     assert uncleared_publishers(source) == set()
+
+
+def test_bar_options_are_cleared_sweep_does_not_borrow_another_class_s_unset() -> None:
+    """A same-named helper in another class of the module is not this publisher's unset."""
+    source = """
+class Pane:
+    async def _write(self, value):
+        await self.services.console_publish_typing(value)
+
+    async def show(self):
+        await self._write(True)
+
+
+class Other:
+    async def _write(self, value):
+        return value
+
+    async def leave(self):
+        await self._write(None)
+"""
+    assert uncleared_publishers(source) == {"console_publish_typing"}
