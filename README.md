@@ -757,7 +757,8 @@ so a stray enter mutates nothing and reaching an agent is one arrow key — the 
 the same cost, as choosing a conversation to resume. Escape is
 Back, F5 re-reads whatever the screen
 you are on shows without leaving it, F7 adds a project, F10 quits — inside a console that means
-closing the console rather than this one pane, which is what its footer entry says — and F1 opens
+closing the console rather than this one pane, which is what the bar (or, in `remote-agents tui`,
+the footer) says — and F1 opens
 a panel naming every key. Sessions and Resume have no key of their own: they are entries in the command
 palette, which `:` and `Ctrl+P` both open. The whole row is *The function-key row* above, with
 what each of 0.41.0's keys became beneath it.
