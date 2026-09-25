@@ -246,8 +246,9 @@ class RemoteAgentsTui(App[AttachRequest | None]):
     }
     ChoiceScreen #filter:focus { border-bottom: solid $primary; }
     /* Pane borders and their titles: every list this surface frames is framed the same way,
-       the title in `$primary` bold and the hints after it muted (markup in the title itself). */
-    ChoiceScreen OptionList { border-title-color: $primary; border-title-style: bold; }
+       the title in `$text`, plain, and what follows it muted (markup in the title itself). The
+       console facelift's rule; the titles were `$primary` bold before it. */
+    ChoiceScreen OptionList { border-title-color: $text; border-title-style: none; }
 
     /* Which of the two bodies a screen shows is a *state*, declared once here, rather than
        four imperative `display =` assignments spread across `on_mount`, `show_output` and

@@ -121,7 +121,7 @@ _EMPTY_FEED_ROW = "notification:none"
 #: new handler, and specifically no app-level one (`screens/base.py:952` says why).
 NOTIFICATION_PREFIX = "notification:"
 
-FEED_TITLE = "Feed[$text-muted] · enter expands[/]"
+FEED_TITLE = "Feed[$text-muted] · newest first · enter expands[/]"
 """The pane's border title: the name, and the one key that means something here, muted.
 
 Markup, deliberately, on the one string in this module that carries no agent's words -- the
@@ -648,7 +648,7 @@ class FeedScreen(SessionKeyHintRow, FeedRegion, ChoiceScreen):
        explicitly. `text-wrap`/`text-overflow` are load-bearing: they are the whole of
        one-observation-one-row. */
     FeedScreen #feed-pane {
-        height: 1fr; text-wrap: nowrap; text-overflow: ellipsis; scrollbar-gutter: stable;
+        height: 1fr; border: round $secondary; text-wrap: nowrap; text-overflow: ellipsis; scrollbar-gutter: stable;
     }
     """
 

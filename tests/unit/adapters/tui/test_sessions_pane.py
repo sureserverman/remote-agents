@@ -849,18 +849,14 @@ async def test_the_action_keys_are_offered_when_a_row_is_highlighted() -> None:
 
 
 @pytest.mark.parametrize("width", (100, 80, 60))
-async def test_the_list_title_names_the_keys_and_is_not_truncated(width: int) -> None:
-    """The keys are `show=False`, so the list's own frame is where they are discoverable.
+async def test_the_list_title_names_the_counts_and_is_not_truncated(width: int) -> None:
+    """`Sessions 1 · ● 1 running` on the list's frame, whole, down to 60 columns.
 
-    Not a preference: the footer at the project's own 100-column baseline already runs to
-    about seventy columns, and six more entries would clip bindings the owner did not add --
-    the defect `InspectScreen`'s own comment records having caused once.
-
-    They lived in the status line until the redesign moved the counts there and the letters to
-    the border title of the list they act on (`Sessions 6 · a i r s c f m`). Asserted on the
-    rendered top border rather than on the title string, for the reason the old version of this
-    test gave: the source string is untruncated at any width whatsoever, and 60 columns is a
-    live budget in `app.py`'s own margin comments.
+    The row letters (`a i r s c f m`) rode on this title from the redesign until the console
+    facelift (R11, signed off 2026-09-25), which names each letter with its word on an action
+    line under the list instead. Asserted on the rendered top border rather than on the title
+    string, because the source string is untruncated at any width whatsoever, and 60 columns
+    is a live budget in `app.py`'s own margin comments.
     """
     app = SessionsPane(_context((_record(),)))
     async with app.run_test(size=(width, 24)) as pilot:
@@ -869,11 +865,9 @@ async def test_the_list_title_names_the_keys_and_is_not_truncated(width: int) ->
         # The top border row of the list, which is where the title is drawn.
         drawn = choices.render_lines(Region(0, 0, choices.size.width, 1))[0].text
 
-    for key, _action, _label, _word in _module_action_keys():
-        assert f" {key} " in drawn or drawn.endswith(f" {key}"), (
-            f"{key!r} missing from the title at {width} columns: {drawn!r}"
-        )
-    assert " m" in drawn, f"the Remote Control key is missing at {width}: {drawn!r}"
+    assert "Sessions 1 · ● 1 running" in drawn, f"the title at {width} columns: {drawn!r}"
+    letters = " ".join(key for key, _action, _label, _word in _module_action_keys())
+    assert letters not in drawn, f"the row letters are still on the title: {drawn!r}"
     assert "…" not in drawn, f"the title was elided at {width} columns: {drawn!r}"
 
 

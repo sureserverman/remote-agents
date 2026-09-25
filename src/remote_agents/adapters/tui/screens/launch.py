@@ -206,7 +206,7 @@ class ProjectsScreen(ChoiceScreen):
         entry.placeholder = PROJECTS_PLACEHOLDER
         choices = self.query_one("#choices", OptionList)
         choices.border_title = (
-            f"Projects[$text-muted] · {_ORDER_TITLE[self.tui.project_order]} · o toggles order[/]"
+            f"Projects[$text-muted] {len(projects)} · {_ORDER_TITLE[self.tui.project_order]}[/]"
         )
         width = choices.scrollable_content_region.width or None
         last_used = self.tui.project_last_used

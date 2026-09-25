@@ -126,7 +126,7 @@ _LIMITS_ROW_PREFIX = "limits:"
 _LIMITS_STAMP_PREFIX = "limits-stamp:"
 """The blank line and the source stamp under the rows (R3): about the rows, not an agent's row."""
 
-LIMITS_TITLE = "Plan limits"
+LIMITS_TITLE = "Plan limits[$text-muted] · account-wide[/]"
 
 #: A stable id for the host toggle's line, so a redraw can tell it from an agent's row and a
 #: test can find it without counting from the bottom of a list whose length is a provider's.
@@ -856,17 +856,16 @@ class LimitsPaneScreen(LimitsRegion, ChoiceScreen):
        itself, so nothing here has ever put a word in it. Two rows to restate a heading, on a
        pane whose content is two lines. */
     LimitsPaneScreen #status { display: none; }
-    /* And no border, where every other list in this app has one. `OptionList` draws its own,
-       which is what carried "Agent limits" once the header went -- but a title costs two rows
-       here and the rows underneath it already begin `claude:` and `codex:`, which is the same
-       fact in the space it was already taking. The empty state says "No agent limits
-       reported.", so the pane names itself when it holds nothing too.
+    /* A round `$secondary` border with `Plan limits · account-wide` on it, like the other three
+       panes (the console facelift). It was dropped once because a title cost two rows on a pane
+       with no header either; with the Textual chrome gone from console panes (R9), the pane can
+       afford its border back, and the README's cell budget counts it.
 
        `height: 1fr` is only what the pane shows before its first measurement: `_fit_to_content`
-       overwrites it with the rows the content actually wraps to, and with no border to allow
-       for that is now the pane's whole height. */
+       overwrites it with the rows the content actually wraps to, plus the widget's own gutter,
+       which is where the border's two rows are counted. */
     LimitsPaneScreen #limits-pane {
-        height: 1fr; border: none; text-wrap: nowrap; text-overflow: ellipsis;
+        height: 1fr; border: round $secondary; text-wrap: nowrap; text-overflow: ellipsis;
     }
     /* And no hint row, which is also why this pane does not advertise the session-key layer even
        though it offers it. Task 3.3 named all three read-only panes; this one hides `#status`
@@ -1084,7 +1083,7 @@ class DashboardScreen(LimitsRegion, FeedRegion, ProjectsPaneScreen):
                     sessions = OptionList(id="sessions-pane", markup=False)
                     # The count is written in by every draw; the letters are the row keys,
                     # advertised on the frame of the list they act on.
-                    sessions.border_title = sessions_title(0)
+                    sessions.border_title = sessions_title(())
                     yield sessions
                     # Between the sessions and the notifications, which is where the owner
                     # asked for it on 2026-08-29. Seeded with its empty state at compose time
@@ -1503,7 +1502,7 @@ class DashboardScreen(LimitsRegion, FeedRegion, ProjectsPaneScreen):
         # regression and a test pinning it as though it were intended.
         was_populated = any(not option.disabled for option in pane.options)
         pane.clear_options()
-        pane.border_title = sessions_title(len(records))
+        pane.border_title = sessions_title(records)
         if not records:
             pane.add_option(Option(_NO_SESSIONS, id="empty", disabled=True))
             self.set_status(_NO_SESSIONS, hint=DASHBOARD_HINT)

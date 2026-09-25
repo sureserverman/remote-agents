@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from types import MappingProxyType
 
 from textual import events
@@ -282,23 +282,24 @@ _CLEARS_VANISHED_CURSOR = True
 #: is not known until the record is read -- see `action_row_remote_control`.
 _REMOTE_CONTROL_KEY = "m"
 
-#: The row keys as the pane title advertises them -- `Sessions 6 · a i r s c f m` -- built from
-#: the table rather than written beside it. Both sessions positions carry the title and the
-#: second is a subclass of the first, so a literal in each would be two strings to keep agreeing.
-#:
-#: The title, not the status line, since the redesign: the status carries the counts (`● 2
-#: running · …`) and the muted hint row beneath it the navigation keys, so the letters moved to
-#: the frame of the list they act on -- which is also where they stop competing for the columns
-#: the old three-row status needed at 60 wide. Letters alone; the word for each is one `d` away
-#: on the detail, and the modal that asks before `f` names its action in full.
+#: The row keys a sessions position binds, space-separated, built from the table rather than
+#: written beside it: `a i r s c f m`. The pane title advertised them until the console
+#: facelift (R11) moved each letter, with its word, to the action line under the list.
 ROW_KEY_LETTERS = " ".join(
     [*(key for key, _action, _label, _word in SESSION_ACTION_KEYS), _REMOTE_CONTROL_KEY]
 )
 
 
-def sessions_title(count: int) -> str:
-    """The list's border title: the count, then the row keys muted. Markup on fixed text only."""
-    return f"Sessions {count}[$text-muted] · {ROW_KEY_LETTERS}[/]"
+def sessions_title(records: Sequence[SessionRecord]) -> Content:
+    """The list's border title: `Sessions 4 · ● 2 running · ○ 1 preserved` (the facelift, R11).
+
+    The count muted, then `session_counts_content` unchanged. The row letters that followed
+    the count here leave the title for a named action line under the list.
+    """
+    counts = session_counts_content(records)
+    if not counts.plain:
+        return Content.assemble("Sessions", (f" {len(records)}", "$text-muted"))
+    return Content.assemble("Sessions", (f" {len(records)} · ", "$text-muted"), counts)
 
 
 #: The bindings themselves, built once from the table above.
@@ -1459,7 +1460,7 @@ class SessionsScreen(_SessionActionKeys, ChoiceScreen):
         # this change's Tier-1 review.
         self._drawn = {str(record.session_id): record for record in records}
         choices = self.query_one("#choices", OptionList)
-        choices.border_title = sessions_title(len(records))
+        choices.border_title = sessions_title(records)
         if not records:
             self.show_choices(())
             self.set_status(self.empty_status, hint="")

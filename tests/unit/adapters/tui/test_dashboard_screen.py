@@ -1284,3 +1284,62 @@ async def test_the_limits_border_footer_goes_when_the_pane_empties() -> None:
         app.screen._draw_limits()
         await pilot.pause()
         assert str(pane.border_subtitle or "") == ""
+
+
+# --- the four console panes carry their titles on round borders (sub-plan 3 Task 1.3) --------
+
+
+class _TitledLauncher(SessionUseCaseDouble):
+    async def refresh_readiness(self):
+        return (_record(),)
+
+    async def list_sessions(self):
+        return (_record(),)
+
+
+_TITLED_PANES = {
+    # pane app, the widget its border is on, the title as the handoff README spells it
+    "projects": ("ProjectsPane", "#choices", "Projects 2 · recent first"),
+    "sessions": ("SessionsPane", "#choices", "Sessions 1 · ● 1 running"),
+    "limits": ("LimitsPane", "#limits-pane", "Plan limits · account-wide"),
+    "feed": ("FeedPane", "#feed-pane", "Feed · newest first · enter expands"),
+}
+
+
+@pytest.mark.parametrize("pane", list(_TITLED_PANES))
+async def test_each_console_pane_carries_its_border_title_on_a_round_border(pane: str) -> None:
+    from backends import tui_context_for
+    from textual.content import Content
+
+    from remote_agents.adapters.tui import panes
+
+    app_name, selector, title = _TITLED_PANES[pane]
+    other = CatalogProject("opaque-other", "other", "infra", "Registered")
+    context = tui_context_for(
+        sessions=_TitledLauncher(),
+        projects=object(),
+        profiles=(ProfileAvailability("claude", True),),
+        refresh_catalogue=lambda: (_PROJECT, other),
+        attach_argv=lambda session_id: ("true",),
+        catalogue=(_PROJECT, other),
+        console_hosted=True,
+    )
+    app = getattr(panes, app_name)(context)
+    async with app.run_test(size=(120, 30)) as pilot:
+        await pilot.pause()
+        await pilot.pause()
+        widget = app.screen.query_one(selector)
+        drawn = widget.border_title
+        plain = drawn.plain if isinstance(drawn, Content) else Content.from_markup(drawn).plain
+        assert plain == title, f"{pane}: the border title reads {plain!r}"
+        edge, colour = widget.styles.border_top
+        assert edge == "round", f"{pane}: the border is {edge!r}, not round"
+        secondary = app.current_theme.secondary
+        assert colour.hex.upper() == str(secondary).upper()[:7], (
+            f"{pane}: the border is {colour.hex}, not $secondary {secondary}"
+        )
+        # `$text`, plain: not the `$primary` bold every framed list drew before the facelift.
+        assert "bold" not in str(widget.styles.border_title_style), f"{pane}: the title is bold"
+        assert widget.styles.border_title_color.hex.upper() != app.current_theme.primary.upper(), (
+            f"{pane}: the title is still drawn in $primary"
+        )
