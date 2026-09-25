@@ -51,15 +51,16 @@ _TRUST_POLL_SECONDS = 5.0
 _LIMITS_POLL_SECONDS = 300.0
 #: How often a waiting message is re-checked while its session's turn may have ended with no
 #: "finished" event to say so (BL-108): an Esc fires no hook, and a turn a limit killed fires
-#: none on Codex. The owner accepted 2-3 s. A tick does nothing -- no capture, no store read
-#: beyond the marker listing -- unless a marked or just-finished session has a message waiting.
+#: none on Codex. The owner accepted 2-3 s. A tick takes no capture unless a marked or
+#: just-finished session has a message waiting; its only reads are the marker listing and, for
+#: each such session, one lookup of its waiting message.
 _FAST_CHECK_SECONDS = 2.5
-#: How long after a "finished" activity a waiting message whose retry still read BUSY is
-#: re-checked. Claude draws "(running Stop hooks...)" until every Stop hook has run, and ours
-#: is one of them, so a retry on its record can land while that is still on screen: measured
-#: 2026-09-24, the screen turned idle 0-60 ms after the record appeared, with the owner's other
-#: Stop hooks taking longer on a busier host. Its Stop has already removed the marker, so without
-#: this the message would wait for another turn.
+#: How long after a "finished" activity a waiting message whose retry still queued it (busy, or
+#: a dialog) is re-checked. Claude draws "(running Stop hooks...)" until every Stop hook has run,
+#: and ours is one of them, so a retry on its record can land while that is still on screen:
+#: measured 2026-09-24, the screen turned idle 0-60 ms after the record appeared, with the
+#: owner's other Stop hooks taking longer on a busier host. Its Stop has already removed the
+#: marker, so without this the message would wait for another turn.
 _JUST_FINISHED_SECONDS = 15.0
 
 
@@ -137,9 +138,10 @@ class ServiceComposition:
     relay is wired."""
 
     relay_rechecks: dict[str, float] = field(default_factory=dict, repr=False, compare=False)
-    """Sessions whose retry on a "finished" activity still read BUSY, by when (monotonic), for
-    the fast check's just-finished window. Mutable state on a frozen composition, deliberately:
-    it is shared by the activity pass that fills it and the fast check that drains it.
+    """Sessions whose retry on a "finished" activity still queued (busy or a dialog), by when
+    (monotonic), for the fast check's just-finished window. Mutable state on a frozen
+    composition, deliberately: it is shared by the activity pass that fills it and the fast
+    check that drains it.
 
     It protects nothing by itself. A new turn the owner starts inside the window is kept from
     being typed into by the retry's own capture, which reads that turn's fresh marker (its

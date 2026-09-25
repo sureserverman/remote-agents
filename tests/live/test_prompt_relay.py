@@ -55,6 +55,7 @@ from remote_agents.adapters.tmux.runtime import AsyncTmuxRunner, TerminalWaits, 
 from remote_agents.application.activity import drain_activity
 from remote_agents.application.prompt_relay import PromptRelay
 from remote_agents.composition.service import (
+    _FAST_CHECK_SECONDS,
     _check_waiting_turns_once,
     _retry_waiting_messages,
 )
@@ -460,18 +461,26 @@ def _wait_until_streaming(
     descriptor = profile_composers()[agent]
     deadline = time.monotonic() + 90.0
     plain = ""
+    reading = PaneState.UNKNOWN
     while time.monotonic() < deadline:
         plain = _tmux(socket, "capture-pane", "-p", "-t", pane).stdout
         styled = _tmux(socket, "capture-pane", "-p", "-e", "-t", pane).stdout
         counted = sum(bool(_COUNTED.match(line)) for line in plain.splitlines())
+        # The screen alone, without the pane title, deliberately: that reading is the gap. With
+        # the title, Codex's spinner would read BUSY here whatever the marker said.
+        reading = classify(styled, descriptor)
         if (
             counted >= 10
             and markers.started_at(str(session_id)) is not None
-            and classify(styled, descriptor) is PaneState.IDLE
+            and reading is PaneState.IDLE
         ):
             return
         time.sleep(0.2)
-    pytest.fail(f"never caught {agent} streaming a marked turn, screen reading idle:\n{plain}")
+    pytest.fail(
+        f"never caught {agent} streaming a marked turn, screen reading idle; it last read "
+        f"{reading.name} (DIALOG: look for a rate-limit or usage prompt before blaming the "
+        f"relay):\n{plain}"
+    )
 
 
 @pytest.mark.parametrize("agent", ["claude", "codex"])
@@ -521,7 +530,8 @@ def test_a_streaming_answer_queues_the_message_until_its_stop(agent: str, tmp_pa
             for activity in drained
         ):
             if time.monotonic() > deadline:
-                pytest.fail(f"no finished event was spooled for the turn: {drained}")
+                screen = _tmux(socket, "capture-pane", "-p", "-t", pane).stdout
+                pytest.fail(f"no finished event was spooled in 240 s: {drained}\n{screen}")
             asyncio.run(_check_waiting_turns_once(composition))
             assert relay.pending(session_id) is not None, (
                 "the fast check typed into a running turn",
@@ -555,7 +565,12 @@ def test_a_streaming_answer_queues_the_message_until_its_stop(agent: str, tmp_pa
 
 @pytest.mark.parametrize("agent", ["claude", "codex"])
 def test_an_interrupted_turn_releases_its_queued_message(agent: str, tmp_path: Path) -> None:
-    """Esc fires no hook; the fast check reads the end line and delivers within about 3 s."""
+    """Esc fires no hook; the fast check reads the end line and delivers the queued message.
+
+    Ticked at the service's own `_FAST_CHECK_SECONDS`, so the bound is what the owner sees: at
+    most one tick plus the redraw after Esc, which is the "about 3 s" the design promises. The
+    assertion allows 6 s -- two ticks and slack -- so a slow redraw is not read as a defect.
+    """
     _requirements(agent)
     socket = f"remote-agents-test-relay-{SessionId.new().value.hex}"
     workspace = tmp_path / "workspace"
@@ -588,20 +603,21 @@ def test_an_interrupted_turn_releases_its_queued_message(agent: str, tmp_path: P
         escaped_at = time.monotonic()
         delivered_at: float | None = None
         while time.monotonic() < escaped_at + 30.0:
+            time.sleep(_FAST_CHECK_SECONDS)
             asyncio.run(_check_waiting_turns_once(composition))
             if relay.pending(session_id) is None:
                 delivered_at = time.monotonic()
                 break
-            time.sleep(0.5)
         screen = _tmux(socket, "capture-pane", "-p", "-t", pane).stdout
 
+        assert delivered_at is not None and delivered_at - escaped_at <= 6.0, (
+            None if delivered_at is None else delivered_at - escaped_at,
+            announced,
+            screen,
+        )
         assert [(session, result.outcome) for session, result in announced] == [
             (str(session_id), RelayOutcome.SENT)
         ], (announced, screen)
-        assert delivered_at is not None and delivered_at - escaped_at <= 6.0, (
-            None if delivered_at is None else delivered_at - escaped_at,
-            screen,
-        )
         # Delivered because the turn ended: its interrupt line stands above the message.
         screen = _wait_for(socket, pane, _QUEUED)
         lines = screen.splitlines()

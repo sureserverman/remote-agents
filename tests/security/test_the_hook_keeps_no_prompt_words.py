@@ -20,7 +20,13 @@ from pathlib import Path
 
 import pytest
 
-from remote_agents.adapters.agents.activity_spool import SESSION_ID_VARIABLE, spool_agent_event
+from remote_agents.adapters.agents.activity_spool import (
+    MAXIMUM_PAYLOAD_BYTES,
+    SESSION_ID_VARIABLE,
+    _observed_event,
+    _write_privately,
+    spool_agent_event,
+)
 from remote_agents.application.activity import drain_activity
 
 _SENTINEL = "zq-sentinel-7c1e5b-never-persist"
@@ -86,6 +92,45 @@ def test_a_submit_writes_the_empty_marker_and_nothing_else(provider: str, tmp_pa
 
     written = [path.relative_to(directory) for path in directory.rglob("*") if path.is_file()]
     assert written == [Path("turns") / "s-42"]
+
+
+@pytest.mark.parametrize("provider", ["claude", "codex"])
+def test_the_pre_marker_hook_keeps_nothing_of_a_submit_either(
+    provider: str, tmp_path: Path
+) -> None:
+    """The rollback property, on the path a 0.48.1 hook runs for every event: read the payload,
+    keep what `_observed_event` admits, write it. Since BL-108 a submit returns before that path,
+    so it is run here directly -- it is still the code a rolled-back host executes."""
+    directory = _spool(tmp_path)
+    moment = datetime(2026, 9, 24, 21, 25, tzinfo=UTC)
+
+    observed = _observed_event(
+        io.BytesIO(json.dumps(_SUBMIT).encode("utf-8")), "s-42", moment, provider
+    )
+    if observed is not None:
+        _write_privately(observed, directory)
+
+    assert _SENTINEL.encode() not in _every_byte_under(directory)
+    assert drain_activity(directory) == ()
+    assert _SENTINEL.encode() not in _every_byte_under(directory)
+
+
+@pytest.mark.parametrize("provider", ["claude", "codex"])
+def test_a_prompt_past_the_bound_is_kept_nowhere(provider: str, tmp_path: Path) -> None:
+    """Past the bound the hook still reads the event name from the prefix (DEC-104); the prompt
+    it walks past on the way is decoded and dropped, never written."""
+    directory = _spool(tmp_path)
+    long_submit = {**_SUBMIT, "prompt": f"{_SENTINEL} " + "x" * (MAXIMUM_PAYLOAD_BYTES * 2)}
+
+    spool_agent_event(
+        io.BytesIO(json.dumps(long_submit).encode("utf-8")),
+        activity_directory=directory,
+        environment={SESSION_ID_VARIABLE: "s-42"},
+        provider=provider,
+    )
+
+    assert (directory / "turns" / "s-42").read_bytes() == b""
+    assert _SENTINEL.encode() not in _every_byte_under(directory)
 
 
 def test_the_sentinel_detector_can_fire(tmp_path: Path) -> None:

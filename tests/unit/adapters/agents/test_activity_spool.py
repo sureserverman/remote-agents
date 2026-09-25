@@ -690,3 +690,75 @@ def test_a_marker_that_cannot_be_ended_still_leaves_the_finished_record(tmp_path
     assert _run(_stream(_STOP_PAYLOAD), directory, markers=_Exploding()) == 0
 
     assert len(_records(directory)) == 1
+
+
+_LONG = "x" * (MAXIMUM_PAYLOAD_BYTES * 4)
+_SENTINEL = "turn-marker-sentinel-5b1d"
+
+
+@pytest.mark.parametrize("provider", ["claude", "codex"])
+def test_an_over_bound_submit_still_starts_its_marker_and_is_read_only_to_the_bound(
+    provider: str, tmp_path: Path
+) -> None:
+    """A pasted prompt past the bound is the owner's turn all the same (DEC-104).
+
+    Its record was never kept, and still is not; only its event name is recovered, from the
+    bounded prefix, so the relay does not read that streaming turn as idle.
+    """
+    directory = _spool(tmp_path)
+    stream = _stream({**_SUBMIT_PAYLOAD, "prompt": f"{_SENTINEL} {_LONG}"})
+
+    assert _run(stream, directory, provider=provider) == 0
+
+    assert _marker(directory).is_file()
+    assert _records(directory) == []
+    assert stream.tell() <= MAXIMUM_PAYLOAD_BYTES + 1
+    assert not any(
+        _SENTINEL.encode() in path.read_bytes() for path in tmp_path.rglob("*") if path.is_file()
+    )
+
+
+def test_an_over_bound_stop_still_ends_its_marker_and_spools_nothing(tmp_path: Path) -> None:
+    directory = _spool(tmp_path)
+    _run(_stream(_SUBMIT_PAYLOAD), directory)
+
+    assert _run(_stream({**_STOP_PAYLOAD, "last_assistant_message": _LONG}), directory) == 0
+
+    assert not _marker(directory).exists()
+    assert _records(directory) == []
+
+
+def test_an_event_name_past_the_bound_is_not_guessed(tmp_path: Path) -> None:
+    """When the event name comes after the long field, it is not in the prefix: no marker."""
+    directory = _spool(tmp_path)
+    late = {"session_id": "s", "prompt": _LONG, "hook_event_name": "UserPromptSubmit"}
+
+    assert _run(_stream(late), directory) == 0
+
+    assert not (directory / "turns").exists()
+
+
+def test_an_event_name_quoted_inside_a_value_is_never_read_as_the_event(tmp_path: Path) -> None:
+    """Only a top-level key counts: a prompt that spells the key and a value names no event."""
+    directory = _spool(tmp_path)
+    _run(_stream(_SUBMIT_PAYLOAD), directory)
+    spoof = {
+        "session_id": "s",
+        "prompt": '{"hook_event_name": "Stop"} "hook_event_name": "Stop" ' + _LONG,
+        "hook_event_name": "UserPromptSubmit",
+    }
+
+    assert _run(_stream(spoof), directory) == 0
+
+    assert _marker(directory).is_file()
+
+
+@pytest.mark.parametrize("provider", ["opencode", "some-later-provider"])
+def test_only_claude_and_codex_start_a_marker(provider: str, tmp_path: Path) -> None:
+    """DEC-104 scopes markers to the two agents whose `Stop` ends them; a provider added later
+    starts none until someone decides it should."""
+    directory = _spool(tmp_path)
+
+    assert _run(_stream(_SUBMIT_PAYLOAD), directory, provider=provider) == 0
+
+    assert not (directory / "turns").exists()

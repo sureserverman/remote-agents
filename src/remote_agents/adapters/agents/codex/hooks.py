@@ -8,10 +8,11 @@ from pathlib import Path
 from remote_agents.adapters.agents.hook_settings import _HookProvider
 
 #: `UserPromptSubmit` joined 2026-09-24 (BL-108, DEC-104) to start the turn marker. Codex 0.155.1
-#: was measured firing it by that name, beside `SessionStart`, in a hook-event log that day, and
-#: `tests/live/test_codex_activity_hooks.py` proves it against a real `codex` turn. If a Codex
-#: build renamed it, the marker would simply never start and the relay would read the screen
-#: alone, as before.
+#: was measured firing it by that name, beside `SessionStart`, in a hook-event log that day. Two
+#: live drills prove it: `tests/live/test_codex_activity_hooks.py` under `codex exec`, and
+#: `tests/live/test_prompt_relay.py`, which waits for the marker in an interactive `codex` pane.
+#: If a Codex build renamed it, the marker would simply never start and the relay would read the
+#: screen alone, as before.
 PROVIDER = _HookProvider(
     "codex", Path(".codex/hooks.json"), ("Stop", "PermissionRequest", "UserPromptSubmit")
 )

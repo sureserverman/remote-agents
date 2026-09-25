@@ -50,6 +50,11 @@ MAXIMUM_PAYLOAD_BYTES = 32_768
 #: Claude has a `StopFailure` (Codex fires nothing on a failed turn, `ports/agent_activity.py`).
 TURN_STARTED = "UserPromptSubmit"
 TURN_ENDED = frozenset({"Stop", "StopFailure"})
+#: The providers whose hook marks a turn: the two whose `Stop` also ends one. Not OpenCode: its
+#: plugin forwards only its own two events, and its "finished" is `session.idle`, which is not in
+#: `TURN_ENDED` -- a marker started there would never end. A provider added later starts none
+#: until someone decides it should.
+MARKED_PROVIDERS = frozenset({"claude", "codex"})
 
 _PLAIN_TOKEN = re.compile(r"[A-Za-z0-9_-]{1,64}")
 #: The field each event discriminates on, as the installed agent actually spells them.
@@ -227,14 +232,19 @@ def spool_agent_event(
         session_id = safe_session_id(environment.get(SESSION_ID_VARIABLE))
         if session_id is None:
             return 0
-        document = _payload_document(payload)
-        if document is None:
+        raw = payload.read(MAXIMUM_PAYLOAD_BYTES + 1)
+        document = _document(raw)
+        if document is not None:
+            event = document.get("hook_event_name")
+        elif len(raw) > MAXIMUM_PAYLOAD_BYTES:
+            # Past the bound nothing is recorded, as before; but a long pasted prompt is still a
+            # turn, and a long final answer still ends one, so the event name is recovered from
+            # the prefix already read.
+            event = _event_in_prefix(raw)
+        else:
             return 0
-        event = document.get("hook_event_name")
         turns = FileTurnMarkers(activity_directory) if markers is None else markers
-        # Not OpenCode's: its plugin forwards only its own two events, and its "finished" is
-        # `session.idle`, which is not in `TURN_ENDED` -- a marker started there would never end.
-        if event == TURN_STARTED and provider != "opencode":
+        if event == TURN_STARTED and provider in MARKED_PROVIDERS:
             turns.start(session_id)
             return 0
         # Ungated, unlike the start: ending a marker that was never started is a no-op. Guarded
@@ -244,6 +254,8 @@ def spool_agent_event(
                 turns.end(session_id)
             except Exception:
                 pass
+        if document is None:
+            return 0
         observed = _observed(document, session_id, now(), provider)
         if observed is not None:
             _write_privately(observed, activity_directory)
@@ -267,7 +279,11 @@ def _observed_event(
 
 def _payload_document(payload: IO[bytes]) -> dict | None:
     """The payload as a JSON object, read once and bounded, or None."""
-    raw = payload.read(MAXIMUM_PAYLOAD_BYTES + 1)
+    return _document(payload.read(MAXIMUM_PAYLOAD_BYTES + 1))
+
+
+def _document(raw: bytes) -> dict | None:
+    """A bounded read as a JSON object, or None -- also when it filled the bound."""
     if not raw or len(raw) > MAXIMUM_PAYLOAD_BYTES:
         return None
     try:
@@ -275,6 +291,44 @@ def _payload_document(payload: IO[bytes]) -> dict | None:
     except (UnicodeDecodeError, ValueError):
         return None
     return document if isinstance(document, dict) else None
+
+
+_DECODER = json.JSONDecoder()
+_BLANK = re.compile(r"[ \t\n\r]*")
+
+
+def _event_in_prefix(raw: bytes) -> str | None:
+    """The top-level `hook_event_name` of a payload cut at the bound, or None.
+
+    Walks the object's top-level keys in order, decoding each value whole with the standard
+    decoder and discarding it, so text inside a value -- a prompt that spells the key -- is
+    never read as a key. The walk stops at the first value the cut leaves incomplete: an event
+    name that comes after the long field is not in the prefix, and is not guessed.
+    """
+    text = raw.decode("utf-8", errors="replace")
+    try:
+        position = _BLANK.match(text, 0).end()
+        if text[position] != "{":
+            return None
+        position += 1
+        while True:
+            position = _BLANK.match(text, position).end()
+            if text[position] != '"':
+                return None
+            key, position = _DECODER.raw_decode(text, position)
+            position = _BLANK.match(text, position).end()
+            if text[position] != ":":
+                return None
+            position = _BLANK.match(text, position + 1).end()
+            value, position = _DECODER.raw_decode(text, position)
+            if key == "hook_event_name":
+                return value if isinstance(value, str) else None
+            position = _BLANK.match(text, position).end()
+            if text[position] != ",":
+                return None
+            position += 1
+    except (IndexError, ValueError):
+        return None
 
 
 def _observed(
