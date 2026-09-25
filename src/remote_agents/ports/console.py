@@ -504,6 +504,12 @@ class ConsolePort(Protocol):
         """Give the console session its function-key bar (DEC-105). Raises; the composer logs."""
         ...
 
+    async def install_layout_hooks(
+        self, main_percent: int, column: Sequence[tuple[str, int]]
+    ) -> None:
+        """Re-apply the console layout on every client attach and resize. Raises; logged."""
+        ...
+
     async def publish_session_selected(self, selected: bool | None) -> None:
         """Tell the status bar whether the sessions cursor rests on a row; `None` unsets it."""
         ...

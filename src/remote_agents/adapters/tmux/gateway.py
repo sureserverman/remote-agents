@@ -15,6 +15,7 @@ from remote_agents.adapters.tmux.codec import (
     ManagedPane,
     console_binding_args,
     console_layout_args,
+    console_layout_hook_args,
     console_option_args,
     console_pane_geometry_args,
     console_resize_pane_args,
@@ -29,6 +30,7 @@ from remote_agents.adapters.tmux.codec import (
     exact_session_target,
     is_console_view,
     list_arrangement_args,
+    pane_height_args,
     pane_mark_args,
     pane_title_args,
     parse_arrangement,
@@ -890,6 +892,21 @@ class TmuxGateway:
         owner the bar and never the console.
         """
         for arguments in status_format_args(keys, palette):
+            await self._runner.run(*self._base_argv(), *arguments)
+
+    async def fit_pane_height(self, pane_id: str, rows: int) -> None:
+        """Resize one console pane to *rows* rows; tmux takes them from the pane below. Raises."""
+        await self._runner.run(*self._base_argv(), *pane_height_args(pane_id, rows))
+
+    async def install_layout_hooks(
+        self, main_percent: int, column: Sequence[tuple[str, int]]
+    ) -> None:
+        """Set the console session's attach and resize hooks to re-apply its layout.
+
+        Idempotent: `set-hook` replaces the hook, so every `ensure` may issue it again with the
+        pane ids it has now. Raises; the composer logs.
+        """
+        for arguments in console_layout_hook_args(main_percent, column):
             await self._runner.run(*self._base_argv(), *arguments)
 
     async def publish_session_selected(self, selected: bool | None) -> None:

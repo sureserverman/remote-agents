@@ -746,3 +746,31 @@ def test_remote_control_words_with_tmux_metacharacters_draw_literally() -> None:
         bar.close()
 
     assert f"Remote Control  co#dex {word}  {CONSOLE_SESSION_NAME}" in row, repr(row)
+
+
+# --- console facelift sub-plan 3 Task 2.3: the layout hooks ------------------------------------
+
+
+def test_the_layout_hooks_reapply_the_layout_on_attach_and_on_resize() -> None:
+    from remote_agents.adapters.tmux.codec import console_layout_hook_args
+
+    hooks = console_layout_hook_args(60, (("%5", 31),))
+
+    command = (
+        "set-window-option -t ra-console: main-pane-width 60% ; "
+        "select-layout -t ra-console: main-vertical ; "
+        "resize-pane -t %5 -y 31%"
+    )
+    assert hooks == (
+        ("set-hook", "-t", "ra-console:", "client-attached", command),
+        ("set-hook", "-w", "-t", "ra-console:", "window-resized", command),
+    )
+
+
+def test_the_layout_hooks_refuse_a_pane_id_that_is_not_one() -> None:
+    import pytest
+
+    from remote_agents.adapters.tmux.codec import console_layout_hook_args
+
+    with pytest.raises(ValueError):
+        console_layout_hook_args(60, (("%5 ; kill-server", 31),))

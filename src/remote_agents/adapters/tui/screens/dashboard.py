@@ -26,7 +26,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from dataclasses import replace
 
 from textual import events
@@ -672,7 +672,9 @@ class LimitsRegion:
             # `_reload_limits`; this branch is the other one.
             pane.add_option(Option(NO_LIMITS, id=_EMPTY_LIMITS_ROW, disabled=True))
             self._add_remote_control_rows(pane, remote_control)
-            _fit_to_content(pane, (Content(NO_LIMITS), *remote_control))
+            _fit_to_content(
+                pane, (Content(NO_LIMITS), *remote_control), on_measured=self._fit_own_pane
+            )
             return
         width = pane.scrollable_content_region.width
         if width <= 0:
@@ -689,7 +691,14 @@ class LimitsRegion:
                 pane.add_option(Option(content, id=f"{_LIMITS_STAMP_PREFIX}{index}", disabled=True))
         pane.border_subtitle = limits_border_footer(width or None) or ""
         self._add_remote_control_rows(pane, remote_control)
-        _fit_to_content(pane, (*contents, *stamp, *remote_control))
+        _fit_to_content(pane, (*contents, *stamp, *remote_control), on_measured=self._fit_own_pane)
+
+    def _fit_own_pane(self, height: int) -> None:
+        """What the limits list measured, for a surface that sizes its own tmux pane.
+
+        Nothing here: the dashboard's region lives inside a Textual layout. The console's
+        limits pane overrides it.
+        """
 
     def _add_remote_control_rows(self, pane: OptionList, lines: tuple[Content, ...]) -> None:
         """Claude's default, then the host line, when this surface draws them at all."""
@@ -911,6 +920,29 @@ class LimitsPaneScreen(LimitsRegion, ChoiceScreen):
     def __init__(self) -> None:
         super().__init__()
         self._timer = None
+
+    def _fit_own_pane(self, height: int) -> None:
+        """Ask tmux for exactly the rows this pane draws (the console facelift's cell budget).
+
+        The list's measured height, plus any other row the body shows (normally none: the
+        status, hint and filter are hidden here). Asked only when it differs from the pane's
+        height now, so the resize this causes, which redraws and re-measures, asks nothing
+        the second time round.
+        """
+        fit = self.services.console_fit_pane
+        if fit is None or not self.showing:
+            return
+        body = self.query_one("#body")
+        others = sum(
+            child.outer_size.height
+            for child in body.children
+            if child.display and child.id != "limits-pane"
+        )
+        wanted = height + others
+        if wanted != self.app.size.height:
+            # Not exclusive (DEC-008 forbids a worker cancelling one in flight): a repeated fit
+            # asks for the same rows, and tmux answers it the same way.
+            self.run_worker(fit(wanted), group="fit-pane", exit_on_error=False)
 
     def compose(self) -> ComposeResult:
         """The base body with the limits list in place of the list; same ids, no app chrome.
@@ -1594,7 +1626,12 @@ class DashboardScreen(LimitsRegion, FeedRegion, ProjectsPaneScreen):
         )
 
 
-def _fit_to_content(pane: OptionList, lines: Iterable[Content]) -> None:
+def _fit_to_content(
+    pane: OptionList,
+    lines: Iterable[Content],
+    *,
+    on_measured: Callable[[int], None] | None = None,
+) -> None:
     """Give the pane exactly the rows its wrapped text needs, and no more.
 
     `height: auto` does not track an `OptionList`'s content here -- measured at several sizes,
@@ -1629,6 +1666,8 @@ def _fit_to_content(pane: OptionList, lines: Iterable[Content]) -> None:
         # sized to have none. `gutter` is padding plus border plus scrollbars, which is exactly
         # the height the wrapped rows do not get to use, asked of the widget that knows.
         pane.styles.height = rows_high + pane.gutter.height
+        if on_measured is not None:
+            on_measured(rows_high + pane.gutter.height)
 
     # Deferred, because the first draw happens inside `populate()` -- before the pane has been
     # laid out, so its width is still 0 and a measurement taken there silently does nothing.

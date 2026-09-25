@@ -145,6 +145,10 @@ class TuiContext:
     console_publish_remote_control: (
         Callable[[Sequence[RemoteControlMark] | None, StatusBarPalette], Awaitable[None]] | None
     ) = None
+    # Resizes this process's own tmux pane to a height, in rows. Wired under console hosting
+    # only, bound to `$TMUX_PANE`; the limits pane asks for exactly the rows it draws, and the
+    # rows come from the feed below it (the console facelift's cell budget).
+    console_fit_pane: Callable[[int], Awaitable[None]] | None = None
     console_recovery: RecoveryReport | None = None
     # Where this surface remembers the one thing it remembers -- which order the projects
     # pane opens in. A *path*, wired by the composition root (DEC-046), rather than a

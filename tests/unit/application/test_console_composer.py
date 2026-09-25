@@ -521,10 +521,10 @@ async def test_a_rebuild_puts_the_window_back_in_its_declared_proportions() -> N
     console = RecordingConsole(arrangement=survivors)
     await _composer(console).ensure()
 
-    # Top pane first, and the limits pane is not named at all: each resize takes its rows
-    # from the panes below it, so what these two leave is what the pane between them gets.
+    # The sessions share alone since the console facelift: the limits pane sizes itself to
+    # its content and the feed takes what is left, so neither is named.
     assert named(console, "normalize_console_layout") == [
-        ("normalize_console_layout", 60, (("%1", 53), ("%2", 35)))
+        ("normalize_console_layout", 60, (("%1", 31),))
     ]
 
 
@@ -1545,3 +1545,41 @@ async def test_a_composer_with_no_status_bar_installs_none() -> None:
 
     assert await _composer(console).ensure() is True
     assert not named(console, "install_status_bar")
+
+
+# --- console facelift sub-plan 3 Task 2.3: the layout follows the client (owner decision) -------
+
+
+class _HookedConsole(RecordingConsole):
+    async def install_layout_hooks(self, main_percent, column) -> None:
+        self.calls.append(("install_layout_hooks", main_percent, tuple(column)))
+
+
+async def test_ensure_installs_the_layout_hooks_against_the_sessions_pane() -> None:
+    """Re-applied on every attach and resize: the console is often built at 80x24 before a
+    client exists, and tmux then stretches the panes unevenly (107/92 at 200x50, measured)."""
+    console = _HookedConsole(arrangement=_three_pane_console())
+
+    assert await _composer(console).ensure() is True
+
+    hooks = [call for call in console.calls if call[0] == "install_layout_hooks"]
+    assert hooks == [("install_layout_hooks", 60, (("%1", 31),))], hooks
+
+
+def test_the_column_names_only_the_sessions_share() -> None:
+    """The limits pane sizes itself to its content; the feed takes what is left."""
+    from remote_agents.application.console import CONSOLE_COLUMN
+    from remote_agents.ports.console import ConsolePaneSlot
+
+    assert CONSOLE_COLUMN == ((ConsolePaneSlot.SESSIONS, 31),)
+
+
+async def test_layout_hooks_that_will_not_install_cost_the_hooks_and_not_the_console(
+    caplog,
+) -> None:
+    class Refuses(RecordingConsole):
+        async def install_layout_hooks(self, main_percent, column) -> None:
+            raise RuntimeError("tmux said no")
+
+    assert await _composer(Refuses(arrangement=_three_pane_console())).ensure() is True
+    assert "layout" in caplog.text

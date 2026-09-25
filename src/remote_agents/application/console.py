@@ -100,13 +100,11 @@ class ConsolePane:
 #: under it lost a third of theirs. Probed on tmux 3.4 at 183x44: `-l 33%` off sessions then
 #: `-l 30%` off the feed gives 29/4/9 rows; 15% of what the feed left sessions gives 23/4/15.
 #:
-#: **Four rows is the pane, because four rows is the content.** It is a count of what the pane
-#: draws and nothing else: one row per reader, plus one for the wrap the borrowed-cache stamp
-#: takes at this width. It was ten, then eight, and both numbers were chrome -- the app header
-#: and footer went first (two rows), then the status region that restated the heading and the
-#: border that drew it (three more). Nothing was taken from what the pane *says*: it held four
-#: content rows at ten and it holds four at four. The rows the chrome was using are in the
-#: sessions list and the feed now.
+#: **The pane is as tall as its content, and it says so itself** (the console facelift). The
+#: 15% split is only where it starts: once it has drawn, the limits pane asks tmux for exactly
+#: the rows it measured (`console_fit_pane`), taking them from the feed below. Its content grew
+#: when its border came back and when the stacked week bars arrived at narrow widths, so a
+#: fixed share either clipped it (3 rows at 100x30, measured) or left it blank.
 CONSOLE_LAYOUT: tuple[ConsolePane, ...] = (
     ConsolePane(
         ConsolePaneSlot.PROJECTS,
@@ -138,10 +136,13 @@ CONSOLE_LAYOUT: tuple[ConsolePane, ...] = (
 #: was named, and naming the bottom pane changed nothing at all: 14/15/13 rows on a 44-row
 #: window, the limits pane as tall as the sessions list. Named top-down, it lands 23/4/15,
 #: which is what a fresh build produces.
-CONSOLE_COLUMN: tuple[tuple[ConsolePaneSlot, int], ...] = (
-    (ConsolePaneSlot.SESSIONS, 53),
-    (ConsolePaneSlot.FEED, 35),
-)
+#:
+#: **The sessions share alone since the console facelift.** The design's budget at 200x50 is
+#: sessions 15 rows of the window's 49, the limits pane its content (7 rows), and the feed the
+#: rest. The limits pane sizes its own tmux pane to what it draws, which takes its rows from the
+#: feed below it, so the feed is what is left and neither of them is named here. 31% of 49 is
+#: 15. *Was:* sessions 53%, feed 35%.
+CONSOLE_COLUMN: tuple[tuple[ConsolePaneSlot, int], ...] = ((ConsolePaneSlot.SESSIONS, 31),)
 
 
 @dataclass(frozen=True, slots=True)
@@ -555,6 +556,18 @@ class ConsoleComposer:
                 await self._console.install_status_bar(*self._status_bar())
             except Exception:
                 _LOG.exception("the console status bar could not be installed; keys still work")
+        # The layout hooks, outside the answer for the same reason: a hook tmux refuses costs
+        # the owner an even layout after a resize, never the console. Issued with the pane ids
+        # this console has now, so a rebuilt pane is named from the next entry on.
+        try:
+            column = _column_resizes(await self._console.pane_arrangement())
+            projects = next(
+                spec for spec in CONSOLE_LAYOUT if spec.slot is ConsolePaneSlot.PROJECTS
+            )
+            if column:
+                await self._console.install_layout_hooks(projects.percent, column)
+        except Exception:
+            _LOG.exception("the console layout hooks could not be installed; resize by hand")
         return True
 
     async def _build_panes(self) -> tuple[str, ...]:

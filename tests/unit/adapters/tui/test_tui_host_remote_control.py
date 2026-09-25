@@ -1017,3 +1017,47 @@ async def test_settings_keeps_the_full_remote_control_wording_under_console_host
     # gave them up to the bar, so this is where the full wording lives.
     assert "Claude Remote Control · on" in rows, rows
     assert "Codex Remote Control · on" in rows, rows
+
+
+# --- console facelift sub-plan 3 Task 2.3: the limits pane sizes its own tmux pane -------------
+
+
+async def test_the_console_limits_pane_asks_tmux_for_exactly_the_rows_it_draws() -> None:
+    """One row ("No agent limits reported.") inside a round border is three rows of pane."""
+    from dataclasses import replace
+
+    asked: list[int] = []
+
+    async def fit(rows: int) -> None:
+        asked.append(rows)
+
+    context = replace(
+        _bar_context(None, None, _BarWords()), console_hosted=True, console_fit_pane=fit
+    )
+    app = RemoteAgentsTui(context)
+    async with app.run_test(size=(80, 20)) as pilot:
+        await app.push_screen(LimitsPaneScreen())
+        await _settle(app, pilot)
+        await pilot.pause(0.2)
+
+    assert asked and asked[-1] == 3, asked
+
+
+async def test_the_limits_pane_does_not_ask_when_it_already_fits() -> None:
+    from dataclasses import replace
+
+    asked: list[int] = []
+
+    async def fit(rows: int) -> None:
+        asked.append(rows)
+
+    context = replace(
+        _bar_context(None, None, _BarWords()), console_hosted=True, console_fit_pane=fit
+    )
+    app = RemoteAgentsTui(context)
+    async with app.run_test(size=(80, 3)) as pilot:
+        await app.push_screen(LimitsPaneScreen())
+        await _settle(app, pilot)
+        await pilot.pause(0.2)
+
+    assert asked == [], asked

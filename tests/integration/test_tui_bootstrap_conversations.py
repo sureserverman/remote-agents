@@ -231,6 +231,9 @@ def test_no_further_capability_leaked_into_the_context() -> None:
         "console_publish_session_selected",
         "console_publish_typing",
         "console_publish_remote_control",
+        # The console facelift's cell budget: resizes this process's own tmux pane (bound to
+        # `$TMUX_PANE`) to the rows it draws. Only the limits pane asks, and only for itself.
+        "console_fit_pane",
         # Added by Stage 5's Task 5.2, and listed here because that is what this test is for.
         # It is *not* the console family above: it is wired on every host, not only a hosted
         # one, and it is a **path** rather than a callable -- the declared writable boundary's

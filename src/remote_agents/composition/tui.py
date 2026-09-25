@@ -388,6 +388,7 @@ def local_context(config, connection, paths: ProductionPaths):
     console_read_selection = None
     console_holds_slot = None
     console_status_bar = None
+    console_fit_pane = None
     console_publish_session_selected = None
     console_publish_typing = None
     console_publish_remote_control = None
@@ -460,6 +461,7 @@ def local_context(config, connection, paths: ProductionPaths):
         pane_id = os.environ.get("TMUX_PANE")
         if pane_id:
             console_holds_slot = partial(runtime.gateway.holds_console_slot, pane_id)
+            console_fit_pane = partial(runtime.gateway.fit_pane_height, pane_id)
         # The bar is re-issued on a theme switch with the key table bound in here, so the
         # surface hands over only the palette it alone knows (DEC-105).
         from remote_agents.adapters.tui.keys import status_bar_keys
@@ -526,6 +528,7 @@ def local_context(config, connection, paths: ProductionPaths):
         console_read_selection=console_read_selection,
         console_holds_slot=console_holds_slot,
         console_status_bar=console_status_bar,
+        console_fit_pane=console_fit_pane,
         console_publish_session_selected=console_publish_session_selected,
         console_publish_typing=console_publish_typing,
         console_publish_remote_control=console_publish_remote_control,

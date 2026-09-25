@@ -1192,6 +1192,40 @@ def console_layout_args(main_percent: int, column: Sequence[tuple[str, int]]):
     )
 
 
+def pane_height_args(pane_id: str, rows: int) -> tuple[str, ...]:
+    """Return the argv suffix resizing one decoded pane to *rows* rows (`resize-pane -y`)."""
+    if rows < 1:
+        raise ValueError("a pane is at least one row high")
+    return ("resize-pane", "-t", exact_pane_target(pane_id), "-y", str(rows))
+
+
+def console_layout_hook_args(
+    main_percent: int, column: Sequence[tuple[str, int]]
+) -> tuple[tuple[str, ...], ...]:
+    """Return the argv that re-apply the console layout whenever a client attaches or resizes.
+
+    The console is usually built at tmux's default 80x24, before any client exists, and tmux
+    then stretches the panes unevenly as a client arrives: measured 107/92 at 200x50 where the
+    layout declares 60/40, and 3 limits rows at 100x30. A session hook runs the same commands
+    `console_layout_args` issues, as one tmux command list, every time the client's size can
+    have changed (the console facelift, owner decision 2026-09-25).
+
+    Plain tmux commands, never `run-shell`. Every pane id passes `exact_pane_target`, so
+    nothing but `%` and digits reaches the hook's command string (DEC-001). The cost: a pane
+    the owner resized by hand goes back to the layout on the next resize.
+    """
+    command = " ; ".join(
+        " ".join(arguments) for arguments in console_layout_args(main_percent, column)
+    )
+    # `window-resized`, not `client-resized`: measured on 3.4, the client hook runs before the
+    # window takes the client's new size, and the proportional rescale after it wins (69/30 at
+    # 100 columns where the layout says 59/40). The window hook runs once the size is final.
+    return (
+        ("set-hook", "-t", console_target(), "client-attached", command),
+        ("set-hook", "-w", "-t", console_target(), "window-resized", command),
+    )
+
+
 def split_console_pane_args(
     target_pane: str,
     command: tuple[str, ...],
