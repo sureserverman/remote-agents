@@ -754,7 +754,7 @@ async def test_which_surfaces_are_offered_the_session_key_layer(
 
     **`RemoteAgentsTui` is the row that matters, and it is `False` in both columns.** Its
     default screen is `DashboardScreen`, which sets `owns_session_cursor` and deliberately
-    binds none of `a i r s c f m` (`dashboard.py`). DEC-062's position names `SessionsScreen`
+    binds none of `a i r s f c m` (`dashboard.py`). DEC-062's position names `SessionsScreen`
     and `SessionsPaneScreen` and *only* those: it makes an unconfirmed `s`/`c` legal there,
     tied to `_draw_listing` resting a vanished row on nothing, and the dashboard is a third
     position that argument does not reach. Offering the session keys there would carry two

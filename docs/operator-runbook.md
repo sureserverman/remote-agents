@@ -1487,8 +1487,9 @@ uv run --locked remote-agents
    launched is the row the cursor is on and the row marked `▸` in yellow — starting a session
    moves the cursor to it. Press `d` on its row and confirm the detail opens **in the sessions
    pane** — every stop, inspect, rename and Remote Control affordance is here, and the agent
-   stays displayed. Escape back to the list and confirm the list's **border title** names the
-   row keys `a i r s c f m`, and its **hint row** beneath the status names `d` and `p`. On a
+   stays displayed. Escape back to the list and confirm the **action line** under the list names
+   each row key with its word (`a attach  i inspect  r rename  s stop  f force  c clean up
+   m remote`), and its **hint row** beneath the status names `d` and `p`. On a
    running row, confirm `c` is *absent* from the keys panel (Clean up is offered only from
    PRESERVED) while `s` is present — a key must not be offered where the policy would refuse the
    action.

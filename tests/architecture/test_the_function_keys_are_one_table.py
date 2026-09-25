@@ -245,7 +245,7 @@ def test_the_f_key_layer_is_offered_exactly_where_the_bare_keys_are() -> None:
     This is the check a Critical review asked for while the layer was still Alt chords, and it
     survives the retirement unchanged because it was never about the modifier. The layer was
     first offered on `owns_session_cursor`, which is a different question: `DashboardScreen`
-    owns a sessions cursor and binds none of `a i r s c f m`, so it acquired the two
+    owns a sessions cursor and binds none of `a i r s f c m`, so it acquired the two
     unconfirmed stops (DEC-018) on a passive, non-focused cursor, at a position DEC-062's
     stated scope (`SessionsScreen` and `SessionsPaneScreen`) does not reach.
 

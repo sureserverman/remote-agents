@@ -629,7 +629,7 @@ class RemoteAgentsTui(App[AttachRequest | None]):
         **A cursor is not what makes the layer legal — the bare keys are.** `carries_row_keys`
         rather than `owns_session_cursor`, and the two differ on exactly one position:
         `DashboardScreen` owns a sessions cursor and deliberately binds none of
-        `a i r s c f m`. DEC-062's position names `SessionsScreen` and `SessionsPaneScreen`
+        `a i r s f c m`. DEC-062's position names `SessionsScreen` and `SessionsPaneScreen`
         only, and makes an unconfirmed `s`/`c` legal there against `_draw_listing`'s
         rest-on-nothing; the dashboard is a third position that argument does not reach, its
         sessions region is not the focused widget, and the import-time invariant in

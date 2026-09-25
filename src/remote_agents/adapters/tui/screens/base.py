@@ -1519,7 +1519,7 @@ class ChoiceScreen(Screen[None]):
     #: a position cannot gain `highlighted_session` and forget this.
     owns_session_cursor: ClassVar[bool] = False
 
-    #: Whether this screen binds the bare row keys `a i r s c f m` on that cursor.
+    #: Whether this screen binds the bare row keys `a i r s f c m` on that cursor.
     #:
     #: **Not the same question as the flag above, and the difference is DEC-062's whole
     #: position.** That entry makes an unconfirmed `s`/`c` legal on `SessionsScreen` and

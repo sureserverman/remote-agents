@@ -271,7 +271,7 @@ _REMOTE_CONTROL_KEY = "m"
 _REMOTE_CONTROL_WORD = "remote"
 
 #: The row keys a sessions position binds, space-separated, built from the table rather than
-#: written beside it: `a i r s c f m`. The pane title advertised them until the console
+#: written beside it: `a i r s f c m`. The pane title advertised them until the console
 #: facelift (R11) moved each letter, with its word, to the action line under the list.
 ROW_KEY_LETTERS = " ".join(
     [*(key for key, _action, _label, _word in SESSION_ACTION_KEYS), _REMOTE_CONTROL_KEY]

@@ -153,8 +153,8 @@ names the provider to avoid, so they are deliberately different keys.
 Free on both screens that carry the line, which is not the same as being free everywhere:
 `DashboardScreen` binds `d` and inherits `slash`, `o` and `ctrl+t` from the projects picker;
 `LimitsPaneScreen` binds nothing of its own. Neither inherits `SESSION_ACTION_BINDINGS`, whose
-letters (`a i r s c f m`) the dashboard's sessions pane nonetheless *advertises* in its border
-title -- so those letters are avoided here even though nothing would collide today, because a
+letters (`a i r s f c m`) the sessions positions nonetheless *advertise* on their action line
+-- so those letters are avoided here even though nothing would collide today, because a
 key the frame names for one subject must not quietly mean another.
 
 **Nor the session keys that carry those same acts**, and that follows from the sentence above
@@ -182,8 +182,8 @@ unaffected -- see `action_show_projects_pane`, which records the same distinctio
 #: the same key, and it is what `Pilot.press` takes too.
 #:
 #: **A punctuation key on purpose.** Every free letter on this chain is one the frame advertises
-#: for something else: `a i r s c f m` are the sessions pane's row keys, named in its border
-#: title; `d`, `h` and `P` are this screen's; `o`, `p` and `slash` belong to the projects list.
+#: for something else: `a i r s f c m` are the sessions pane's row keys, named on its action
+#: line; `d`, `h` and `P` are this screen's; `o`, `p` and `slash` belong to the projects list.
 #: The rule those comments state is that a key the frame names for one subject must not quietly
 #: mean another, and the honest way to keep it with the letters spent is to stop spending
 #: letters. `,` is also what an owner expects from every other tool that has a settings screen.

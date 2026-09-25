@@ -191,10 +191,12 @@ class ProjectsScreen(ChoiceScreen):
         arrangement, and a reversal of the one before it, which focused the filter on every
         render so typing filtered at once. That is what made every bare letter unavailable as a
         key here; with the rows holding the keyboard, `o` toggles the order and `/` is one
-        keystroke from filtering, which is what the pane title and the hint row advertise.
+        keystroke from filtering, which is what the hint row (and, on the console's pane, the
+        footer line under the list) advertises.
 
-        Two columns: the name, and the project's last-launch age against the right edge, muted,
-        from the same usage read that ordered the list (`RemoteAgentsTui.project_last_used`).
+        Three columns: the name, `registered`/`unregistered`, and the project's last-launch age
+        against the right edge, muted, from the same usage read that ordered the list
+        (`RemoteAgentsTui.project_last_used`).
         Laid out to the pane's measured width, so the rows are redrawn on resize.
         """
         if not self.showing:
