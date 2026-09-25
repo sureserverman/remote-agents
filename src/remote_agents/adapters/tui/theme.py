@@ -126,15 +126,16 @@ def _status_bar_palette(theme: Theme) -> StatusBarPalette:
         colour, _, alpha = chosen.partition(" ")
         if colour == "auto":
             # Textual's "readable text over this background, at this strength", flattened onto
-            # the bar, since tmux has no alpha.
-            colour = text
+            # the bar, since tmux has no alpha. The theme's own foreground, never a resolved
+            # value, so no resolution order can hand this an empty string.
+            colour = theme.foreground or derived["foreground"]
         parsed = Color.parse(colour)
         if alpha:
             parsed = Color.parse(bar).blend(parsed, float(alpha.rstrip("%")) / 100)
         return parsed.hex[:7]
 
-    # The two a grey is flattened onto resolve first; neither of them is ever an `auto`.
-    bar = text = ""
+    # The bar resolves first: a grey with a strength is flattened onto it.
+    bar = ""
     bar = resolve(theme.panel, "panel")
     text = resolve(theme.foreground, "foreground")
     return StatusBarPalette(
