@@ -962,7 +962,9 @@ def test_an_agent_whose_read_failed_keeps_its_row_and_says_so() -> None:
 
 def _paced(label: str, percent: float, resets_in: timedelta | None, **kwargs) -> LimitWindow:
     resets = None if resets_in is None else datetime.now(UTC) + resets_in
-    (row,) = limit_rows((_account("claude", UsageWindow(label, percent, resets_at=resets), **kwargs),))
+    (row,) = limit_rows(
+        (_account("claude", UsageWindow(label, percent, resets_at=resets), **kwargs),)
+    )
     (window,) = row.windows
     return window
 
@@ -986,9 +988,7 @@ def test_five_hour_windows_have_no_pace() -> None:
 
 def test_stale_reading_has_no_pace() -> None:
     """DEC-061: a reading hours old makes no claim about where the account is today."""
-    window = _paced(
-        "week", 7.0, timedelta(days=6), observed=datetime.now(UTC) - timedelta(hours=8)
-    )
+    window = _paced("week", 7.0, timedelta(days=6), observed=datetime.now(UTC) - timedelta(hours=8))
     assert window.expected_percent is None
     assert window.pace_delta is None
 

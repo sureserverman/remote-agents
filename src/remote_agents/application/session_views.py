@@ -748,20 +748,23 @@ bar supports -- it answers "roughly how full", and the percent beside it answers
 """
 
 
-def percent_gauge(percent: float) -> str:
+def percent_gauge(percent: float, cells: int = _GAUGE_CELLS) -> str:
     """The eight-cell bar for a share already expressed as a percentage, bar only.
 
     For the account-wide limits, whose figure the provider publishes as a percent and whose
     percent the surface prints beside the bar in its own column. Same cells, same rounding-up,
     same clamp as `context_gauge`, so the two gauges on one screen cannot fill differently for
     the same share.
+
+    `cells` is for the one wider bar: a paced week window on a wide pane, whose tick needs
+    resolution eight cells do not give (DEC-106). The rounding is still this function's.
     """
-    return _cells(percent / 100)
+    return _cells(percent / 100, cells)
 
 
-def _cells(fraction: float) -> str:
-    filled = min(_GAUGE_CELLS, max(0, ceil(fraction * _GAUGE_CELLS)))
-    return f"{'█' * filled}{'░' * (_GAUGE_CELLS - filled)}"
+def _cells(fraction: float, cells: int = _GAUGE_CELLS) -> str:
+    filled = min(cells, max(0, ceil(fraction * cells)))
+    return f"{'█' * filled}{'░' * (cells - filled)}"
 
 
 def context_gauge(context: ContextWindow) -> str:

@@ -43,6 +43,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import replace
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from backends import SessionUseCaseDouble, backend_for
@@ -50,7 +51,7 @@ from textual.widgets import OptionList
 
 from remote_agents.adapters.tui.app import RemoteAgentsTui
 from remote_agents.adapters.tui.context import TuiContext
-from remote_agents.adapters.tui.rows import limit_rows_content
+from remote_agents.adapters.tui.rows import limit_gauge_content, limit_rows_content
 from remote_agents.adapters.tui.screens.dashboard import (
     _CLAUDE_REMOTE_CONTROL_ROW,
     _EMPTY_LIMITS_ROW,
@@ -66,9 +67,10 @@ from remote_agents.application.remote_control_default import (
     UNAVAILABLE,
     remote_control_default_line,
 )
-from remote_agents.application.session_views import LimitRow, LimitWindow
-from remote_agents.domain.models import SessionRecord
+from remote_agents.application.session_views import LimitRow, LimitWindow, limit_rows
+from remote_agents.domain.models import ProfileId, SessionRecord
 from remote_agents.domain.remote_control import RemoteControlDefault
+from remote_agents.ports.agent_usage import AgentLimits, UsageWindow
 
 #: Wide enough that `limit_row_content` takes its one-line branch for every row here. The
 #: narrow branch is a different layout with its own contract and its own test
@@ -380,7 +382,8 @@ def test_a_row_with_no_windows_draws_empty_bars_then_says_which_silence_it_is() 
 
     for line, phrase in zip(lines[1:], ("never reported", "no reading yet", "unreadable")):
         bars = _gauge_spans(line)
-        assert len(bars) == 2 and all(line[a:b] == "░" * 8 for a, b in bars), line
+        # Empty, whatever their width: the week bar widens on a wide pane (DEC-106).
+        assert len(bars) == 2 and all(set(line[a:b]) == {"░"} for a, b in bars), line
         assert line.index(phrase) > bars[-1][1], f"{phrase!r} should trail the bars.\n" + "\n".join(
             lines
         )
@@ -690,3 +693,97 @@ def test_every_row_draws_every_column(first: tuple[str, ...], second: tuple[str,
         assert len(starts) == 1, f"{label} is drawn at {sorted(starts)}.\n" + "\n".join(lines)
     for line in lines:
         assert line.index("5h") < line.index("wk"), line
+
+
+# --- the pace tick (DEC-106) ----------------------------------------------------------------
+#
+# A week or day window with a live reading carries where an even spend would stand today, and
+# the gauge shows it as a `┃` in its bar. A glyph, not a colour change (DEC-010): the fill on
+# both sides keeps its threshold colour, so the tick alone marks the boundary.
+
+_TICKED_GAUGE = re.compile(r"[█░┃]+")
+
+
+def _style_at(content, index: int) -> str:
+    """The style of the one cell at `index`, read off the spans that cover it."""
+    styles = [str(span.style) for span in content.spans if span.start <= index < span.end]
+    assert len(styles) == 1, f"cell {index} is covered by {styles}"
+    return styles[0]
+
+
+@pytest.mark.parametrize(
+    ("expected", "cells", "index"),
+    [
+        (0, 8, 0),
+        (14, 8, 1),
+        (57, 8, 5),
+        (100, 8, 7),
+        (0, 16, 0),
+        (14, 16, 2),
+        (57, 16, 9),
+        (100, 16, 15),
+    ],
+)
+def test_the_pace_tick_sits_at_the_expected_share(expected: int, cells: int, index: int) -> None:
+    """`round(expected/100 * cells)`, clamped to the last cell so 100% still draws inside."""
+    bar = limit_gauge_content(40, cells, expected).plain
+    assert len(bar) == cells, bar
+    assert bar.count("┃") == 1 and bar.index("┃") == index, bar
+
+
+def test_a_five_hour_gauge_never_has_a_pace_tick() -> None:
+    """Fed from the application, so the rule under test is the whole path's, not a fixture's."""
+    soon = datetime.now(UTC) + timedelta(hours=2)
+    later = datetime.now(UTC) + timedelta(days=6)
+    rows = limit_rows(
+        (
+            AgentLimits(
+                ProfileId("claude"),
+                (
+                    UsageWindow("5h", 40.0, resets_at=soon),
+                    UsageWindow("week", 7.0, resets_at=later),
+                ),
+            ),
+        )
+    )
+    lines = [content.plain for content in limit_rows_content(rows, 80)]
+    gauges = [match.group() for line in lines for match in _TICKED_GAUGE.finditer(line)]
+    assert len(gauges) == 2, lines
+    five_hour, week = gauges
+    assert "┃" not in five_hour, lines
+    assert week.count("┃") == 1, lines
+
+
+def _one_paced_row() -> tuple[LimitRow, ...]:
+    return (
+        LimitRow(
+            "claude",
+            (
+                LimitWindow("5h", 28, "1h"),
+                LimitWindow("week", 71, "3d", expected_percent=57, pace_delta=14),
+            ),
+            None,
+            None,
+        ),
+    )
+
+
+def test_the_week_gauge_widens_with_the_pane_for_its_pace_tick() -> None:
+    """16 cells from a 70-cell pane up, the 8 `_GAUGE_CELLS` below it; the 5h gauge never widens."""
+    for width, week_cells in ((70, 16), (69, 8), (120, 16)):
+        lines = [content.plain for content in limit_rows_content(_one_paced_row(), width)]
+        gauges = [match.group() for line in lines for match in _TICKED_GAUGE.finditer(line)]
+        assert [len(gauge) for gauge in gauges] == [8, week_cells], (width, lines)
+
+
+def test_the_pace_tick_styles() -> None:
+    """The tick is `$text`; fill on both sides of it keeps one threshold colour; the track
+    stays `$secondary`."""
+    content = limit_gauge_content(71, 16, 57)
+    bar = content.plain
+    assert bar == "█████████┃██░░░░", bar
+    tick = bar.index("┃")
+    assert _style_at(content, tick) == "$text"
+    before, after = _style_at(content, tick - 1), _style_at(content, tick + 1)
+    assert before == after == "$warning"
+    assert _style_at(content, len(bar) - 1) == "$secondary"

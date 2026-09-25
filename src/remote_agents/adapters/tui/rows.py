@@ -341,6 +341,22 @@ def _column_labels(seen: Iterable[str]) -> tuple[str, ...]:
     return LIMIT_COLUMNS + tuple(sorted(extra, key=lambda label: (_label_minutes(label), label)))
 
 
+#: How many cells `percent_gauge` draws, asked of it rather than written down again. The
+#: number is `session_views._GAUGE_CELLS`' to own (DEC-043), and a second copy here would be a
+#: lockstep site that nothing checks: the gauge would change width and this pane would keep
+#: reserving the old one.
+_GAUGE_WIDTH = len(percent_gauge(0))
+
+#: From how wide a pane the week gauge widens, and to how many cells (DEC-106). A pace tick
+#: at 8 cells moves in 12.5% steps -- nearly a day of a week -- so where there is room the week
+#: bar doubles. Only the week: a 5h window has no pace, and a wider bar would say nothing more.
+_WIDE_PANE = 70
+_WIDE_WEEK_GAUGE = 16
+
+#: The pace tick: where an even spend would stand today, drawn inside the bar it measures.
+PACE_TICK = "┃"
+
+
 @dataclass(frozen=True, slots=True)
 class _LimitColumns:
     """The column widths of one limits render, measured across every row in it.
@@ -357,6 +373,8 @@ class _LimitColumns:
     percent: int
     reset: int
     labels: tuple[str, ...] = LIMIT_COLUMNS
+    week_gauge: int = _GAUGE_WIDTH
+    """How many cells the week column's bar is drawn in: `_WIDE_WEEK_GAUGE` on a wide pane."""
     """Which window kinds the table has a column for, left to right: `_column_labels`.
 
     A column is a *window kind*, not a position. Positional layout was BL-046: an agent that
@@ -384,12 +402,6 @@ _MINIMUM_PROFILE_COLUMN = 3
 #: and two literal `2`s that must match are two chances to change one of them.
 _GROUP_GUTTER = 2
 
-#: How many cells `percent_gauge` draws, asked of it rather than written down again. The
-#: number is `session_views._GAUGE_CELLS`' to own (DEC-043), and a second copy here would be a
-#: lockstep site that nothing checks: the gauge would change width and this pane would keep
-#: reserving the old one.
-_GAUGE_WIDTH = len(percent_gauge(0))
-
 
 def _limit_columns(rows: Sequence[LimitRow], width: int | None = None) -> _LimitColumns:
     """The four column widths, measured across every row, with the profile capped to fit.
@@ -412,7 +424,38 @@ def _limit_columns(rows: Sequence[LimitRow], width: int | None = None) -> _Limit
         percent=percent,
         reset=reset,
         labels=labels,
+        week_gauge=_WIDE_WEEK_GAUGE if width is not None and width >= _WIDE_PANE else _GAUGE_WIDTH,
     )
+
+
+def _gauge_cells(label: str, columns: _LimitColumns) -> int:
+    return columns.week_gauge if label == "week" else _GAUGE_WIDTH
+
+
+def limit_gauge_content(percent: int, cells: int, expected: int | None) -> Content:
+    """A window's bar, with the pace tick in it when `expected` is given.
+
+    The tick sits at `round(expected/100 * cells)`, clamped to the last cell so a spent window
+    still draws it inside. It replaces the cell it lands on rather than widening the bar, and it
+    is `$text`; the fill keeps its threshold colour on both sides of it and the track stays
+    `$secondary`, so the glyph alone marks where an even spend would be (DEC-010).
+    """
+    bar = percent_gauge(percent, cells)
+    filled = len(bar.rstrip("░"))
+    fill = _percent_style(percent)
+    if expected is None:
+        return Content.assemble((bar[:filled], fill), (bar[filled:], "$secondary"))
+    tick = min(cells - 1, max(0, round(expected / 100 * cells)))
+    parts = []
+    for start, end in ((0, min(tick, filled)), (min(tick, filled), tick)):
+        if end > start:
+            parts.append((bar[start:end], fill if start < filled else "$secondary"))
+    parts.append((PACE_TICK, "$text"))
+    rest = bar[tick + 1 :]
+    after = max(0, filled - tick - 1)
+    parts.append((rest[:after], fill))
+    parts.append((rest[after:], "$secondary"))
+    return Content.assemble(*(part for part in parts if part[0]))
 
 
 def _capped_profile(
@@ -465,13 +508,12 @@ def _window_content(row: LimitRow, window, columns: _LimitColumns, *, last: bool
     `cell_length`, tipping a row that fits into the narrow branch on the strength of spaces
     the owner cannot see.
     """
-    bar = percent_gauge(window.percent)
-    filled = bar.rstrip("░")
     cell = Content.assemble(
         (_window_label(window).ljust(columns.label), MUTED),
         (" ", None),
-        (filled, _percent_style(window.percent)),
-        (bar[len(filled) :], "$secondary"),
+        limit_gauge_content(
+            window.percent, _gauge_cells(window.label, columns), window.expected_percent
+        ),
         (f" {f'{window.percent}%'.rjust(columns.percent)}", None),
     )
     if not columns.reset:
@@ -492,7 +534,7 @@ def _empty_window_content(label: str, columns: _LimitColumns, *, last: bool) -> 
     cell = Content.assemble(
         (_WINDOW_LABELS.get(label, label).ljust(columns.label), MUTED),
         (" ", None),
-        (percent_gauge(0), "$secondary"),
+        (percent_gauge(0, _gauge_cells(label, columns)), "$secondary"),
         (" " * (1 + columns.percent), None),
     )
     if columns.reset and not last:
@@ -554,10 +596,11 @@ def _table_width(columns: _LimitColumns) -> int:
     date, an absence phrase -- takes a line of its own when it does not fit, rather than
     flipping the whole pane between layouts as a reading ages.
     """
-    cell = columns.label + 1 + _GAUGE_WIDTH + 1 + columns.percent
+    cell = columns.label + 1 + 1 + columns.percent
     if columns.reset:
         cell += 1 + columns.reset
-    return columns.profile + len(columns.labels) * (_GROUP_GUTTER + cell)
+    gauges = sum(_gauge_cells(label, columns) for label in columns.labels)
+    return columns.profile + len(columns.labels) * (_GROUP_GUTTER + cell) + gauges
 
 
 def _note(row: LimitRow, columns: _LimitColumns) -> tuple[Content, Content]:
