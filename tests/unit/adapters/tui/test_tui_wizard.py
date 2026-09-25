@@ -1055,3 +1055,36 @@ async def test_the_name_entry_still_refuses_an_empty_name_when_it_is_submitted()
     assert before == "NAME"
     assert after == "NAME", "an empty project name was accepted"
     assert any("lowercase letters, digits" in message for message in rejected), rejected
+
+
+# --- console facelift sub-plan 2 Task 2.2: the new project's name step publishes typing ---------
+
+
+async def test_the_new_project_name_step_publishes_typing_and_escape_publishes_its_end() -> None:
+    typing: list[bool | None] = []
+
+    async def publish(value: bool | None) -> None:
+        typing.append(value)
+
+    async def holds_slot() -> bool:
+        return True
+
+    app = RemoteAgentsTui(_context(console_publish_typing=publish, console_holds_slot=holds_slot))
+
+    async with app.run_test() as pilot:
+        await app.action_add_project()
+        await pilot.pause()
+        before = list(typing)
+        await app.screen.choose(_keys(app)[0])
+        await pilot.pause()
+        await app.workers.wait_for_complete()
+        on_name = list(typing)
+        await pilot.press("escape")
+        await pilot.pause()
+        await app.workers.wait_for_complete()
+        left = list(typing)
+
+    assert True not in before, "the area list is not a text entry"
+    assert on_name[-1] is True, on_name
+    assert left[-1] is False, left
+    assert typing[-1] is None

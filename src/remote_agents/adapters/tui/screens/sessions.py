@@ -357,6 +357,7 @@ _SHOW_PROJECTS_BINDING = Binding("p", "show_projects_pane", "Projects", show=Fal
 #: two places is the drift `test_the_function_keys_are_one_table.py` exists to catch.
 _DETAIL_KEY = "d"
 
+
 def session_key_hint_content(base: str, *, live: bool) -> Content:
     """The hint row for a console pane: its own keys, then the F-keys, dim when they are inert.
 
@@ -1859,11 +1860,22 @@ class SessionsPaneScreen(SessionsScreen):
                     continue
                 try:
                     await publish(wanted)
+                    await self._publish_selected_flag(wanted is not None)
                 except Exception:
                     _LOG.debug("the console selection could not be published", exc_info=True)
                 else:
                     self._written_selection = wanted
                     self._ever_written = True
+
+    async def _publish_selected_flag(self, selected: bool | None) -> None:
+        """The bar's half of the same fact: whether there is a row for a session key to act on.
+
+        Written inside the selection's own lock and right after it, so the flag can never
+        describe a different cursor from the id the other panes read (DEC-105).
+        """
+        flag = self.services.console_publish_session_selected
+        if flag is not None:
+            await flag(selected)
 
     async def on_unmount(self) -> None:
         """A pane that is gone has no cursor, so it must not leave one published.
@@ -1881,6 +1893,11 @@ class SessionsPaneScreen(SessionsScreen):
         self._pending_selection = None
         self._selection_pending = True
         await self._write_selection()
+        # Unset, not `False`: a pane that is gone makes no claim either way.
+        try:
+            await self._publish_selected_flag(None)
+        except Exception:
+            _LOG.debug("the console selected flag could not be unset", exc_info=True)
 
     async def action_session_detail(self) -> None:
         """`d` on the highlighted row opens today's detail screen, unchanged."""

@@ -410,6 +410,17 @@ class ChoiceScreen(Screen[None]):
     async def populate(self) -> None:
         """Render this screen's rows. Overridden by every concrete screen."""
 
+    def on_screen_resume(self) -> None:
+        """A commitment screen at the front means the owner is typing: the console bar dims
+        the keys this screen refuses and says `esc cancels` (DEC-105)."""
+        if self.entry_is_a_commitment:
+            self.tui.publish_typing(True)
+
+    def on_screen_suspend(self) -> None:
+        """Leaving the front -- popped by escape or submit, or covered -- ends the typing."""
+        if self.entry_is_a_commitment:
+            self.tui.publish_typing(False)
+
     async def on_reveal(self) -> None:
         """Re-render whatever this screen shows, because it just became active again.
 

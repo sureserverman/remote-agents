@@ -1833,3 +1833,63 @@ def test_the_session_key_hint_keeps_its_own_ten_second_clock() -> None:
     assert _SESSION_KEY_HINT_REFRESH != _SESSIONS_AUTO_REFRESH, (
         "one clock for two unrelated cadences is how the first of them got six times slower"
     )
+
+
+# --- console facelift sub-plan 2 Task 2.2: the selection flag the console bar dims by -------------
+
+
+async def test_the_pane_publishes_selected_on_a_row_off_a_vanished_one_and_unset_on_exit() -> None:
+    console = SelectionConsole()
+    flags: list[bool | None] = []
+
+    async def publish_selected(value: bool | None) -> None:
+        flags.append(value)
+
+    first, second, third = _three()
+    launcher = _Launcher((first, second, third))
+    app = SessionsPane(
+        _context(
+            (),
+            sessions=launcher,
+            console_publish_selection=console.publish,
+            console_read_selection=console.read,
+            console_publish_session_selected=publish_selected,
+        )
+    )
+
+    async with app.run_test(size=(120, 30)) as pilot:
+        await pilot.pause()
+        screen = app.screen
+        choices = screen.query_one("#choices", OptionList)
+        choices.highlighted = 2
+        await pilot.pause()
+        await app.workers.wait_for_complete()
+        on_row = list(flags)
+
+        launcher.records = (first, second)
+        await screen._auto_reload()
+        await pilot.pause()
+        await app.workers.wait_for_complete()
+        vanished = list(flags)
+
+    assert on_row and on_row[-1] is True, on_row
+    assert vanished[-1] is False, vanished
+    assert flags[-1] is None, "a pane that exits must unset the flag, not leave it standing"
+
+
+async def test_the_full_sessions_position_publishes_no_selected_flag() -> None:
+    """Only the console's own sessions pane owns the cursor the bar reads (as for the id)."""
+    flags: list[bool | None] = []
+
+    async def publish_selected(value: bool | None) -> None:
+        flags.append(value)
+
+    app = RemoteAgentsTui(_context(_three(), console_publish_session_selected=publish_selected))
+    async with app.run_test(size=(120, 30)) as pilot:
+        await pilot.pause()
+        await app.show_sessions()
+        await pilot.pause()
+        app.screen.query_one("#choices", OptionList).highlighted = 1
+        await pilot.pause()
+
+    assert flags == []

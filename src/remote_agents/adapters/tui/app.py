@@ -439,6 +439,14 @@ class RemoteAgentsTui(App[AttachRequest | None]):
         #: DEC-012's registered-first-then-alphabetical fallback after one round trip.
         self._raw_catalogue = context.backend.catalogue
         self._context_timer: Timer | None = None
+        # The typing flag the console bar reads, coalesced like the selection: one lock, and
+        # a slot a waiter reads rather than a value it captured, so the last write is the
+        # newest thing asked for. `_typing_written` is what the bar was last told, or `None`
+        # before anything was -- which is what `on_unmount` reads to decide it owes a clear.
+        self._typing_lock = asyncio.Lock()
+        self._typing_wanted: bool | None = None
+        self._typing_pending = False
+        self._typing_written: bool | None = None
         self._context_windows: dict[str, ContextWindow] = {}
         """The last context reading per session, keyed by session id as a string.
 
@@ -674,6 +682,45 @@ class RemoteAgentsTui(App[AttachRequest | None]):
             return getattr(screen, "subject_session", lambda: None)() is not None
         return self.services.console_holds_slot is not None
 
+    def publish_typing(self, typing: bool) -> None:
+        """Tell the console bar whether a text entry holds the keyboard (DEC-105).
+
+        Called by a commitment screen as it comes to the front and as it leaves it. Scheduled,
+        because neither hook may wait on tmux; ordered by `_write_typing`.
+        """
+        if self.services.console_publish_typing is None:
+            return
+        self._typing_wanted = typing
+        self._typing_pending = True
+        self.run_worker(self._write_typing(), name="publish-typing", exit_on_error=False)
+
+    async def _write_typing(self) -> None:
+        """Write the newest typing value, from a console pane only, one write at a time.
+
+        Gated on `console_holds_slot` for the reason `SessionsScreen._publish_selection`
+        records: a stray `tui` on the console's server is classified CONSOLE too, and its
+        rename box is not the console's. A failure is logged and leaves the last value; the
+        next change corrects it.
+        """
+        publish = self.services.console_publish_typing
+        holds_slot = self.services.console_holds_slot
+        if publish is None or holds_slot is None:
+            return
+        async with self._typing_lock:
+            while self._typing_pending:
+                self._typing_pending = False
+                wanted = self._typing_wanted
+                if wanted == self._typing_written:
+                    continue
+                try:
+                    if not await holds_slot():
+                        continue
+                    await publish(wanted)
+                except Exception:
+                    _LOG.debug("the console typing flag could not be published", exc_info=True)
+                else:
+                    self._typing_written = wanted
+
     async def on_unmount(self) -> None:
         """Reclaim what the backend's usage readers hold open, as this process leaves.
 
@@ -682,6 +729,12 @@ class RemoteAgentsTui(App[AttachRequest | None]):
         close can run on the loop that started it. Bounded like the service's, for the same
         reason: a close that hangs must not keep the pane from exiting.
         """
+        # And unset the typing flag this process published, awaited because nothing runs after
+        # this: a pane that exits mid-rename must not leave the bar saying `esc cancels`.
+        if self._typing_written is not None:
+            self._typing_wanted = None
+            self._typing_pending = True
+            await self._write_typing()
         close = self.services.backend.close_usage_readers
         if close is None:
             return

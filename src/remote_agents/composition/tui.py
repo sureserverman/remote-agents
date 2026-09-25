@@ -388,6 +388,8 @@ def local_context(config, connection, paths: ProductionPaths):
     console_read_selection = None
     console_holds_slot = None
     console_status_bar = None
+    console_publish_session_selected = None
+    console_publish_typing = None
     hide_in_console = None
     console_recovery = None
     # The classification itself, kept as a value rather than left inside the `if`: the surface
@@ -462,6 +464,10 @@ def local_context(config, connection, paths: ProductionPaths):
         from remote_agents.adapters.tui.keys import status_bar_keys
 
         console_status_bar = partial(runtime.gateway.install_status_bar, status_bar_keys())
+        # The bar's two flags, straight onto the gateway for `console_publish_selection`'s
+        # reason: one `set-option` each, none of the composer's arrangement reasoning.
+        console_publish_session_selected = runtime.gateway.publish_session_selected
+        console_publish_typing = runtime.gateway.publish_typing
         # The stop paths ask the console to step out of the way before a pane is destroyed.
         # Wired only where a composer exists: elsewhere `SessionService` keeps the destruction
         # contract it has always had. The bot builds a composer of its own for this one
@@ -518,6 +524,8 @@ def local_context(config, connection, paths: ProductionPaths):
         console_read_selection=console_read_selection,
         console_holds_slot=console_holds_slot,
         console_status_bar=console_status_bar,
+        console_publish_session_selected=console_publish_session_selected,
+        console_publish_typing=console_publish_typing,
         console_recovery=console_recovery,
         # The declared boundary's answer to where a surface preference lives, not this
         # surface's own (DEC-046): the path is wired here and read through a total reader.

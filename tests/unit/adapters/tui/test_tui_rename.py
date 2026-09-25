@@ -499,3 +499,121 @@ async def test_a_session_that_ended_while_the_box_was_open_lands_on_the_list() -
 
     assert launcher.renamed == [], "a session that has gone must not be renamed"
     assert step == "SESSIONS", f"landed on {step} rather than the list"
+
+
+# --- console facelift sub-plan 2 Task 2.2: the rename box tells the console bar it is typing ------
+
+
+class _BarFlags:
+    """What a console pane would publish to the bar's typing option, in order."""
+
+    def __init__(self, *, holds_slot: bool = True) -> None:
+        self.typing: list[bool | None] = []
+        self._holds_slot = holds_slot
+
+    async def publish_typing(self, value: bool | None) -> None:
+        self.typing.append(value)
+
+    async def holds_slot(self) -> bool:
+        return self._holds_slot
+
+
+def _console_context(launcher: _Listing, bar: _BarFlags) -> TuiContext:
+    return replace(
+        _context(launcher),
+        console_publish_typing=bar.publish_typing,
+        console_holds_slot=bar.holds_slot,
+    )
+
+
+async def _open_rename(app: RemoteAgentsTui, pilot, record: SessionRecord) -> None:
+    await app.show_detail(str(record.session_id))
+    await pilot.pause()
+    await app.screen.choose("rename")
+    await pilot.pause()
+    await app.workers.wait_for_complete()
+
+
+async def test_the_rename_box_publishes_typing_and_escape_publishes_its_end() -> None:
+    record = _record()
+    bar = _BarFlags()
+    app = RemoteAgentsTui(_console_context(_Listing((record,)), bar))
+
+    async with app.run_test() as pilot:
+        await _open_rename(app, pilot, record)
+        opened = list(bar.typing)
+        await pilot.press("escape")
+        await pilot.pause()
+        await app.workers.wait_for_complete()
+        left = list(bar.typing)
+
+    assert opened and opened[-1] is True, opened
+    assert left[-1] is False, left
+    assert bar.typing[-1] is None, "a process that exits must unset what it published"
+
+
+async def test_submitting_a_rename_publishes_the_end_of_typing() -> None:
+    record = _record()
+    bar = _BarFlags()
+    app = RemoteAgentsTui(_console_context(_Listing((record,)), bar))
+
+    async with app.run_test() as pilot:
+        await _open_rename(app, pilot, record)
+        app.screen.query_one(Input).value = "nightly"
+        await app.screen.submit("nightly")
+        await pilot.pause()
+        await app.workers.wait_for_complete()
+        after = list(bar.typing)
+
+    assert True in after and after[-1] is False, after
+
+
+async def test_a_rename_screen_that_raises_leaves_no_typing_claim(monkeypatch) -> None:
+    """The process dies with the screen; what it last said about typing must not outlive it."""
+    import pytest
+
+    from remote_agents.adapters.tui.screens.sessions import RenameScreen
+
+    async def raising(self, value: str) -> None:
+        raise RuntimeError("an unexpected failure inside the rename box")
+
+    monkeypatch.setattr(RenameScreen, "submit", raising)
+    record = _record()
+    bar = _BarFlags()
+    app = RemoteAgentsTui(_console_context(_Listing((record,)), bar))
+
+    with pytest.raises(RuntimeError):
+        async with app.run_test() as pilot:
+            await _open_rename(app, pilot, record)
+            await pilot.press("enter")
+            await pilot.pause()
+
+    assert True in bar.typing
+    assert bar.typing[-1] in (None, False), bar.typing
+
+
+async def test_nothing_is_published_by_a_process_outside_the_console_panes() -> None:
+    """A stray `remote-agents tui` on the console's server must not drive the owner's bar."""
+    record = _record()
+    bar = _BarFlags(holds_slot=False)
+    app = RemoteAgentsTui(_console_context(_Listing((record,)), bar))
+
+    async with app.run_test() as pilot:
+        await _open_rename(app, pilot, record)
+        await pilot.press("escape")
+        await pilot.pause()
+
+    assert bar.typing == []
+
+
+async def test_nothing_is_published_under_bare_tui_hosting() -> None:
+    """Bare `tui` has no console, so no publisher is wired and the rename box works as before."""
+    record = _record()
+    app = RemoteAgentsTui(_context(_Listing((record,))))
+
+    async with app.run_test() as pilot:
+        await _open_rename(app, pilot, record)
+        step = position(app)
+
+    assert step == "RENAME"
+    assert app._services.console_publish_typing is None

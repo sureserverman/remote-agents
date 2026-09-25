@@ -136,6 +136,11 @@ class TuiContext:
     # hosting only. The key table is bound in by the composition root, so the surface hands
     # over the one thing it alone knows: which theme the owner just chose.
     console_status_bar: Callable[[StatusBarPalette], Awaitable[None]] | None = None
+    # The status bar's two flags (DEC-105): whether the sessions cursor rests on a row, and
+    # whether a text entry holds the keyboard. `None` unsets. Wired under console hosting
+    # only; the sessions pane is the one writer of the first, a commitment screen of the second.
+    console_publish_session_selected: Callable[[bool | None], Awaitable[None]] | None = None
+    console_publish_typing: Callable[[bool | None], Awaitable[None]] | None = None
     console_recovery: RecoveryReport | None = None
     # Where this surface remembers the one thing it remembers -- which order the projects
     # pane opens in. A *path*, wired by the composition root (DEC-046), rather than a
