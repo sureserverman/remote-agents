@@ -231,11 +231,6 @@ class ProjectsScreen(ChoiceScreen):
         if not keep_focus:
             entry.value = ""
 
-    #: What the last draw laid out, so the cursor's marker can be moved without a refill.
-    _drawn_projects: dict[str, CatalogProject] = {}  # noqa: RUF012
-    _project_width: int | None = None
-    _marked_project: str | None = None
-
     def _project_prompt(self, project: CatalogProject, *, marked: bool = False) -> Content:
         return project_row_content(
             project.name,
@@ -255,7 +250,12 @@ class ProjectsScreen(ChoiceScreen):
             return
         choices = self.query_one("#choices", OptionList)
         index = choices.highlighted
-        key = choices.get_option_at_index(index).id if index is not None else None
+        key = None
+        if index is not None:
+            # Read from the list a moment ago, but a refill can still leave it behind; a row
+            # that has gone is nothing marked, as in the loop below.
+            with contextlib.suppress(OptionDoesNotExist):
+                key = choices.get_option_at_index(index).id
         if key == self._marked_project:
             return
         for row, marked in ((self._marked_project, False), (key, True)):
@@ -343,6 +343,11 @@ class ProjectsScreen(ChoiceScreen):
         #: the two ways out of the filter — enter and down — have to apply it *now* rather
         #: than wait, and they need the query to do it.
         self._pending_query: str | None = None
+        #: What the last draw laid out, so the cursor's marker can be moved without a refill.
+        #: Per instance: a class-level `{}` would be one dict shared by every projects screen.
+        self._drawn_projects: dict[str, CatalogProject] = {}
+        self._project_width: int | None = None
+        self._marked_project: str | None = None
 
     def on_input_changed(self, event: Input.Changed) -> None:
         """Schedule the re-search, replacing any the previous keystroke scheduled.

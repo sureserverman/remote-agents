@@ -854,3 +854,32 @@ def test_the_marker_is_drawn_in_the_sessions_marker_s_style() -> None:
     assert len(marked.plain) == len(plain.plain) == 60
     styles = {marked.plain[s.start : s.end]: str(s.style) for s in marked.spans}
     assert styles.get(ACTIVE_MARKER) == str(ACTIVE_STYLE), styles
+
+
+def test_each_projects_screen_owns_its_drawn_rows() -> None:
+    """Instance state, never a class-level `{}` two screens would share (release review)."""
+    from remote_agents.adapters.tui.screens.launch import ProjectsScreen
+
+    assert "_drawn_projects" not in vars(ProjectsScreen)
+    first, second = ProjectsPaneScreen(), ProjectsPaneScreen()
+    assert first._drawn_projects is not second._drawn_projects
+
+
+async def test_the_marker_repaint_survives_a_cursor_row_that_is_gone() -> None:
+    """A highlighted index the list no longer holds reads as nothing marked, never a crash
+    out of an event handler (release review)."""
+    from textual.widgets.option_list import OptionDoesNotExist
+
+    app = ProjectsPane(_context())
+    async with app.run_test(size=(120, 30)) as pilot:
+        await pilot.pause()
+        choices = app.screen.query_one("#choices", OptionList)
+
+        def gone(_index):
+            raise OptionDoesNotExist("gone mid-refill")
+
+        choices.get_option_at_index = gone
+        app.screen._marked_project = "something-else"
+        app.screen._repaint_project_marker()
+        await pilot.pause()
+        assert app.screen._marked_project is None
