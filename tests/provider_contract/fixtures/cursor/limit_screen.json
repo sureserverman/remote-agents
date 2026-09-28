@@ -1,0 +1,6 @@
+{
+  "_measured": true,
+  "_provenance": "Captured 2026-09-28 from cursor-agent 2026.09.28-64d2043 (auto-updated from 2026.09.26 during the session) in a throwaway tmux server (120x40), account at 100% of both monthly pools with on-demand usage disallowed (GetHardLimit: noUsageBasedAllowed). Auto still answered (bonus usage); a named API-pool model (`--model gpt-5.2`) drew this screen. The workspace path is anonymised. The prompt was not consumed: it stays in the composer, and a second Enter resubmits it and draws the same error.",
+  "marker": "You're out of usage.",
+  "composer": "draft"
+}

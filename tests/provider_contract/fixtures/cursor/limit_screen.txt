@@ -1,0 +1,40 @@
+
+
+  Cursor Agent
+  v2026.09.28-64d2043
+  Tip: Type ? in the prompt bar to show in-app hints.
+
+
+
+
+  → Reply with the single word ok.
+
+
+  GPT-5.2 Medium · allowlist ·
+  ~/dev/example-project · HEAD*
+
+  Error: Increase limits for faster responses
+  You're out of usage. Switch to Auto, or ask your admin to increase your limit to continue.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

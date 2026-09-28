@@ -1,0 +1,6 @@
+{
+  "_measured": false,
+  "_provenance": "Not driven to a limit: the owner ruled on 2026-09-28 not to spend Claude quota for the capture. The sentence is read out of the installed bundle (claude 2.1.284): `Yh(e,n,r,s)` returns `You've hit your ${label}${ · resets <time>}${ · progress saved}`, and `bme` maps five_hour -> 'session limit', seven_day -> 'weekly limit', seven_day_opus -> 'Opus limit', seven_day_sonnet -> 'Sonnet limit', seven_day_overage_included -> 'Fable limit', overage -> 'usage credit limit'. Three real instances of the session form are on record in the owner's agent_activity table (2026-09-23/24), e.g. `You've hit your session limit · resets 10:50am (Europe/London)`. Claude reports the stop through its StopFailure hook, so no pane watch reads this screen; the text is what the hint parser reads.",
+  "marker": "You've hit your",
+  "composer": null
+}
