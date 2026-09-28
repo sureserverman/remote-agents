@@ -92,5 +92,10 @@ def descriptor() -> ProviderDescriptor:
                 r"Approaching rate limits",
                 r"Hooks need review",
             ),
+            # 0.158.0: `/exit` mid-turn prints "Disconnected from this task. Any running work
+            # continues." and the app server finished the turn 23 s later (`task_complete`);
+            # `Esc` aborted it (`turn_aborted`, reason `interrupted`) and left the composer
+            # empty. Measured 2026-09-28 in a disposable CODEX_HOME.
+            interrupt=("Escape",),
         ),
     )

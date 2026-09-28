@@ -267,6 +267,9 @@ def test_a_codex_stop_sends_every_key_over_the_screens_between_them() -> None:
 
     panes = Path(__file__).resolve().parents[3] / "fixtures/panes"
     screens = [
+        # Read twice: once for whether a turn needs interrupting first (it does not), once by
+        # the stop's own check.
+        (panes / "codex" / "idle.txt").read_text(encoding="utf-8"),
         (panes / "codex" / "idle.txt").read_text(encoding="utf-8"),
         (panes / "stop_sequence" / "codex_after_exit_typed.txt").read_text(encoding="utf-8"),
         (panes / "stop_sequence" / "codex_after_first_enter.txt").read_text(encoding="utf-8"),
@@ -288,6 +291,95 @@ def test_a_codex_stop_sends_every_key_over_the_screens_between_them() -> None:
     asyncio.run(terminal.graceful_stop(pane.session_id, ProfileId("codex")))
 
     assert pane.keys == list(keys)
+
+
+# --- Codex 0.158.0, measured 2026-09-28: `/exit` mid-turn left the app server running it ---
+
+#: Its title while it streams its answer: the screen alone reads idle (`codex_0158_streaming.txt`).
+_SPINNING = "⠏ ⠏ | w"
+
+
+class _TurnPane:
+    """A Codex pane whose title spins until `Escape` is pressed, or for good with `stuck`."""
+
+    def __new__(cls, screens: list[str], *, stuck: bool = False):
+        from .test_send_prompt import PromptPane
+
+        class Pane(PromptPane):
+            async def run(self, *argv: str) -> str:
+                if "#{pane_title}" in argv:
+                    self.calls.append(argv)
+                    ended = not stuck and "Escape" in self.keys
+                    return "Count to 600 | w" if ended else _SPINNING
+                return await super().run(*argv)
+
+        return Pane(screens, profile="codex")
+
+
+def _codex_terminal(pane) -> TmuxTerminal:
+    from remote_agents.adapters.agents.registry import profile_composers
+    from remote_agents.adapters.tmux.runtime import TerminalWaits
+
+    return TmuxTerminal(
+        TmuxGateway("remote-agents-test-graceful", pane),
+        {},
+        {
+            ProfileId("codex"): LaunchProfile(
+                "/usr/bin/codex",
+                ("/usr/bin/codex",),
+                {},
+                None,
+                graceful_keys=("/exit", "Enter", "Enter"),
+            )
+        },
+        startup_timeout=0.05,
+        composers=profile_composers(),
+        waits=TerminalWaits(interrupt=0.3),
+    )
+
+
+def test_a_codex_stop_mid_turn_interrupts_the_turn_before_it_exits() -> None:
+    """Without the `Escape` the pane closed and the app server finished the turn anyway."""
+    import asyncio
+
+    pane = _TurnPane(
+        _panes(
+            "stop_sequence/codex_0158_streaming.txt",
+            "stop_sequence/codex_0158_interrupted.txt",
+            "stop_sequence/codex_0158_interrupted.txt",
+        )
+    )
+
+    asyncio.run(_codex_terminal(pane).graceful_stop(pane.session_id, ProfileId("codex")))
+
+    assert pane.keys == ["Escape", "/exit", "Enter", "Enter"]
+
+
+def test_a_codex_turn_that_will_not_end_is_still_stopped() -> None:
+    """The interrupt is bounded: the stop goes on as it did before the interrupt existed."""
+    import asyncio
+
+    pane = _TurnPane(_panes("stop_sequence/codex_0158_streaming.txt"), stuck=True)
+
+    asyncio.run(_codex_terminal(pane).graceful_stop(pane.session_id, ProfileId("codex")))
+
+    assert pane.keys == ["Escape", "/exit", "Enter", "Enter"]
+
+
+def test_a_codex_dialog_mid_turn_gets_no_escape() -> None:
+    """`Esc` on an approval answers it (declines), which is the owner's call, not a stop's."""
+    import asyncio
+
+    from remote_agents.ports.terminal import AGENT_ASKING
+
+    pane = _TurnPane(_panes("codex/dialog_approval.txt"))
+
+    observation = asyncio.run(
+        _codex_terminal(pane).graceful_stop(pane.session_id, ProfileId("codex"))
+    )
+
+    assert pane.keys == []
+    assert observation.detail == AGENT_ASKING
 
 
 # --- cursor-agent, measured 2026-09-24 (`fixtures/panes/stop_sequence/`): 2026.09.18-9a7762b, ---

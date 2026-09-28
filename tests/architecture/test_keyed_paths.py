@@ -107,6 +107,11 @@ _GUARDED: dict[tuple[str, str], tuple[str, str, str]] = {
         "unasked",
         "a draft, shell mode, a dialog or the open Remote Control menu; a dialog between keys",
     ),
+    ("_interrupt_running_turn", "interrupt"): (
+        "running",
+        "running",
+        "anything but a running turn (a dialog reads DIALOG, not BUSY); before each later key too",
+    ),
     ("_remote_control", "REMOTE_CONTROL_ENABLE_KEYS"): (
         "lambda",
         "unasked",

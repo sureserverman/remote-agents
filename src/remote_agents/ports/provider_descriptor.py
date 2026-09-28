@@ -141,6 +141,11 @@ class ComposerScreen:
     transcript and are skipped. Empty means the agent draws no end line, and its turn has ended
     when nothing on screen or in its title says busy -- Codex, whose title spinner runs for the
     whole turn."""
+    interrupt: tuple[str, ...] = ()
+    """Keys that end a running turn, sent before a stop's own keys when the pane reads BUSY, for
+    an agent whose exit leaves its turn running. Codex 0.158.0 runs turns in a shared app server,
+    so `/exit` mid-turn only disconnects the pane and the server finishes the turn; its `Esc`
+    aborts it. Empty for an agent whose exit takes the turn with it."""
 
 
 @dataclass(frozen=True, slots=True)

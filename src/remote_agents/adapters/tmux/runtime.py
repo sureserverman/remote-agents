@@ -126,6 +126,10 @@ class TerminalWaits:
     """The whole of one relayed delivery, every tmux call in it included. The bot handles one
     update at a time, so a tmux call that never returned would otherwise freeze it."""
 
+    interrupt: float = 5.0
+    """A turn being aborted before a stop's own keys. Codex 0.158.0 drew its interrupted line and
+    dropped its title spinner within 1.5 s; a turn still running after this is stopped anyway."""
+
 
 #: What a caller that has no opinion gets, so the production path names nothing.
 _DEFAULT_WAITS = TerminalWaits()
@@ -573,6 +577,8 @@ class TmuxTerminal:
             return not guarded or not dialog_on_screen(capture, descriptor)
 
         try:
+            if guarded and descriptor.composer is not None and descriptor.composer.interrupt:
+                await self._interrupt_running_turn(session_id, descriptor)
             refused = await self._gateway.send_keys_when(
                 session_id, profile.graceful_keys, stoppable, between=unasked
             )
@@ -618,6 +624,42 @@ class TmuxTerminal:
                 return observation
             await asyncio.sleep(0.01)
         return TerminalObservation(session_id, live=True, preserved=False, detail=GRACEFUL_TIMEOUT)
+
+    async def _interrupt_running_turn(
+        self, session_id: SessionId, descriptor: ProviderDescriptor
+    ) -> None:
+        """End a running turn before a stop, for an agent whose exit leaves it running.
+
+        Without this a "Stop and close" on a busy Codex 0.158.0 pane closed the pane and the app
+        server went on to finish the turn (`ComposerScreen.interrupt`). Only onto a screen
+        reading BUSY with its title, which is the only place Codex marks a turn while it streams
+        its answer; a dialog reads DIALOG and gets nothing, as it does from the stop's own keys.
+
+        The title is read just before the key lock, so a turn that ends in that gap gets an
+        `Esc` on an idle composer. Measured: that only swaps Codex's hint line for "esc again to
+        edit previous message", and `/exit Enter Enter` still ends it. A turn still running once
+        `TerminalWaits.interrupt` is up is left to the stop's own keys, as before this existed.
+        """
+        assert descriptor.composer is not None
+        interrupt = descriptor.composer.interrupt
+        title = (await self._gateway.pane_title(session_id)).rstrip("\n")
+
+        def running(capture: str) -> bool:
+            return classify(capture, descriptor, title) is PaneState.BUSY
+
+        refused = await self._gateway.send_keys_when(
+            session_id, interrupt, running, between=running
+        )
+        if refused is not None:
+            return
+        deadline = asyncio.get_running_loop().time() + self._waits.interrupt
+        while asyncio.get_running_loop().time() < deadline:
+            await asyncio.sleep(0.1)
+            title = (await self._gateway.pane_title(session_id)).rstrip("\n")
+            capture = await self._gateway.capture(session_id, styled=True)
+            if classify(capture, descriptor, title) is not PaneState.BUSY:
+                return
+        _LOG.warning("%s's turn was still running when its stop went on", session_id)
 
     async def confirm_ready(
         self, session_id: SessionId, profile_id: ProfileId
