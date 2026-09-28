@@ -19,8 +19,9 @@ from datetime import datetime
 from remote_agents.ports.agent_activity import LimitHit
 from remote_agents.ports.limit_screen import LimitScreen
 
-#: Anchored at the start of a line (Cursor indents it two spaces), for Codex's reason.
-_STOP = r"^\W*You're out of usage\."
+#: Anchored at the start of a line and led by indentation only (Cursor indents it two spaces),
+#: never by its composer's `→`, for Codex's reason.
+_STOP = r"^[ \t]*You're out of usage\."
 
 
 def _hint(text: str, now: datetime) -> LimitHit | None:  # noqa: ARG001 -- no instant is named

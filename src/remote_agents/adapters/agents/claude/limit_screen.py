@@ -64,7 +64,8 @@ def _resets_at(text: str, now: datetime) -> datetime | None:
         return None
     try:
         zone = ZoneInfo(found.group("zone"))
-    except (ZoneInfoNotFoundError, ValueError):
+    except (ZoneInfoNotFoundError, ValueError, OSError):
+        # `ZoneInfo("America")` is a directory, and that raises an OSError subclass.
         return None
     hour = int(found.group("hour")) % 12 + (12 if found.group("meridiem") == "pm" else 0)
     minute = int(found.group("minute") or 0)

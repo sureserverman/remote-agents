@@ -216,3 +216,68 @@ async def test_a_marker_inside_a_line_the_owner_typed_is_not_a_stop() -> None:
     panes.screens[_CODEX] = "\n".join([*lines[:composer], typed, "", *lines[composer:]]) + "\n"
 
     assert await watcher.poll() == ()
+
+
+async def test_a_line_the_owner_typed_that_starts_with_the_sentence_is_not_a_stop() -> None:
+    """Only the agent's own glyph may lead the sentence; the composer's `›` may not."""
+    panes = _Panes()
+    watcher = _watcher(panes, {_CODEX: "codex"})
+    panes.screens[_CODEX] = _CODEX_IDLE
+    await watcher.poll()
+
+    lines = _CODEX_IDLE.rstrip("\n").split("\n")
+    composer = next(i for i, line in enumerate(lines) if line.startswith("›"))
+    typed = ["› You’ve hit your usage limit, here is what I pasted:", "  secret-looking-text"]
+    panes.screens[_CODEX] = "\n".join([*lines[:composer], *typed, *lines[composer + 1 :]]) + "\n"
+
+    assert await watcher.poll() == ()
+
+
+@pytest.mark.parametrize("answer_lines", [3, 20])
+async def test_an_answer_bullet_quoting_the_sentence_is_not_a_stop(answer_lines: int) -> None:
+    panes = _Panes()
+    watcher = _watcher(panes, {_CODEX: "codex"})
+    panes.screens[_CODEX] = _CODEX_IDLE
+    await watcher.poll()
+
+    lines = _CODEX_IDLE.rstrip("\n").split("\n")
+    composer = next(i for i, line in enumerate(lines) if line.startswith("›"))
+    answer = ["• You’ve hit your usage limit means the plan's window is spent."]
+    answer += [f"  more of the answer, line {n}" for n in range(answer_lines)]
+    panes.screens[_CODEX] = "\n".join([*answer, "", *lines[composer:]]) + "\n"
+
+    assert await watcher.poll() == ()
+
+
+async def test_the_stop_s_sentence_well_above_the_last_output_is_not_a_stop() -> None:
+    """The tail window, exercised on a line the anchor alone would accept."""
+    panes = _Panes()
+    watcher = _watcher(panes, {_CODEX: "codex"})
+    panes.screens[_CODEX] = _CODEX_IDLE
+    await watcher.poll()
+
+    lines = _CODEX_IDLE.rstrip("\n").split("\n")
+    composer = next(i for i, line in enumerate(lines) if line.startswith("›"))
+    old = ["■ You’ve hit your usage limit."]
+    old += [f"› prompt {n}" if n % 2 else f"  answer {n}" for n in range(20)]
+    panes.screens[_CODEX] = "\n".join([*old, "", *lines[composer:]]) + "\n"
+
+    assert await watcher.poll() == ()
+
+
+async def test_a_second_stop_while_the_first_is_still_on_screen_is_a_new_stop() -> None:
+    """The owner retried before the reset and Codex said it again: that is a second stop."""
+    panes = _Panes()
+    watcher = _watcher(panes, {_CODEX: "codex"})
+    panes.screens[_CODEX] = _CODEX_IDLE
+    await watcher.poll()
+
+    lines = _CODEX_IDLE.rstrip("\n").split("\n")
+    composer = next(i for i, line in enumerate(lines) if line.startswith("›"))
+    once = ["■ You’ve hit your usage limit."]
+    twice = [*once, "› try again", "■ You’ve hit your usage limit."]
+    panes.screens[_CODEX] = "\n".join([*lines[:composer], *once, "", *lines[composer:]]) + "\n"
+    assert len(await watcher.poll()) == 1
+    panes.screens[_CODEX] = "\n".join([*lines[:composer], *twice, "", *lines[composer:]]) + "\n"
+    assert len(await watcher.poll()) == 1
+    assert await watcher.poll() == ()

@@ -85,3 +85,9 @@ def test_claude_names_its_window_and_reset(text: str, expected: LimitHit) -> Non
 )
 def test_a_sentence_that_is_not_a_limit_stop_says_nothing(text: str) -> None:
     assert LIMIT_SCREEN.hint(text, _NOW) is None
+
+
+def test_a_zone_name_that_is_a_directory_drops_only_the_instant() -> None:
+    """`ZoneInfo("America")` raises an OSError subclass, not ZoneInfoNotFoundError."""
+    text = "You've hit your weekly limit · resets Sep 30, 9am (America)"
+    assert LIMIT_SCREEN.hint(text, _NOW) == LimitHit("week", None)

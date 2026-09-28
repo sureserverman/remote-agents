@@ -50,6 +50,10 @@ _TRUST_POLL_SECONDS = 5.0
 #: asked for, and the grace is how far ahead of its published instant a wipe must be to count
 #: as early. A scheduled rollover is silent whatever either of them is set to.
 _LIMITS_POLL_SECONDS = 300.0
+
+#: Bounds one pass's limit-stop classification (a limits read, one session lookup per stop), so a
+#: wedged reader delays this pass's delivery by at most this long; the stops then go window-blind.
+_CLASSIFY_TIMEOUT_SECONDS = 12.0
 #: How often a waiting message is re-checked while its session's turn may have ended with no
 #: "finished" event to say so (BL-108): an Esc fires no hook, and a turn a limit killed fires
 #: none on Codex. The owner accepted 2-3 s. A tick takes no capture unless a marked or
@@ -440,7 +444,10 @@ async def _watch_activity_once(composition: ServiceComposition) -> None:
             _LOG.exception("the limit-screen watch failed")
     if composition.limit_classifier is not None:
         try:
-            activities = await composition.limit_classifier.classified(activities)
+            activities = await asyncio.wait_for(
+                composition.limit_classifier.classified(activities),
+                timeout=_CLASSIFY_TIMEOUT_SECONDS,
+            )
         except Exception:
             _LOG.exception("classifying limit stops failed; they are delivered as they arrived")
     if composition.activity_store is not None:

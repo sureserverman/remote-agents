@@ -80,10 +80,24 @@ def classify(
         resets_at = saturated.resets_at
         if resets_at is None and hint is not None and hint.window == saturated.label:
             resets_at = hint.resets_at
-        return LimitHit(saturated.label, resets_at)
+        measured = LimitHit(saturated.label, resets_at)
+        # A window the reading cannot publish (Claude's per-model weeks) is not contradicted by
+        # a reading that is silent about it: the two compete, and the later lift is what keeps
+        # the agent stopped.
+        if hint is not None and hint.window is not None and hint.window not in _labels(reading):
+            return max((measured, hint), key=_hit_lifts_last)
+        return measured
     if hint is not None:
         return hint
     return LimitHit(None, None)
+
+
+def _labels(reading: AgentLimits | None) -> set[str]:
+    return set() if reading is None else {window.label for window in reading.windows}
+
+
+def _hit_lifts_last(hit: LimitHit) -> tuple[int, datetime | None]:
+    return (1, None) if hit.resets_at is None else (0, hit.resets_at)
 
 
 def _saturated(reading: AgentLimits | None, *, now: datetime) -> UsageWindow | None:
@@ -125,6 +139,11 @@ def _aware(instant: datetime | None) -> bool:
     return instant is None or instant.tzinfo is not None
 
 
+#: How many activity passes an inferred stop may wait for a reading that names its window: a
+#: minute of the readers' memo, plus a pass either side.
+_HOLD_PASSES = 3
+
+
 class LimitStopClassifier:
     """Give each limit stop in a pass the window that stopped it, before it is recorded.
 
@@ -153,30 +172,58 @@ class LimitStopClassifier:
         self._limits = limits
         self._screens = screens
         self._now = now
+        self._held: list[tuple[AgentActivity, int]] = []
 
     async def classified(self, activities: Sequence[AgentActivity]) -> list[AgentActivity]:
-        """The same activities in the same order, each unclassified limit stop classified."""
-        if not any(_unclassified(activity) for activity in activities):
+        """The activities to record and deliver this pass, each limit stop classified.
+
+        In the order they arrived, after any held stop released this pass. **An inferred stop
+        whose window no reading names yet is held**, for at most `_HOLD_PASSES` passes: the
+        account reading is remembered for a minute, so the reading taken in the stop's own pass
+        usually predates the stop and shows the window just short of full. The next pass's
+        reading names it. A stop drained from the spool is never held, because the drain has
+        already deleted its file and memory is not a place to keep the only copy.
+        """
+        if not self._held and not any(_unclassified(activity) for activity in activities):
             return list(activities)
         now = self._now()
         readings = await self._readings()
+        released: list[AgentActivity] = []
+        held: list[tuple[AgentActivity, int]] = []
+        for activity, passes in self._held:
+            outcome, hold = await self._classify(activity, readings, now=now, passes=passes)
+            if hold:
+                held.append((activity, passes + 1))
+            else:
+                released.append(outcome)
         result: list[AgentActivity] = []
         for activity in activities:
             if _unclassified(activity):
-                activity = await self._classify(activity, readings, now=now)
+                outcome, hold = await self._classify(activity, readings, now=now, passes=0)
+                if hold:
+                    held.append((activity, 1))
+                    continue
+                activity = outcome
             result.append(activity)
-        return result
+        self._held = held
+        return [*released, *result]
 
     async def _classify(
-        self, activity: AgentActivity, readings: Mapping[str, AgentLimits], *, now: datetime
-    ) -> AgentActivity:
+        self,
+        activity: AgentActivity,
+        readings: Mapping[str, AgentLimits],
+        *,
+        now: datetime,
+        passes: int,
+    ) -> tuple[AgentActivity, bool]:
+        """The classified stop, and whether to hold it for a fresher reading instead."""
         try:
             record = await self._store.get(SessionId.parse(activity.session_id))
         except Exception:
             _LOG.warning("could not look up the session a limit stop belongs to")
-            return activity
+            return activity, False
         if record is None:
-            return activity
+            return activity, False
         profile = str(record.profile_id)
         screen = self._screens.get(profile)
         hint = None
@@ -185,7 +232,16 @@ class LimitStopClassifier:
                 hint = screen.hint(activity.detail, now)
             except Exception:
                 _LOG.warning("a provider's limit sentence could not be read")
-        return replace(activity, limit=classify(readings.get(profile), hint, now=now))
+        reading = readings.get(profile)
+        hit = classify(reading, hint, now=now)
+        hold = (
+            hit.window is None
+            and activity.confidence is ActivityConfidence.INFERRED
+            and passes < _HOLD_PASSES
+            and reading is not None
+            and reading.absence is None
+        )
+        return replace(activity, limit=hit), hold
 
     async def _readings(self) -> dict[str, AgentLimits]:
         try:
@@ -228,16 +284,18 @@ class LimitScreenWatcher:
     copy of it would be the redundancy DEC-066 retired `quiet` for.
 
     **What is read and what is kept.** Each pass captures the visible pane, matches the
-    provider's markers against its last few written lines, and keeps one boolean per session:
-    whether the marker was there. The capture itself is discarded. The emitted activity carries
+    provider's markers against its last few written lines, and keeps one count per session: how
+    many stop sentences were there. The capture itself is discarded. The emitted activity carries
     the matched line -- the agent's own words, bounded like any hook detail (DEC-037) -- because
     that line is what names the retry instant, and it is classified by the same pass that
     classifies every other stop.
 
     **Edge-triggered, seeded on first sight.** A session's first successful capture only records
     what it shows, so a restart over a limit screen that was already reported does not report it
-    again; after that, a marker appearing is one stop, a marker still showing is nothing, and a
-    marker gone re-arms. A capture that fails costs that session that pass and changes nothing.
+    again -- and, the accepted cost, a stop already on screen when the watch first sees a
+    session is not reported either. After that, one more stop sentence in the tail than last
+    pass is one stop, the same count is nothing, and a count that falls re-arms. A capture that
+    fails costs that session that pass and changes nothing.
     """
 
     def __init__(
@@ -256,7 +314,10 @@ class LimitScreenWatcher:
             if ActivityKind.LIMIT_REACHED not in reported_activity_kinds_for(profile)
         }
         self._now = now
-        self._showing: dict[str, bool] = {}
+        #: How many stop sentences each session's tail showed last pass. A count rather than a
+        #: flag, so a second stop printed while the first is still on screen is still news.
+        self._showing: dict[str, int] = {}
+        self._start = 0
 
     async def poll(self) -> tuple[AgentActivity, ...]:
         """Take one look at every running session whose stop only its screen can show."""
@@ -265,6 +326,11 @@ class LimitScreenWatcher:
         live = {str(record.session_id) for record in watched}
         self._showing = {key: value for key, value in self._showing.items() if key in live}
 
+        # Rotated a place each pass, so a wedged tmux that exhausts the budget cannot starve the
+        # same sessions at the end of the list pass after pass.
+        if watched:
+            self._start = (self._start + 1) % len(watched)
+            watched = watched[self._start :] + watched[: self._start]
         stops: list[AgentActivity] = []
         deadline = time.monotonic() + _PASS_BUDGET_SECONDS
         for record in watched:
@@ -279,44 +345,49 @@ class LimitScreenWatcher:
             except Exception:
                 _LOG.warning("could not capture a pane while watching for a limit stop")
                 continue
-            line = _limit_line(screen, self._watched[str(record.profile_id)])
+            count, line = _limit_lines(screen, self._watched[str(record.profile_id)])
             seen_before = key in self._showing
-            was_showing = self._showing.get(key, False)
-            self._showing[key] = line is not None
-            if line is None or was_showing or not seen_before:
-                continue
-            stops.append(
-                AgentActivity(
-                    session_id=key,
-                    kind=ActivityKind.LIMIT_REACHED,
-                    detail=bounded_detail_line(line),
-                    observed_at=self._now(),
-                    confidence=ActivityConfidence.INFERRED,
+            if seen_before and line is not None and count > self._showing[key]:
+                stops.append(
+                    AgentActivity(
+                        session_id=key,
+                        kind=ActivityKind.LIMIT_REACHED,
+                        detail=bounded_detail_line(line),
+                        observed_at=self._now(),
+                        confidence=ActivityConfidence.INFERRED,
+                    )
                 )
-            )
+            # Recorded after the stop is built, so a failure building it re-offers the stop
+            # next pass rather than losing it.
+            self._showing[key] = count
         return tuple(stops)
 
 
-def _limit_line(screen: str, limit_screen: LimitScreen) -> str | None:
-    """The sentence among the agent's last output that says it was stopped, or `None`.
+def _limit_lines(screen: str, limit_screen: LimitScreen) -> tuple[int, str | None]:
+    """How many stop sentences the agent's last output holds, and the newest of them.
 
-    Returned with the lines that continue it, joined: a long sentence wraps in an ordinary pane
-    (`capture-pane` keeps the wrap), and the part that names the retry instant is the part that
-    lands on the next line. A continuation is an indented line; the first line that is not one
-    ends the sentence.
+    The newest is returned with the lines that continue it, joined: a long sentence wraps in an
+    ordinary pane (`capture-pane` keeps the wrap), and the part that names the retry instant is
+    the part that lands on the next line. A continuation is an indented line; the first line
+    that is not one, or that opens something of its own, ends the sentence.
     """
     tail = [line for line in screen.splitlines() if line.strip()][-_LAST_OUTPUT_LINES:]
-    for index in range(len(tail) - 1, -1, -1):
-        if any(re.search(marker, tail[index]) for marker in limit_screen.markers):
-            sentence = [tail[index].strip()]
-            for continuation in tail[index + 1 : index + 1 + _CONTINUATION_LINES]:
-                if not continuation.startswith("  ") or _starts_a_line(continuation):
-                    break
-                sentence.append(continuation.strip())
-            return " ".join(sentence)
-    return None
+    found = [
+        index
+        for index, line in enumerate(tail)
+        if any(re.search(marker, line) for marker in limit_screen.markers)
+    ]
+    if not found:
+        return 0, None
+    newest = found[-1]
+    sentence = [tail[newest].strip()]
+    for continuation in tail[newest + 1 : newest + 1 + _CONTINUATION_LINES]:
+        if not continuation.startswith("  ") or _starts_a_line(continuation):
+            break
+        sentence.append(continuation.strip())
+    return len(found), " ".join(sentence)
 
 
 def _starts_a_line(line: str) -> bool:
     """Whether an indented line opens something of its own (a bullet, a prompt, a box)."""
-    return line.lstrip()[:1] in {"›", "■", "•", "→", "│", "╭", "╰", "─"}
+    return line.lstrip()[:1] in {"›", "❯", "■", "•", "→", "│", "╭", "╰", "─"}
