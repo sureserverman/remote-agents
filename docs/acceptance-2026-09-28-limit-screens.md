@@ -26,8 +26,8 @@ bme={five_hour:"session limit",seven_day:"weekly limit",seven_day_opus:"Opus lim
   the reading. Its hint carries the model label.
 - **The suffix is ` · resets <time>`** (U+00B7), with the time as Claude formats it, e.g.
   `10:50am (Europe/London)`.
-- **On record.** Three real stops sit in the owner's `agent_activity` table (2026-09-23/24), all in
-  the session form: `You've hit your session limit · resets 10:50am (Europe/London)`.
+- **On record.** The owner's `agent_activity` table holds 49 `limit_reached` rows, 8 of them on
+  2026-09-23/24, in the session form: `You've hit your session limit · resets 10:50am (Europe/London)`.
 - **Claude reports the stop itself**, through `StopFailure` with `error: "rate_limit"`. No pane
   watch reads this screen. What the composer shows after the stop (idle, or a rate-limit
   options menu) is **unmeasured**.
