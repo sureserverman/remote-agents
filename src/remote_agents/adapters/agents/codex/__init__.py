@@ -60,9 +60,16 @@ def descriptor() -> ProviderDescriptor:
         # rate-limit and hook prompts are from the binary's strings (not raised on screen) and are
         # matched loosely: a false DIALOG holds a message, a missed one types into a prompt.
         composer=ComposerScreen(
-            composer=r"^› (?P<draft>[^\n]*(?:\n  [^\n]*)*?)\n  [^\n]* · [^\n]*\Z",
-            # Shell mode puts `!` where `›` was (`composed_shell_mode.txt`).
-            shell=r"^![^\n]*(?:\n  [^\n]*)*?\n  [^\n]* · [^\n]*\Z",
+            # 0.158.0 draws a hint line under the model line while the composer is empty
+            # (`← for agents · ? for shortcuts`, `idle_0158.txt`). Without it here the model line
+            # read as a draft, every idle pane as COMPOSING, and every stop was refused.
+            composer=(
+                r"^› (?P<draft>[^\n]*(?:\n  [^\n]*)*?)\n  [^\n]* · [^\n]*"
+                r"(?:\n  [^\n]*\? for shortcuts[^\n]*)?\Z"
+            ),
+            # Shell mode puts `!` where `›` was (`composed_shell_mode.txt`); 0.158.0 moved its
+            # `Shell mode` label to a line of its own (`composed_shell_mode_0158.txt`).
+            shell=r"^![^\n]*(?:\n  [^\n]*)*?\n  [^\n]* · [^\n]*(?:\n +Shell mode)?\Z",
             placeholders=(r"Ask Codex to do anything", r"Ask a follow-up question"),
             # Any column-0 bullet carrying `esc to interrupt`: Codex heads the line with its
             # reasoning summary (`• Planning edits (9s • esc to interrupt)`), not always `Working`.

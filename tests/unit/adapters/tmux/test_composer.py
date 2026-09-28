@@ -16,7 +16,13 @@ from pathlib import Path
 import pytest
 
 from remote_agents.adapters.agents.registry import provider_descriptors
-from remote_agents.adapters.tmux.composer import PaneState, classify, composer_draft, turn_ended
+from remote_agents.adapters.tmux.composer import (
+    PaneState,
+    classify,
+    composer_draft,
+    in_shell_mode,
+    turn_ended,
+)
 
 _PANES = Path(__file__).resolve().parents[3] / "fixtures" / "panes"
 
@@ -29,7 +35,11 @@ _MENU_OVER_COMPOSER = {"codex/composed_slash", "cursor/composed_space_slash"}
 
 #: Shell mode (`!`) is not the prompt composer -- anything submitted there runs as a command --
 #: so its composer is deliberately not matched and the screen reads UNKNOWN (Stage 2 gate).
-_SHELL_MODE = {"claude/composed_shell_mode", "codex/composed_shell_mode"}
+_SHELL_MODE = {
+    "claude/composed_shell_mode",
+    "codex/composed_shell_mode",
+    "codex/composed_shell_mode_0158",
+}
 
 
 def _descriptor(agent: str):
@@ -74,6 +84,17 @@ def test_every_capture_classifies_as_its_name_says(agent: str, name: str) -> Non
     screen = (_PANES / agent / f"{name}.txt").read_text(encoding="utf-8")
 
     assert classify(screen, _descriptor(agent)) is _expected(agent, name)
+
+
+@pytest.mark.parametrize("capture", sorted(_SHELL_MODE))
+def test_every_shell_mode_capture_is_read_as_shell_mode(capture: str) -> None:
+    """UNKNOWN alone does not keep a stop out: `graceful_stop` types into an UNKNOWN screen, so
+    only `in_shell_mode` stops `/exit Enter` running as a command (Codex 0.158.0 moved its
+    `Shell mode` label to a line of its own, and the pattern stopped matching)."""
+    agent, name = capture.split("/")
+    screen = (_PANES / agent / f"{name}.txt").read_text(encoding="utf-8")
+
+    assert in_shell_mode(screen, _descriptor(agent))
 
 
 @pytest.mark.parametrize(("agent", "name"), _captures(), ids=lambda value: value)

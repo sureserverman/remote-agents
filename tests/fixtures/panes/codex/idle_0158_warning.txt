@@ -1,0 +1,6 @@
+                                             Tip: You can resume a previous conversation by running codex resume
+
+› Ask Codex to do anything
+
+  GPT-6-Sol high · /workspace · feature · +2913 -93 · Ready …
+  ← for agents · ? for shortcuts                                                        ⚠ 1 warning · f2 to view
