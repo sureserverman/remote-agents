@@ -6,6 +6,7 @@ from collections.abc import Mapping
 from pathlib import Path
 
 from remote_agents.adapters.agents.codex.account_limits import CodexAccountLimitsReader
+from remote_agents.adapters.agents.codex.limit_screen import LIMIT_SCREEN
 from remote_agents.adapters.agents.codex.remote_control import CodexRemoteControl
 from remote_agents.adapters.agents.codex.sessions import (
     CodexAppServerClient,
@@ -98,4 +99,7 @@ def descriptor() -> ProviderDescriptor:
             # empty. Measured 2026-09-28 in a disposable CODEX_HOME.
             interrupt=("Escape",),
         ),
+        # Measured 2026-09-28 (`docs/acceptance-2026-09-28-limit-screens.md`); read off the pane
+        # by the limit-screen watch, because this agent reports no limit event of its own.
+        limit_screen=LIMIT_SCREEN,
     )

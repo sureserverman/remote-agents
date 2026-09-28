@@ -70,10 +70,7 @@ DECLARATIONS: dict[str, dict[str, tuple[Requirement, str]]] = {
         "activity": (CONDITIONAL, "placeholder until the vertical wires an activity source"),
         "trust_dialog": (SUPPORTED, "asks about folder trust, measured 2026-09-09 at +0.22s"),
         "composer": (SUPPORTED, "idle/busy/dialog patterns measured on 0.155.1, 2026-09-23"),
-        "limit_screen": (
-            UNSUPPORTED,
-            "not yet declared; the limit-screen watch lands in Sub-plan 1 Task 2.2",
-        ),
+        "limit_screen": (SUPPORTED, "limit sentence read from the 0.158.0 binary, 2026-09-28"),
     },
     "opencode": {
         "sessions": (SUPPORTED, "opencode.db catalogue via the CLI runner"),
@@ -105,9 +102,6 @@ DECLARATIONS: dict[str, dict[str, tuple[Requirement, str]]] = {
         "activity": (CONDITIONAL, "placeholder until the vertical wires an activity source"),
         "trust_dialog": (SUPPORTED, "asks about folder trust, measured 2026-09-09 at +0.66s"),
         "composer": (SUPPORTED, "idle/busy/dialog patterns measured on 2026.09.18, 2026-09-23"),
-        "limit_screen": (
-            UNSUPPORTED,
-            "not yet declared; the limit-screen watch lands in Sub-plan 1 Task 2.2",
-        ),
+        "limit_screen": (SUPPORTED, "limit screen captured on 2026.09.28, 2026-09-28"),
     },
 }

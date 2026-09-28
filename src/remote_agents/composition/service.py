@@ -16,7 +16,7 @@ from remote_agents.adapters.telegram.trust_notifications import TrustNotifier
 from remote_agents.adapters.tmux.runtime import TmuxTerminal
 from remote_agents.application.activity import CodexApprovalWatcher, drain_activity
 from remote_agents.application.backend import CLOSE_TIMEOUT_SECONDS
-from remote_agents.application.limit_stops import LimitStopClassifier
+from remote_agents.application.limit_stops import LimitScreenWatcher, LimitStopClassifier
 from remote_agents.application.reconcile import ReconciliationService
 from remote_agents.config import TelegramSecrets
 from remote_agents.domain.models import SessionId
@@ -147,6 +147,13 @@ class ServiceComposition:
     It protects nothing by itself. A new turn the owner starts inside the window is kept from
     being typed into by the retry's own capture, which reads that turn's fresh marker (its
     `UserPromptSubmit` fired before it started) and refuses as busy."""
+
+    limit_screen_watcher: LimitScreenWatcher | None = None
+    """The pass that reads a limit stop off the pane of an agent that reports none, or None.
+
+    None where nothing wires it -- every composition but the bot's -- and then Codex and Cursor
+    stops go unobserved, exactly as they did before it existed.
+    """
 
     limit_classifier: LimitStopClassifier | None = None
     """What gives each limit stop the window that stopped it before it is recorded, or None.
@@ -426,6 +433,11 @@ async def _watch_activity_once(composition: ServiceComposition) -> None:
             activities.extend(await composition.approval_watcher.poll())
         except Exception:
             _LOG.exception("the Codex approval watch failed")
+    if composition.limit_screen_watcher is not None:
+        try:
+            activities.extend(await composition.limit_screen_watcher.poll())
+        except Exception:
+            _LOG.exception("the limit-screen watch failed")
     if composition.limit_classifier is not None:
         try:
             activities = await composition.limit_classifier.classified(activities)

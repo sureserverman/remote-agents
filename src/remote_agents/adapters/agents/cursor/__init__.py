@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from pathlib import Path
 
+from remote_agents.adapters.agents.cursor.limit_screen import LIMIT_SCREEN
 from remote_agents.adapters.agents.cursor.sessions import CursorSessionCatalogue
 from remote_agents.adapters.agents.cursor.usage import CursorUsageReader
 from remote_agents.domain.models import ProfileId, ProjectId
@@ -73,4 +74,7 @@ def descriptor() -> ProviderDescriptor:
                 r"Use arrow keys to navigate, Enter to select",
             ),
         ),
+        # Measured 2026-09-28 (`docs/acceptance-2026-09-28-limit-screens.md`); read off the pane
+        # by the limit-screen watch, because this agent reports no limit event of its own.
+        limit_screen=LIMIT_SCREEN,
     )

@@ -25,7 +25,7 @@ from remote_agents.adapters.sqlite.trust_notifications import SQLiteTrustNotific
 from remote_agents.adapters.telegram import FRONTEND
 from remote_agents.adapters.telegram.service import build_private_bot
 from remote_agents.application.activity import CodexApprovalWatcher
-from remote_agents.application.limit_stops import LimitStopClassifier
+from remote_agents.application.limit_stops import LimitScreenWatcher, LimitStopClassifier
 from remote_agents.application.prompt_relay import PromptRelay
 from remote_agents.application.reconcile import ReconciliationService, SessionLocks
 from remote_agents.composition.backend import (
@@ -207,5 +207,9 @@ def _private_boundary(
             None
             if backend.limits is None
             else LimitStopClassifier(store, backend.limits, profile_limit_screens(descriptors))
+        ),
+        # Codex and Cursor Agent report no limit event, so their stop is read off the pane.
+        limit_screen_watcher=LimitScreenWatcher(
+            store, terminal.capture, profile_limit_screens(descriptors)
         ),
     )

@@ -32,14 +32,24 @@ the function total: nothing here can raise on a reading it did not expect.
 
 from __future__ import annotations
 
+import asyncio
 import logging
+import re
+import time
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import replace
 from datetime import UTC, datetime
 
 from remote_agents.application.session_views import _STALE_READING_AGE
-from remote_agents.domain.models import SessionId
-from remote_agents.ports.agent_activity import ActivityKind, AgentActivity, LimitHit
+from remote_agents.domain.models import SessionId, SessionState
+from remote_agents.ports.agent_activity import (
+    ActivityConfidence,
+    ActivityKind,
+    AgentActivity,
+    LimitHit,
+    bounded_detail_line,
+    reported_activity_kinds_for,
+)
 from remote_agents.ports.agent_usage import AgentLimits, UsageWindow
 from remote_agents.ports.limit_screen import LimitScreen
 from remote_agents.ports.session_store import SessionStore
@@ -187,3 +197,126 @@ class LimitStopClassifier:
 
 def _unclassified(activity: AgentActivity) -> bool:
     return activity.kind is ActivityKind.LIMIT_REACHED and activity.limit is None
+
+
+#: How much of the bottom of a pane counts as "what the agent said last". Codex prints its limit
+#: sentence just above its composer and Cursor draws it just below its status line, so both land
+#: within the last dozen written lines; an answer that merely quotes the sentence scrolls it
+#: above this window as soon as the answer is longer than a few lines.
+_LAST_OUTPUT_LINES = 12
+
+#: How many wrapped lines may continue a limit sentence. Codex's longest variant is about 150
+#: characters, so three continuation lines cover it in a pane down to about 40 columns.
+_CONTINUATION_LINES = 3
+
+#: Bounds one pass: past this, the remaining sessions wait for the next pass rather than delay
+#: the classification and delivery that run after this watch in the same activity pass.
+_PASS_BUDGET_SECONDS = 15.0
+
+#: Bounds one pane capture, for `CodexApprovalWatcher`'s reason: tmux's runner has no timeout of
+#: its own, and a wedged server would otherwise stop this watch for the life of the process.
+_CAPTURE_TIMEOUT_SECONDS = 5.0
+
+
+class LimitScreenWatcher:
+    """Find the limit stop an agent draws on its pane when it reports no limit event of its own.
+
+    Codex fires no hook on a failed turn and Cursor Agent has no hooks at all, so the only
+    place either says a usage limit stopped it is its screen. This watches exactly the running
+    sessions whose provider declares a `limit_screen` and does **not** report `LIMIT_REACHED`
+    itself -- Claude's `StopFailure` is the better evidence for Claude, and a second, inferred
+    copy of it would be the redundancy DEC-066 retired `quiet` for.
+
+    **What is read and what is kept.** Each pass captures the visible pane, matches the
+    provider's markers against its last few written lines, and keeps one boolean per session:
+    whether the marker was there. The capture itself is discarded. The emitted activity carries
+    the matched line -- the agent's own words, bounded like any hook detail (DEC-037) -- because
+    that line is what names the retry instant, and it is classified by the same pass that
+    classifies every other stop.
+
+    **Edge-triggered, seeded on first sight.** A session's first successful capture only records
+    what it shows, so a restart over a limit screen that was already reported does not report it
+    again; after that, a marker appearing is one stop, a marker still showing is nothing, and a
+    marker gone re-arms. A capture that fails costs that session that pass and changes nothing.
+    """
+
+    def __init__(
+        self,
+        store: SessionStore,
+        capture: Callable[[SessionId], Awaitable[str]],
+        screens: Mapping[str, LimitScreen],
+        *,
+        now: Callable[[], datetime] = lambda: datetime.now(UTC),
+    ) -> None:
+        self._store = store
+        self._capture = capture
+        self._watched = {
+            profile: screen
+            for profile, screen in screens.items()
+            if ActivityKind.LIMIT_REACHED not in reported_activity_kinds_for(profile)
+        }
+        self._now = now
+        self._showing: dict[str, bool] = {}
+
+    async def poll(self) -> tuple[AgentActivity, ...]:
+        """Take one look at every running session whose stop only its screen can show."""
+        records = await self._store.list((SessionState.RUNNING,))
+        watched = [record for record in records if str(record.profile_id) in self._watched]
+        live = {str(record.session_id) for record in watched}
+        self._showing = {key: value for key, value in self._showing.items() if key in live}
+
+        stops: list[AgentActivity] = []
+        deadline = time.monotonic() + _PASS_BUDGET_SECONDS
+        for record in watched:
+            if time.monotonic() > deadline:
+                _LOG.warning("the limit-screen watch ran out of time; the rest wait a pass")
+                break
+            key = str(record.session_id)
+            try:
+                screen = await asyncio.wait_for(
+                    self._capture(record.session_id), timeout=_CAPTURE_TIMEOUT_SECONDS
+                )
+            except Exception:
+                _LOG.warning("could not capture a pane while watching for a limit stop")
+                continue
+            line = _limit_line(screen, self._watched[str(record.profile_id)])
+            seen_before = key in self._showing
+            was_showing = self._showing.get(key, False)
+            self._showing[key] = line is not None
+            if line is None or was_showing or not seen_before:
+                continue
+            stops.append(
+                AgentActivity(
+                    session_id=key,
+                    kind=ActivityKind.LIMIT_REACHED,
+                    detail=bounded_detail_line(line),
+                    observed_at=self._now(),
+                    confidence=ActivityConfidence.INFERRED,
+                )
+            )
+        return tuple(stops)
+
+
+def _limit_line(screen: str, limit_screen: LimitScreen) -> str | None:
+    """The sentence among the agent's last output that says it was stopped, or `None`.
+
+    Returned with the lines that continue it, joined: a long sentence wraps in an ordinary pane
+    (`capture-pane` keeps the wrap), and the part that names the retry instant is the part that
+    lands on the next line. A continuation is an indented line; the first line that is not one
+    ends the sentence.
+    """
+    tail = [line for line in screen.splitlines() if line.strip()][-_LAST_OUTPUT_LINES:]
+    for index in range(len(tail) - 1, -1, -1):
+        if any(re.search(marker, tail[index]) for marker in limit_screen.markers):
+            sentence = [tail[index].strip()]
+            for continuation in tail[index + 1 : index + 1 + _CONTINUATION_LINES]:
+                if not continuation.startswith("  ") or _starts_a_line(continuation):
+                    break
+                sentence.append(continuation.strip())
+            return " ".join(sentence)
+    return None
+
+
+def _starts_a_line(line: str) -> bool:
+    """Whether an indented line opens something of its own (a bullet, a prompt, a box)."""
+    return line.lstrip()[:1] in {"›", "■", "•", "→", "│", "╭", "╰", "─"}

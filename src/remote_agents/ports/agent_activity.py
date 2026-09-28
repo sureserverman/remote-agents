@@ -276,7 +276,9 @@ _REPORTED_KINDS_BY_PROFILE: dict[str, frozenset[ActivityKind]] = {
         }
     ),
     # Codex exposes Stop and PermissionRequest hooks. It does not expose a StopFailure
-    # equivalent, so limit/output kinds stay absent rather than being guessed from pane text.
+    # equivalent, so neither limit kind is *reported*. A limit stop is instead read off its pane
+    # by `application.limit_stops.LimitScreenWatcher` and arrives INFERRED -- an inference with a
+    # measured marker behind it, not a claim this table makes about the hook.
     "codex": frozenset({ActivityKind.COMPLETED, ActivityKind.NEEDS_ANSWER}),
     # OpenCode's plugin acts on two measured `event` types -- `session.idle` and
     # `permission.asked` -- and the same limit reasoning applies for the same reason: nothing
