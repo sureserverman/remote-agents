@@ -500,18 +500,44 @@ async def test_status_bar_install_sets_the_console_session_options_and_nothing_w
     """Sub-plan 2 Task 2.1: the bar is issued on our socket, on the console session only."""
     from bar_console import NIGHT
 
-    from remote_agents.adapters.tmux.codec import status_format_args
+    from remote_agents.adapters.tmux.codec import (
+        console_background_hook_args,
+        console_clients_args,
+        status_format_args,
+    )
     from remote_agents.adapters.tui.keys import status_bar_keys
 
     runner = RecordingRunner()
     await gateway(runner).install_status_bar(status_bar_keys(), NIGHT)
 
     assert runner.calls == [
-        (*_BASE, *argv) for argv in status_format_args(status_bar_keys(), NIGHT)
+        *((*_BASE, *argv) for argv in status_format_args(status_bar_keys(), NIGHT)),
+        *((*_BASE, *argv) for argv in console_background_hook_args(NIGHT.window)),
+        (*_BASE, *console_clients_args()),
     ]
+    # One thing is server-wide, and on purpose: the detach hook that puts the terminal's own
+    # background back, which a session hook would miss when F10 kills the session.
+    wide = [call for call in runner.calls if "-g" in call]
+    assert [call[len(_BASE) + 2] for call in wide] == ["client-detached[1]"]
     for call in runner.calls:
-        assert "-g" not in call
-        assert call[call.index("-t") + 1] == "ra-console:"
+        if call not in wide:
+            assert call[call.index("-t") + 1] == "ra-console:"
+
+
+async def test_status_bar_install_paints_the_terminals_already_attached() -> None:
+    """A theme switch reaches a terminal attached before it; its attach hook had the old colour."""
+    from bar_console import NIGHT
+
+    from remote_agents.adapters.tmux.codec import paint_client_args
+    from remote_agents.adapters.tui.keys import status_bar_keys
+
+    runner = RecordingRunner(output="/dev/pts/5\n/dev/pts/9\n")
+    await gateway(runner).install_status_bar(status_bar_keys(), NIGHT)
+
+    assert runner.calls[-2:] == [
+        (*_BASE, *paint_client_args("/dev/pts/5", NIGHT.window)),
+        (*_BASE, *paint_client_args("/dev/pts/9", NIGHT.window)),
+    ]
 
 
 async def test_status_bar_install_lets_a_tmux_failure_through_for_the_composer_to_log() -> None:

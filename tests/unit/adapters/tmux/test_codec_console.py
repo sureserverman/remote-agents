@@ -762,9 +762,40 @@ def test_the_layout_hooks_reapply_the_layout_on_attach_and_on_resize() -> None:
         "resize-pane -t %5 -y 31%"
     )
     assert hooks == (
-        ("set-hook", "-t", "ra-console:", "client-attached", command),
+        ("set-hook", "-t", "ra-console:", "client-attached[0]", command),
         ("set-hook", "-w", "-t", "ra-console:", "window-resized", command),
     )
+
+
+def test_the_background_hooks_paint_on_attach_and_put_back_on_any_detach() -> None:
+    """Attach to the console paints the terminal; leaving the server by any road puts it back.
+
+    Slot 1, beside the layout's slot 0: an unindexed `set-hook` would clear the other."""
+    from remote_agents.adapters.tmux.codec import console_background_hook_args
+
+    attached, detached = console_background_hook_args("#0F1115")
+
+    assert attached == (
+        "set-hook", "-t", "ra-console:", "client-attached[1]",
+        "run-shell -b \"printf '\\\\033]11;##0F1115\\\\007' > '#{hook_client}'\"",
+    )  # fmt: skip
+    assert detached == (
+        "set-hook", "-g", "client-detached[1]",
+        "run-shell -b \"printf '\\\\033]111\\\\007' > '#{hook_client}'\"",
+    )  # fmt: skip
+
+
+def test_an_attached_client_is_painted_through_its_own_terminal_only() -> None:
+    import pytest
+
+    from remote_agents.adapters.tmux.codec import paint_client_args
+
+    assert paint_client_args("/dev/pts/5", "#FAFAF7") == (
+        "run-shell", "-b", "printf '\\033]11;##FAFAF7\\007' > '/dev/pts/5'",
+    )  # fmt: skip
+    for name in ("/dev/pts/5'; rm -rf ~; '", "client-7", ""):
+        with pytest.raises(ValueError):
+            paint_client_args(name, "#0F1115")
 
 
 def test_the_layout_hooks_refuse_a_pane_id_that_is_not_one() -> None:

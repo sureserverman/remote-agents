@@ -147,4 +147,5 @@ def _status_bar_palette(theme: Theme) -> StatusBarPalette:
         muted=resolve(None, "text-muted"),
         on=resolve(theme.success, "success"),
         off=resolve(theme.error, "error"),
+        window=resolve(theme.background, "background"),
     )

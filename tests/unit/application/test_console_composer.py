@@ -1492,7 +1492,7 @@ def _status_bar():
     from remote_agents.ports.console import StatusBarKey, StatusBarPalette
 
     keys = (StatusBarKey(1, "help", "help", needs_selection=False, refused_while_typing=False),)
-    palette = StatusBarPalette(*(["#000000"] * 7))
+    palette = StatusBarPalette(*(["#000000"] * 8))
     return keys, palette
 
 

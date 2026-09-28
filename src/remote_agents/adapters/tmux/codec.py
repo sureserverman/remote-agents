@@ -941,6 +941,70 @@ def status_format_args(
     )
 
 
+#: The slot in the console's `client-attached` hook array this module paints from; slot 0 is
+#: the layout's. A `set-hook` without an index replaces the whole array (measured on 3.4), so
+#: each writer names its own.
+_PAINT_HOOK = 1
+
+#: A tmux client's name is its terminal device (`/dev/pts/5`, `/dev/ttys003` on macOS). The
+#: only value spliced into a `run-shell` here, so it is held to this shape first.
+_CLIENT_TTY = re.compile(r"/dev/[A-Za-z0-9/_.-]+")
+
+
+def _paint_shell(colour: str | None, tty: str) -> str:
+    """The shell line writing OSC 11 (set the terminal's background) or, for None, OSC 111 (put
+    back the terminal's own) straight to one client's terminal, as `run-shell` is to be given it.
+
+    tmux has no command that reaches the terminal outside it, and a client's tty is the one
+    place to write that reaches it. `#` is doubled because `run-shell` expands its command as a
+    format first: measured, `#FAFAF7` arrived as `*AFAF7`, since `#F` is the window flags.
+    """
+    sequence = r"\033]111\007" if colour is None else rf"\033]11;{colour.replace('#', '##')}\007"
+    return f"printf '{sequence}' > '{tty}'"
+
+
+def _paint_hook(colour: str | None) -> str:
+    """`_paint_shell` for the hook's own client, as a `run-shell` in a hook's command string,
+    where tmux's parser reads a backslash inside double quotes as an escape."""
+    shell = _paint_shell(colour, "#{hook_client}").replace("\\", "\\\\")
+    return f'run-shell -b "{shell}"'
+
+
+def console_background_hook_args(window: str) -> tuple[tuple[str, ...], ...]:
+    """Return the argv painting the terminal *window* while a client is on this server.
+
+    Painted on attach to the console session, so the strip a terminal leaves below its last
+    whole row (a window height that is not a multiple of the row height) is the console's
+    window colour rather than the terminal's own. Put back when a client leaves the server,
+    by a **global** hook: a session's own `client-detached` does not run when F10 kills the
+    session under the client (measured on 3.4), and this server runs nothing but ours
+    (DEC-001), so global reaches no one else. `#{hook_client}` because `#{client_tty}` is
+    already empty by the time `client-detached` runs.
+    """
+    return (
+        (
+            "set-hook", "-t", console_target(), f"client-attached[{_PAINT_HOOK}]",
+            _paint_hook(window),
+        ),
+        ("set-hook", "-g", f"client-detached[{_PAINT_HOOK}]", _paint_hook(None)),
+    )  # fmt: skip
+
+
+def console_clients_args() -> tuple[str, ...]:
+    """Return the argv suffix listing the terminals attached to the console, one per line."""
+    return ("list-clients", "-t", console_target(), "-F", "#{client_name}")
+
+
+def paint_client_args(tty: str, window: str) -> tuple[str, ...]:
+    """Return the argv painting one already-attached client, whose attach hook has run.
+
+    `set-hook -R` would rerun the hook, but with no client, so `#{hook_client}` is empty.
+    """
+    if _CLIENT_TTY.fullmatch(tty) is None:
+        raise ValueError(f"not a client terminal: {tty!r}")
+    return ("run-shell", "-b", _paint_shell(window, tty))
+
+
 def console_option_unset_args(name: str) -> tuple[str, ...]:
     """Return the argv suffix removing one console window option, so a reader sees it unset.
 
@@ -1226,7 +1290,8 @@ def console_layout_hook_args(
     # window takes the client's new size, and the proportional rescale after it wins (69/30 at
     # 100 columns where the layout says 59/40). The window hook runs once the size is final.
     return (
-        ("set-hook", "-t", console_target(), "client-attached", command),
+        # Slot 0 by name: unindexed, `set-hook` would clear the painting hook in slot 1.
+        ("set-hook", "-t", console_target(), "client-attached[0]", command),
         ("set-hook", "-w", "-t", console_target(), "window-resized", command),
     )
 

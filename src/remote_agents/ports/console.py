@@ -291,9 +291,12 @@ class StatusBarPalette:
     muted: str
     on: str
     off: str
+    #: The window behind the panes. Not drawn by the bar: the terminal is painted it while a
+    #: client is attached, so the pixels below the last row match the console.
+    window: str
 
     def __post_init__(self) -> None:
-        for name in ("bar", "text", "key", "dim", "muted", "on", "off"):
+        for name in ("bar", "text", "key", "dim", "muted", "on", "off", "window"):
             value = getattr(self, name)
             if len(value) != 7 or value[0] != "#" or not set(value[1:]) <= _HEX_COLOUR:
                 raise ValueError(f"a status bar colour is #RRGGBB, got {name}={value!r}")

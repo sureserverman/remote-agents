@@ -95,6 +95,12 @@ def test_colours_come_from_the_theme() -> None:
     assert _format(_NIGHT) != _format(_DAY)
 
 
+def test_the_terminal_behind_the_console_is_the_handoff_s_window_colour() -> None:
+    """The handoff's window bg (README: `#0F1115`), which the terminal is painted on attach."""
+    assert _NIGHT.window == "#0F1115"
+    assert _DAY.window == "#FAFAF7"
+
+
 def test_status_every_theme_the_palette_offers_yields_a_bar() -> None:
     """Textual's own themes leave `panel` and our greys unset; the bar must still resolve."""
     from textual.theme import BUILTIN_THEMES

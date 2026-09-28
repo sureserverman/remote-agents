@@ -13,7 +13,9 @@ from typing import Protocol
 from remote_agents.adapters.tmux.codec import (
     PANE_FORMAT,
     ManagedPane,
+    console_background_hook_args,
     console_binding_args,
+    console_clients_args,
     console_layout_args,
     console_layout_hook_args,
     console_option_args,
@@ -30,6 +32,7 @@ from remote_agents.adapters.tmux.codec import (
     exact_session_target,
     is_console_view,
     list_arrangement_args,
+    paint_client_args,
     pane_height_args,
     pane_mark_args,
     pane_title_args,
@@ -893,6 +896,14 @@ class TmuxGateway:
         """
         for arguments in status_format_args(keys, palette):
             await self._runner.run(*self._base_argv(), *arguments)
+        # The terminal behind the console takes its window colour: hooks for the next attach and
+        # detach, and a paint now for a client already attached, whose hook ran with the
+        # palette before this one (a theme switch, or panes that started after the attach).
+        for arguments in console_background_hook_args(palette.window):
+            await self._runner.run(*self._base_argv(), *arguments)
+        clients = await self._runner.run(*self._base_argv(), *console_clients_args())
+        for tty in clients.split():
+            await self._runner.run(*self._base_argv(), *paint_client_args(tty, palette.window))
 
     async def fit_pane_height(self, pane_id: str, rows: int) -> None:
         """Resize one console pane to *rows* rows; tmux takes them from the pane below. Raises."""
