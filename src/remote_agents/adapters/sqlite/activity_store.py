@@ -11,7 +11,12 @@ import logging
 import sqlite3
 from datetime import UTC, datetime
 
-from remote_agents.ports.agent_activity import ActivityConfidence, ActivityKind, AgentActivity
+from remote_agents.ports.agent_activity import (
+    ActivityConfidence,
+    ActivityKind,
+    AgentActivity,
+    LimitHit,
+)
 
 _LOG = logging.getLogger(__name__)
 
@@ -39,9 +44,10 @@ class SQLiteActivityStore:
             self._connection.execute(
                 """
                 INSERT INTO agent_activity(
-                    session_id, kind, detail, confidence, observed_at, ask
+                    session_id, kind, detail, confidence, observed_at, ask,
+                    limit_window, limit_resets_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     activity.session_id,
@@ -59,6 +65,9 @@ class SQLiteActivityStore:
                     # freeze today's vocabulary into every historical row, so a token later
                     # recognised would still read as unknown in the feed (DEC-074).
                     activity.ask,
+                    # A provider's window label and instant, never its words (migration 15).
+                    None if activity.limit is None else activity.limit.window,
+                    _stored_instant(None if activity.limit is None else activity.limit.resets_at),
                 ),
             )
 
@@ -90,7 +99,8 @@ class SQLiteActivityStore:
             if before is None:
                 rows = self._connection.execute(
                     """
-                    SELECT activity_id, session_id, kind, detail, confidence, observed_at, ask
+                    SELECT activity_id, session_id, kind, detail, confidence, observed_at, ask,
+                        limit_window, limit_resets_at
                     FROM agent_activity ORDER BY activity_id DESC LIMIT ?
                     """,
                     (batch,),
@@ -98,7 +108,8 @@ class SQLiteActivityStore:
             else:
                 rows = self._connection.execute(
                     """
-                    SELECT activity_id, session_id, kind, detail, confidence, observed_at, ask
+                    SELECT activity_id, session_id, kind, detail, confidence, observed_at, ask,
+                        limit_window, limit_resets_at
                     FROM agent_activity WHERE activity_id < ?
                     ORDER BY activity_id DESC LIMIT ?
                     """,
@@ -124,6 +135,7 @@ class SQLiteActivityStore:
                             # backfills it, because nothing knows what those rows were asking
                             # about.
                             row[6],
+                            limit=_limit(ActivityKind(row[2]), row[7], row[8]),
                         )
                     )
                 except ValueError:
@@ -137,3 +149,19 @@ class SQLiteActivityStore:
 def _instant(value: str) -> datetime:
     parsed = datetime.fromisoformat(value)
     return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=UTC)
+
+
+def _stored_instant(value: datetime | None) -> str | None:
+    return None if value is None else value.astimezone(UTC).isoformat()
+
+
+def _limit(kind: ActivityKind, window: str | None, resets_at: str | None) -> LimitHit | None:
+    """The hit a row recorded, and a limit stop always has one.
+
+    A `LIMIT_REACHED` written before migration 15 has no window anyone measured, and that is
+    the same fact as a stop nothing could classify, so both read back as `LimitHit(None, None)`.
+    Any other kind reads back what it recorded, which is nothing.
+    """
+    if window is not None or resets_at is not None:
+        return LimitHit(window, None if resets_at is None else _instant(resets_at))
+    return LimitHit(None, None) if kind is ActivityKind.LIMIT_REACHED else None

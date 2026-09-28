@@ -15,7 +15,12 @@ from remote_agents.adapters.sqlite.database import open_ui_database
 from remote_agents.adapters.sqlite.standing_notification_store import (
     SQLiteStandingNotificationStore,
 )
-from remote_agents.ports.agent_activity import ActivityConfidence, ActivityKind, AgentActivity
+from remote_agents.ports.agent_activity import (
+    ActivityConfidence,
+    ActivityKind,
+    AgentActivity,
+    LimitHit,
+)
 from remote_agents.ports.standing_notification import StandingNotification
 
 _CHAT = 11
@@ -214,6 +219,7 @@ def test_every_rendered_field_of_an_observation_round_trips(tmp_path) -> None:
         _OBSERVED,
         ActivityConfidence.INFERRED,
         "bash",
+        LimitHit("5h", _OBSERVED),
     )
     # The fixture has to exercise every field, or the equality below proves less than it looks:
     # a value left at its default is indistinguishable from one the encoder never wrote.

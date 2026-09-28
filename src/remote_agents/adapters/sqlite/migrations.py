@@ -271,6 +271,17 @@ MIGRATIONS: tuple[tuple[int, str], ...] = (
         DROP TABLE IF EXISTS handoff_intents;
         """,
     ),
+    # A limit stop's window and reset instant, so the bot can retire its line when the limit
+    # lifts and the service can resume the session after it. Provider figures -- a label and an
+    # instant -- and never agent words, so DEC-013/037's retention question is not reopened.
+    # Nullable and never backfilled: nothing measured the window of a stop recorded before this.
+    (
+        15,
+        """
+        ALTER TABLE agent_activity ADD COLUMN limit_window TEXT;
+        ALTER TABLE agent_activity ADD COLUMN limit_resets_at TEXT;
+        """,
+    ),
 )
 """Migration 14 takes the surface's bookkeeping out of the watched store.
 

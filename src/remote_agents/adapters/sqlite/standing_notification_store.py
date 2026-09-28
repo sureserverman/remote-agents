@@ -16,7 +16,12 @@ import logging
 import sqlite3
 from datetime import UTC, datetime
 
-from remote_agents.ports.agent_activity import ActivityConfidence, ActivityKind, AgentActivity
+from remote_agents.ports.agent_activity import (
+    ActivityConfidence,
+    ActivityKind,
+    AgentActivity,
+    LimitHit,
+)
 from remote_agents.ports.standing_notification import StandingNotification
 
 _LOG = logging.getLogger(__name__)
@@ -109,6 +114,7 @@ def _encoded(activities: tuple[AgentActivity, ...]) -> str:
                 "confidence": activity.confidence.value,
                 "observed_at": activity.observed_at.astimezone(UTC).isoformat(),
                 "ask": activity.ask,
+                "limit": _encoded_limit(activity.limit),
             }
             for activity in activities
         ]
@@ -138,6 +144,7 @@ def _notification(row: tuple) -> StandingNotification | None:
                 # one of them down the "this build cannot read it" path below and silently
                 # restart notifications that were mid-flight across the upgrade.
                 line.get("ask"),
+                limit=_decoded_limit(ActivityKind(line["kind"]), line.get("limit")),
             )
             for line in lines
         )
@@ -150,3 +157,26 @@ def _notification(row: tuple) -> StandingNotification | None:
 def _instant(value: str) -> datetime:
     parsed = datetime.fromisoformat(value)
     return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=UTC)
+
+
+def _encoded_limit(limit: LimitHit | None) -> dict | None:
+    if limit is None:
+        return None
+    return {
+        "window": limit.window,
+        "resets_at": None
+        if limit.resets_at is None
+        else limit.resets_at.astimezone(UTC).isoformat(),
+    }
+
+
+def _decoded_limit(kind: ActivityKind, encoded: object) -> LimitHit | None:
+    """The same answer the activity store gives: what was recorded, and a limit stop always has one.
+
+    `.get`, not `[...]`, for the reason `ask` gives above: a row written before this key existed
+    is readable and simply names no window.
+    """
+    if isinstance(encoded, dict):
+        resets_at = encoded.get("resets_at")
+        return LimitHit(encoded.get("window"), None if resets_at is None else _instant(resets_at))
+    return LimitHit(None, None) if kind is ActivityKind.LIMIT_REACHED else None

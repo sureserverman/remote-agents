@@ -310,6 +310,21 @@ def reported_activity_kinds_for(profile_id: str) -> frozenset[ActivityKind]:
 
 
 @dataclass(frozen=True, slots=True)
+class LimitHit:
+    """Which usage window stopped a session, and when its provider said it lifts.
+
+    Both fields are provider figures, never agent words: `window` is a limits label as a
+    `UsageWindow` spells it (`5h`, `week`, a Cursor `month`), and `resets_at` is the instant the
+    provider published for it. Either may be unknown, and `LimitHit(None, None)` is still a
+    stop -- one whose window nothing could name. `application/limit_stops.classify` is the one
+    place that decides them.
+    """
+
+    window: str | None = None
+    resets_at: datetime | None = None
+
+
+@dataclass(frozen=True, slots=True)
 class AgentActivity:
     """One observation about one session, bounded and ready to render."""
 
@@ -325,6 +340,13 @@ class AgentActivity:
     the spool records what a provider said, `ask_class` decides what this project calls it, and
     each surface decides what to write. A stored enum would freeze today's classification into
     every historical row, so a token later recognised would still read as unknown in the feed.
+    """
+    limit: LimitHit | None = None
+    """What stopped the session, on a `LIMIT_REACHED`; `None` on every other kind.
+
+    The stores answer `LimitHit(None, None)` for a stored `LIMIT_REACHED` that carries none --
+    one recorded before the window was kept, or one nothing could classify -- so a reader never
+    has to tell "not a limit stop" from "a stop with nothing known" by this field alone.
     """
 
 
