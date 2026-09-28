@@ -2,14 +2,14 @@
 
 A limit stop reaches this project three ways -- Claude's `StopFailure` hook, and the limit screen
 Codex and Cursor Agent draw in their panes -- and each arrives knowing less than the owner wants
-told: the hook says "rate limit", the screen says "you've hit your usage limit", and only
+told: the hook says "rate limit", the screen says the agent is out of usage, and only
 sometimes does the provider's own sentence name the window. So the window is decided here, from
 two pieces of evidence the caller hands over, and never re-decided by a notifier or a feed row
 (DEC-043).
 
 **The measured figure beats the sentence.** A live reading showing a window at 100% is the
 provider's own accounting at the moment of the stop; a hint parsed out of a sentence is the
-provider's wording, which has changed before (Claude says "session limit" for its 5-hour window).
+provider's wording, which has changed before (Claude names its 5-hour window "session").
 When they disagree the reading names the window, and the hint only fills an instant the reading
 did not publish for that same window.
 
@@ -22,7 +22,7 @@ and with no hint either the answer is `LimitHit(None, None)`: the stop is still 
 every surface keeps its window-blind wording for it. A full window with no published instant is
 treated as the last to lift, because resuming on the other window's reset would type into an
 agent that is still stopped. The same direction `limit_resets` fails in, for the same reason --
-a wrong "weekly limit" would send the owner to wait days for something that lifts in hours.
+a wrong "week" would send the owner to wait days for something that lifts in hours.
 
 **An instant without a zone is not evidence.** It can be neither compared with `now` nor stored
 without guessing the host's offset, so a reading stamped with one is not read, a window carrying

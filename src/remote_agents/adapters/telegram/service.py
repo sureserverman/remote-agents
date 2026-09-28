@@ -2228,7 +2228,7 @@ class PrivateBotBoundary:
         heading_counts = f" · {len(records)}" + (f"  {legend}" if legend else "")
         # Read once, above the branch, because both branches render it. The empty branch needs
         # it for the reason `notice` already reaches there: stopping the last session is exactly
-        # when this list is empty, and an agent's weekly limit does not stop existing because
+        # when this list is empty, and an agent's week window does not stop existing because
         # nothing is running against it right now.
         spent = await self._limit_block()
         # Read beside the limits and for the same reasons: both branches render it, and the
