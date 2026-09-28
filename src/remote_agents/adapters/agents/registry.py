@@ -115,6 +115,7 @@ from remote_agents.ports.agent_usage import (
     LimitsAbsence,
     UsageQuery,
 )
+from remote_agents.ports.limit_screen import LimitScreen
 from remote_agents.ports.provider_descriptor import ProviderDescriptor, TrustDialog
 from remote_agents.ports.provider_errors import ProviderUnavailable
 
@@ -430,6 +431,27 @@ def profile_composers(
         descriptor = by_provider.get(name) or by_provider.get(executables.get(name, ""))
         if descriptor is not None and descriptor.composer is not None:
             resolved[name] = descriptor
+    return resolved
+
+
+def profile_limit_screens(
+    descriptors: tuple[ProviderDescriptor, ...] | None = None,
+) -> dict[str, LimitScreen]:
+    """Every curated profile whose vertical declares how its agent words a limit stop.
+
+    `profile_composers`' fold, for the limit-stop classifier and the limit-screen watch: a
+    profile is present exactly when its vertical declares a `limit_screen`, keyed through each
+    profile's executable like the other folds.
+    """
+    built = provider_descriptors() if descriptors is None else descriptors
+    by_provider = {str(descriptor.profile_id): descriptor for descriptor in built}
+    executables = {str(profile.profile_id): profile.executable for profile in closed_profiles()}
+    resolved = {}
+    for profile in closed_profiles():
+        name = str(profile.profile_id)
+        descriptor = by_provider.get(name) or by_provider.get(executables.get(name, ""))
+        if descriptor is not None and descriptor.limit_screen is not None:
+            resolved[name] = descriptor.limit_screen
     return resolved
 
 

@@ -7,6 +7,7 @@ from functools import partial
 from remote_agents.adapters.agents.registry import (
     profile_composers,
     profile_glyphs,
+    profile_limit_screens,
     profile_trust_dialogs,
     profiles_with_finished_events,
     provider_descriptors,
@@ -24,6 +25,7 @@ from remote_agents.adapters.sqlite.trust_notifications import SQLiteTrustNotific
 from remote_agents.adapters.telegram import FRONTEND
 from remote_agents.adapters.telegram.service import build_private_bot
 from remote_agents.application.activity import CodexApprovalWatcher
+from remote_agents.application.limit_stops import LimitStopClassifier
 from remote_agents.application.prompt_relay import PromptRelay
 from remote_agents.application.reconcile import ReconciliationService, SessionLocks
 from remote_agents.composition.backend import (
@@ -199,4 +201,11 @@ def _private_boundary(
         prompt_relay=relay,
         relay_announcer=boundary.announce_relayed,
         turn_markers=turn_markers,
+        # The limits read both surfaces share, and each vertical's own limit sentence: a limit
+        # stop is given the window that stopped it before it is recorded or delivered.
+        limit_classifier=(
+            None
+            if backend.limits is None
+            else LimitStopClassifier(store, backend.limits, profile_limit_screens(descriptors))
+        ),
     )

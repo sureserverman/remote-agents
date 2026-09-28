@@ -46,6 +46,11 @@ import typing
 #: which grew the capability half: `composer` is how an agent draws its composer, busy state and
 #: dialogs, which the prompt relay reads before it may type into a pane. A real `None` again: a
 #: provider that declares no composer is never typed into.
+#: It moved 10 -> 11 on 2026-09-28 by the plan
+#: `2026-09-28-limit-lifecycle-sub-01-limit-stops-plan.md` (Task 2.1), which grew the
+#: capability half: `limit_screen` is how an agent words a usage-limit stop -- the markers the
+#: limit-screen watch looks for and the hint that names the window. A real `None`: an agent
+#: with nothing measured is never watched for a limit.
 _IDENTITY_FIELDS = ("profile_id", "glyph")
 _CAPABILITY_FIELDS = (
     "sessions",
@@ -55,6 +60,7 @@ _CAPABILITY_FIELDS = (
     "remote_control",
     "trust_dialog",
     "composer",
+    "limit_screen",
 )
 _RESERVATION_FIELDS = ("reserved_keys",)
 

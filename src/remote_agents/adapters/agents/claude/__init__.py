@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping
 from pathlib import Path
 
+from remote_agents.adapters.agents.claude.limit_screen import LIMIT_SCREEN
 from remote_agents.adapters.agents.claude.limits_source import ClaudeLimitsSource
 from remote_agents.adapters.agents.claude.sessions import ClaudeSessionCatalogue
 from remote_agents.adapters.agents.claude.usage import ClaudeUsageReader
@@ -128,4 +129,7 @@ def descriptor(
                 r"^  (?P<first>/\S+)[^\n]*(?:\n(?:  /\S+| {10,}\S)[^\n]*)*\n─{10,}\n[❯!]"
             ),
         ),
+        # Read out of the 2.1.284 bundle (`docs/acceptance-2026-09-28-limit-screens.md`). Claude
+        # reports the stop through `StopFailure`, so this is read for its hint, not watched for.
+        limit_screen=LIMIT_SCREEN,
     )

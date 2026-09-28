@@ -57,6 +57,7 @@ DECLARATIONS: dict[str, dict[str, tuple[Requirement, str]]] = {
             "asks about folder trust; strings carried from 2.1.263 (this host never asks)",
         ),
         "composer": (SUPPORTED, "idle/busy/dialog patterns measured on 2.1.280, 2026-09-23"),
+        "limit_screen": (SUPPORTED, "limit sentence read from the 2.1.284 bundle, 2026-09-28"),
     },
     "codex": {
         "sessions": (SUPPORTED, "rollout catalogue via the app-server client"),
@@ -69,6 +70,10 @@ DECLARATIONS: dict[str, dict[str, tuple[Requirement, str]]] = {
         "activity": (CONDITIONAL, "placeholder until the vertical wires an activity source"),
         "trust_dialog": (SUPPORTED, "asks about folder trust, measured 2026-09-09 at +0.22s"),
         "composer": (SUPPORTED, "idle/busy/dialog patterns measured on 0.155.1, 2026-09-23"),
+        "limit_screen": (
+            UNSUPPORTED,
+            "not yet declared; the limit-screen watch lands in Sub-plan 1 Task 2.2",
+        ),
     },
     "opencode": {
         "sessions": (SUPPORTED, "opencode.db catalogue via the CLI runner"),
@@ -84,6 +89,10 @@ DECLARATIONS: dict[str, dict[str, tuple[Requirement, str]]] = {
             "opencode raises no folder-trust dialog at all; the registry declares None",
         ),
         "composer": (SUPPORTED, "idle/busy/dialog patterns measured on 1.18.30/32, 2026-09-23"),
+        "limit_screen": (
+            UNSUPPORTED,
+            "no limit sentence measured for opencode; the registry declares None",
+        ),
     },
     "cursor-agent": {
         "sessions": (SUPPORTED, "constant catalogue; workspace-blind by design"),
@@ -96,5 +105,9 @@ DECLARATIONS: dict[str, dict[str, tuple[Requirement, str]]] = {
         "activity": (CONDITIONAL, "placeholder until the vertical wires an activity source"),
         "trust_dialog": (SUPPORTED, "asks about folder trust, measured 2026-09-09 at +0.66s"),
         "composer": (SUPPORTED, "idle/busy/dialog patterns measured on 2026.09.18, 2026-09-23"),
+        "limit_screen": (
+            UNSUPPORTED,
+            "not yet declared; the limit-screen watch lands in Sub-plan 1 Task 2.2",
+        ),
     },
 }

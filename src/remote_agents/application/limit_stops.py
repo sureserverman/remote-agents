@@ -32,11 +32,19 @@ the function total: nothing here can raise on a reading it did not expect.
 
 from __future__ import annotations
 
-from datetime import datetime
+import logging
+from collections.abc import Awaitable, Callable, Mapping, Sequence
+from dataclasses import replace
+from datetime import UTC, datetime
 
 from remote_agents.application.session_views import _STALE_READING_AGE
-from remote_agents.ports.agent_activity import LimitHit
+from remote_agents.domain.models import SessionId
+from remote_agents.ports.agent_activity import ActivityKind, AgentActivity, LimitHit
 from remote_agents.ports.agent_usage import AgentLimits, UsageWindow
+from remote_agents.ports.limit_screen import LimitScreen
+from remote_agents.ports.session_store import SessionStore
+
+_LOG = logging.getLogger(__name__)
 
 #: The percentage at which a window counts as the one that stopped the agent: anything that rounds
 #: to 100. Readers pass the provider's figure through unrounded, and nothing guarantees a blocked
@@ -105,3 +113,77 @@ def _lifts_last(window: UsageWindow) -> tuple[int, datetime | None]:
 def _aware(instant: datetime | None) -> bool:
     """Whether an instant is absent or carries a zone -- the two shapes this rule can use."""
     return instant is None or instant.tzinfo is not None
+
+
+class LimitStopClassifier:
+    """Give each limit stop in a pass the window that stopped it, before it is recorded.
+
+    The activity pass hands over what it gathered; every `LIMIT_REACHED` that arrived without a
+    hit is classified with its provider's current reading and its provider's own sentence, and
+    everything else passes through untouched. Application-layer under DEC-001: the provider
+    readings, the session store and each vertical's `LimitScreen` are handed in, so nothing here
+    knows which agent spells which sentence.
+
+    **A failure costs the window, never the stop.** An unreadable reading, a session the store
+    cannot find, or a hint that raised each leaves the activity as it arrived -- still a limit
+    stop, still recorded and delivered, with the window-blind wording every surface already has.
+    The pass that calls this runs beside the one that serves the owner and must not lose an
+    observation to a classification it could do without.
+    """
+
+    def __init__(
+        self,
+        store: SessionStore,
+        limits: Callable[[], Awaitable[Sequence[AgentLimits]]],
+        screens: Mapping[str, LimitScreen],
+        *,
+        now: Callable[[], datetime] = lambda: datetime.now(UTC),
+    ) -> None:
+        self._store = store
+        self._limits = limits
+        self._screens = screens
+        self._now = now
+
+    async def classified(self, activities: Sequence[AgentActivity]) -> list[AgentActivity]:
+        """The same activities in the same order, each unclassified limit stop classified."""
+        if not any(_unclassified(activity) for activity in activities):
+            return list(activities)
+        now = self._now()
+        readings = await self._readings()
+        result: list[AgentActivity] = []
+        for activity in activities:
+            if _unclassified(activity):
+                activity = await self._classify(activity, readings, now=now)
+            result.append(activity)
+        return result
+
+    async def _classify(
+        self, activity: AgentActivity, readings: Mapping[str, AgentLimits], *, now: datetime
+    ) -> AgentActivity:
+        try:
+            record = await self._store.get(SessionId.parse(activity.session_id))
+        except Exception:
+            _LOG.warning("could not look up the session a limit stop belongs to")
+            return activity
+        if record is None:
+            return activity
+        profile = str(record.profile_id)
+        screen = self._screens.get(profile)
+        hint = None
+        if screen is not None and activity.detail:
+            try:
+                hint = screen.hint(activity.detail, now)
+            except Exception:
+                _LOG.warning("a provider's limit sentence could not be read")
+        return replace(activity, limit=classify(readings.get(profile), hint, now=now))
+
+    async def _readings(self) -> dict[str, AgentLimits]:
+        try:
+            return {str(reading.profile_id): reading for reading in await self._limits()}
+        except Exception:
+            _LOG.warning("the limits read failed; limit stops this pass go by their own words")
+            return {}
+
+
+def _unclassified(activity: AgentActivity) -> bool:
+    return activity.kind is ActivityKind.LIMIT_REACHED and activity.limit is None

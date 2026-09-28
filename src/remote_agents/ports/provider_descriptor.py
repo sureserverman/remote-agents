@@ -30,6 +30,7 @@ from __future__ import annotations
 from dataclasses import MISSING, dataclass, fields
 
 from remote_agents.domain.models import ProfileId
+from remote_agents.ports.limit_screen import LimitScreen
 
 
 @dataclass(frozen=True, slots=True)
@@ -213,6 +214,16 @@ class ProviderDescriptor:
     What the prompt relay reads before it may type into a pane (DEC-099): a provider with no
     declaration is never typed into, because nothing can tell its idle composer from a running
     turn or a dialog. Typed, like `trust_dialog`, because it carries only strings.
+    """
+
+    limit_screen: LimitScreen | None = None
+    """How this agent says a usage limit stopped it, or None when nothing was measured.
+
+    Read twice (`ports.limit_screen`): its hint names the window a limit stop's own sentence
+    names, and its markers are what the limit-screen watch looks for on the pane of an agent
+    that publishes no limit event. A real `None` again: an agent with no declaration is never
+    watched for a limit, and its stops -- if it reports any -- stay window-blind. Typed, like
+    `composer`, because it carries strings and one pure function of a string.
     """
 
     remote_control: object | None = None

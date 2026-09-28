@@ -39,7 +39,9 @@ def expected_skips() -> int:
 
 
 def test_the_skip_count_is_fully_accounted_for() -> None:
-    assert expected_skips() == 9, (
+    # 9 -> 12 on 2026-09-28: `limit_screen` joined the capability set declared for codex,
+    # opencode and cursor-agent as unsupported (Sub-plan 1 Task 2.1 of the limit-lifecycle plan).
+    assert expected_skips() == 12, (
         "the kit's skip budget changed; re-derive the gate's grep expectation from this "
         "number rather than editing either side alone"
     )

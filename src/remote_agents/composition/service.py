@@ -16,6 +16,7 @@ from remote_agents.adapters.telegram.trust_notifications import TrustNotifier
 from remote_agents.adapters.tmux.runtime import TmuxTerminal
 from remote_agents.application.activity import CodexApprovalWatcher, drain_activity
 from remote_agents.application.backend import CLOSE_TIMEOUT_SECONDS
+from remote_agents.application.limit_stops import LimitStopClassifier
 from remote_agents.application.reconcile import ReconciliationService
 from remote_agents.config import TelegramSecrets
 from remote_agents.domain.models import SessionId
@@ -146,6 +147,13 @@ class ServiceComposition:
     It protects nothing by itself. A new turn the owner starts inside the window is kept from
     being typed into by the retry's own capture, which reads that turn's fresh marker (its
     `UserPromptSubmit` fired before it started) and refuses as busy."""
+
+    limit_classifier: LimitStopClassifier | None = None
+    """What gives each limit stop the window that stopped it before it is recorded, or None.
+
+    None in compositions that wire no limits read -- every one but the bot's -- where a limit
+    stop is recorded and delivered as it arrived, window-blind, exactly as before it existed.
+    """
 
 
 async def _serve_with_reconciliation(
@@ -418,6 +426,11 @@ async def _watch_activity_once(composition: ServiceComposition) -> None:
             activities.extend(await composition.approval_watcher.poll())
         except Exception:
             _LOG.exception("the Codex approval watch failed")
+    if composition.limit_classifier is not None:
+        try:
+            activities = await composition.limit_classifier.classified(activities)
+        except Exception:
+            _LOG.exception("classifying limit stops failed; they are delivered as they arrived")
     if composition.activity_store is not None:
         for activity in activities:
             try:
