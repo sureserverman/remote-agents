@@ -313,11 +313,12 @@ def reported_activity_kinds_for(profile_id: str) -> frozenset[ActivityKind]:
 class LimitHit:
     """Which usage window stopped a session, and when its provider said it lifts.
 
-    Both fields are provider figures, never agent words: `window` is a limits label as a
-    `UsageWindow` spells it (`5h`, `week`, a Cursor `month`), and `resets_at` is the instant the
-    provider published for it. Either may be unknown, and `LimitHit(None, None)` is still a
-    stop -- one whose window nothing could name. `application/limit_stops.classify` is the one
-    place that decides them.
+    Both fields are provider figures, never agent words: `window` is a limits label -- as a
+    `UsageWindow` spells it (`5h`, `week`) when a reading named it, or as the provider's own
+    vertical names it when only its limit text did (Cursor's `month`) -- and `resets_at` is the
+    instant the provider published for it, always zone-aware. Either may be unknown, and
+    `LimitHit(None, None)` is still a stop -- one whose window nothing could name.
+    `application/limit_stops.classify` is the one place that decides them.
     """
 
     window: str | None = None

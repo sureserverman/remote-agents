@@ -82,6 +82,29 @@ _WEEK_LOW = UsageWindow("week", 80, _IN_3D)
             id="absence-falls-to-hint",
         ),
         pytest.param(None, None, LimitHit(None, None), id="nothing-known"),
+        # A full window whose own reset has already passed is not what is stopping the agent
+        # now -- a reading up to 30 minutes old can still show one.
+        pytest.param(
+            _reading(UsageWindow("5h", 100, _NOW - timedelta(minutes=10)), _WEEK_LOW),
+            None,
+            LimitHit(None, None),
+            id="an-expired-full-window-names-nothing",
+        ),
+        # Two full windows, one with no published instant: unknown is the later lift, never a
+        # guess that resumes the agent while the other window still blocks it.
+        pytest.param(
+            _reading(_FIVE_HOUR_FULL, UsageWindow("week", 100)),
+            None,
+            LimitHit("week", None),
+            id="an-unknown-instant-lifts-last",
+        ),
+        # Providers need not round: a figure that rounds to 100 is a full window.
+        pytest.param(
+            _reading(UsageWindow("5h", 99.6, _IN_2H)),
+            None,
+            LimitHit("5h", _IN_2H),
+            id="a-figure-that-rounds-to-100-is-full",
+        ),
         pytest.param(
             _reading(UsageWindow("day", 100, _IN_2H)),
             None,
@@ -94,3 +117,18 @@ def test_the_window_that_stopped_a_session(
     reading: AgentLimits | None, hint: LimitHit | None, expected: LimitHit
 ) -> None:
     assert classify(reading, hint, now=_NOW) == expected
+
+
+def test_naive_instants_are_never_trusted_and_never_raise() -> None:
+    """Totality: an instant without a zone cannot be compared or stored honestly, so it is
+    treated as unknown rather than raising inside a service loop or being stored shifted by the
+    host's offset."""
+    naive_now = datetime(2026, 9, 28, 21, 0)
+    naive_reading = AgentLimits(
+        "claude", (UsageWindow("5h", 100, naive_now + timedelta(hours=2)),), observed_at=naive_now
+    )
+    mixed = _reading(UsageWindow("5h", 100, naive_now + timedelta(hours=2)), _WEEK_FULL)
+
+    assert classify(naive_reading, None, now=_NOW) == LimitHit(None, None)
+    assert classify(mixed, None, now=_NOW) == LimitHit("week", _IN_3D)
+    assert classify(None, LimitHit("5h", naive_now), now=_NOW) == LimitHit("5h", None)

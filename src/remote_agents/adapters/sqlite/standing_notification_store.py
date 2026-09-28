@@ -162,11 +162,13 @@ def _instant(value: str) -> datetime:
 def _encoded_limit(limit: LimitHit | None) -> dict | None:
     if limit is None:
         return None
+    resets_at = limit.resets_at
+    if resets_at is not None and resets_at.tzinfo is None:
+        # Read as UTC, which is what `_instant` assumes reading it back.
+        resets_at = resets_at.replace(tzinfo=UTC)
     return {
         "window": limit.window,
-        "resets_at": None
-        if limit.resets_at is None
-        else limit.resets_at.astimezone(UTC).isoformat(),
+        "resets_at": None if resets_at is None else resets_at.astimezone(UTC).isoformat(),
     }
 
 

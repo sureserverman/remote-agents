@@ -152,7 +152,15 @@ def _instant(value: str) -> datetime:
 
 
 def _stored_instant(value: datetime | None) -> str | None:
-    return None if value is None else value.astimezone(UTC).isoformat()
+    """UTC ISO text, reading a zone-less instant as UTC -- the same assumption `_instant` makes
+    reading one back, so a value can never shift by the host's offset on the way through."""
+    if value is None:
+        return None
+    return (
+        (value if value.tzinfo is not None else value.replace(tzinfo=UTC))
+        .astimezone(UTC)
+        .isoformat()
+    )
 
 
 def _limit(kind: ActivityKind, window: str | None, resets_at: str | None) -> LimitHit | None:
