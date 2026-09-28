@@ -109,7 +109,7 @@ def test_a_remote_control_launch_substitutes_only_the_generated_managed_name() -
 @pytest.mark.parametrize(
     ("profile_id", "expected_blockers"),
     (
-        ("codex", ("Do you trust the contents of this directory?",)),
+        ("codex", ("Trust this folder?",)),
         ("cursor-agent", ("Workspace Trust Required",)),
     ),
 )

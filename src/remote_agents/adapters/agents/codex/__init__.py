@@ -37,20 +37,23 @@ def descriptor() -> ProviderDescriptor:
         usage=CodexAccountLimitsReader(),
         hooks="codex",
         remote_control=CodexRemoteControl(),
-        # Measured 2026-09-09 on codex-cli 0.153.4: the dialog is up 0.22 s after launch, and
-        # the cursor rests on the **affirmative** -- the opposite of claude's, which is the
-        # whole reason the keys are computed from the capture rather than fixed.
+        # Measured 2026-09-28 on codex-cli 0.158.0, which redrew the dialog (acceptance
+        # 2026-09-09 § 9): "Trust this folder?" under a `Folder access` heading, the cursor
+        # still on the **affirmative** -- the opposite of claude's, which is the whole reason
+        # the keys are computed from the capture rather than fixed. The negative no longer
+        # quits: it goes to the Agent Command Center, and a decline force-stops the pane when
+        # it does not exit (`decline_trust`).
         #
-        # `identifies_by` is NOT the question: codex and cursor-agent draw "Do you trust the
-        # contents of this directory?" word for word, so it identifies neither of them.
+        # 0.153.4-0.155.1 asked "Do you trust the contents of this directory?", which
+        # cursor-agent draws word for word; that dialog is no longer recognised as codex's.
         trust_dialog=TrustDialog(
-            question="Do you trust the contents of this directory?",
-            affirmative="Yes, continue",
-            negative="No, quit",
+            question="Trust this folder?",
+            affirmative="Trust and continue",
+            negative="Back to Agent Command Center",
             cursor="›",
-            # Not the affirmative, for the reason claude's declaration gives: this is the
-            # sentence codex draws under its question, and it is no answer.
-            identifies_by="Working with untrusted contents",
+            # Not an answer, for the reason claude's declaration gives: the heading codex draws
+            # above its question.
+            identifies_by="Folder access",
         ),
         # Measured on 0.155.1 (`docs/acceptance-2026-09-22-composer-states.md`, captures in
         # `tests/fixtures/panes/codex/`). The composer is the last `› ` line (a `! ` line is shell

@@ -266,13 +266,14 @@ class _DeclineGateway(Gateway):
         self.live = False
 
 
-_CODEX_BLOCKER = "Do you trust the contents of this directory?"
+_CODEX_BLOCKER = "Trust this folder?"
 
 _CODEX_DIALOG = (
-    "> You are in /home/user/dev/example\n"
-    f"  {_CODEX_BLOCKER} Working with untrusted contents comes with higher risk.\n"
-    "\u203a 1. Yes, continue\n"
-    "  2. No, quit\n"
+    "  Folder access\n"
+    "  /home/user/dev/example\n"
+    f"  {_CODEX_BLOCKER} Codex can read, edit, and run files here.\n"
+    "\u203a 1. Trust and continue\n"
+    "  2. Back to Agent Command Center\n"
 )
 
 #: Claude's dialog, abbreviated — but no longer abbreviated past its own identifier.
@@ -366,7 +367,7 @@ async def test_codex_is_told_no_in_its_own_dialog_now_that_it_declares_one(tmp_p
     observation = await terminal.decline_trust(session_id)
 
     assert gateway.sent == [("Down", "Enter")], (
-        "codex rests its cursor on 'Yes, continue', so declining is one row down from it"
+        "codex rests its cursor on 'Trust and continue', so declining is one row down from it"
     )
     assert gateway.destroyed == [session_id]
     assert not observation.live
@@ -493,10 +494,11 @@ async def test_a_codex_pane_that_is_no_longer_asking_is_refused_too(tmp_path) ->
 #: `classify_trust_capture` says AWAITING, and no `›` for `plan_trust_keys` to count rows
 #: from, so it fails closed. The screen a parser can *recognise* and cannot *read*.
 _CODEX_DIALOG_WITHOUT_A_CURSOR = (
-    "> You are in /home/user/dev/example\n"
-    f"  {_CODEX_BLOCKER} Working with untrusted contents comes with higher risk.\n"
-    "  1. Yes, continue\n"
-    "  2. No, quit\n"
+    "  Folder access\n"
+    "  /home/user/dev/example\n"
+    f"  {_CODEX_BLOCKER} Codex can read, edit, and run files here.\n"
+    "  1. Trust and continue\n"
+    "  2. Back to Agent Command Center\n"
 )
 
 

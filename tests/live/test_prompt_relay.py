@@ -26,6 +26,7 @@ import shutil
 import subprocess
 import sys
 import time
+from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
@@ -39,6 +40,7 @@ from agent_panes import (
     Interstitial,
     open_to_composer,
 )
+from codex_home import retire_codex_home, short_codex_home
 
 from remote_agents.adapters.agents.registry import (
     install_agent_hooks,
@@ -121,6 +123,17 @@ def _requirements(agent: str) -> None:
         pytest.skip("BLOCKED: codex is not logged in with ChatGPT")
 
 
+#: The Codex homes this module's panes were given, retired after each test (`codex_home.py`).
+_CODEX_HOMES: list[Path] = []
+
+
+@pytest.fixture(autouse=True)
+def _codex_homes_are_retired():
+    yield
+    while _CODEX_HOMES:
+        retire_codex_home(_CODEX_HOMES.pop())
+
+
 def _open_pane(
     agent: str, socket: str, workspace: Path, *, spool: Path | None = None
 ) -> tuple[SessionId, list[str]]:
@@ -148,8 +161,8 @@ def _open_pane(
             install_agent_hooks(settings, executable=Path(sys.executable), activity_directory=spool)
         command += ["--settings", str(settings)]
     if agent == "codex":
-        codex_home = workspace / ".codex-home"
-        codex_home.mkdir(mode=0o700)
+        codex_home = short_codex_home()
+        _CODEX_HOMES.append(codex_home)
         os.symlink(Path.home() / ".codex" / "auth.json", codex_home / "auth.json")
         # The model nudge is hidden because an account near its weekly limit raises it after
         # every turn, and the relay rightly refuses a dialog (measured 2026-09-25, Codex 0.155.1).
@@ -191,7 +204,7 @@ def _answer(
     socket: str,
     pane: str,
     agent: str,
-    ready: str | tuple[str, ...],
+    ready: str | tuple[str, ...] | Callable[[str], bool],
     opening: tuple[Interstitial, ...],
 ) -> None:
     open_to_composer(

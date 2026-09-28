@@ -303,7 +303,10 @@ def test_an_agent_that_never_asks_declares_no_dialog_to_read_it_with() -> None:
 
 def test_a_doubled_target_row_still_plans_nothing_for_the_new_dialogs() -> None:
     """Fails closed identically, whichever agent's dialog is being read."""
-    doubled = capture("codex").replace("2. No, quit", "2. No, quit\n  2. No, quit")
+    doubled = capture("codex").replace(
+        "2. Back to Agent Command Center",
+        "2. Back to Agent Command Center\n  2. Back to Agent Command Center",
+    )
     assert plan_trust_keys(doubled, _dialog("codex"), accept=False) is None
 
 

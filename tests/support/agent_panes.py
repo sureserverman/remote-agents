@@ -19,6 +19,7 @@ import re
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
+from functools import cache
 
 import pytest
 
@@ -34,6 +35,8 @@ class Interstitial:
 
 
 CODEX_OPENING = (
+    # 0.158.0's wording, then 0.153.4-0.155.1's.
+    Interstitial("Trust this folder?", "Trust and continue"),
     Interstitial("Do you trust the contents of this directory", "Yes, continue"),
     # Hook trust, granted inside the drill's disposable CODEX_HOME only.
     Interstitial("Hooks need review", "Trust all and continue"),
@@ -41,7 +44,26 @@ CODEX_OPENING = (
     # strings; keep the model the drill was configured with.
     Interstitial("Approaching rate limits", "Keep current model"),
 )
-CODEX_READY = "Ask Codex to do anything"
+
+
+@cache
+def _codex():
+    from remote_agents.adapters.agents.codex import descriptor
+
+    return descriptor()
+
+
+def CODEX_READY(text: str) -> bool:  # noqa: N802 -- read beside CLAUDE_READY, as it replaced one
+    """Codex's composer, read as the relay reads it: IDLE.
+
+    Its placeholder is not enough since 0.158.0, which draws `› Ask Codex to do anything` on a
+    splash with no model line ~0.25 s before the folder-trust dialog. The drill took the splash
+    for the composer and sent its first message into a pane that was not one.
+    """
+    from remote_agents.adapters.tmux.composer import PaneState, classify
+
+    return classify(text, _codex()) is PaneState.IDLE
+
 
 CLAUDE_OPENING = (
     # Raised only for a folder claude has not been told about. The option words are the
@@ -121,7 +143,7 @@ def open_to_composer(
     capture: Callable[[], str],
     press: Callable[[str], None],
     *,
-    ready: str | tuple[str, ...],
+    ready: str | tuple[str, ...] | Callable[[str], bool],
     interstitials: tuple[Interstitial, ...],
     agent: str,
     timeout: float = 120.0,
@@ -152,7 +174,10 @@ def open_to_composer(
                 unanswerable = showing
                 sleep(poll)
             continue
-        if any(marker in text for marker in ((ready,) if isinstance(ready, str) else ready)):
+        if callable(ready):
+            if ready(text):
+                return
+        elif any(marker in text for marker in ((ready,) if isinstance(ready, str) else ready)):
             return
         sleep(poll)
     if unanswerable is not None:

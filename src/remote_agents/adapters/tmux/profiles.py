@@ -52,7 +52,8 @@ _READINESS_MARKERS = {
 #: asked -- a pane resting on the question matches nothing here.
 _READINESS_BLOCKERS = {
     "claude": ("Accessing workspace:",),
-    "codex": ("Do you trust the contents of this directory?",),
+    # 0.158.0's wording; 0.153.4-0.155.1 asked "Do you trust the contents of this directory?".
+    "codex": ("Trust this folder?",),
     "cursor-agent": ("Workspace Trust Required",),
 }
 
@@ -68,6 +69,8 @@ _READINESS_BLOCKERS = {
 #: apart** across five launches, and its banner is its readiness marker -- so a launch whose
 #: deciding capture lands in that window reports a ready agent that is about to stop on a
 #: question. 0.1 s is the measured maximum plus one poll interval (0.01 s), rounded up.
+#: **0.158.0 widened the gap to 0.247-0.263 s** (five launches, 2026-09-28): its banner is now
+#: a placeholder composer ("Ask Codex to do anything") drawn before the dialog, so 0.3 s.
 #:
 #: `claude` is 0.0 because ten launches produced **no dialog at all** on this host, which makes
 #: its gap *undefined* rather than zero. The number is a floor chosen in the absence of the
@@ -80,7 +83,7 @@ _READINESS_BLOCKERS = {
 #: belongs.
 _TRUST_SETTLE_SECONDS = {
     "claude": 0.0,
-    "codex": 0.1,
+    "codex": 0.3,
 }
 
 

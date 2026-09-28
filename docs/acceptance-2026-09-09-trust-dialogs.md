@@ -304,3 +304,37 @@ the keys arriving, and the row afterwards — is the owner's.
 **What no test covers, stated so it is not mistaken for covered:** nothing in the suite sends
 the planned keys into a live agent's pane. The keys are computed against real captures and the
 sending is exercised against fakes; the join between them is this drill.
+
+---
+
+## Section 9 — codex 0.158.0 redrew its dialog (2026-09-28)
+
+`codex-cli 0.158.0` no longer asks cursor-agent's question. Captured into a never-asked
+directory on this host, pane 160x40, the owner's `CODEX_HOME`, and left unanswered. This is now
+`tests/fixtures/trust_dialogs/codex.txt`:
+
+```
+
+  Folder access
+  /workspace
+
+  Trust this folder? Codex can read, edit, and run files here, subject to your permission settings. Folder settings can run code automatically, even without a
+  model request. Continue only if you trust these files. Your trust decision will be saved.
+
+› 1. Trust and continue
+  2. Back to Agent Command Center
+
+  enter continue · esc back
+```
+
+- **question** `Trust this folder?`, **affirmative** `Trust and continue`, **negative**
+  `Back to Agent Command Center`, **cursor** `›` U+203A, still on the affirmative.
+- **identifies_by** `Folder access`: the heading, absent from every other capture here.
+- The negative no longer quits: it goes to Codex's Agent Command Center with the pane alive.
+  A decline therefore ends in `decline_trust`'s force stop after its wait, not a clean exit.
+- **Readiness blocker** is `Trust this folder?`. **Banner to dialog**, five launches, polled
+  every 10 ms: 0.263, 0.247, 0.247, 0.261, 0.261 s. Its readiness marker `Codex` is now on a
+  splash that draws a placeholder composer (`› Ask Codex to do anything`, `? for shortcuts`, no
+  model line) before the dialog, so `_TRUST_SETTLE_SECONDS["codex"]` is 0.3 s, up from 0.1.
+
+With this, codex and cursor-agent no longer share a question; §6's cross-check stays the guard.

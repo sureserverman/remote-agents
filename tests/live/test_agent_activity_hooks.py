@@ -26,6 +26,7 @@ import shutil
 import subprocess
 import sys
 import time
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
@@ -37,6 +38,7 @@ from agent_panes import (
     Interstitial,
     open_to_composer,
 )
+from codex_home import retire_codex_home, short_codex_home
 
 from remote_agents.adapters.agents.registry import install_agent_hooks
 from remote_agents.application.activity import drain_activity
@@ -212,7 +214,11 @@ def _pane_text(socket: str = _DRILL_SOCKET) -> str:
     return _tmux("capture-pane", "-p", "-t", "0", socket=socket).stdout
 
 
-def _open(agent: str, ready: str, interstitials: tuple[Interstitial, ...]) -> None:
+def _open(
+    agent: str,
+    ready: str | tuple[str, ...] | Callable[[str], bool],
+    interstitials: tuple[Interstitial, ...],
+) -> None:
     """Answer whatever the pane shows until its composer is up (BL-105); fail if it cannot."""
     open_to_composer(
         _pane_text,
@@ -278,8 +284,7 @@ def test_a_real_codex_approval_spools_the_command_it_is_asking_about(tmp_path: P
 
     workspace = tmp_path / "workspace"
     workspace.mkdir()
-    codex_home = workspace / ".codex"
-    codex_home.mkdir(mode=0o700)
+    codex_home = short_codex_home()
     spool = tmp_path / "activity"
     # Never opened, copied or serialized here -- only linked, so the ordinary ChatGPT
     # entitlement is used instead of separate API billing.
@@ -336,6 +341,7 @@ def test_a_real_codex_approval_spools_the_command_it_is_asking_about(tmp_path: P
         assert activity.ask == "Bash"
     finally:
         _tmux("kill-server")
+        retire_codex_home(codex_home)
 
 
 @pytest.mark.live_profile

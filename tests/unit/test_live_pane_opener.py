@@ -21,6 +21,9 @@ from agent_panes import (
 
 _PANES = Path(__file__).resolve().parents[1] / "fixtures" / "panes"
 
+#: A real idle Codex 0.158.0 composer: what `CODEX_READY` accepts.
+_CODEX_IDLE = (_PANES / "codex" / "idle_0158.txt").read_text(encoding="utf-8")
+
 
 class _Screens:
     """A pane that shows each screen in turn, advancing when a key is pressed."""
@@ -68,7 +71,7 @@ def test_the_opener_answers_codex_0_155_s_rate_limit_prompt_by_its_words() -> No
         "Approaching rate limits\n› 1. Switch to gpt-6-mini\n  2. Keep current model\n"
         "  3. Keep current model (never show again)",
         "Hooks need review\n  1. Review\n› 2. Trust all and continue\n  3. Continue without",
-        f"› {CODEX_READY}",
+        _CODEX_IDLE,
     )
 
     open_to_composer(
@@ -98,7 +101,7 @@ def test_the_opener_answers_claude_s_unnumbered_trust_prompt_from_a_real_capture
 def test_the_opener_waits_for_a_menu_drawn_a_frame_after_its_marker() -> None:
     clock, sleep = _fake_clock()
     half = "Do you trust the contents of this directory?"
-    screens = _Screens(half, f"{half}\n› 1. Yes, continue\n  2. No, quit", f"› {CODEX_READY}")
+    screens = _Screens(half, f"{half}\n› 1. Yes, continue\n  2. No, quit", _CODEX_IDLE)
     original = screens.capture
     calls = []
 
@@ -114,6 +117,29 @@ def test_the_opener_waits_for_a_menu_drawn_a_frame_after_its_marker() -> None:
     )  # fmt: skip
 
     assert screens.pressed == ["Enter"]
+
+
+def test_the_opener_answers_codex_0_158_s_trust_dialog_and_waits_out_its_splash() -> None:
+    """0.158.0 draws its placeholder composer on a splash before the trust dialog: not ready."""
+    clock, sleep = _fake_clock()
+    splash = "› Ask Codex to do anything\n\n  ? for shortcuts"
+    trust = Path(__file__).resolve().parents[1] / "fixtures" / "trust_dialogs" / "codex.txt"
+    screens = _Screens(splash, trust.read_text(encoding="utf-8"), _CODEX_IDLE)
+    looks = []
+
+    def capture() -> str:
+        looks.append(1)
+        if len(looks) == 3:
+            screens.screens.pop(0)  # the dialog replaces the splash
+        return screens.capture()
+
+    open_to_composer(
+        capture, screens.press, ready=CODEX_READY, interstitials=CODEX_OPENING,
+        agent="codex", timeout=30, clock=clock, sleep=sleep,
+    )  # fmt: skip
+
+    assert screens.pressed == ["Enter"], "`Trust and continue` is where the cursor rests"
+    assert len(looks) >= 3, "the splash was taken for the composer"
 
 
 def test_the_opener_fails_on_a_known_prompt_whose_option_never_appears() -> None:

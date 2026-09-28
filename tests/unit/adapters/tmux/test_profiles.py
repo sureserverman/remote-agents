@@ -115,7 +115,7 @@ def test_the_settle_each_agent_gets_is_the_one_that_was_measured_for_it() -> Non
             ("claude", "--remote-control", "{managed_name}"),
             0.0,
         ),
-        ("codex", "codex", ("codex",), ("/exit", "Enter", "Enter"), None, 0.1),
+        ("codex", "codex", ("codex",), ("/exit", "Enter", "Enter"), None, 0.3),
     ):
         definition = ProfileDefinition(
             ProfileId(profile_id), executable, argv, ("--version",), graceful, variant
@@ -162,7 +162,7 @@ def test_the_settle_is_read_from_one_table_by_both_constructions() -> None:
         dict(_CURATED),
     )
 
-    assert launched.trust_settle_seconds == 0.1
+    assert launched.trust_settle_seconds == 0.3
     assert resumed.trust_settle_seconds == launched.trust_settle_seconds
 
 

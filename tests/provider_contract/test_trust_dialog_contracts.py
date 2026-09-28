@@ -43,10 +43,13 @@ def test_the_captures_this_contract_reads_are_the_ones_that_were_measured() -> N
     makes each cross-check a loop over zero captures, which passes.
     """
     assert set(_CAPTURES) >= {"codex", "cursor-agent", "opencode", "claude"}, sorted(_CAPTURES)
+    # codex 0.153.4-0.155.1 asked cursor-agent's question word for word; 0.158.0 asks its own
+    # (acceptance 2026-09-09 § 9). The premise stands for any two agents that ever share one,
+    # which is why every identifier is still checked against every other capture below.
     shared = "Do you trust the contents of this directory?"
-    assert shared in _CAPTURES["codex"] and shared in _CAPTURES["cursor-agent"], (
-        "the two agents that share their question verbatim no longer do, which is the premise "
-        "this whole file is built on — re-read the acceptance document before relaxing anything"
+    assert shared in _CAPTURES["cursor-agent"] and shared not in _CAPTURES["codex"], (
+        "the question codex used to share with cursor-agent is back on codex's screen, or gone "
+        "from cursor-agent's — re-read the acceptance document before relaxing anything"
     )
 
 
