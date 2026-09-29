@@ -707,3 +707,14 @@ async def test_interrupted_answers_one_stop_for_duplicate_activity_rows(connecti
     await outcomes.claim(stop, decided_at=_AFTER)
 
     assert len(await outcomes.interrupted()) == 1
+
+
+async def test_a_tmux_error_before_anything_was_typed_is_tried_again(connection) -> None:
+    """Refused with nothing typed is a pass lost to tmux, not a screen that cannot be read."""
+    await SQLiteActivityStore(connection).append(_stop())
+    terminal = _Terminal(PromptDelivery(PromptOutcome.REFUSED, PromptReason.TMUX_ERROR), SENT)
+    watcher = _watcher(connection, terminal, _Line(), _Clock())
+
+    assert await watcher.pass_once() == 0
+    assert await watcher.pass_once() == 1
+    assert _outcomes(connection) == [RESUMED]

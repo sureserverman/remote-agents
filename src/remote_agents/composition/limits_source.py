@@ -90,7 +90,8 @@ class ConfigResumeSetting:
     `ConfigLimitsSource`'s twin for `limits.resume_after_limit`, in this module for its reason:
     a file path meeting a port is composition's business, and both switches go through the
     same one writer. Read afresh on every call, since the bot and the terminal are two writers
-    over one file and the service reads it on every lift.
+    over one file. It is the Settings rows' read; the service reads the switch itself, stricter
+    (`composition.telegram._resume_switch`).
     """
 
     _KEY = "resume_after_limit"

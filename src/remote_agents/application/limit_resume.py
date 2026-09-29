@@ -11,8 +11,8 @@ draft is seen. What it does not do is queue: `PromptRelay.submit` queues a messa
 busy, and a queued nudge would replace the owner's own waiting message and fire after some later
 turn, out of context. So a refusal is decided here instead:
 
-- **busy** (or another sender at the keys) is tried again each pass, for `BUSY_PATIENCE`, then
-  given up;
+- **busy** (or another sender at the keys, or tmux failing before anything was typed) is tried
+  again each pass, for `BUSY_PATIENCE`, then given up;
 - **a dialog, a draft in the composer, a screen not recognised** are given up at once -- waiting
   does not fix them, and typing past them is what the guards exist to stop;
 - **unconfirmed** (typed, and not seen to land) is never tried again: a double submit is worse
@@ -98,7 +98,9 @@ class Nudge:
     reason: NotResumed | None = None
 
 
-_WAITS = frozenset({PromptReason.BUSY, PromptReason.KEYS_BUSY})
+#: Refusals that typed nothing and that a later pass can outlast: busy, another sender at the
+#: keys, and a tmux call that failed before the paste (a partway failure is UNCONFIRMED).
+_WAITS = frozenset({PromptReason.BUSY, PromptReason.KEYS_BUSY, PromptReason.TMUX_ERROR})
 _DIALOGS = frozenset({PromptReason.DIALOG, PromptReason.MENU})
 
 

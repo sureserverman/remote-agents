@@ -25,8 +25,10 @@ class SQLiteLimitStopStore:
         """Each session whose newest observation, by insertion, is an undecided limit stop.
 
         Newest by `activity_id`, the order the feed reads in, rather than by stamp: a stop is
-        superseded by whatever the service recorded after it, which is also what retired its
-        line from the bot's message (limit-lifecycle sub-plan 2, Stage 1).
+        superseded by whatever the service recorded after it. That is usually also what retired
+        its line from the bot's message (Stage 1), which goes by stamp -- not always: a hook
+        record stamped before a pane-read stop but drained after it supersedes the stop here and
+        leaves its line in the message, where later news retires it.
         """
         stops: list[LimitStop] = []
         for session_id in session_ids:

@@ -6,8 +6,10 @@
 switch it off.
 
 **Total on both verbs.** `read` answers the default for a file that is absent, malformed or
-holding a non-bool, and never raises: the service consults it on every lift, and the Settings
-rows draw it. A failed `write` is one log line, and the read-back is what reports it.
+holding a non-bool, and never raises: the Settings rows draw it. The service does not read the
+switch through this port -- it reads the file itself with `read_resume_after_limit(when_unsure=
+False)`, so a half-edited file that Settings draws as on is off to the service. A failed
+`write` is one log line, and the read-back is what reports it.
 """
 
 from __future__ import annotations
