@@ -53,6 +53,18 @@ from remote_agents.ports.session_store import SessionStore
 
 _LOG = logging.getLogger(__name__)
 
+NEW_PERIOD_MARGIN = timedelta(hours=1)
+"""How far past the stop's reset a reading's reset must lie to count as a new period.
+
+A stop's reset is often read off the agent's own screen rather than a reading, and Claude
+prints a reset more than a day away at the hour (`resets Sep 30, 9am`,
+`tests/unit/adapters/agents/claude/test_limit_hint.py`), so the stop's instant can sit up to an
+hour before the provider's true one. A cached reading carrying that true reset would then look
+like a new period. An hour covers the coarsest text measured, and costs nothing real: a window
+that genuinely rolled over resets a whole window length later, and every window here is an hour
+or longer. A wipe whose new reset lands within the hour waits for the schedule instead.
+"""
+
 READ_TIMEOUT_SECONDS = 8.0
 """How long one pass waits for the providers' readings before lifting on schedules alone."""
 
@@ -104,12 +116,15 @@ def _any_binding(windows: tuple[UsageWindow, ...], *, now: datetime) -> bool:
 
 
 def _new_period(window: UsageWindow, *, after: datetime) -> bool:
-    """Whether `window` is below full in a period that began after the stop's reset."""
+    """Whether `window` is below full in a period that began after the stop's reset.
+
+    "Began after" by `NEW_PERIOD_MARGIN`, never by the grace minute: see there.
+    """
     return (
         window.used_percent < _SATURATED
         and _zoned(window.resets_at)
         and window.resets_at is not None
-        and window.resets_at > after + LIFT_GRACE
+        and window.resets_at > after + NEW_PERIOD_MARGIN
     )
 
 

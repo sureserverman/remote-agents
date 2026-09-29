@@ -124,6 +124,13 @@ _CASES = [
         id="a-new-period-that-rounds-to-100-is-still-full",
     ),
     pytest.param(
+        LimitHit("week", _WEEK),
+        _reading(_window("week", 97, _WEEK + timedelta(minutes=40)), at=_EARLY),
+        _EARLY_NOW,
+        False,
+        id="an-hour-level-screen-reset-is-not-a-new-period-40-minutes-later",
+    ),
+    pytest.param(
         LimitHit("5h", _RESET),
         _reading(_window("5h", 12), _window("week", 100, _WEEK), at=_EARLY),
         _EARLY_NOW,
