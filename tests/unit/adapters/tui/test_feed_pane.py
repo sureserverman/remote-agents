@@ -1834,6 +1834,8 @@ def test_limit_window_word_never_widens_the_kind_column(window: str | None) -> N
 
     assert FEED_KIND_WIDTH == 12
     assert len(kind_words(_stop(window))) <= FEED_KIND_WIDTH
+    if window in ("123456m", None):
+        assert kind_words(_stop(window)) == "usage limit"
 
 
 def test_limit_window_does_not_touch_the_rows_around_it() -> None:

@@ -1878,9 +1878,17 @@ def test_the_same_ask_and_detail_repeated_is_a_silent_amendment() -> None:
     assert unheard((asked,), (again,)) == ()
 
 
-# A clock in the host's own zone, because that is the zone the bot writes a reset in. Built
-# from a naive wall time so the expected strings below hold in whatever zone the suite runs.
-LOCAL_OBSERVED = datetime(2026, 9, 29, 9, 0).astimezone()
+def _local(month: int, day: int, hour: int, minute: int = 0) -> datetime:
+    """A wall-clock instant in the host's own zone, the zone the bot writes a reset in.
+
+    Built from a naive wall time for **each** instant, never by adding a `timedelta` to another:
+    `astimezone()` on a naive time applies that date's own offset, so a DST change between the
+    stop and its reset leaves the expected clock intact in whatever zone the suite runs.
+    """
+    return datetime(2026, month, day, hour, minute).astimezone()
+
+
+LOCAL_OBSERVED = _local(9, 29, 9)  # a Tuesday
 
 
 def _stop(window: str | None, resets_at: datetime | None = None, **kwargs) -> str:
@@ -1933,27 +1941,28 @@ def test_limit_window_unknown_keeps_the_window_blind_phrase(limit: LimitHit | No
 
 
 @pytest.mark.parametrize(
-    ("resets_in", "clause"),
+    ("resets_at", "clause"),
     [
-        (timedelta(hours=1, minutes=50), "resets 10:50"),
-        (timedelta(days=1), "resets Wed 09:00"),
-        (timedelta(days=6, hours=2), "resets Mon 11:00"),
-        (timedelta(days=3, hours=-9), "resets Fri 00:00"),
-        (timedelta(days=33), "resets 1 Nov"),
+        ((9, 29, 10, 50), "resets 10:50"),
+        ((9, 30, 9, 0), "resets Wed 09:00"),
+        ((10, 5, 11, 0), "resets Mon 11:00"),
+        ((10, 2, 0, 0), "resets Fri 00:00"),
+        ((10, 6, 9, 0), "resets 6 Oct"),
+        ((11, 1, 9, 0), "resets 1 Nov"),
     ],
 )
 def test_limit_window_reset_is_a_clock_a_weekday_or_a_date(
-    resets_in: timedelta, clause: str
+    resets_at: tuple[int, int, int, int], clause: str
 ) -> None:
     """A clock today, a weekday this week, a date beyond it -- in the host's zone, measured from
     the stop rather than from now, so an amended message never rewrites its own reset."""
-    text = _stop("5h", LOCAL_OBSERVED + resets_in)
+    text = _stop("5h", _local(*resets_at))
 
     assert text.splitlines()[0].startswith(f"⛽ <b>Hit the 5-hour limit</b> · {clause} · ")
 
 
 def test_limit_window_reset_is_kept_when_only_the_window_is_unknown() -> None:
-    text = _stop(None, LOCAL_OBSERVED + timedelta(hours=1, minutes=50))
+    text = _stop(None, _local(9, 29, 10, 50))
 
     assert text.startswith("⛽ <b>Hit a usage limit</b> · resets 10:50 · ")
 
@@ -1965,7 +1974,7 @@ def test_limit_window_is_named_on_a_grouped_bullet_too() -> None:
             _activity(
                 ActivityKind.LIMIT_REACHED,
                 observed_at=LOCAL_OBSERVED + timedelta(minutes=1),
-                limit=LimitHit("week", LOCAL_OBSERVED + timedelta(days=1)),
+                limit=LimitHit("week", _local(9, 30, 9)),
             ),
         ),
         display=DISPLAY,
@@ -2007,3 +2016,15 @@ def test_limit_window_a_guess_beside_a_screen_stop_keeps_the_guess_hedge() -> No
 
     assert message.text.count(notifications._HEDGE) == 1
     assert notifications._SEEN_ON_SCREEN not in message.text
+
+
+@pytest.mark.parametrize("resets_at", [(9, 29, 9, 0), (9, 29, 8, 0), (9, 28, 12, 0)])
+def test_limit_window_reset_already_past_at_the_stop_is_not_said(
+    resets_at: tuple[int, int, int, int],
+) -> None:
+    """A reset at or before the stop is a stale or skewed figure; "resets 28 Sep" on a stop made
+    on the 29th would tell the owner to wait for something already behind them."""
+    text = _stop("5h", _local(*resets_at))
+
+    assert text.startswith("⛽ <b>Hit the 5-hour limit</b> · ")
+    assert "resets" not in text

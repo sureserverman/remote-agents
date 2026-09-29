@@ -104,7 +104,10 @@ this module to build the notifier, so the constant has to live on this side of i
 """
 
 _HEDGE = "This is a guess, not something it reported."
-"""Appended to every inferred observation, and to no reported one -- save a limit stop."""
+"""Leads the observations of every group holding an inferred one, and of no reported group.
+
+The one exception is a group whose only inferred observations are limit stops read off the
+screen, which leads with `_SEEN_ON_SCREEN` instead."""
 
 _SEEN_ON_SCREEN = "Read off its screen, not something it reported."
 """The hedge for a group whose only inferred observations are limit stops (DEC-107).
@@ -197,10 +200,12 @@ def _reset_clause(limit: LimitHit | None, observed_at: datetime) -> str:
     """` · resets 10:50`, ` · resets Tue 09:00` or ` · resets 2 Oct`; nothing when unpublished.
 
     A clock when the reset falls on the stop's own day, a weekday within the six after it, a date
-    beyond that. **Measured from the stop, not from now**, so a standing message amended hours
-    later never rewrites its own reset. The host's zone, as every clock this bot prints.
+    beyond that. A reset at or before the stop is a stale or skewed figure and is not said:
+    "resets 28 Sep" on a stop of the 29th would have the owner wait for something already past.
+    **Measured from the stop, not from now**, so a standing message amended hours later never
+    rewrites its own reset. The host's zone, as every clock this bot prints.
     """
-    if limit is None or limit.resets_at is None:
+    if limit is None or limit.resets_at is None or limit.resets_at <= observed_at:
         return ""
     resets = limit.resets_at.astimezone()
     days = (resets.date() - observed_at.astimezone().date()).days
@@ -238,7 +243,7 @@ def kind_headline(
     measured cannot reach the owner as itself (DEC-067's whole argument, DEC-074's mechanism).
 
     A limit stop names its window and, given the stop's instant, its reset
-    (`⛽ Hit the weekly limit · resets Tue 09:00`).
+    (`⛽ Hit the 5-hour limit · resets 10:50`).
     """
     reset = _reset_clause(limit, observed_at) if observed_at is not None else ""
     return f"{_KIND_EMOJI[kind]} {_headline_words(kind, ask, limit)}{reset}"
@@ -340,7 +345,9 @@ def activity_text(group: SessionGroup, *, display: str) -> str:
 
     **One hedge covers the group.** Repeated per line it would read as emphasis -- as though
     the service were less sure this time -- when it is saying the same structural thing about
-    the same kind.
+    the same kind. It has two wordings: `_SEEN_ON_SCREEN` when every inferred observation is a
+    limit stop read off the pane, and `_HEDGE` otherwise, because the weaker claim is the one a
+    mixed group must make.
 
     **The hedge leads the observations; only the counter trails them.** That is a correction,
     and the paragraph it replaces is worth keeping in mind: it argued that neither trailer could
