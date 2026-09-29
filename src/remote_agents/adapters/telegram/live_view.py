@@ -364,6 +364,13 @@ class LiveView:
         answer is exactly what makes it safe to remove. Added by the same rule the paragraph
         above states; permitting a fifth without saying so would repeat the defect it records.
 
+        **The sixth is a notification of ours whose news is over** -- one whose session has
+        finished (`ActivityNotifier.retire_finished`, which predated this list and was missing
+        from it), or whose only line was a limit stop that has since lifted
+        (`ActivityNotifier.retire_line`, limit-lifecycle sub-plan 2). It is a superseded
+        message rather than a screen: the owner has either answered it by stopping the session,
+        or the thing it announced has ended by itself.
+
         Answers whether the message is actually gone. A caller tracking a message it must
         eventually remove needs to know the difference between "deleted" and "refused" —
         without it, the only record of a surviving message is dropped on the assumption it

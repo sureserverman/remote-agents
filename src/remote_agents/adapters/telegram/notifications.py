@@ -57,8 +57,8 @@ from remote_agents.application.notification_policy import (
     for_update,
     forget_absent,
     grouped_for_delivery,
-    is_observation,
     merged,
+    retired_with,
     shown_in_message,
     unheard,
     unsaid,
@@ -719,8 +719,9 @@ class ActivityNotifier:
         #: Which of the sessions holding a notification have stopped being worth one, or None
         #: in a composition with no lifecycle to ask. See `retire_finished`.
         self._finished = finished
-        #: Serialises the two writers of the standing record: a delivery pass and a lift's
-        #: `retire_line`. Each reads the record, awaits Telegram, and writes it back.
+        #: Serialises a delivery pass and a lift's `retire_line`, which each read the standing
+        #: record, await Telegram, and write it back. Not every writer: the owner's press path
+        #: forgets a record outside it, and a press racing either one is left as it was.
         self._lock = asyncio.Lock()
 
     def attach(self, bot: object) -> None:
@@ -1235,65 +1236,79 @@ class ActivityNotifier:
         async with self._lock:
             if self._bot is None:
                 raise RuntimeError("the notifier has no bot to speak through yet")
-            if any(
-                is_observation(queued, session_id, kind, observed_at) for queued in self._pending
-            ):
+            if self._flood.held():
+                # The chat's ban is every sender's (DEC-049): no request is spent inside it.
                 return False
-            standing = self._recall(session_id)
-            if standing is None:
-                return True
-            kept = tuple(
-                activity
-                for activity in standing.activities
-                if not is_observation(activity, session_id, kind, observed_at)
-            )
-            if len(kept) == len(standing.activities):
-                return True
-            display = await self._display(session_id)
-            if kept:
-                if display is None:
-                    return False
-                rendered = render_activity(
-                    SessionGroup(session_id, kept), display=display, open_session=standing.token
+            try:
+                return await self._retire_line(session_id, kind, observed_at, headline)
+            except RetryAfter as refusal:
+                remaining = refusal.retry_after
+                self._flood.hold_off(
+                    remaining.total_seconds()
+                    if hasattr(remaining, "total_seconds")
+                    else float(remaining)
                 )
-                if await self._view.amend_apart(
-                    self._bot,
-                    standing.message_id,
-                    {
-                        "text": rendered.text,
-                        "parse_mode": ParseMode.HTML,
-                        "reply_markup": _markup(rendered.keyboard),
-                    },
-                ):
-                    self._remember(session_id, standing.message_id, kept, standing.token)
-                else:
-                    self._callbacks.prune_for_message(self._view.chat_id, standing.message_id)
-                    self._standing.forget(self._view.chat_id, session_id)
-                return True
-            if await self._view.discard(self._bot, standing.message_id):
-                self._callbacks.prune_for_message(self._view.chat_id, standing.message_id)
-            else:
-                name = _bounded_escaped(
-                    display or "", MAX_TELEGRAM_TEXT_UNITS - _RESERVED_NAME_UNITS
-                )
-                lifted = _notification(
-                    "\n".join(
-                        line for line in (f"{_KIND_EMOJI[kind]} <b>{headline}</b>", name) if line
-                    ),
-                    standing.token,
-                )
-                if not await self._view.amend_apart(
-                    self._bot,
-                    standing.message_id,
-                    {
-                        "text": lifted.text,
-                        "parse_mode": ParseMode.HTML,
-                        "reply_markup": _markup(lifted.keyboard),
-                    },
-                ):
-                    self._callbacks.prune_for_message(self._view.chat_id, standing.message_id)
-            self._standing.forget(self._view.chat_id, session_id)
+                return False
+
+    async def _retire_line(
+        self, session_id: str, kind: ActivityKind, observed_at: datetime, headline: str
+    ) -> bool:
+        """`retire_line`'s work, under its lock and outside a flood hold."""
+        if any(retired_with(queued, session_id, kind, observed_at) for queued in self._pending):
+            return False
+        standing = self._recall(session_id)
+        if standing is None:
             return True
+        kept = tuple(
+            activity
+            for activity in standing.activities
+            if not retired_with(activity, session_id, kind, observed_at)
+        )
+        if len(kept) == len(standing.activities):
+            return True
+        display = await self._display(session_id)
+        if kept:
+            if display is None:
+                return False
+            rendered = render_activity(
+                SessionGroup(session_id, kept), display=display, open_session=standing.token
+            )
+            if await self._view.amend_apart(
+                self._bot,
+                standing.message_id,
+                {
+                    "text": rendered.text,
+                    "parse_mode": ParseMode.HTML,
+                    "reply_markup": _markup(rendered.keyboard),
+                },
+            ):
+                self._remember(session_id, standing.message_id, kept, standing.token)
+            else:
+                self._callbacks.prune_for_message(self._view.chat_id, standing.message_id)
+                self._standing.forget(self._view.chat_id, session_id)
+            return True
+        if await self._view.discard(self._bot, standing.message_id):
+            self._callbacks.prune_for_message(self._view.chat_id, standing.message_id)
+        else:
+            name = _bounded_escaped(display or "", MAX_TELEGRAM_TEXT_UNITS - _RESERVED_NAME_UNITS)
+            lifted = _notification(
+                "\n".join(
+                    line for line in (f"{_KIND_EMOJI[kind]} <b>{headline}</b>", name) if line
+                ),
+                standing.token,
+            )
+            if not await self._view.amend_apart(
+                self._bot,
+                standing.message_id,
+                {
+                    "text": lifted.text,
+                    "parse_mode": ParseMode.HTML,
+                    "reply_markup": _markup(lifted.keyboard),
+                },
+            ):
+                self._callbacks.prune_for_message(self._view.chat_id, standing.message_id)
+        self._standing.forget(self._view.chat_id, session_id)
+        return True
 
     async def _replace(
         self, standing: StandingNotification, group: SessionGroup, *, display: str

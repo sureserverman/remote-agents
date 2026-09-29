@@ -207,20 +207,22 @@ def current(activities: tuple[AgentActivity, ...]) -> tuple[AgentActivity, ...]:
     )
 
 
-def is_observation(
+def retired_with(
     activity: AgentActivity, session_id: str, kind: ActivityKind, observed_at: datetime
 ) -> bool:
-    """Whether `activity` is the one observation named by its session, kind and stamp.
+    """Whether retiring the `kind` line observed at `observed_at` retires `activity` too.
 
     How a retired line is found (limit-lifecycle sub-plan 2): a lift is decided about one stop,
-    and the line it retires is that stop's -- never "the limit line", which a newer stop may
-    hold by the time the retirement runs. Here rather than in the adapter because comparing
-    stamps is the policy's business (`test_grouping_is_asked_not_restated`).
+    and it retires that stop's line *and any older one of the same kind* -- the standing message
+    can lag the record, still carrying an earlier stop whose successor never reached the chat.
+    Never a newer one, which a stop arriving after the decision may hold. Here rather than in
+    the adapter because comparing stamps is the policy's business
+    (`test_grouping_is_asked_not_restated`).
     """
     return (
         activity.session_id == session_id
         and activity.kind is kind
-        and activity.observed_at == observed_at
+        and activity.observed_at <= observed_at
     )
 
 

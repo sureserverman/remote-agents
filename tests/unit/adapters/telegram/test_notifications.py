@@ -2321,3 +2321,71 @@ async def test_retire_line_refuses_a_kind_a_lift_never_retires() -> None:
 
     with pytest.raises(ValueError):
         await notifier.retire_line(SESSION_A, ActivityKind.COMPLETED, observed_at=clock.moment)
+
+
+async def test_retire_line_takes_an_older_stop_s_line_with_it() -> None:
+    """The standing message can lag the record: a second stop that never reached the chat is
+    what the lift was decided about, and the first stop's line is just as over (gate review)."""
+    clock = _Clock()
+    notifier, view = _notifier(clock)
+    first = _stop_at(clock)
+    await notifier.deliver([first])
+    message_id = view.ids[-1]
+
+    assert await notifier.retire_line(
+        SESSION_A, ActivityKind.LIMIT_REACHED, observed_at=first.observed_at + timedelta(hours=1)
+    )
+
+    assert view.deleted == [message_id]
+    assert notifier._recall(SESSION_A) is None
+
+
+async def test_retire_line_is_not_done_while_an_older_stop_waits_to_be_sent() -> None:
+    clock = _Clock()
+    notifier, view = _notifier(clock)
+
+    async def refused(_bot: object, _arguments: dict[str, object]) -> int:
+        raise RuntimeError("Telegram is unreachable")
+
+    view.send_apart = refused  # type: ignore[method-assign]
+    first = _stop_at(clock)
+    await notifier.deliver([first])
+
+    assert not await notifier.retire_line(
+        SESSION_A, ActivityKind.LIMIT_REACHED, observed_at=first.observed_at + timedelta(hours=1)
+    )
+
+
+async def test_retire_line_spends_no_request_on_a_held_chat() -> None:
+    clock = _Clock()
+    flood = FloodGate()
+    notifier, view = _notifier(clock, flood=flood)
+    stop = _stop_at(clock)
+    await notifier.deliver([stop])
+    written = len(view.written)
+    flood.hold_off(600)
+
+    assert not await notifier.retire_line(
+        SESSION_A, ActivityKind.LIMIT_REACHED, observed_at=stop.observed_at
+    )
+    assert len(view.written) == written
+    assert view.deleted == []
+
+
+async def test_retire_line_records_a_refusal_that_says_when_to_come_back() -> None:
+    clock = _Clock()
+    flood = FloodGate()
+    notifier, view = _notifier(clock, flood=flood)
+    stop = _stop_at(clock)
+    await notifier.deliver([stop])
+
+    async def refuse(_bot: object, _message_id: int) -> bool:
+        raise RetryAfter(900)
+
+    view.discard = refuse  # type: ignore[method-assign]
+
+    assert not await notifier.retire_line(
+        SESSION_A, ActivityKind.LIMIT_REACHED, observed_at=stop.observed_at
+    )
+    assert flood.held()
+    assert notifier._recall(SESSION_A) is not None, "nothing was retired, so nothing is forgotten"

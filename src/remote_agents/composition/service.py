@@ -53,7 +53,7 @@ _TRUST_POLL_SECONDS = 5.0
 _LIMITS_POLL_SECONDS = 300.0
 #: How often an undecided limit stop is asked whether it lifted. The activity pass's clock: a
 #: lift is acted on within half a minute of its reset's grace minute, and a pass with no running
-#: session stopped by a limit is two cheap reads.
+#: session stopped by a limit is a session listing plus one indexed seek per running session.
 _LIMIT_STOP_POLL_SECONDS = 30.0
 #: Bounds one limit-stop pass (a limits read, the session and outcome reads, a Telegram edit or
 #: delete per lifted stop), so one wedged call costs a pass rather than every later lift.
@@ -259,7 +259,7 @@ async def _serve_with_reconciliation(
         periodic.append(
             asyncio.create_task(_watch_limit_stops_periodically(composition, limit_stop_interval))
         )
-    # Not a fourth periodic task, and the difference is the point: the three above each poll
+    # Not another periodic task, and the difference is the point: the loops above each poll
     # something on a clock of their own, while this *subscribes* to a watcher that already
     # polls. Subscribing is what starts it (`StoreWatch.subscribe`), so there is no task to
     # create here and none to cancel -- detaching stops it.

@@ -252,3 +252,21 @@ async def test_lifted_watch_loop_survives_a_pass_that_hangs(monkeypatch) -> None
     await asyncio.gather(loop, return_exceptions=True)
 
     assert calls >= 2
+
+
+async def test_lifted_pass_lifts_on_schedule_past_a_wedged_limits_read(
+    connection, monkeypatch
+) -> None:
+    """A reader that never answers costs the early witness, not the schedule (gate review)."""
+    import asyncio
+
+    from remote_agents.application import limit_lifts
+
+    monkeypatch.setattr(limit_lifts, "READ_TIMEOUT_SECONDS", 0.05)
+    await SQLiteActivityStore(connection).append(_stop())
+    retire = _Retire()
+
+    async def wedged():
+        await asyncio.Event().wait()
+
+    assert await _watcher(connection, _Sessions(), retire, limits=wedged).pass_once() == 1

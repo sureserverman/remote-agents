@@ -1,31 +1,44 @@
 """Whether a limit stop has lifted, decided once for the bot's line and the "carry on" after it.
 
 A lift has two witnesses. **The schedule:** the provider published when the window resets, and
-that instant, plus a minute of grace, has passed. **A reading:** the provider's own accounting,
-taken after the stop, shows the window no longer full -- which is how an early or external reset
-is seen, and how a stop whose instant nobody published lifts at all.
+that instant, plus a minute of grace, has passed. **A new period:** a reading taken well after the
+stop shows the stop's own window rolled over -- its reset now later than the one the stop was
+recorded against -- and below full, which is how a window reopened ahead of its schedule is seen.
 
 **It fails toward "not yet".** A false lift retires the owner's limit line while the agent is
-still stopped and, with the resume switch on, types "carry on" into it. A late lift costs a few
-minutes of a line the owner can already see. So each witness is admitted only on terms that
-cannot mislead:
+still stopped and, with the resume switch on, types "carry on" into it; a late lift costs a few
+minutes of a line the owner can already see. So each witness is admitted only on positive
+evidence, and the gate review of 2026-09-29 is why "positive" is the word:
 
-- A scheduled lift is held back by a reading taken *after* the reset that still shows the window
-  full: the provider moved its own reset. A reading from before the reset says nothing about it.
-- A reading lifts only when it was taken after the stop, is not stale by `session_views`' rule
-  (asked, not restated, DEC-043), and names the stop's own window below full. A different window,
-  an absence, a reading with no stamp or with a naive one is not evidence of anything.
-- A stop whose window is unknown lifts from a reading only when every window it carries is below
-  full, and never on a schedule nobody published.
+- **A reading's stamp is not proof its figures are new.** Claude's status-line recording is dated
+  when Code last *drew* the line, and it carries the rate limits the session cached from its last
+  response -- so a redraw after the stop is a reading "after the stop" holding the figures from
+  before it. A drop below full proves nothing on its own; a window whose reset moved past the
+  stop's does, because a cached figure carries the old reset.
+- **Any full window whose own reset is still ahead holds the lift**, not only the stop's: after the
+  five-hour window reopens, a full week still stops the agent. A full window whose reset has
+  lapsed is a cached figure and holds nothing -- otherwise a status line that is never redrawn
+  with new figures would hold the stop for ever.
+- **A reading must be taken more than a minute after the stop**, past the readers' memo.
+- **A stop whose window is unknown never lifts from a reading**, only on a published schedule:
+  "nothing is full" is exactly the condition that left it unnamed. Nor does a named window with no
+  published reset (Cursor's month), which has no period to roll past.
 - A Claude model week (`opus week`, ...) is a label no reading publishes, so it lifts on its own
   reset only.
 
-"Full" is `limit_stops`' saturation line, so the window that named the stop and the window that
-lifts it are measured by the same figure.
+**Accepted cost:** a provider that wipes a window in place, keeping its published reset, is not
+lifted early -- the stop waits for its schedule. That wipe is exactly what the early-reset
+notification (`limit_resets`, DEC-097) already tells the owner about, so they are not left
+guessing; they are only not resumed automatically ahead of time.
+
+Staleness is `session_views`' rule and "full" is `limit_stops`' saturation line, both asked rather
+than restated (DEC-043), so the window that named a stop and the window that lifts it are measured
+by the same figure.
 """
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from collections.abc import Awaitable, Callable, Sequence
 from datetime import UTC, datetime, timedelta
@@ -39,6 +52,9 @@ from remote_agents.ports.limit_stop_outcomes import LIFTED, LimitStop, LimitStop
 from remote_agents.ports.session_store import SessionStore
 
 _LOG = logging.getLogger(__name__)
+
+READ_TIMEOUT_SECONDS = 8.0
+"""How long one pass waits for the providers' readings before lifting on schedules alone."""
 
 LIFT_GRACE = timedelta(seconds=60)
 """How long past a published reset the schedule alone waits before it calls the stop lifted.
@@ -57,41 +73,48 @@ def lifted(
 ) -> bool:
     """Whether the stop recorded as `hit` at `stopped_at` has lifted by `now`. Total and pure."""
     fresh = _fresh(reading, now=now)
-    resets_at = hit.resets_at if _aware(hit.resets_at) else None
+    held = fresh is not None and _any_binding(fresh.windows, now=now)
+    resets_at = hit.resets_at if _zoned(hit.resets_at) else None
     if resets_at is not None and now >= resets_at + LIFT_GRACE:
-        held = (
-            fresh is not None and fresh.observed_at is not None and fresh.observed_at >= resets_at
-        )
-        if not (held and _still_full(fresh.windows, hit.window)):
-            return True
-    if fresh is None or fresh.observed_at is None or not _aware(stopped_at):
+        return not held
+    if held or fresh is None or hit.window is None or resets_at is None:
         return False
-    if fresh.observed_at <= stopped_at:
+    if not _zoned(stopped_at) or fresh.observed_at <= stopped_at + LIFT_GRACE:
         return False
-    if hit.window is None:
-        return bool(fresh.windows) and not _still_full(fresh.windows, None)
     own = [window for window in fresh.windows if window.label == hit.window]
-    return bool(own) and all(window.used_percent < _SATURATED for window in own)
+    return bool(own) and all(_new_period(window, after=resets_at) for window in own)
 
 
 def _fresh(reading: AgentLimits | None, *, now: datetime) -> AgentLimits | None:
     """The reading, when it can be evidence at all: present, stamped with a zone, not stale."""
     if reading is None or reading.absence is not None or reading.observed_at is None:
         return None
-    if not _aware(reading.observed_at) or now - reading.observed_at > _STALE_READING_AGE:
+    if not _zoned(reading.observed_at) or now - reading.observed_at > _STALE_READING_AGE:
         return None
     return reading
 
 
-def _still_full(windows: tuple[UsageWindow, ...], label: str | None) -> bool:
-    """Whether `label`'s window -- or, for an unknown window, any window -- is still full."""
+def _any_binding(windows: tuple[UsageWindow, ...], *, now: datetime) -> bool:
+    """Whether any window is full and still in force: its reset ahead, or never published."""
     return any(
-        window.used_percent >= _SATURATED and (label is None or window.label == label)
+        window.used_percent >= _SATURATED
+        and (window.resets_at is None or (_zoned(window.resets_at) and window.resets_at > now))
         for window in windows
     )
 
 
-def _aware(instant: datetime | None) -> bool:
+def _new_period(window: UsageWindow, *, after: datetime) -> bool:
+    """Whether `window` is below full in a period that began after the stop's reset."""
+    return (
+        window.used_percent < _SATURATED
+        and _zoned(window.resets_at)
+        and window.resets_at is not None
+        and window.resets_at > after + LIFT_GRACE
+    )
+
+
+def _zoned(instant: datetime | None) -> bool:
+    """Whether an instant is present and carries a zone -- the only shape compared here."""
     return instant is not None and instant.tzinfo is not None
 
 
@@ -155,9 +178,14 @@ class LimitLiftWatcher:
         return acted
 
     async def _readings(self) -> dict[str, AgentLimits]:
-        """Each provider's reading, or none: a schedule needs no reading to lift a stop."""
+        """Each provider's reading, or none: a schedule needs no reading to lift a stop.
+
+        Bounded on its own, inside the pass's bound, so a slow reader costs this pass its early
+        witness and its holds, never the schedule lifts that need no reading at all.
+        """
         try:
-            return {str(reading.profile_id): reading for reading in await self._limits()}
+            readings = await asyncio.wait_for(self._limits(), timeout=READ_TIMEOUT_SECONDS)
+            return {str(reading.profile_id): reading for reading in readings}
         except Exception:
             _LOG.warning("the limits read failed; this pass lifts stops on their schedule only")
             return {}
