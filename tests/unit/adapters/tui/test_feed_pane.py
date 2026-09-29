@@ -33,7 +33,12 @@ from remote_agents.application.profiles import ProfileAvailability
 from remote_agents.application.project_admin import CreatedProject, CreateProjectCommand
 from remote_agents.application.project_catalog import CatalogProject
 from remote_agents.domain.projects import ProjectIdentity
-from remote_agents.ports.agent_activity import ActivityConfidence, ActivityKind, AgentActivity
+from remote_agents.ports.agent_activity import (
+    ActivityConfidence,
+    ActivityKind,
+    AgentActivity,
+    LimitHit,
+)
 
 _PROJECT = CatalogProject("opaque-existing", "existing", "infra", "Registered")
 
@@ -1775,3 +1780,83 @@ def test_needs_answer_fits_the_twelve_cell_kind_column() -> None:
 
     assert FEED_KIND_WIDTH == 12 == len(KIND_WORDS[ActivityKind.NEEDS_ANSWER])
     assert FEED_AGE_WIDTH == 3
+
+
+# --- a limit stop names its window (limit-lifecycle sub-plan 1 Task 3.2) ---------------------
+
+
+def _stop(window: str | None) -> AgentActivity:
+    return replace(
+        _activity(ActivityKind.LIMIT_REACHED, minutes_ago=2), limit=LimitHit(window, None)
+    )
+
+
+@pytest.mark.parametrize(
+    ("window", "words"),
+    [
+        ("5h", "5h limit"),
+        ("week", "week limit"),
+        ("month", "month limit"),
+        ("day", "day limit"),
+        ("opus week", "Opus limit"),
+        ("sonnet week", "Sonnet limit"),
+        ("fable week", "Fable limit"),
+        ("2h", "2h limit"),
+        ("3d", "3d limit"),
+    ],
+)
+def test_limit_window_is_the_feed_row_s_kind_word(window: str, words: str) -> None:
+    from remote_agents.adapters.tui.screens.feed import FEED_KIND_WIDTH, feed_rows, kind_words
+
+    stop = _stop(window)
+    row = feed_rows((stop,), width=80)[0][1].plain
+
+    assert kind_words(stop) == words
+    assert f" {words.ljust(FEED_KIND_WIDTH)} " in row, row
+    assert "usage limit" not in row
+
+
+@pytest.mark.parametrize("limit", [None, LimitHit(None, None), LimitHit("fortnightly", None)])
+def test_limit_window_unknown_keeps_usage_limit(limit: LimitHit | None) -> None:
+    from remote_agents.adapters.tui.screens.feed import feed_rows, kind_words
+
+    stop = replace(_activity(ActivityKind.LIMIT_REACHED, minutes_ago=2), limit=limit)
+
+    assert kind_words(stop) == "usage limit"
+    assert "usage limit" in feed_rows((stop,), width=80)[0][1].plain
+
+
+@pytest.mark.parametrize("window", ["5h", "week", "month", "sonnet week", "123456m", None])
+def test_limit_window_word_never_widens_the_kind_column(window: str | None) -> None:
+    """The kind column is 12 cells (console facelift), so a window word that would not fit
+    falls back to the window-blind phrase rather than shifting every row."""
+    from remote_agents.adapters.tui.screens.feed import FEED_KIND_WIDTH, kind_words
+
+    assert FEED_KIND_WIDTH == 12
+    assert len(kind_words(_stop(window))) <= FEED_KIND_WIDTH
+
+
+def test_limit_window_does_not_touch_the_rows_around_it() -> None:
+    """Only the stop's own word changes: a neighbour's row is drawn as it was."""
+    assert _row_text_beside(_stop("month"), 60) == _row_text_beside(None, 60)
+
+
+@_SURFACES
+async def test_limit_window_is_what_the_status_flash_says(surface) -> None:
+    rows: list[tuple[AgentActivity, ...]] = [(_activity(ActivityKind.COMPLETED, minutes_ago=5),)]
+    flashes: list[str] = []
+
+    async def feed() -> tuple[AgentActivity, ...]:
+        return rows[0]
+
+    async def flash(text: str) -> None:
+        flashes.append(text)
+
+    app = surface(replace(_context(feed), console_flash=flash))
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        rows[0] = (_stop("week"), *rows[0])
+        await app.screen._reload_feed()
+        await pilot.pause()
+
+    assert flashes == ["week limit"]

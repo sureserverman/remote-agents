@@ -14,6 +14,7 @@ is displayed and never interpreted (DEC-014's spirit, DEC-037's carriage of the 
 from __future__ import annotations
 
 import logging
+import re
 import textwrap
 
 from textual.app import ComposeResult
@@ -102,6 +103,42 @@ A constant since 0.46.0. Measured from the shown rows, one `needs answer` arrivi
 `finished` rows shifted every row sideways, and moved the narrow threshold that decides whether
 the word is drawn at all (`rows.feed_row_content`).
 """
+
+_LIMIT_WINDOW_WORDS = {
+    "5h": "5h",
+    "week": "week",
+    "month": "month",
+    "day": "day",
+    "opus week": "Opus",
+    "sonnet week": "Sonnet",
+    "fable week": "Fable",
+}
+"""**This surface's** name for a limit stop's window label (`LimitHit.window`, DEC-107).
+
+Nouns rather than the bot's "weekly" and "monthly", because the kind column is twelve cells and
+"monthly limit" is thirteen. The model weeks read as Claude's own sentence does ("You've hit
+your Opus limit"). A span label Codex derives (`2h`, `3d`) is drawn as itself.
+"""
+
+_SPAN_LABEL = re.compile(r"[1-9][0-9]*[mhdw]")
+
+
+def kind_words(activity: AgentActivity) -> str:
+    """The row's kind word: `5h limit`, `week limit`, `month limit`, or the kind's own words.
+
+    A limit stop whose window this surface cannot name -- none recorded, a label it does not
+    know, or one too long for the column -- keeps `usage limit`, so the column never widens and
+    no window is invented. The status flash reads this too, so the two stay one vocabulary.
+    """
+    if activity.kind is ActivityKind.LIMIT_REACHED and activity.limit is not None:
+        window = activity.limit.window
+        named = _LIMIT_WINDOW_WORDS.get(window) if window else None
+        if named is None and window and _SPAN_LABEL.fullmatch(window):
+            named = window
+        if named is not None and len(words := f"{named} limit") <= FEED_KIND_WIDTH:
+            return words
+    return KIND_WORDS.get(activity.kind, activity.kind.value)
+
 
 FEED_AGE_WIDTH = 3
 """The age column's width: `age_short`'s widest ordinary output (`59m`, `23h`, `99d`).
@@ -245,7 +282,7 @@ def feed_rows(
     #: defect Task 2.1's composite key exists to prevent.
     seen: dict[str, int] = {}
     for activity, age_text in zip(shown, ages, strict=True):
-        words = KIND_WORDS.get(activity.kind, activity.kind.value)
+        words = kind_words(activity)
         named = names.get(str(activity.session_id))
         identity, sequence = named if named is not None else (str(activity.session_id), None)
         # `_elide` caps the *detail* so one verbose agent cannot crowd out the identity that
@@ -612,7 +649,7 @@ class FeedRegion:
         flash = self.services.console_flash
         if newest is not None and flash is not None:
             try:
-                await flash(KIND_WORDS.get(newest.kind, newest.kind.value))
+                await flash(kind_words(newest))
             except Exception:
                 _LOG.exception("the status flash failed; the feed row is the record")
 
