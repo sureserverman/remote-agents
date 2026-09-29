@@ -229,7 +229,12 @@ class LimitLiftWatcher:
         if not done:
             # The surface is not finished with it yet -- its notification is still queued.
             return False
-        await self._outcomes.record(stop, LIFTED, decided_at=now)
+        try:
+            await self._outcomes.record(stop, LIFTED, decided_at=now)
+        except Exception:
+            # Retiring again next pass is a no-op, so an unrecorded lift costs nothing.
+            _LOG.warning("could not record a lifted stop; it is recorded next pass")
+            return False
         return True
 
     async def _nudges(self, stop: LimitStop) -> bool:
@@ -288,9 +293,12 @@ class LimitLiftWatcher:
             if not await resume.enabled():
                 return 0
             try:
-                await self._outcomes.claim(stop, decided_at=now)
+                claimed = await self._outcomes.claim(stop, decided_at=now)
             except Exception:
                 _LOG.warning("could not write a nudge's intent; nothing is typed this pass")
+                return 0
+            if not claimed:
+                # Decided already -- by a step that finished after this pass read the stop.
                 return 0
         verdict = await resume.nudge(stop)
         if verdict.outcome is None or verdict.outcome == LIFTED:
@@ -307,13 +315,17 @@ class LimitLiftWatcher:
         resume = self._resume
         assert resume is not None and verdict.outcome is not None
         try:
-            await self._outcomes.record(stop, verdict.outcome, decided_at=now)
+            recorded = await self._outcomes.record(stop, verdict.outcome, decided_at=now)
         except Exception:
             # The verdict stays held and the intent stays written, so the next pass records it
             # (`_settle_interrupted`) without typing again.
             _LOG.exception("a nudge's outcome could not be recorded; it is recorded next pass")
             return 0
         resume.forget(stop)
+        if not recorded:
+            # The stop was already final -- the settle loop read it before its own step
+            # finished -- and that step has the line; saying anything here would contradict it.
+            return 0
         if not await self._update_line(stop, verdict.reason):
             self._owed[_key(stop)] = (stop, verdict.reason)
         return 1

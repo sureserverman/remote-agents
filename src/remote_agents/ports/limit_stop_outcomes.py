@@ -51,13 +51,19 @@ class LimitStopOutcomes(Protocol):
         """Each named session whose newest observation is a limit stop with no outcome yet."""
         ...
 
-    async def record(self, stop: LimitStop, outcome: str, *, decided_at: datetime) -> None:
-        """Write the stop's outcome. The first one written stands and a second is ignored --
-        except over `NUDGING`, which is an intent and is replaced by the outcome it became."""
+    async def record(self, stop: LimitStop, outcome: str, *, decided_at: datetime) -> bool:
+        """Write the stop's outcome, answering whether it did. The first one written stands and
+        a second is ignored -- except over `NUDGING`, which is an intent and is replaced by the
+        outcome it became."""
         ...
 
-    async def claim(self, stop: LimitStop, *, decided_at: datetime) -> None:
-        """Write `NUDGING` for the stop, unless it already holds a row."""
+    async def claim(self, stop: LimitStop, *, decided_at: datetime) -> bool:
+        """Write `NUDGING` for the stop, answering whether it did: never over any row, so a
+        stop already decided -- by a step that finished after this pass read it -- is not
+        typed into again.
+
+        An intent only ever loses a nudge, never doubles one: a process that stops after the
+        claim and before the typing leaves an intent that is given up as unconfirmed."""
         ...
 
     async def release(self, stop: LimitStop) -> None:

@@ -51,13 +51,13 @@ class SQLiteLimitStopStore:
             stops.append(LimitStop(session_id, _instant(row[0]), hit, row[0]))
         return tuple(stops)
 
-    async def record(self, stop: LimitStop, outcome: str, *, decided_at: datetime) -> None:
+    async def record(self, stop: LimitStop, outcome: str, *, decided_at: datetime) -> bool:
         """Keyed on the stamp exactly as `agent_activity` stored it, so the two rows join.
 
         The first outcome stands, except over a `NUDGING` intent, which it replaces.
         """
         with self._connection:
-            self._connection.execute(
+            cursor = self._connection.execute(
                 """
                 INSERT INTO limit_stop_outcomes(session_id, stopped_at, outcome, decided_at)
                 VALUES (?, ?, ?, ?)
@@ -73,10 +73,11 @@ class SQLiteLimitStopStore:
                     NUDGING,
                 ),
             )
+        return cursor.rowcount > 0
 
-    async def claim(self, stop: LimitStop, *, decided_at: datetime) -> None:
+    async def claim(self, stop: LimitStop, *, decided_at: datetime) -> bool:
         with self._connection:
-            self._connection.execute(
+            cursor = self._connection.execute(
                 """
                 INSERT OR IGNORE INTO limit_stop_outcomes(
                     session_id, stopped_at, outcome, decided_at
@@ -85,6 +86,7 @@ class SQLiteLimitStopStore:
                 """,
                 (stop.session_id, stop.stamp, NUDGING, decided_at.astimezone(UTC).isoformat()),
             )
+        return cursor.rowcount > 0
 
     async def release(self, stop: LimitStop) -> None:
         with self._connection:
@@ -103,6 +105,7 @@ class SQLiteLimitStopStore:
             JOIN agent_activity AS a
               ON a.session_id = o.session_id AND a.observed_at = o.stopped_at AND a.kind = ?
             WHERE o.outcome = ?
+            GROUP BY o.session_id, o.stopped_at
             """,
             (ActivityKind.LIMIT_REACHED.value, NUDGING),
         ).fetchall()

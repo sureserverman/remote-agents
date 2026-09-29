@@ -315,11 +315,11 @@ class _FailingOutcomes(SQLiteLimitStopStore):
         super().__init__(connection)
         self.failures = 1
 
-    async def record(self, stop, outcome, *, decided_at) -> None:
+    async def record(self, stop, outcome, *, decided_at) -> bool:
         if self.failures:
             self.failures -= 1
             raise RuntimeError("database is locked")
-        await super().record(stop, outcome, decided_at=decided_at)
+        return await super().record(stop, outcome, decided_at=decided_at)
 
 
 async def test_a_record_that_fails_after_the_send_never_types_twice(connection) -> None:
@@ -619,3 +619,91 @@ async def test_the_switch_is_read_again_just_before_the_send(connection) -> None
 
     assert terminal.sent == []
     assert _outcomes(connection) == []
+
+
+# Stage 3 gate, remediation round 2 -----------------------------------------------------------
+
+
+async def test_record_and_claim_say_whether_they_wrote(connection) -> None:
+    await SQLiteActivityStore(connection).append(_stop())
+    outcomes = SQLiteLimitStopStore(connection)
+    (stop,) = await outcomes.unresolved([_A])
+
+    assert await outcomes.claim(stop, decided_at=_AFTER) is True
+    assert await outcomes.claim(stop, decided_at=_AFTER) is False
+    assert await outcomes.record(stop, RESUMED, decided_at=_AFTER) is True
+    assert await outcomes.record(stop, LIFTED, decided_at=_AFTER) is False
+    assert await outcomes.claim(stop, decided_at=_AFTER) is False
+    assert _outcomes(connection) == [RESUMED]
+
+
+async def test_a_stale_interrupted_snapshot_leaves_a_finished_nudge_s_line_alone(
+    connection,
+) -> None:
+    """The step for this stop finished while the settle loop was busy elsewhere: its outcome is
+    already final, so the loop must not call it unconfirmed on the owner's line."""
+    await SQLiteActivityStore(connection).append(_stop())
+    outcomes = SQLiteLimitStopStore(connection)
+    (stop,) = await outcomes.unresolved([_A])
+    await outcomes.claim(stop, decided_at=_AFTER)
+    await outcomes.record(stop, RESUMED, decided_at=_AFTER)
+
+    async def stale():
+        return (stop,)
+
+    outcomes.interrupted = stale  # type: ignore[method-assign]
+    terminal, line = _Terminal(), _Line()
+    clock = _Clock()
+
+    async def enabled() -> bool:
+        return True
+
+    resume = LimitResume(
+        send=terminal.send, enabled=enabled, settled=line.settled, amend=line.amend, now=clock
+    )
+    watcher = LimitLiftWatcher(
+        _Sessions(), outcomes, _no_readings, line.retire, resume=resume, now=clock
+    )
+
+    assert await watcher.pass_once() == 0
+
+    assert line.amended == [] and line.retired == []
+    assert _outcomes(connection) == [RESUMED]
+
+
+async def test_a_stale_unresolved_snapshot_types_nothing_over_a_final_outcome(connection) -> None:
+    await SQLiteActivityStore(connection).append(_stop())
+    outcomes = SQLiteLimitStopStore(connection)
+    (stop,) = await outcomes.unresolved([_A])
+    await outcomes.record(stop, RESUMED, decided_at=_AFTER)
+
+    async def stale(_ids):
+        return (stop,)
+
+    outcomes.unresolved = stale  # type: ignore[method-assign]
+    terminal, line = _Terminal(SENT), _Line()
+    clock = _Clock()
+
+    async def enabled() -> bool:
+        return True
+
+    resume = LimitResume(
+        send=terminal.send, enabled=enabled, settled=line.settled, amend=line.amend, now=clock
+    )
+    watcher = LimitLiftWatcher(
+        _Sessions(), outcomes, _no_readings, line.retire, resume=resume, now=clock
+    )
+
+    assert await watcher.pass_once() == 0
+    assert terminal.sent == []
+
+
+async def test_interrupted_answers_one_stop_for_duplicate_activity_rows(connection) -> None:
+    activities = SQLiteActivityStore(connection)
+    await activities.append(_stop())
+    await activities.append(_stop())
+    outcomes = SQLiteLimitStopStore(connection)
+    (stop,) = await outcomes.unresolved([_A])
+    await outcomes.claim(stop, decided_at=_AFTER)
+
+    assert len(await outcomes.interrupted()) == 1
