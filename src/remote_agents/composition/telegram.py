@@ -16,6 +16,7 @@ from remote_agents.adapters.agents.turn_markers import FileTurnMarkers
 from remote_agents.adapters.sqlite.activity_store import SQLiteActivityStore
 from remote_agents.adapters.sqlite.callback_state_store import SQLiteCallbackStateStore
 from remote_agents.adapters.sqlite.chat_view_store import SQLiteChatViewStore
+from remote_agents.adapters.sqlite.limit_stop_store import SQLiteLimitStopStore
 from remote_agents.adapters.sqlite.queued_prompt_store import SQLiteQueuedPromptStore
 from remote_agents.adapters.sqlite.session_store import SQLiteSessionStore
 from remote_agents.adapters.sqlite.standing_notification_store import (
@@ -25,6 +26,7 @@ from remote_agents.adapters.sqlite.trust_notifications import SQLiteTrustNotific
 from remote_agents.adapters.telegram import FRONTEND
 from remote_agents.adapters.telegram.service import build_private_bot
 from remote_agents.application.activity import CodexApprovalWatcher
+from remote_agents.application.limit_lifts import LimitLiftWatcher
 from remote_agents.application.limit_stops import LimitScreenWatcher, LimitStopClassifier
 from remote_agents.application.prompt_relay import PromptRelay
 from remote_agents.application.reconcile import ReconciliationService, SessionLocks
@@ -36,7 +38,14 @@ from remote_agents.composition.backend import (
 from remote_agents.composition.service import ServiceComposition
 from remote_agents.composition.tui import _console_composer, _local_runtime
 from remote_agents.config import TelegramSecrets, read_claude_limits_source
+from remote_agents.ports.agent_activity import ActivityKind
+from remote_agents.ports.agent_usage import AgentLimits
 from remote_agents.production import ProductionPaths
+
+
+async def _no_limits() -> tuple[AgentLimits, ...]:
+    """The limits read of a backend that has none: every stop lifts on its schedule alone."""
+    return ()
 
 
 def _private_boundary(
@@ -211,5 +220,15 @@ def _private_boundary(
         # Codex and Cursor Agent report no limit event, so their stop is read off the pane.
         limit_screen_watcher=LimitScreenWatcher(
             store, terminal.capture, profile_limit_screens(descriptors)
+        ),
+        # A stop whose limit lifted has its line retired from the bot's message, once. The same
+        # shared limits read as the classifier; without one, stops lift on their schedule only.
+        limit_lift_watcher=LimitLiftWatcher(
+            store,
+            SQLiteLimitStopStore(connection),
+            backend.limits if backend.limits is not None else _no_limits,
+            lambda stop: boundary.notifier.retire_line(
+                stop.session_id, ActivityKind.LIMIT_REACHED, observed_at=stop.stopped_at
+            ),
         ),
     )

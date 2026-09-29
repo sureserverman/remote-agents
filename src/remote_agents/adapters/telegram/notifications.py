@@ -26,6 +26,7 @@ a title is content-free for the same reason, and the next such kind will be too.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
 from collections import deque
@@ -56,6 +57,7 @@ from remote_agents.application.notification_policy import (
     for_update,
     forget_absent,
     grouped_for_delivery,
+    is_observation,
     merged,
     shown_in_message,
     unheard,
@@ -133,6 +135,16 @@ a phone at the size a headline is. Title-cased and bare, with the mark in front 
 and the observation's age behind. The sentences' one structural job survives them: every kind
 still has a distinct headline, and the test that asserts the table covers the enum exactly
 still does.
+"""
+
+_RETIRED_HEADLINES: dict[ActivityKind, str] = {
+    ActivityKind.LIMIT_REACHED: "Limit lifted",
+}
+"""What a message says when the one line it held was retired and Telegram refused the delete.
+
+Past 48 hours a bot may not delete its own message, and DEC-082's fallback is to amend it to
+say the thing is over. Only the kinds a lift retires are here; a kind without an entry is not
+retired by `retire_line` at all.
 """
 
 _KIND_EMOJI: dict[ActivityKind, str] = {
@@ -492,11 +504,17 @@ def render_activity(group: SessionGroup, *, display: str, open_session: str) -> 
     this renderer reaching for a store, and the rendering is the part worth testing
     exhaustively.
     """
+    return _notification(activity_text(group, display=display), open_session)
+
+
+def _notification(text: str, open_session: str) -> RenderedMessage:
+    """A notification's text under its one button: the single barless render this module makes.
+
+    Shared by every message a notification can become -- the news itself, and a line retired to
+    "Limit lifted" -- so the choke-point sweep counts one call however many shapes it takes.
+    """
     _validate_callback(open_session)
-    return render_message(
-        activity_text(group, display=display),
-        ((Button(OPEN_SESSION_LABEL, open_session),),),
-    )
+    return render_message(text, ((Button(OPEN_SESSION_LABEL, open_session),),))
 
 
 def _ask_of(activity: AgentActivity) -> str | None:
@@ -701,6 +719,9 @@ class ActivityNotifier:
         #: Which of the sessions holding a notification have stopped being worth one, or None
         #: in a composition with no lifecycle to ask. See `retire_finished`.
         self._finished = finished
+        #: Serialises the two writers of the standing record: a delivery pass and a lift's
+        #: `retire_line`. Each reads the record, awaits Telegram, and writes it back.
+        self._lock = asyncio.Lock()
 
     def attach(self, bot: object) -> None:
         """Learn which Telegram application to speak through, once there is one."""
@@ -815,7 +836,14 @@ class ActivityNotifier:
 
         Never raises. This runs on the periodic task beside the one that serves the owner, and
         a notification failing is not a reason for the service to stop noticing things.
+
+        Held under the lock `retire_line` shares, for the reason given there.
         """
+        async with self._lock:
+            return await self._deliver(activities)
+
+    async def _deliver(self, activities: Iterable[AgentActivity]) -> int:
+        """`deliver`'s pass, run under the lock."""
         for session_id, held in enqueue(self._pending, activities, maximum=_MAXIMUM_PENDING):
             # The rule is the policy's; the sentence is this surface's (DEC-043). It now names
             # the session that paid -- BL-032, taken deliberately and on its own, which is the
@@ -1175,6 +1203,97 @@ class ActivityNotifier:
             # piece of news -- degraded once instead of degraded for good.
             self._remember(group.session_id, message_id, shown, token)
         return True, True, unsaid(group.activities, shown)
+
+    async def retire_line(
+        self, session_id: str, kind: ActivityKind, *, observed_at: datetime
+    ) -> bool:
+        """Take one line whose news is over out of the session's standing message.
+
+        A lifted limit is the one case (limit-lifecycle sub-plan 2): the stop was news, and the
+        lift is not -- DEC-031/097 admit no lift *message* -- so the line goes quietly. The line
+        is the one observed at `observed_at`, never "the limit line": a newer stop that arrived
+        since the lift was decided is still in force and keeps its line. The other lines stay
+        and are amended in place, button and all. A message the line was the only line of is
+        deleted, and one Telegram will no longer delete is amended to say the limit lifted
+        (DEC-082's fallback) and then left alone: it is not this session's news any more, so its
+        next report starts a new message.
+
+        **Answers whether the stop is done with**, so the lift pass records its outcome only
+        then. Done: the line was retired, or no message carries it -- later news retired it
+        (Stage 1), the owner pressed it away, or a pass that crashed before recording already
+        did this. Not done: the stop is still waiting in the queue to be sent, and would reach
+        the owner after its lift with nothing left to retire it; or the session cannot be named
+        right now. **Raises** when it cannot act at all -- no bot yet -- and for a kind no lift
+        retires.
+
+        Held under the delivery lock: both read the standing record, await Telegram, and write
+        it back, and interleaved at an await one erased the other's news.
+        """
+        headline = _RETIRED_HEADLINES.get(kind)
+        if headline is None:
+            raise ValueError(f"a lift never retires a {kind.value} line")
+        async with self._lock:
+            if self._bot is None:
+                raise RuntimeError("the notifier has no bot to speak through yet")
+            if any(
+                is_observation(queued, session_id, kind, observed_at) for queued in self._pending
+            ):
+                return False
+            standing = self._recall(session_id)
+            if standing is None:
+                return True
+            kept = tuple(
+                activity
+                for activity in standing.activities
+                if not is_observation(activity, session_id, kind, observed_at)
+            )
+            if len(kept) == len(standing.activities):
+                return True
+            display = await self._display(session_id)
+            if kept:
+                if display is None:
+                    return False
+                rendered = render_activity(
+                    SessionGroup(session_id, kept), display=display, open_session=standing.token
+                )
+                if await self._view.amend_apart(
+                    self._bot,
+                    standing.message_id,
+                    {
+                        "text": rendered.text,
+                        "parse_mode": ParseMode.HTML,
+                        "reply_markup": _markup(rendered.keyboard),
+                    },
+                ):
+                    self._remember(session_id, standing.message_id, kept, standing.token)
+                else:
+                    self._callbacks.prune_for_message(self._view.chat_id, standing.message_id)
+                    self._standing.forget(self._view.chat_id, session_id)
+                return True
+            if await self._view.discard(self._bot, standing.message_id):
+                self._callbacks.prune_for_message(self._view.chat_id, standing.message_id)
+            else:
+                name = _bounded_escaped(
+                    display or "", MAX_TELEGRAM_TEXT_UNITS - _RESERVED_NAME_UNITS
+                )
+                lifted = _notification(
+                    "\n".join(
+                        line for line in (f"{_KIND_EMOJI[kind]} <b>{headline}</b>", name) if line
+                    ),
+                    standing.token,
+                )
+                if not await self._view.amend_apart(
+                    self._bot,
+                    standing.message_id,
+                    {
+                        "text": lifted.text,
+                        "parse_mode": ParseMode.HTML,
+                        "reply_markup": _markup(lifted.keyboard),
+                    },
+                ):
+                    self._callbacks.prune_for_message(self._view.chat_id, standing.message_id)
+            self._standing.forget(self._view.chat_id, session_id)
+            return True
 
     async def _replace(
         self, standing: StandingNotification, group: SessionGroup, *, display: str

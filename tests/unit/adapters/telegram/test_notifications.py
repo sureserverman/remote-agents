@@ -2146,3 +2146,178 @@ async def test_obsolete_rule_never_drops_a_late_question_or_owes_it_twice() -> N
     assert "Which file?" in _showing(view)
     assert len(view.sent) == sent_before + 1, "an unheard question arrives"
     assert notifier.pending_count() == 0
+
+
+# A lifted limit stop's line leaves the message (limit-lifecycle sub-plan 2 Task 2.2) -------
+
+
+def _stop_at(clock: _Clock, seconds: float = 0) -> AgentActivity:
+    return _for(
+        SESSION_A, ActivityKind.LIMIT_REACHED, None, clock.moment + timedelta(seconds=seconds)
+    )
+
+
+async def test_retire_line_drops_the_limit_line_and_keeps_the_rest() -> None:
+    clock = _Clock()
+    notifier, view = _notifier(clock)
+    stop = _stop_at(clock, 1)
+    await notifier.deliver(
+        [_for(SESSION_A, ActivityKind.OUTPUT_LIMIT, "ceiling", clock.moment), stop]
+    )
+    assert "Hit a usage limit" in _showing(view)
+    sent = len(view.sent)
+
+    assert await notifier.retire_line(
+        SESSION_A, ActivityKind.LIMIT_REACHED, observed_at=stop.observed_at
+    )
+
+    assert len(view.sent) == sent, "retiring a line is an amendment, never an alert"
+    assert "usage limit" not in _showing(view)
+    assert "Hit its output ceiling" in _showing(view)
+    assert "reply_markup" in view.written[-1], "the Open session button survives the edit"
+    standing = notifier._recall(SESSION_A)
+    assert standing is not None
+    assert [a.kind for a in standing.activities] == [ActivityKind.OUTPUT_LIMIT]
+
+
+async def test_retire_line_deletes_a_message_it_was_the_only_line_of() -> None:
+    clock = _Clock()
+    notifier, view = _notifier(clock)
+    stop = _stop_at(clock)
+    await notifier.deliver([stop])
+    message_id = view.ids[-1]
+
+    assert await notifier.retire_line(
+        SESSION_A, ActivityKind.LIMIT_REACHED, observed_at=stop.observed_at
+    )
+
+    assert view.deleted == [message_id]
+    assert notifier._recall(SESSION_A) is None
+
+
+async def test_retire_line_amends_to_lifted_when_the_delete_is_refused() -> None:
+    """Past Telegram's 48 hours a bot may not delete its message (DEC-082's fallback)."""
+    clock = _Clock()
+    notifier, view = _notifier(clock)
+    stop = _stop_at(clock)
+    await notifier.deliver([stop])
+    view.refuse_delete = True
+
+    assert await notifier.retire_line(
+        SESSION_A, ActivityKind.LIMIT_REACHED, observed_at=stop.observed_at
+    )
+
+    assert view.deleted == []
+    assert _showing(view).startswith("⛽ <b>Limit lifted</b>")
+    assert DISPLAY.split(" · ")[0] in _showing(view)
+    assert notifier._recall(SESSION_A) is None, "a lifted message is not this session's news"
+
+
+async def test_retire_line_with_nothing_to_retire_touches_nothing_and_is_done() -> None:
+    """No message, or one without the stop's line (later news retired it): nothing is owed."""
+    clock = _Clock()
+    notifier, view = _notifier(clock)
+    assert await notifier.retire_line(
+        SESSION_A, ActivityKind.LIMIT_REACHED, observed_at=clock.moment
+    )
+    await notifier.deliver([_for(SESSION_A, ActivityKind.COMPLETED, "done", clock.moment)])
+    written = len(view.written)
+
+    assert await notifier.retire_line(
+        SESSION_A, ActivityKind.LIMIT_REACHED, observed_at=clock.moment
+    )
+
+    assert len(view.written) == written
+    assert view.deleted == []
+    assert notifier._recall(SESSION_A) is not None
+
+
+async def test_retire_line_leaves_a_newer_stop_s_line_alone() -> None:
+    """The lift pass decided about one stop; a newer stop that arrived since is still in force."""
+    clock = _Clock()
+    notifier, view = _notifier(clock)
+    older = _stop_at(clock)
+    newer = _stop_at(clock, 600)
+    await notifier.deliver([newer])
+    written = len(view.written)
+
+    assert await notifier.retire_line(
+        SESSION_A, ActivityKind.LIMIT_REACHED, observed_at=older.observed_at
+    )
+
+    assert len(view.written) == written
+    assert "Hit a usage limit" in _showing(view)
+
+
+async def test_retire_line_is_not_done_while_the_stop_waits_to_be_sent() -> None:
+    """A stop still queued would reach the owner after its lift, with nothing left to retire it."""
+    clock = _Clock()
+    notifier, view = _notifier(clock)
+
+    async def refused(_bot: object, _arguments: dict[str, object]) -> int:
+        raise RuntimeError("Telegram is unreachable")
+
+    view.send_apart = refused  # type: ignore[method-assign]
+    stop = _stop_at(clock)
+    await notifier.deliver([stop])
+    assert notifier.pending_count() == 1
+
+    assert not await notifier.retire_line(
+        SESSION_A, ActivityKind.LIMIT_REACHED, observed_at=stop.observed_at
+    )
+
+
+async def test_retire_line_waits_for_a_delivery_already_in_flight() -> None:
+    """The two write the same standing record; interleaved at an await, one erased the other."""
+    import asyncio
+
+    clock = _Clock()
+    notifier, view = _notifier(clock)
+    stop = _stop_at(clock)
+    await notifier.deliver([stop])
+    release = asyncio.Event()
+    amend = view.amend_apart
+
+    async def slow_amend(bot: object, message_id: int, arguments: dict[str, object]) -> bool:
+        await release.wait()
+        return await amend(bot, message_id, arguments)
+
+    view.amend_apart = slow_amend  # type: ignore[method-assign]
+    clock.advance(60)
+    # A repeat of the stop's own kind, newer: amended in silently -- and held mid-amend.
+    newer = _stop_at(clock)
+    delivering = asyncio.create_task(notifier.deliver([newer]))
+    await asyncio.sleep(0)
+    retiring = asyncio.create_task(
+        notifier.retire_line(SESSION_A, ActivityKind.LIMIT_REACHED, observed_at=stop.observed_at)
+    )
+    await asyncio.sleep(0)
+    release.set()
+    await asyncio.gather(delivering, retiring)
+
+    standing = notifier._recall(SESSION_A)
+    assert view.deleted == [], "the older stop's retirement deleted the newer stop's message"
+    assert standing is not None, "the newer stop's message was taken for the older one's"
+    assert [a.observed_at for a in standing.activities] == [newer.observed_at]
+    assert "Hit a usage limit" in _showing(view)
+
+
+async def test_retire_line_without_a_bot_raises_so_the_lift_is_tried_again() -> None:
+    clock = _Clock()
+    notifier, _view = _notifier(clock)
+    stop = _stop_at(clock)
+    await notifier.deliver([stop])
+    notifier._bot = None
+
+    with pytest.raises(RuntimeError):
+        await notifier.retire_line(
+            SESSION_A, ActivityKind.LIMIT_REACHED, observed_at=stop.observed_at
+        )
+
+
+async def test_retire_line_refuses_a_kind_a_lift_never_retires() -> None:
+    clock = _Clock()
+    notifier, _view = _notifier(clock)
+
+    with pytest.raises(ValueError):
+        await notifier.retire_line(SESSION_A, ActivityKind.COMPLETED, observed_at=clock.moment)

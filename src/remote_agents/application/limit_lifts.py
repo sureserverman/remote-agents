@@ -26,12 +26,19 @@ lifts it are measured by the same figure.
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+import logging
+from collections.abc import Awaitable, Callable, Sequence
+from datetime import UTC, datetime, timedelta
 
 from remote_agents.application.limit_stops import _SATURATED
 from remote_agents.application.session_views import _STALE_READING_AGE
+from remote_agents.domain.models import SessionState
 from remote_agents.ports.agent_activity import LimitHit
 from remote_agents.ports.agent_usage import AgentLimits, UsageWindow
+from remote_agents.ports.limit_stop_outcomes import LIFTED, LimitStop, LimitStopOutcomes
+from remote_agents.ports.session_store import SessionStore
+
+_LOG = logging.getLogger(__name__)
 
 LIFT_GRACE = timedelta(seconds=60)
 """How long past a published reset the schedule alone waits before it calls the stop lifted.
@@ -86,3 +93,71 @@ def _still_full(windows: tuple[UsageWindow, ...], label: str | None) -> bool:
 
 def _aware(instant: datetime | None) -> bool:
     return instant is not None and instant.tzinfo is not None
+
+
+class LimitLiftWatcher:
+    """Find each running session's undecided limit stop, and act once on the ones that lifted.
+
+    Application-layer under DEC-001: the session store, the outcome store, the provider readings
+    and the surface's retire call are handed in. A pass asks `lifted` of every running session
+    whose newest news is still a limit stop; for each that lifted it retires the stop's line and
+    then records `lifted`, so the stop is never acted on again -- not on the next pass, and not
+    after a restart.
+
+    **Retire, then record -- and only when the surface says the stop is done with.** Retiring a
+    line that is already gone does nothing, so a crash between the two costs one repeat of a
+    harmless step on restart. The other order would lose the retirement outright: recorded as
+    done, never done, and never tried again. A retire that raises, or answers that the stop is not
+    done yet (its notification still queued), records nothing, so the next pass tries again.
+    """
+
+    def __init__(
+        self,
+        store: SessionStore,
+        outcomes: LimitStopOutcomes,
+        limits: Callable[[], Awaitable[Sequence[AgentLimits]]],
+        retire: Callable[[LimitStop], Awaitable[bool]],
+        *,
+        now: Callable[[], datetime] = lambda: datetime.now(UTC),
+    ) -> None:
+        self._store = store
+        self._outcomes = outcomes
+        self._limits = limits
+        self._retire = retire
+        self._now = now
+
+    async def pass_once(self) -> int:
+        """How many stops this pass found lifted and acted on."""
+        running = await self._store.list((SessionState.RUNNING,))
+        profiles = {str(record.session_id): str(record.profile_id) for record in running}
+        if not profiles:
+            return 0
+        stops = await self._outcomes.unresolved(tuple(profiles))
+        if not stops:
+            return 0
+        readings = await self._readings()
+        now = self._now()
+        acted = 0
+        for stop in stops:
+            reading = readings.get(profiles[stop.session_id])
+            if not lifted(stop.hit, stop.stopped_at, reading, now=now):
+                continue
+            try:
+                done = await self._retire(stop)
+            except Exception:
+                _LOG.warning("could not retire a lifted limit stop's line; it is tried again")
+                continue
+            if not done:
+                # The surface is not finished with it yet -- its notification is still queued.
+                continue
+            await self._outcomes.record(stop, LIFTED, decided_at=now)
+            acted += 1
+        return acted
+
+    async def _readings(self) -> dict[str, AgentLimits]:
+        """Each provider's reading, or none: a schedule needs no reading to lift a stop."""
+        try:
+            return {str(reading.profile_id): reading for reading in await self._limits()}
+        except Exception:
+            _LOG.warning("the limits read failed; this pass lifts stops on their schedule only")
+            return {}

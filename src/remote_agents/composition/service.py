@@ -16,6 +16,7 @@ from remote_agents.adapters.telegram.trust_notifications import TrustNotifier
 from remote_agents.adapters.tmux.runtime import TmuxTerminal
 from remote_agents.application.activity import CodexApprovalWatcher, drain_activity
 from remote_agents.application.backend import CLOSE_TIMEOUT_SECONDS
+from remote_agents.application.limit_lifts import LimitLiftWatcher
 from remote_agents.application.limit_stops import LimitScreenWatcher, LimitStopClassifier
 from remote_agents.application.reconcile import ReconciliationService
 from remote_agents.config import TelegramSecrets
@@ -50,6 +51,13 @@ _TRUST_POLL_SECONDS = 5.0
 #: asked for, and the grace is how far ahead of its published instant a wipe must be to count
 #: as early. A scheduled rollover is silent whatever either of them is set to.
 _LIMITS_POLL_SECONDS = 300.0
+#: How often an undecided limit stop is asked whether it lifted. The activity pass's clock: a
+#: lift is acted on within half a minute of its reset's grace minute, and a pass with no running
+#: session stopped by a limit is two cheap reads.
+_LIMIT_STOP_POLL_SECONDS = 30.0
+#: Bounds one limit-stop pass (a limits read, the session and outcome reads, a Telegram edit or
+#: delete per lifted stop), so one wedged call costs a pass rather than every later lift.
+_LIMIT_STOP_PASS_TIMEOUT_SECONDS = 20.0
 
 #: Bounds one pass's limit-stop classification (a limits read, one session lookup per stop), so a
 #: wedged reader delays this pass's delivery by at most this long; the stops then go window-blind.
@@ -159,6 +167,13 @@ class ServiceComposition:
     stops go unobserved, exactly as they did before it existed.
     """
 
+    limit_lift_watcher: LimitLiftWatcher | None = None
+    """The pass that notices a limit stop has lifted and retires its line, or None.
+
+    None where nothing wires it -- every composition but the bot's -- and then a stop's line
+    stays until later news retires it, exactly as before it existed.
+    """
+
     limit_classifier: LimitStopClassifier | None = None
     """What gives each limit stop the window that stopped it before it is recorded, or None.
 
@@ -236,6 +251,14 @@ async def _serve_with_reconciliation(
         # condition and asking the backend again here would be a second opinion about it.
         periodic.append(
             asyncio.create_task(_watch_limits_periodically(composition, limits_interval))
+        )
+    if composition.limit_lift_watcher is not None:
+        # Its own task and clock, on the same terms as the others: a pass that hangs or raises
+        # costs this watch one tick and nothing else.
+        periodic.append(
+            asyncio.create_task(
+                _watch_limit_stops_periodically(composition, _LIMIT_STOP_POLL_SECONDS)
+            )
         )
     # Not a fourth periodic task, and the difference is the point: the three above each poll
     # something on a clock of their own, while this *subscribes* to a watcher that already
@@ -375,6 +398,21 @@ async def _watch_limits_periodically(composition: ServiceComposition, interval: 
             # One pass, logged. The baseline is the notifier's and survives this, so a tick lost
             # to a failing reader costs at most the detection that tick would have made.
             _LOG.exception("the limits watch could not complete a pass")
+
+
+async def _watch_limit_stops_periodically(composition: ServiceComposition, interval: float) -> None:
+    """Ask each undecided limit stop whether it lifted, on a clock of its own -- never raising."""
+    while True:
+        await asyncio.sleep(interval)
+        try:
+            await asyncio.wait_for(
+                composition.limit_lift_watcher.pass_once(),
+                timeout=_LIMIT_STOP_PASS_TIMEOUT_SECONDS,
+            )
+        except Exception:
+            # One pass, logged. The outcome is only written once a stop was acted on, so a pass
+            # lost here is asked again thirty seconds later.
+            _LOG.exception("the limit-stop watch could not complete a pass")
 
 
 async def _watch_activity_periodically(composition: ServiceComposition, interval: float) -> None:

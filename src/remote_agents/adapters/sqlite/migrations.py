@@ -282,6 +282,25 @@ MIGRATIONS: tuple[tuple[int, str], ...] = (
         ALTER TABLE agent_activity ADD COLUMN limit_resets_at TEXT;
         """,
     ),
+    # What became of each limit stop (lifted, and from Stage 3 resumed or not), so the service
+    # acts on a lift once and a restart does not act on it again. Keyed on the stop itself --
+    # its session and the stamp `agent_activity` stored for it -- because a stop is one row
+    # there and has no id of its own that survives the activity store's read. Holds no agent
+    # words. The index makes "each running session's newest observation" a seek per session
+    # rather than a scan of the whole append-only table every thirty seconds.
+    (
+        16,
+        """
+        CREATE TABLE limit_stop_outcomes (
+            session_id TEXT NOT NULL,
+            stopped_at TEXT NOT NULL,
+            outcome TEXT NOT NULL,
+            decided_at TEXT NOT NULL,
+            PRIMARY KEY (session_id, stopped_at)
+        );
+        CREATE INDEX agent_activity_by_session ON agent_activity(session_id, activity_id);
+        """,
+    ),
 )
 """Migration 14 takes the surface's bookkeeping out of the watched store.
 

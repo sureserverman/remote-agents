@@ -30,6 +30,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable, MutableMapping, MutableSequence
 from dataclasses import dataclass
+from datetime import datetime
 
 from remote_agents.ports.agent_activity import ActivityKind, AgentActivity
 
@@ -203,6 +204,23 @@ def current(activities: tuple[AgentActivity, ...]) -> tuple[AgentActivity, ...]:
         activity
         for activity in activities
         if activity.kind not in _OBSOLETED_BY_LATER_NEWS or activity.observed_at == newest
+    )
+
+
+def is_observation(
+    activity: AgentActivity, session_id: str, kind: ActivityKind, observed_at: datetime
+) -> bool:
+    """Whether `activity` is the one observation named by its session, kind and stamp.
+
+    How a retired line is found (limit-lifecycle sub-plan 2): a lift is decided about one stop,
+    and the line it retires is that stop's -- never "the limit line", which a newer stop may
+    hold by the time the retirement runs. Here rather than in the adapter because comparing
+    stamps is the policy's business (`test_grouping_is_asked_not_restated`).
+    """
+    return (
+        activity.session_id == session_id
+        and activity.kind is kind
+        and activity.observed_at == observed_at
     )
 
 
