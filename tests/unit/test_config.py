@@ -726,3 +726,123 @@ def test_the_selector_literal_for_claude_limits_source_is_in_the_closed_set() ->
     from remote_agents.config import CLAUDE_LIMITS_SOURCES
 
     assert USAGE_API in CLAUDE_LIMITS_SOURCES
+
+
+def test_resume_after_limit_defaults_to_on_when_absent(tmp_path: Path) -> None:
+    """Absent means on: the owner asked for "carry on" after a lift unless they switch it off."""
+    from remote_agents.config import read_resume_after_limit
+
+    path = write_config(tmp_path, example(tmp_path))
+
+    assert load_config(path).resume_after_limit is True
+    assert read_resume_after_limit(path) is True
+    assert read_resume_after_limit(tmp_path / "absent.toml") is True
+
+
+@pytest.mark.parametrize("value", ["1", '"false"', '"true"', "0"])
+def test_resume_after_limit_refuses_anything_but_a_bool_by_name(tmp_path: Path, value: str) -> None:
+    """The loader refuses a non-bool; the fresh reader falls back to the default instead."""
+    from remote_agents.config import read_resume_after_limit
+
+    path = write_config(tmp_path, example(tmp_path) + f"resume_after_limit = {value}\n")
+
+    with pytest.raises(ConfigError, match="limits.resume_after_limit"):
+        load_config(path)
+    assert read_resume_after_limit(path) is True
+
+
+def test_resume_after_limit_round_trips_false_and_true_and_changes_no_other_byte(
+    tmp_path: Path,
+) -> None:
+    from remote_agents.config import read_resume_after_limit, write_limits_key
+
+    path = write_config(tmp_path, limits_source_body(tmp_path))
+    before = path.read_text(encoding="utf-8")
+
+    write_limits_key(path, "resume_after_limit", False)
+    off = path.read_text(encoding="utf-8")
+    assert "resume_after_limit = false" in off
+    assert load_config(path).resume_after_limit is False
+    assert read_resume_after_limit(path) is False
+    assert everything_but(off, "resume_after_limit") == everything_but(before, "resume_after_limit")
+    assert not off.endswith("\n")
+
+    write_limits_key(path, "resume_after_limit", True)
+    on = path.read_text(encoding="utf-8")
+    assert "resume_after_limit = true" in on
+    assert load_config(path).resume_after_limit is True
+    assert read_resume_after_limit(path) is True
+    assert on.count("resume_after_limit =") == 1
+
+
+def test_resume_after_limit_is_written_through_a_symlink(tmp_path: Path) -> None:
+    from remote_agents.config import read_resume_after_limit, write_limits_key
+
+    real = tmp_path / "dotfiles" / "config.toml"
+    real.parent.mkdir()
+    real.write_text(limits_source_body(tmp_path), encoding="utf-8")
+    link = tmp_path / "config.toml"
+    link.symlink_to(real)
+
+    write_limits_key(link, "resume_after_limit", False)
+
+    assert link.is_symlink()
+    assert "resume_after_limit = false" in real.read_text(encoding="utf-8")
+    assert read_resume_after_limit(link) is False
+
+
+@pytest.mark.parametrize("value", [1, 0, "false", "true", None])
+def test_resume_after_limit_writer_refuses_a_non_bool(tmp_path: Path, value: object) -> None:
+    """`True` is an `int` and `1` is not a `bool`: neither may pass for the other."""
+    from remote_agents.config import write_limits_key
+
+    path = write_config(tmp_path, limits_source_body(tmp_path))
+    before = path.read_bytes()
+
+    with pytest.raises(ConfigError, match="resume_after_limit"):
+        write_limits_key(path, "resume_after_limit", value)  # type: ignore[arg-type]
+
+    assert path.read_bytes() == before
+
+
+def test_an_integer_limit_still_refuses_a_bool(tmp_path: Path) -> None:
+    from remote_agents.config import write_limits_key
+
+    path = write_config(tmp_path, limits_source_body(tmp_path))
+
+    with pytest.raises(ConfigError, match="claude_context_window"):
+        write_limits_key(path, "claude_context_window", True)
+
+
+def test_resume_after_limit_write_refused_when_the_file_changed_since_it_was_read(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from remote_agents import config as config_module
+    from remote_agents.config import write_limits_key
+
+    path = write_config(tmp_path, example(tmp_path))
+    original = config_module._replace_limits_line
+
+    def edit_underneath(text: str, key: str, line: str) -> str:
+        concurrent = path.read_text(encoding="utf-8").replace(
+            "max_label_length = 40", "max_label_length = 99"
+        )
+        path.write_text(concurrent, encoding="utf-8")
+        return original(text, key, line)
+
+    monkeypatch.setattr(config_module, "_replace_limits_line", edit_underneath)
+
+    with pytest.raises(ConfigError, match="changed since it was read"):
+        write_limits_key(path, "resume_after_limit", False)
+
+    assert "max_label_length = 99" in path.read_text(encoding="utf-8")
+    assert "resume_after_limit =" not in path.read_text(encoding="utf-8")
+
+
+def test_resume_after_limit_absent_is_not_drift(tmp_path: Path) -> None:
+    """DEC-058: a config written before the key existed is not drift."""
+    from remote_agents.config import describe_schema_drift
+
+    drift = describe_schema_drift(write_config(tmp_path, example(tmp_path)))
+
+    assert drift["missing"] == [] and drift["unknown"] == []

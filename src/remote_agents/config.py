@@ -75,6 +75,9 @@ service reaches for on its own (DEC-061, amended): the default keeps the old bou
 DEFAULT_CLAUDE_LIMITS_SOURCE = "status-line"
 """Opt-in means off until the owner says otherwise, and a file that says nothing said nothing."""
 
+DEFAULT_RESUME_AFTER_LIMIT = True
+"""On unless the owner switches it off: they asked for "carry on" after a lift by default."""
+
 
 @dataclass(frozen=True, slots=True)
 class AppConfig:
@@ -131,6 +134,16 @@ class AppConfig:
     surfaces are two writers (DEC-005), so the file is the only thing that knows.
     """
 
+    resume_after_limit: bool = DEFAULT_RESUME_AFTER_LIMIT
+    """Whether the service types one "carry on" into a limit-stopped session after its lift.
+
+    Optional and **on** when absent: the owner asked for the nudge by default, and a switch is
+    how they decline it. Written by the Settings row on either surface through
+    `write_limits_key`, the second key DEC-088's one writer carries. The service reads it
+    afresh through `read_resume_after_limit` on every lift rather than off this field, so a
+    flip lands without a restart.
+    """
+
     path: Path | None = None
     """The file this configuration was loaded from, or `None` for one built in memory.
 
@@ -149,6 +162,7 @@ _LIMIT_KEYS = {
     "activity_poll_seconds",
     "claude_context_window",
     "claude_limits_source",
+    "resume_after_limit",
 }
 
 _RETIRED_LIMIT_KEYS = frozenset({"activity_quiet_polls"})
@@ -174,7 +188,9 @@ counts captures now. `activity_poll_seconds` is untouched and still paces the ti
 the spool drain.
 """
 
-_OPTIONAL_LIMIT_KEYS = frozenset({"claude_context_window", "claude_limits_source"})
+_OPTIONAL_LIMIT_KEYS = frozenset(
+    {"claude_context_window", "claude_limits_source", "resume_after_limit"}
+)
 """Keys the schema accepts but does not require, and the only ones in it.
 
 Every other key here is required on purpose: `_require_exact_keys` refuses a missing one so an
@@ -394,6 +410,9 @@ def load_config(path: Path) -> AppConfig:
     claude_limits_source = _limits_source(
         limits.get("claude_limits_source", DEFAULT_CLAUDE_LIMITS_SOURCE)
     )
+    resume_after_limit = _flag(
+        limits.get("resume_after_limit", DEFAULT_RESUME_AFTER_LIMIT), "limits.resume_after_limit"
+    )
     return AppConfig(
         dev_root,
         registry_path,
@@ -405,6 +424,7 @@ def load_config(path: Path) -> AppConfig:
         claude_context_window_stated=claude_context_window_stated,
         path=path,
         claude_limits_source=claude_limits_source,
+        resume_after_limit=resume_after_limit,
     )
 
 
@@ -484,6 +504,13 @@ def _absolute_directory(value: object, name: str) -> Path:
 def _bounded_int(value: object, name: str, minimum: int, maximum: int) -> int:
     if not isinstance(value, int) or isinstance(value, bool) or not minimum <= value <= maximum:
         raise ConfigError(f"{name} must be an integer between {minimum} and {maximum}")
+    return value
+
+
+def _flag(value: object, name: str) -> bool:
+    """Admit a TOML boolean and nothing else: `1`, `0` and `"true"` are refused by name."""
+    if not isinstance(value, bool):
+        raise ConfigError(f"{name} must be true or false")
     return value
 
 
@@ -622,14 +649,16 @@ def render_config(
     return f"[paths]\n{rendered_paths}\n\n[limits]\n{rendered_limits}\n"
 
 
-def _toml_value(value: int | str) -> str:
-    """Render one limit the way its type demands: an integer bare, a string quoted and escaped.
+def _toml_value(value: bool | int | str) -> str:
+    """Render one limit the way its type demands: a bool as `true`/`false`, an integer bare, a
+    string quoted and escaped.
 
     `bool` is an `int` to `isinstance` and `True` renders as `1` under `:d`, which the loader
-    would then accept as a legal count -- the same trap `_bounded_int` closes on the way in,
-    closed here on the way out.
+    would then accept as a legal count -- so it is matched first and spelled as TOML spells it.
     """
-    if isinstance(value, bool) or not isinstance(value, int | str):
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if not isinstance(value, int | str):
         raise ConfigError(
             f"generated limits must be integers or strings, not {type(value).__name__}"
         )
@@ -678,7 +707,24 @@ def read_claude_limits_source(path: Path) -> str:
     return value if value in CLAUDE_LIMITS_SOURCES else DEFAULT_CLAUDE_LIMITS_SOURCE
 
 
-def write_limits_key(path: Path, key: str, value: str | int) -> None:
+def read_resume_after_limit(path: Path) -> bool:
+    """The resume switch as the file states it right now, or on when it cannot be read.
+
+    Total like `read_claude_limits_source`, and for the same reason: the service consults it on
+    every lift, and a file that is missing, malformed or holding a non-bool may not raise into
+    the loop. Failing toward the default is failing toward what the owner asked for when they
+    stated nothing; an owner who switched it off wrote a `false` this reads.
+    """
+    try:
+        raw = tomllib.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError):
+        return DEFAULT_RESUME_AFTER_LIMIT
+    limits = raw.get("limits") if isinstance(raw, dict) else None
+    value = limits.get("resume_after_limit") if isinstance(limits, dict) else None
+    return value if isinstance(value, bool) else DEFAULT_RESUME_AFTER_LIMIT
+
+
+def write_limits_key(path: Path, key: str, value: bool | str | int) -> None:
     """Rewrite one `key = value` line in `[limits]` and preserve every other byte of the file.
 
     **Not a re-render.** `render_config` writes a fresh file for a host that has none; this
@@ -716,6 +762,8 @@ def write_limits_key(path: Path, key: str, value: str | int) -> None:
         raise ConfigError(f"limits.{key} is not a key this schema writes")
     if key == "claude_limits_source":
         rendered = _toml_value(_limits_source(value))
+    elif key == "resume_after_limit":
+        rendered = _toml_value(_flag(value, f"limits.{key}"))
     elif isinstance(value, bool) or not isinstance(value, int):
         raise ConfigError(f"limits.{key} must be an integer")
     else:

@@ -36,6 +36,7 @@ from pathlib import Path
 from remote_agents.config import (
     ConfigError,
     read_claude_limits_source,
+    read_resume_after_limit,
     write_limits_key,
 )
 
@@ -81,3 +82,30 @@ class ConfigLimitsSource:
             _LOG.warning("the limits source could not be written to %s: %s", self._path, error)
         except Exception:
             _LOG.debug("the limits source could not be written", exc_info=True)
+
+
+class ConfigResumeSetting:
+    """`ports.resume_setting.ResumeSettingPort` over the operator's `config.toml`.
+
+    `ConfigLimitsSource`'s twin for `limits.resume_after_limit`, in this module for its reason:
+    a file path meeting a port is composition's business, and both switches go through the
+    same one writer. Read afresh on every call, since the bot and the terminal are two writers
+    over one file and the service reads it on every lift.
+    """
+
+    _KEY = "resume_after_limit"
+
+    def __init__(self, path: Path) -> None:
+        self._path = path
+
+    async def read(self) -> bool:
+        return await asyncio.to_thread(read_resume_after_limit, self._path)
+
+    async def write(self, value: bool) -> None:
+        """Record the choice, or log why it could not be recorded. Never raises."""
+        try:
+            await asyncio.to_thread(write_limits_key, self._path, self._KEY, value)
+        except ConfigError as error:
+            _LOG.warning("the resume switch could not be written to %s: %s", self._path, error)
+        except Exception:
+            _LOG.debug("the resume switch could not be written", exc_info=True)

@@ -112,3 +112,32 @@ async def test_a_value_outside_the_closed_set_is_refused_rather_than_stored(
     await setting.write("carrier-pigeon")
 
     assert await setting.read() == DEFAULT_CLAUDE_LIMITS_SOURCE
+
+
+async def test_the_resume_switch_defaults_on_and_round_trips_through_the_config(
+    tmp_path: Path,
+) -> None:
+    from remote_agents.composition.limits_source import ConfigResumeSetting
+    from remote_agents.config import read_resume_after_limit
+
+    path = _config(tmp_path)
+    setting = ConfigResumeSetting(path)
+
+    assert await setting.read() is True
+    await setting.write(False)
+    assert await setting.read() is False
+    assert read_resume_after_limit(path) is False
+    await setting.write(True)
+    assert await setting.read() is True
+
+
+async def test_a_refused_resume_write_is_not_an_exception(tmp_path: Path) -> None:
+    from remote_agents.composition.limits_source import ConfigResumeSetting
+
+    path = _config(tmp_path, '[paths]\ndev_root = "/tmp/dev"\n')
+    setting = ConfigResumeSetting(path)
+
+    await setting.write(False)
+
+    assert await setting.read() is True
+    assert path.read_text(encoding="utf-8") == '[paths]\ndev_root = "/tmp/dev"\n'
