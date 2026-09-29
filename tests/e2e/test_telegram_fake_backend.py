@@ -3153,3 +3153,56 @@ async def test_relay_queue_then_finished_sends(tmp_path) -> None:
         assert "Relay" in chat.bot_messages[-1].text
     finally:
         connection.close()
+
+
+@pytest.mark.asyncio
+async def test_obsolete_lines_leave_the_bot_but_every_feed_row_stays(tmp_path) -> None:
+    """The owner's split (limit-lifecycle sub-plan 2): the bot's standing message drops a
+    question and a limit stop once later news arrives, while the feed -- read from the same
+    append-only `agent_activity` table the service writes -- still lists all three rows."""
+    from remote_agents.adapters.sqlite.activity_store import SQLiteActivityStore
+    from remote_agents.adapters.sqlite.database import open_database
+    from remote_agents.adapters.sqlite.migrations import MIGRATIONS
+    from remote_agents.adapters.tui.screens.feed import feed_rows
+
+    record = _a_running_session()
+    boundary, _ = _renameable(record)
+    chat = FakeChat()
+    await boundary.sessions_command(chat.message_update("/sessions"), None)
+    boundary.notifier.attach(chat.bot)
+    connection = open_database(tmp_path / "state.sqlite3", migrations=MIGRATIONS)
+    store = SQLiteActivityStore(connection)
+
+    def observed(kind: ActivityKind, detail: str | None, minute: int) -> AgentActivity:
+        return AgentActivity(
+            session_id=str(record.session_id),
+            kind=kind,
+            detail=detail,
+            observed_at=datetime(2026, 9, 29, 10, minute, tzinfo=UTC),
+        )
+
+    story = (
+        observed(ActivityKind.NEEDS_ANSWER, "Overwrite config.toml?", 1),
+        observed(ActivityKind.LIMIT_REACHED, None, 2),
+        observed(ActivityKind.COMPLETED, "Ran the suite.", 3),
+    )
+    for activity in story:
+        await store.append(activity)
+        await boundary.notifier.deliver([activity])
+
+    notification = next(
+        message
+        for message in reversed(chat.bot_messages)
+        if message.message_id != boundary.view.anchor()
+    )
+    assert "Ran the suite." in notification.text
+    assert "Overwrite config.toml?" not in notification.text
+    assert "usage limit" not in notification.text
+
+    feed = await store.recent(limit=20)
+    connection.close()
+    assert sorted(activity.kind.value for activity in feed) == sorted(a.kind.value for a in story)
+    rows = " / ".join(row.plain for _key, row, _dim in feed_rows(feed, width=120))
+    assert "needs answer" in rows
+    assert "usage limit" in rows
+    assert "finished" in rows

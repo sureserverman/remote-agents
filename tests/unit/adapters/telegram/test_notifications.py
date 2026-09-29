@@ -2033,3 +2033,89 @@ def test_limit_window_reset_already_past_at_the_stop_is_not_said(
 
     assert text.startswith("⛽ <b>Hit the 5-hour limit</b> · ")
     assert "resets" not in text
+
+
+# Lines later news made obsolete (limit-lifecycle sub-plan 2 Task 1.2) ------------------------
+
+
+async def test_obsolete_question_is_dropped_on_the_silent_amend_path() -> None:
+    """Completed, then a question, then completed again: an amendment, and no question in it."""
+    clock = _Clock()
+    notifier, view = _notifier(clock)
+    await notifier.deliver([_for(SESSION_A, ActivityKind.COMPLETED, "turn 1", clock.moment)])
+    clock.advance(60)
+    await notifier.deliver(
+        [_for(SESSION_A, ActivityKind.NEEDS_ANSWER, "Which file?", clock.moment)]
+    )
+    assert "Which file?" in _showing(view)
+    amended_before = len(view.amended)
+
+    clock.advance(60)
+    await notifier.deliver([_for(SESSION_A, ActivityKind.COMPLETED, "turn 2", clock.moment)])
+
+    assert len(view.amended) == amended_before + 1, "a repeat of completed is amended in"
+    assert "Which file?" not in _showing(view)
+    assert "turn 2" in _showing(view)
+    assert _messages(view) == 1
+
+
+async def test_obsolete_question_is_dropped_on_the_replace_path() -> None:
+    """A question, then news of a kind not yet shown: a new message, and no question in it."""
+    clock = _Clock()
+    notifier, view = _notifier(clock)
+    await notifier.deliver(
+        [_for(SESSION_A, ActivityKind.NEEDS_ANSWER, "Which file?", clock.moment)]
+    )
+    sent_before = len(view.sent)
+
+    clock.advance(60)
+    await notifier.deliver([_for(SESSION_A, ActivityKind.COMPLETED, "done", clock.moment)])
+
+    assert len(view.sent) == sent_before + 1, "completed is unheard, so it arrives"
+    assert "Which file?" not in _showing(view)
+    assert _messages(view) == 1
+
+
+async def test_obsolete_limit_line_is_dropped_by_later_news() -> None:
+    clock = _Clock()
+    notifier, view = _notifier(clock)
+    await notifier.deliver([_for(SESSION_A, ActivityKind.LIMIT_REACHED, None, clock.moment)])
+    assert "Hit a usage limit" in _showing(view)
+
+    clock.advance(60)
+    await notifier.deliver([_for(SESSION_A, ActivityKind.COMPLETED, "done", clock.moment)])
+
+    assert "usage limit" not in _showing(view)
+
+
+async def test_obsolete_question_heard_in_the_same_pass_is_neither_sent_nor_owed() -> None:
+    """A question and a later finish drained together: the question is already answered, and
+    it must not be held for the next pass either, or it would be re-queued forever."""
+    clock = _Clock()
+    notifier, view = _notifier(clock)
+    asked = _for(SESSION_A, ActivityKind.NEEDS_ANSWER, "Which file?", clock.moment)
+    finished = _for(SESSION_A, ActivityKind.COMPLETED, "done", clock.moment + timedelta(seconds=5))
+
+    assert await notifier.deliver([asked, finished]) == 1
+
+    assert "Which file?" not in _showing(view)
+    assert "done" in _showing(view)
+    assert notifier.pending_count() == 0
+
+
+async def test_obsolete_lines_stay_gone_from_what_the_standing_message_remembers() -> None:
+    """The pruned set is what is stored, so the next amendment cannot bring the line back."""
+    clock = _Clock()
+    notifier, view = _notifier(clock)
+    await notifier.deliver(
+        [_for(SESSION_A, ActivityKind.NEEDS_ANSWER, "Which file?", clock.moment)]
+    )
+    clock.advance(60)
+    await notifier.deliver([_for(SESSION_A, ActivityKind.COMPLETED, "turn 1", clock.moment)])
+    clock.advance(60)
+    await notifier.deliver([_for(SESSION_A, ActivityKind.COMPLETED, "turn 2", clock.moment)])
+
+    assert "Which file?" not in _showing(view)
+    standing = notifier._recall(SESSION_A)
+    assert standing is not None
+    assert [activity.kind for activity in standing.activities] == [ActivityKind.COMPLETED]

@@ -51,6 +51,7 @@ from remote_agents.adapters.telegram.presenters import (
 from remote_agents.application.notification_policy import (
     REFUSALS_BEFORE_ABANDONING,
     SessionGroup,
+    current,
     enqueue,
     for_update,
     forget_absent,
@@ -1041,6 +1042,11 @@ class ActivityNotifier:
         arrives; every other kind keeps the kind-only rule above.
 
         """
+        # What later news made obsolete is gone before anything is shown or owed: a question
+        # drained in the same pass as a newer finish is already answered, and holding it as
+        # unsaid would re-queue it every pass. The standing paths prune again through `merged`,
+        # which also retires the lines the message was carrying (limit-lifecycle sub-plan 2).
+        group = SessionGroup(group.session_id, current(group.activities))
         standing = self._recall(group.session_id)
         # **No suppression window. Removed 2026-08-23 by the owner's decision (DEC-048).**
         #
