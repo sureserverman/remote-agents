@@ -933,18 +933,23 @@ async def test_an_observation_the_message_could_not_hold_is_owed_not_spent(
     overflows. It is kept, and kept tested, as the backstop for a kind being added -- the two
     defects above are properties of the fold, not of the number, and they would come back with
     it.
+
+    **The folded observation is an output ceiling, not the question it was until 2026-09-29.** A
+    question behind newer news is now obsolete rather than owed (`notification_policy.current`,
+    limit-lifecycle sub-plan 2), so it would test the new rule instead of the fold. An output
+    ceiling is an event, which later news never retires, so it still exercises the fold.
     """
     clock = _Clock()
     notifier, view = _notifier(clock)
     monkeypatch.setattr(notifications, "_MAXIMUM_LINES_PER_MESSAGE", 2)
-    waiting = _for(SESSION_A, ActivityKind.NEEDS_ANSWER, "Which file?", clock.moment)
+    waiting = _for(SESSION_A, ActivityKind.OUTPUT_LIMIT, "ceiling at turn 3", clock.moment)
     clock.advance(1)
     newer = [
         _for(SESSION_A, ActivityKind.COMPLETED, "turn 4", clock.moment),
         _for(
             SESSION_A,
-            ActivityKind.LIMIT_REACHED,
-            "out of budget",
+            ActivityKind.NEEDS_ANSWER,
+            "Which file?",
             clock.moment + timedelta(seconds=1),
         ),
     ]
@@ -953,7 +958,7 @@ async def test_an_observation_the_message_could_not_hold_is_owed_not_spent(
 
     text = str(view.sent[-1]["text"])
     assert "and 1 earlier." in text, "the oldest is the one folded away"
-    assert "Which file?" not in text
+    assert "ceiling at turn 3" not in text
     assert notifier.pending_count() == 1, "it is owed, not spent"
 
     # The next pass says it, rather than it being lost with the group that could not carry it.
@@ -962,7 +967,7 @@ async def test_an_observation_the_message_could_not_hold_is_owed_not_spent(
     # same contest every pass, forever.
     clock.advance(1)
     assert await notifier.deliver([]) == 1
-    assert "Which file?" in _showing(view)
+    assert "ceiling at turn 3" in _showing(view)
     assert _messages(view) == 1
 
 

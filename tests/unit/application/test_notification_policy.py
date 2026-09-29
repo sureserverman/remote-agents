@@ -29,9 +29,11 @@ import pytest
 from remote_agents.application import notification_policy
 from remote_agents.application.notification_policy import (
     SessionGroup,
+    current,
     enqueue,
     for_update,
     grouped_for_delivery,
+    merged,
     shown_in_message,
 )
 from remote_agents.ports.agent_activity import (
@@ -349,3 +351,113 @@ def test_eviction_reports_rather_than_says() -> None:
     session_id, count = reports[0]
     assert " " not in session_id, "a session id, not a sentence about one"
     assert isinstance(count, int), "a count the surface may word however it likes"
+
+
+# Lines later news made obsolete (limit-lifecycle sub-plan 2 Task 1.1) ------------------------
+
+NA, LIMIT, DONE = ActivityKind.NEEDS_ANSWER, ActivityKind.LIMIT_REACHED, ActivityKind.COMPLETED
+
+
+def _kinds_and_details(
+    activities: tuple[AgentActivity, ...],
+) -> list[tuple[ActivityKind, str | None]]:
+    return [(activity.kind, activity.detail) for activity in activities]
+
+
+@pytest.mark.parametrize(
+    ("carried", "arrived", "expected"),
+    [
+        pytest.param(
+            [(NA, "which branch?", 1)],
+            [(DONE, "done", 2)],
+            [(DONE, "done")],
+            id="question-then-completed",
+        ),
+        pytest.param(
+            [(NA, "which branch?", 1)],
+            [(NA, "push now?", 2)],
+            [(NA, "push now?")],
+            id="question-then-different-question",
+        ),
+        pytest.param(
+            [(NA, "which branch?", 1)],
+            [(NA, "which branch?", 2)],
+            [(NA, "which branch?")],
+            id="question-then-same-question",
+        ),
+        pytest.param(
+            [(LIMIT, None, 1)],
+            [(DONE, "done", 2)],
+            [(DONE, "done")],
+            id="limit-then-completed",
+        ),
+        pytest.param(
+            [(DONE, "done", 1)],
+            [(NA, "which branch?", 2)],
+            [(DONE, "done"), (NA, "which branch?")],
+            id="completed-then-question-drops-nothing",
+        ),
+        pytest.param(
+            [(NA, "which branch?", 1)],
+            [(LIMIT, None, 2)],
+            [(LIMIT, None)],
+            id="question-then-limit",
+        ),
+        pytest.param(
+            [(LIMIT, None, 1)],
+            [(NA, "which branch?", 2)],
+            [(NA, "which branch?")],
+            id="limit-then-question",
+        ),
+        pytest.param(
+            [(DONE, "done", 5)],
+            [(NA, "which branch?", 3)],
+            [(DONE, "done")],
+            id="a-late-question-behind-newer-news-is-already-obsolete",
+        ),
+        pytest.param(
+            [(DONE, "done", 1), (NA, "which branch?", 2)],
+            [],
+            [(DONE, "done"), (NA, "which branch?")],
+            id="nothing-arrived-nothing-dropped",
+        ),
+    ],
+)
+def test_obsolete_lines_are_dropped_by_merged(carried, arrived, expected) -> None:
+    def build(rows):
+        return tuple(
+            _observed(SESSION_A, kind, detail=detail, minute=m) for kind, detail, m in rows
+        )
+
+    assert _kinds_and_details(merged(build(carried), build(arrived))) == expected
+
+
+def test_obsolete_lines_within_one_pass_are_dropped_by_current() -> None:
+    """A question and a later finish heard in the same pass: the question is already answered."""
+    pass_ = (
+        _observed(SESSION_A, NA, detail="which branch?", minute=1),
+        _observed(SESSION_A, LIMIT, minute=2),
+        _observed(SESSION_A, DONE, detail="done", minute=3),
+    )
+
+    assert current(pass_) == (pass_[2],)
+
+
+def test_obsolete_is_never_decided_by_a_tie() -> None:
+    """Two stamps that agree say nothing about which came first, so neither retires the other."""
+    tied = (
+        _observed(SESSION_A, DONE, detail="done", minute=2),
+        _observed(SESSION_A, NA, detail="which branch?", minute=2),
+    )
+
+    assert current(tied) == tied
+
+
+def test_obsolete_rule_leaves_the_other_kinds_alone() -> None:
+    older = (
+        _observed(SESSION_A, DONE, detail="done", minute=1),
+        _observed(SESSION_A, ActivityKind.OUTPUT_LIMIT, minute=2),
+        _observed(SESSION_A, NA, detail="which branch?", minute=3),
+    )
+
+    assert current(older) == older

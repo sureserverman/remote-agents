@@ -146,9 +146,44 @@ def merged(
     about.
 
     Both arguments belong to one session, so there is exactly one group to unpack.
+
+    **And what later news made obsolete is left out** (`current`), so a standing message stops
+    carrying a question the agent has moved past the moment anything newer about it arrives.
     """
     groups = grouped_for_delivery((*carried, *arrived))
-    return groups[0].activities if groups else ()
+    return current(groups[0].activities) if groups else ()
+
+
+_OBSOLETED_BY_LATER_NEWS = frozenset({ActivityKind.NEEDS_ANSWER, ActivityKind.LIMIT_REACHED})
+"""The kinds that describe a state the session is *in*, rather than something it did.
+
+A question is open until the agent does anything else, and a limit stop holds until the agent
+moves again. Either one followed by any newer observation of the same session describes a state
+that has ended. `completed` and `output_limit` are events: a later one does not make them
+untrue, so they are only ever replaced by a newer copy of themselves.
+"""
+
+
+def current(activities: tuple[AgentActivity, ...]) -> tuple[AgentActivity, ...]:
+    """One session's observations without the needs-answer and limit lines later news retired.
+
+    The owner's rule of 2026-09-28: a question or a limit stop stops being news the moment the
+    session reports anything newer. Each such line is dropped when *any* observation in the set
+    is strictly newer. That covers a newer copy of its own kind (the kind collapse did so
+    already, which is why a question repeated word for word survives as its newer copy, DEC-048)
+    and a different kind alike. A tie retires nothing, because two equal stamps carry no fact
+    about which came first.
+
+    Applied to what the bot sends, never to what is stored. The feed reads the append-only
+    `agent_activity` table and keeps every row (DEC-037), and the standing message's store only
+    ever receives what this left.
+    """
+    newest = max((activity.observed_at for activity in activities), default=None)
+    return tuple(
+        activity
+        for activity in activities
+        if activity.kind not in _OBSOLETED_BY_LATER_NEWS or activity.observed_at == newest
+    )
 
 
 def for_update(
