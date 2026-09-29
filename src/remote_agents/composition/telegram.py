@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Awaitable, Callable
 from functools import partial
-from typing import cast
+from pathlib import Path
 
 from remote_agents.adapters.agents.registry import (
     profile_composers,
@@ -40,10 +41,13 @@ from remote_agents.composition.backend import (
 )
 from remote_agents.composition.service import ServiceComposition
 from remote_agents.composition.tui import _console_composer, _local_runtime
-from remote_agents.config import TelegramSecrets, read_claude_limits_source
+from remote_agents.config import (
+    TelegramSecrets,
+    read_claude_limits_source,
+    read_resume_after_limit,
+)
 from remote_agents.ports.agent_activity import ActivityKind
 from remote_agents.ports.agent_usage import AgentLimits
-from remote_agents.ports.resume_setting import ResumeSettingPort
 from remote_agents.production import ProductionPaths
 
 
@@ -238,7 +242,9 @@ def _private_boundary(
             # session through the terminal's guarded send -- never the owner's relay queue.
             resume=LimitResume(
                 send=terminal.send_prompt,
-                enabled=_resume_switch(backend.resume_after_limit),
+                enabled=_resume_switch(
+                    backend.resume_after_limit, config.path or paths.config_path
+                ),
                 settled=lambda stop: boundary.notifier.line_settled(
                     stop.session_id, ActivityKind.LIMIT_REACHED, observed_at=stop.stopped_at
                 ),
@@ -253,12 +259,21 @@ def _private_boundary(
     )
 
 
-def _resume_switch(setting: object | None) -> Callable[[], Awaitable[bool]]:
-    """The resume switch's fresh read, or a switch that is off when none is wired."""
-    if setting is not None:
-        return cast(ResumeSettingPort, setting).read
+def _resume_switch(setting: object | None, path: Path) -> Callable[[], Awaitable[bool]]:
+    """The service's read of the resume switch: fresh, and off on any doubt.
 
-    async def off() -> bool:
-        return False
+    Not the Settings row's read. That one draws the default for a file it cannot read; this one
+    decides whether the service types into a pane, so a half-edited file reads as off
+    (`read_resume_after_limit(when_unsure=False)`). A composition that wired no switch is off.
+    """
+    if setting is None:
 
-    return off
+        async def off() -> bool:
+            return False
+
+        return off
+
+    async def read() -> bool:
+        return await asyncio.to_thread(read_resume_after_limit, path, when_unsure=False)
+
+    return read

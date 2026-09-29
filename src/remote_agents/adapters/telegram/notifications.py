@@ -149,7 +149,7 @@ retired by `retire_line` at all.
 """
 
 _NOT_RESUMED_WORDS: dict[str, str] = {
-    NotResumed.BUSY: f"didn't send “{NUDGE}”: it stayed busy for 30 minutes",
+    NotResumed.BUSY: f"didn't send “{NUDGE}”: it stayed busy",
     NotResumed.DIALOG: f"didn't send “{NUDGE}”: a dialog was open",
     NotResumed.COMPOSING: f"didn't send “{NUDGE}”: its composer held a draft",
     NotResumed.UNRECOGNISED: f"didn't send “{NUDGE}”: its screen wasn't recognised",
@@ -1251,19 +1251,21 @@ class ActivityNotifier:
         (DEC-082's fallback) and then left alone: it is not this session's news any more, so its
         next report starts a new message.
 
-        **Answers whether the stop is done with**, so the lift pass records its outcome only
-        then. Done: the line was retired, or no message carries it -- later news retired it
-        (Stage 1), the owner pressed it away, or a pass that crashed before recording already
-        did this. Not done: the stop is still waiting in the queue to be sent, and would reach
-        the owner after its lift with nothing left to retire it; or the session cannot be named
-        right now. **Raises** when it cannot act at all -- no bot yet -- and for a kind no lift
-        retires.
+        **Answers whether the stop is done with.** Without a nudge the lift pass records its
+        outcome only then; after a nudge it has already recorded it, and keeps asking until
+        this answers done. Done: the line was retired, or no message carries it -- later news
+        retired it (Stage 1), the owner pressed it away, or a pass that crashed before recording
+        already did this. Not done: the stop is still waiting in the queue to be sent, and
+        would reach the owner after its lift with nothing left to retire it; or the session
+        cannot be named right now. **Raises** when it cannot act at all -- no bot yet -- and
+        for a kind no lift retires.
 
         **With a `note`** -- a `limit_resume.NotResumed` key -- the line is not dropped quietly:
         the service lifted the stop and could not send its nudge, and the owner must still see
         that. The line becomes "Limit lifted · didn't send …", below the lines that stay, or as
-        the whole message when it was the only line; that message is left alone afterwards, as
-        the fallback's is.
+        the whole message when it was the only line. That only-line message is left alone
+        afterwards, as the fallback's is; below kept lines, the note lasts until the session's
+        next news redraws the message from what it keeps.
 
         Held under the delivery lock: both read the standing record, await Telegram, and write
         it back, and interleaved at an await one erased the other's news.

@@ -12,7 +12,7 @@ from datetime import UTC, datetime
 
 from remote_agents.adapters.sqlite.activity_store import _instant, _limit
 from remote_agents.ports.agent_activity import ActivityKind
-from remote_agents.ports.limit_stop_outcomes import RESUMED, LimitStop
+from remote_agents.ports.limit_stop_outcomes import NUDGING, RESUMED, LimitStop
 
 
 class SQLiteLimitStopStore:
@@ -52,7 +52,29 @@ class SQLiteLimitStopStore:
         return tuple(stops)
 
     async def record(self, stop: LimitStop, outcome: str, *, decided_at: datetime) -> None:
-        """Keyed on the stamp exactly as `agent_activity` stored it, so the two rows join."""
+        """Keyed on the stamp exactly as `agent_activity` stored it, so the two rows join.
+
+        The first outcome stands, except over a `NUDGING` intent, which it replaces.
+        """
+        with self._connection:
+            self._connection.execute(
+                """
+                INSERT INTO limit_stop_outcomes(session_id, stopped_at, outcome, decided_at)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(session_id, stopped_at) DO UPDATE
+                SET outcome = excluded.outcome, decided_at = excluded.decided_at
+                WHERE limit_stop_outcomes.outcome = ?
+                """,
+                (
+                    stop.session_id,
+                    stop.stamp,
+                    outcome,
+                    decided_at.astimezone(UTC).isoformat(),
+                    NUDGING,
+                ),
+            )
+
+    async def claim(self, stop: LimitStop, *, decided_at: datetime) -> None:
         with self._connection:
             self._connection.execute(
                 """
@@ -61,13 +83,38 @@ class SQLiteLimitStopStore:
                 )
                 VALUES (?, ?, ?, ?)
                 """,
-                (
-                    stop.session_id,
-                    stop.stamp,
-                    outcome,
-                    decided_at.astimezone(UTC).isoformat(),
-                ),
+                (stop.session_id, stop.stamp, NUDGING, decided_at.astimezone(UTC).isoformat()),
             )
+
+    async def release(self, stop: LimitStop) -> None:
+        with self._connection:
+            self._connection.execute(
+                "DELETE FROM limit_stop_outcomes"
+                " WHERE session_id = ? AND stopped_at = ? AND outcome = ?",
+                (stop.session_id, stop.stamp, NUDGING),
+            )
+
+    async def interrupted(self) -> tuple[LimitStop, ...]:
+        """Each `NUDGING` intent, joined back to the stop it was written for."""
+        rows = self._connection.execute(
+            """
+            SELECT o.session_id, o.stopped_at, a.limit_window, a.limit_resets_at
+            FROM limit_stop_outcomes AS o
+            JOIN agent_activity AS a
+              ON a.session_id = o.session_id AND a.observed_at = o.stopped_at AND a.kind = ?
+            WHERE o.outcome = ?
+            """,
+            (ActivityKind.LIMIT_REACHED.value, NUDGING),
+        ).fetchall()
+        return tuple(
+            LimitStop(
+                session_id,
+                _instant(stamp),
+                _limit(ActivityKind.LIMIT_REACHED, window, resets_at),
+                stamp,
+            )
+            for session_id, stamp, window, resets_at in rows
+        )
 
     async def last_resumed_at(self, session_id: str) -> datetime | None:
         """The newest `RESUMED` decision for the session, read back as an instant."""

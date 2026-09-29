@@ -846,3 +846,40 @@ def test_resume_after_limit_absent_is_not_drift(tmp_path: Path) -> None:
     drift = describe_schema_drift(write_config(tmp_path, example(tmp_path)))
 
     assert drift["missing"] == [] and drift["unknown"] == []
+
+
+@pytest.mark.parametrize(
+    ("body", "expected"),
+    [
+        ("this is not toml [[[", False),
+        ('[limits]\nresume_after_limit = "false"\n', False),
+        ("[limits]\nresume_after_limit = 0\n", False),
+        ("[paths]\nnothing = 1\n", False),
+        ("[limits]\nmax_label_length = 40\n", True),
+        ("[limits]\nresume_after_limit = false\n", False),
+        ("[limits]\nresume_after_limit = true\n", True),
+    ],
+)
+def test_the_service_s_read_of_the_switch_fails_toward_off(
+    tmp_path: Path, body: str, expected: bool
+) -> None:
+    """The service types on this answer, so a doubt is off; only a well-formed file saying
+    nothing about the key takes the default."""
+    from remote_agents.config import read_resume_after_limit
+
+    path = write_config(tmp_path, body)
+
+    assert read_resume_after_limit(path, when_unsure=False) is expected
+    assert read_resume_after_limit(tmp_path / "absent.toml", when_unsure=False) is False
+
+
+def test_a_generated_config_refuses_a_bool_for_an_integer_limit(tmp_path: Path) -> None:
+    from remote_agents.config import DEFAULT_LIMITS, render_config
+
+    with pytest.raises(ConfigError, match="activity_poll_seconds"):
+        render_config(
+            dev_root=tmp_path,
+            registry_path=tmp_path / "registry.yaml",
+            database_path=tmp_path / "sessions.sqlite3",
+            limits={**DEFAULT_LIMITS, "activity_poll_seconds": True},
+        )

@@ -3005,7 +3005,11 @@ class PrivateBotBoundary:
         limits_source: str | None = None,
         resume: bool | None = None,
     ) -> RenderedMessage:
-        """Three rows about this machine, each reading its own source.
+        """Four rows about this machine, each reading its own source.
+
+        The fourth, the resume switch (limit-lifecycle sub-plan 2, DEC-109), is the limits
+        source's sibling: it decides what this service does, not what a provider does, and is
+        drawn and pressed the same way. What follows argues for the first three.
 
         Three rows, three subjects, and a screen shared without the vocabulary being shared
         (DEC-071 -- siblings, "not a generalisation"). Claude's row is a stored intention read

@@ -493,3 +493,129 @@ async def test_a_line_that_settles_later_is_nudged_exactly_once(connection) -> N
     assert await watcher.pass_once() == 1
     assert await watcher.pass_once() == 0
     assert terminal.sent == [(_A, NUDGE)]
+
+
+# Stage 3 gate, remediation round 1 -----------------------------------------------------------
+
+
+async def test_a_nudge_interrupted_before_its_record_is_never_typed_again(connection) -> None:
+    """A process that died between the send and the record left its intent row. The next
+    process cannot know whether the text landed, so it gives the stop up as unconfirmed."""
+    await SQLiteActivityStore(connection).append(_stop())
+    outcomes = SQLiteLimitStopStore(connection)
+    (stop,) = await outcomes.unresolved([_A])
+    await outcomes.claim(stop, decided_at=_AFTER)
+    terminal, line = _Terminal(SENT), _Line()
+
+    assert await _watcher(connection, terminal, line, _Clock()).pass_once() == 1
+
+    assert terminal.sent == []
+    assert _outcomes(connection) == [not_resumed(NotResumed.UNCONFIRMED)]
+    assert line.amended == [(_A, "unconfirmed")]
+
+
+async def test_a_busy_pass_leaves_no_intent_behind(connection) -> None:
+    await SQLiteActivityStore(connection).append(_stop())
+    terminal, line = _Terminal(BUSY), _Line()
+
+    assert await _watcher(connection, terminal, line, _Clock()).pass_once() == 0
+
+    assert _outcomes(connection) == []
+
+
+async def test_a_line_that_does_not_land_after_the_record_is_retried_without_typing(
+    connection,
+) -> None:
+    await SQLiteActivityStore(connection).append(_stop())
+    terminal = _Terminal(SENT, SENT)
+    line = _Line()
+    answers = [False, False, True]
+
+    async def retire(stop) -> bool:
+        line.retired.append(stop.session_id)
+        return answers.pop(0)
+
+    line.retire = retire  # type: ignore[method-assign]
+    watcher = _watcher(connection, terminal, line, _Clock())
+
+    for _ in range(4):
+        await watcher.pass_once()
+
+    assert terminal.sent == [(_A, NUDGE)]
+    assert line.retired == [_A, _A, _A], "retried until it landed, then left alone"
+
+
+async def test_a_pass_cancelled_mid_send_still_updates_the_line(connection) -> None:
+    import asyncio
+
+    await SQLiteActivityStore(connection).append(_stop())
+    started, release = asyncio.Event(), asyncio.Event()
+
+    async def slow_send(session_id, text):
+        started.set()
+        await release.wait()
+        return SENT
+
+    line, clock = _Line(), _Clock()
+
+    async def enabled() -> bool:
+        return True
+
+    resume = LimitResume(
+        send=slow_send, enabled=enabled, settled=line.settled, amend=line.amend, now=clock
+    )
+    watcher = LimitLiftWatcher(
+        _Sessions(), SQLiteLimitStopStore(connection), _no_readings, line.retire,
+        resume=resume, now=clock,
+    )  # fmt: skip
+    task = asyncio.create_task(watcher.pass_once())
+    await started.wait()
+    task.cancel()
+    release.set()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    for _ in range(50):
+        await asyncio.sleep(0)
+
+    assert _outcomes(connection) == [RESUMED]
+    assert line.retired == [_A]
+
+
+async def test_a_looped_stop_with_an_already_passed_reset_is_not_nudged(connection) -> None:
+    """The loop guard's schedule exemption holds only for a reset still ahead at the nudge; a
+    re-stop carrying a reset that had already passed is exactly a false lift repeating."""
+    activities = SQLiteActivityStore(connection)
+    await activities.append(_stop())
+    clock = _Clock()
+    terminal, line = _Terminal(SENT, SENT), _Line()
+    watcher = _watcher(connection, terminal, line, clock)
+    assert await watcher.pass_once() == 1
+
+    await activities.append(_stop(at=clock.moment + timedelta(minutes=1), resets_at=_RESET))
+    clock.moment += timedelta(minutes=3)
+    assert await watcher.pass_once() == 0
+
+    assert len(terminal.sent) == 1
+
+
+async def test_the_switch_is_read_again_just_before_the_send(connection) -> None:
+    await SQLiteActivityStore(connection).append(_stop())
+    terminal, line = _Terminal(SENT), _Line()
+    answers = [True, False]
+
+    async def enabled() -> bool:
+        return answers.pop(0) if answers else False
+
+    clock = _Clock()
+    resume = LimitResume(
+        send=terminal.send, enabled=enabled, settled=line.settled, amend=line.amend, now=clock
+    )
+    watcher = LimitLiftWatcher(
+        _Sessions(), SQLiteLimitStopStore(connection), _no_readings, line.retire,
+        resume=resume, now=clock,
+    )  # fmt: skip
+
+    assert await watcher.pass_once() == 0
+
+    assert terminal.sent == []
+    assert _outcomes(connection) == []

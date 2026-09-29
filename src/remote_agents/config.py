@@ -635,6 +635,11 @@ def render_config(
     # closed set, so the renderer must too, or it writes a file its own loader rejects.
     if "claude_limits_source" in values:
         _limits_source(values["claude_limits_source"])
+    # A bool is a legal value for the flag and nothing else: `_toml_value` spells one as
+    # `true`, which the loader refuses for a count, so it is refused here instead.
+    for key, value in values.items():
+        if isinstance(value, bool) and key != "resume_after_limit":
+            raise ConfigError(f"generated limits.{key} must be an integer, not a bool")
     rendered_paths = "\n".join(f"{key} = {_toml_string(paths[key])}" for key in sorted(paths))
     # A blank line before a commented key and nowhere else: separating every key would make the
     # file's own shape argue that each one needs reading, when only this one does.
@@ -707,21 +712,30 @@ def read_claude_limits_source(path: Path) -> str:
     return value if value in CLAUDE_LIMITS_SOURCES else DEFAULT_CLAUDE_LIMITS_SOURCE
 
 
-def read_resume_after_limit(path: Path) -> bool:
-    """The resume switch as the file states it right now, or on when it cannot be read.
+def read_resume_after_limit(path: Path, *, when_unsure: bool = DEFAULT_RESUME_AFTER_LIMIT) -> bool:
+    """The resume switch as the file states it right now; total, never raising.
 
-    Total like `read_claude_limits_source`, and for the same reason: the service consults it on
-    every lift, and a file that is missing, malformed or holding a non-bool may not raise into
-    the loop. Failing toward the default is failing toward what the owner asked for when they
-    stated nothing; an owner who switched it off wrote a `false` this reads.
+    A well-formed `[limits]` table that does not mention the key states nothing, and that is
+    the default -- on. Everything else that cannot be read as a stated bool -- a missing or
+    unreadable file, a file that does not parse, no `[limits]` table, a value that is not
+    `true` or `false` -- answers `when_unsure`.
+
+    **Two callers, two directions.** The Settings rows draw the switch and take the default
+    (`when_unsure` left on), as `read_claude_limits_source` does. The service types into a pane
+    on this answer, so it asks with `when_unsure=False`: an owner who wrote `false` and then
+    left the file half-edited must not be typed into.
     """
     try:
         raw = tomllib.loads(path.read_text(encoding="utf-8"))
     except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError):
-        return DEFAULT_RESUME_AFTER_LIMIT
+        return when_unsure
     limits = raw.get("limits") if isinstance(raw, dict) else None
-    value = limits.get("resume_after_limit") if isinstance(limits, dict) else None
-    return value if isinstance(value, bool) else DEFAULT_RESUME_AFTER_LIMIT
+    if not isinstance(limits, dict):
+        return when_unsure
+    if "resume_after_limit" not in limits:
+        return DEFAULT_RESUME_AFTER_LIMIT
+    value = limits["resume_after_limit"]
+    return value if isinstance(value, bool) else when_unsure
 
 
 def write_limits_key(path: Path, key: str, value: bool | str | int) -> None:
@@ -730,11 +744,12 @@ def write_limits_key(path: Path, key: str, value: bool | str | int) -> None:
     **Not a re-render.** `render_config` writes a fresh file for a host that has none; this
     writes one line into a file the owner may have annotated, reordered, or linked into place
     from a dotfiles tree, so that a surface can flip one switch without a hand edit (DEC-088:
-    `config.toml` gains one key a surface writes, and no settings file). Re-rendering would honour
-    the schema and destroy the owner's comments, which is the wrong trade for a switch that is
-    flipped from a phone. The line is located textually, inside the `[limits]` header and
-    before the next one; it is replaced in place when present and appended to the section when
-    absent, and the file's trailing newline -- or its absence -- is kept as found.
+    `config.toml` gains keys a surface writes, and no settings file; DEC-109 added the second).
+    Re-rendering would honour the schema and destroy the owner's comments, which is the wrong
+    trade for a switch that is flipped from a phone. The line is located textually, inside the
+    `[limits]` header and before the next one; it is replaced in place when present and appended
+    to the section when absent, and the file's trailing newline -- or its absence -- is kept as
+    found.
 
     Refuses, with `ConfigError` and the file untouched: a key outside the limits schema (a
     retired key included -- nothing writes one back), a source outside `CLAUDE_LIMITS_SOURCES`,

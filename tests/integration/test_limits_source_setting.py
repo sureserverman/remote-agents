@@ -141,3 +141,14 @@ async def test_a_refused_resume_write_is_not_an_exception(tmp_path: Path) -> Non
 
     assert await setting.read() is True
     assert path.read_text(encoding="utf-8") == '[paths]\ndev_root = "/tmp/dev"\n'
+
+
+async def test_the_service_reads_a_half_edited_resume_switch_as_off(tmp_path: Path) -> None:
+    """The bot composition's switch read, not the Settings row's: a doubt is off."""
+    from remote_agents.composition.telegram import _resume_switch
+
+    path = _config(tmp_path, '[limits]\nresume_after_limit = "false"\n')
+    assert await _resume_switch(object(), path)() is False
+    path.write_text("[limits]\nmax_label_length = 40\n", encoding="utf-8")
+    assert await _resume_switch(object(), path)() is True
+    assert await _resume_switch(None, path)() is False

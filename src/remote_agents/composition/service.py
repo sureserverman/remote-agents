@@ -409,8 +409,9 @@ async def _watch_limit_stops_periodically(composition: ServiceComposition, inter
                 timeout=_LIMIT_STOP_PASS_TIMEOUT_SECONDS,
             )
         except Exception:
-            # One pass, logged. The outcome is only written once a stop was acted on, so a pass
-            # lost here is asked again thirty seconds later.
+            # One pass, logged. Without a nudge the outcome is written only once a stop was acted
+            # on, so a pass lost here is asked again thirty seconds later. A nudge runs shielded
+            # from this bound and finishes -- record and line -- after a pass is cancelled.
             _LOG.exception("the limit-stop watch could not complete a pass")
 
 

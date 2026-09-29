@@ -18,10 +18,11 @@ turn, out of context. So a refusal is decided here instead:
 - **unconfirmed** (typed, and not seen to land) is never tried again: a double submit is worse
   than a lost one (DEC-099).
 
-**At most one nudge per stop, and it survives a restart**: the lift pass records the outcome
-before it touches the bot's line (`limit_lifts.LimitLiftWatcher`). The busy clock is this
-process's memory only, so a restart during a busy wait starts the wait again -- it can delay the
-give-up, never repeat a nudge.
+**At most one nudge per stop, and it survives a restart**: the lift pass writes a `NUDGING`
+intent before the typing and the outcome over it before it touches the bot's line
+(`limit_lifts.LimitLiftWatcher`); an intent found after a restart is given up as unconfirmed.
+The busy clock is this process's memory only, so a restart during a busy wait starts the wait
+again -- it can delay the give-up, never repeat a nudge.
 
 **Cursor is not resumed by this.** Its limit screen keeps the owner's own message in the
 composer, so the send refuses it (a draft is there) and the stop is recorded not resumed, with
@@ -151,6 +152,14 @@ class LimitResume:
         if verdict.outcome is not None:
             self._decided[key] = verdict
         return verdict
+
+    def holds(self, stop: LimitStop) -> bool:
+        """Whether a final verdict for this stop is waiting to be recorded."""
+        return (stop.session_id, stop.stamp) in self._decided
+
+    def held(self, stop: LimitStop) -> Nudge | None:
+        """The final verdict waiting to be recorded for this stop, if there is one."""
+        return self._decided.get((stop.session_id, stop.stamp))
 
     def forget(self, stop: LimitStop) -> None:
         """The stop's outcome is recorded; its verdict need not be held any longer."""

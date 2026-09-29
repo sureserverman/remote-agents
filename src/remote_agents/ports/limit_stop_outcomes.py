@@ -22,6 +22,14 @@ LIFTED = "lifted"
 RESUMED = "resumed"
 """The stop lifted and the service's one nudge was typed into the idle composer."""
 
+NUDGING = "nudging"
+"""Written just before the nudge is typed, and upgraded to the final outcome once it is known.
+
+Not an outcome: an intent. A stop found holding it by a process that did not write it was
+interrupted between the typing and the record, so whether the text landed is unknown -- and it
+is given up as unconfirmed, never typed again (DEC-099: a double submit is worse than a lost one).
+"""
+
 NOT_RESUMED = "not_resumed"
 """The prefix of `not_resumed:<reason>`: the stop lifted and the nudge could not be sent."""
 
@@ -44,7 +52,20 @@ class LimitStopOutcomes(Protocol):
         ...
 
     async def record(self, stop: LimitStop, outcome: str, *, decided_at: datetime) -> None:
-        """Write the stop's outcome. The first one written stands; a second is ignored."""
+        """Write the stop's outcome. The first one written stands and a second is ignored --
+        except over `NUDGING`, which is an intent and is replaced by the outcome it became."""
+        ...
+
+    async def claim(self, stop: LimitStop, *, decided_at: datetime) -> None:
+        """Write `NUDGING` for the stop, unless it already holds a row."""
+        ...
+
+    async def release(self, stop: LimitStop) -> None:
+        """Remove the stop's `NUDGING` intent -- nothing was typed -- and nothing else."""
+        ...
+
+    async def interrupted(self) -> tuple[LimitStop, ...]:
+        """Every stop still holding a `NUDGING` intent."""
         ...
 
     async def last_resumed_at(self, session_id: str) -> datetime | None:

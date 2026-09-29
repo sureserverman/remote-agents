@@ -43,7 +43,13 @@ import logging
 from collections.abc import Awaitable, Callable, Sequence
 from datetime import UTC, datetime, timedelta
 
-from remote_agents.application.limit_resume import LOOP_GUARD, LimitResume, Nudge
+from remote_agents.application.limit_resume import (
+    LOOP_GUARD,
+    LimitResume,
+    NotResumed,
+    Nudge,
+    not_resumed,
+)
 from remote_agents.application.limit_stops import _SATURATED
 from remote_agents.application.session_views import _STALE_READING_AGE
 from remote_agents.domain.models import SessionId, SessionState
@@ -152,9 +158,11 @@ class LimitLiftWatcher:
     is on and the stop belongs to the session's current life. Then the order changes on
     purpose. The nudge goes only once the stop's line is settled -- sent, and the chat not held
     -- and its outcome is recorded *before* the line is touched, because a nudge typed twice is
-    worse than a line left standing. The send and the record run shielded from the pass's
-    bound. A line call that raises or answers "not done" after the record leaves the line as
-    it was, logged, and is not tried again.
+    worse than a line left standing. A `NUDGING` intent is written just before the typing and
+    replaced by the outcome; an intent a later process finds is given up as unconfirmed, never
+    typed again. The switch is read again, the intent written, the text typed, the outcome
+    recorded and the line updated as one step shielded from the pass's bound. A line that does
+    not land is retried each pass until it does (in memory: a restart leaves it as it was).
 
     **Without a nudge: retire, then record -- and only when the surface says the stop is done
     with.** Retiring a
@@ -180,20 +188,28 @@ class LimitLiftWatcher:
         self._retire = retire
         self._resume = resume
         self._now = now
+        #: Stops whose nudge step is running, possibly past a cancelled pass.
+        self._in_flight: set[tuple[str, str]] = set()
+        #: Lines a recorded nudge could not bring into line yet, retried each pass. In memory:
+        #: a restart loses them, and the line stays as it was.
+        self._owed: dict[tuple[str, str], tuple[LimitStop, NotResumed | None]] = {}
 
     async def pass_once(self) -> int:
         """How many stops this pass found lifted and acted on."""
+        acted = await self._settle_interrupted()
+        await self._retry_owed_lines()
         running = await self._store.list((SessionState.RUNNING,))
         profiles = {str(record.session_id): str(record.profile_id) for record in running}
         if not profiles:
-            return 0
+            return acted
         stops = await self._outcomes.unresolved(tuple(profiles))
         if not stops:
-            return 0
+            return acted
         readings = await self._readings()
         now = self._now()
-        acted = 0
         for stop in stops:
+            if _key(stop) in self._in_flight:
+                continue
             reading = readings.get(profiles[stop.session_id])
             if not lifted(stop.hit, stop.stopped_at, reading, now=now):
                 continue
@@ -242,56 +258,119 @@ class LimitLiftWatcher:
         except Exception:
             _LOG.warning("could not read when a session was last nudged; it is asked next pass")
             return 0
-        if (
-            last is not None
-            and last <= stop.stopped_at < last + LOOP_GUARD
-            and not scheduled(stop.hit, now=now)
-        ):
-            # Stopped again straight after a nudge: only its own reset lifts it.
-            return 0
+        if last is not None and last <= stop.stopped_at < last + LOOP_GUARD:
+            # Stopped again straight after a nudge: only its own published reset lifts it, and
+            # only one still ahead when the nudge went -- a reset already past is the false
+            # lift repeating.
+            reset = stop.hit.resets_at
+            if not (scheduled(stop.hit, now=now) and reset is not None and reset > last):
+                return 0
         try:
             if not await resume.settled(stop):
                 return 0
         except Exception:
             _LOG.warning("could not ask whether a stop's line is settled; it is tried again")
             return 0
-        # Shielded: the service bounds each pass, and a bound that fired between the typing and
-        # the record would leave a typed nudge unrecorded -- and the next pass would type it again.
-        verdict = await asyncio.shield(asyncio.ensure_future(self._decide(stop, now=now)))
-        if verdict is None or verdict.outcome is None:
-            return 0
-        if verdict.outcome == LIFTED:
-            return int(await self._retire_and_record(stop, now=now))
-        try:
-            if verdict.reason is None:
-                done = await self._retire(stop)
-            else:
-                done = await resume.amend(stop, verdict.reason.value)
-        except Exception:
-            done = False
-        if not done:
-            _LOG.warning("a nudged stop's line could not be updated; it stays as it was")
-        return 1
+        # One shielded step from the switch's last read to the line: the service bounds each
+        # pass, and a bound firing between the typing and the record -- or between the record
+        # and the line -- would leave the nudge unrecorded or the line stale.
+        key = _key(stop)
+        self._in_flight.add(key)
+        task = asyncio.ensure_future(self._act(stop, now=now))
+        task.add_done_callback(lambda _done: self._in_flight.discard(key))
+        return await asyncio.shield(task)
 
-    async def _decide(self, stop: LimitStop, *, now: datetime) -> Nudge | None:
-        """Nudge and record as one step. `None` when the record failed and is owed next pass.
-
-        A final verdict is recorded here, before any line is touched; the resume step holds it
-        until the record lands, so a failed record is retried without a second send.
-        """
+    async def _act(self, stop: LimitStop, *, now: datetime) -> int:
+        """Read the switch again, write the intent, type, and finish -- or back out untyped."""
         resume = self._resume
         assert resume is not None
+        if not resume.holds(stop):
+            if not await resume.enabled():
+                return 0
+            try:
+                await self._outcomes.claim(stop, decided_at=now)
+            except Exception:
+                _LOG.warning("could not write a nudge's intent; nothing is typed this pass")
+                return 0
         verdict = await resume.nudge(stop)
         if verdict.outcome is None or verdict.outcome == LIFTED:
+            # Nothing was typed: take the intent back.
             resume.forget(stop)
-            return verdict
+            await self._release(stop)
+            if verdict.outcome is None:
+                return 0
+            return int(await self._retire_and_record(stop, now=now))
+        return await self._finish(stop, verdict, now=now)
+
+    async def _finish(self, stop: LimitStop, verdict: Nudge, *, now: datetime) -> int:
+        """Record the verdict over the intent, then bring the line into line with it."""
+        resume = self._resume
+        assert resume is not None and verdict.outcome is not None
         try:
             await self._outcomes.record(stop, verdict.outcome, decided_at=now)
         except Exception:
+            # The verdict stays held and the intent stays written, so the next pass records it
+            # (`_settle_interrupted`) without typing again.
             _LOG.exception("a nudge's outcome could not be recorded; it is recorded next pass")
-            return None
+            return 0
         resume.forget(stop)
-        return verdict
+        if not await self._update_line(stop, verdict.reason):
+            self._owed[_key(stop)] = (stop, verdict.reason)
+        return 1
+
+    async def _settle_interrupted(self) -> int:
+        """Finish every intent this process is not already acting on.
+
+        One this process holds a verdict for is a record that failed: it is recorded now. One
+        it holds nothing for was written by a process that stopped between the typing and the
+        record, so whether the text landed is unknown -- it is given up as unconfirmed, and
+        never typed again.
+        """
+        if self._resume is None:
+            return 0
+        try:
+            interrupted = await self._outcomes.interrupted()
+        except Exception:
+            _LOG.warning("could not read the nudges left unfinished; they are read next pass")
+            return 0
+        now = self._now()
+        settled = 0
+        for stop in interrupted:
+            if _key(stop) in self._in_flight:
+                continue
+            held = self._resume.held(stop)
+            verdict = held or Nudge(not_resumed(NotResumed.UNCONFIRMED), NotResumed.UNCONFIRMED)
+            settled += await self._finish(stop, verdict, now=now)
+        return settled
+
+    async def _retry_owed_lines(self) -> None:
+        """Bring each line a recorded nudge left stale into line, until it lands."""
+        for key, (stop, reason) in list(self._owed.items()):
+            if await self._update_line(stop, reason):
+                self._owed.pop(key, None)
+
+    async def _update_line(self, stop: LimitStop, reason: NotResumed | None) -> bool:
+        """Retire a resumed stop's line, or amend a not-resumed one's. Whether it landed."""
+        resume = self._resume
+        assert resume is not None
+        try:
+            if reason is None:
+                done = await self._retire(stop)
+            else:
+                done = await resume.amend(stop, reason.value)
+        except Exception:
+            done = False
+        if not done:
+            _LOG.warning("a nudged stop's line could not be updated yet; it is tried again")
+        return done
+
+    async def _release(self, stop: LimitStop) -> None:
+        try:
+            await self._outcomes.release(stop)
+        except Exception:
+            # Left written, the intent reads as interrupted next pass and is given up as
+            # unconfirmed: a lost nudge, never a doubled one.
+            _LOG.warning("could not take back a nudge's intent")
 
     async def _readings(self) -> dict[str, AgentLimits]:
         """Each provider's reading, or none: a schedule needs no reading to lift a stop.
@@ -305,3 +384,7 @@ class LimitLiftWatcher:
         except Exception:
             _LOG.warning("the limits read failed; this pass lifts stops on their schedule only")
             return {}
+
+
+def _key(stop: LimitStop) -> tuple[str, str]:
+    return (stop.session_id, stop.stamp)
