@@ -200,7 +200,11 @@ def test_a_real_cursor_agent_stop_gets_through_its_command_menu(tmp_path: Path) 
             if not answered and "Trust this workspace" in screen:
                 _tmux(socket, "send-keys", "-t", pane_id, "a")
                 answered = True
-            if "Plan, search, build anything" in screen:
+            # The whole idle screen, not just its placeholder: build 2026.09.28 draws the
+            # status line about 0.2 s after the composer (measured 2026-09-29), and a stop sent
+            # into that gap rightly refuses a composer it cannot read.
+            styled = _tmux(socket, "capture-pane", "-p", "-e", "-t", pane_id).stdout
+            if classify(styled, profile_composers()["cursor-agent"]) is PaneState.IDLE:
                 break
             time.sleep(0.5)
         else:
