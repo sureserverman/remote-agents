@@ -792,7 +792,7 @@ def _with_limits_source(context: TuiContext, port: object | None) -> TuiContext:
     return replace(context, backend=replace(context.backend, claude_limits_source=port))
 
 
-async def test_the_screen_draws_five_rows_in_the_declared_order(tmp_path: Path) -> None:
+async def test_the_screen_draws_six_rows_in_the_declared_order(tmp_path: Path) -> None:
     """The set of rows swept from the screen's own table, so the count is the declaration and
     not a numeral in a docstring that the list grows past."""
     from remote_agents.adapters.tui.screens import settings as module
@@ -807,9 +807,9 @@ async def test_the_screen_draws_five_rows_in_the_declared_order(tmp_path: Path) 
         choices = app.screen.query_one("#choices", OptionList)
         drawn = [choices.get_option_at_index(i).id for i in range(choices.option_count)]
 
-        assert len(module.SETTINGS_ROWS) == 5
+        assert len(module.SETTINGS_ROWS) == 6
         assert drawn == list(module.SETTINGS_ROWS)
-        assert len(set(drawn)) == 5, "every row needs a stable id of its own"
+        assert len(set(drawn)) == 6, "every row needs a stable id of its own"
 
 
 async def test_the_limits_source_row_reads_the_hop_on_a_default_config(tmp_path: Path) -> None:
@@ -900,3 +900,93 @@ def test_the_limits_source_is_read_as_a_declared_backend_field_not_probed() -> N
     declared = {field.name for field in fields(Backend)}
     assert "claude_limits_source" in declared
     assert Backend(sessions=object(), projects=object()).claude_limits_source is None
+
+
+# --- The resume-after-limit row ---------------------------------------------------------------
+
+
+class FakeResumeSetting:
+    """A scripted `ports.resume_setting.ResumeSettingPort`; `refuse` drops the write silently."""
+
+    def __init__(self, value: bool = True, *, refuse: bool = False) -> None:
+        self.value = value
+        self.writes: list[bool] = []
+        self.refuse = refuse
+
+    async def read(self) -> bool:
+        return self.value
+
+    async def write(self, value: bool) -> None:
+        self.writes.append(value)
+        if not self.refuse:
+            self.value = value
+
+
+def _with_resume(context: TuiContext, port: object | None) -> TuiContext:
+    return replace(context, backend=replace(context.backend, resume_after_limit=port))
+
+
+async def test_the_resume_row_reads_on_by_default_and_a_press_flips_and_returns(
+    tmp_path: Path,
+) -> None:
+    from remote_agents.application.resume_setting import RESUME_LABELS, RESUME_TITLE
+
+    port = FakeResumeSetting()
+    context = _with_resume(_context(preferences_path=tmp_path / "preferences.json"), port)
+    app = RemoteAgentsTui(context)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await _open_settings(app, pilot)
+        assert _row(app, RESUME_TITLE) == f"{RESUME_TITLE} · {RESUME_LABELS[True]}"
+
+        await _press_row(app, pilot, RESUME_TITLE)
+        assert port.writes == [False]
+        assert _row(app, RESUME_TITLE) == f"{RESUME_TITLE} · {RESUME_LABELS[False]}"
+
+        await _press_row(app, pilot, RESUME_TITLE)
+        assert port.writes == [False, True]
+        assert _row(app, RESUME_TITLE).endswith(RESUME_LABELS[True])
+
+
+async def test_a_refused_resume_write_reads_as_a_refusal(tmp_path: Path) -> None:
+    from remote_agents.application.resume_setting import RESUME_LABELS, RESUME_TITLE
+
+    port = FakeResumeSetting(refuse=True)
+    context = _with_resume(_context(preferences_path=tmp_path / "preferences.json"), port)
+    app = RemoteAgentsTui(context)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await _open_settings(app, pilot)
+
+        await _press_row(app, pilot, RESUME_TITLE)
+
+        assert port.writes == [False]
+        assert _row(app, RESUME_TITLE).endswith(RESUME_LABELS[True])
+        said = " ".join(announcements(app))
+        assert RESUME_TITLE in said and "still" in said.lower(), said
+
+
+async def test_an_unwired_resume_row_says_unavailable_and_its_press_does_nothing(
+    tmp_path: Path,
+) -> None:
+    from remote_agents.application.remote_control_default import UNAVAILABLE
+    from remote_agents.application.resume_setting import RESUME_TITLE
+
+    context = _with_resume(_context(preferences_path=tmp_path / "preferences.json"), None)
+    app = RemoteAgentsTui(context)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await _open_settings(app, pilot)
+
+        assert _row(app, RESUME_TITLE).endswith(UNAVAILABLE)
+        await _press_row(app, pilot, RESUME_TITLE)
+        assert _row(app, RESUME_TITLE).endswith(UNAVAILABLE)
+
+
+def test_the_resume_switch_is_a_declared_backend_field() -> None:
+    from dataclasses import fields
+
+    from remote_agents.application.backend import Backend
+
+    assert "resume_after_limit" in {field.name for field in fields(Backend)}
+    assert Backend(sessions=object(), projects=object()).resume_after_limit is None

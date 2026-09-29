@@ -522,10 +522,14 @@ def test_the_backend_capability_set_is_read_from_the_dataclass() -> None:
     `None`, never discovered by asking whether the object has a `write` — which matters more
     here than elsewhere, since the thing behind it decides whether this service reads a
     credential and calls out (DEC-087/DEC-088).
+
+    **Seventeen since `resume_after_limit` joined them** (limit-lifecycle sub-plan 02,
+    2026-09-29), for `claude_limits_source`'s reason: both surfaces draw a Settings row for
+    it, and a host that wired no switch says *unavailable* from a field that is `None`.
     """
     fields = _backend_fields()
-    assert len(fields) == 16, (
-        f"`Backend` now declares {len(fields)} fields, not 16. That is fine — but it widens "
+    assert len(fields) == 17, (
+        f"`Backend` now declares {len(fields)} fields, not 17. That is fine — but it widens "
         "what Rule 2 forbids probing for, so confirm the new field is a capability an adapter "
         "should read as a declared field rather than discover."
     )

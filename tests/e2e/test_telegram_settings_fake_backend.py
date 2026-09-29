@@ -239,3 +239,30 @@ async def test_the_settings_screen_marks_no_tab_on_the_navigation_bar() -> None:
 
     assert _rows(chat.bot_messages[0])[-1] == ["Sessions", "Launch"]
     assert all("•" not in label for label in _labels(chat.bot_messages[0]))
+
+
+async def test_the_owner_switches_resume_after_limit_off_and_back_on_through_the_chat(
+    tmp_path,
+) -> None:
+    """Through the real config writer: the press lands in `config.toml`, not in a fake."""
+    from remote_agents.application.resume_setting import RESUME_LABELS, RESUME_TITLE
+    from remote_agents.composition.limits_source import ConfigResumeSetting
+    from remote_agents.config import read_resume_after_limit
+
+    config = tmp_path / "config.toml"
+    config.write_text('[paths]\ndev_root = "/tmp"\n\n[limits]\nmax_label_length = 40\n')
+    boundary = _boundary(None, None)
+    boundary.backend = replace(boundary.backend, resume_after_limit=ConfigResumeSetting(config))
+    chat = FakeChat()
+
+    await boundary.settings_command(chat.message_update("/settings"), None)
+    anchor = chat.bot_messages[0].message_id
+    assert f"{RESUME_TITLE}: {RESUME_LABELS[True]}" in _labels(chat.messages[anchor])
+
+    await boundary.callback(chat.press(_row(chat.messages[anchor], RESUME_TITLE)), None)
+    assert read_resume_after_limit(config) is False
+    assert f"{RESUME_TITLE}: {RESUME_LABELS[False]}" in _labels(chat.messages[anchor])
+
+    await boundary.callback(chat.press(_row(chat.messages[anchor], RESUME_TITLE)), None)
+    assert read_resume_after_limit(config) is True
+    assert len(chat.bot_messages) == 1, chat.transcript()

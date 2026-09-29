@@ -106,6 +106,7 @@ from remote_agents.application.remote_control_default import (
     remote_control_default_line,
 )
 from remote_agents.application.resume_flow import RESUME_PAGE_SIZE, resume_capable
+from remote_agents.application.resume_setting import RESUME_LABELS, RESUME_TITLE
 from remote_agents.application.session_actions import (
     ACTION_LABELS,
     CLEANUP,
@@ -1351,6 +1352,7 @@ class PrivateBotBoundary:
             self.backend.claude_remote_control_default is not None
             or self.backend.host_remote_control is not None
             or self.backend.claude_limits_source is not None
+            or self.backend.resume_after_limit is not None
         ):
             # Conditional on a row being wired, unlike the `/settings` menu entry, and the two
             # rules are different on purpose: the menu is a door that always has something
@@ -1648,6 +1650,8 @@ class PrivateBotBoundary:
             return await self._settings_claude_reply(token, message_id)
         if action == "settings.limits_source":
             return await self._settings_limits_source_reply(token, message_id)
+        if action == "settings.resume_after_limit":
+            return await self._settings_resume_reply(token, message_id)
         # `host.remote.pair` is deliberately absent: it is handled before this dispatcher
         # runs, because its message must be *sent* rather than edited into the live view.
         if action == "session.trust":
@@ -2999,6 +3003,7 @@ class PrivateBotBoundary:
         claude_default: RemoteControlDefault | None = None,
         *,
         limits_source: str | None = None,
+        resume: bool | None = None,
     ) -> RenderedMessage:
         """Three rows about this machine, each reading its own source.
 
@@ -3106,6 +3111,21 @@ class PrivateBotBoundary:
                     ),
                 )
             )
+        switch = self.backend.resume_after_limit
+        if switch is None:
+            lines += ["", f"{escape(RESUME_TITLE)} is unavailable."]
+        else:
+            # The caller's read-back where it has one, for the limits-source row's reason.
+            chosen_resume = await switch.read() if resume is None else resume
+            rows.append(
+                (
+                    Button(
+                        f"{_LIMITS_EMOJI} {RESUME_TITLE}: {RESUME_LABELS[chosen_resume]}",
+                        # `mutation=True`: a redelivered callback must not flip it back.
+                        self._callback("settings.resume_after_limit", "service", mutation=True),
+                    ),
+                )
+            )
         return self._message(
             "\n".join(lines),
             tuple(rows),
@@ -3151,6 +3171,37 @@ class PrivateBotBoundary:
             self._message(
                 f"{escape(LIMITS_SOURCE_TITLE)} could not be changed; it is still "
                 f"<code>{escape(LIMITS_SOURCE_LABELS.get(landed, landed))}</code>.",
+                screen.keyboard,
+            )
+        )
+
+    async def _settings_resume_reply(self, token: str, message_id: int) -> dict[str, object]:
+        """Flip the resume switch by one press, then draw what the file says.
+
+        `_settings_limits_source_reply`'s shape: flip from a fresh read rather than from the
+        drawn value (the terminal writes the same file), and detect a refused write by the
+        read-back, since the port cannot raise to say it declined.
+        """
+        switch = self.backend.resume_after_limit
+        if switch is None:
+            return _reply_arguments(self._message(f"{escape(RESUME_TITLE)} is unavailable."))
+        if not self.callbacks.claim_mutation(
+            token,
+            owner_id=self.owner_user_id,
+            chat_id=self.owner_chat_id,
+            message_id=message_id,
+        ):
+            return _reply_arguments(self._message("That action has already run."))
+        intended = not await switch.read()
+        await switch.write(intended)
+        landed = await switch.read()
+        screen = await self._settings_screen(resume=landed)
+        if landed == intended:
+            return _reply_arguments(screen)
+        return _reply_arguments(
+            self._message(
+                f"{escape(RESUME_TITLE)} could not be changed; it is still "
+                f"<code>{escape(RESUME_LABELS[landed])}</code>.",
                 screen.keyboard,
             )
         )

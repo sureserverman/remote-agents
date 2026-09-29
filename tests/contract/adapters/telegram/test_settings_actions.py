@@ -679,3 +679,111 @@ async def test_help_says_the_screen_holds_more_than_remote_control() -> None:
 
     said = chat.bot_messages[0].text
     assert "limits" in said.lower(), said
+
+
+# --- The resume-after-limit row ---------------------------------------------------------------
+
+
+class FakeResumeSetting:
+    """A scripted `ports.resume_setting.ResumeSettingPort`; `refuse` drops the write silently."""
+
+    def __init__(self, value: bool = True, *, refuse: bool = False) -> None:
+        self.value = value
+        self.calls: list[str] = []
+        self.refuse = refuse
+
+    async def read(self) -> bool:
+        self.calls.append("read")
+        return self.value
+
+    async def write(self, value: bool) -> None:
+        self.calls.append(f"write:{value}")
+        if not self.refuse:
+            self.value = value
+
+
+def _bot_with_resume(setting: object | None) -> PrivateBotBoundary:
+    bot = _bot(None, None)
+    bot.backend = replace(bot.backend, resume_after_limit=setting)
+    return bot
+
+
+async def _press_resume(bot: PrivateBotBoundary, screen) -> dict[str, object]:
+    from remote_agents.application.resume_setting import RESUME_TITLE
+
+    token = _token(screen, _row_label(screen, RESUME_TITLE))
+    bot.callbacks.bind_pending(CHAT, 1)
+    state = bot.callbacks.resolve(token, owner_id=OWNER, chat_id=CHAT, message_id=1)
+    assert state is not None and state.action == "settings.resume_after_limit"
+    return await bot._reply_for(state.action, state.entity_id, token=token, message_id=1)
+
+
+async def test_the_resume_row_reads_on_by_default() -> None:
+    from remote_agents.application.resume_setting import RESUME_LABELS, RESUME_TITLE
+
+    setting = FakeResumeSetting()
+
+    screen = await _bot_with_resume(setting)._settings_screen()
+
+    assert _row_label(screen, RESUME_TITLE) == f"{RESUME_TITLE}: {RESUME_LABELS[True]}"
+    assert setting.calls == ["read"], "drawing the screen reads; it must not write"
+
+
+async def test_pressing_the_resume_row_flips_it_and_reads_it_back() -> None:
+    from remote_agents.application.resume_setting import RESUME_LABELS, RESUME_TITLE
+
+    setting = FakeResumeSetting(True)
+    bot = _bot_with_resume(setting)
+    screen = await bot._settings_screen()
+
+    result = await _press_resume(bot, screen)
+
+    assert setting.value is False
+    assert setting.calls == ["read", "read", "write:False", "read"], setting.calls
+    labels = [
+        unmarked(unpadded(button.text))
+        for row in result["reply_markup"].inline_keyboard
+        for button in row
+    ]
+    assert f"{RESUME_TITLE}: {RESUME_LABELS[False]}" in labels
+
+
+async def test_a_redelivered_resume_callback_does_not_flip_twice() -> None:
+    from remote_agents.application.resume_setting import RESUME_TITLE
+
+    setting = FakeResumeSetting(True)
+    bot = _bot_with_resume(setting)
+    screen = await bot._settings_screen()
+    token = _token(screen, _row_label(screen, RESUME_TITLE))
+    bot.callbacks.bind_pending(CHAT, 1)
+    state = bot.callbacks.resolve(token, owner_id=OWNER, chat_id=CHAT, message_id=1)
+    assert state is not None
+
+    await bot._reply_for(state.action, state.entity_id, token=token, message_id=1)
+    again = await bot._reply_for(state.action, state.entity_id, token=token, message_id=1)
+
+    assert setting.value is False, "the first press landed and the retry did not undo it"
+    assert "already run" in str(again["text"]), again["text"]
+
+
+async def test_a_refused_resume_write_says_so() -> None:
+    from remote_agents.application.resume_setting import RESUME_LABELS, RESUME_TITLE
+
+    setting = FakeResumeSetting(True, refuse=True)
+    bot = _bot_with_resume(setting)
+    screen = await bot._settings_screen()
+
+    result = await _press_resume(bot, screen)
+
+    said = str(result["text"])
+    assert RESUME_TITLE in said and "still" in said, said
+    assert RESUME_LABELS[True] in said, said
+
+
+async def test_a_composition_with_no_resume_setting_says_so_rather_than_hiding_the_row() -> None:
+    from remote_agents.application.resume_setting import RESUME_TITLE
+
+    screen = await _bot_with_resume(None)._settings_screen()
+
+    assert f"{RESUME_TITLE} is unavailable." in screen.text, screen.text
+    assert not any(label.startswith(RESUME_TITLE) for label in _labels(screen))

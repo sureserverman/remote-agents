@@ -226,6 +226,14 @@ class Backend:
     would pull its import into every test double that builds a partial backend.
     """
 
+    resume_after_limit: object | None = None
+    """Whether a limit-stopped session is sent one nudge after its lift, a `ports.resume_setting`.
+
+    `claude_limits_source`'s sibling: a switch in the operator's `config.toml` that decides what
+    this service does, on by default. Optional for the same reason, and its absence renders
+    unavailable from `is None` (DEC-061/067). Typed `object` for the reason `sessions` is.
+    """
+
     state_events: object | None = None
     """The store-change source (`application.store_watch.StoreWatch`), a `ports.state_events`.
 

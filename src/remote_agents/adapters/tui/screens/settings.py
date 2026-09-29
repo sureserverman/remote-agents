@@ -106,6 +106,7 @@ from remote_agents.application.remote_control_default import (
     remote_control_default_line,
     remote_control_default_word,
 )
+from remote_agents.application.resume_setting import RESUME_LABELS, RESUME_TITLE
 from remote_agents.domain.remote_control import HostRemoteControlStatus, RemoteControlDefault
 
 _LOG = logging.getLogger(__name__)
@@ -116,6 +117,7 @@ _LOG = logging.getLogger(__name__)
 _CLAUDE_ROW = "settings:claude-remote-control-default"
 _CODEX_ROW = "settings:codex-remote-control"
 _LIMITS_SOURCE_ROW = "settings:claude-limits-source"
+_RESUME_ROW = "settings:resume-after-limit"
 _THEME_ROW = "settings:theme"
 _ORDER_ROW = "settings:project-order"
 
@@ -126,7 +128,14 @@ _ORDER_ROW = "settings:project-order"
 #: numeral written once is a numeral the list grows past in silence. The tests sweep this
 #: instead of counting a render, so a row added without being declared here fails rather than
 #: quietly changing what "the third row" means to every test that walks the cursor.
-SETTINGS_ROWS = (_CLAUDE_ROW, _CODEX_ROW, _LIMITS_SOURCE_ROW, _THEME_ROW, _ORDER_ROW)
+SETTINGS_ROWS = (
+    _CLAUDE_ROW,
+    _CODEX_ROW,
+    _LIMITS_SOURCE_ROW,
+    _RESUME_ROW,
+    _THEME_ROW,
+    _ORDER_ROW,
+)
 
 
 def _limits_source_line(value: str | None) -> str:
@@ -149,6 +158,13 @@ def _limits_source_line(value: str | None) -> str:
     if value is None:
         return f"{LIMITS_SOURCE_TITLE} · {UNAVAILABLE}"
     return f"{LIMITS_SOURCE_TITLE} · {LIMITS_SOURCE_LABELS.get(value, value)}"
+
+
+def _resume_line(value: bool | None) -> str:
+    """The resume row, or *unavailable* for a composition that wired no switch."""
+    if value is None:
+        return f"{RESUME_TITLE} · {UNAVAILABLE}"
+    return f"{RESUME_TITLE} · {RESUME_LABELS[value]}"
 
 
 SETTINGS_INSTRUCTION = "Press enter on a row to change it."
@@ -194,6 +210,8 @@ class SettingsScreen(ChoiceScreen):
         #: `None` rather than the default string, because "this host cannot choose" and "this
         #: host chose the hop" are different answers and the row must not render them alike.
         self._limits_source: str | None = None
+        #: The stored resume switch, or `None` for a composition that wired none.
+        self._resume: bool | None = None
         #: The two terminal preferences, as last read. Plain strings rather than `None`-able
         #: readings: `read_theme` and `read_project_order` are total and always answer one of
         #: the values this surface knows, so there is no absence for these two rows to render.
@@ -267,6 +285,14 @@ class SettingsScreen(ChoiceScreen):
                 self._limits_source = await source.read()
             except Exception:
                 _LOG.exception("the Claude limits source could not be read")
+        resume = self.services.backend.resume_after_limit
+        if resume is None:
+            self._resume = None
+        else:
+            try:
+                self._resume = await resume.read()
+            except Exception:
+                _LOG.exception("the resume switch could not be read")
         self._read_preferences()
 
     def _draw_settings_rows(self) -> None:
@@ -287,6 +313,7 @@ class SettingsScreen(ChoiceScreen):
                 (_CLAUDE_ROW, remote_control_default_line(self._claude_default)),
                 (_CODEX_ROW, host_remote_control_line(self._host_status)),
                 (_LIMITS_SOURCE_ROW, _limits_source_line(self._limits_source)),
+                (_RESUME_ROW, _resume_line(self._resume)),
                 (_THEME_ROW, f"{THEME_TITLE} · {THEME_LABELS.get(self._theme, self._theme)}"),
                 (
                     _ORDER_ROW,
@@ -329,6 +356,9 @@ class SettingsScreen(ChoiceScreen):
             return
         if key == _LIMITS_SOURCE_ROW:
             await self.advance_limits_source()
+            return
+        if key == _RESUME_ROW:
+            await self.flip_resume()
             return
         if key == _THEME_ROW:
             await self.advance_theme()
@@ -388,6 +418,38 @@ class SettingsScreen(ChoiceScreen):
                 self.set_status(f"{LIMITS_SOURCE_TITLE} is now {word}.")
             else:
                 self.announce(f"{LIMITS_SOURCE_TITLE} could not be changed; it is still {word}.")
+
+    async def flip_resume(self) -> None:
+        """One press: read, flip, write, read back, say what it now is.
+
+        `advance_limits_source`'s shape: the press flips from a fresh read rather than from the
+        drawn value (the bot writes the same file), and a refused write is detected by the
+        read-back, because the port cannot raise to say it declined.
+        """
+        port = self.services.backend.resume_after_limit
+        if port is None or self.tui.busy:
+            return
+        async with self.holding_the_guard():
+            try:
+                async with self.awaiting(f"Changing {RESUME_TITLE}…"):
+                    intended = not await port.read()
+                    await port.write(intended)
+                    self._resume = await port.read()
+            except Exception as error:
+                _LOG.exception("the resume switch could not be changed")
+                self.announce(
+                    f"{RESUME_TITLE} could not be confirmed: {error} "
+                    "Reopen Settings to see what it says."
+                )
+                return
+            if not self.showing:
+                return
+            self._draw_settings_rows()
+            word = RESUME_LABELS[self._resume]
+            if self._resume == intended:
+                self.set_status(f"{RESUME_TITLE} is now {word}.")
+            else:
+                self.announce(f"{RESUME_TITLE} could not be changed; it is still {word}.")
 
     async def advance_theme(self) -> None:
         """One press: move to the other relay theme, and say whether it will be remembered.
