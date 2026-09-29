@@ -463,3 +463,12 @@ def test_every_declared_end_pattern_is_backed_by_a_captured_screen() -> None:
             assert any(
                 re.search(pattern, line) for screen in screens for line in screen.splitlines()
             ), f"{agent}: no captured screen draws {pattern!r}"
+
+
+def test_codex_0159_s_warning_status_line_does_not_hide_the_draft() -> None:
+    """0.159.0 draws `⚠ 1 warning · f2 to view` right-aligned under the model line while a draft
+    is in the composer -- the hint line gone, the warning left. Measured 2026-09-29, with the
+    account's weekly-limit warning raised; every Codex relay read DRAFT_NOT_SEEN until then."""
+    screen = (_PANES / "codex" / "composed_0159_warning.txt").read_text(encoding="utf-8")
+
+    assert composer_draft(screen, _descriptor("codex")) == "hello draft"

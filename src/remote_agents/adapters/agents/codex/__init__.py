@@ -67,9 +67,12 @@ def descriptor() -> ProviderDescriptor:
             # 0.158.0 draws a hint line under the model line while the composer is empty
             # (`← for agents · ? for shortcuts`, `idle_0158.txt`). Without it here the model line
             # read as a draft, every idle pane as COMPOSING, and every stop was refused.
+            # 0.159.0 keeps a right-aligned `⚠ 1 warning · f2 to view` there when the hint
+            # line goes -- while a draft is in the composer (`composed_0159_warning.txt`) --
+            # and every Codex draft read as not seen until it was allowed.
             composer=(
                 r"^› (?P<draft>[^\n]*(?:\n  [^\n]*)*?)\n  [^\n]* · [^\n]*"
-                r"(?:\n  [^\n]*\? for shortcuts[^\n]*)?\Z"
+                r"(?:\n  [^\n]*\? for shortcuts[^\n]*|\n {2,}⚠[^\n]*)?\Z"
             ),
             # Shell mode puts `!` where `›` was (`composed_shell_mode.txt`); 0.158.0 moved its
             # `Shell mode` label to a line of its own (`composed_shell_mode_0158.txt`).
