@@ -182,6 +182,35 @@ def test_the_service_composition_gives_the_bot_a_durable_callback_store(
     assert isinstance(composition.boundary.standing, SQLiteStandingNotificationStore)
 
 
+def test_the_service_composition_wires_the_limit_stop_watch(tmp_path, monkeypatch) -> None:
+    """The lift pass exists only if the bot's composition builds it; a dropped keyword would
+    leave every limit line standing until later news, with the suite green (sub-plan 2)."""
+    from remote_agents.adapters.sqlite.database import open_database
+    from remote_agents.adapters.sqlite.migrations import MIGRATIONS
+    from remote_agents.application.limit_lifts import LimitLiftWatcher
+    from remote_agents.bootstrap import _private_boundary
+    from remote_agents.config import AppConfig, load_secrets
+    from remote_agents.production import ProductionPaths
+
+    monkeypatch.setenv("REMOTE_AGENTS_TELEGRAM_BOT_TOKEN", "test-token")
+    monkeypatch.setenv("REMOTE_AGENTS_OWNER_USER_ID", "7")
+    monkeypatch.setenv("REMOTE_AGENTS_OWNER_CHAT_ID", "11")
+    home = tmp_path / "home"
+    paths = ProductionPaths.for_home(home)
+    paths.ensure_directories()
+    (home / "dev").mkdir()
+    config = AppConfig(home / "dev", home / "registry.yaml", paths.database_path, 40, 10, 30)
+    connection = open_database(paths.database_path, migrations=MIGRATIONS)
+    try:
+        composition = _private_boundary(
+            config, connection, paths, load_secrets(), ui_connection=_ui(paths)
+        )
+    finally:
+        connection.close()
+
+    assert isinstance(composition.limit_lift_watcher, LimitLiftWatcher)
+
+
 def test_the_service_composition_lets_the_bot_step_the_console_aside(tmp_path, monkeypatch) -> None:
     """A stop from the phone must move the console *before* it destroys the pane.
 

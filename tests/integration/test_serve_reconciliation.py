@@ -850,3 +850,66 @@ async def test_the_limits_watch_is_cancelled_with_the_other_periodic_tasks(
 
     await asyncio.sleep(0)
     assert len(asyncio.all_tasks()) <= before, "a periodic task outlived the serving loop"
+
+
+async def test_the_limit_stop_watch_survives_a_pass_that_raises(tmp_path: Path) -> None:
+    """The fifth loop on the four's terms: a pass that raises costs one tick (sub-plan 2)."""
+
+    class _Exploding:
+        passes = 0
+
+        async def pass_once(self) -> int:
+            _Exploding.passes += 1
+            raise RuntimeError("the outcome store is locked")
+
+    connection = open_database(tmp_path / "sessions.sqlite3")
+    try:
+        composition = ServiceComposition(
+            build_private_bot(7, 11),
+            StubTerminal(),
+            ReconciliationService(SQLiteSessionStore(connection)),
+            limit_lift_watcher=_Exploding(),  # type: ignore[arg-type]
+        )
+
+        async def poll(secrets: TelegramSecrets, boundary: PrivateBotBoundary) -> None:
+            await asyncio.sleep(0.15)
+
+        await _serve_with_reconciliation(_SECRETS, composition, poll, 3600, limit_stop_interval=0)
+    finally:
+        connection.close()
+
+    assert _Exploding.passes > 1, f"the watch stopped after its first failure ({_Exploding.passes})"
+
+
+async def test_the_limit_stop_watch_is_cancelled_with_the_other_periodic_tasks(
+    tmp_path: Path,
+) -> None:
+    class _Idle:
+        passes = 0
+
+        async def pass_once(self) -> int:
+            _Idle.passes += 1
+            return 0
+
+    before = len(asyncio.all_tasks())
+    connection = open_database(tmp_path / "sessions.sqlite3")
+    try:
+        composition = ServiceComposition(
+            build_private_bot(7, 11),
+            StubTerminal(),
+            ReconciliationService(SQLiteSessionStore(connection)),
+            limit_lift_watcher=_Idle(),  # type: ignore[arg-type]
+        )
+
+        async def poll(secrets: TelegramSecrets, boundary: PrivateBotBoundary) -> None:
+            await asyncio.sleep(0.1)
+
+        await _serve_with_reconciliation(
+            _SECRETS, composition, poll, 3600, limit_stop_interval=0.01
+        )
+    finally:
+        connection.close()
+
+    await asyncio.sleep(0)
+    assert _Idle.passes >= 1, "the serve loop never scheduled the limit-stop watch"
+    assert len(asyncio.all_tasks()) <= before, "a periodic task outlived the serving loop"

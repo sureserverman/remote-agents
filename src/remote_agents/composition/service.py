@@ -190,6 +190,7 @@ async def _serve_with_reconciliation(
     activity_interval: float = _ACTIVITY_POLL_SECONDS,
     trust_interval: float = _TRUST_POLL_SECONDS,
     limits_interval: float = _LIMITS_POLL_SECONDS,
+    limit_stop_interval: float = _LIMIT_STOP_POLL_SECONDS,
 ) -> None:
     """Poll Telegram while keeping durable records agreeing with observed panes.
 
@@ -256,9 +257,7 @@ async def _serve_with_reconciliation(
         # Its own task and clock, on the same terms as the others: a pass that hangs or raises
         # costs this watch one tick and nothing else.
         periodic.append(
-            asyncio.create_task(
-                _watch_limit_stops_periodically(composition, _LIMIT_STOP_POLL_SECONDS)
-            )
+            asyncio.create_task(_watch_limit_stops_periodically(composition, limit_stop_interval))
         )
     # Not a fourth periodic task, and the difference is the point: the three above each poll
     # something on a clock of their own, while this *subscribes* to a watcher that already
