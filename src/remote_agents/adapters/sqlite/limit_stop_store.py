@@ -12,7 +12,7 @@ from datetime import UTC, datetime
 
 from remote_agents.adapters.sqlite.activity_store import _instant, _limit
 from remote_agents.ports.agent_activity import ActivityKind
-from remote_agents.ports.limit_stop_outcomes import LimitStop
+from remote_agents.ports.limit_stop_outcomes import RESUMED, LimitStop
 
 
 class SQLiteLimitStopStore:
@@ -68,3 +68,14 @@ class SQLiteLimitStopStore:
                     decided_at.astimezone(UTC).isoformat(),
                 ),
             )
+
+    async def last_resumed_at(self, session_id: str) -> datetime | None:
+        """The newest `RESUMED` decision for the session, read back as an instant."""
+        row = self._connection.execute(
+            """
+            SELECT MAX(decided_at) FROM limit_stop_outcomes
+            WHERE session_id = ? AND outcome = ?
+            """,
+            (session_id, RESUMED),
+        ).fetchone()
+        return None if row is None or row[0] is None else _instant(row[0])

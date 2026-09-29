@@ -49,6 +49,7 @@ from remote_agents.adapters.telegram.presenters import (
     render_message,
     uniform_keyboard,
 )
+from remote_agents.application.limit_resume import NUDGE, NotResumed
 from remote_agents.application.notification_policy import (
     REFUSALS_BEFORE_ABANDONING,
     SessionGroup,
@@ -146,6 +147,16 @@ Past 48 hours a bot may not delete its own message, and DEC-082's fallback is to
 say the thing is over. Only the kinds a lift retires are here; a kind without an entry is not
 retired by `retire_line` at all.
 """
+
+_NOT_RESUMED_WORDS: dict[str, str] = {
+    NotResumed.BUSY: f"didn't send “{NUDGE}”: it stayed busy for 30 minutes",
+    NotResumed.DIALOG: f"didn't send “{NUDGE}”: a dialog was open",
+    NotResumed.COMPOSING: f"didn't send “{NUDGE}”: its composer held a draft",
+    NotResumed.UNRECOGNISED: f"didn't send “{NUDGE}”: its screen wasn't recognised",
+    NotResumed.UNCONFIRMED: f"“{NUDGE}” was typed but not seen to land",
+}
+"""What a lifted stop's line says when the service's nudge was not sent (DEC-043: the
+application hands over the key, this surface words it). Appended to the retired headline."""
 
 _KIND_EMOJI: dict[ActivityKind, str] = {
     ActivityKind.NEEDS_ANSWER: "\u2753",  # ❓
@@ -1205,8 +1216,29 @@ class ActivityNotifier:
             self._remember(group.session_id, message_id, shown, token)
         return True, True, unsaid(group.activities, shown)
 
-    async def retire_line(
+    async def line_settled(
         self, session_id: str, kind: ActivityKind, *, observed_at: datetime
+    ) -> bool:
+        """Whether the stop's line is out of the queue and the chat free to be edited.
+
+        Asked before the service's nudge (limit-lifecycle sub-plan 2 Task 3.3): a stop still
+        waiting to be sent would reach the owner after the nudge, with nothing left to change
+        its line, and a held chat could not be told the nudge was not sent.
+        """
+        async with self._lock:
+            if self._bot is None or self._flood.held():
+                return False
+            return not any(
+                retired_with(queued, session_id, kind, observed_at) for queued in self._pending
+            )
+
+    async def retire_line(
+        self,
+        session_id: str,
+        kind: ActivityKind,
+        *,
+        observed_at: datetime,
+        note: str | None = None,
     ) -> bool:
         """Take one line whose news is over out of the session's standing message.
 
@@ -1227,6 +1259,12 @@ class ActivityNotifier:
         right now. **Raises** when it cannot act at all -- no bot yet -- and for a kind no lift
         retires.
 
+        **With a `note`** -- a `limit_resume.NotResumed` key -- the line is not dropped quietly:
+        the service lifted the stop and could not send its nudge, and the owner must still see
+        that. The line becomes "Limit lifted · didn't send …", below the lines that stay, or as
+        the whole message when it was the only line; that message is left alone afterwards, as
+        the fallback's is.
+
         Held under the delivery lock: both read the standing record, await Telegram, and write
         it back, and interleaved at an await one erased the other's news.
         """
@@ -1240,7 +1278,7 @@ class ActivityNotifier:
                 # The chat's ban is every sender's (DEC-049): no request is spent inside it.
                 return False
             try:
-                return await self._retire_line(session_id, kind, observed_at, headline)
+                return await self._retire_line(session_id, kind, observed_at, headline, note)
             except RetryAfter as refusal:
                 remaining = refusal.retry_after
                 self._flood.hold_off(
@@ -1251,9 +1289,20 @@ class ActivityNotifier:
                 return False
 
     async def _retire_line(
-        self, session_id: str, kind: ActivityKind, observed_at: datetime, headline: str
+        self,
+        session_id: str,
+        kind: ActivityKind,
+        observed_at: datetime,
+        headline: str,
+        note: str | None = None,
     ) -> bool:
         """`retire_line`'s work, under its lock and outside a flood hold."""
+        noted = (
+            None
+            if note is None
+            else f"{_KIND_EMOJI[kind]} <b>{headline}</b> · "
+            + _NOT_RESUMED_WORDS.get(note, _NOT_RESUMED_WORDS[NotResumed.UNRECOGNISED])
+        )
         if any(retired_with(queued, session_id, kind, observed_at) for queued in self._pending):
             return False
         standing = self._recall(session_id)
@@ -1273,6 +1322,10 @@ class ActivityNotifier:
             rendered = render_activity(
                 SessionGroup(session_id, kept), display=display, open_session=standing.token
             )
+            if noted is not None:
+                text = f"{rendered.text}\n{noted}"
+                if _utf16_units(text) <= MAX_TELEGRAM_TEXT_UNITS:
+                    rendered = _notification(text, standing.token)
             if await self._view.amend_apart(
                 self._bot,
                 standing.message_id,
@@ -1287,13 +1340,15 @@ class ActivityNotifier:
                 self._callbacks.prune_for_message(self._view.chat_id, standing.message_id)
                 self._standing.forget(self._view.chat_id, session_id)
             return True
-        if await self._view.discard(self._bot, standing.message_id):
+        if noted is None and await self._view.discard(self._bot, standing.message_id):
             self._callbacks.prune_for_message(self._view.chat_id, standing.message_id)
         else:
             name = _bounded_escaped(display or "", MAX_TELEGRAM_TEXT_UNITS - _RESERVED_NAME_UNITS)
             lifted = _notification(
                 "\n".join(
-                    line for line in (f"{_KIND_EMOJI[kind]} <b>{headline}</b>", name) if line
+                    line
+                    for line in (noted or f"{_KIND_EMOJI[kind]} <b>{headline}</b>", name)
+                    if line
                 ),
                 standing.token,
             )

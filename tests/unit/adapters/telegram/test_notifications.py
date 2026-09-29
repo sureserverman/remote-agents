@@ -2389,3 +2389,99 @@ async def test_retire_line_records_a_refusal_that_says_when_to_come_back() -> No
     )
     assert flood.held()
     assert notifier._recall(SESSION_A) is not None, "nothing was retired, so nothing is forgotten"
+
+
+# A lift whose nudge was not sent amends the line instead (limit-lifecycle sub-plan 2 Task 3.3)
+
+
+async def test_not_resumed_note_amends_the_only_line_rather_than_deleting_it() -> None:
+    from remote_agents.application.limit_resume import NUDGE
+
+    clock = _Clock()
+    notifier, view = _notifier(clock)
+    stop = _stop_at(clock)
+    await notifier.deliver([stop])
+    sent = len(view.sent)
+
+    assert await notifier.retire_line(
+        SESSION_A, ActivityKind.LIMIT_REACHED, observed_at=stop.observed_at, note="dialog"
+    )
+
+    assert view.deleted == [], "the owner must still see that nothing was sent"
+    assert len(view.sent) == sent, "an amendment, never an alert"
+    said = _showing(view)
+    assert said.startswith("⛽ <b>Limit lifted</b>"), said
+    assert f"didn't send “{NUDGE}”" in said and "a dialog was open" in said, said
+    assert "reply_markup" in view.written[-1]
+    assert notifier._recall(SESSION_A) is None, "the next report starts a new message"
+
+
+async def test_not_resumed_note_is_appended_below_the_lines_that_stay() -> None:
+    clock = _Clock()
+    notifier, view = _notifier(clock)
+    stop = _stop_at(clock, 1)
+    await notifier.deliver(
+        [_for(SESSION_A, ActivityKind.OUTPUT_LIMIT, "ceiling", clock.moment), stop]
+    )
+
+    assert await notifier.retire_line(
+        SESSION_A, ActivityKind.LIMIT_REACHED, observed_at=stop.observed_at, note="busy"
+    )
+
+    said = _showing(view)
+    assert "Hit its output ceiling" in said
+    assert "Hit a usage limit" not in said
+    assert "Limit lifted" in said and "stayed busy" in said, said
+    standing = notifier._recall(SESSION_A)
+    assert standing is not None
+    assert [a.kind for a in standing.activities] == [ActivityKind.OUTPUT_LIMIT]
+
+
+async def test_every_not_resumed_reason_reads_differently_and_no_key_leaks() -> None:
+    from remote_agents.application.limit_resume import NotResumed
+
+    shown: dict[str, str] = {}
+    for reason in NotResumed:
+        clock = _Clock()
+        notifier, view = _notifier(clock)
+        stop = _stop_at(clock)
+        await notifier.deliver([stop])
+        await notifier.retire_line(
+            SESSION_A, ActivityKind.LIMIT_REACHED, observed_at=stop.observed_at, note=reason.value
+        )
+        shown[reason.value] = _showing(view).split("\n", 1)[0]
+
+    assert len(set(shown.values())) == len(NotResumed), shown
+    assert not any("not_resumed" in line or "_" in line for line in shown.values()), shown
+
+
+async def test_line_settled_is_false_while_the_stop_waits_to_be_sent_or_the_chat_is_held() -> None:
+    clock = _Clock()
+    flood = FloodGate()
+    notifier, view = _notifier(clock, flood=flood)
+    stop = _stop_at(clock)
+    await notifier.deliver([stop])
+
+    assert await notifier.line_settled(
+        SESSION_A, ActivityKind.LIMIT_REACHED, observed_at=stop.observed_at
+    )
+    flood.hold_off(600)
+    assert not await notifier.line_settled(
+        SESSION_A, ActivityKind.LIMIT_REACHED, observed_at=stop.observed_at
+    )
+
+
+async def test_line_settled_is_false_for_a_stop_still_queued() -> None:
+    clock = _Clock()
+    notifier, view = _notifier(clock)
+
+    async def refused(_bot: object, _arguments: dict[str, object]) -> int:
+        raise RuntimeError("Telegram is unreachable")
+
+    view.send_apart = refused  # type: ignore[method-assign]
+    stop = _stop_at(clock)
+    await notifier.deliver([stop])
+
+    assert not await notifier.line_settled(
+        SESSION_A, ActivityKind.LIMIT_REACHED, observed_at=stop.observed_at
+    )

@@ -1,4 +1,4 @@
-"""Whether a limit stop has lifted, decided once for the bot's line and the "carry on" after it.
+"""Whether a limit stop has lifted, decided once for the bot's line and the nudge after it.
 
 A lift has two witnesses. **The schedule:** the provider published when the window resets, and
 that instant, plus a minute of grace, has passed. **A new period:** a reading taken well after the
@@ -6,7 +6,7 @@ stop shows the stop's own window rolled over -- its reset now later than the one
 recorded against -- and below full, which is how a window reopened ahead of its schedule is seen.
 
 **It fails toward "not yet".** A false lift retires the owner's limit line while the agent is
-still stopped and, with the resume switch on, types "carry on" into it; a late lift costs a few
+still stopped and, with the resume switch on, types the nudge into it; a late lift costs a few
 minutes of a line the owner can already see. So each witness is admitted only on positive
 evidence, and the gate review of 2026-09-29 is why "positive" is the word:
 
@@ -43,9 +43,10 @@ import logging
 from collections.abc import Awaitable, Callable, Sequence
 from datetime import UTC, datetime, timedelta
 
+from remote_agents.application.limit_resume import LOOP_GUARD, LimitResume, Nudge
 from remote_agents.application.limit_stops import _SATURATED
 from remote_agents.application.session_views import _STALE_READING_AGE
-from remote_agents.domain.models import SessionState
+from remote_agents.domain.models import SessionId, SessionState
 from remote_agents.ports.agent_activity import LimitHit
 from remote_agents.ports.agent_usage import AgentLimits, UsageWindow
 from remote_agents.ports.limit_stop_outcomes import LIFTED, LimitStop, LimitStopOutcomes
@@ -72,7 +73,7 @@ LIFT_GRACE = timedelta(seconds=60)
 """How long past a published reset the schedule alone waits before it calls the stop lifted.
 
 Providers roll their counters over on their own clock, and this host's clock is not theirs; a
-minute is the margin that keeps "carry on" from landing a few seconds before the window opens.
+minute is the margin that keeps the nudge from landing a few seconds before the window opens.
 """
 
 
@@ -95,6 +96,11 @@ def lifted(
         return False
     own = [window for window in fresh.windows if window.label == hit.window]
     return bool(own) and all(_new_period(window, after=resets_at) for window in own)
+
+
+def scheduled(hit: LimitHit, *, now: datetime) -> bool:
+    """Whether the stop's own published reset, plus the grace minute, has passed."""
+    return _zoned(hit.resets_at) and hit.resets_at is not None and now >= hit.resets_at + LIFT_GRACE
 
 
 def _fresh(reading: AgentLimits | None, *, now: datetime) -> AgentLimits | None:
@@ -142,7 +148,16 @@ class LimitLiftWatcher:
     then records `lifted`, so the stop is never acted on again -- not on the next pass, and not
     after a restart.
 
-    **Retire, then record -- and only when the surface says the stop is done with.** Retiring a
+    **With a resume step, a lifted stop may be nudged first** (`limit_resume`): when the switch
+    is on and the stop belongs to the session's current life. Then the order changes on
+    purpose. The nudge goes only once the stop's line is settled -- sent, and the chat not held
+    -- and its outcome is recorded *before* the line is touched, because a nudge typed twice is
+    worse than a line left standing. The send and the record run shielded from the pass's
+    bound. A line call that raises or answers "not done" after the record leaves the line as
+    it was, logged, and is not tried again.
+
+    **Without a nudge: retire, then record -- and only when the surface says the stop is done
+    with.** Retiring a
     line that is already gone does nothing, so a crash between the two costs one repeat of a
     harmless step on restart. The other order would lose the retirement outright: recorded as
     done, never done, and never tried again. A retire that raises, or answers that the stop is not
@@ -156,12 +171,14 @@ class LimitLiftWatcher:
         limits: Callable[[], Awaitable[Sequence[AgentLimits]]],
         retire: Callable[[LimitStop], Awaitable[bool]],
         *,
+        resume: LimitResume | None = None,
         now: Callable[[], datetime] = lambda: datetime.now(UTC),
     ) -> None:
         self._store = store
         self._outcomes = outcomes
         self._limits = limits
         self._retire = retire
+        self._resume = resume
         self._now = now
 
     async def pass_once(self) -> int:
@@ -180,17 +197,101 @@ class LimitLiftWatcher:
             reading = readings.get(profiles[stop.session_id])
             if not lifted(stop.hit, stop.stopped_at, reading, now=now):
                 continue
-            try:
-                done = await self._retire(stop)
-            except Exception:
-                _LOG.warning("could not retire a lifted limit stop's line; it is tried again")
-                continue
-            if not done:
-                # The surface is not finished with it yet -- its notification is still queued.
-                continue
-            await self._outcomes.record(stop, LIFTED, decided_at=now)
-            acted += 1
+            if await self._nudges(stop):
+                acted += await self._nudge(stop, now=now)
+            elif await self._retire_and_record(stop, now=now):
+                acted += 1
         return acted
+
+    async def _retire_and_record(self, stop: LimitStop, *, now: datetime) -> bool:
+        """Stage 2's step: retire the line, and record `LIFTED` once the surface is done."""
+        try:
+            done = await self._retire(stop)
+        except Exception:
+            _LOG.warning("could not retire a lifted limit stop's line; it is tried again")
+            return False
+        if not done:
+            # The surface is not finished with it yet -- its notification is still queued.
+            return False
+        await self._outcomes.record(stop, LIFTED, decided_at=now)
+        return True
+
+    async def _nudges(self, stop: LimitStop) -> bool:
+        """Whether this stop is one to nudge: the switch is on, and it is this life's stop.
+
+        "This life's": no lifecycle event since the stop. A running session writes none -- the
+        state machine has no running-to-running step -- so an event after the stop means the
+        session went through a stop request, a trust question or a restart since, and the old
+        stop is not what it is doing now.
+        """
+        if self._resume is None or not await self._resume.enabled():
+            return False
+        try:
+            events = await self._store.events(SessionId.parse(stop.session_id))
+        except Exception:
+            _LOG.warning("could not read a session's history; its lifted stop is not nudged")
+            return False
+        return all(event.created_at <= stop.stopped_at for event in events)
+
+    async def _nudge(self, stop: LimitStop, *, now: datetime) -> int:
+        """Nudge one stop, record what came of it, then retire or amend its line."""
+        resume = self._resume
+        assert resume is not None
+        try:
+            last = await self._outcomes.last_resumed_at(stop.session_id)
+        except Exception:
+            _LOG.warning("could not read when a session was last nudged; it is asked next pass")
+            return 0
+        if (
+            last is not None
+            and last <= stop.stopped_at < last + LOOP_GUARD
+            and not scheduled(stop.hit, now=now)
+        ):
+            # Stopped again straight after a nudge: only its own reset lifts it.
+            return 0
+        try:
+            if not await resume.settled(stop):
+                return 0
+        except Exception:
+            _LOG.warning("could not ask whether a stop's line is settled; it is tried again")
+            return 0
+        # Shielded: the service bounds each pass, and a bound that fired between the typing and
+        # the record would leave a typed nudge unrecorded -- and the next pass would type it again.
+        verdict = await asyncio.shield(asyncio.ensure_future(self._decide(stop, now=now)))
+        if verdict is None or verdict.outcome is None:
+            return 0
+        if verdict.outcome == LIFTED:
+            return int(await self._retire_and_record(stop, now=now))
+        try:
+            if verdict.reason is None:
+                done = await self._retire(stop)
+            else:
+                done = await resume.amend(stop, verdict.reason.value)
+        except Exception:
+            done = False
+        if not done:
+            _LOG.warning("a nudged stop's line could not be updated; it stays as it was")
+        return 1
+
+    async def _decide(self, stop: LimitStop, *, now: datetime) -> Nudge | None:
+        """Nudge and record as one step. `None` when the record failed and is owed next pass.
+
+        A final verdict is recorded here, before any line is touched; the resume step holds it
+        until the record lands, so a failed record is retried without a second send.
+        """
+        resume = self._resume
+        assert resume is not None
+        verdict = await resume.nudge(stop)
+        if verdict.outcome is None or verdict.outcome == LIFTED:
+            resume.forget(stop)
+            return verdict
+        try:
+            await self._outcomes.record(stop, verdict.outcome, decided_at=now)
+        except Exception:
+            _LOG.exception("a nudge's outcome could not be recorded; it is recorded next pass")
+            return None
+        resume.forget(stop)
+        return verdict
 
     async def _readings(self) -> dict[str, AgentLimits]:
         """Each provider's reading, or none: a schedule needs no reading to lift a stop.

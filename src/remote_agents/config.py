@@ -76,7 +76,7 @@ DEFAULT_CLAUDE_LIMITS_SOURCE = "status-line"
 """Opt-in means off until the owner says otherwise, and a file that says nothing said nothing."""
 
 DEFAULT_RESUME_AFTER_LIMIT = True
-"""On unless the owner switches it off: they asked for "carry on" after a lift by default."""
+"""On unless the owner switches it off: they asked for the resume nudge after a lift by default."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -135,7 +135,7 @@ class AppConfig:
     """
 
     resume_after_limit: bool = DEFAULT_RESUME_AFTER_LIMIT
-    """Whether the service types one "carry on" into a limit-stopped session after its lift.
+    """Whether the service types one resume nudge into a limit-stopped session after its lift.
 
     Optional and **on** when absent: the owner asked for the nudge by default, and a switch is
     how they decline it. Written by the Settings row on either surface through

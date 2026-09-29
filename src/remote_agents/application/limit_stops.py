@@ -15,7 +15,7 @@ did not publish for that same window.
 
 **When two windows are full, the later reset is what keeps the agent stopped.** A week window at
 100% with a 5-hour window also at 100% lifts only when the week does, and the reset instant is
-what the lift and the "carry on" after it wait for.
+what the lift and the nudge after it wait for.
 
 **Unknown is an answer, not a guess.** A stale reading or an absence falls through to the hint,
 and with no hint either the answer is `LimitHit(None, None)`: the stop is still a stop, and

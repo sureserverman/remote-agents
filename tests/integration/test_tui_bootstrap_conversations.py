@@ -256,6 +256,9 @@ def test_no_further_capability_leaked_into_the_context() -> None:
         # phone unable to reach the one setting on that screen it has most reason to want,
         # since it decides whether this service reads a credential and calls out.
         "claude_limits_source",
+        # Limit-lifecycle sub-plan 2 Task 3.2: the resume switch, drawn as a Settings row on
+        # both surfaces for `claude_limits_source`'s reason.
+        "resume_after_limit",
         "sessions",
         "projects",
         "conversations",

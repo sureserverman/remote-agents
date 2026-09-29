@@ -19,6 +19,12 @@ from remote_agents.ports.agent_activity import LimitHit
 LIFTED = "lifted"
 """The stop's window lifted and its line was retired from the bot's message."""
 
+RESUMED = "resumed"
+"""The stop lifted and the service's one nudge was typed into the idle composer."""
+
+NOT_RESUMED = "not_resumed"
+"""The prefix of `not_resumed:<reason>`: the stop lifted and the nudge could not be sent."""
+
 
 @dataclass(frozen=True, slots=True)
 class LimitStop:
@@ -39,4 +45,8 @@ class LimitStopOutcomes(Protocol):
 
     async def record(self, stop: LimitStop, outcome: str, *, decided_at: datetime) -> None:
         """Write the stop's outcome. The first one written stands; a second is ignored."""
+        ...
+
+    async def last_resumed_at(self, session_id: str) -> datetime | None:
+        """When this session was last nudged (`RESUMED`), or `None` if it never was."""
         ...

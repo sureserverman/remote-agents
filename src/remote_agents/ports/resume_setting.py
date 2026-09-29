@@ -1,4 +1,4 @@
-"""Whether a limit-stopped session is sent "carry on" after its limit lifts, as a switch.
+"""Whether a limit-stopped session is sent the resume nudge after its limit lifts, as a switch.
 
 `ports/limits_source.py`'s shape with a bool: a stored intention in this project's own
 `config.toml` (`limits.resume_after_limit`), read afresh and written through the one

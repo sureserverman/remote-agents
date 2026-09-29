@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
 from functools import partial
+from typing import cast
 
 from remote_agents.adapters.agents.registry import (
     profile_composers,
@@ -27,6 +29,7 @@ from remote_agents.adapters.telegram import FRONTEND
 from remote_agents.adapters.telegram.service import build_private_bot
 from remote_agents.application.activity import CodexApprovalWatcher
 from remote_agents.application.limit_lifts import LimitLiftWatcher
+from remote_agents.application.limit_resume import LimitResume
 from remote_agents.application.limit_stops import LimitScreenWatcher, LimitStopClassifier
 from remote_agents.application.prompt_relay import PromptRelay
 from remote_agents.application.reconcile import ReconciliationService, SessionLocks
@@ -40,6 +43,7 @@ from remote_agents.composition.tui import _console_composer, _local_runtime
 from remote_agents.config import TelegramSecrets, read_claude_limits_source
 from remote_agents.ports.agent_activity import ActivityKind
 from remote_agents.ports.agent_usage import AgentLimits
+from remote_agents.ports.resume_setting import ResumeSettingPort
 from remote_agents.production import ProductionPaths
 
 
@@ -230,5 +234,31 @@ def _private_boundary(
             lambda stop: boundary.notifier.retire_line(
                 stop.session_id, ActivityKind.LIMIT_REACHED, observed_at=stop.stopped_at
             ),
+            # And, with the Settings switch on (its default), one nudge typed into the lifted
+            # session through the terminal's guarded send -- never the owner's relay queue.
+            resume=LimitResume(
+                send=terminal.send_prompt,
+                enabled=_resume_switch(backend.resume_after_limit),
+                settled=lambda stop: boundary.notifier.line_settled(
+                    stop.session_id, ActivityKind.LIMIT_REACHED, observed_at=stop.stopped_at
+                ),
+                amend=lambda stop, reason: boundary.notifier.retire_line(
+                    stop.session_id,
+                    ActivityKind.LIMIT_REACHED,
+                    observed_at=stop.stopped_at,
+                    note=reason,
+                ),
+            ),
         ),
     )
+
+
+def _resume_switch(setting: object | None) -> Callable[[], Awaitable[bool]]:
+    """The resume switch's fresh read, or a switch that is off when none is wired."""
+    if setting is not None:
+        return cast(ResumeSettingPort, setting).read
+
+    async def off() -> bool:
+        return False
+
+    return off
