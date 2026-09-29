@@ -301,3 +301,37 @@ async def test_pressing_the_current_notification_still_forgets_it() -> None:
     notifier.forget(SESSION, standing.notification(chat.chat_id, SESSION).message_id)
 
     assert standing.notification(chat.chat_id, SESSION) is None
+
+
+@pytest.mark.asyncio
+async def test_a_restart_reloads_a_pruned_standing_message_as_pruned(tmp_path) -> None:
+    """Limit-lifecycle sub-plan 2. Later news retires a question, and what is written to the
+    durable store is the pruned message: a process started on that database, amending on the
+    next report, must not bring the question back."""
+    from remote_agents.adapters.sqlite.database import open_ui_database
+    from remote_agents.adapters.sqlite.standing_notification_store import (
+        SQLiteStandingNotificationStore,
+    )
+
+    database = tmp_path / "ui.sqlite3"
+    chat, callbacks = _Chat(), CallbackStateStore()
+    first = open_ui_database(database)
+    before = _notifier(chat, SQLiteStandingNotificationStore(first), callbacks=callbacks)
+    await before.deliver([_activity(ActivityKind.NEEDS_ANSWER, detail="Which file?", minutes=1)])
+    await before.deliver([_activity(detail="Found it.", minutes=2)])
+    first.close()
+
+    second = open_ui_database(database)
+    store = SQLiteStandingNotificationStore(second)
+    reloaded = store.notification(chat.chat_id, SESSION)
+    assert reloaded is not None
+    assert [activity.kind for activity in reloaded.activities] == [ActivityKind.COMPLETED]
+
+    after = _notifier(chat, store, callbacks=callbacks, now=STARTED + timedelta(minutes=3))
+    assert await after.deliver([_activity(detail="Still fine.", minutes=3)]) == 1
+    second.close()
+
+    latest = str(chat.amended[-1][1]["text"])
+    assert "Still fine." in latest
+    assert "Which file?" not in latest
+    assert chat.standing_messages() == 1
