@@ -147,11 +147,24 @@ def merged(
 
     Both arguments belong to one session, so there is exactly one group to unpack.
 
-    **And what later news made obsolete is left out** (`current`), so a standing message stops
-    carrying a question the agent has moved past the moment anything newer about it arrives.
+    **And what later news made obsolete is left out.** A carried needs-answer or limit line is
+    retired by an *arrival* newer than it, and the arrivals are pruned among themselves
+    (`current`). What the message already carries never retires an arrival: stamps come from
+    different sources -- a hook stamps when its event fires, the pane watch when it polls -- so
+    a question stamped before the message's newest line is not proof it was answered, and
+    dropping it would hide a question that may still be open. Shown beside newer news, it is
+    retired by the next arrival instead.
     """
-    groups = grouped_for_delivery((*carried, *arrived))
-    return current(groups[0].activities) if groups else ()
+    newest_arrival = max((activity.observed_at for activity in arrived), default=None)
+    still_current = tuple(
+        activity
+        for activity in carried
+        if activity.kind not in _OBSOLETED_BY_LATER_NEWS
+        or newest_arrival is None
+        or activity.observed_at >= newest_arrival
+    )
+    groups = grouped_for_delivery((*still_current, *current(arrived)))
+    return groups[0].activities if groups else ()
 
 
 _OBSOLETED_BY_LATER_NEWS = frozenset({ActivityKind.NEEDS_ANSWER, ActivityKind.LIMIT_REACHED})
@@ -165,14 +178,21 @@ untrue, so they are only ever replaced by a newer copy of themselves.
 
 
 def current(activities: tuple[AgentActivity, ...]) -> tuple[AgentActivity, ...]:
-    """One session's observations without the needs-answer and limit lines later news retired.
+    """One pass's observations without the needs-answer and limit lines later news retired.
 
     The owner's rule of 2026-09-28: a question or a limit stop stops being news the moment the
-    session reports anything newer. Each such line is dropped when *any* observation in the set
-    is strictly newer. That covers a newer copy of its own kind (the kind collapse did so
-    already, which is why a question repeated word for word survives as its newer copy, DEC-048)
-    and a different kind alike. A tie retires nothing, because two equal stamps carry no fact
-    about which came first.
+    session reports anything newer. Within one set, each such line is dropped when *any*
+    observation in it is strictly newer. That covers a newer copy of its own kind (the kind
+    collapse did so already, which is why a question repeated word for word survives as its
+    newer copy, DEC-048) and a different kind alike. A tie retires nothing, because two equal
+    stamps carry no fact about which came first. `merged` applies the same rule across a
+    standing message and a pass, one way only (see there).
+
+    **Two limits, both accepted.** Nothing reports that a question was *answered*, so a line
+    is retired only by the session's next observation: a Codex approval stays on the message
+    until the turn's next report. And the comparison trusts the stamps: the pane watch stamps
+    when it polls, so its observations can only look newer than they were, which errs toward
+    keeping a question rather than dropping it.
 
     Applied to what the bot sends, never to what is stored. The feed reads the append-only
     `agent_activity` table and keeps every row (DEC-037), and the standing message's store only
@@ -197,11 +217,12 @@ def for_update(
 
     `shown_in_message` takes the newest `limit`, which is right for a message being sent for the
     first time and wrong for one being amended. An observation that arrives *older* than the
-    ones the message already carries -- a `needs_answer` queued behind five newer `completed`
-    reports -- would be folded into "and N earlier" on this pass, and on every pass after it,
-    forever: the merge keeps putting it back in the same losing position. Under the old shape
-    it escaped because the next pass sent it as a message of its own. There is no next message
-    now, so the room has to be made here, and the drain deleted its record long ago.
+    ones the message already carries -- an `output_limit` queued behind newer reports, or a
+    `needs_answer` stamped before them, which `merged` keeps rather than retires -- would be
+    folded into "and N earlier" on this pass, and on every pass after it, forever: the merge
+    keeps putting it back in the same losing position. Under the old shape it escaped because
+    the next pass sent it as a message of its own. There is no next message now, so the room has
+    to be made here, and the drain deleted its record long ago.
 
     So arrivals claim slots first, the previously-shown fill what is left, and the result is
     laid out with those slots **last**, because the end of the tuple is where

@@ -2119,3 +2119,30 @@ async def test_obsolete_lines_stay_gone_from_what_the_standing_message_remembers
     standing = notifier._recall(SESSION_A)
     assert standing is not None
     assert [activity.kind for activity in standing.activities] == [ActivityKind.COMPLETED]
+
+
+async def test_obsolete_rule_never_drops_a_late_question_or_owes_it_twice() -> None:
+    """A question stamped before what the message already carries is still shown, and alerts.
+
+    Stamps come from different sources -- a hook stamps when the event fires, the pane watch
+    when it polls -- so "older than the message" is not proof the question was answered. Only
+    a newer *arrival* retires a line. The pass owes nothing afterwards: `merged` drops no
+    arrival, so none is re-queued (the Stage 1 gate review's trace)."""
+    clock = _Clock()
+    notifier, view = _notifier(clock)
+    await notifier.deliver(
+        [_for(SESSION_A, ActivityKind.COMPLETED, "done", clock.moment + timedelta(minutes=5))]
+    )
+    sent_before = len(view.sent)
+
+    at = clock.moment
+    await notifier.deliver(
+        [
+            _for(SESSION_A, ActivityKind.OUTPUT_LIMIT, "ceiling", at + timedelta(minutes=2)),
+            _for(SESSION_A, ActivityKind.NEEDS_ANSWER, "Which file?", at + timedelta(minutes=3)),
+        ]
+    )
+
+    assert "Which file?" in _showing(view)
+    assert len(view.sent) == sent_before + 1, "an unheard question arrives"
+    assert notifier.pending_count() == 0

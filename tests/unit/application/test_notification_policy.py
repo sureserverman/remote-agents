@@ -412,8 +412,14 @@ def _kinds_and_details(
         pytest.param(
             [(DONE, "done", 5)],
             [(NA, "which branch?", 3)],
-            [(DONE, "done")],
-            id="a-late-question-behind-newer-news-is-already-obsolete",
+            [(NA, "which branch?"), (DONE, "done")],
+            id="a-late-question-is-never-retired-by-what-the-message-carries",
+        ),
+        pytest.param(
+            [(NA, "which branch?", 1), (DONE, "done", 4)],
+            [(ActivityKind.OUTPUT_LIMIT, None, 2)],
+            [(ActivityKind.OUTPUT_LIMIT, None), (DONE, "done")],
+            id="a-carried-question-is-retired-by-an-older-arrival-only-when-newer-than-it",
         ),
         pytest.param(
             [(DONE, "done", 1), (NA, "which branch?", 2)],
