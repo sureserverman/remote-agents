@@ -27,6 +27,7 @@ a title is content-free for the same reason, and the next such kind will be too.
 from __future__ import annotations
 
 import logging
+import re
 from collections import deque
 from collections.abc import Awaitable, Callable, Iterable
 from datetime import UTC, datetime
@@ -72,6 +73,7 @@ from remote_agents.ports.agent_activity import (
     ActivityKind,
     AgentActivity,
     AskClass,
+    LimitHit,
     ask_class,
 )
 from remote_agents.ports.callback_state import CallbackStatePort
@@ -102,7 +104,16 @@ this module to build the notifier, so the constant has to live on this side of i
 """
 
 _HEDGE = "This is a guess, not something it reported."
-"""Appended to every inferred observation, and to no reported one."""
+"""Appended to every inferred observation, and to no reported one -- save a limit stop."""
+
+_SEEN_ON_SCREEN = "Read off its screen, not something it reported."
+"""The hedge for a group whose only inferred observations are limit stops (DEC-107).
+
+A stop read off the pane is a measured sentence the agent printed, anchored and matched on its
+last lines, so calling it a guess would undersell it. It is still not something the agent
+*reported*, and the owner is told which of the two it is. A group that also holds a real guess
+keeps `_HEDGE`: one hedge covers a group, and the weaker claim is the one it must make.
+"""
 
 _HEADLINES: dict[ActivityKind, str] = {
     ActivityKind.NEEDS_ANSWER: "Waiting for an answer",
@@ -145,7 +156,78 @@ a word and no information, on the most interrupting message this service sends.
 """
 
 
-def kind_headline(kind: ActivityKind, ask: str | None = None) -> str:
+_WINDOW_WORDS: dict[str, str] = {
+    "5h": "5-hour",
+    "week": "weekly",
+    "month": "monthly",
+    "day": "daily",
+    "opus week": "Opus weekly",
+    "sonnet week": "Sonnet weekly",
+    "fable week": "Fable weekly",
+}
+"""**The bot's** words for a limit stop's window label (`LimitHit.window`, DEC-107).
+
+The labels are provider figures -- the readers' `5h` and `week`, Cursor's `month`, Claude's
+model weeks -- and the sentence is this surface's (DEC-043). A span label Codex derives from
+`window_minutes` (`2h`, `3d`) is worded by `_SPAN` instead. A label neither knows gets no window
+at all, and the headline stays "Hit a usage limit": naming a window this surface cannot read
+would be inventing it.
+"""
+
+_SPAN = re.compile(r"(?P<count>[1-9][0-9]*)(?P<unit>[mhdw])")
+_SPAN_UNITS = {"m": "minute", "h": "hour", "d": "day", "w": "week"}
+
+_WEEKDAYS = ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
+_MONTHS = ("Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")
+"""Spelled here rather than taken from `strftime`, whose `%a` and `%b` follow the host locale."""
+
+
+def _limit_headline(limit: LimitHit | None) -> str | None:
+    """`Hit the 5-hour limit`, or `None` when no window is named that this surface can word."""
+    window = limit.window if limit is not None else None
+    if window is None:
+        return None
+    words = _WINDOW_WORDS.get(window)
+    if words is None and (span := _SPAN.fullmatch(window)):
+        words = f"{span['count']}-{_SPAN_UNITS[span['unit']]}"
+    return f"Hit the {words} limit" if words else None
+
+
+def _reset_clause(limit: LimitHit | None, observed_at: datetime) -> str:
+    """` · resets 10:50`, ` · resets Tue 09:00` or ` · resets 2 Oct`; nothing when unpublished.
+
+    A clock when the reset falls on the stop's own day, a weekday within the six after it, a date
+    beyond that. **Measured from the stop, not from now**, so a standing message amended hours
+    later never rewrites its own reset. The host's zone, as every clock this bot prints.
+    """
+    if limit is None or limit.resets_at is None:
+        return ""
+    resets = limit.resets_at.astimezone()
+    days = (resets.date() - observed_at.astimezone().date()).days
+    if days == 0:
+        when = f"{resets:%H:%M}"
+    elif 0 < days < 7:
+        when = f"{_WEEKDAYS[resets.weekday()]} {resets:%H:%M}"
+    else:
+        when = f"{resets.day} {_MONTHS[resets.month - 1]}"
+    return f" · resets {when}"
+
+
+def _headline_words(kind: ActivityKind, ask: str | None, limit: LimitHit | None) -> str:
+    """The headline without its mark: the kind's words, or the window's, then the ask clause."""
+    words = _ASK_WORDS.get(ask_class(ask)) if ask else None
+    clause = f" {words}" if words else ""
+    named = _limit_headline(limit) if kind is ActivityKind.LIMIT_REACHED else None
+    return f"{named or _HEADLINES[kind]}{clause}"
+
+
+def kind_headline(
+    kind: ActivityKind,
+    ask: str | None = None,
+    *,
+    limit: LimitHit | None = None,
+    observed_at: datetime | None = None,
+) -> str:
     """`❓ Waiting for an answer about a shell command` -- the mark, the headline, the ask.
 
     The one place the three are joined, so the grouped shape and the lone shape cannot start
@@ -154,10 +236,12 @@ def kind_headline(kind: ActivityKind, ask: str | None = None) -> str:
     The ask clause is **the class's, never the token's**: `ask_class` decides what a provider's
     `Bash` means and `_ASK_WORDS` decides what this surface calls it, so a token nobody has
     measured cannot reach the owner as itself (DEC-067's whole argument, DEC-074's mechanism).
+
+    A limit stop names its window and, given the stop's instant, its reset
+    (`⛽ Hit the weekly limit · resets Tue 09:00`).
     """
-    words = _ASK_WORDS.get(ask_class(ask)) if ask else None
-    clause = f" {words}" if words else ""
-    return f"{_KIND_EMOJI[kind]} {_HEADLINES[kind]}{clause}"
+    reset = _reset_clause(limit, observed_at) if observed_at is not None else ""
+    return f"{_KIND_EMOJI[kind]} {_headline_words(kind, ask, limit)}{reset}"
 
 
 # The UTF-16 budget, the escape-then-fit routine and the callback shape are imported from
@@ -284,15 +368,16 @@ def activity_text(group: SessionGroup, *, display: str) -> str:
     # sort makes first-appearance and newest the same element, so nothing failed.
     newest = shown[-1]
 
-    asked = _ask_of(newest)
-    words = _ASK_WORDS.get(ask_class(asked)) if asked else None
+    words = _headline_words(newest.kind, _ask_of(newest), newest.limit)
     headline = (
-        f"{_KIND_EMOJI[newest.kind]} <b>{_HEADLINES[newest.kind]}"
-        f"{f' {words}' if words else ''}</b>"
+        f"{_KIND_EMOJI[newest.kind]} <b>{words}</b>"
+        f"{_reset_clause(newest.limit, newest.observed_at)}"
         f" · {age_short(newest.observed_at)}"
     )
     details = [_detail_of(activity) for activity in shown]
-    hedged = any(activity.confidence is ActivityConfidence.INFERRED for activity in shown)
+    inferred = [
+        activity for activity in shown if activity.confidence is ActivityConfidence.INFERRED
+    ]
 
     # The hedge leads; only the counter trails. Until 2026-09-06 both sat at the end, and the
     # docstring above asserted that neither could ever follow a quotation -- true when written,
@@ -304,7 +389,12 @@ def activity_text(group: SessionGroup, *, display: str) -> str:
     # Leading is the fix rather than per-line hedging because the hedge is deliberately one
     # statement about the group (see below): placed first it qualifies what follows, which is
     # what it always meant, and it cannot acquire a referent by adjacency.
-    leaders = [_HEDGE] if hedged else []
+    if not inferred:
+        leaders = []
+    elif all(activity.kind is ActivityKind.LIMIT_REACHED for activity in inferred):
+        leaders = [_SEEN_ON_SCREEN]
+    else:
+        leaders = [_HEDGE]
     trailers = [f"and {hidden} earlier."] if hidden else []
     # Measured with each detail reduced to ONE unit rather than to nothing, and that unit
     # subtracted again below. Passing `None` -- which this did until 2026-09-06 -- makes
@@ -367,7 +457,15 @@ def _lines(
         return [_quote(detail)] if detail else []
     lines: list[str] = []
     for activity, detail in zip(shown, details, strict=True):
-        lines.append(f"{_BULLET}{kind_headline(activity.kind, _ask_of(activity))}")
+        lines.append(
+            f"{_BULLET}"
+            + kind_headline(
+                activity.kind,
+                _ask_of(activity),
+                limit=activity.limit,
+                observed_at=activity.observed_at,
+            )
+        )
         if detail:
             lines.append(_quote(detail))
     return lines

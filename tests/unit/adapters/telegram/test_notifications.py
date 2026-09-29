@@ -23,6 +23,7 @@ from remote_agents.ports.agent_activity import (
     ActivityConfidence,
     ActivityKind,
     AgentActivity,
+    LimitHit,
 )
 
 OPEN = "c1_open_session_token"
@@ -38,6 +39,7 @@ def _activity(
     confidence: ActivityConfidence = ActivityConfidence.REPORTED,
     observed_at: datetime = OBSERVED,
     ask: str | None = None,
+    limit: LimitHit | None = None,
 ) -> AgentActivity:
     return AgentActivity(
         session_id="0191f2c2-0000-7000-8000-00000000abcd",
@@ -46,6 +48,7 @@ def _activity(
         observed_at=observed_at,
         confidence=confidence,
         ask=ask,
+        limit=limit,
     )
 
 
@@ -1873,3 +1876,134 @@ def test_the_same_ask_and_detail_repeated_is_a_silent_amendment() -> None:
     again = _activity(ActivityKind.NEEDS_ANSWER, ask="Bash", detail="$ rm -rf build/")
 
     assert unheard((asked,), (again,)) == ()
+
+
+# A clock in the host's own zone, because that is the zone the bot writes a reset in. Built
+# from a naive wall time so the expected strings below hold in whatever zone the suite runs.
+LOCAL_OBSERVED = datetime(2026, 9, 29, 9, 0).astimezone()
+
+
+def _stop(window: str | None, resets_at: datetime | None = None, **kwargs) -> str:
+    return render_activity(
+        _group(
+            _activity(
+                ActivityKind.LIMIT_REACHED,
+                observed_at=LOCAL_OBSERVED,
+                limit=LimitHit(window, resets_at),
+                **kwargs,
+            )
+        ),
+        display=DISPLAY,
+        open_session=OPEN,
+    ).text
+
+
+@pytest.mark.parametrize(
+    ("window", "words"),
+    [
+        ("5h", "Hit the 5-hour limit"),
+        ("week", "Hit the weekly limit"),
+        ("month", "Hit the monthly limit"),
+        ("day", "Hit the daily limit"),
+        ("opus week", "Hit the Opus weekly limit"),
+        ("sonnet week", "Hit the Sonnet weekly limit"),
+        ("fable week", "Hit the Fable weekly limit"),
+        ("2h", "Hit the 2-hour limit"),
+        ("3d", "Hit the 3-day limit"),
+        ("90m", "Hit the 90-minute limit"),
+    ],
+)
+def test_limit_window_is_named_in_the_headline(window: str, words: str) -> None:
+    text = _stop(window)
+
+    assert text.splitlines()[0].startswith(f"⛽ <b>{words}</b> · ")
+    assert "usage limit" not in text
+
+
+@pytest.mark.parametrize("limit", [None, LimitHit(None, None), LimitHit("fortnightly", None)])
+def test_limit_window_unknown_keeps_the_window_blind_phrase(limit: LimitHit | None) -> None:
+    message = render_activity(
+        _group(_activity(ActivityKind.LIMIT_REACHED, limit=limit)),
+        display=DISPLAY,
+        open_session=OPEN,
+    )
+
+    assert message.text.startswith("⛽ <b>Hit a usage limit</b> · ")
+    assert "resets" not in message.text
+
+
+@pytest.mark.parametrize(
+    ("resets_in", "clause"),
+    [
+        (timedelta(hours=1, minutes=50), "resets 10:50"),
+        (timedelta(days=1), "resets Wed 09:00"),
+        (timedelta(days=6, hours=2), "resets Mon 11:00"),
+        (timedelta(days=3, hours=-9), "resets Fri 00:00"),
+        (timedelta(days=33), "resets 1 Nov"),
+    ],
+)
+def test_limit_window_reset_is_a_clock_a_weekday_or_a_date(
+    resets_in: timedelta, clause: str
+) -> None:
+    """A clock today, a weekday this week, a date beyond it -- in the host's zone, measured from
+    the stop rather than from now, so an amended message never rewrites its own reset."""
+    text = _stop("5h", LOCAL_OBSERVED + resets_in)
+
+    assert text.splitlines()[0].startswith(f"⛽ <b>Hit the 5-hour limit</b> · {clause} · ")
+
+
+def test_limit_window_reset_is_kept_when_only_the_window_is_unknown() -> None:
+    text = _stop(None, LOCAL_OBSERVED + timedelta(hours=1, minutes=50))
+
+    assert text.startswith("⛽ <b>Hit a usage limit</b> · resets 10:50 · ")
+
+
+def test_limit_window_is_named_on_a_grouped_bullet_too() -> None:
+    message = render_activity(
+        _group(
+            _activity(ActivityKind.COMPLETED, detail="done", observed_at=LOCAL_OBSERVED),
+            _activity(
+                ActivityKind.LIMIT_REACHED,
+                observed_at=LOCAL_OBSERVED + timedelta(minutes=1),
+                limit=LimitHit("week", LOCAL_OBSERVED + timedelta(days=1)),
+            ),
+        ),
+        display=DISPLAY,
+        open_session=OPEN,
+    )
+
+    assert "• ⛽ Hit the weekly limit · resets Wed 09:00" in message.text.splitlines()
+
+
+def test_limit_window_inferred_stop_is_worded_as_seen_on_its_screen() -> None:
+    """A stop read off the pane is a measured sentence, not a guess -- but it is still not
+    something the agent reported, and the message says which of the two it is."""
+    text = _stop("5h", confidence=ActivityConfidence.INFERRED, detail="You've hit your usage limit")
+
+    assert "Hit the 5-hour limit" in text
+    assert notifications._SEEN_ON_SCREEN in text
+    assert notifications._HEDGE not in text
+    assert "You've hit" not in text, "an inferred observation still carries no words"
+
+
+def test_limit_window_a_guess_beside_a_screen_stop_keeps_the_guess_hedge() -> None:
+    message = render_activity(
+        _group(
+            _activity(
+                ActivityKind.NEEDS_ANSWER,
+                confidence=ActivityConfidence.INFERRED,
+                observed_at=LOCAL_OBSERVED,
+            ),
+            _activity(
+                ActivityKind.LIMIT_REACHED,
+                confidence=ActivityConfidence.INFERRED,
+                observed_at=LOCAL_OBSERVED + timedelta(minutes=1),
+                limit=LimitHit("5h", None),
+            ),
+        ),
+        display=DISPLAY,
+        open_session=OPEN,
+    )
+
+    assert message.text.count(notifications._HEDGE) == 1
+    assert notifications._SEEN_ON_SCREEN not in message.text
