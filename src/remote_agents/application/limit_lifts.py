@@ -22,7 +22,12 @@ evidence, and the gate review of 2026-09-29 is why "positive" is the word:
 - **A reading must be taken more than a minute after the stop**, past the readers' memo.
 - **A stop whose window is unknown never lifts from a reading**, only on a published schedule:
   "nothing is full" is exactly the condition that left it unnamed. Nor does a named window with no
-  published reset (Cursor's month), which has no period to roll past.
+  published reset (Cursor's month as its screen names it), which has no period to roll past.
+- **A live reading is the one exception to the first rule** (`AgentLimits.live`). Cursor's month is
+  asked of Cursor's server when it is read, so its figures are as new as its stamp, and a stop's
+  own window seen below full in the stop's own period has reopened. Only for a stop that carries
+  that period's end, which it has from a reading that showed the window full: a stop the screen
+  alone named was never measured full, so "below full" says nothing new about it.
 - A Claude model week (`opus week`, ...) is a label no reading publishes, so it lifts on its own
   reset only.
 
@@ -31,7 +36,7 @@ lifted early -- the stop waits for its schedule. That wipe is exactly what the e
 notification (`limit_resets`, DEC-097) already tells the owner about, so they are not left
 guessing; they are only not resumed automatically ahead of time.
 
-Staleness is `session_views`' rule and "full" is `limit_stops`' saturation line, both asked rather
+Staleness is `session_views`' rule and "full" is `limit_stops.is_full`, both asked rather
 than restated (DEC-043), so the window that named a stop and the window that lifts it are measured
 by the same figure.
 """
@@ -50,7 +55,7 @@ from remote_agents.application.limit_resume import (
     Nudge,
     not_resumed,
 )
-from remote_agents.application.limit_stops import _SATURATED
+from remote_agents.application.limit_stops import is_full
 from remote_agents.application.session_views import _STALE_READING_AGE
 from remote_agents.domain.models import SessionId, SessionState
 from remote_agents.ports.agent_activity import LimitHit
@@ -101,7 +106,11 @@ def lifted(
     if not _zoned(stopped_at) or fresh.observed_at <= stopped_at + LIFT_GRACE:
         return False
     own = [window for window in fresh.windows if window.label == hit.window]
-    return bool(own) and all(_new_period(window, after=resets_at) for window in own)
+    if not own:
+        return False
+    if all(_new_period(window, after=resets_at) for window in own):
+        return True
+    return fresh.live and all(_reopened(window, period_end=resets_at) for window in own)
 
 
 def scheduled(hit: LimitHit, *, now: datetime) -> bool:
@@ -121,7 +130,7 @@ def _fresh(reading: AgentLimits | None, *, now: datetime) -> AgentLimits | None:
 def _any_binding(windows: tuple[UsageWindow, ...], *, now: datetime) -> bool:
     """Whether any window is full and still in force: its reset ahead, or never published."""
     return any(
-        window.used_percent >= _SATURATED
+        is_full(window)
         and (window.resets_at is None or (_zoned(window.resets_at) and window.resets_at > now))
         for window in windows
     )
@@ -133,10 +142,24 @@ def _new_period(window: UsageWindow, *, after: datetime) -> bool:
     "Began after" by `NEW_PERIOD_MARGIN`, never by the grace minute: see there.
     """
     return (
-        window.used_percent < _SATURATED
+        not is_full(window)
         and _zoned(window.resets_at)
         and window.resets_at is not None
         and window.resets_at > after + NEW_PERIOD_MARGIN
+    )
+
+
+def _reopened(window: UsageWindow, *, period_end: datetime) -> bool:
+    """Whether `window` is below full in the period that ends at `period_end`, the stop's own.
+
+    The same period by `NEW_PERIOD_MARGIN`, the line `_new_period` draws from the other side.
+    Evidence only from a live reading; the caller asks that.
+    """
+    return (
+        not is_full(window)
+        and _zoned(window.resets_at)
+        and window.resets_at is not None
+        and abs(window.resets_at - period_end) <= NEW_PERIOD_MARGIN
     )
 
 

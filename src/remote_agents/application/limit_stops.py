@@ -7,6 +7,10 @@ sometimes does the provider's own sentence name the window. So the window is dec
 two pieces of evidence the caller hands over, and never re-decided by a notifier or a feed row
 (DEC-043).
 
+**A window metered as separate pools is full when any pool is** (`is_full`). Cursor's month is
+one: its own models and every other model each have a pool, and a session is stopped by the pool
+it draws on whatever the total reads.
+
 **The measured figure beats the sentence.** A live reading showing a window at 100% is the
 provider's own accounting at the moment of the stop; a hint parsed out of a sentence is the
 provider's wording, which has changed before (Claude names its 5-hour window "session").
@@ -62,6 +66,17 @@ _LOG = logging.getLogger(__name__)
 _SATURATED = 99.5
 
 
+def is_full(window: UsageWindow) -> bool:
+    """Whether a window is one that stops an agent: it, or any pool in it, rounds to 100.
+
+    The one test of "full", asked by the rule that names a stop's window and by the rule that
+    lifts it (`limit_lifts`), so the two cannot disagree about the same figure.
+    """
+    return window.used_percent >= _SATURATED or any(
+        part.used_percent >= _SATURATED for part in window.parts
+    )
+
+
 def classify(
     reading: AgentLimits | None,
     hint: LimitHit | None,
@@ -115,7 +130,7 @@ def _saturated(reading: AgentLimits | None, *, now: datetime) -> UsageWindow | N
     full = [
         window
         for window in reading.windows
-        if window.used_percent >= _SATURATED
+        if is_full(window)
         and _aware(window.resets_at)
         and (window.resets_at is None or window.resets_at > now)
     ]
@@ -181,8 +196,11 @@ class LimitStopClassifier:
         whose window no reading names yet is held**, for at most `_HOLD_PASSES` passes: the
         account reading is remembered for a minute, so the reading taken in the stop's own pass
         usually predates the stop and shows the window just short of full. The next pass's
-        reading names it. A stop drained from the spool is never held, because the drain has
-        already deleted its file and memory is not a place to keep the only copy.
+        reading names it. **So is one its screen named and nothing dated**, while the reading
+        publishes that window: Cursor's screen says "month" and never when the month ends, and
+        recorded that way the stop has no instant to lift on. A stop drained from the spool is
+        never held, because the drain has already deleted its file and memory is not a place to
+        keep the only copy.
         """
         if not self._held and not any(_unclassified(activity) for activity in activities):
             return list(activities)
@@ -235,7 +253,7 @@ class LimitStopClassifier:
         reading = readings.get(profile)
         hit = classify(reading, hint, now=now)
         hold = (
-            hit.window is None
+            (hit.window is None or (hit.resets_at is None and hit.window in _labels(reading)))
             and activity.confidence is ActivityConfidence.INFERRED
             and passes < _HOLD_PASSES
             and reading is not None

@@ -267,6 +267,16 @@ class AgentLimits:
     note: LimitsNote | None = None
     """What would mend `absence`, or `None` when the reader has nothing to add."""
 
+    live: bool = False
+    """Whether the provider was asked for these figures at `observed_at`, by this reader.
+
+    False for a figure read out of a recording, whose stamp says when the recording was written
+    and not when its figures were true: Claude's status line is redrawn with the limits a session
+    cached from its last response. A rule that needs "this was so at that instant" -- a limit
+    stop lifting because its window fell below full -- may take a live reading's word for it and
+    no other's. Defaulted to the answer that claims nothing.
+    """
+
 
 @dataclass(frozen=True, slots=True)
 class UsageQuery:

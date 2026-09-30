@@ -18,7 +18,13 @@ from remote_agents.ports.agent_activity import (
     AgentActivity,
     LimitHit,
 )
-from remote_agents.ports.agent_usage import AgentLimits, LimitsAbsence, UsageWindow
+from remote_agents.ports.agent_usage import (
+    AgentLimits,
+    LimitsAbsence,
+    LimitsNote,
+    UsagePart,
+    UsageWindow,
+)
 from remote_agents.ports.limit_screen import LimitScreen
 
 _NOW = datetime(2026, 9, 28, 21, 0, tzinfo=UTC)
@@ -225,3 +231,99 @@ async def test_a_reported_stop_is_never_held() -> None:
 
     (stop,) = await classifier.classified([_stop(ActivityConfidence.REPORTED)])
     assert stop.limit == LimitHit(None, None)
+
+
+# --- Cursor's month: one window metered as two pools ----------------------------------------
+
+_CYCLE_END = _NOW + timedelta(days=4)
+_MONTH_HINT = LimitHit("month", None)
+"""What Cursor's own screen says: which window, and never when it ends."""
+
+
+def _cursor(total: float, cursor: float, other: float) -> AgentLimits:
+    month = UsageWindow(
+        "month", total, _CYCLE_END, (UsagePart("cursor", cursor), UsagePart("other", other))
+    )
+    return AgentLimits(
+        "cursor-agent", (month,), observed_at=_NOW, stale_source="Cursor API", live=True
+    )
+
+
+@pytest.mark.parametrize(
+    ("reading", "expected"),
+    [
+        pytest.param(_cursor(100, 100, 40), LimitHit("month", _CYCLE_END), id="the-total-is-full"),
+        pytest.param(
+            _cursor(70, 100, 40), LimitHit("month", _CYCLE_END), id="its-own-pool-is-full"
+        ),
+        pytest.param(_cursor(70, 30, 99.6), LimitHit("month", _CYCLE_END), id="the-other-is-full"),
+        pytest.param(_cursor(98, 99, 99), _MONTH_HINT, id="nothing-is-full-so-the-screen-names-it"),
+        pytest.param(
+            AgentLimits("cursor-agent", absence=LimitsAbsence.NOT_REPORTED, note=LimitsNote.OFF),
+            _MONTH_HINT,
+            id="the-switch-is-off-so-the-screen-names-it",
+        ),
+    ],
+)
+def test_a_cursor_stop_is_dated_by_the_cycle_end_when_any_pool_is_full(
+    reading: AgentLimits, expected: LimitHit
+) -> None:
+    assert classify(reading, _MONTH_HINT, now=_NOW) == expected
+
+
+class _CursorStore:
+    async def get(self, session_id):
+        return _Record(session_id, "cursor-agent")
+
+
+def _cursor_classifier(readings: list[AgentLimits]) -> LimitStopClassifier:
+    async def limits():
+        return (readings.pop(0) if len(readings) > 1 else readings[0],)
+
+    screen = LimitScreen(markers=(".",), hint=lambda text, now: _MONTH_HINT)
+    return LimitStopClassifier(_CursorStore(), limits, {"cursor-agent": screen}, now=lambda: _NOW)
+
+
+async def test_a_cursor_stop_waits_a_pass_for_the_reading_that_dates_it() -> None:
+    """The screen names the month and nothing dates it, and the reading is a minute's memo old.
+
+    Recorded at once it would be `month` with no instant, which never lifts on its own.
+    """
+    classifier = _cursor_classifier([_cursor(98, 98, 40), _cursor(100, 100, 40)])
+
+    assert await classifier.classified([_stop(ActivityConfidence.INFERRED)]) == []
+    (released,) = await classifier.classified([])
+    assert released.limit == LimitHit("month", _CYCLE_END)
+
+
+async def test_a_cursor_stop_no_reading_ever_dates_is_released_with_what_its_screen_said() -> None:
+    classifier = _cursor_classifier([_cursor(98, 98, 40)])
+
+    released = await classifier.classified([_stop(ActivityConfidence.INFERRED)])
+    for _ in range(4):
+        released += await classifier.classified([])
+    (stop,) = released
+    assert stop.limit == _MONTH_HINT
+
+
+async def test_a_cursor_stop_with_the_switch_off_is_recorded_at_once() -> None:
+    """No reading will ever date it, so holding it would only delay the owner's notification."""
+    off = AgentLimits("cursor-agent", absence=LimitsAbsence.NOT_REPORTED, note=LimitsNote.OFF)
+    classifier = _cursor_classifier([off])
+
+    (stop,) = await classifier.classified([_stop(ActivityConfidence.INFERRED)])
+    assert stop.limit == _MONTH_HINT
+
+
+async def test_a_stop_its_sentence_dated_is_not_held_for_a_cursor_style_reading() -> None:
+    """The hold is for a stop nothing dates; Codex's sentence usually does."""
+
+    async def limits():
+        return (_codex(97),)
+
+    dated = LimitHit("5h", _IN_2H)
+    screen = LimitScreen(markers=(".",), hint=lambda text, now: dated)
+    classifier = LimitStopClassifier(_Store(), limits, {"codex": screen}, now=lambda: _NOW)
+
+    (stop,) = await classifier.classified([_stop(ActivityConfidence.INFERRED)])
+    assert stop.limit == dated

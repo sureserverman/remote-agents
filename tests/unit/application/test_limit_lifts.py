@@ -16,7 +16,7 @@ import pytest
 
 from remote_agents.application.limit_lifts import lifted
 from remote_agents.ports.agent_activity import LimitHit
-from remote_agents.ports.agent_usage import AgentLimits, LimitsAbsence, UsageWindow
+from remote_agents.ports.agent_usage import AgentLimits, LimitsAbsence, UsagePart, UsageWindow
 
 _STOP = datetime(2026, 9, 29, 10, 0, tzinfo=UTC)
 _RESET = _STOP + timedelta(hours=2)
@@ -230,3 +230,142 @@ def test_lifted_a_naive_stop_instant_is_never_after_anything() -> None:
     naive_stop = _STOP.replace(tzinfo=None)
 
     assert lifted(LimitHit("5h", _RESET), naive_stop, reading, now=_EARLY_NOW) is False
+
+
+# --- Cursor's month: a live reading, one window in two pools --------------------------------
+
+_CYCLE = _STOP + timedelta(days=4)
+_NEXT_CYCLE = _CYCLE + timedelta(days=30)
+
+
+def _cursor(
+    total: float,
+    cursor: float,
+    other: float,
+    *,
+    at: datetime,
+    resets_at: datetime = _CYCLE,
+    live: bool = True,
+) -> AgentLimits:
+    month = UsageWindow(
+        "month", total, resets_at, (UsagePart("cursor", cursor), UsagePart("other", other))
+    )
+    return AgentLimits("cursor-agent", (month,), observed_at=at, live=live)
+
+
+_AFTER_CYCLE = _CYCLE + timedelta(minutes=1)
+
+_CURSOR_CASES = [
+    # --- at the cycle end, which only the reading could supply ---------------------------------
+    pytest.param(
+        LimitHit("month", _CYCLE),
+        _cursor(1, 1, 0, at=_AFTER_CYCLE, resets_at=_NEXT_CYCLE),
+        _CYCLE + timedelta(minutes=2),
+        True,
+        id="lifts-at-the-cycle-end",
+    ),
+    pytest.param(
+        LimitHit("month", _CYCLE), None, _CYCLE + timedelta(minutes=2), True, id="lifts-unread"
+    ),
+    pytest.param(
+        LimitHit("month", _CYCLE),
+        _cursor(40, 100, 0, at=_AFTER_CYCLE, resets_at=_NEXT_CYCLE),
+        _CYCLE + timedelta(minutes=2),
+        False,
+        id="a-pool-already-full-in-the-new-cycle-holds-it",
+    ),
+    pytest.param(
+        LimitHit("month", _CYCLE),
+        None,
+        _CYCLE - timedelta(days=1),
+        False,
+        id="waits-for-the-cycle-end-unread",
+    ),
+    # --- early: the figures dropped inside the stop's own cycle ---------------------------------
+    pytest.param(
+        LimitHit("month", _CYCLE),
+        _cursor(60, 60, 20, at=_EARLY),
+        _EARLY_NOW,
+        True,
+        id="an-early-drop-lifts",
+    ),
+    pytest.param(
+        LimitHit("month", _CYCLE),
+        _cursor(70, 100, 20, at=_EARLY),
+        _EARLY_NOW,
+        False,
+        id="an-early-drop-with-its-own-pool-still-full",
+    ),
+    pytest.param(
+        LimitHit("month", _CYCLE),
+        _cursor(70, 20, 99.6, at=_EARLY),
+        _EARLY_NOW,
+        False,
+        id="an-early-drop-with-the-other-pool-still-full",
+    ),
+    pytest.param(
+        LimitHit("month", _CYCLE),
+        _cursor(60, 60, 20, at=_EARLY, live=False),
+        _EARLY_NOW,
+        False,
+        id="a-drop-in-a-recording-is-not-evidence",
+    ),
+    pytest.param(
+        LimitHit("month", _CYCLE),
+        _cursor(60, 60, 20, at=_STOP + timedelta(seconds=50)),
+        _EARLY_NOW,
+        False,
+        id="a-drop-read-inside-the-memo-minute",
+    ),
+    pytest.param(
+        LimitHit("month", _CYCLE),
+        _cursor(60, 60, 20, at=_EARLY, resets_at=_CYCLE - timedelta(days=2)),
+        _EARLY_NOW,
+        False,
+        id="a-drop-dated-to-another-cycle-end",
+    ),
+    pytest.param(
+        LimitHit("month", None),
+        _cursor(60, 60, 20, at=_EARLY),
+        _EARLY_NOW,
+        False,
+        id="a-stop-only-the-screen-named-never-lifts-from-a-reading",
+    ),
+    pytest.param(
+        LimitHit(None, _CYCLE),
+        _cursor(60, 60, 20, at=_EARLY),
+        _EARLY_NOW,
+        False,
+        id="a-stop-with-no-window-never-lifts-from-a-reading",
+    ),
+    # --- early: a new cycle began ahead of the stop's cycle end -----------------------------------
+    pytest.param(
+        LimitHit("month", _CYCLE),
+        _cursor(2, 2, 0, at=_EARLY, resets_at=_NEXT_CYCLE),
+        _EARLY_NOW,
+        True,
+        id="a-new-cycle-lifts",
+    ),
+    pytest.param(
+        LimitHit("month", _CYCLE),
+        _cursor(2, 99.6, 0, at=_EARLY, resets_at=_NEXT_CYCLE),
+        _EARLY_NOW,
+        False,
+        id="a-new-cycle-with-a-full-pool-does-not",
+    ),
+]
+
+
+@pytest.mark.parametrize(("hit", "reading", "now", "expected"), _CURSOR_CASES)
+def test_lifted_a_cursor_stop(
+    hit: LimitHit, reading: AgentLimits | None, now: datetime, expected: bool
+) -> None:
+    assert lifted(hit, _STOP, reading, now=now) is expected
+
+
+def test_a_live_drop_does_not_lift_a_cursor_stop_while_the_reading_is_stale() -> None:
+    reading = _cursor(60, 60, 20, at=_EARLY)
+
+    assert (
+        lifted(LimitHit("month", _CYCLE), _STOP, reading, now=_EARLY + timedelta(hours=1)) is False
+    )

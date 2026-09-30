@@ -172,7 +172,7 @@ def test_a_200_answers_one_month_window_with_both_pools_stamped_and_dated_now(
     write_auth(tmp_path, auth_document())
     opener = ok_opener()
     answer = reader(tmp_path, opener).limits()
-    assert answer == AgentLimits(CURSOR, (MONTH,), observed_at=NOW, stale_source=STAMP)
+    assert answer == AgentLimits(CURSOR, (MONTH,), observed_at=NOW, stale_source=STAMP, live=True)
     assert answer.absence is None and answer.note is None
     assert len(opener.calls) == 1
 

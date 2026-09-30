@@ -272,7 +272,9 @@ class CursorUsageApiReader:
                 self.limits_profile, absence=LimitsAbsence.NO_READING, stale_source=_STAMP
             )
         month = UsageWindow(window.label, window.used_percent, window.resets_at, parts)
-        return AgentLimits(self.limits_profile, (month,), observed_at=asked_at, stale_source=_STAMP)
+        return AgentLimits(
+            self.limits_profile, (month,), observed_at=asked_at, stale_source=_STAMP, live=True
+        )
 
 
 def _status_fault(status: object) -> _Fault:
