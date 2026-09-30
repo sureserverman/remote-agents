@@ -2982,6 +2982,49 @@ async def test_the_limits_block_carries_the_claude_default_line_for_every_state(
     assert text.index("Plan limits") < text.index(REMOTE_CONTROL_DEFAULT_TITLE)
 
 
+async def test_the_limits_block_redraws_on_the_floor_with_one_edit_a_pass() -> None:
+    """The fuller block costs what the old one did: one limits read and one edit per pass.
+
+    And a second store change inside `_REDRAW_INTERVAL_SECONDS` reaches neither the providers
+    nor Telegram.
+    """
+    reads = 0
+
+    async def counted() -> tuple[AgentLimits, ...]:
+        nonlocal reads
+        reads += 1
+        return await _a_weekly_window()
+
+    boundary = _limits_block_boundary(_a_running_session(), claude=None, limits=counted, host=None)
+    chat = FakeChat()
+    await boundary.sessions_command(chat.message_update("/sessions"), None)
+    calls: list[str] = []
+    for method in ("send_message", "edit_message_text", "delete_message", "send_document"):
+        real = getattr(chat.bot, method, None)
+        if real is None:
+            continue
+
+        async def recorded(*args, _real=real, _method=method, **kwargs):
+            calls.append(_method)
+            return await _real(*args, **kwargs)
+
+        setattr(chat.bot, method, recorded)
+
+    first = await boundary.redraw_sessions_if_open(chat.bot)
+
+    assert first is True
+    assert calls == ["edit_message_text"], calls
+    assert reads == 2, "one read for the command and one for the redraw"
+    assert "<code>wk █████░░░ 61%</code>" in chat.bot_messages[-1].text
+
+    second = await boundary.redraw_sessions_if_open(chat.bot)
+
+    assert second is False
+    assert calls == ["edit_message_text"], calls
+    assert reads == 2, "a change inside the floor must not reach the providers either"
+    boundary.cancel_pending_redraw()
+
+
 async def test_the_limits_block_omits_the_claude_default_line_when_no_port_is_wired() -> None:
     """An unwired capability draws nothing here, unlike on Settings where it says so.
 

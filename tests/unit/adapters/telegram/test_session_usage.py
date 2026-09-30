@@ -3,13 +3,17 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from html import unescape
 
 import pytest
 from backends import SessionUseCaseDouble, backend_for
 
+from remote_agents.adapters.telegram.limits_block import WIDTH, limits_block
+from remote_agents.adapters.telegram.presenters import MAX_TELEGRAM_TEXT_UNITS
 from remote_agents.adapters.telegram.service import PrivateBotBoundary, build_private_bot
 from remote_agents.application.profiles import ProfileAvailability
 from remote_agents.application.project_catalog import CatalogProject
+from remote_agents.application.session_views import LimitPart, LimitRow, LimitWindow
 from remote_agents.domain.models import (
     ProfileId,
     ProjectId,
@@ -289,3 +293,81 @@ async def test_no_heading_is_promised_when_there_is_nothing_under_it() -> None:
     )._sessions_reply()
 
     assert "Plan limits" not in rendered.text
+
+
+# --- the block on a phone ------------------------------------------------------------------
+
+#: The widest a row's figures get: a spent window, a three-character countdown, the longest
+#: pace words, the longest source this project stamps and a two-digit age.
+_FULL = LimitRow(
+    "claude",
+    (
+        LimitWindow("5h", 100, "59m"),
+        LimitWindow("week", 100, "23h", expected_percent=0, pace_delta=100),
+    ),
+    borrowed="status-line cache",
+    stale_for=None,
+)
+_UNDER = LimitRow(
+    "codex",
+    (LimitWindow("week", 0, "23h", expected_percent=100, pace_delta=-100),),
+    borrowed="rollout file",
+    stale_for=None,
+)
+_DATED = LimitRow(
+    "claude",
+    (LimitWindow("5h", 100, "59m"), LimitWindow("week", 100, "23h")),
+    borrowed="status-line cache",
+    stale_for="23h",
+)
+_SPLIT = LimitRow(
+    "cursor-agent",
+    (LimitWindow("month", 100, "29d", parts=(LimitPart("cursor", 100), LimitPart("other", 100))),),
+    borrowed="Cursor API",
+    stale_for=None,
+)
+_ABSENT = tuple(
+    LimitRow(name, (), None, None, absence=phrase)
+    for name, phrase in (
+        ("claude", "no reading yet"),
+        ("codex", "unreadable"),
+        ("cursor-agent", "sign in to cursor-agent"),
+        ("opencode", "unreadable"),
+    )
+)
+
+_LAYOUTS = {
+    "two agents": (_FULL, _UNDER),
+    "four agents": (_FULL, _UNDER, _SPLIT, _ABSENT[3]),
+    "a dated reading": (_DATED, _UNDER),
+    "all absent": _ABSENT,
+    "Cursor split": (_SPLIT,),
+}
+
+
+@pytest.mark.parametrize("layout", _LAYOUTS)
+def test_the_limits_block_fits_a_phone_line(layout: str) -> None:
+    """No monospace line outruns `WIDTH`, at the widest figures each layout can carry."""
+    lines = limits_block(_LAYOUTS[layout]).split("\n")
+    monospace = [
+        unescape(line.removeprefix("<code>").removesuffix("</code>"))
+        for line in lines
+        if line.startswith("<code>")
+    ]
+
+    assert monospace, lines
+    too_wide = [line for line in monospace if len(line) > WIDTH]
+    assert not too_wide, too_wide
+
+
+def test_the_limits_block_at_its_widest_is_a_line_of_exactly_the_phone_width() -> None:
+    """The bound is met and not merely approached, so `WIDTH` cannot drift above the layout."""
+    assert "<code>wk ░░░░░░░░   0% ↻ 23h ▼ 100 under</code>" in limits_block((_FULL, _UNDER))
+    assert len("wk ░░░░░░░░   0% ↻ 23h ▼ 100 under") == WIDTH
+
+
+def test_the_limits_block_of_four_agents_leaves_the_message_its_room() -> None:
+    """Four agents at their widest are a small share of what one Telegram message may hold."""
+    block = limits_block((_FULL, _UNDER, _SPLIT, _ABSENT[3]))
+
+    assert len(block.encode("utf-16-le")) // 2 < MAX_TELEGRAM_TEXT_UNITS // 8
