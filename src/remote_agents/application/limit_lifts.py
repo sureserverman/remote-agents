@@ -23,11 +23,12 @@ evidence, and the gate review of 2026-09-29 is why "positive" is the word:
 - **A stop whose window is unknown never lifts from a reading**, only on a published schedule:
   "nothing is full" is exactly the condition that left it unnamed. Nor does a named window with no
   published reset (Cursor's month as its screen names it), which has no period to roll past.
-- **A live reading is the one exception to the first rule** (`AgentLimits.live`). Cursor's month is
-  asked of Cursor's server when it is read, so its figures are as new as its stamp, and a stop's
-  own window seen below full in the stop's own period has reopened. Only for a stop that carries
-  that period's end, which it has from a reading that showed the window full: a stop the screen
-  alone named was never measured full, so "below full" says nothing new about it.
+- **A live reading is the one exception to the first rule** (`AgentLimits.live`, DEC-110).
+  Cursor's month is asked of Cursor's server when it is read, so its figures are as new as its
+  stamp, and a stop's own window seen below full in the stop's own period has reopened. Only for
+  a stop that carries that period's end, which it has from a reading that showed the window
+  full: a stop the screen alone named was never measured full, so "below full" says nothing new
+  about it.
 - A Claude model week (`opus week`, ...) is a label no reading publishes, so it lifts on its own
   reset only.
 
