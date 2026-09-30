@@ -31,6 +31,8 @@ _SESSION = "7a729881-8115-41fb-8613-160182188f40"
 _CHAT = 11
 _OBSERVED = datetime(2026, 9, 28, 21, 13, tzinfo=UTC)
 _RESETS = datetime(2026, 9, 28, 23, 50, tzinfo=UTC)
+#: The migration that adds `limit_window` and `limit_resets_at` to `agent_activity`.
+_LIMIT_COLUMNS_MIGRATION = 15
 
 
 def _stop(limit: LimitHit | None) -> AgentActivity:
@@ -70,7 +72,12 @@ async def test_the_activity_store_round_trips_a_limit_hit(tmp_path: Path) -> Non
 async def test_a_limit_hit_survives_the_migration_of_a_pre_existing_store(tmp_path: Path) -> None:
     """The operator's live database gains the columns; an old stop reads back with nothing known."""
     path = tmp_path / "state.sqlite3"
-    old = open_database(path, migrations=MIGRATIONS[:-1])
+    # By version, not by position: `MIGRATIONS[:-1]` stopped being "before the columns" the
+    # day a later migration was appended, and the test then migrated nothing it was about.
+    before_the_columns = tuple(step for step in MIGRATIONS if step[0] < _LIMIT_COLUMNS_MIGRATION)
+    old = open_database(path, migrations=before_the_columns)
+    columns = {row[1] for row in old.execute("PRAGMA table_info(agent_activity)")}
+    assert "limit_window" not in columns, "the old store already has the new columns"
     old.execute(
         "INSERT INTO agent_activity(session_id, kind, detail, confidence, observed_at, ask)"
         " VALUES (?, 'limit_reached', NULL, 'reported', ?, NULL)",

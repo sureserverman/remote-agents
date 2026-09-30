@@ -2079,7 +2079,13 @@ Rolling the *code* back is the upgrade path run at the earlier tag: re-run the i
 re-install them with the older version. An older `--remove` does not know the `UserPromptSubmit`
 group, so it would stay behind. It would be harmless: the older hook records the event's name
 alone, which its drain discards, and never the prompt. Removing it first just leaves nothing
-behind. Do not remove a
+behind. **Rolling back below 0.55.0: delete `cursor_limits_source` and `resume_after_limit`
+from the `[limits]` table of `config.toml` first.** Either Settings switch writes its key there
+the first time it is used, and an older version refuses a config with a key it does not know,
+so `serve`, `tui` and `add-project` would all fail to start. A host that never touched either
+switch has neither key and needs nothing. The database needs nothing either: an older version
+opens it, and its `doctor` reports `database_ready` false, as after any release that migrated.
+Do not remove a
 managed tmux session until its ownership and output have been inspected.
 
 `remote-agents tui` keeps working while the service is disabled, because it needs neither the unit
