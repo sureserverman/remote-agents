@@ -241,6 +241,43 @@ def test_the_environment_token_wins_and_the_file_is_never_opened(
     assert credentials not in opened, "the file is not consulted when the environment answers"
 
 
+def test_an_environment_token_no_header_could_carry_falls_through_to_the_file(
+    tmp_path: Path,
+) -> None:
+    """Refused before `http.client` sees it: its own refusal quotes the value."""
+    write_credentials(tmp_path, credentials_document())
+    opener = ok_opener()
+    unsafe = "tok-not-real\nX-Injected: 1"
+    answer = reader(tmp_path, opener, environment={"CLAUDE_CODE_OAUTH_TOKEN": unsafe}).limits()
+    assert answer.stale_source == STAMP
+    headers = {name.lower(): value for name, value in opener.calls[0][0].header_items()}
+    assert headers["authorization"] == f"Bearer {TOKEN}"
+
+
+def test_a_json_read_that_overflows_the_stack_answers_the_fallback_not_a_raise(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`RecursionError` is a `RuntimeError`. How deep a document must nest to raise it varies
+    by interpreter, so the decoder is made to raise it here. The environment supplies the
+    token, so the one document parsed is the response body."""
+    from remote_agents.ports import agent_usage_support
+
+    fallback = FakeFallback()
+    api = reader(
+        tmp_path,
+        ok_opener(),
+        fallback=fallback,
+        environment={"CLAUDE_CODE_OAUTH_TOKEN": ENVIRONMENT_TOKEN},
+    )
+
+    def overflowing(value: object) -> object:
+        raise RecursionError("Stack overflow while decoding a JSON array")
+
+    monkeypatch.setattr(agent_usage_support.json, "loads", overflowing)
+    assert api.limits() is HOP_READING
+    assert fallback.calls == 1
+
+
 def test_an_empty_environment_token_falls_through_to_the_file(tmp_path: Path) -> None:
     write_credentials(tmp_path, credentials_document())
     opener = ok_opener()
@@ -308,6 +345,8 @@ def faults() -> list[tuple[str, BaseException | FakeResponse]]:
         ("malformed json", FakeResponse(200, b"{not json")),
         ("json list", FakeResponse(200, b"[1, 2, 3]")),
         ("empty body", FakeResponse(200, b"")),
+        ("a header refusal quoting the token", ValueError("Invalid header value " + TOKEN)),
+        ("an error no transport documents", RuntimeError("unexpected " + TOKEN)),
     ]
 
 
@@ -338,6 +377,9 @@ def credential_faults() -> list[tuple[str, object]]:
         ("no accessToken", {"claudeAiOauth": {"refreshToken": "rt-not-real-000"}}),
         ("accessToken empty", credentials_document("")),
         ("accessToken not a string", credentials_document(12345)),
+        ("accessToken with a newline", credentials_document("tok-not-real\nX-Injected: 1")),
+        ("accessToken with a control character", credentials_document("tok-not-real\x00")),
+        ("accessToken outside latin-1", credentials_document("tok-not-real-\u2603")),
     ]
 
 

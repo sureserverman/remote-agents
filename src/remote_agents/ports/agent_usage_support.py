@@ -175,7 +175,9 @@ def _loads(value: object) -> object:
         return None
     try:
         return json.loads(value)
-    except (UnicodeDecodeError, ValueError):
+    except (UnicodeDecodeError, ValueError, RecursionError):
+        # `RecursionError` is what a document nested thousands deep raises. It is a
+        # `RuntimeError`, so it passed every catch set built around `ValueError`.
         return None
 
 

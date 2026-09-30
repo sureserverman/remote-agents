@@ -71,8 +71,8 @@ _CREDENTIALS_RELATIVE = Path(".claude") / ".credentials.json"
 #: The environment variable Claude Code itself honours ahead of the file.
 _TOKEN_VARIABLE = "CLAUDE_CODE_OAUTH_TOKEN"
 
-#: How long one request may take, connect and read included. Well past the ordinary round
-#: trip and still short of a render anyone notices, the same bound the Codex reader uses.
+#: The socket timeout: how long a connect, and each read, may block. Well past the ordinary
+#: round trip and still short of a render anyone notices, the same bound the Codex reader uses.
 _REQUEST_TIMEOUT_SECONDS = 5.0
 
 #: The most of a body this reader will hold: the documented response is two small window
@@ -214,6 +214,10 @@ class ClaudeUsageApiReader:
             # line: a `BadStatusLine` or `LineTooLong` from a proxy or a broken server escapes
             # raw, and is a transport fault like the rest.
             raise _Fault("usage API: malformed body") from None
+        except Exception:  # noqa: BLE001 -- nothing the transport raises may leave this frame
+            # `http.client` refuses a header value by quoting it, so its `ValueError` would
+            # carry the token. Whatever else an opener raises is dropped the same way.
+            raise _Fault("usage API: unreachable") from None
         try:
             status = getattr(response, "status", None)
             if status != 200:
@@ -237,7 +241,8 @@ class ClaudeUsageApiReader:
     def _token(self) -> str:
         """The environment's token when set, else the file's; neither is kept past the caller."""
         from_environment = self._read_environment().get(_TOKEN_VARIABLE)
-        if isinstance(from_environment, str) and from_environment:
+        # A value no header could carry (a stray newline) is treated as unset, like an empty one.
+        if isinstance(from_environment, str) and _header_safe(from_environment):
             return from_environment
         try:
             with self._credentials_path.open("r", encoding="utf-8") as handle:
@@ -251,7 +256,7 @@ class ClaudeUsageApiReader:
         if not isinstance(session, dict):
             raise _Fault("usage API: no credential")
         token = session.get("accessToken")
-        if not isinstance(token, str) or not token:
+        if not isinstance(token, str) or not _header_safe(token):
             raise _Fault("usage API: no credential")
         return token
 
@@ -265,6 +270,15 @@ class ClaudeUsageApiReader:
                 self.limits_profile, absence=LimitsAbsence.NO_READING, stale_source=_STAMP
             )
         return AgentLimits(self.limits_profile, windows, observed_at=asked_at, stale_source=_STAMP)
+
+
+def _header_safe(token: str) -> bool:
+    """Whether a token can be sent as a header value at all: visible ASCII, no spaces.
+
+    Checked here so a control character never reaches `http.client`, whose refusal quotes the
+    value it refused.
+    """
+    return bool(token) and token.isascii() and token.isprintable() and " " not in token
 
 
 def _usage_windows(

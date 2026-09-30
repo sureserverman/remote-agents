@@ -71,6 +71,25 @@ class ContextWindow:
 
 
 @dataclass(frozen=True, slots=True)
+class UsagePart:
+    """One pool inside a window that the provider meters as separate pools.
+
+    Cursor's month is the case: its own models and every other model each have a percentage
+    *of their own pool*, so the two do not add up to the window's figure and neither is a share
+    of it. `label` is the pool in the owner's words, as `UsageWindow.label` is the window.
+    """
+
+    label: str
+    used_percent: float
+
+    def __post_init__(self) -> None:
+        if not self.label or self.label != self.label.strip():
+            raise ValueError("a usage part needs a trimmed, non-empty label")
+        if not 0 <= self.used_percent <= 100:
+            raise ValueError("a usage part percentage must fall between 0 and 100")
+
+
+@dataclass(frozen=True, slots=True)
 class UsageWindow:
     """One of a plan's rate-limit windows, as the provider itself reports it.
 
@@ -86,6 +105,8 @@ class UsageWindow:
     label: str
     used_percent: float
     resets_at: datetime | None = None
+    parts: tuple[UsagePart, ...] = ()
+    """The window's separately metered pools, or empty for a window that has one figure."""
 
     def __post_init__(self) -> None:
         if not self.label or self.label != self.label.strip():
@@ -152,6 +173,18 @@ class LimitsAbsence(Enum):
     """The read itself failed. The one absence that names a fault rather than a state, and
     the reason `registry.limits` files it: a reader that raised must not be indistinguishable
     from a provider that had nothing to say."""
+
+
+class LimitsNote(Enum):
+    """What the owner can do about an absence, when the reader knows.
+
+    An absence says why there are no windows; this says what would change that. A signal and
+    not a sentence, for `LimitsAbsence`'s reason: the words are presentation's (DEC-043).
+    """
+
+    SIGN_IN = "sign_in"
+    """The provider's own login is missing or was refused. This project never refreshes or
+    writes another program's credential, so only the provider's CLI can mend it."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -226,6 +259,9 @@ class AgentLimits:
     rollout file when the app server could not answer. A figure whose freshness
     depends on a file is never rendered as though the service had just measured it.
     """
+
+    note: LimitsNote | None = None
+    """What would mend `absence`, or `None` when the reader has nothing to add."""
 
 
 @dataclass(frozen=True, slots=True)

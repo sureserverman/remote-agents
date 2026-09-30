@@ -1,0 +1,26 @@
+{
+  "billingCycleStart": "1790251200000",
+  "billingCycleEnd": "1792843200000",
+  "planUsage": {
+    "totalSpend": 1240,
+    "includedSpend": 1240,
+    "bonusSpend": 0,
+    "limit": 2000,
+    "remainingBonus": false,
+    "bonusTooltip": "Synthetic fixture text.",
+    "autoPercentUsed": 62,
+    "apiPercentUsed": 18.5,
+    "totalPercentUsed": 40
+  },
+  "spendLimitUsage": {
+    "limitType": "user"
+  },
+  "displayThreshold": 200,
+  "enabled": true,
+  "displayMessage": "Synthetic fixture message.",
+  "autoBucketModels": [
+    "default",
+    "composer-0",
+    "example-model"
+  ]
+}
