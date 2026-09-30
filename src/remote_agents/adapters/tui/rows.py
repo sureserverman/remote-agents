@@ -38,6 +38,7 @@ from remote_agents.application.session_views import (
     SessionRowParts,
     StateGroup,
     group_counts,
+    part_figures,
     percent_gauge,
 )
 from remote_agents.domain.models import SessionRecord
@@ -408,9 +409,6 @@ def pace_style(delta: int) -> str:
 #: What divides the pools of a split bar. A box-drawing bar rather than `PACE_TICK`'s heavy one,
 #: so a boundary between two gauges is never read as a mark inside one.
 PART_DIVIDER = "│"
-
-_PART_LABELS = {"cursor": "Cursor"}
-"""A pool's name as this surface writes it: the provider is a proper noun, the rest are words."""
 
 
 def _split_window(row: LimitRow):
@@ -840,8 +838,8 @@ def _note(row: LimitRow, columns: _LimitColumns) -> tuple[Content, Content]:
 
 
 def _part_figures(window) -> list[str]:
-    """`Cursor 62%`, `other 18%`: each pool's own percent, under the name this surface gives it."""
-    return [f"{_PART_LABELS.get(part.label, part.label)} {part.percent}%" for part in window.parts]
+    """`Cursor 62%`, `other 18%`: each pool's own percent, under the name both surfaces give it."""
+    return list(part_figures(window))
 
 
 def _split_room(row: LimitRow, window) -> int:

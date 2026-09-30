@@ -18,7 +18,13 @@ from remote_agents.domain.models import (
     SessionRecord,
     SessionState,
 )
-from remote_agents.ports.agent_usage import AgentLimits, AgentUsage, ContextWindow, UsageWindow
+from remote_agents.ports.agent_usage import (
+    AgentLimits,
+    AgentUsage,
+    ContextWindow,
+    LimitsAbsence,
+    UsageWindow,
+)
 
 OWNER = 4242
 CHAT = 99
@@ -162,7 +168,7 @@ def _limits_reader(*entries: AgentLimits):
 
 
 @pytest.mark.asyncio
-async def test_the_sessions_screen_carries_one_line_per_answering_agent() -> None:
+async def test_the_sessions_screen_carries_a_group_of_lines_per_agent() -> None:
     """Where a whole-agent fact belongs: on the screen about every session, not inside one."""
     rendered = await _account_boundary(
         _limits_reader(
@@ -173,11 +179,19 @@ async def test_the_sessions_screen_carries_one_line_per_answering_agent() -> Non
         )
     )._sessions_reply()
 
-    # The `Plan limits` block: names padded to the longest plus two inside `<code>`, the
-    # borrowed source disclosed (DEC-061), no reset countdowns on the phone.
-    assert "<b>Plan limits</b>" in rendered.text
-    assert "<code>claude  5h 2% · via status-line cache</code>" in rendered.text
-    assert "<code>codex   week 61%</code>" in rendered.text
+    # The `Plan limits` block: each agent's name over one `<code>` line per window, the fixed
+    # 5h and week kinds always drawn, then the borrowed source and the age (DEC-061).
+    assert rendered.text.endswith(
+        "\n\n<b>Plan limits</b>\n"
+        "claude\n"
+        "<code>5h █░░░░░░░  2%</code>\n"
+        "<code>wk ░░░░░░░░</code>\n"
+        "<code>via status-line cache · live</code>\n"
+        "codex\n"
+        "<code>5h ░░░░░░░░</code>\n"
+        "<code>wk █████░░░ 61%</code>\n"
+        "<code>live</code>"
+    )
 
 
 @pytest.mark.asyncio
@@ -196,7 +210,7 @@ async def test_an_empty_list_still_carries_the_agents_limits() -> None:
     text = (await empty._sessions_reply()).text
 
     assert "Nothing is running." in text
-    assert "<code>codex  week 61%</code>" in text
+    assert "codex\n<code>5h ░░░░░░░░</code>\n<code>wk █████░░░ 61%</code>" in text
 
 
 @pytest.mark.asyncio
@@ -208,30 +222,42 @@ async def test_a_host_that_wired_no_limits_reader_renders_no_block() -> None:
 
 
 @pytest.mark.asyncio
-async def test_a_limits_reader_that_raises_costs_the_block_and_not_the_screen() -> None:
-    """The screen's real content is the list of sessions and the way into each one."""
+async def test_a_limits_reader_that_raises_marks_every_agent_unreadable() -> None:
+    """The screen's real content is the list of sessions and the way into each one.
+
+    And the block stays: one that vanished on a failed read said "no limits to report", which
+    is a different answer from "the read failed".
+    """
 
     async def exploding() -> tuple[AgentLimits, ...]:
         raise RuntimeError("the provider changed its layout under an upgrade")
 
-    rendered = await _account_boundary(exploding)._sessions_reply()
+    rendered = await build_private_bot(
+        OWNER,
+        CHAT,
+        backend=backend_for(sessions=_Launcher(), catalogue=(PROJECT,), limits=exploding),
+        profiles=(
+            ProfileAvailability("claude", True, None),
+            ProfileAvailability("codex", False, "not_installed"),
+        ),
+    )._sessions_reply()
 
     assert "Sessions" in rendered.text
     assert rendered.keyboard
-    # The assertion the test is named for. Without it, a guard that swallowed the exception and
-    # then rendered a diagnostic line in its place passed here -- proven by mutation.
-    assert "Plan limits" not in rendered.text
-    assert "limits" not in rendered.text.replace("Plan limits", "")
+    assert rendered.text.endswith(
+        "\n\n<b>Plan limits</b>\nclaude\n<code>unreadable</code>\ncodex\n<code>unreadable</code>"
+    )
+    # Without it, a guard that swallowed the exception and then rendered the exception's own
+    # words in its place passed here -- proven by mutation.
+    assert "provider changed" not in rendered.text and "RuntimeError" not in rendered.text
 
 
 @pytest.mark.asyncio
-async def test_no_heading_is_promised_when_there_is_nothing_under_it() -> None:
-    """The heading is part of the block, so it goes when the block does.
+async def test_an_agent_that_answered_nothing_keeps_its_row_and_names_its_silence() -> None:
+    """The row set is the profile set's, as it is on the terminal (DEC-061, DEC-100).
 
-    Reached whenever every agent answers with no windows -- Claude's borrowed cache past its
-    thirty-minute fence, codex quiet -- which is the same routine state the TUI pane's empty
-    sentence exists for. A bare "Plan limits" over nothing promises a block and delivers none,
-    and puts the two surfaces back into disagreement at the instant one of them says so.
+    Reached whenever an agent answers with no windows -- Claude's borrowed cache past its
+    thirty-minute fence -- and when its reader was never heard from at all.
     """
     text = (
         await _account_boundary(
@@ -239,4 +265,27 @@ async def test_no_heading_is_promised_when_there_is_nothing_under_it() -> None:
         )._sessions_reply()
     ).text
 
-    assert "Plan limits" not in text
+    assert text.endswith("\n\n<b>Plan limits</b>\nclaude\n<code>no reading yet</code>")
+
+
+@pytest.mark.asyncio
+async def test_no_heading_is_promised_when_there_is_nothing_under_it() -> None:
+    """The heading is part of the block, so it goes when the block does.
+
+    Reached on a host whose every agent publishes no limits at all: none has a row, and a bare
+    "Plan limits" over nothing promises a block and delivers none.
+    """
+    rendered = await build_private_bot(
+        OWNER,
+        CHAT,
+        backend=backend_for(
+            sessions=_Launcher(),
+            catalogue=(PROJECT,),
+            limits=_limits_reader(
+                AgentLimits(ProfileId("opencode"), absence=LimitsAbsence.NOT_REPORTED)
+            ),
+        ),
+        profiles=(ProfileAvailability("opencode", True, None),),
+    )._sessions_reply()
+
+    assert "Plan limits" not in rendered.text

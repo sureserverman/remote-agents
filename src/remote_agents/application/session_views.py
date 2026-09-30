@@ -528,6 +528,17 @@ class LimitWindow:
     positional fixtures above it keep meaning what they meant."""
 
 
+_PART_LABELS = {"cursor": "Cursor"}
+"""A pool's name as both surfaces write it: the provider is a proper noun, the rest are words."""
+
+
+def part_figures(window: LimitWindow) -> tuple[str, ...]:
+    """`Cursor 62%`, `other 18%`: each pool's own percent under its name, for both surfaces."""
+    return tuple(
+        f"{_PART_LABELS.get(part.label, part.label)} {part.percent}%" for part in window.parts
+    )
+
+
 _PACED_WINDOWS = {"week": timedelta(days=7), "day": timedelta(days=1)}
 """How long a window lasts, by the provider's own label (DEC-106).
 

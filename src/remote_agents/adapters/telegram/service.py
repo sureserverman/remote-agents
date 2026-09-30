@@ -174,7 +174,7 @@ from remote_agents.domain.remote_control import (
 )
 from remote_agents.domain.trust import TrustState
 from remote_agents.domain.trust import answerable as trust_answerable
-from remote_agents.ports.agent_usage import ContextWindow
+from remote_agents.ports.agent_usage import AgentLimits, ContextWindow, LimitsAbsence
 from remote_agents.ports.callback_state import CallbackStatePort
 from remote_agents.ports.chat_view import ChatViewPort
 from remote_agents.ports.message_relay import (
@@ -2681,29 +2681,38 @@ class PrivateBotBoundary:
         await self.view.send_apart(self._bot, {"text": text, "parse_mode": ParseMode.HTML})
 
     async def _limit_block(self) -> str:
-        """Each installed agent's rate-limit windows, as a monospace block under the rows.
+        """Each agent's rate-limit windows, as a monospace block under the rows.
 
         Last on the screen and separated by a blank line, because it is a statement about the
         account rather than about any row — the placement that stops a window reading as the
         spend of whichever session it happens to sit beside, which is the report this block
-        exists to answer. Agent names are padded to the longest profile id plus two inside
-        `<code>`, so the percentages line up; a stale reading says so (`· as of 2h ago`) and a
-        borrowed one names its source (`· via …`, DEC-061). Reset countdowns are the local
-        surface's; the phone gets the share.
+        exists to answer. `limits_block` lays it out, and it carries what the terminal's limits
+        pane carries: a row per agent this host offers, its bars, reset countdowns, week pace,
+        and its source and age (DEC-061).
 
-        Escaped here rather than in `limit_rows`, which returns parts and takes no view on
-        either surface's markup (DEC-043, DEC-014). The broad `except` is `_usage_lines`'s
-        trade made again one screen up, and it matters more here: this block sits on the screen
-        that is the only way to reach a session at all, so a provider that changed its file
-        format under an upgrade must not be able to cost the owner the list.
+        **The row set is the profile set's**, as it is on the terminal: an agent that answered
+        nothing keeps its row and says which silence it is.
+
+        **A failed read shows every agent as unreadable, never a vanished block.** A block that
+        disappeared read as "no limits to report", which is a different answer. The broad
+        `except` is `_usage_lines`'s trade made again one screen up, and it matters more here:
+        this block sits on the screen that is the only way to reach a session at all, so a
+        provider that changed its file format under an upgrade must not be able to cost the
+        owner the list.
         """
         if self.backend.limits is None:
             return ""
+        profiles = tuple(ProfileId(profile.profile_id) for profile in self.profiles)
         try:
-            rows = limit_rows(await self.backend.limits())
+            rows = limit_rows(await self.backend.limits(), profiles)
         except Exception:
             logging.getLogger(__name__).debug("account limits read failed", exc_info=True)
-            return ""
+            rows = limit_rows(
+                tuple(
+                    AgentLimits(profile, absence=LimitsAbsence.UNREADABLE) for profile in profiles
+                ),
+                profiles,
+            )
         block = limits_block(rows)
         return f"\n\n{block}" if block else ""
 
