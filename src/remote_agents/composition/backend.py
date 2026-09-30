@@ -34,7 +34,11 @@ from remote_agents.application.project_catalog import CatalogProject, build_cata
 from remote_agents.application.reconcile import SessionLocks
 from remote_agents.application.services import SessionService
 from remote_agents.application.store_watch import StoreWatch
-from remote_agents.composition.limits_source import ConfigLimitsSource, ConfigResumeSetting
+from remote_agents.composition.limits_source import (
+    ConfigCursorLimitsSource,
+    ConfigLimitsSource,
+    ConfigResumeSetting,
+)
 from remote_agents.config import read_claude_limits_source, read_cursor_limits_source
 from remote_agents.domain.models import ProjectId, SessionId
 from remote_agents.domain.profiles import ProfileCompatibility, closed_profiles
@@ -342,6 +346,7 @@ def compose_backend(
         # read side gives: `--config` can name another file, and a row that wrote the default
         # path would flip a switch the running process never consults.
         claude_limits_source=ConfigLimitsSource(config.path or paths.config_path),
+        cursor_limits_source=ConfigCursorLimitsSource(config.path or paths.config_path),
         resume_after_limit=ConfigResumeSetting(config.path or paths.config_path),
         projects=_project_creator(config),
         conversations=_conversation_service(projects.paths, descriptors),

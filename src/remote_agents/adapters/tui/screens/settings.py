@@ -57,7 +57,9 @@ modal drawn correctly because the modal is the last thing it manages to draw. Th
 row is the one that most looks like it should confirm and deliberately does not -- turning it to
 the API makes this service read the owner's Claude credential and call Anthropic -- because that
 consequence needs to be *visible before the press*, not confirmed after it, so it is spelled
-into the row's own label. The two preference rows ask nothing and cost nothing outside this
+into the row's own label. The Cursor limits row confirms turning on and asks nothing to turn
+off: on reads a login this project does not own, and the owner ruled that switch opt-in
+(limit-lifecycle sub-plan 3). The two preference rows ask nothing and cost nothing outside this
 process, and they alone report a failure as "changed, but not remembered": for them the change
 is immediate and only the memory of it can fail.
 """
@@ -78,7 +80,10 @@ from remote_agents.adapters.tui.preferences import (
     read_theme,
 )
 from remote_agents.adapters.tui.screens.base import NEVER_EMPTY, ChoiceScreen
-from remote_agents.adapters.tui.screens.confirm import HostRemoteControlConfirmModal
+from remote_agents.adapters.tui.screens.confirm import (
+    CursorLimitsConfirmModal,
+    HostRemoteControlConfirmModal,
+)
 
 # From the dashboard rather than re-spelled here, and the direction of the import is what keeps
 # it honest: the dashboard draws the Codex *reading* on its limits pane, so that module owns the
@@ -95,8 +100,12 @@ from remote_agents.adapters.tui.screens.dashboard import (
 )
 from remote_agents.application.host_remote_control import host_remote_control_directions
 from remote_agents.application.limits_source import (
+    CURSOR_LIMITS_ON,
+    CURSOR_LIMITS_SOURCE_LABELS,
+    CURSOR_LIMITS_SOURCE_TITLE,
     LIMITS_SOURCE_LABELS,
     LIMITS_SOURCE_TITLE,
+    next_cursor_limits_source,
     next_limits_source,
 )
 from remote_agents.application.remote_control_default import (
@@ -117,6 +126,7 @@ _LOG = logging.getLogger(__name__)
 _CLAUDE_ROW = "settings:claude-remote-control-default"
 _CODEX_ROW = "settings:codex-remote-control"
 _LIMITS_SOURCE_ROW = "settings:claude-limits-source"
+_CURSOR_LIMITS_ROW = "settings:cursor-limits-source"
 _RESUME_ROW = "settings:resume-after-limit"
 _THEME_ROW = "settings:theme"
 _ORDER_ROW = "settings:project-order"
@@ -132,6 +142,7 @@ SETTINGS_ROWS = (
     _CLAUDE_ROW,
     _CODEX_ROW,
     _LIMITS_SOURCE_ROW,
+    _CURSOR_LIMITS_ROW,
     _RESUME_ROW,
     _THEME_ROW,
     _ORDER_ROW,
@@ -158,6 +169,13 @@ def _limits_source_line(value: str | None) -> str:
     if value is None:
         return f"{LIMITS_SOURCE_TITLE} · {UNAVAILABLE}"
     return f"{LIMITS_SOURCE_TITLE} · {LIMITS_SOURCE_LABELS.get(value, value)}"
+
+
+def _cursor_limits_line(value: str | None) -> str:
+    """The Cursor limits row, or *unavailable* for a composition that wired no switch."""
+    if value is None:
+        return f"{CURSOR_LIMITS_SOURCE_TITLE} · {UNAVAILABLE}"
+    return f"{CURSOR_LIMITS_SOURCE_TITLE} · {CURSOR_LIMITS_SOURCE_LABELS.get(value, value)}"
 
 
 def _resume_line(value: bool | None) -> str:
@@ -210,6 +228,8 @@ class SettingsScreen(ChoiceScreen):
         #: `None` rather than the default string, because "this host cannot choose" and "this
         #: host chose the hop" are different answers and the row must not render them alike.
         self._limits_source: str | None = None
+        #: Cursor's stored switch, or `None` for a composition that wired none.
+        self._cursor_limits: str | None = None
         #: The stored resume switch, or `None` for a composition that wired none.
         self._resume: bool | None = None
         #: The two terminal preferences, as last read. Plain strings rather than `None`-able
@@ -285,6 +305,14 @@ class SettingsScreen(ChoiceScreen):
                 self._limits_source = await source.read()
             except Exception:
                 _LOG.exception("the Claude limits source could not be read")
+        cursor = self.services.backend.cursor_limits_source
+        if cursor is None:
+            self._cursor_limits = None
+        else:
+            try:
+                self._cursor_limits = await cursor.read()
+            except Exception:
+                _LOG.exception("the Cursor limits switch could not be read")
         resume = self.services.backend.resume_after_limit
         if resume is None:
             self._resume = None
@@ -313,6 +341,7 @@ class SettingsScreen(ChoiceScreen):
                 (_CLAUDE_ROW, remote_control_default_line(self._claude_default)),
                 (_CODEX_ROW, host_remote_control_line(self._host_status)),
                 (_LIMITS_SOURCE_ROW, _limits_source_line(self._limits_source)),
+                (_CURSOR_LIMITS_ROW, _cursor_limits_line(self._cursor_limits)),
                 (_RESUME_ROW, _resume_line(self._resume)),
                 (_THEME_ROW, f"{THEME_TITLE} · {THEME_LABELS.get(self._theme, self._theme)}"),
                 (
@@ -356,6 +385,9 @@ class SettingsScreen(ChoiceScreen):
             return
         if key == _LIMITS_SOURCE_ROW:
             await self.advance_limits_source()
+            return
+        if key == _CURSOR_LIMITS_ROW:
+            await self.advance_cursor_limits_source()
             return
         if key == _RESUME_ROW:
             await self.flip_resume()
@@ -418,6 +450,48 @@ class SettingsScreen(ChoiceScreen):
                 self.set_status(f"{LIMITS_SOURCE_TITLE} is now {word}.")
             else:
                 self.announce(f"{LIMITS_SOURCE_TITLE} could not be changed; it is still {word}.")
+
+    async def advance_cursor_limits_source(self) -> None:
+        """One press: read, ask if the press turns it on, write, read back, say what it now is.
+
+        `advance_limits_source`'s shape with one step added. Turning it on makes this service
+        read the Cursor CLI's login and call Cursor's server, so that direction is confirmed
+        first (`CursorLimitsConfirmModal`), from this screen handler (DEC-025/068). Turning it
+        off asks nothing. The guard is held across the read and the whole modal, as
+        `confirm_codex_remote_control` holds it.
+
+        A refused write is detected by the read-back, because the port cannot raise to say it
+        declined.
+        """
+        port = self.services.backend.cursor_limits_source
+        if port is None or self.tui.busy:
+            return
+        async with self.holding_the_guard():
+            try:
+                intended = next_cursor_limits_source(await port.read())
+                if intended == CURSOR_LIMITS_ON:
+                    if not await self.tui.ask_to_confirm(CursorLimitsConfirmModal()):
+                        return
+                async with self.awaiting(f"Changing {CURSOR_LIMITS_SOURCE_TITLE}…"):
+                    await port.write(intended)
+                    self._cursor_limits = await port.read()
+            except Exception as error:
+                _LOG.exception("the Cursor limits switch could not be changed")
+                self.announce(
+                    f"{CURSOR_LIMITS_SOURCE_TITLE} could not be confirmed: {error} "
+                    "Reopen Settings to see what it says."
+                )
+                return
+            if not self.showing:
+                return
+            self._draw_settings_rows()
+            word = CURSOR_LIMITS_SOURCE_LABELS.get(self._cursor_limits, self._cursor_limits)
+            if self._cursor_limits == intended:
+                self.set_status(f"{CURSOR_LIMITS_SOURCE_TITLE} is now {word}.")
+            else:
+                self.announce(
+                    f"{CURSOR_LIMITS_SOURCE_TITLE} could not be changed; it is still {word}."
+                )
 
     async def flip_resume(self) -> None:
         """One press: read, flip, write, read back, say what it now is.

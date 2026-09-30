@@ -49,6 +49,7 @@ adds to this list:
 
 import re
 from dataclasses import replace
+from html import escape as escape_html
 
 import pytest
 from backends import FakeHostRemoteControl, SessionUseCaseDouble, backend_for
@@ -787,3 +788,235 @@ async def test_a_composition_with_no_resume_setting_says_so_rather_than_hiding_t
 
     assert f"{RESUME_TITLE} is unavailable." in screen.text, screen.text
     assert not any(label.startswith(RESUME_TITLE) for label in _labels(screen))
+
+
+# --- The Cursor limits row --------------------------------------------------------------------
+
+
+def _bot_with_cursor_limits(source: object | None) -> PrivateBotBoundary:
+    bot = _bot(None, None)
+    bot.backend = replace(bot.backend, cursor_limits_source=source)
+    return bot
+
+
+class _Screen:
+    """A reply's keyboard, in the shape `_labels` and `_token` read a rendered screen in."""
+
+    def __init__(self, reply: dict[str, object]) -> None:
+        self.text = str(reply["text"])
+        self.keyboard = reply["reply_markup"].inline_keyboard  # type: ignore[attr-defined]
+
+
+async def _press(bot: PrivateBotBoundary, screen, label: str, action: str) -> dict[str, object]:
+    """One whole owner press of the button carrying `label`, through the token registry."""
+    token = _token(screen, label)
+    bot.callbacks.bind_pending(CHAT, 1)
+    state = bot.callbacks.resolve(token, owner_id=OWNER, chat_id=CHAT, message_id=1)
+    assert state is not None and state.action == action, state
+    return await bot._reply_for(state.action, state.entity_id, token=token, message_id=1)
+
+
+async def test_the_cursor_limits_row_reads_off_by_default() -> None:
+    from remote_agents.application.limits_source import (
+        CURSOR_LIMITS_SOURCE_LABELS,
+        CURSOR_LIMITS_SOURCE_TITLE,
+    )
+
+    source = FakeLimitsSource("off")
+
+    screen = await _bot_with_cursor_limits(source)._settings_screen()
+
+    assert _row_label(screen, CURSOR_LIMITS_SOURCE_TITLE) == (
+        f"{CURSOR_LIMITS_SOURCE_TITLE}: {CURSOR_LIMITS_SOURCE_LABELS['off']}"
+    )
+    assert source.calls == ["read"], "drawing the screen reads; it must not write"
+
+
+async def test_pressing_the_cursor_limits_row_while_off_asks_and_writes_nothing() -> None:
+    """The question names the outbound call and the local login token, before anything lands."""
+    from remote_agents.application.limits_source import (
+        CURSOR_LIMITS_CONFIRM_LABEL,
+        CURSOR_LIMITS_SOURCE_TITLE,
+    )
+
+    source = FakeLimitsSource("off")
+    bot = _bot_with_cursor_limits(source)
+    screen = await bot._settings_screen()
+
+    asked = await _press(
+        bot, screen, _row_label(screen, CURSOR_LIMITS_SOURCE_TITLE), "settings.cursor_limits.ask"
+    )
+
+    said = str(asked["text"])
+    assert "login token" in said and "Cursor CLI" in said, said
+    assert "Cursor&#x27;s server" in said or "Cursor's server" in said, said
+    # The confirm row, then Cancel, above the fixed navigation bar.
+    assert _labels(_Screen(asked))[:2] == [CURSOR_LIMITS_CONFIRM_LABEL, "Cancel"]
+    assert not [call for call in source.calls if call.startswith("write")], source.calls
+    assert source.value == "off"
+
+
+async def test_confirming_cursor_limits_writes_usage_api_and_reads_it_back() -> None:
+    from remote_agents.application.limits_source import (
+        CURSOR_LIMITS_CONFIRM_LABEL,
+        CURSOR_LIMITS_SOURCE_LABELS,
+        CURSOR_LIMITS_SOURCE_TITLE,
+    )
+
+    source = FakeLimitsSource("off")
+    bot = _bot_with_cursor_limits(source)
+    screen = await bot._settings_screen()
+    asked = await _press(
+        bot, screen, _row_label(screen, CURSOR_LIMITS_SOURCE_TITLE), "settings.cursor_limits.ask"
+    )
+    source.calls.clear()
+
+    result = await _press(
+        bot, _Screen(asked), CURSOR_LIMITS_CONFIRM_LABEL, "settings.cursor_limits.set"
+    )
+
+    assert source.value == "usage-api"
+    assert source.calls[:2] == ["write:usage-api", "read"], source.calls
+    assert f"{CURSOR_LIMITS_SOURCE_TITLE}: {CURSOR_LIMITS_SOURCE_LABELS['usage-api']}" in _labels(
+        _Screen(result)
+    )
+
+
+async def test_a_redelivered_cursor_limits_confirmation_does_not_run_twice() -> None:
+    from remote_agents.application.limits_source import (
+        CURSOR_LIMITS_CONFIRM_LABEL,
+        CURSOR_LIMITS_SOURCE_TITLE,
+    )
+
+    source = FakeLimitsSource("off")
+    bot = _bot_with_cursor_limits(source)
+    screen = await bot._settings_screen()
+    asked = _Screen(
+        await _press(
+            bot,
+            screen,
+            _row_label(screen, CURSOR_LIMITS_SOURCE_TITLE),
+            "settings.cursor_limits.ask",
+        )
+    )
+    token = _token(asked, CURSOR_LIMITS_CONFIRM_LABEL)
+    bot.callbacks.bind_pending(CHAT, 1)
+    state = bot.callbacks.resolve(token, owner_id=OWNER, chat_id=CHAT, message_id=1)
+    assert state is not None
+
+    await bot._reply_for(state.action, state.entity_id, token=token, message_id=1)
+    again = await bot._reply_for(state.action, state.entity_id, token=token, message_id=1)
+
+    assert source.calls.count("write:usage-api") == 1
+    assert "already run" in str(again["text"]), again["text"]
+
+
+async def test_cancelling_the_cursor_limits_question_returns_to_settings_unchanged() -> None:
+    from remote_agents.application.limits_source import (
+        CURSOR_LIMITS_SOURCE_LABELS,
+        CURSOR_LIMITS_SOURCE_TITLE,
+    )
+
+    source = FakeLimitsSource("off")
+    bot = _bot_with_cursor_limits(source)
+    screen = await bot._settings_screen()
+    asked = await _press(
+        bot, screen, _row_label(screen, CURSOR_LIMITS_SOURCE_TITLE), "settings.cursor_limits.ask"
+    )
+
+    back = await _press(bot, _Screen(asked), "Cancel", "settings.open")
+
+    assert source.value == "off"
+    assert not [call for call in source.calls if call.startswith("write")]
+    assert f"{CURSOR_LIMITS_SOURCE_TITLE}: {CURSOR_LIMITS_SOURCE_LABELS['off']}" in _labels(
+        _Screen(back)
+    )
+
+
+async def test_turning_cursor_limits_off_is_one_press_and_asks_nothing() -> None:
+    from remote_agents.application.limits_source import (
+        CURSOR_LIMITS_SOURCE_LABELS,
+        CURSOR_LIMITS_SOURCE_TITLE,
+    )
+
+    source = FakeLimitsSource("usage-api")
+    bot = _bot_with_cursor_limits(source)
+    screen = await bot._settings_screen()
+
+    result = await _press(
+        bot, screen, _row_label(screen, CURSOR_LIMITS_SOURCE_TITLE), "settings.cursor_limits.set"
+    )
+
+    assert source.value == "off"
+    assert f"{CURSOR_LIMITS_SOURCE_TITLE}: {CURSOR_LIMITS_SOURCE_LABELS['off']}" in _labels(
+        _Screen(result)
+    )
+
+
+async def test_a_cursor_limits_press_carries_its_direction_and_never_toggles() -> None:
+    """A token outlives its screen (DEC-011). A stale "turn off" pressed after the terminal
+    already turned it off writes off again; it never turns the credential read on."""
+    from remote_agents.application.limits_source import CURSOR_LIMITS_SOURCE_TITLE
+
+    source = FakeLimitsSource("usage-api")
+    bot = _bot_with_cursor_limits(source)
+    screen = await bot._settings_screen()
+    source.value = "off"  # the terminal's Settings screen got there first
+
+    await _press(
+        bot, screen, _row_label(screen, CURSOR_LIMITS_SOURCE_TITLE), "settings.cursor_limits.set"
+    )
+
+    assert source.value == "off"
+    assert "write:usage-api" not in source.calls
+
+
+async def test_a_cursor_limits_direction_outside_the_set_writes_nothing() -> None:
+    source = FakeLimitsSource("off")
+    bot = _bot_with_cursor_limits(source)
+    token = bot._callback("settings.cursor_limits.set", "carrier-pigeon", mutation=True)
+    bot.callbacks.bind_pending(CHAT, 1)
+
+    reply = await bot._reply_for(
+        "settings.cursor_limits.set", "carrier-pigeon", token=token, message_id=1
+    )
+
+    assert not [call for call in source.calls if call.startswith("write")]
+    assert "incomplete" in str(reply["text"])
+
+
+async def test_a_refused_cursor_limits_write_says_so() -> None:
+    from remote_agents.application.limits_source import (
+        CURSOR_LIMITS_SOURCE_LABELS,
+        CURSOR_LIMITS_SOURCE_TITLE,
+    )
+
+    source = FakeLimitsSource("usage-api", refuse=True)
+    bot = _bot_with_cursor_limits(source)
+    screen = await bot._settings_screen()
+
+    result = await _press(
+        bot, screen, _row_label(screen, CURSOR_LIMITS_SOURCE_TITLE), "settings.cursor_limits.set"
+    )
+
+    said = str(result["text"])
+    assert CURSOR_LIMITS_SOURCE_TITLE in said and "still" in said, said
+    assert escape_html(CURSOR_LIMITS_SOURCE_LABELS["usage-api"]) in said, said
+
+
+async def test_a_composition_with_no_cursor_limits_source_says_so() -> None:
+    from remote_agents.application.limits_source import CURSOR_LIMITS_SOURCE_TITLE
+
+    screen = await _bot_with_cursor_limits(None)._settings_screen()
+
+    assert all(not label.startswith(CURSOR_LIMITS_SOURCE_TITLE) for label in _labels(screen))
+    assert f"{CURSOR_LIMITS_SOURCE_TITLE} is unavailable." in screen.text
+
+
+async def test_help_names_the_settings_screen_for_a_host_that_wired_only_cursor_limits() -> None:
+    chat = FakeChat(chat_id=CHAT, owner_id=OWNER)
+    only_cursor = _bot_with_cursor_limits(FakeLimitsSource("off"))
+
+    await only_cursor.help_command(chat.message_update("/help"), None)
+
+    assert "Settings" in chat.bot_messages[0].text

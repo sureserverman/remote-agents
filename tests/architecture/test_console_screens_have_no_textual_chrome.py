@@ -58,6 +58,7 @@ from remote_agents.adapters.tui.screens import (
 from remote_agents.adapters.tui.screens.base import ChoiceScreen, GatheredSelectionScreen
 from remote_agents.adapters.tui.screens.confirm import (
     ConfirmScreen,
+    CursorLimitsConfirmModal,
     HostPairingCodeModal,
     HostRemoteControlConfirmModal,
     HostRemoteControlDirectionModal,
@@ -184,6 +185,7 @@ _ARRANGED: dict[type[Screen], Callable[[], Screen] | None] = {
     HostRemoteControlConfirmModal: lambda: HostRemoteControlConfirmModal.for_direction(
         RemoteControlState.ACTIVE
     ),
+    CursorLimitsConfirmModal: CursorLimitsConfirmModal,
     HostRemoteControlDirectionModal: lambda: HostRemoteControlDirectionModal(
         (RemoteControlState.ACTIVE, RemoteControlState.INACTIVE)
     ),

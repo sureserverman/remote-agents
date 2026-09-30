@@ -118,6 +118,10 @@ from remote_agents.application.host_remote_control import (
     HOST_REMOTE_CONTROL_LABELS,
     HOST_REMOTE_CONTROL_TITLE,
 )
+from remote_agents.application.limits_source import (
+    CURSOR_LIMITS_CONFIRM_LABEL,
+    CURSOR_LIMITS_CONFIRM_QUESTION,
+)
 from remote_agents.application.session_actions import explain_state, remote_control_target
 from remote_agents.domain.models import SessionRecord
 from remote_agents.domain.remote_control import PairingCode, RemoteControlState
@@ -444,6 +448,26 @@ class HostRemoteControlConfirmModal(ConfirmScreen):
             f"{effect}",
             confirm_label=f"Yes, {label.casefold()}",
         )
+
+
+class CursorLimitsConfirmModal(ConfirmScreen):
+    """Ask before this service starts reading the Cursor CLI's login and calling Cursor.
+
+    The one Settings question that is not about Remote Control. Turning Cursor limits on is
+    one press back, so it is not asked because it cannot be undone. It is asked because on
+    uses a credential this project does not own, and the owner ruled the switch opt-in. The
+    question and the confirm label are the application's, and the bot asks with the same two.
+
+    **Not in `ALL_CONFIRMS`**, for `HostRemoteControlConfirmModal`'s reason: that registry's
+    arrangements are keyed by a session-detail row, and this question has no session. The
+    abort resting under the cursor is inherited from `ConfirmScreen` and asserted in
+    `tests/unit/adapters/tui/test_settings_screen.py`.
+    """
+
+    position = "CURSOR_LIMITS_MODAL"
+    question = CURSOR_LIMITS_CONFIRM_QUESTION
+    confirm_key = "cursor-limits-confirm"
+    confirm_label = CURSOR_LIMITS_CONFIRM_LABEL
 
 
 class HostRemoteControlDirectionModal(ModalScreen[RemoteControlState | None]):

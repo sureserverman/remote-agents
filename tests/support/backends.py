@@ -72,6 +72,7 @@ def backend_for(
     host_remote_control: object | None = _UNSET,
     claude_remote_control_default: object | None = _UNSET,
     claude_limits_source: object | None = _UNSET,
+    cursor_limits_source: object | None = _UNSET,
     state_events: object | None = _UNSET,
     close_usage_readers: Callable[[], Awaitable[None]] | None = _UNSET,  # type: ignore[assignment]
     max_label_length: int = _UNSET,  # type: ignore[assignment]
@@ -106,6 +107,7 @@ def backend_for(
         "host_remote_control": host_remote_control,
         "claude_remote_control_default": claude_remote_control_default,
         "claude_limits_source": claude_limits_source,
+        "cursor_limits_source": cursor_limits_source,
         "state_events": state_events,
         "limits": limits,
         "close_usage_readers": close_usage_readers,

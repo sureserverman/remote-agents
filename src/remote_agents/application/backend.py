@@ -226,6 +226,15 @@ class Backend:
     would pull its import into every test double that builds a partial backend.
     """
 
+    cursor_limits_source: object | None = None
+    """Whether Cursor's monthly usage is read at all, a `ports.limits_source` port.
+
+    `claude_limits_source`'s sibling for Cursor's switch (`limits.cursor_limits_source`): on
+    makes this service read the Cursor CLI's login and call Cursor's server, so both surfaces
+    ask before turning it on. Optional for the same reason, and its absence renders
+    unavailable from `is None` (DEC-061/067). Typed `object` for the reason `sessions` is.
+    """
+
     resume_after_limit: object | None = None
     """Whether a limit-stopped session is sent one nudge after its lift, a `ports.resume_setting`.
 

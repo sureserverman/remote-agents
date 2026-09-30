@@ -517,10 +517,11 @@ def _surfaces() -> list[type[RemoteAgentsTui]]:
     return [RemoteAgentsTui, ProjectsPane, SessionsPane, LimitsPane, FeedPane]
 
 
-async def test_f2_opens_the_six_row_settings_screen_from_every_surface() -> None:
-    """One key, five processes, the same six rows -- the pane that had no route (BL-057) has F2.
+async def test_f2_opens_the_seven_row_settings_screen_from_every_surface() -> None:
+    """One key, five processes, the same seven rows -- the pane that had no route (BL-057) has F2.
 
-    Six since limit-lifecycle sub-plan 2 added the resume switch."""
+    Six since limit-lifecycle sub-plan 2 added the resume switch, seven since sub-plan 3 added
+    Cursor's limits switch."""
     from textual.widgets import OptionList
 
     from remote_agents.adapters.tui.screens.settings import SETTINGS_ROWS, SettingsScreen
@@ -538,7 +539,7 @@ async def test_f2_opens_the_six_row_settings_screen_from_every_surface() -> None
             choices = app.screen.query_one("#choices", OptionList)
             drawn = [choices.get_option_at_index(index).id for index in range(choices.option_count)]
             assert drawn == list(SETTINGS_ROWS), f"{surface.__name__} drew {drawn}"
-            assert len(drawn) == 6
+            assert len(drawn) == 7
 
             await pilot.press("escape")
             await pilot.pause()

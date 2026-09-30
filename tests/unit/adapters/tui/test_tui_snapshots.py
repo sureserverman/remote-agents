@@ -443,6 +443,11 @@ class _ClaudeLimitsSource:
         return "usage-api"
 
 
+class _CursorLimitsSource:
+    async def read(self) -> str:
+        return "off"
+
+
 def _activities() -> tuple[AgentActivity, ...]:
     return (
         AgentActivity(
@@ -583,6 +588,9 @@ def _settings_context() -> TuiContext:
             context.backend,
             claude_remote_control_default=_ClaudeRemoteControlDefault(),
             claude_limits_source=_ClaudeLimitsSource(),
+            # Wired for the rule above: unwired, the baseline would photograph a Cursor row
+            # reading `unavailable` on a host where production always wires it.
+            cursor_limits_source=_CursorLimitsSource(),
         ),
     )
 

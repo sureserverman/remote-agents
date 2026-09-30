@@ -526,10 +526,13 @@ def test_the_backend_capability_set_is_read_from_the_dataclass() -> None:
     **Seventeen since `resume_after_limit` joined them** (limit-lifecycle sub-plan 02,
     2026-09-29), for `claude_limits_source`'s reason: both surfaces draw a Settings row for
     it, and a host that wired no switch says *unavailable* from a field that is `None`.
+
+    **Eighteen since `cursor_limits_source` joined them** (limit-lifecycle sub-plan 03,
+    2026-09-30), for the same reason: both surfaces draw a Settings row for Cursor's switch.
     """
     fields = _backend_fields()
-    assert len(fields) == 17, (
-        f"`Backend` now declares {len(fields)} fields, not 17. That is fine — but it widens "
+    assert len(fields) == 18, (
+        f"`Backend` now declares {len(fields)} fields, not 18. That is fine — but it widens "
         "what Rule 2 forbids probing for, so confirm the new field is a capability an adapter "
         "should read as a declared field rather than discover."
     )

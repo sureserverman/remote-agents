@@ -87,8 +87,14 @@ from remote_agents.application.host_remote_control import (
     pair_available,
 )
 from remote_agents.application.limits_source import (
+    CURSOR_LIMITS_CONFIRM_LABEL,
+    CURSOR_LIMITS_CONFIRM_QUESTION,
+    CURSOR_LIMITS_ON,
+    CURSOR_LIMITS_SOURCE_LABELS,
+    CURSOR_LIMITS_SOURCE_TITLE,
     LIMITS_SOURCE_LABELS,
     LIMITS_SOURCE_TITLE,
+    next_cursor_limits_source,
     next_limits_source,
 )
 from remote_agents.application.profiles import ProfileAvailability
@@ -1352,6 +1358,7 @@ class PrivateBotBoundary:
             self.backend.claude_remote_control_default is not None
             or self.backend.host_remote_control is not None
             or self.backend.claude_limits_source is not None
+            or self.backend.cursor_limits_source is not None
             or self.backend.resume_after_limit is not None
         ):
             # Conditional on a row being wired, unlike the `/settings` menu entry, and the two
@@ -1652,6 +1659,14 @@ class PrivateBotBoundary:
             return await self._settings_limits_source_reply(token, message_id)
         if action == "settings.resume_after_limit":
             return await self._settings_resume_reply(token, message_id)
+        # Cursor's switch has three: the question, the write, and the way back from the
+        # question. The write carries its direction, so a stale button never toggles.
+        if action == "settings.cursor_limits.ask":
+            return _reply_arguments(self._settings_cursor_limits_confirm())
+        if action == "settings.cursor_limits.set":
+            return await self._settings_cursor_limits_reply(entity_id, token, message_id)
+        if action == "settings.open":
+            return _reply_arguments(await self._settings_screen())
         # `host.remote.pair` is deliberately absent: it is handled before this dispatcher
         # runs, because its message must be *sent* rather than edited into the live view.
         if action == "session.trust":
@@ -3004,6 +3019,7 @@ class PrivateBotBoundary:
         *,
         limits_source: str | None = None,
         resume: bool | None = None,
+        cursor_limits: str | None = None,
     ) -> RenderedMessage:
         """Four rows about this machine, each reading its own source.
 
@@ -3115,6 +3131,27 @@ class PrivateBotBoundary:
                     ),
                 )
             )
+        cursor = self.backend.cursor_limits_source
+        if cursor is None:
+            lines += ["", f"{escape(CURSOR_LIMITS_SOURCE_TITLE)} is unavailable."]
+        else:
+            chosen_cursor = await cursor.read() if cursor_limits is None else cursor_limits
+            intended = next_cursor_limits_source(chosen_cursor)
+            rows.append(
+                (
+                    Button(
+                        f"{_LIMITS_EMOJI} {CURSOR_LIMITS_SOURCE_TITLE}: "
+                        f"{CURSOR_LIMITS_SOURCE_LABELS.get(chosen_cursor, chosen_cursor)}",
+                        # Turning it on goes to a question first, which writes nothing.
+                        # Turning it off is the write itself. Both carry the direction rather
+                        # than "advance": a token outlives its screen (DEC-011), and a stale
+                        # press must not be able to turn the credential read on.
+                        self._callback("settings.cursor_limits.ask", "cursor")
+                        if intended == CURSOR_LIMITS_ON
+                        else self._callback("settings.cursor_limits.set", intended, mutation=True),
+                    ),
+                )
+            )
         switch = self.backend.resume_after_limit
         if switch is None:
             lines += ["", f"{escape(RESUME_TITLE)} is unavailable."]
@@ -3175,6 +3212,68 @@ class PrivateBotBoundary:
             self._message(
                 f"{escape(LIMITS_SOURCE_TITLE)} could not be changed; it is still "
                 f"<code>{escape(LIMITS_SOURCE_LABELS.get(landed, landed))}</code>.",
+                screen.keyboard,
+            )
+        )
+
+    def _settings_cursor_limits_confirm(self) -> RenderedMessage:
+        """Ask before Cursor limits are turned on. A question, so nothing is read or written.
+
+        The words are the application's, and the terminal's modal asks with the same two. The
+        confirm button carries the direction and a fresh one-shot token. Cancel redraws
+        Settings.
+        """
+        if self.backend.cursor_limits_source is None:
+            return self._message(f"{escape(CURSOR_LIMITS_SOURCE_TITLE)} is unavailable.")
+        title, _, body = CURSOR_LIMITS_CONFIRM_QUESTION.partition("\n")
+        return self._message(
+            f"<b>{escape(title)}</b>\n{escape(body)}",
+            (
+                (
+                    Button(
+                        CURSOR_LIMITS_CONFIRM_LABEL,
+                        self._callback(
+                            "settings.cursor_limits.set", CURSOR_LIMITS_ON, mutation=True
+                        ),
+                    ),
+                ),
+                (Button("Cancel", self._callback("settings.open", "settings")),),
+            ),
+        )
+
+    async def _settings_cursor_limits_reply(
+        self, entity_id: str, token: str, message_id: int
+    ) -> dict[str, object]:
+        """Write the direction this press carries, then draw what the file says.
+
+        `_settings_limits_source_reply`'s shape, except that the value comes from the button
+        and not from advancing a fresh read. On is only ever minted by the question screen,
+        and a redelivered callback is answered "already run". A refused write is detected by
+        the read-back.
+        """
+        source = self.backend.cursor_limits_source
+        if source is None:
+            return _reply_arguments(
+                self._message(f"{escape(CURSOR_LIMITS_SOURCE_TITLE)} is unavailable.")
+            )
+        if entity_id not in CURSOR_LIMITS_SOURCE_LABELS:
+            return _reply_arguments(self._message("That Cursor limits request is incomplete."))
+        if not self.callbacks.claim_mutation(
+            token,
+            owner_id=self.owner_user_id,
+            chat_id=self.owner_chat_id,
+            message_id=message_id,
+        ):
+            return _reply_arguments(self._message("That action has already run."))
+        await source.write(entity_id)
+        landed = await source.read()
+        screen = await self._settings_screen(cursor_limits=landed)
+        if landed == entity_id:
+            return _reply_arguments(screen)
+        return _reply_arguments(
+            self._message(
+                f"{escape(CURSOR_LIMITS_SOURCE_TITLE)} could not be changed; it is still "
+                f"<code>{escape(CURSOR_LIMITS_SOURCE_LABELS.get(landed, landed))}</code>.",
                 screen.keyboard,
             )
         )

@@ -65,3 +65,43 @@ def next_limits_source(current: str) -> str:
     """
     index = _CYCLE.index(current) if current in _CYCLE else -1
     return _CYCLE[(index + 1) % len(_CYCLE)]
+
+
+#: What Cursor's switch is called. Named for the provider like the Claude row, and not "source":
+#: Cursor has one place its limits can be read from, so the choice is whether to read at all.
+CURSOR_LIMITS_SOURCE_TITLE = "Cursor limits"
+
+#: What each state is called. Off is the default, so its label is the short one. The on label
+#: says the two things the row cannot show afterwards, as the Claude row's API label does.
+CURSOR_LIMITS_SOURCE_LABELS: dict[str, str] = {
+    "off": "off",
+    "usage-api": "on (reads your Cursor login, calls Cursor)",
+}
+
+#: What turning it on is asked with, on both surfaces. It names the outbound call and the local
+#: login token, because on is the one state of this row that does something outside this
+#: machine with a credential this project does not own. Turning it off asks nothing.
+CURSOR_LIMITS_CONFIRM_QUESTION = (
+    "Turn on Cursor limits?\n"
+    "This service will read the login token the Cursor CLI keeps on this machine and send it "
+    "to Cursor's server to ask for your usage, at most once a minute from each surface. "
+    "It never changes or refreshes that token. Nothing is read or sent while this is off."
+)
+
+#: The confirm row's label. It names the direction, so the row reads alone.
+CURSOR_LIMITS_CONFIRM_LABEL = "Yes, turn on Cursor limits"
+
+#: The value that needs the question above before it is written.
+CURSOR_LIMITS_ON = "usage-api"
+
+_CURSOR_CYCLE: tuple[str, ...] = ("off", "usage-api")
+
+
+def next_cursor_limits_source(current: str) -> str:
+    """What one press advances to from `current`: `next_limits_source`'s rule for this switch.
+
+    Total. An unknown value answers the default, off, which is also what
+    `config.read_cursor_limits_source` reads that value as.
+    """
+    index = _CURSOR_CYCLE.index(current) if current in _CURSOR_CYCLE else -1
+    return _CURSOR_CYCLE[(index + 1) % len(_CURSOR_CYCLE)]

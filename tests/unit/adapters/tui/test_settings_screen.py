@@ -792,7 +792,7 @@ def _with_limits_source(context: TuiContext, port: object | None) -> TuiContext:
     return replace(context, backend=replace(context.backend, claude_limits_source=port))
 
 
-async def test_the_screen_draws_six_rows_in_the_declared_order(tmp_path: Path) -> None:
+async def test_the_screen_draws_seven_rows_in_the_declared_order(tmp_path: Path) -> None:
     """The set of rows swept from the screen's own table, so the count is the declaration and
     not a numeral in a docstring that the list grows past."""
     from remote_agents.adapters.tui.screens import settings as module
@@ -807,9 +807,9 @@ async def test_the_screen_draws_six_rows_in_the_declared_order(tmp_path: Path) -
         choices = app.screen.query_one("#choices", OptionList)
         drawn = [choices.get_option_at_index(i).id for i in range(choices.option_count)]
 
-        assert len(module.SETTINGS_ROWS) == 6
+        assert len(module.SETTINGS_ROWS) == 7
         assert drawn == list(module.SETTINGS_ROWS)
-        assert len(set(drawn)) == 6, "every row needs a stable id of its own"
+        assert len(set(drawn)) == 7, "every row needs a stable id of its own"
 
 
 async def test_the_limits_source_row_reads_the_hop_on_a_default_config(tmp_path: Path) -> None:
@@ -990,3 +990,243 @@ def test_the_resume_switch_is_a_declared_backend_field() -> None:
 
     assert "resume_after_limit" in {field.name for field in fields(Backend)}
     assert Backend(sessions=object(), projects=object()).resume_after_limit is None
+
+
+# --- The Cursor limits row --------------------------------------------------------------------
+
+
+class FakeCursorLimitsSource:
+    """A scripted `ports.limits_source.LimitsSourcePort` for Cursor's switch."""
+
+    def __init__(self, value: str = "off", *, refuse: bool = False) -> None:
+        self.value = value
+        self.writes: list[str] = []
+        self.refuse = refuse
+
+    async def read(self) -> str:
+        return self.value
+
+    async def write(self, value: str) -> None:
+        self.writes.append(value)
+        if not self.refuse:
+            self.value = value
+
+
+def _with_cursor_limits(context: TuiContext, port: object | None) -> TuiContext:
+    return replace(context, backend=replace(context.backend, cursor_limits_source=port))
+
+
+def _cursor_app(tmp_path: Path, port: object | None) -> RemoteAgentsTui:
+    context = _context(preferences_path=tmp_path / "preferences.json")
+    return RemoteAgentsTui(_with_cursor_limits(context, port))
+
+
+async def _ask_cursor_limits(app: RemoteAgentsTui, pilot) -> asyncio.Task[None]:
+    """Start the row's press as a task: its handler suspends on the modal until answered."""
+    from remote_agents.adapters.tui.screens.confirm import CursorLimitsConfirmModal
+
+    screen = app.screen
+    assert isinstance(screen, SettingsScreen)
+    asking = asyncio.create_task(screen.advance_cursor_limits_source())
+    await _until(
+        lambda: isinstance(app.screen, CursorLimitsConfirmModal),
+        why="the Cursor limits row to raise its confirmation",
+    )
+    return asking
+
+
+async def test_the_cursor_limits_row_reads_off_on_a_default_config(tmp_path: Path) -> None:
+    from remote_agents.application.limits_source import (
+        CURSOR_LIMITS_SOURCE_LABELS,
+        CURSOR_LIMITS_SOURCE_TITLE,
+    )
+
+    app = _cursor_app(tmp_path, FakeCursorLimitsSource())
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await _open_settings(app, pilot)
+
+        assert _row(app, CURSOR_LIMITS_SOURCE_TITLE) == (
+            f"{CURSOR_LIMITS_SOURCE_TITLE} · {CURSOR_LIMITS_SOURCE_LABELS['off']}"
+        )
+
+
+async def test_turning_cursor_limits_on_asks_first_naming_the_call_and_the_token(
+    tmp_path: Path,
+) -> None:
+    """Enter on the row, as the owner presses it: the question is raised from the screen's own
+    handler (DEC-025/068), so the app still answers the next key, and nothing is written yet."""
+    from remote_agents.adapters.tui.screens.confirm import CursorLimitsConfirmModal
+    from remote_agents.application.limits_source import CURSOR_LIMITS_SOURCE_TITLE
+
+    port = FakeCursorLimitsSource()
+    app = _cursor_app(tmp_path, port)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await _open_settings(app, pilot)
+        choices = app.screen.query_one("#choices", OptionList)
+        target = next(
+            index
+            for index in range(choices.option_count)
+            if CURSOR_LIMITS_SOURCE_TITLE in str(choices.get_option_at_index(index).prompt)
+        )
+        for _ in range(target):
+            await pilot.press("down")
+        pressing = asyncio.create_task(pilot.press("enter"))
+        dismissing: asyncio.Task[None] | None = None
+        try:
+            await _until(
+                lambda: isinstance(app.screen, CursorLimitsConfirmModal),
+                why="the row to raise the confirmation",
+            )
+            question = str(app.screen.query_one("#status").render())
+            assert "login token" in question and "Cursor CLI" in question, question
+            assert "Cursor's server" in question, question
+            assert port.writes == [], "nothing is written while the question is open"
+            dismissing = asyncio.create_task(pilot.press("escape"))
+            await _until(
+                lambda: isinstance(app.screen, SettingsScreen),
+                why="the app to answer a key while the confirmation was open",
+            )
+            await asyncio.wait_for(asyncio.gather(pressing, dismissing), timeout=10)
+            assert port.writes == [], "a dismissed question changes nothing"
+        finally:
+            for task in (pressing, dismissing):
+                if task is not None and not task.done():
+                    task.cancel()
+            await _release_any_question(app)
+
+
+async def test_confirming_cursor_limits_writes_usage_api_once_and_redraws(
+    tmp_path: Path,
+) -> None:
+    from remote_agents.application.limits_source import (
+        CURSOR_LIMITS_SOURCE_LABELS,
+        CURSOR_LIMITS_SOURCE_TITLE,
+    )
+
+    port = FakeCursorLimitsSource()
+    app = _cursor_app(tmp_path, port)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await _open_settings(app, pilot)
+        asking = await _ask_cursor_limits(app, pilot)
+        # Down onto the confirm row, deliberately: the abort is the resting one (DEC-007).
+        await pilot.press("down")
+        await pilot.press("enter")
+        await asyncio.wait_for(asking, timeout=5)
+        await pilot.pause()
+
+        assert port.writes == ["usage-api"]
+        assert _row(app, CURSOR_LIMITS_SOURCE_TITLE) == (
+            f"{CURSOR_LIMITS_SOURCE_TITLE} · {CURSOR_LIMITS_SOURCE_LABELS['usage-api']}"
+        )
+        assert CURSOR_LIMITS_SOURCE_TITLE in status(app)
+
+
+async def test_declining_cursor_limits_writes_nothing_and_leaves_the_row_off(
+    tmp_path: Path,
+) -> None:
+    from remote_agents.application.limits_source import (
+        CURSOR_LIMITS_SOURCE_LABELS,
+        CURSOR_LIMITS_SOURCE_TITLE,
+    )
+
+    port = FakeCursorLimitsSource()
+    app = _cursor_app(tmp_path, port)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await _open_settings(app, pilot)
+        asking = await _ask_cursor_limits(app, pilot)
+        await pilot.press("enter")  # the resting row is Cancel
+        await asyncio.wait_for(asking, timeout=5)
+        await pilot.pause()
+
+        assert port.writes == []
+        assert _row(app, CURSOR_LIMITS_SOURCE_TITLE).endswith(CURSOR_LIMITS_SOURCE_LABELS["off"])
+
+
+async def test_turning_cursor_limits_off_asks_nothing(tmp_path: Path) -> None:
+    from remote_agents.application.limits_source import (
+        CURSOR_LIMITS_SOURCE_LABELS,
+        CURSOR_LIMITS_SOURCE_TITLE,
+    )
+
+    port = FakeCursorLimitsSource("usage-api")
+    app = _cursor_app(tmp_path, port)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await _open_settings(app, pilot)
+
+        await _press_row(app, pilot, CURSOR_LIMITS_SOURCE_TITLE)
+
+        assert isinstance(app.screen, SettingsScreen), "off is one press, with no question"
+        assert port.writes == ["off"]
+        assert _row(app, CURSOR_LIMITS_SOURCE_TITLE).endswith(CURSOR_LIMITS_SOURCE_LABELS["off"])
+
+
+async def test_a_refused_cursor_limits_write_reads_as_a_refusal(tmp_path: Path) -> None:
+    from remote_agents.application.limits_source import (
+        CURSOR_LIMITS_SOURCE_LABELS,
+        CURSOR_LIMITS_SOURCE_TITLE,
+    )
+
+    port = FakeCursorLimitsSource("usage-api", refuse=True)
+    app = _cursor_app(tmp_path, port)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await _open_settings(app, pilot)
+
+        await _press_row(app, pilot, CURSOR_LIMITS_SOURCE_TITLE)
+
+        assert port.writes == ["off"]
+        assert CURSOR_LIMITS_SOURCE_LABELS["usage-api"] in _row(app, CURSOR_LIMITS_SOURCE_TITLE)
+        said = " ".join(announcements(app))
+        assert CURSOR_LIMITS_SOURCE_TITLE in said and "still" in said.lower(), said
+
+
+async def test_an_unwired_cursor_limits_row_says_unavailable_and_its_press_does_nothing(
+    tmp_path: Path,
+) -> None:
+    from remote_agents.application.limits_source import CURSOR_LIMITS_SOURCE_TITLE
+    from remote_agents.application.remote_control_default import UNAVAILABLE
+
+    app = _cursor_app(tmp_path, None)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await _open_settings(app, pilot)
+
+        assert _row(app, CURSOR_LIMITS_SOURCE_TITLE).endswith(UNAVAILABLE)
+        await _press_row(app, pilot, CURSOR_LIMITS_SOURCE_TITLE)
+        assert isinstance(app.screen, SettingsScreen)
+        assert _row(app, CURSOR_LIMITS_SOURCE_TITLE).endswith(UNAVAILABLE)
+
+
+def test_the_cursor_limits_confirmation_rests_on_cancel() -> None:
+    from remote_agents.adapters.tui.screens.confirm import CursorLimitsConfirmModal
+
+    assert CursorLimitsConfirmModal().initial_focus_is_mutating is False
+
+
+def test_the_cursor_limits_source_is_a_declared_backend_field() -> None:
+    from dataclasses import fields
+
+    from remote_agents.application.backend import Backend
+
+    assert "cursor_limits_source" in {field.name for field in fields(Backend)}
+    assert Backend(sessions=object(), projects=object()).cursor_limits_source is None
+
+
+def test_the_cursor_limits_words_cover_exactly_the_config_s_closed_set() -> None:
+    from remote_agents.application.limits_source import (
+        CURSOR_LIMITS_SOURCE_LABELS,
+        next_cursor_limits_source,
+    )
+    from remote_agents.config import CURSOR_LIMITS_SOURCES, DEFAULT_CURSOR_LIMITS_SOURCE
+
+    assert set(CURSOR_LIMITS_SOURCE_LABELS) == set(CURSOR_LIMITS_SOURCES)
+    assert next_cursor_limits_source("off") == "usage-api"
+    assert next_cursor_limits_source("usage-api") == "off"
+    assert next_cursor_limits_source("carrier-pigeon") == DEFAULT_CURSOR_LIMITS_SOURCE
+    on = CURSOR_LIMITS_SOURCE_LABELS["usage-api"]
+    assert "login" in on and "calls Cursor" in on, "the on label says what on costs"
