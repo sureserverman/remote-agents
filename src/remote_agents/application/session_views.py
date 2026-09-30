@@ -661,8 +661,8 @@ def limit_rows(
     **`profiles` decides the row set, and its absence keeps the old answer.** Given one, the
     result is one row per profile in that order, windows possibly empty and the silence named --
     a grid whose shape is a property of the host rather than of what the providers happened to
-    publish this minute. Given none, only agents that answered contribute, which is what the
-    bot's block reads and why that surface needs no edit to stay exactly as it was.
+    publish this minute. Both surfaces pass theirs. Given none, only agents that answered
+    contribute, which is what `limit_lines` reads.
 
     A profile the readings do not mention at all is `NO_READING`: nothing was read for it. That
     is the same answer a reader gives when it looked and found nothing, and it is deliberately

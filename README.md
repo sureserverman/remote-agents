@@ -57,7 +57,8 @@ remote-agents install-agent-hooks --provider claude
 
 Nothing else on the host is waiting on you for this. Codex's limits are asked of `codex
 app-server` and fall back to its own rollout files, so no hook of ours stands behind them.
-OpenCode and Cursor publish no rate limits at all. `remote-agents doctor` reports which state
+OpenCode publishes no rate limits at all, and Cursor's are read only once you switch that on
+in Settings. `remote-agents doctor` reports which state
 this host is in on its `claude_limits` line, without moving `healthy`.
 
 To pass the script an option you need bash's `-s --`. A piped `bash --no-onboard` is bash's own
@@ -296,8 +297,9 @@ sessions and notifications panes. The three-pane console does not carry that pan
 are separate processes and the dashboard is not one of them.
 
 **The terminal's pane carries one row per agent that publishes rate limits at all** — today
-Claude and Codex; OpenCode and Cursor publish none, ever, so they get no row rather than a
-permanent line saying nothing will appear there. Columns are keyed by window kind, so a weekly
+Claude, Codex and Cursor; OpenCode publishes none, ever, so it gets no row rather than a
+permanent line saying nothing will appear there. Cursor's row reads *off in Settings* until its
+switch is on, and then draws its month as one bar in two halves, `Cursor N% · other M%`. Columns are keyed by window kind, so a weekly
 window is always under the weekly column and never under somebody else's five-hour one.
 
 **The week carries its pace.** Where a weekly (or daily) window has a live reading and a reset
@@ -312,6 +314,16 @@ cells, and the pane's bottom border explains the tick.
 **One dim line under the rows says where each reading came from and how old it is**: for
 example `claude · status line · as of 4m        codex · live`. A stale reading's date lives
 there rather than on its row, so a row never shows both a countdown and a date.
+
+**The bot's block carries the same facts, laid out for a phone.** Under `Plan limits` on the
+Sessions list each agent's name stands over one line per window: its label, bar, percent,
+`↻` countdown and, where the window has pace, `▲ 8 over`, `▼ 3 under` or `on pace`. The
+five-hour and weekly windows are always drawn, and one the agent did not publish is an empty
+bar. Cursor's month is its two gauges and countdown, with `Cursor N% · other M%` on the next
+line. The agent's last line says where the reading came from and how old it is:
+`via status-line cache · live`. The block has no `┃` tick, no `expected` figure and no colour.
+An agent with no figure keeps its name and says which silence it is, and a read that fails
+marks every agent *unreadable* instead of removing the block.
 
 A reporting agent with no figure keeps its row and says which silence it is rather than
 leaving a blank: *no reading yet* (it does publish limits and none was found — including a

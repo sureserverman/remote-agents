@@ -1838,8 +1838,8 @@ uv run --locked remote-agents tui
 ```
 
 1. Check the `Plan limits` pane before anything else: it shows one row per agent that
-   publishes rate limits — Claude and Codex on this host, the two agents that publish none
-   being absent entirely — with the window columns aligned by kind. Each row shows its gauges or says which silence it is,
+   publishes rate limits — Claude, Codex and Cursor on this host, OpenCode publishing none
+   and being absent entirely — with the window columns aligned by kind. Each row shows its gauges or says which silence it is,
    `no reading yet` or `unreadable`. Codex's figure is asked of `codex app-server` and falls
    back to the rollout file, stamped, when the child cannot answer. Claude's comes from the
    **status-line hop**: `install-agent-hooks --provider claude` wraps the owner's Claude Code
@@ -1862,7 +1862,10 @@ uv run --locked remote-agents tui
    the service reads the login token out of `~/.config/cursor/auth.json` and calls
    `https://api2.cursor.sh` for the month's figures, stamping them `Cursor API`. It never
    changes or refreshes that token, and it sends at most one request a minute from each
-   surface. `remote-agents doctor` reports it in its `cursor_limits_source` line. The pane must never collapse to
+   surface. `remote-agents doctor` reports it in its `cursor_limits_source` line. With the switch off, Cursor's row reads `off in Settings`.
+   The bot's `Plan limits` block on `/sessions` carries the same rows and the same facts, one
+   window per line: bar, percent, `↻` countdown, pace words, and each agent's source and age.
+   The pane must never collapse to
    `No agent limits reported.` once a read has landed and any agent reported; that sentence
    belongs to the moment before the first read and to a host with no limits reader wired.
 1. Open the command palette with `:` or `Ctrl+P` and choose Sessions, which is available from any screen. Sessions lists every managed session the
