@@ -42,6 +42,7 @@ from remote_agents.ports.agent_usage import (
     AgentUsage,
     ContextWindow,
     LimitsAbsence,
+    LimitsNote,
     UsageWindow,
 )
 
@@ -495,6 +496,15 @@ while a provider's own number stays worth showing as long as it is labelled.
 
 
 @dataclass(frozen=True, slots=True)
+class LimitPart:
+    """One separately metered pool of a window as a surface draws it: its label and a whole
+    percent *of its own pool*, so two parts never add up to their window's figure."""
+
+    label: str
+    percent: int
+
+
+@dataclass(frozen=True, slots=True)
 class LimitWindow:
     """One rate-limit window as a surface draws it: the provider's label, a whole percent, and
     how long until it resets (`None` when the provider did not say)."""
@@ -513,6 +523,9 @@ class LimitWindow:
     pace_delta: int | None = None
     """`percent - expected_percent`: positive is ahead of an even spend. A value, never a word
     (DEC-043) -- how it is said, and in which colour, is the surface's."""
+    parts: tuple[LimitPart, ...] = ()
+    """The window's pools, or empty for a window with one figure. Last, and defaulted, so the
+    positional fixtures above it keep meaning what they meant."""
 
 
 _PACED_WINDOWS = {"week": timedelta(days=7), "day": timedelta(days=1)}
@@ -592,6 +605,38 @@ colour is only ever a second signal.
 """
 
 
+OFF_IN_SETTINGS = "off in Settings"
+"""What `LimitsNote.OFF` reads as: the read exists, and the owner has not switched it on."""
+
+_NOTE_WORDS: dict[LimitsNote, str] = {
+    LimitsNote.OFF: OFF_IN_SETTINGS,
+    LimitsNote.SIGN_IN: "sign in to {profile}",
+}
+"""The phrase a note puts in place of its absence's word, chosen once for both surfaces.
+
+In place of, not beside: the note is the more useful half. "unreadable" says a read failed and
+"sign in to cursor-agent" says which command ends it, and a row has room for one phrase.
+"""
+
+
+def _absence_phrase(entry: AgentLimits | None, profile: str) -> str:
+    """Why a row has no windows, in the words that say what would change it."""
+    if entry is None or entry.absence is None:
+        return NO_READING
+    if entry.note is not None:
+        return _NOTE_WORDS[entry.note].format(profile=profile)
+    return _ABSENCE_WORDS[entry.absence]
+
+
+def _never_reports(entry: AgentLimits) -> bool:
+    """Whether a provider publishes no limits and nothing the owner can do would change that.
+
+    `NOT_REPORTED` with `LimitsNote.OFF` is the other case: a switch away from a reading, so it
+    keeps its row and the row says where the switch is.
+    """
+    return entry.absence is LimitsAbsence.NOT_REPORTED and entry.note is not LimitsNote.OFF
+
+
 def limit_rows(
     limits: Iterable[AgentLimits], profiles: Iterable[ProfileId] = ()
 ) -> tuple[LimitRow, ...]:
@@ -636,7 +681,7 @@ def limit_rows(
         wanted = [
             name
             for name in (str(profile) for profile in profiles)
-            if name not in entries or entries[name].absence is not LimitsAbsence.NOT_REPORTED
+            if name not in entries or not _never_reports(entries[name])
         ]
         # A reading is never dropped for want of a matching profile. The profile set decides
         # the grid's *shape*; it does not get to silence an agent that answered -- a host
@@ -649,10 +694,7 @@ def limit_rows(
     for name in wanted:
         entry = entries.get(name)
         windows = entry.windows if entry is not None else ()
-        absence = None
-        if not windows:
-            declared = entry.absence if entry is not None else None
-            absence = _ABSENCE_WORDS[declared] if declared is not None else NO_READING
+        absence = None if windows else _absence_phrase(entry, name)
         stale_for = _stale_for(entry.observed_at) if entry is not None else None
         rows.append(
             LimitRow(
@@ -663,6 +705,10 @@ def limit_rows(
                         percent,
                         None if window.resets_at is None else until(window.resets_at),
                         *_pace(window, percent, live=stale_for is None),
+                        parts=tuple(
+                            LimitPart(part.label, whole_percent(part.used_percent))
+                            for part in window.parts
+                        ),
                     )
                     for window in windows
                     for percent in (whole_percent(window.used_percent),)

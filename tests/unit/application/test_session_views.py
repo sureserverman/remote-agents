@@ -32,6 +32,7 @@ from remote_agents.application.session_views import (
     NO_READING,
     NOT_REPORTED,
     UNREADABLE,
+    LimitPart,
     LimitWindow,
     StateGroup,
     _window_phrase,
@@ -66,6 +67,8 @@ from remote_agents.ports.agent_usage import (
     AgentLimits,
     ContextWindow,
     LimitsAbsence,
+    LimitsNote,
+    UsagePart,
     UsageWindow,
 )
 
@@ -955,6 +958,108 @@ def test_an_agent_whose_read_failed_keeps_its_row_and_says_so() -> None:
 
     assert [row.profile for row in rows] == ["codex"]
     assert rows[0].absence == UNREADABLE
+
+
+# --- Cursor's split window and its switch --------------------------------------------------
+
+
+def _cursor_month(resets: datetime | None = None) -> UsageWindow:
+    return UsageWindow(
+        "month",
+        70.4,
+        resets_at=resets,
+        parts=(UsagePart("cursor", 61.6), UsagePart("other", 18.4)),
+    )
+
+
+def test_a_cursor_window_carries_its_parts_rounded_by_the_one_rule() -> None:
+    """Each pool is a percentage of its own pool, so the parts ride along and are never summed."""
+    resets = datetime.now(UTC) + timedelta(days=4, hours=2)
+    (row,) = limit_rows((_account("cursor-agent", _cursor_month(resets), stale="Cursor API"),))
+
+    (window,) = row.windows
+    assert (window.label, window.percent, window.resets_in) == ("month", 70, "4d")
+    assert window.parts == (LimitPart("cursor", 62), LimitPart("other", 18))
+    assert row.borrowed == "Cursor API"
+
+
+def test_a_window_without_parts_has_none_beside_a_cursor_one() -> None:
+    rows = limit_rows(
+        (_account("codex", UsageWindow("5h", 41.0)), _account("cursor-agent", _cursor_month()))
+    )
+
+    assert [[bool(window.parts) for window in row.windows] for row in rows] == [[False], [True]]
+
+
+def test_a_cursor_month_has_no_pace() -> None:
+    """DEC-106 names `week` and `day`; a month is not one of them, parts or no parts."""
+    resets = datetime.now(UTC) + timedelta(days=10)
+    (row,) = limit_rows((_account("cursor-agent", _cursor_month(resets)),))
+
+    assert (row.windows[0].expected_percent, row.windows[0].pace_delta) == (None, None)
+
+
+def test_a_cursor_row_switched_off_keeps_its_place_and_says_where_the_switch_is() -> None:
+    """`NOT_REPORTED` by the switch is not `NOT_REPORTED` by design: one flip would fill it."""
+    profiles = tuple(ProfileId(name) for name in ("claude", "opencode", "cursor-agent"))
+    rows = limit_rows(
+        (
+            _account("claude", UsageWindow("5h", 9.0)),
+            AgentLimits(ProfileId("opencode"), absence=LimitsAbsence.NOT_REPORTED),
+            AgentLimits(
+                ProfileId("cursor-agent"), absence=LimitsAbsence.NOT_REPORTED, note=LimitsNote.OFF
+            ),
+        ),
+        profiles,
+    )
+
+    assert [row.profile for row in rows] == ["claude", "cursor-agent"]
+    assert rows[1].windows == () and rows[1].absence == "off in Settings"
+
+
+def test_a_cursor_row_with_no_login_names_the_program_to_sign_in_to() -> None:
+    (row,) = limit_rows(
+        (
+            AgentLimits(
+                ProfileId("cursor-agent"),
+                absence=LimitsAbsence.UNREADABLE,
+                stale_source="Cursor API",
+                note=LimitsNote.SIGN_IN,
+            ),
+        ),
+        (ProfileId("cursor-agent"),),
+    )
+
+    assert row.absence == "sign in to cursor-agent"
+
+
+def test_a_cursor_read_that_failed_without_a_note_is_still_unreadable() -> None:
+    (row,) = limit_rows(
+        (AgentLimits(ProfileId("cursor-agent"), absence=LimitsAbsence.UNREADABLE),),
+        (ProfileId("cursor-agent"),),
+    )
+
+    assert row.absence == UNREADABLE
+
+
+def test_a_cursor_row_switched_off_stays_out_of_the_block_the_bot_reads() -> None:
+    """With no profile set only agents that answered contribute; the switch does not change it."""
+    off = AgentLimits(
+        ProfileId("cursor-agent"), absence=LimitsAbsence.NOT_REPORTED, note=LimitsNote.OFF
+    )
+
+    assert limit_rows((off,)) == ()
+    assert limit_lines((off,)) == ()
+
+
+def test_every_note_the_port_can_declare_has_cursor_wording_here() -> None:
+    """A note with no word would fall back to the bare absence and hide what would mend it."""
+    for note in LimitsNote:
+        (row,) = limit_rows(
+            (AgentLimits(ProfileId("cursor-agent"), absence=LimitsAbsence.NO_READING, note=note),),
+            (ProfileId("cursor-agent"),),
+        )
+        assert row.absence not in set(_ABSENCE_WORDS.values()), f"{note} has no wording"
 
 
 # --- weekly pace (DEC-106) ----------------------------------------------------------------
