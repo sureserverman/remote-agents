@@ -1374,8 +1374,8 @@ class PrivateBotBoundary:
             # side. Found by sweeping this stage's prose for stale row counts.
             lines.append(
                 "<b>Settings</b> holds Remote Control for this machine, one row per provider — "
-                "what each provider does when it starts a session — and where Claude's plan "
-                "limits are read from."
+                "what each provider does when it starts a session — and where plan limits are "
+                "read from."
             )
         lines += [
             "",
@@ -3021,11 +3021,12 @@ class PrivateBotBoundary:
         resume: bool | None = None,
         cursor_limits: str | None = None,
     ) -> RenderedMessage:
-        """Four rows about this machine, each reading its own source.
+        """The rows about this machine, each reading its own source.
 
-        The fourth, the resume switch (limit-lifecycle sub-plan 2, DEC-109), is the limits
-        source's sibling: it decides what this service does, not what a provider does, and is
-        drawn and pressed the same way. What follows argues for the first three.
+        The resume switch (limit-lifecycle sub-plan 2, DEC-109) and Cursor's limits switch
+        (sub-plan 3) are the limits source's siblings: each decides what this service does, not
+        what a provider does. Cursor's asks before it is turned on. What follows argues for the
+        first three rows.
 
         Three rows, three subjects, and a screen shared without the vocabulary being shared
         (DEC-071 -- siblings, "not a generalisation"). Claude's row is a stored intention read
@@ -3064,9 +3065,9 @@ class PrivateBotBoundary:
         lines = [
             "<b>Settings</b>",
             "",
-            "Remote Control for this machine, one row per provider, and where Claude's plan "
-            "limits are read from. Each row is its own setting, so changing one says nothing "
-            "about the others.",
+            "Remote Control for this machine, one row per provider, where plan limits are "
+            "read from, and what happens after a limit lifts. Each row is its own setting, so "
+            "changing one says nothing about the others.",
         ]
         rows: list[tuple[Button, ...]] = []
         default = self.backend.claude_remote_control_default

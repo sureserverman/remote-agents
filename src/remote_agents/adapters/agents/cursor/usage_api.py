@@ -24,7 +24,13 @@ model). Each part is a percentage of its own pool, so the two do not add up to t
 is no second source to fall back on. A missing or refused login also carries
 `LimitsNote.SIGN_IN`. One answer is not a failure and not a window: a 200 whose billing cycle
 has already ended is `NO_READING`. Every answer is stamped `"Cursor API"` (DEC-061: every
-answer says where it came from). Only an answer carrying a window is remembered, for a minute.
+answer says where it came from).
+
+**At most one request a minute, whatever the answer.** Once a request has been sent, its
+answer -- a window, a failure, a refused login -- stands for a minute, and callers arriving
+together share one request. A failure is remembered too because there is no cheap fallback
+here: without that, a dead network or an expired token would resend the token on every redraw.
+A login that could not be read sent nothing, so it is not remembered and is read again at once.
 
 The host and the credential path are spelled in this module and nowhere else (DEC-070).
 """
@@ -34,6 +40,7 @@ from __future__ import annotations
 import contextlib
 import http.client
 import logging
+import threading
 import urllib.error
 import urllib.request
 from collections.abc import Callable
@@ -71,7 +78,7 @@ _MAX_BODY_BYTES = 64 * 1024
 #: The most of the login file this reader will hold. The measured file is two tokens.
 _MAX_AUTH_BYTES = 64 * 1024
 
-#: How long one successful answer stands before the server is asked again.
+#: How long the answer to one request stands before the server is asked again.
 _MEMO_SECONDS = 60.0
 
 #: Epoch milliseconds run to 13 digits until the year 2286. A longer run is not a date.
@@ -79,6 +86,10 @@ _MAX_EPOCH_DIGITS = 17
 
 #: What an answer is stamped with, in the owner's words (DEC-061).
 _STAMP = "Cursor API"
+
+#: How `doctor` names this source, worded with its cost, and the one place those words live:
+#: the login file and the host are spelled in this module and nowhere else in the code.
+USAGE_API_DESCRIPTION = "usage API (reads ~/.config/cursor/auth.json and calls api2.cursor.sh)"
 
 _WINDOW_LABEL = "month"
 
@@ -89,9 +100,11 @@ _PARTS: tuple[tuple[str, str], ...] = (("autoPercentUsed", "cursor"), ("apiPerce
 class _Fault(Exception):
     """One of this module's own sentences: the only text a failure may carry to a log."""
 
-    def __init__(self, sentence: str, *, sign_in: bool = False) -> None:
+    def __init__(self, sentence: str, *, sign_in: bool = False, asked: bool = True) -> None:
         super().__init__(sentence)
         self.sign_in = sign_in
+        #: Whether a request went out before this fault. False only for an unreadable login.
+        self.asked = asked
 
 
 Opener = Callable[[urllib.request.Request, float], object]
@@ -141,9 +154,15 @@ class CursorUsageApiReader:
         self._opener: Opener = opener if opener is not None else _open
         self._now = now
         self._remembered: tuple[datetime, AgentLimits] | None = None
+        #: Held across one whole read, so callers arriving together share one request.
+        self._lock = threading.Lock()
 
     def limits(self) -> AgentLimits:
         """Ask once, map the month and its two pools, and date the answer when it was read."""
+        with self._lock:
+            return self._limits()
+
+    def _limits(self) -> AgentLimits:
         asked_at = _moment(self._now)
         if self._remembered is not None:
             remembered_at, answer = self._remembered
@@ -156,14 +175,15 @@ class CursorUsageApiReader:
             # so nothing that later inspects this fault can reach the transport's own text.
             fault.__context__ = None
             _LOG.debug("%s; answering unreadable", fault)
-            return AgentLimits(
+            answer = AgentLimits(
                 self.limits_profile,
                 absence=LimitsAbsence.UNREADABLE,
                 stale_source=_STAMP,
                 note=LimitsNote.SIGN_IN if fault.sign_in else None,
             )
-        if answer.windows:
-            self._remembered = (asked_at, answer)
+            if not fault.asked:
+                return answer
+        self._remembered = (asked_at, answer)
         return answer
 
     def _fetch(self) -> bytes:
@@ -217,13 +237,13 @@ class CursorUsageApiReader:
             with self._auth_path.open("r", encoding="utf-8") as handle:
                 text = handle.read(_MAX_AUTH_BYTES + 1)
         except (OSError, ValueError):
-            raise _Fault("Cursor API: no credential", sign_in=True) from None
+            raise _Fault("Cursor API: no credential", sign_in=True, asked=False) from None
         document = _loads(text) if len(text) <= _MAX_AUTH_BYTES else None
         if not isinstance(document, dict):
-            raise _Fault("Cursor API: no credential", sign_in=True)
+            raise _Fault("Cursor API: no credential", sign_in=True, asked=False)
         token = document.get("accessToken")
         if not isinstance(token, str) or not _header_safe(token):
-            raise _Fault("Cursor API: no credential", sign_in=True)
+            raise _Fault("Cursor API: no credential", sign_in=True, asked=False)
         return token
 
     def _limits_from(self, body: bytes, asked_at: datetime) -> AgentLimits:

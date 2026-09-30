@@ -30,7 +30,10 @@ are the exceptions, each bounded and each stamped (DEC-087): Codex's windows are
 bounded, with the rollout file as the fallback; and, only when the owner has switched
 `limits.claude_limits_source` to `usage-api`, Claude's are asked of the usage endpoint with
 the owner's own token, five seconds bounded, with the status-line hop's recording as the
-fallback. With the default switch nothing here touches the network.
+fallback. A third is opt-in the same way: when the owner has switched
+`limits.cursor_limits_source` to `usage-api`, Cursor's month is asked of Cursor's server with
+the Cursor CLI's own login (`cursor.usage_api`). With the default switches nothing here touches
+the network.
 
 **The providers publish very different amounts, and the asymmetry is the whole shape of this
 module.** Measured on this host on 2026-08-27 rather than taken from documentation, because
@@ -41,7 +44,7 @@ none of these formats is documented and all of them are free to change:
 | claude        | transcript `message.usage` per turn | the status-line hop's recording |
 | codex         | rollout `token_count.info`          | app server; rollout as fallback |
 | opencode      | `opencode.db` `message.data.tokens` | none written down               |
-| cursor-agent  | nothing — see `CursorUsageReader`   | nothing                         |
+| cursor-agent  | nothing — see `CursorUsageReader`   | nothing; opt-in, Cursor's API   |
 
 **Claude's limits are the one number that is not the session's own.** Claude Code receives
 `rate_limits` from the API and hands them to a *status line* command; it never persists them.
@@ -87,6 +90,9 @@ from remote_agents.adapters.agents.claude.usage_api import USAGE_API_DESCRIPTION
 from remote_agents.adapters.agents.codex.account_limits import CodexAccountLimitsReader
 from remote_agents.adapters.agents.codex.hooks import PROVIDER as _CODEX
 from remote_agents.adapters.agents.cursor.usage import CursorUsageReader
+from remote_agents.adapters.agents.cursor.usage_api import (
+    USAGE_API_DESCRIPTION as _CURSOR_USAGE_API_DESCRIPTION,
+)
 from remote_agents.adapters.agents.hook_settings import (
     HookInstallError,
     _foreign_status_line_note,
@@ -658,6 +664,9 @@ def claude_remote_control_default(home: Path) -> ClaudeRemoteControlDefault:
 #: because only the registry may import a provider's package (ARCH-04); the root reads it
 #: off this module as it reads everything else provider-shaped.
 CLAUDE_USAGE_API_DESCRIPTION = USAGE_API_DESCRIPTION
+
+#: The same for Cursor's opt-in source, in its own API module's words.
+CURSOR_USAGE_API_DESCRIPTION = _CURSOR_USAGE_API_DESCRIPTION
 
 
 def claude_status_line_hop_installed(settings_path: Path) -> bool:

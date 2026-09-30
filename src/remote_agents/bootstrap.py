@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING
 
 from remote_agents.adapters.agents.registry import (
     CLAUDE_USAGE_API_DESCRIPTION,
+    CURSOR_USAGE_API_DESCRIPTION,
     HookInstallError,
     claude_status_line_hop_installed,
     default_settings_path,
@@ -777,6 +778,7 @@ def _doctor_report(paths: ProductionPaths, config, drift: dict[str, object]) -> 
         release=_release_state(),
         claude_limits=_claude_limits_state(paths),
         claude_limits_source=_claude_limits_source_line(config),
+        cursor_limits_source=_cursor_limits_source_line(config),
     )
 
 
@@ -791,6 +793,17 @@ def _claude_limits_source_line(config) -> str:
     if config.claude_limits_source == "usage-api":
         return CLAUDE_USAGE_API_DESCRIPTION
     return "status line"
+
+
+def _cursor_limits_source_line(config) -> str:
+    """Whether `limits.cursor_limits_source` is on, worded with its cost.
+
+    `_claude_limits_source_line`'s twin: the `usage API` sentence is Cursor's API module's own
+    (`CURSOR_USAGE_API_DESCRIPTION`), so the login file and the host stay spelled there.
+    """
+    if config.cursor_limits_source == "usage-api":
+        return CURSOR_USAGE_API_DESCRIPTION
+    return "off"
 
 
 def _claude_limits_state(paths: ProductionPaths) -> str:

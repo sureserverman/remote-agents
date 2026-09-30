@@ -1,5 +1,8 @@
 """Which source Claude's account-wide limits are read from, as a thing a surface can change.
 
+Cursor's switch (`limits.cursor_limits_source`, off or on) is a second implementation of the
+same port, with its own closed set. What follows was written for Claude's and holds for both.
+
 The fourth boundary in the Remote Control family's shape but not its subject: like
 `ports/remote_control_default.py` this is a *stored intention* read from a file, and like it
 the read takes no session and the write is a plain assignment. What differs is whose file it

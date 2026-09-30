@@ -684,8 +684,9 @@ def limit_lines(limits: Iterable[AgentLimits]) -> tuple[str, ...]:
     publish it for the whole plan. Naming the agent is what makes the line true, which is why
     `AgentLimits` carries a profile at all.
 
-    **An agent with no windows contributes no line rather than an empty one.** `opencode` and
-    `cursor-agent` are permanently in that state and a bare name with nothing after it is
+    **An agent with no windows contributes no line rather than an empty one.** `opencode` is
+    permanently in that state, and `cursor-agent` is until the owner switches its read on,
+    and a bare name with nothing after it is
     noise; a Claude whose borrowed cache went stale is temporarily in it, and a line that said
     so would be reporting on this project's plumbing rather than on the owner's plan. The
     surfaces are told the difference by there being nothing to draw.

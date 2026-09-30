@@ -1,14 +1,15 @@
 """Settings: what this machine does, and what this terminal remembers.
 
-Five rows in two groups. The first three have the **machine** as their subject -- whether each
-provider's next session starts remote-controlled, and where Claude's account limits are read
-from -- and the last two have this **terminal** as theirs: its theme and the order it lists
-projects in. Nothing here is about a session or a launch, which is what makes it a screen and
-not a line on one of the panes.
+Two groups of rows, listed in `SETTINGS_ROWS`. The first group has the **machine** as its
+subject -- whether each provider's next session starts remote-controlled, where Claude's
+account limits are read from, whether Cursor's are read at all, and whether a limit-stopped
+session is resumed -- and the last two rows have this **terminal** as theirs: its theme and
+the order it lists projects in. Nothing here is about a session or a launch, which is what
+makes it a screen and not a line on one of the panes.
 
 The groups are the draw order and nothing else. No headings and no separators: the screen is
 short enough that a heading would be a bigger thing to read than the rows it introduced, and
-the subjects are legible from the row titles -- three name a provider, two name the surface.
+the subjects are legible from the row titles.
 
 **Why this is a screen of its own rather than a line on an existing pane.** The first facts it
 carries have the *machine* as their subject, not a session and not a launch. Claude resolves

@@ -1,4 +1,4 @@
-"""The bot's Settings screen: three rows about this machine, three vocabularies kept apart.
+"""The bot's Settings screen: rows about this machine, their vocabularies kept apart.
 
 Sibling of `test_host_remote_control_actions.py` and deliberately not an extension of it. That
 one covers the screen whose whole subject is the Codex daemon; this one covers the screen where

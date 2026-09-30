@@ -570,3 +570,38 @@ def test_doctor_names_the_claude_limits_source_and_what_it_costs(
     assert report["claude_limits_source"] == expected
     assert report["healthy"] is True
     assert "claude_limits_source" not in report["components"]
+
+
+@pytest.mark.parametrize(
+    ("stated", "expected"),
+    [
+        pytest.param(None, "off", id="default"),
+        pytest.param("off", "off", id="off"),
+        pytest.param(
+            "usage-api",
+            "usage API (reads ~/.config/cursor/auth.json and calls api2.cursor.sh)",
+            id="usage-api",
+        ),
+    ],
+)
+def test_doctor_names_the_cursor_limits_source_and_what_it_costs(
+    tmp_path, monkeypatch, capsys, stated, expected
+) -> None:
+    """Cursor's switch is the same trust-boundary decision, so the report says its side too.
+
+    Claude's line is unmoved by it: the two switches share a literal and nothing else."""
+    _arrange(tmp_path, monkeypatch, _SYSTEMD, liveness_exit_zero=True)
+    if stated is not None:
+        config = tmp_path / "config.toml"
+        config.write_text(
+            config.read_text(encoding="utf-8") + f'cursor_limits_source = "{stated}"\n',
+            encoding="utf-8",
+        )
+
+    assert main(["doctor", "--json"]) == 0
+
+    report = json.loads(capsys.readouterr().out)
+    assert report["cursor_limits_source"] == expected
+    assert report["claude_limits_source"] == _SOURCE_STATUS_LINE
+    assert report["healthy"] is True
+    assert "cursor_limits_source" not in report["components"]

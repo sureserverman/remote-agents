@@ -1,4 +1,4 @@
-"""The terminal's Settings position: five rows in two groups.
+"""The terminal's Settings position: two groups of rows, swept from `SETTINGS_ROWS`.
 
 The screen exists because the premise check moved the subject. `remoteControlAtStartup` governs
 every Claude session on this machine and Codex's enrollment governs every Codex one, so neither

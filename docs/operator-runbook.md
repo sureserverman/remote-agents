@@ -1856,7 +1856,13 @@ uv run --locked remote-agents tui
    That is a credential read and an outbound call the service otherwise never makes, which is
    why it is a switch you throw and not a fallback the service reaches for; the file is
    consulted on every read, so flipping it needs no restart. `remote-agents doctor` reports
-   the source in force in its `claude_limits_source` line, worded with that cost. The pane must never collapse to
+   the source in force in its `claude_limits_source` line, worded with that cost.
+   Cursor's usage is opt-in the same way and off by default: `cursor_limits_source` under
+   `[limits]` is `"off"`; set it to `"usage-api"` (Settings on either surface asks first) and
+   the service reads the login token out of `~/.config/cursor/auth.json` and calls
+   `https://api2.cursor.sh` for the month's figures, stamping them `Cursor API`. It never
+   changes or refreshes that token, and it sends at most one request a minute from each
+   surface. `remote-agents doctor` reports it in its `cursor_limits_source` line. The pane must never collapse to
    `No agent limits reported.` once a read has landed and any agent reported; that sentence
    belongs to the moment before the first read and to a host with no limits reader wired.
 1. Open the command palette with `:` or `Ctrl+P` and choose Sessions, which is available from any screen. Sessions lists every managed session the

@@ -41,8 +41,9 @@ class CursorUsageReader:
     def limits(self) -> AgentLimits:
         """Constant for the reason `read` is: there is nothing on disk to consult.
 
-        `NOT_REPORTED` rather than a bare empty answer: this provider publishes no limits at
-        all, which is permanent and complete, and a surface that cannot tell it from "nothing
-        read yet" invites the owner to wait for a figure that is never coming (DEC-061).
+        `NOT_REPORTED` rather than a bare empty answer: this provider writes no limits down
+        on the host at all (the opt-in read of its server is `usage_api`'s). A surface that
+        cannot tell that from "nothing read yet" invites the owner to wait for a figure that
+        is never coming (DEC-061).
         """
         return AgentLimits(self.limits_profile, absence=LimitsAbsence.NOT_REPORTED)

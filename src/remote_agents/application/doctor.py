@@ -109,6 +109,7 @@ def production_doctor(
     release: dict[str, object] | None = None,
     claude_limits: str | None = None,
     claude_limits_source: str | None = None,
+    cursor_limits_source: str | None = None,
 ) -> dict[str, object]:
     """Render the installed service's non-secret dependency health report.
 
@@ -178,6 +179,9 @@ def production_doctor(
     # for the reason the line above is not.
     if claude_limits_source is not None:
         report["claude_limits_source"] = claude_limits_source
+    # Cursor's switch, reported the same way and for the same reason.
+    if cursor_limits_source is not None:
+        report["cursor_limits_source"] = cursor_limits_source
     # Reported, deliberately not aggregated: nothing live depends on the console until the
     # console-surface plan's Stage 3 composes it, so an incapable tmux is worth naming to
     # the operator and not worth failing an otherwise healthy deploy over. The stage that

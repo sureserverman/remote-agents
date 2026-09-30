@@ -100,8 +100,8 @@ _CURSOR_CYCLE: tuple[str, ...] = ("off", "usage-api")
 def next_cursor_limits_source(current: str) -> str:
     """What one press advances to from `current`: `next_limits_source`'s rule for this switch.
 
-    Total. An unknown value answers the default, off, which is also what
-    `config.read_cursor_limits_source` reads that value as.
+    Total. From an unknown value the press lands on off, the default. The port's read never
+    hands one over: `config.read_cursor_limits_source` already reads an unknown value as off.
     """
     index = _CURSOR_CYCLE.index(current) if current in _CURSOR_CYCLE else -1
     return _CURSOR_CYCLE[(index + 1) % len(_CURSOR_CYCLE)]

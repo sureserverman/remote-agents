@@ -427,19 +427,33 @@ def test_an_answer_is_remembered_for_a_minute_then_asked_for_again(tmp_path: Pat
     assert third.observed_at == clock.at
 
 
-def test_a_failure_is_not_remembered(tmp_path: Path) -> None:
+def test_a_failed_request_is_remembered_for_a_minute_too(tmp_path: Path) -> None:
+    """No cheap fallback here: a dead network must not resend the token on every redraw."""
     write_auth(tmp_path, auth_document())
     clock = Clock()
     opener = FakeOpener(fault=TimeoutError("timed out"))
     api = reader(tmp_path, opener, now=clock)
-    api.limits()
-    clock.step(5)
+    first = api.limits()
+    clock.step(59)
+    assert api.limits() == first == UNREADABLE
+    assert len(opener.calls) == 1
+    clock.step(2)
     api.limits()
     assert len(opener.calls) == 2
 
 
-def test_an_answer_without_a_window_is_not_remembered(tmp_path: Path) -> None:
-    """An ended cycle is asked about again at once, so the new cycle shows when it opens."""
+def test_a_refused_login_is_remembered_for_a_minute_too(tmp_path: Path) -> None:
+    write_auth(tmp_path, auth_document())
+    clock = Clock()
+    opener = opener_for(http_error(401))
+    api = reader(tmp_path, opener, now=clock)
+    assert api.limits() == SIGN_IN
+    clock.step(30)
+    assert api.limits() == SIGN_IN
+    assert len(opener.calls) == 1
+
+
+def test_an_ended_cycle_is_remembered_for_a_minute_too(tmp_path: Path) -> None:
     write_auth(tmp_path, auth_document())
     clock = Clock(CYCLE_END + timedelta(hours=1))
     opener = ok_opener()
@@ -447,7 +461,45 @@ def test_an_answer_without_a_window_is_not_remembered(tmp_path: Path) -> None:
     assert api.limits().absence is LimitsAbsence.NO_READING
     clock.step(5)
     api.limits()
-    assert len(opener.calls) == 2
+    assert len(opener.calls) == 1
+
+
+def test_a_login_that_could_not_be_read_is_read_again_at_once(tmp_path: Path) -> None:
+    """Nothing was sent, so nothing is remembered: signing in shows on the next read."""
+    clock = Clock()
+    opener = ok_opener()
+    api = reader(tmp_path, opener, now=clock)
+    assert api.limits() == SIGN_IN
+    write_auth(tmp_path, auth_document())
+    clock.step(1)
+    assert api.limits().windows == (MONTH,)
+    assert len(opener.calls) == 1
+
+
+def test_callers_arriving_together_share_one_request(tmp_path: Path) -> None:
+    import threading
+
+    write_auth(tmp_path, auth_document())
+    entered, release = threading.Event(), threading.Event()
+    calls: list[object] = []
+
+    def slow(request: object, timeout: float) -> object:
+        calls.append(request)
+        entered.set()
+        assert release.wait(5)
+        return FakeResponse(200, usage_body())
+
+    api = CursorUsageApiReader(home=tmp_path, opener=slow, now=lambda: NOW)
+    answers: list[AgentLimits] = []
+    threads = [threading.Thread(target=lambda: answers.append(api.limits())) for _ in range(3)]
+    for thread in threads:
+        thread.start()
+    assert entered.wait(5)
+    release.set()
+    for thread in threads:
+        thread.join(5)
+    assert len(calls) == 1
+    assert [answer.windows for answer in answers] == [(MONTH,)] * 3
 
 
 def test_a_clock_that_went_backwards_asks_again(tmp_path: Path) -> None:
