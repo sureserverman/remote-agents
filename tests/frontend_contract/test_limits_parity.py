@@ -9,6 +9,13 @@ pace direction and points, its source and age, and each pool of a split window.
 does not draw is not owed by the bot, and a contract that only ever read the bot would keep
 passing after the pane stopped drawing something. The wording stays each surface's own
 (DEC-043), so a fact is matched by its figures and glyphs, never by a shared sentence.
+
+**The bot's half is asked of the agent's own lines**, the ones between its name and the next
+name, so a fact one agent shows cannot stand in for the same fact missing from another.
+
+**Three things the pane draws are not owed by the bot**, and the last test here asserts it
+withholds the first two: the `┃` pace tick, the `expected` figure, and colour (DEC-106 as
+amended 2026-09-30). The pace direction and points are owed.
 """
 
 from __future__ import annotations
@@ -23,7 +30,14 @@ from surfaces import surface_pairs
 
 from remote_agents.adapters.telegram.limits_block import limits_block
 from remote_agents.adapters.tui.rows import limit_rows_content, limit_stamp_content
-from remote_agents.application.session_views import LimitRow, limit_rows, percent_gauge
+from remote_agents.application.session_views import (
+    FIXED_LIMIT_WINDOWS,
+    LimitRow,
+    countdown,
+    limit_rows,
+    percent_gauge,
+    split_window,
+)
 from remote_agents.domain.models import ProfileId
 from remote_agents.ports.agent_usage import (
     AgentLimits,
@@ -35,9 +49,13 @@ from remote_agents.ports.agent_usage import (
 
 PROFILES = tuple(ProfileId(name) for name in ("claude", "codex", "cursor-agent", "opencode"))
 
-#: What each surface calls the provider's `week`. The label is a surface's word, so the
+#: What each surface calls a provider's window kind. The label is a surface's word, so the
 #: contract accepts either spelling and asks only that the window's line is named.
-_WEEK = r"(?:wk|week)"
+_KINDS = {"week": r"(?:wk|week)", "day": r"(?:1d|day)"}
+
+
+def _kind(label: str) -> str:
+    return _KINDS.get(label, re.escape(label))
 
 
 def _in(delta: timedelta) -> datetime:
@@ -76,18 +94,58 @@ def _readings() -> tuple[LimitRow, ...]:
     )
 
 
+def _cursor(*windows: UsageWindow, **about: object) -> AgentLimits:
+    return AgentLimits(ProfileId("cursor-agent"), windows, stale_source="Cursor API", **about)
+
+
+def _month(percent: float, cursor: float, other: float) -> UsageWindow:
+    return UsageWindow(
+        "month",
+        percent,
+        _in(timedelta(days=12)),
+        parts=(UsagePart("cursor", cursor), UsagePart("other", other)),
+    )
+
+
+def _on_pace() -> tuple[LimitRow, ...]:
+    """A week exactly where an even spend would be, beside a daily window ahead of its own."""
+    return limit_rows(
+        (
+            AgentLimits(
+                ProfileId("codex"),
+                (
+                    UsageWindow("5h", 12.0, _in(timedelta(hours=3))),
+                    UsageWindow("week", 50.0, _in(timedelta(days=3, hours=12))),
+                    UsageWindow("day", 90.0, _in(timedelta(hours=18))),
+                ),
+            ),
+        ),
+        (ProfileId("codex"),),
+    )
+
+
 def _stale() -> tuple[LimitRow, ...]:
-    """One reading two hours old: it is dated, and it draws no countdown and no pace."""
+    """Two readings two hours old: each is dated, and draws no countdown and no pace."""
+    observed = datetime.now(UTC) - timedelta(hours=2, minutes=5)
     return limit_rows(
         (
             AgentLimits(
                 ProfileId("codex"),
                 (UsageWindow("week", 7.0, _in(timedelta(days=3))),),
-                observed_at=datetime.now(UTC) - timedelta(hours=2, minutes=5),
+                observed_at=observed,
                 stale_source="rollout file",
             ),
+            _cursor(_month(88.0, 41.0, 9.0), observed_at=observed),
         ),
-        (ProfileId("codex"),),
+        (ProfileId("codex"), ProfileId("cursor-agent")),
+    )
+
+
+def _split_beside() -> tuple[LimitRow, ...]:
+    """A split window beside another: both surfaces lay the row out by kind (DEC-111)."""
+    return limit_rows(
+        (_cursor(_month(73.0, 62.0, 18.0), UsageWindow("week", 26.0)),),
+        (ProfileId("cursor-agent"),),
     )
 
 
@@ -105,9 +163,29 @@ def _absences() -> tuple[LimitRow, ...]:
     )
 
 
+def _plain(markup: str) -> str:
+    return unescape(re.sub(r"<[^>]+>", "", markup))
+
+
 def _telegram(rows: tuple[LimitRow, ...], width: int) -> str:
     """The bot's block as the owner reads it: markup removed, entities decoded."""
-    return unescape(re.sub(r"<[^>]+>", "", limits_block(rows)))
+    return _plain(limits_block(rows))
+
+
+def _telegram_groups(rows: tuple[LimitRow, ...]) -> dict[str, str]:
+    """Each agent's own lines in the bot's block, keyed by the name that stands over them.
+
+    A name is a line outside `<code>`; the lines under it, up to the next name, are its group.
+    """
+    groups: dict[str, list[str]] = {}
+    current: list[str] | None = None
+    for line in limits_block(rows).split("\n")[1:]:
+        if line.startswith("<code>"):
+            assert current is not None, f"a line with no agent over it: {line}"
+            current.append(_plain(line))
+        else:
+            current = groups.setdefault(_plain(line), [])
+    return {name: "\n".join(lines) for name, lines in groups.items()}
 
 
 def _tui(rows: tuple[LimitRow, ...], width: int) -> str:
@@ -122,82 +200,124 @@ def _figure(percent: int) -> str:
     return rf"(?<!\d){percent}%"
 
 
-def _facts(rows: tuple[LimitRow, ...]) -> Iterator[tuple[str, dict[str, str]]]:
-    """Each fact in `rows`, as (what it is, the pattern that finds it on each surface).
+def _facts(rows: tuple[LimitRow, ...]) -> Iterator[tuple[str, str, dict[str, str]]]:
+    """Each fact in `rows`, as (its agent, what it is, the pattern that finds it per surface).
 
-    One pattern for both where the fact is a figure or a glyph. The bot's pattern is stricter
-    where the plan fixes its line: a window is its label, its bar, then its whole percent.
+    The bot's pattern is searched in that agent's own lines, and is stricter where the plan
+    fixes its line: a window is its label, its bar, then its whole percent.
     """
 
     def both(pattern: str) -> dict[str, str]:
         return {"telegram": pattern, "tui": pattern}
 
     for row in rows:
-        # The terminal ellipsises a long name into a narrow pane's name column.
-        yield (
-            f"{row.profile}: its row",
-            {"telegram": re.escape(row.profile), "tui": rf"(?m)^{re.escape(row.profile[:5])}"},
-        )
         if row.absence:
-            yield f"{row.profile}: {row.absence!r}", both(re.escape(row.absence))
-        split = row.windows[0] if len(row.windows) == 1 and row.windows[0].parts else None
+            yield row.profile, f"{row.absence!r}", both(re.escape(row.absence))
+        split = split_window(row)
         published = {window.label for window in row.windows}
         if row.windows and split is None:
-            for label in ("5h", "week"):
+            for label in FIXED_LIMIT_WINDOWS:
                 if label not in published:
-                    name = _WEEK if label == "week" else re.escape(label)
                     # The terminal's one-line layout names the column once, in its header.
                     empty = percent_gauge(0)
                     yield (
-                        f"{row.profile}: an empty {label} bar",
+                        row.profile,
+                        f"an empty {label} bar",
                         {
-                            "telegram": rf"(?m)^{name} {empty}\s*$",
+                            "telegram": rf"(?m)^{_kind(label)} +{empty}\s*$",
                             "tui": rf"(?<![█░┃│]){empty}(?![█░┃│])",
                         },
                     )
         for window in row.windows:
-            where = f"{row.profile} {window.label}"
-            live = row.stale_for is None
+            where = window.label
             if window is split:
                 for part in window.parts:
                     yield (
+                        row.profile,
                         f"{where}: the {part.label} pool's percent",
                         both(rf"(?i){re.escape(part.label)} {part.percent}%"),
                     )
                 bar = "│".join(percent_gauge(part.percent) for part in window.parts)
-                yield f"{where}: the split bar", both(re.escape(bar))
+                yield row.profile, f"{where}: the split bar", both(re.escape(bar))
             else:
-                name = _WEEK if window.label == "week" else re.escape(window.label)
                 yield (
+                    row.profile,
                     f"{where}: label, bar and {window.percent}%",
                     {
                         "telegram": (
-                            rf"(?m)^{name} +{percent_gauge(window.percent)} +"
+                            rf"(?m)^{_kind(window.label)} +{percent_gauge(window.percent)} +"
                             rf"{_figure(window.percent)}"
                         ),
                         "tui": _figure(window.percent),
                     },
                 )
-            if window.resets_in is not None and live:
-                yield f"{where}: resets in {window.resets_in}", both(f"↻ {window.resets_in}")
-            if window.pace_delta:
+            left = countdown(row, window)
+            if left is not None:
+                yield row.profile, f"{where}: resets in {left}", both(f"↻ {left}")
+            if window.pace_delta is None:
+                continue
+            if window.pace_delta == 0:
+                said, points = "on pace", "on pace"
+            else:
                 arrow = "▲" if window.pace_delta > 0 else "▼"
-                yield (
-                    f"{where}: pace {arrow} {abs(window.pace_delta)}",
-                    both(rf"{arrow} {abs(window.pace_delta)}\b"),
-                )
+                said = f"pace {arrow} {abs(window.pace_delta)}"
+                points = rf"{arrow} {abs(window.pace_delta)}\b"
+            # The terminal words the week's pace; a daily window's is its tick alone.
+            yield (
+                row.profile,
+                f"{where}: {said}",
+                {"telegram": points, "tui": points if window.label == "week" else "┃"},
+            )
         if row.windows:
-            if row.borrowed:
-                yield f"{row.profile}: source {row.borrowed!r}", both(re.escape(row.borrowed))
             age = "live" if row.stale_for is None else f"as of {row.stale_for}"
-            yield f"{row.profile}: stamped {age!r}", both(rf"\b{re.escape(age)}\b")
+            source = "" if row.borrowed is None else f"{row.borrowed} · "
+            yield (
+                row.profile,
+                f"stamped {source}{age}",
+                {
+                    "telegram": rf"(?m)^{re.escape(f'via {source}' if source else '')}"
+                    rf"{re.escape(age)}$",
+                    "tui": re.escape(f"{row.profile} · {source}{age}"),
+                },
+            )
 
 
 def _missing(rows: tuple[LimitRow, ...], surface: str, text: str) -> list[str]:
-    return [name for name, patterns in _facts(rows) if re.search(patterns[surface], text) is None]
+    """Every fact `surface` does not show, named by its agent."""
+    if surface != "telegram":
+        # The terminal ellipsises a long name into a narrow pane's name column.
+        absent = [
+            f"{row.profile}: its row"
+            for row in rows
+            if re.search(rf"(?m)^{re.escape(row.profile[:5])}", text) is None
+        ]
+        return absent + [
+            f"{profile}: {name}"
+            for profile, name, patterns in _facts(rows)
+            if re.search(patterns[surface], text) is None
+        ]
+    groups = _telegram_groups(rows)
+    absent = [f"{row.profile}: its row" for row in rows if row.profile not in groups]
+    profiles = [row.profile for row in rows]
+    extra = [f"{name}: a row nothing asked for" for name in groups if name not in profiles]
+    return (
+        absent
+        + extra
+        + [
+            f"{profile}: {name}"
+            for profile, name, patterns in _facts(rows)
+            if re.search(patterns[surface], groups.get(profile, "")) is None
+        ]
+    )
 
 
-SCENARIOS = {"readings": _readings, "stale": _stale, "absences": _absences}
+SCENARIOS = {
+    "readings": _readings,
+    "on pace": _on_pace,
+    "stale": _stale,
+    "split beside": _split_beside,
+    "absences": _absences,
+}
 
 #: The terminal's stacked layout and its one-line layout. The bot has one layout, so the width
 #: is the terminal's alone.
@@ -220,7 +340,11 @@ def test_limits_parity_every_fact_is_on_each_surface(
 
 def test_limits_parity_the_scenarios_carry_every_kind_of_fact() -> None:
     """The contract is only as wide as its rows, so their width is asserted, not assumed."""
-    names = [name for build in SCENARIOS.values() for name, _patterns in _facts(build())]
+    names = [
+        f"{profile}: {name}"
+        for build in SCENARIOS.values()
+        for profile, name, _patterns in _facts(build())
+    ]
 
     for kind in (
         "'no reading yet'",
@@ -228,16 +352,33 @@ def test_limits_parity_the_scenarios_carry_every_kind_of_fact() -> None:
         "'off in Settings'",
         "an empty 5h bar",
         "resets in",
-        "pace ▲",
-        "pace ▼",
+        "week: pace ▲",
+        "week: pace ▼",
+        "week: on pace",
+        "day: pace ▲",
         "the cursor pool's percent",
         "the other pool's percent",
         "the split bar",
-        "source 'status-line cache'",
-        "stamped 'live'",
-        "stamped 'as of 2h'",
+        "month: label, bar and 73%",
+        "stamped status-line cache · live",
+        "codex: stamped live",
+        "codex: stamped rollout file · as of 2h",
+        "cursor-agent: stamped Cursor API · as of 2h",
     ):
         assert any(kind in name for name in names), f"no scenario carries: {kind}"
+
+
+def test_limits_parity_a_fact_on_one_agent_does_not_stand_in_for_another() -> None:
+    """The bot's half is row-scoped: a block that drops one agent's stamp is caught."""
+    rows = _readings()
+    block = limits_block(rows)
+    assert block.count("<code>live</code>") == 1
+    dropped = block.replace("\n<code>live</code>", "")
+
+    groups_before = _telegram_groups(rows)
+    assert re.search(r"(?m)^live$", groups_before["codex"])
+    assert re.search(r"(?m)^live$", _plain(dropped)) is None
+    assert re.search(r"\blive\b", _plain(dropped)), "the other agents' stamps still say live"
 
 
 @pytest.mark.parametrize("surface, render", SURFACES)
@@ -245,7 +386,17 @@ def test_limits_parity_the_scenarios_carry_every_kind_of_fact() -> None:
 def test_limits_parity_neither_surface_says_what_the_other_withholds(
     width: int, surface: str, render
 ) -> None:
-    """A split window's total, a stale reading's countdown and a row that never reports."""
+    """A split window's total, a stale reading's countdown and pace, a row that never reports."""
     assert "97%" not in render(_readings(), width), "the split window's total is drawn"
-    assert "↻" not in render(_stale(), width), "a stale reading still counts down"
+    stale = render(_stale(), width)
+    assert "88%" not in stale, "the split window's total is drawn"
+    assert re.search("[↻▲▼┃]", stale) is None, "a stale reading still counts down or paces"
     assert "opencode" not in render(_absences(), width), "a provider with no limits has a row"
+
+
+@pytest.mark.parametrize("scenario", SCENARIOS)
+def test_limits_parity_the_bot_draws_no_tick_and_no_expected_figure(scenario: str) -> None:
+    """The carve-out, asserted: the phone line has room for the direction and the points."""
+    block = _telegram(SCENARIOS[scenario](), 0)
+
+    assert "┃" not in block and "exp" not in block, block

@@ -34,12 +34,15 @@ from datetime import UTC, datetime, timedelta
 from textual.content import Content
 
 from remote_agents.application.session_views import (
+    FIXED_LIMIT_WINDOWS,
     LimitRow,
     SessionRowParts,
     StateGroup,
+    countdown,
     group_counts,
     part_figures,
     percent_gauge,
+    split_window,
 )
 from remote_agents.domain.models import SessionRecord
 from remote_agents.ports.agent_activity import ActivityKind
@@ -335,7 +338,7 @@ def _percent_style(percent: int) -> str:
 _WINDOW_LABELS = {"week": "wk"}
 """The provider's `week` is this surface's `wk`: the pane is a third of a column wide."""
 
-LIMIT_COLUMNS = ("5h", "week")
+LIMIT_COLUMNS = FIXED_LIMIT_WINDOWS
 """The window kinds every limits row draws, in this order, whatever any row published.
 
 Fixed rather than collected from the readings (0.46.0). Collected first-seen, one row's state
@@ -419,9 +422,7 @@ def _split_window(row: LimitRow):
     row's figures apart to make room for a bar only this row fills. A row that publishes a
     split window *beside* another is laid out by kind like any other.
     """
-    if len(row.windows) == 1 and row.windows[0].parts:
-        return row.windows[0]
-    return None
+    return split_window(row)
 
 
 def split_gauge_content(parts) -> Content:
@@ -641,9 +642,8 @@ def _reset_text(row: LimitRow, window) -> str:
     A countdown on a stale number is a claim about the present made from the past, which is why
     a stale row draws none, and its date is on the source stamp line (`limit_stamp_content`).
     """
-    if window.resets_in is None or row.stale_for is not None:
-        return ""
-    return f"↻ {window.resets_in}"
+    left = countdown(row, window)
+    return "" if left is None else f"↻ {left}"
 
 
 def _window_content(

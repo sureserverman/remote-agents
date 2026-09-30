@@ -336,8 +336,20 @@ _ABSENT = tuple(
     )
 )
 
+_DAILY = LimitRow(
+    "codex",
+    (
+        LimitWindow("5h", 100, "59m"),
+        LimitWindow("week", 100, "23h", expected_percent=0, pace_delta=100),
+        LimitWindow("day", 0, "23h", expected_percent=100, pace_delta=-100),
+    ),
+    borrowed="rollout file",
+    stale_for=None,
+)
+
 _LAYOUTS = {
     "two agents": (_FULL, _UNDER),
+    "a daily window": (_FULL, _DAILY),
     "four agents": (_FULL, _UNDER, _SPLIT, _ABSENT[3]),
     "a dated reading": (_DATED, _UNDER),
     "all absent": _ABSENT,
@@ -371,3 +383,42 @@ def test_the_limits_block_of_four_agents_leaves_the_message_its_room() -> None:
     block = limits_block((_FULL, _UNDER, _SPLIT, _ABSENT[3]))
 
     assert len(block.encode("utf-16-le")) // 2 < MAX_TELEGRAM_TEXT_UNITS // 8
+
+
+def test_the_limits_block_escapes_every_string_it_did_not_write() -> None:
+    """A stray `<` in a name, a label or a source would cost the whole sessions message.
+
+    Telegram refuses a message whose HTML does not parse, and this block is on the one screen
+    that is the only way to reach a session (DEC-014).
+    """
+    rows = (
+        LimitRow(
+            "a<b>&gent",
+            (LimitWindow("5<h", 10, "2h"), LimitWindow("week", 20, "3d")),
+            borrowed="cache & <file>",
+            stale_for=None,
+        ),
+        LimitRow(
+            "split<er",
+            (LimitWindow("month", 50, None, parts=(LimitPart("o<ther>", 5), LimitPart("&", 6))),),
+            borrowed=None,
+            stale_for=None,
+        ),
+        LimitRow("absent&", (), None, None, absence="sign in to <absent&>"),
+    )
+
+    block = limits_block(rows)
+
+    ours = block.replace("<b>Plan limits</b>", "").replace("<code>", "").replace("</code>", "")
+    assert "<" not in ours and ">" not in ours, ours
+    assert not [part for part in ours.split("&")[1:] if not part.startswith(("lt;", "gt;", "amp;"))]
+    for written in (
+        "a&lt;b&gt;&amp;gent",
+        "5&lt;h",
+        "via cache &amp; &lt;file&gt; · live",
+        "split&lt;er",
+        "o&lt;ther&gt; 5% · &amp; 6%",
+        "absent&amp;",
+        "sign in to &lt;absent&amp;&gt;",
+    ):
+        assert written in block, written

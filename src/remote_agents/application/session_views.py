@@ -539,6 +539,35 @@ def part_figures(window: LimitWindow) -> tuple[str, ...]:
     )
 
 
+FIXED_LIMIT_WINDOWS = ("5h", "week")
+"""The window kinds every row with a reading draws, in this order, whatever it published
+(DEC-100). A rule both surfaces follow, so it is spelled once; how a kind is labelled and laid
+out stays each surface's."""
+
+
+def split_window(row: LimitRow) -> LimitWindow | None:
+    """The row's one window when it is metered as separate pools; else None (DEC-111).
+
+    Such a row draws one bar of a gauge per pool and never its total. A row that publishes a
+    split window *beside* another is laid out by kind like any other, on both surfaces.
+    """
+    if len(row.windows) == 1 and row.windows[0].parts:
+        return row.windows[0]
+    return None
+
+
+def countdown(row: LimitRow, window: LimitWindow) -> str | None:
+    """How long until `window` resets, or None when no surface may draw a countdown.
+
+    None when the provider published no reset, and None for a stale reading: a countdown on a
+    stale number is a claim about the present made from the past. The glyph beside it is the
+    surface's.
+    """
+    if window.resets_in is None or row.stale_for is not None:
+        return None
+    return window.resets_in
+
+
 _PACED_WINDOWS = {"week": timedelta(days=7), "day": timedelta(days=1)}
 """How long a window lasts, by the provider's own label (DEC-106).
 

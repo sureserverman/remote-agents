@@ -2234,8 +2234,9 @@ class PrivateBotBoundary:
         rendered above the heading rather than below it so the owner reads what happened
         before they read the list it happened to. It reaches the empty branch too.
 
-        **Budget.** Section headings, six two-line rows and the limits block come to roughly
-        700 UTF-16 units against `MAX_TELEGRAM_TEXT_UNITS`, so the page size stays at eight.
+        **Budget.** A page of eight two-line rows over the limits block of four agents at their
+        widest measures about 1,050 UTF-16 units against `MAX_TELEGRAM_TEXT_UNITS`, so the page
+        size stays at eight.
         Every string here passes `escape()` and then `presenters._message` (DEC-014).
         """
         # Handed in by the store-driven redraw, which has already read them to decide whether
@@ -2687,8 +2688,8 @@ class PrivateBotBoundary:
         account rather than about any row — the placement that stops a window reading as the
         spend of whichever session it happens to sit beside, which is the report this block
         exists to answer. `limits_block` lays it out, and it carries what the terminal's limits
-        pane carries: a row per agent this host offers, its bars, reset countdowns, week pace,
-        and its source and age (DEC-061).
+        pane carries: a row per agent that publishes limits or is a switch away from it, its
+        bars, reset countdowns, week pace, and its source and age (DEC-061).
 
         **The row set is the profile set's**, as it is on the terminal: an agent that answered
         nothing keeps its row and says which silence it is.

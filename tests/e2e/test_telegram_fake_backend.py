@@ -5,7 +5,7 @@ import subprocess
 import sys
 from collections.abc import Callable
 from dataclasses import replace
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from html import escape
 from time import monotonic
 from types import SimpleNamespace
@@ -35,7 +35,7 @@ from remote_agents.adapters.sqlite.database import (
 )
 from remote_agents.adapters.telegram.callbacks import CallbackStateStore
 from remote_agents.adapters.telegram.inspection import inspect_capture
-from remote_agents.adapters.telegram.presenters import unpadded
+from remote_agents.adapters.telegram.presenters import MAX_TELEGRAM_TEXT_UNITS, unpadded
 from remote_agents.adapters.telegram.service import PrivateBotBoundary, build_private_bot
 from remote_agents.adapters.telegram.stops import StopController
 from remote_agents.application.errors import SessionNotFoundError
@@ -61,7 +61,7 @@ from remote_agents.domain.profiles import closed_profiles
 from remote_agents.domain.remote_control import HostConnection, RemoteControlDefault
 from remote_agents.domain.trust import TrustState
 from remote_agents.ports.agent_activity import ActivityKind, AgentActivity
-from remote_agents.ports.agent_usage import AgentLimits, UsageWindow
+from remote_agents.ports.agent_usage import AgentLimits, UsagePart, UsageWindow
 from remote_agents.ports.terminal import TerminalObservation, TrustAnswer
 
 
@@ -2983,10 +2983,12 @@ async def test_the_limits_block_carries_the_claude_default_line_for_every_state(
 
 
 async def test_the_limits_block_redraws_on_the_floor_with_one_edit_a_pass() -> None:
-    """The fuller block costs what the old one did: one limits read and one edit per pass.
+    """The fuller block did not change what a redraw costs, and this pins that it cannot.
 
-    And a second store change inside `_REDRAW_INTERVAL_SECONDS` reaches neither the providers
-    nor Telegram.
+    A drawn pass is one limits read and one `edit_message_text`, with no second Bot API call
+    for the block. A store change inside `_REDRAW_INTERVAL_SECONDS` reaches neither the
+    providers nor Telegram. The floor itself is older than the block and is tested above; what
+    is new here is the count of reads and calls with a limits reader wired.
     """
     reads = 0
 
@@ -3023,6 +3025,53 @@ async def test_the_limits_block_redraws_on_the_floor_with_one_edit_a_pass() -> N
     assert calls == ["edit_message_text"], calls
     assert reads == 2, "a change inside the floor must not reach the providers either"
     boundary.cancel_pending_redraw()
+
+
+async def _four_agents_at_their_widest() -> tuple[AgentLimits, ...]:
+    soon = datetime.now(UTC) + timedelta(hours=23, minutes=30)
+    return (
+        AgentLimits(
+            ProfileId("claude"),
+            (UsageWindow("5h", 100.0, soon), UsageWindow("week", 100.0, soon)),
+            stale_source="status-line cache",
+        ),
+        AgentLimits(
+            ProfileId("codex"),
+            (UsageWindow("5h", 100.0, soon), UsageWindow("week", 100.0, soon)),
+            stale_source="rollout file",
+        ),
+        AgentLimits(
+            ProfileId("cursor-agent"),
+            (
+                UsageWindow(
+                    "month",
+                    100.0,
+                    soon,
+                    parts=(UsagePart("cursor", 100.0), UsagePart("other", 100.0)),
+                ),
+            ),
+            stale_source="Cursor API",
+        ),
+        AgentLimits(ProfileId("opencode"), (UsageWindow("week", 100.0, soon),)),
+    )
+
+
+async def test_the_limits_block_and_a_full_page_stay_inside_one_message() -> None:
+    """A page of eight two-line rows over four agents at their widest is a third of the budget."""
+    boundary = _limits_block_boundary(
+        *_many_sessions(8),
+        claude=_FakeClaudeDefault(RemoteControlDefault.ON),
+        limits=_four_agents_at_their_widest,
+        host=FakeHostRemoteControl(HostConnection.CONNECTED),
+    )
+    chat = FakeChat()
+
+    await boundary.sessions_command(chat.message_update("/sessions"), None)
+
+    text = chat.bot_messages[0].text
+    assert text.count("<code>via ") == 3 and "▲ 14 over" in text, text
+    units = len(text.encode("utf-16-le")) // 2
+    assert units < MAX_TELEGRAM_TEXT_UNITS // 2, units
 
 
 async def test_the_limits_block_omits_the_claude_default_line_when_no_port_is_wired() -> None:

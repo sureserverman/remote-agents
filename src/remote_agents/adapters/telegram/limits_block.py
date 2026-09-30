@@ -12,8 +12,9 @@
     codex
     no reading yet
 
-Everything the terminal's limits pane draws, stacked one window per line so a line stays
-within `WIDTH` monospace characters. The parity contract
+The facts the terminal's limits pane draws, stacked one window per line so a line stays
+within `WIDTH` monospace characters. Three things the pane has are left out for want of room
+or of a medium: the `┃` pace tick, the `expected` figure, and colour. The parity contract
 (`tests/frontend_contract/test_limits_parity.py`) hands one `limit_rows` result to this
 renderer and to the terminal's and asks each for every fact in it.
 
@@ -34,23 +35,25 @@ from collections.abc import Sequence
 from html import escape
 
 from remote_agents.application.session_views import (
+    FIXED_LIMIT_WINDOWS,
     LimitRow,
     LimitWindow,
+    countdown,
     part_figures,
     percent_gauge,
+    split_window,
 )
 
 TITLE = "Plan limits"
 
 #: How many monospace characters a phone shows on one line of this block before it wraps.
+#: The layout keeps to it for labels of two characters, which every kind a reader publishes
+#: outside a split row has here. A longer provider label lengthens its block's lines by the
+#: difference.
 WIDTH = 34
 
-#: The provider's `week` as a phone line writes it: the pace words need the room.
-_WINDOW_LABELS = {"week": "wk"}
-
-#: The window kinds every row with a reading draws, in this order, as the terminal's pane does
-#: (DEC-100). One the row did not publish is its label and an empty bar.
-_FIXED_WINDOWS = ("5h", "week")
+#: A paced kind as a phone line writes it, in two characters: the pace words need the room.
+_WINDOW_LABELS = {"week": "wk", "day": "1d"}
 
 #: What divides the pools of a split bar.
 _PART_DIVIDER = "│"
@@ -67,21 +70,10 @@ def _pace_words(delta: int) -> str:
     return f"▲ {delta} over" if delta > 0 else f"▼ {-delta} under"
 
 
-def _split_window(row: LimitRow) -> LimitWindow | None:
-    """The row's one window when it is metered as separate pools; else None (DEC-111)."""
-    if len(row.windows) == 1 and row.windows[0].parts:
-        return row.windows[0]
-    return None
-
-
 def _reset(row: LimitRow, window: LimitWindow) -> str:
-    """` ↻ 2h`, or nothing when the provider published no reset or the reading is stale.
-
-    A countdown on a stale number is a claim about the present made from the past.
-    """
-    if window.resets_in is None or row.stale_for is not None:
-        return ""
-    return f" ↻ {window.resets_in}"
+    """` ↻ 2h`, or nothing where `countdown` says no surface may draw one."""
+    left = countdown(row, window)
+    return "" if left is None else f" ↻ {left}"
 
 
 def _split_lines(row: LimitRow, window: LimitWindow) -> list[str]:
@@ -95,9 +87,14 @@ def _split_lines(row: LimitRow, window: LimitWindow) -> list[str]:
 
 
 def _window_lines(row: LimitRow, label_width: int, percent_width: int) -> list[str]:
-    """`5h ███░░░░░  34% ↻ 2h`: the fixed kinds first, then whatever else the row published."""
+    """`5h ███░░░░░  34% ↻ 2h`: the fixed kinds first, then whatever else the row published.
+
+    A fixed kind the row did not publish is its label and an empty bar (DEC-100).
+    """
     published = {window.label: window for window in row.windows}
-    kinds = _FIXED_WINDOWS + tuple(kind for kind in published if kind not in _FIXED_WINDOWS)
+    kinds = FIXED_LIMIT_WINDOWS + tuple(
+        kind for kind in published if kind not in FIXED_LIMIT_WINDOWS
+    )
     lines = []
     for kind in kinds:
         name = _label(kind).ljust(label_width)
@@ -120,7 +117,7 @@ def _stamp(row: LimitRow) -> str:
 def _row_lines(row: LimitRow, label_width: int, percent_width: int) -> list[str]:
     if not row.windows:
         return [row.absence or ""]
-    split = _split_window(row)
+    split = split_window(row)
     if split is not None:
         return [*_split_lines(row, split), _stamp(row)]
     return [*_window_lines(row, label_width, percent_width), _stamp(row)]
@@ -137,9 +134,9 @@ def limits_block(rows: Sequence[LimitRow]) -> str:
     """
     if not rows:
         return ""
-    laid_out = [row for row in rows if row.windows and _split_window(row) is None]
+    laid_out = [row for row in rows if row.windows and split_window(row) is None]
     windows = [window for row in laid_out for window in row.windows]
-    kinds = {*_FIXED_WINDOWS, *(window.label for window in windows)}
+    kinds = {*FIXED_LIMIT_WINDOWS, *(window.label for window in windows)}
     label_width = max(len(_label(kind)) for kind in kinds)
     percent_width = max((len(f"{window.percent}%") for window in windows), default=0)
     lines = [f"<b>{TITLE}</b>"]
