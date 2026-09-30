@@ -34,6 +34,7 @@ from __future__ import annotations
 
 import re
 
+import pytest
 from backends import SessionUseCaseDouble, backend_for
 from rich.cells import cell_len
 from textual.widgets import OptionList
@@ -48,7 +49,7 @@ from remote_agents.application.remote_control_default import (
     REMOTE_CONTROL_DEFAULT_TITLE,
     remote_control_default_line,
 )
-from remote_agents.application.session_views import LimitRow, LimitWindow
+from remote_agents.application.session_views import LimitPart, LimitRow, LimitWindow
 
 #: Narrower than two windows with countdowns need, and close to the dashboard's own right
 #: column. Measured rather than picked: `limit_row_content`'s docstring records that region as
@@ -452,3 +453,86 @@ def test_the_readme_stacked_example() -> None:
         "        wk █████┃░░ 71%",
         "           ↻ 3d · exp 57%  ▲ 14 over",
     ]
+
+
+# --- Cursor's split bar, stacked (amends DEC-100) -------------------------------------------
+
+#: The console's limits pane on the owner's host, measured 2026-09-30: a 76-cell tmux pane.
+CONSOLE = 72
+
+#: The dashboard's right region at an 80x24 terminal (`PANE_CELLS`), where nothing but a bar
+#: and a short word fits beside a name.
+SMALLEST = PANE_CELLS
+
+
+def _cursor_row(*, resets_in: str | None = "4d") -> LimitRow:
+    parts = (LimitPart("cursor", 62), LimitPart("other", 18))
+    return LimitRow(
+        "cursor-agent", (LimitWindow("month", 62, resets_in, parts=parts),), "Cursor API", None
+    )
+
+
+def _with_cursor() -> tuple[LimitRow, ...]:
+    return (*_paced_rows(), _cursor_row())
+
+
+def _cursor_lines(width: int) -> list[str]:
+    lines = [content.plain for content in limit_rows_content(_with_cursor(), width)]
+    return lines[6:]
+
+
+def test_a_stacked_cursor_row_is_one_line_where_the_console_has_room() -> None:
+    """The bar sits under the other rows' bars, and carries no label of its own."""
+    lines = [content.plain for content in limit_rows_content(_with_cursor(), CONSOLE)]
+    gauge_column = _GAUGE_RUN.search(lines[0]).start()
+    assert lines[6:] == [
+        "cursor-agent"
+        + " " * (gauge_column - 12)
+        + "█████░░░│██░░░░░░  Cursor 62% · other 18%  ↻ 4d"
+    ], lines
+    assert " month " not in "\n".join(lines)
+
+
+def test_a_stacked_cursor_row_too_wide_for_one_line_puts_its_figures_under_the_bar() -> None:
+    """The reset stays beside the bar, as it does on every other stacked window."""
+    first = limit_rows_content(_with_cursor(), DASHBOARD_RIGHT)[0].plain
+    gauge_column = _GAUGE_RUN.search(first).start()
+    bar, figures = _cursor_lines(DASHBOARD_RIGHT)
+    assert bar[gauge_column:] == "█████░░░│██░░░░░░ ↻ 4d", bar
+    assert figures == " " * gauge_column + "Cursor 62% · other 18%", figures
+
+
+@pytest.mark.parametrize("width", [SMALLEST, NARROW, DASHBOARD_RIGHT, 60, CONSOLE])
+def test_a_cursor_row_never_cuts_a_gauge_or_leaves_padding_behind(width: int) -> None:
+    for line in _cursor_lines(width):
+        assert line == line.rstrip(), repr(line)
+        for run in _GAUGE_RUN.finditer(line):
+            assert len(run.group()) == GAUGE_CELLS, line
+
+
+@pytest.mark.parametrize("width", [NARROW, DASHBOARD_RIGHT, 60, CONSOLE])
+def test_a_long_cursor_name_costs_no_other_row_its_pace_line(width: int) -> None:
+    """The profile column is the widest name, so one long name indents every row.
+
+    Until this row existed the longest name on the owner's host was `claude`. `cursor-agent`
+    doubled the column, and the cap only reserved room for a window line, so a pace line ran six
+    cells past the dashboard's right region and lost its `under`.
+    """
+    for content in limit_rows_content(_with_cursor(), width):
+        assert cell_len(content.plain) <= width, f"at {width}: {content.plain!r}"
+
+
+def test_a_cursor_row_without_a_reset_keeps_its_bar_line_bare() -> None:
+    rows = (*_paced_rows(), _cursor_row(resets_in=None))
+    bar, figures = [content.plain for content in limit_rows_content(rows, NARROW)][6:]
+    assert bar.endswith("█████░░░│██░░░░░░"), bar
+    assert figures.strip() == "Cursor 62% · other 18%", figures
+
+
+def test_a_switched_off_cursor_row_stacks_like_any_absence() -> None:
+    rows = (*_paced_rows(), LimitRow("cursor-agent", (), None, None, absence="off in Settings"))
+    lines = [content.plain for content in limit_rows_content(rows, DASHBOARD_RIGHT)][6:]
+    assert sum("░░░░░░░░" in line for line in lines) == 2, lines
+    assert lines[-1].endswith("off in Settings"), lines
+    for line in lines:
+        assert cell_len(line) <= DASHBOARD_RIGHT, line

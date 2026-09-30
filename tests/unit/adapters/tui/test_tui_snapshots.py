@@ -122,7 +122,15 @@ from remote_agents.ports.agent_activity import (
     ActivityKind,
     AgentActivity,
 )
-from remote_agents.ports.agent_usage import AgentLimits, AgentUsage, ContextWindow, UsageWindow
+from remote_agents.ports.agent_usage import (
+    AgentLimits,
+    AgentUsage,
+    ContextWindow,
+    LimitsAbsence,
+    LimitsNote,
+    UsagePart,
+    UsageWindow,
+)
 
 _SNAPSHOTS = Path(__file__).parent / "snapshots"
 
@@ -502,6 +510,7 @@ def _context(
     activity_feed=None,
     limits=None,
     usage=None,
+    cursor: bool = False,
 ) -> TuiContext:
     """The collaborators every capture is driven against.
 
@@ -541,6 +550,9 @@ def _context(
         profiles=(
             ProfileAvailability("claude", True),
             ProfileAvailability("codex", False, "not installed on this host"),
+            # Only for the states that photograph its limits row: every other baseline was
+            # captured on a host offering two agents, and a third would move all of them.
+            *((ProfileAvailability("cursor-agent", True),) if cursor else ()),
         ),
         attach_argv=lambda session_id: (
             "tmux",
@@ -935,7 +947,58 @@ def _stale_claude_paced_codex_reader():
     return read
 
 
+def _cursor_reader(cursor: AgentLimits):
+    """The stale-Claude, paced-Codex pair with Cursor's answer under them."""
+
+    async def read() -> tuple[AgentLimits, ...]:
+        return (*await _stale_claude_paced_codex_reader()(), cursor)
+
+    return read
+
+
+def _cursor_split_reader():
+    """Cursor's month with the switch on: two pools, one full, and a cycle end (DEC-111).
+
+    The reset is an hour past four days for the reason the Codex one above is past three.
+    """
+    return _cursor_reader(
+        AgentLimits(
+            ProfileId("cursor-agent"),
+            (
+                UsageWindow(
+                    "month",
+                    100.0,
+                    resets_at=datetime.now(UTC) + timedelta(days=4, hours=1),
+                    parts=(UsagePart("cursor", 100.0), UsagePart("other", 50.0)),
+                ),
+            ),
+            stale_source="Cursor API",
+        )
+    )
+
+
+def _cursor_off_reader():
+    """Cursor's answer on an untouched host: the switch is off, and the row says where it is."""
+    return _cursor_reader(
+        AgentLimits(
+            ProfileId("cursor-agent"), absence=LimitsAbsence.NOT_REPORTED, note=LimitsNote.OFF
+        )
+    )
+
+
 _STATES = (
+    _State(
+        "LIMITS_PANE_CURSOR_SPLIT",
+        "LIMITS_PANE",
+        lambda: _context(limits=_cursor_split_reader(), cursor=True),
+        _to_limits_pane,
+    ),
+    _State(
+        "LIMITS_PANE_CURSOR_OFF",
+        "LIMITS_PANE",
+        lambda: _context(limits=_cursor_off_reader(), cursor=True),
+        _to_limits_pane,
+    ),
     _State(
         "LIMITS_PANE_STALE_CLAUDE",
         "LIMITS_PANE",

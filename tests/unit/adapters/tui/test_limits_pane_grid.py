@@ -58,6 +58,7 @@ from remote_agents.adapters.tui.rows import (
     limits_border_footer,
     pace_style,
     pace_text,
+    split_gauge_content,
 )
 from remote_agents.adapters.tui.screens.dashboard import (
     _CLAUDE_REMOTE_CONTROL_ROW,
@@ -74,7 +75,12 @@ from remote_agents.application.remote_control_default import (
     UNAVAILABLE,
     remote_control_default_line,
 )
-from remote_agents.application.session_views import LimitRow, LimitWindow, limit_rows
+from remote_agents.application.session_views import (
+    LimitPart,
+    LimitRow,
+    LimitWindow,
+    limit_rows,
+)
 from remote_agents.domain.models import ProfileId, SessionRecord
 from remote_agents.domain.remote_control import RemoteControlDefault
 from remote_agents.ports.agent_usage import AgentLimits, UsageWindow
@@ -967,3 +973,101 @@ def test_the_limits_border_footer_is_wide_only() -> None:
 def test_a_stacked_pane_spends_no_row_on_the_blank_before_the_stamp() -> None:
     lines = [line.plain for line in limit_stamp_content(_stamped_rows(), 38)]
     assert lines == ["claude · status line · as of 4m", "codex · live"], lines
+
+
+# --- Cursor's split bar (amends DEC-100) ----------------------------------------------------
+
+
+def _cursor_row(
+    cursor: int = 62,
+    other: int = 18,
+    *,
+    profile: str = "cursor",
+    resets_in: str | None = "4d",
+    stale_for: str | None = None,
+) -> LimitRow:
+    """Cursor's one window: a month metered as two pools, each a percent of its own pool."""
+    parts = (LimitPart("cursor", cursor), LimitPart("other", other))
+    window = LimitWindow("month", max(cursor, other), resets_in, parts=parts)
+    return LimitRow(profile, (window,), "Cursor API", stale_for)
+
+
+def test_a_cursor_row_is_one_bar_in_two_halves_then_both_figures_and_the_reset() -> None:
+    """The bar starts where the 5h column does and runs across it into the week's."""
+    header, *lines = [c.plain for c in limit_rows_content((*_readme_rows(), _cursor_row()), 80)]
+    assert lines[2] == "cursor  █████░░░│██░░░░░░  Cursor 62% · other 18%  ↻ 4d", lines[2]
+    assert lines[2].index("█") == header.index("5h")
+
+
+@pytest.mark.parametrize("width", [WIDE, 80])
+def test_a_cursor_row_adds_no_column_and_moves_no_other_row(width: int) -> None:
+    """`month` is not a column: the header and every other row are drawn as if it were absent.
+
+    The Cursor row here is named as long as the longest neighbour, so the profile column -- the
+    one width a row's *name* is entitled to move -- stays put and any difference is the window's.
+    """
+    without = [content.plain for content in limit_rows_content(_readme_rows(), width)]
+    drawn = [c.plain for c in limit_rows_content((*_readme_rows(), _cursor_row()), width)]
+    assert drawn[:-1] == without, "\n".join(drawn)
+    assert "month" not in drawn[0], drawn[0]
+
+
+def test_a_cursor_row_alone_still_draws_under_the_fixed_columns() -> None:
+    header, line = [content.plain for content in limit_rows_content((_cursor_row(),), WIDE)]
+    assert header.split()[:2] == ["5h", "week"], header
+    assert line.index("░") > line.index("█") == header.index("5h"), (header, line)
+
+
+@pytest.mark.parametrize(
+    ("cursor", "other", "bar", "fills"),
+    [
+        (0, 100, "░░░░░░░░│████████", {9: "$error"}),
+        (50, 0, "████░░░░│░░░░░░░░", {0: "$warning"}),
+        (100, 50, "████████│████░░░░", {0: "$error", 9: "$warning"}),
+        (49, 86, "████░░░░│███████░", {0: "$success", 9: "$error"}),
+    ],
+)
+def test_each_half_of_a_cursor_bar_is_its_own_gauge(
+    cursor: int, other: int, bar: str, fills: dict[int, str]
+) -> None:
+    """Each half fills and colours from its own pool: the two are never summed or shared."""
+    content = split_gauge_content(_cursor_row(cursor, other).windows[0].parts)
+    assert content.plain == bar
+    for index, style in fills.items():
+        assert _style_at(content, index) == style, (index, content.spans)
+    assert _style_at(content, bar.index("│")) == "$text-muted"
+    for index, cell in enumerate(bar):
+        if cell == "░":
+            assert _style_at(content, index) == "$secondary", index
+
+
+def test_a_stale_cursor_row_draws_no_countdown() -> None:
+    """The rule every row follows: a countdown on a stale figure is a claim about the present."""
+    _header, line = [
+        content.plain for content in limit_rows_content((_cursor_row(stale_for="2h"),), WIDE)
+    ]
+    assert line.endswith("Cursor 62% · other 18%"), line
+
+
+def test_a_cursor_reset_is_muted_and_its_figures_are_not() -> None:
+    _header, line = limit_rows_content((_cursor_row(),), WIDE)
+    assert _style_at(line, line.plain.index("↻")) == "$text-muted"
+    assert not [span for span in line.spans if span.start <= line.plain.index("Cursor") < span.end]
+
+
+@pytest.mark.parametrize("phrase", ["off in Settings", "sign in to cursor-agent", "unreadable"])
+def test_a_cursor_row_with_no_reading_draws_the_fixed_columns_empty_then_says_why(
+    phrase: str,
+) -> None:
+    """Without a window there is nothing to split, so the row is any other absence row."""
+    rows = (*_readme_rows(), LimitRow("cursor-agent", (), None, None, absence=phrase))
+    header, *lines = [content.plain for content in limit_rows_content(rows, WIDE)]
+    gauges = _labelled_gauges(header, lines[2])
+    assert set(gauges) == {"5h", "week"}, lines[2]
+    assert "█" not in lines[2] and "│" not in lines[2], lines[2]
+    assert lines[2].endswith(f"  {phrase}"), lines[2]
+
+
+def test_the_cursor_stamp_names_its_source() -> None:
+    _blank, stamp = limit_stamp_content((_cursor_row(profile="cursor-agent"),), WIDE)
+    assert stamp.plain == "cursor-agent · Cursor API · live"

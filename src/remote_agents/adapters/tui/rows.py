@@ -405,6 +405,44 @@ def pace_style(delta: int) -> str:
     return "$error"
 
 
+#: What divides the pools of a split bar. A box-drawing bar rather than `PACE_TICK`'s heavy one,
+#: so a boundary between two gauges is never read as a mark inside one.
+PART_DIVIDER = "│"
+
+_PART_LABELS = {"cursor": "Cursor"}
+"""A pool's name as this surface writes it: the provider is a proper noun, the rest are words."""
+
+
+def _split_window(row: LimitRow):
+    """The row's one window when it is metered as separate pools; else None.
+
+    Such a row draws one bar across the fixed columns instead of a bar in each (DEC-111): its
+    window is a kind neither column names, and a column of its own would push every other
+    row's figures apart to make room for a bar only this row fills. A row that publishes a
+    split window *beside* another is laid out by kind like any other.
+    """
+    if len(row.windows) == 1 and row.windows[0].parts:
+        return row.windows[0]
+    return None
+
+
+def split_gauge_content(parts) -> Content:
+    """`█████░░░│██░░░░░░`: one gauge per pool, each filled and coloured from its own percent.
+
+    Side by side and never stacked into one fill: each percent is of its own pool, so a single
+    bar summing them would draw a total the provider does not publish.
+    """
+    pieces: list[tuple[str, str]] = []
+    for part in parts:
+        if pieces:
+            pieces.append((PART_DIVIDER, MUTED))
+        bar = percent_gauge(part.percent)
+        filled = len(bar.rstrip("░"))
+        pieces.append((bar[:filled], _percent_style(part.percent)))
+        pieces.append((bar[filled:], "$secondary"))
+    return Content.assemble(*(piece for piece in pieces if piece[0]))
+
+
 def _week_pace(row: LimitRow):
     """The row's window that owns the pace columns, when it has pace; else None."""
     window = next((w for w in row.windows if w.label == _PACE_WINDOW), None)
@@ -470,7 +508,11 @@ def _limit_columns(rows: Sequence[LimitRow], width: int | None = None) -> _Limit
     on that one level up -- but for a row that has *windows of its own* and none in the render
     at all, which `limit_rows` can still hand us.
     """
-    windows = [(row, window) for row in rows for window in row.windows]
+    # A split row's window is in no column (`_split_window`), so it names none and measures
+    # into none: its figures trail its bar, where nothing is aligned against them.
+    windows = [
+        (row, window) for row in rows if _split_window(row) is None for window in row.windows
+    ]
     labels = _column_labels(window.label for _row, window in windows)
     label = max(len(_WINDOW_LABELS.get(kind, kind)) for kind in labels)
     percent = max((len(f"{window.percent}%") for _row, window in windows), default=0)
@@ -484,9 +526,19 @@ def _limit_columns(rows: Sequence[LimitRow], width: int | None = None) -> _Limit
         default=0,
     )
     week_gauge = _WIDE_WEEK_GAUGE if width is not None and width >= _WIDE_PANE else _GAUGE_WIDTH
+    pace_line = max(
+        (_pace_line(row, window).cell_length for row, window in zip(rows, paces) if window),
+        default=0,
+    )
     return _LimitColumns(
         profile=_capped_profile(
-            profile, width, label=label, gauge=week_gauge, percent=percent, reset=reset
+            profile,
+            width,
+            label=label,
+            gauge=week_gauge,
+            percent=percent,
+            reset=reset,
+            pace_line=pace_line,
         ),
         label=label,
         percent=percent,
@@ -528,7 +580,14 @@ def limit_gauge_content(percent: int, cells: int, expected: int | None) -> Conte
 
 
 def _capped_profile(
-    profile: int, width: int | None, *, label: int, gauge: int, percent: int, reset: int
+    profile: int,
+    width: int | None,
+    *,
+    label: int,
+    gauge: int,
+    percent: int,
+    reset: int,
+    pace_line: int = 0,
 ) -> int:
     """Shrink the profile column until one whole window fits beside it, never below the floor.
 
@@ -539,11 +598,15 @@ def _capped_profile(
 
     `gauge` is the widest bar a window draws -- the week's, which widens on a wide pane
     (DEC-106) -- so the window that fits is the widest one, not the eight-cell one.
+
+    `pace_line` is the widest stacked pace line, which starts under the bar and can outrun the
+    window above it: it is the longest thing the stacked layout puts beside a name, so it gets
+    the same room. Only a name longer than the two this pane grew up with reaches it.
     """
     if width is None or width <= 0:
         return profile
     window = label + 1 + gauge + 1 + percent + (1 + reset if reset else 0)
-    room = width - _GROUP_GUTTER - window
+    room = width - _GROUP_GUTTER - max(window, label + 1 + pace_line if pace_line else 0)
     return max(_MINIMUM_PROFILE_COLUMN, min(profile, room))
 
 
@@ -750,6 +813,37 @@ def _note(row: LimitRow, columns: _LimitColumns) -> tuple[Content, Content]:
     return Content(""), Content("")
 
 
+def _split_lines(
+    row: LimitRow, window, columns: _LimitColumns, width: int | None, *, stack: bool
+) -> list[Content]:
+    """`cursor  █████░░░│██░░░░░░  Cursor 62% · other 18%  ↻ 4d`: a split row, in either layout.
+
+    The bar begins where every other row's first bar does -- under the first column's heading,
+    or after the label column when stacked -- and runs on into the next column's cells. Where
+    the line does not fit, the figures take a line of their own under the bar and the reset
+    stays beside it, which is where a stacked window keeps its reset.
+    """
+    lead = _name(row, columns) + Content(" " * _GROUP_GUTTER)
+    if stack:
+        lead = lead + Content(" " * (columns.label + 1))
+    bar = lead + split_gauge_content(window.parts)
+    figures = Content(
+        " · ".join(
+            f"{_PART_LABELS.get(part.label, part.label)} {part.percent}%" for part in window.parts
+        )
+    )
+    countdown = _reset_text(row, window)
+    gutter = Content(" " * _GROUP_GUTTER)
+    line = bar + gutter + figures
+    if countdown:
+        line = line + gutter + Content.assemble((countdown, MUTED))
+    if width is None or width <= 0 or line.cell_length <= width:
+        return [line]
+    if countdown:
+        bar = bar + Content.assemble((f" {countdown}", MUTED))
+    return [bar, Content(" " * lead.cell_length) + figures]
+
+
 def limit_row_content(
     row: LimitRow, columns: _LimitColumns, width: int | None, *, stack: bool | None = None
 ) -> list[Content]:
@@ -775,6 +869,9 @@ def limit_row_content(
     """
     if stack is None:
         stack = width is not None and width > 0 and _table_width(columns) > width
+    split = _split_window(row)
+    if split is not None:
+        return _split_lines(row, split, columns, width, stack=stack)
     published = _row_windows(row)
     indent = Content(" " * (columns.profile + _GROUP_GUTTER))
     if stack:
