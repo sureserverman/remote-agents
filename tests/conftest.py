@@ -105,6 +105,11 @@ def pytest_configure(config: pytest.Config) -> None:
     config.addinivalue_line(
         "markers", "live_acceptance: opt-in audit of owner-driven Telegram lifecycle traces"
     )
+    config.addinivalue_line(
+        "markers",
+        "live_network: opt-in read of a provider's own server with the owner's own login; "
+        "runs only when `-m` names it",
+    )
     # **What a hosted CI runner cannot do, as a named set rather than an absence.**
     #
     # The meaning is narrow and deliberate: this marks a test whose blocker is a real
@@ -123,3 +128,18 @@ def pytest_configure(config: pytest.Config) -> None:
         "requires_session: needs a real login session (launchd's gui/<uid>), which no hosted "
         "CI runner has; excluded by name from the CI matrix so a green badge does not claim it",
     )
+
+
+def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
+    """Keep `live_network` tests out of every run that did not ask for them by name.
+
+    A marker alone selects nothing out: the plain suite would send the owner's login to a
+    provider's server on every run, and CI would try to. So these run only when the `-m`
+    expression names the marker, and otherwise skip saying how to run them.
+    """
+    if "live_network" in (config.getoption("markexpr", "") or ""):
+        return
+    skip = pytest.mark.skip(reason="opt-in: run with `-m live_network`")
+    for item in items:
+        if "live_network" in item.keywords:
+            item.add_marker(skip)
