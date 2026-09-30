@@ -988,7 +988,8 @@ def _cursor_row(
 ) -> LimitRow:
     """Cursor's one window: a month metered as two pools, each a percent of its own pool."""
     parts = (LimitPart("cursor", cursor), LimitPart("other", other))
-    window = LimitWindow("month", max(cursor, other), resets_in, parts=parts)
+    # A total neither pool equals, so a line that printed it in a pool's place would show.
+    window = LimitWindow("month", 71, resets_in, parts=parts)
     return LimitRow(profile, (window,), "Cursor API", stale_for)
 
 
@@ -1071,3 +1072,56 @@ def test_a_cursor_row_with_no_reading_draws_the_fixed_columns_empty_then_says_wh
 def test_the_cursor_stamp_names_its_source() -> None:
     _blank, stamp = limit_stamp_content((_cursor_row(profile="cursor-agent"),), WIDE)
     assert stamp.plain == "cursor-agent · Cursor API · live"
+
+
+def _quiet(profile: str) -> LimitRow:
+    return LimitRow(profile, (), None, None, absence="no reading yet")
+
+
+@pytest.mark.parametrize(
+    "last",
+    [
+        _cursor_row(profile="cursor-agent"),
+        LimitRow("cursor-agent", (), None, None, absence="off in Settings"),
+    ],
+    ids=["split", "off"],
+)
+def test_a_long_cursor_name_does_not_stack_a_table_that_fits_without_it(last: LimitRow) -> None:
+    """The name gives way, not the layout: its row has nothing in the columns to push apart.
+
+    76 cells is the limits region of a 200-column terminal, where Claude and Codex fit on one
+    line each with three cells to spare. `cursor-agent` is six cells longer than `claude`.
+    """
+    without = [content.plain for content in limit_rows_content(_readme_rows(), 76)]
+    assert "expected" in without[0], "the fixture no longer fits on one line at 76"
+    header, claude, codex, cursor = [
+        content.plain for content in limit_rows_content((*_readme_rows(), last), 76)
+    ]
+    assert "expected" in header, header
+    assert cursor.startswith("cursor-a… "), cursor
+    assert (claude, codex) == tuple(line[:6] + "   " + line[6:] for line in without[1:]), (
+        "the other rows moved by more than the three cells the column grew"
+    )
+    for line in (header, claude, codex, cursor):
+        assert len(line) <= 76, line
+
+
+def test_a_name_gives_way_only_down_to_six_cells_and_then_the_table_stacks() -> None:
+    """Whatever the rows read: the rule is the names and the width, so no reading flips it."""
+    rows = (*_readme_rows(), _cursor_row(profile="cursor-agent"))
+    header = limit_rows_content(rows, 73)[0].plain
+    assert "expected" in header, header
+    assert limit_rows_content(rows, 73)[3].plain.startswith("curso…  █"), "six cells at 73"
+    assert "expected" not in limit_rows_content(rows, 72)[0].plain, "and stacked at 72"
+    unread = (*_readme_rows(), LimitRow("cursor-agent", (), None, None, absence="unreadable"))
+    for width in range(60, 90):
+        one_line = ["expected" in limit_rows_content(r, width)[0].plain for r in (rows, unread)]
+        assert len(set(one_line)) == 1, f"at {width} the layout depends on the reading"
+
+
+def test_a_cursor_name_is_drawn_whole_where_the_table_has_the_room() -> None:
+    lines = [
+        c.plain
+        for c in limit_rows_content((*_readme_rows(), _cursor_row(profile="cursor-agent")), 80)
+    ]
+    assert lines[3].startswith("cursor-agent  █"), lines[3]

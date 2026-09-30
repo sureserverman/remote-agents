@@ -6,6 +6,7 @@ import os
 import subprocess
 from pathlib import Path
 
+import live_network_gate
 import pytest
 
 _TEST_SOCKET_PREFIX = "remote-agents-test-"
@@ -135,11 +136,12 @@ def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item
 
     A marker alone selects nothing out: the plain suite would send the owner's login to a
     provider's server on every run, and CI would try to. So these run only when the `-m`
-    expression names the marker, and otherwise skip saying how to run them.
+    expression asks for the marker (`live_network_gate.asked_for`), and otherwise skip saying
+    how to run them.
     """
-    if "live_network" in (config.getoption("markexpr", "") or ""):
+    if live_network_gate.asked_for(config.getoption("markexpr", "")):
         return
     skip = pytest.mark.skip(reason="opt-in: run with `-m live_network`")
     for item in items:
-        if "live_network" in item.keywords:
+        if item.get_closest_marker(live_network_gate.MARKER) is not None:
             item.add_marker(skip)

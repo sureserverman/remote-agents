@@ -107,6 +107,16 @@ def classify(
     return LimitHit(None, None)
 
 
+def _datable(hit: LimitHit, reading: AgentLimits | None) -> bool:
+    """Whether a stop nothing dated names a window a live reading publishes, and could date."""
+    return (
+        hit.resets_at is None
+        and reading is not None
+        and reading.live
+        and hit.window in _labels(reading)
+    )
+
+
 def _labels(reading: AgentLimits | None) -> set[str]:
     return set() if reading is None else {window.label for window in reading.windows}
 
@@ -196,9 +206,12 @@ class LimitStopClassifier:
         whose window no reading names yet is held**, for at most `_HOLD_PASSES` passes: the
         account reading is remembered for a minute, so the reading taken in the stop's own pass
         usually predates the stop and shows the window just short of full. The next pass's
-        reading names it. **So is one its screen named and nothing dated**, while the reading
-        publishes that window: Cursor's screen says "month" and never when the month ends, and
-        recorded that way the stop has no instant to lift on. A stop drained from the spool is
+        reading names it. **So is one its screen named and nothing dated**, while a live reading
+        (`AgentLimits.live`) publishes that window: Cursor's screen says "month" and never when
+        the month ends, and recorded that way the stop has no instant to lift on. Only a live
+        reading, because only its next answer is sure to have been asked after the stop. One no
+        reading shows full within the hold is released as its screen named it, undated, and
+        does not lift on its own. A stop drained from the spool is
         never held, because the drain has already deleted its file and memory is not a place to
         keep the only copy.
         """
@@ -253,7 +266,7 @@ class LimitStopClassifier:
         reading = readings.get(profile)
         hit = classify(reading, hint, now=now)
         hold = (
-            (hit.window is None or (hit.resets_at is None and hit.window in _labels(reading)))
+            (hit.window is None or _datable(hit, reading))
             and activity.confidence is ActivityConfidence.INFERRED
             and passes < _HOLD_PASSES
             and reading is not None

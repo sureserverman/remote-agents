@@ -1,9 +1,11 @@
 """Whether a limit stop has lifted, decided once for the bot's line and the nudge after it.
 
-A lift has two witnesses. **The schedule:** the provider published when the window resets, and
+A lift has three witnesses. **The schedule:** the provider published when the window resets, and
 that instant, plus a minute of grace, has passed. **A new period:** a reading taken well after the
 stop shows the stop's own window rolled over -- its reset now later than the one the stop was
 recorded against -- and below full, which is how a window reopened ahead of its schedule is seen.
+**A live drop:** a reading the provider was asked for well after the stop shows the stop's own
+window below full inside the stop's own period. Only a live reading is a witness to that.
 
 **It fails toward "not yet".** A false lift retires the owner's limit line while the agent is
 still stopped and, with the resume switch on, types the nudge into it; a late lift costs a few
@@ -13,8 +15,8 @@ evidence, and the gate review of 2026-09-29 is why "positive" is the word:
 - **A reading's stamp is not proof its figures are new.** Claude's status-line recording is dated
   when Code last *drew* the line, and it carries the rate limits the session cached from its last
   response -- so a redraw after the stop is a reading "after the stop" holding the figures from
-  before it. A drop below full proves nothing on its own; a window whose reset moved past the
-  stop's does, because a cached figure carries the old reset.
+  before it. In such a reading a drop below full proves nothing on its own; a window whose reset
+  moved past the stop's does, because a cached figure carries the old reset.
 - **Any full window whose own reset is still ahead holds the lift**, not only the stop's: after the
   five-hour window reopens, a full week still stops the agent. A full window whose reset has
   lapsed is a cached figure and holds nothing -- otherwise a status line that is never redrawn

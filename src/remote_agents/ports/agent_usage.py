@@ -162,8 +162,10 @@ class LimitsAbsence(Enum):
     """
 
     NOT_REPORTED = "not_reported"
-    """The provider publishes no limits at all, by design — `cursor-agent`'s answer, and a
-    complete one. Nothing is pending and nothing is broken."""
+    """The provider publishes nothing this project reads — `opencode`'s answer, and a complete
+    one: nothing is pending and nothing is broken. `cursor-agent` answers it with
+    `LimitsNote.OFF` while its switch is off, which is the one case where something would
+    change it."""
 
     NO_READING = "no_reading"
     """The provider does publish limits, and none was found this time — no file yet, nothing
@@ -268,13 +270,16 @@ class AgentLimits:
     """What would mend `absence`, or `None` when the reader has nothing to add."""
 
     live: bool = False
-    """Whether the provider was asked for these figures at `observed_at`, by this reader.
+    """Whether a rule may treat these figures as measured at `observed_at`.
 
-    False for a figure read out of a recording, whose stamp says when the recording was written
-    and not when its figures were true: Claude's status line is redrawn with the limits a session
-    cached from its last response. A rule that needs "this was so at that instant" -- a limit
-    stop lifting because its window fell below full -- may take a live reading's word for it and
-    no other's. Defaulted to the answer that claims nothing.
+    True only where the provider was asked at that instant *and* a decision admits the reading
+    as evidence -- Cursor's usage API, under DEC-110. False for a figure read out of a
+    recording, whose stamp says when the recording was written and not when its figures were
+    true: Claude's status line is redrawn with the limits a session cached from its last
+    response. False, too, for Claude's usage API: it is asked live, and no decision has admitted
+    it. A rule that needs "this was so at that instant" -- a limit stop lifting because its
+    window fell below full -- may take a live reading's word for it and no other's. Defaulted to
+    the answer that claims nothing.
     """
 
 

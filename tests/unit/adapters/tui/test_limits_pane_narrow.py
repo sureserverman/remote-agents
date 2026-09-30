@@ -536,3 +536,43 @@ def test_a_switched_off_cursor_row_stacks_like_any_absence() -> None:
     assert lines[-1].endswith("off in Settings"), lines
     for line in lines:
         assert cell_len(line) <= DASHBOARD_RIGHT, line
+
+
+def _quiet_with_cursor(resets_in: str = "31d") -> tuple[LimitRow, ...]:
+    """Cursor the only row with a reading: no pace line is there to narrow the name column."""
+    parts = (LimitPart("cursor", 100), LimitPart("other", 100))
+    return (
+        LimitRow("claude", (), None, None, absence="no reading yet"),
+        LimitRow("codex", (), None, None, absence="unreadable"),
+        LimitRow(
+            "cursor-agent", (LimitWindow("month", 100, resets_in, parts=parts),), "Cursor API", None
+        ),
+    )
+
+
+@pytest.mark.parametrize("width", [SMALLEST, 33, NARROW, DASHBOARD_RIGHT, 45, 60, CONSOLE])
+@pytest.mark.parametrize("rows", [_quiet_with_cursor(), _quiet_with_cursor()[2:]], ids=["3", "1"])
+def test_a_cursor_row_fits_the_pane_when_no_row_beside_it_has_pace(
+    rows: tuple[LimitRow, ...], width: int
+) -> None:
+    """Found at the Stage 2 gate: the name column kept room for a pace line and not for this row.
+
+    With Claude and Codex unread the name column stayed twelve cells, and the bar's reset and
+    the second figure ran past a 38-cell pane. The widest figures and a two-digit day count,
+    because those are the longest lines the row has.
+    """
+    lines = [content.plain for content in limit_rows_content(rows, width)]
+    cursor = lines[next(i for i, line in enumerate(lines) if line.startswith("cu")) :]
+    assert "Cursor 100%" in " ".join(cursor) and "other 100%" in " ".join(cursor), cursor
+    assert "↻ 31d" in " ".join(cursor), cursor
+    for line in lines:
+        assert cell_len(line) <= width, f"at {width}: {line!r}"
+        assert line == line.rstrip(), repr(line)
+    for line in cursor:
+        for run in _GAUGE_RUN.finditer(line):
+            assert len(run.group()) == GAUGE_CELLS, line
+
+
+def test_a_cursor_row_in_the_smallest_pane_gives_each_figure_a_line() -> None:
+    cursor = [content.plain for content in limit_rows_content(_quiet_with_cursor()[2:], SMALLEST)]
+    assert [line.strip() for line in cursor[1:]] == ["Cursor 100%", "other 100%", "↻ 31d"], cursor

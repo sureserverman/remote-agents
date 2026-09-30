@@ -28,7 +28,7 @@ from __future__ import annotations
 import math
 import re
 from collections.abc import Iterable, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 
 from textual.content import Content
@@ -472,7 +472,8 @@ class _LimitColumns:
     A column is a *window kind*, not a position. Positional layout was BL-046: an agent that
     published only a weekly window had it drawn in the column its neighbour used for five
     hours, so the grid invited the owner to read one agent's week against another's afternoon,
-    with both labels truthful. Every row draws every one of these columns.
+    with both labels truthful. Every row draws every one of these columns, except a split row
+    (`_split_window`), whose one bar runs across them.
     """
     week_gauge: int = _GAUGE_WIDTH
     """How many cells the week column's bar is drawn in: `_WIDE_WEEK_GAUGE` on a wide pane."""
@@ -493,6 +494,12 @@ class _LimitColumns:
 #: readable figure beside any of them. `columns()` has always had the equivalent guard one
 #: function over -- it abandons padding below `room < 4` -- and this path had none.
 _MINIMUM_PROFILE_COLUMN = 3
+
+#: The narrowest the profile column is squeezed to *to keep the one-line layout*: six cells,
+#: `claude`'s length, which leaves `curso…` and `openc…` told apart. Above the stacked floor on
+#: purpose -- there the alternative to a short name is a cut gauge, here it is only three lines
+#: per agent where there was one.
+_ONE_LINE_PROFILE_FLOOR = 6
 
 #: The gap between the profile and its first window, and between one window and the next. Two
 #: rather than `_GUTTER`'s one, deliberately: it marks a group boundary against the single
@@ -530,7 +537,28 @@ def _limit_columns(rows: Sequence[LimitRow], width: int | None = None) -> _Limit
         (_pace_line(row, window).cell_length for row, window in zip(rows, paces) if window),
         default=0,
     )
-    return _LimitColumns(
+    splits = [(row, window) for row in rows for window in (_split_window(row),) if window]
+    split_line = max((_split_room(row, window) for row, window in splits), default=0)
+    columns = _LimitColumns(
+        profile=0,
+        label=label,
+        percent=percent,
+        reset=reset,
+        labels=labels,
+        week_gauge=week_gauge,
+        pace=max(len(_PACE_HEADING), pace),
+    )
+    # **A long name gives way before the table stacks.** The profile column is the widest name,
+    # and `cursor-agent` is twice `claude`: its six extra cells took a 76-cell pane from one
+    # line per agent to three. So where the table would fit with a narrower name column, the
+    # column narrows to what fits, never below `_ONE_LINE_PROFILE_FLOOR`, and a longer name is
+    # ellipsised into it. From the names and the width alone, never from which rows have a
+    # reading, so the layout cannot flip as a reading ages.
+    rest = _table_width(columns)
+    if width is not None and _ONE_LINE_PROFILE_FLOOR + rest <= width < profile + rest:
+        profile = width - rest
+    return replace(
+        columns,
         profile=_capped_profile(
             profile,
             width,
@@ -538,14 +566,8 @@ def _limit_columns(rows: Sequence[LimitRow], width: int | None = None) -> _Limit
             gauge=week_gauge,
             percent=percent,
             reset=reset,
-            pace_line=pace_line,
+            pace_line=max(pace_line, split_line),
         ),
-        label=label,
-        percent=percent,
-        reset=reset,
-        labels=labels,
-        week_gauge=week_gauge,
-        pace=max(len(_PACE_HEADING), pace),
     )
 
 
@@ -599,9 +621,10 @@ def _capped_profile(
     `gauge` is the widest bar a window draws -- the week's, which widens on a wide pane
     (DEC-106) -- so the window that fits is the widest one, not the eight-cell one.
 
-    `pace_line` is the widest stacked pace line, which starts under the bar and can outrun the
-    window above it: it is the longest thing the stacked layout puts beside a name, so it gets
-    the same room. Only a name longer than the two this pane grew up with reaches it.
+    `pace_line` is the widest line the stacked layout starts under the bars -- a paced week's
+    pace line, or a split row's bar and figures (`_split_room`) -- which can outrun the window
+    above it, so it gets the same room. Only a name longer than the two this pane grew up with
+    reaches it.
     """
     if width is None or width <= 0:
         return profile
@@ -718,9 +741,10 @@ def _one_line(row: LimitRow, columns: _LimitColumns) -> Content:
     """The row, laid out against the table's columns rather than against its own windows.
 
     Walking `columns.labels` rather than `row.windows` is the whole of BL-046's fix: a window
-    is drawn in the column its *kind* owns. Every row walks every column (0.46.0): a kind this
-    row did not publish is drawn as its label and an empty bar. What the row says after its
-    bars is `_note`'s, added by `limit_row_content`.
+    is drawn in the column its *kind* owns. Every row that reaches here walks every column
+    (0.46.0): a kind this row did not publish is drawn as its label and an empty bar. A split
+    row never reaches here (`_split_lines`). What the row says after its bars is `_note`'s,
+    added by `limit_row_content`.
     """
     line = _name(row, columns)
     published = _row_windows(row)
@@ -787,7 +811,9 @@ def _table_width(columns: _LimitColumns) -> int:
     What the stack decision is made from, and nothing else (0.46.0). Every row draws every
     column, so this is a property of the table; what a row says *after* its bars -- a stale
     date, an absence phrase -- takes a line of its own when it does not fit, rather than
-    flipping the whole pane between layouts as a reading ages.
+    flipping the whole pane between layouts as a reading ages. A split row draws in none of the
+    columns and still does not decide this: a pane holding only split rows stacks or not by the
+    fixed columns it would draw for any other row.
     """
     windows = sum(_GROUP_GUTTER + _cell_width(label, columns) for label in columns.labels)
     pace = _GROUP_GUTTER + columns.expected + _GROUP_GUTTER + columns.pace
@@ -813,6 +839,18 @@ def _note(row: LimitRow, columns: _LimitColumns) -> tuple[Content, Content]:
     return Content(""), Content("")
 
 
+def _part_figures(window) -> list[str]:
+    """`Cursor 62%`, `other 18%`: each pool's own percent, under the name this surface gives it."""
+    return [f"{_PART_LABELS.get(part.label, part.label)} {part.percent}%" for part in window.parts]
+
+
+def _split_room(row: LimitRow, window) -> int:
+    """How wide a split row's two-line form is after its lead: bar and reset, then figures."""
+    countdown = _reset_text(row, window)
+    bar = split_gauge_content(window.parts).cell_length + (1 + len(countdown) if countdown else 0)
+    return max(bar, Content(" · ".join(_part_figures(window))).cell_length)
+
+
 def _split_lines(
     row: LimitRow, window, columns: _LimitColumns, width: int | None, *, stack: bool
 ) -> list[Content]:
@@ -821,27 +859,38 @@ def _split_lines(
     The bar begins where every other row's first bar does -- under the first column's heading,
     or after the label column when stacked -- and runs on into the next column's cells. Where
     the line does not fit, the figures take a line of their own under the bar and the reset
-    stays beside it, which is where a stacked window keeps its reset.
+    stays beside it, which is where a stacked window keeps its reset. The profile column is
+    capped to leave room for that form (`_split_room`). Below the cap's floor each figure, and
+    then the reset, takes its own line, so nothing is cut that a line of its own would show.
     """
     lead = _name(row, columns) + Content(" " * _GROUP_GUTTER)
     if stack:
         lead = lead + Content(" " * (columns.label + 1))
-    bar = lead + split_gauge_content(window.parts)
-    figures = Content(
-        " · ".join(
-            f"{_PART_LABELS.get(part.label, part.label)} {part.percent}%" for part in window.parts
-        )
-    )
-    countdown = _reset_text(row, window)
+    indent = Content(" " * lead.cell_length)
     gutter = Content(" " * _GROUP_GUTTER)
-    line = bar + gutter + figures
+    bar = lead + split_gauge_content(window.parts)
+    each = [Content(figure) for figure in _part_figures(window)]
+    figures = Content(" · ").join(each)
+    countdown = _reset_text(row, window)
+    if not countdown:
+        forms = [[bar + gutter + figures], [bar, indent + figures]]
+    else:
+        reset = Content.assemble((countdown, MUTED))
+        beside = bar + Content(" ") + reset
+        forms = [
+            [bar + gutter + figures + gutter + reset],
+            [beside, indent + figures],
+            [beside, *(indent + figure for figure in each)],
+        ]
+    last = [bar, *(indent + figure for figure in each)]
     if countdown:
-        line = line + gutter + Content.assemble((countdown, MUTED))
-    if width is None or width <= 0 or line.cell_length <= width:
-        return [line]
-    if countdown:
-        bar = bar + Content.assemble((f" {countdown}", MUTED))
-    return [bar, Content(" " * lead.cell_length) + figures]
+        last.append(indent + reset)
+    if width is None or width <= 0:
+        return forms[0]
+    for form in forms:
+        if all(line.cell_length <= width for line in form):
+            return form
+    return last
 
 
 def limit_row_content(
@@ -865,7 +914,8 @@ def limit_row_content(
     **Every field is padded to a width measured across the whole render** (`columns`), so the
     Nth window of every agent begins in the same column and the pane reads as one table rather
     than as one sentence per agent. That is what the sessions pane has always done through
-    `session_contents`, and this list is the one in the surface that did not.
+    `session_contents`, and this list is the one in the surface that did not. The one row this
+    does not describe is a split row, which `_split_lines` lays out (DEC-111).
     """
     if stack is None:
         stack = width is not None and width > 0 and _table_width(columns) > width

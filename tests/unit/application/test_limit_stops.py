@@ -253,6 +253,9 @@ def _cursor(total: float, cursor: float, other: float) -> AgentLimits:
     ("reading", "expected"),
     [
         pytest.param(_cursor(100, 100, 40), LimitHit("month", _CYCLE_END), id="the-total-is-full"),
+        pytest.param(_cursor(100, 40, 40), LimitHit("month", _CYCLE_END), id="only-the-total-is"),
+        pytest.param(_cursor(60, 99.5, 40), LimitHit("month", _CYCLE_END), id="a-pool-at-99.5"),
+        pytest.param(_cursor(60, 99.4, 40), _MONTH_HINT, id="a-pool-at-99.4-is-not-full"),
         pytest.param(
             _cursor(70, 100, 40), LimitHit("month", _CYCLE_END), id="its-own-pool-is-full"
         ),
@@ -327,3 +330,32 @@ async def test_a_stop_its_sentence_dated_is_not_held_for_a_cursor_style_reading(
 
     (stop,) = await classifier.classified([_stop(ActivityConfidence.INFERRED)])
     assert stop.limit == dated
+
+
+async def test_a_stop_a_recording_cannot_date_is_not_held_for_a_cursor_style_reading() -> None:
+    """Codex's reading is a recording: its next answer is not sure to be newer than the stop."""
+
+    async def limits():
+        return (_codex(97),)
+
+    undated = LimitHit("week", None)
+    screen = LimitScreen(markers=(".",), hint=lambda text, now: undated)
+    classifier = LimitStopClassifier(_Store(), limits, {"codex": screen}, now=lambda: _NOW)
+
+    (stop,) = await classifier.classified([_stop(ActivityConfidence.INFERRED)])
+    assert stop.limit == undated
+
+
+async def test_a_cursor_stop_naming_a_window_the_reading_lacks_is_not_held() -> None:
+    other = LimitHit("on-demand", None)
+
+    async def limits():
+        return (_cursor(98, 98, 40),)
+
+    screen = LimitScreen(markers=(".",), hint=lambda text, now: other)
+    classifier = LimitStopClassifier(
+        _CursorStore(), limits, {"cursor-agent": screen}, now=lambda: _NOW
+    )
+
+    (stop,) = await classifier.classified([_stop(ActivityConfidence.INFERRED)])
+    assert stop.limit == other

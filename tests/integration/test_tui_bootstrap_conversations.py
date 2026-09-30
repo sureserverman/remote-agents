@@ -259,6 +259,10 @@ def test_no_further_capability_leaked_into_the_context() -> None:
         # Limit-lifecycle sub-plan 2 Task 3.2: the resume switch, drawn as a Settings row on
         # both surfaces for `claude_limits_source`'s reason.
         "resume_after_limit",
+        # Limit-lifecycle sub-plan 3 Task 1.3: Cursor's limits switch, a Settings row on both
+        # surfaces for `claude_limits_source`'s reason -- it decides whether this service reads
+        # a credential and calls out.
+        "cursor_limits_source",
         "sessions",
         "projects",
         "conversations",

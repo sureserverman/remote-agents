@@ -677,7 +677,9 @@ def limit_rows(
         # that mean *this may resolve*.
         #
         # A rule rather than a pair, so nothing has to be re-decided: a provider that starts
-        # publishing limits gets a row the day it does, and one that never will has none.
+        # publishing limits gets a row the day it does, and one that never will has none. A
+        # provider one Settings switch away from publishing them keeps its row and says so
+        # (`_never_reports`).
         wanted = [
             name
             for name in (str(profile) for profile in profiles)
