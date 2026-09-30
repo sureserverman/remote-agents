@@ -41,6 +41,7 @@ from remote_agents.adapters.telegram.inspection import inspect_capture
 from remote_agents.adapters.telegram.limit_reset_notifications import (
     LimitResetNotifier,
 )
+from remote_agents.adapters.telegram.limits_block import limits_block
 from remote_agents.adapters.telegram.live_view import ChatViewStore, LiveView
 from remote_agents.adapters.telegram.notifications import (
     NOTIFIED_DETAIL_ACTION as _NOTIFIED_DETAIL,
@@ -2703,25 +2704,8 @@ class PrivateBotBoundary:
         except Exception:
             logging.getLogger(__name__).debug("account limits read failed", exc_info=True)
             return ""
-        if not rows:
-            # The heading is part of the block, so it goes when the block does. Emitting it
-            # unconditionally promised a block and delivered none -- reached whenever every
-            # agent answers with no windows, which is Claude's cache past its thirty-minute
-            # fence and a quiet codex, the same routine state the TUI pane's empty sentence
-            # exists for.
-            return ""
-        width = max(len(row.profile) for row in rows) + 2
-        lines = []
-        for row in rows:
-            pieces = [f"{window.label} {window.percent}%" for window in row.windows]
-            if row.borrowed is not None:
-                pieces.append(f"via {row.borrowed}")
-            if row.stale_for is not None:
-                pieces.append(f"as of {row.stale_for} ago")
-            lines.append(
-                f"<code>{escape(row.profile.ljust(width))}{escape(' · '.join(pieces))}</code>"
-            )
-        return "\n\n<b>Plan limits</b>\n" + "\n".join(lines)
+        block = limits_block(rows)
+        return f"\n\n{block}" if block else ""
 
     async def _usage_lines(self, record: SessionRecord) -> tuple[str, ...]:
         """Ask the provider what this session has spent, and never let the answer cost a screen.
