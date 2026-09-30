@@ -209,6 +209,9 @@ def test_the_service_composition_wires_the_limit_stop_watch(tmp_path, monkeypatc
         connection.close()
 
     assert isinstance(composition.limit_lift_watcher, LimitLiftWatcher)
+    # Cursor's lifted stop is retired and never nudged (DEC-110): a dropped keyword here would
+    # type "carry on" into a Cursor session at its cycle end.
+    assert composition.limit_lift_watcher._retire_only == frozenset({"cursor-agent"})
 
 
 def test_the_service_composition_lets_the_bot_step_the_console_aside(tmp_path, monkeypatch) -> None:

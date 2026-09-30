@@ -190,6 +190,9 @@ class LimitLiftWatcher:
     recorded and the line updated as one step shielded from the pass's bound. A line that does
     not land is retried each pass until it does (in memory: a restart leaves it as it was).
 
+    **A profile in `retire_only` is never nudged**, whatever the switch says: its agent keeps
+    the owner's draft at the stop (`LimitScreen.keeps_draft`), so its lift takes the step below.
+
     **Without a nudge: retire, then record -- and only when the surface says the stop is done
     with.** Retiring a
     line that is already gone does nothing, so a crash between the two costs one repeat of a
@@ -206,8 +209,10 @@ class LimitLiftWatcher:
         retire: Callable[[LimitStop], Awaitable[bool]],
         *,
         resume: LimitResume | None = None,
+        retire_only: frozenset[str] = frozenset(),
         now: Callable[[], datetime] = lambda: datetime.now(UTC),
     ) -> None:
+        self._retire_only = retire_only
         self._store = store
         self._outcomes = outcomes
         self._limits = limits
@@ -239,7 +244,8 @@ class LimitLiftWatcher:
             reading = readings.get(profiles[stop.session_id])
             if not lifted(stop.hit, stop.stopped_at, reading, now=now):
                 continue
-            if await self._nudges(stop):
+            nudged = profiles[stop.session_id] not in self._retire_only
+            if nudged and await self._nudges(stop):
                 acted += await self._nudge(stop, now=now)
             elif await self._retire_and_record(stop, now=now):
                 acted += 1

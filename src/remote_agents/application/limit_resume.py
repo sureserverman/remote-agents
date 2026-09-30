@@ -24,10 +24,10 @@ intent before the typing and the outcome over it before it touches the bot's lin
 The busy clock is this process's memory only, so a restart during a busy wait starts the wait
 again -- it can delay the give-up, never repeat a nudge.
 
-**Cursor is not resumed by this.** Its limit screen keeps the owner's own message in the
-composer, so the send refuses it (a draft is there) and the stop is recorded not resumed, with
-the reason on the line. Submitting that kept draft is a different pane action, and it is not
-built here.
+**Cursor is not resumed by this, and is never asked.** Its limit screen keeps the owner's own
+message in the composer (`LimitScreen.keeps_draft`), so the lift pass retires a lifted Cursor
+stop without coming here (DEC-110). Submitting that kept draft is a different pane action, and
+it is not built (BL-112).
 """
 
 from __future__ import annotations

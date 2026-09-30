@@ -28,4 +28,4 @@ def _hint(text: str, now: datetime) -> LimitHit | None:  # noqa: ARG001 -- no in
     return LimitHit("month", None) if re.search(_STOP, text, re.MULTILINE) else None
 
 
-LIMIT_SCREEN = LimitScreen(markers=(_STOP,), hint=_hint)
+LIMIT_SCREEN = LimitScreen(markers=(_STOP,), hint=_hint, keeps_draft=True)

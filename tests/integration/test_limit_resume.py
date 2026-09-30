@@ -108,7 +108,17 @@ def _stop(at: datetime = _STOP, resets_at: datetime = _RESET) -> AgentActivity:
     return AgentActivity(_A, ActivityKind.LIMIT_REACHED, None, at, limit=LimitHit("5h", resets_at))
 
 
-def _watcher(connection, terminal, line, clock, *, sessions=None, on=True, limits=_no_readings):
+def _watcher(
+    connection,
+    terminal,
+    line,
+    clock,
+    *,
+    sessions=None,
+    on=True,
+    limits=_no_readings,
+    retire_only=frozenset(),
+):
     async def enabled() -> bool:
         return on
 
@@ -121,6 +131,7 @@ def _watcher(connection, terminal, line, clock, *, sessions=None, on=True, limit
         limits,
         line.retire,
         resume=resume,
+        retire_only=retire_only,
         now=clock,
     )
 
@@ -718,3 +729,38 @@ async def test_a_tmux_error_before_anything_was_typed_is_tried_again(connection)
     assert await watcher.pass_once() == 0
     assert await watcher.pass_once() == 1
     assert _outcomes(connection) == [RESUMED]
+
+
+async def test_a_profile_that_keeps_its_draft_is_retired_at_the_lift_and_never_typed_into(
+    connection,
+) -> None:
+    """With the switch on and an empty idle composer, which is when a nudge would land.
+
+    Cursor keeps the owner's message at its stop and reports nothing afterwards. A stop the
+    owner has since worked past still reads as undecided, so a nudge at the cycle end would be
+    typed into a session that was never waiting.
+    """
+    await SQLiteActivityStore(connection).append(_stop())
+    terminal, line = _Terminal(SENT), _Line()
+    watcher = _watcher(
+        connection,
+        terminal,
+        line,
+        _Clock(),
+        sessions=_Sessions("cursor-agent"),
+        retire_only=frozenset({"cursor-agent"}),
+    )
+
+    assert await watcher.pass_once() == 1
+    assert await watcher.pass_once() == 0
+
+    assert terminal.sent == []
+    assert line.retired == [_A] and line.amended == []
+    assert _outcomes(connection) == [LIFTED]
+
+
+def test_only_cursor_is_declared_to_keep_its_draft() -> None:
+    """The fold the service wires: read off each vertical's own limit screen (DEC-070)."""
+    from remote_agents.adapters.agents.registry import profiles_keeping_a_draft
+
+    assert profiles_keeping_a_draft() == frozenset({"cursor-agent"})

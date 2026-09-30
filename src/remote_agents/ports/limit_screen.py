@@ -29,3 +29,12 @@ class LimitScreen:
 
     markers: tuple[str, ...]
     hint: Callable[[str, datetime], LimitHit | None]
+    keeps_draft: bool = False
+    """Whether the agent leaves the owner's unsent message in its composer at the stop.
+
+    For such an agent "carry on" is the wrong thing to type after the lift: the message that
+    was stopped is still there, waiting to be submitted. So its lifted stop is retired and
+    never nudged (DEC-110). It also reports nothing after the stop, so a stop the owner has
+    since worked past still looks undecided, and a nudge at its lift would land in a session
+    that was never waiting.
+    """

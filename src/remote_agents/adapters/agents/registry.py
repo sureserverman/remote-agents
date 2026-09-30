@@ -464,6 +464,17 @@ def profile_limit_screens(
     return resolved
 
 
+def profiles_keeping_a_draft(
+    descriptors: tuple[ProviderDescriptor, ...] | None = None,
+) -> frozenset[str]:
+    """The curated profiles whose limit screen keeps the owner's draft (`LimitScreen.keeps_draft`).
+
+    The lift pass retires such a profile's lifted stop and never nudges it (DEC-110).
+    """
+    screens = profile_limit_screens(descriptors)
+    return frozenset(name for name, screen in screens.items() if screen.keeps_draft)
+
+
 def profiles_with_finished_events(
     descriptors: tuple[ProviderDescriptor, ...] | None = None,
 ) -> frozenset[str]:

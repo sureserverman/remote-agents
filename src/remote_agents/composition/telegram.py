@@ -12,6 +12,7 @@ from remote_agents.adapters.agents.registry import (
     profile_glyphs,
     profile_limit_screens,
     profile_trust_dialogs,
+    profiles_keeping_a_draft,
     profiles_with_finished_events,
     provider_descriptors,
 )
@@ -259,6 +260,8 @@ def _private_boundary(
                     note=reason,
                 ),
             ),
+            # Cursor keeps the owner's draft at its stop, so its lift is retired, never nudged.
+            retire_only=profiles_keeping_a_draft(descriptors),
         ),
     )
 
