@@ -75,6 +75,19 @@ service reaches for on its own (DEC-061, amended): the default keeps the old bou
 DEFAULT_CLAUDE_LIMITS_SOURCE = "status-line"
 """Opt-in means off until the owner says otherwise, and a file that says nothing said nothing."""
 
+CURSOR_LIMITS_SOURCES = ("off", "usage-api")
+"""Whether Cursor's monthly usage is read at all; a closed set, never free text.
+
+Cursor writes no usage down on the host, so there is no source that grants nothing new:
+`off` reads nothing. `usage-api` lets the service read the login token out of the Cursor CLI's
+own auth file and call Cursor's server for the figures -- a credential read and an outbound
+call the service otherwise never makes (DEC-061/087). The file and the host are named in one
+module, `adapters.agents.cursor.usage_api`, and nowhere else in the code.
+"""
+
+DEFAULT_CURSOR_LIMITS_SOURCE = "off"
+"""Opt-in means off until the owner says otherwise, and a file that says nothing said nothing."""
+
 DEFAULT_RESUME_AFTER_LIMIT = True
 """On unless the owner switches it off: they asked for the resume nudge after a lift by default."""
 
@@ -134,6 +147,16 @@ class AppConfig:
     surfaces are two writers (DEC-005), so the file is the only thing that knows.
     """
 
+    cursor_limits_source: str = DEFAULT_CURSOR_LIMITS_SOURCE
+    """Which of `CURSOR_LIMITS_SOURCES` the owner chose, or off when they chose nothing.
+
+    A permission, optional for `claude_limits_source`'s reason: a host that never granted it
+    has not granted it. Written by the Settings row on either surface through
+    `write_limits_key`. The Cursor limits router reads it afresh through
+    `read_cursor_limits_source` on every account read rather than off this field, so a flip
+    lands without a restart.
+    """
+
     resume_after_limit: bool = DEFAULT_RESUME_AFTER_LIMIT
     """Whether the service types one resume nudge into a limit-stopped session after its lift.
 
@@ -162,6 +185,7 @@ _LIMIT_KEYS = {
     "activity_poll_seconds",
     "claude_context_window",
     "claude_limits_source",
+    "cursor_limits_source",
     "resume_after_limit",
 }
 
@@ -189,7 +213,7 @@ the spool drain.
 """
 
 _OPTIONAL_LIMIT_KEYS = frozenset(
-    {"claude_context_window", "claude_limits_source", "resume_after_limit"}
+    {"claude_context_window", "claude_limits_source", "cursor_limits_source", "resume_after_limit"}
 )
 """Keys the schema accepts but does not require, and the only ones in it.
 
@@ -410,6 +434,9 @@ def load_config(path: Path) -> AppConfig:
     claude_limits_source = _limits_source(
         limits.get("claude_limits_source", DEFAULT_CLAUDE_LIMITS_SOURCE)
     )
+    cursor_limits_source = _cursor_limits_source(
+        limits.get("cursor_limits_source", DEFAULT_CURSOR_LIMITS_SOURCE)
+    )
     resume_after_limit = _flag(
         limits.get("resume_after_limit", DEFAULT_RESUME_AFTER_LIMIT), "limits.resume_after_limit"
     )
@@ -424,6 +451,7 @@ def load_config(path: Path) -> AppConfig:
         claude_context_window_stated=claude_context_window_stated,
         path=path,
         claude_limits_source=claude_limits_source,
+        cursor_limits_source=cursor_limits_source,
         resume_after_limit=resume_after_limit,
     )
 
@@ -528,6 +556,18 @@ def _limits_source(value: object) -> str:
     return value
 
 
+def _cursor_limits_source(value: object) -> str:
+    """Admit one of `CURSOR_LIMITS_SOURCES` and nothing else, naming both on refusal.
+
+    `_limits_source`'s rule for the other switch: exact, case-sensitive, no aliases, because a
+    value that is nearly `usage-api` must not be read as a grant.
+    """
+    if not isinstance(value, str) or value not in CURSOR_LIMITS_SOURCES:
+        legal = " or ".join(f'"{source}"' for source in CURSOR_LIMITS_SOURCES)
+        raise ConfigError(f"limits.cursor_limits_source must be {legal}")
+    return value
+
+
 #: What a freshly generated configuration starts at, and the values the shipped example has
 #: carried since it was written. They are here rather than in the generator's caller because
 #: the bounds that accept them are here: `_bounded_int` is what says 40 is a legal label length,
@@ -550,6 +590,12 @@ _LIMIT_COMMENTS: dict[str, str] = {
         "# keeping the hop as its fallback. That is a credential read and an\n"
         "# outbound call the service otherwise never makes, which is why it is opt-in: set it\n"
         "# here, and nowhere else."
+    ),
+    "cursor_limits_source": (
+        '# Whether the service reads Cursor\'s monthly usage at all. The default, "off", reads\n'
+        '# nothing. "usage-api" lets the service read the login token out of the Cursor CLI\'s\n'
+        "# own login file and call Cursor's server for the figures. That is a credential read\n"
+        "# and an outbound call the service otherwise never makes, which is why it is opt-in."
     ),
     "claude_context_window": (
         "# The size of Claude's context window, in tokens. **This is your statement, not a\n"
@@ -635,6 +681,8 @@ def render_config(
     # closed set, so the renderer must too, or it writes a file its own loader rejects.
     if "claude_limits_source" in values:
         _limits_source(values["claude_limits_source"])
+    if "cursor_limits_source" in values:
+        _cursor_limits_source(values["cursor_limits_source"])
     # A bool is a legal value for the flag and nothing else: `_toml_value` spells one as
     # `true`, which the loader refuses for a count, so it is refused here instead.
     for key, value in values.items():
@@ -712,6 +760,22 @@ def read_claude_limits_source(path: Path) -> str:
     return value if value in CLAUDE_LIMITS_SOURCES else DEFAULT_CLAUDE_LIMITS_SOURCE
 
 
+def read_cursor_limits_source(path: Path) -> str:
+    """Cursor's switch as the file states it right now, or off when it cannot be read.
+
+    Total, like `read_claude_limits_source`, and failing the same way: toward the default,
+    which here is no read at all. A file that is missing, malformed, or states a value outside
+    `CURSOR_LIMITS_SOURCES` never starts a credential read.
+    """
+    try:
+        raw = tomllib.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError):
+        return DEFAULT_CURSOR_LIMITS_SOURCE
+    limits = raw.get("limits") if isinstance(raw, dict) else None
+    value = limits.get("cursor_limits_source") if isinstance(limits, dict) else None
+    return value if value in CURSOR_LIMITS_SOURCES else DEFAULT_CURSOR_LIMITS_SOURCE
+
+
 def read_resume_after_limit(path: Path, *, when_unsure: bool = DEFAULT_RESUME_AFTER_LIMIT) -> bool:
     """The resume switch as the file states it right now; total, never raising.
 
@@ -744,7 +808,8 @@ def write_limits_key(path: Path, key: str, value: bool | str | int) -> None:
     **Not a re-render.** `render_config` writes a fresh file for a host that has none; this
     writes one line into a file the owner may have annotated, reordered, or linked into place
     from a dotfiles tree, so that a surface can flip one switch without a hand edit (DEC-088:
-    `config.toml` gains keys a surface writes, and no settings file; DEC-109 added the second).
+    `config.toml` gains keys a surface writes, and no settings file; DEC-109 added the second,
+    and Cursor's limits switch is the third).
     Re-rendering would honour the schema and destroy the owner's comments, which is the wrong
     trade for a switch that is flipped from a phone. The line is located textually, inside the
     `[limits]` header and before the next one; it is replaced in place when present and appended
@@ -752,7 +817,7 @@ def write_limits_key(path: Path, key: str, value: bool | str | int) -> None:
     found.
 
     Refuses, with `ConfigError` and the file untouched: a key outside the limits schema (a
-    retired key included -- nothing writes one back), a source outside `CLAUDE_LIMITS_SOURCES`,
+    retired key included -- nothing writes one back), a source outside its switch's closed set,
     a file that does not parse, and a file with no `[limits]` table. Then it refuses once more
     on its own output: the rewritten text is parsed with `tomllib` and the key read back before
     anything reaches the disk, because a writer that could corrupt the owner's config is worse
@@ -777,6 +842,8 @@ def write_limits_key(path: Path, key: str, value: bool | str | int) -> None:
         raise ConfigError(f"limits.{key} is not a key this schema writes")
     if key == "claude_limits_source":
         rendered = _toml_value(_limits_source(value))
+    elif key == "cursor_limits_source":
+        rendered = _toml_value(_cursor_limits_source(value))
     elif key == "resume_after_limit":
         rendered = _toml_value(_flag(value, f"limits.{key}"))
     elif isinstance(value, bool) or not isinstance(value, int):

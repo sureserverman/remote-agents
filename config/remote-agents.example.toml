@@ -29,3 +29,11 @@ claude_context_window = 1000000
 # That is a credential read and an outbound call the service otherwise never makes, which is why
 # it is opt-in: set it here, and nowhere else.
 claude_limits_source = "status-line"
+
+# Whether the service reads Cursor's monthly usage at all. The default, "off", reads nothing:
+# cursor-agent writes no usage down on this machine. "usage-api" lets the service read the login
+# token out of ~/.config/cursor/auth.json (the Cursor CLI's own file) and call
+# https://api2.cursor.sh for the figures. That is a credential read and an outbound call the
+# service otherwise never makes, which is why it is opt-in. The service never changes or
+# refreshes that token. Settings on either surface writes this key.
+cursor_limits_source = "off"

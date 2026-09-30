@@ -186,6 +186,10 @@ class LimitsNote(Enum):
     """The provider's own login is missing or was refused. This project never refreshes or
     writes another program's credential, so only the provider's CLI can mend it."""
 
+    OFF = "off"
+    """The read is one the owner has to switch on, and the switch is off. Beside
+    `NOT_REPORTED` it separates "nothing to read without your say" from "nothing, ever"."""
+
 
 @dataclass(frozen=True, slots=True)
 class AgentLimits:

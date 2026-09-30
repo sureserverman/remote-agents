@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from pathlib import Path
 
 from remote_agents.adapters.agents.cursor.limit_screen import LIMIT_SCREEN
+from remote_agents.adapters.agents.cursor.limits_source import CursorLimitsSource
 from remote_agents.adapters.agents.cursor.sessions import CursorSessionCatalogue
 from remote_agents.adapters.agents.cursor.usage import CursorUsageReader
+from remote_agents.adapters.agents.cursor.usage_api import CursorUsageApiReader
 from remote_agents.domain.models import ProfileId, ProjectId
 from remote_agents.ports.provider_descriptor import ComposerScreen, ProviderDescriptor, TrustDialog
 
@@ -18,20 +20,41 @@ def _sessions(project_paths: Mapping[ProjectId, Path]) -> CursorSessionCatalogue
     return CursorSessionCatalogue()
 
 
-def descriptor() -> ProviderDescriptor:
+def _usage(
+    limits_switch: Callable[[], str] | None, home: Path | None
+) -> CursorUsageReader | CursorLimitsSource:
+    """The constant reader alone, or the switch in front of it and the usage API behind it.
+
+    Without a switch -- the default reader set, a test double's composition -- the constant
+    reader is the capability, as it was before the API reader existed. With one, the router
+    decides per account read, and off is still the constant answer (DEC-061/087: opt-in).
+    """
+    constant = CursorUsageReader()
+    if limits_switch is None:
+        return constant
+    return CursorLimitsSource(limits_switch, CursorUsageApiReader(home=home), constant)
+
+
+def descriptor(
+    *, limits_switch: Callable[[], str] | None = None, home: Path | None = None
+) -> ProviderDescriptor:
     """This provider's declared capability set (ARCH-04).
 
-    Hooks and `remote_control` both stay a declared None. `usage` is constant-empty and
-    deliberately NOT None: cursor answers "I publish nothing", which renders as "not
-    reported by this agent"; a None here
+    Hooks and `remote_control` both stay a declared None. `usage` is deliberately NOT None:
+    a session read answers "I publish nothing", which renders as "not reported by this
+    agent"; a None here
     would render "no conversation matched yet" forever (DEC-061 — the two must never
-    conflate; the fold regression test pins the consequence).
+    conflate; the fold regression test pins the consequence). The account read answers the
+    same unless the owner's switch is wired and on (`_usage`).
+
+    The two keyword arguments are the owner's switch for the account read and the home the
+    Cursor CLI's login lives under, both handed down by the composition root (DEC-046).
     """
     return ProviderDescriptor(
         ProfileId("cursor-agent"),
         glyph="🔶",
         sessions=_sessions,
-        usage=CursorUsageReader(),
+        usage=_usage(limits_switch, home),
         # Measured 2026-09-09 on 2026.09.08-6caf4ff: up 0.66 s after launch, cursor on the
         # **affirmative**, and drawn **inside a box** -- so the `▶` is not the first character
         # of its row (`│` is) and the directory path wraps across two rows. The parser looks

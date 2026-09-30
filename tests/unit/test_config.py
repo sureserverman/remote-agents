@@ -883,3 +883,139 @@ def test_a_generated_config_refuses_a_bool_for_an_integer_limit(tmp_path: Path) 
             database_path=tmp_path / "sessions.sqlite3",
             limits={**DEFAULT_LIMITS, "activity_poll_seconds": True},
         )
+
+
+# --- the switch that says whether Cursor's limits are read at all ---------------------------
+
+
+def test_cursor_limits_source_defaults_to_off(tmp_path: Path) -> None:
+    """Absent means the old boundary: no credential read, no outbound call (DEC-061/087)."""
+    from remote_agents.config import read_cursor_limits_source
+
+    path = write_config(tmp_path, example(tmp_path))
+
+    assert load_config(path).cursor_limits_source == "off"
+    assert read_cursor_limits_source(path) == "off"
+
+
+@pytest.mark.parametrize("value", ["off", "usage-api"])
+def test_cursor_limits_source_loads_each_legal_value(tmp_path: Path, value: str) -> None:
+    from remote_agents.config import read_cursor_limits_source
+
+    path = write_config(tmp_path, example(tmp_path) + f'cursor_limits_source = "{value}"\n')
+
+    assert load_config(path).cursor_limits_source == value
+    assert read_cursor_limits_source(path) == value
+
+
+@pytest.mark.parametrize("value", ['"api"', '"Usage-Api"', '"status-line"', '""', "1", "true"])
+def test_cursor_limits_source_refuses_anything_else_by_name(tmp_path: Path, value: str) -> None:
+    """The loader refuses a value outside the set; the fresh reader answers off instead."""
+    from remote_agents.config import read_cursor_limits_source
+
+    path = write_config(tmp_path, example(tmp_path) + f"cursor_limits_source = {value}\n")
+
+    with pytest.raises(ConfigError) as refusal:
+        load_config(path)
+
+    message = str(refusal.value)
+    assert "limits.cursor_limits_source" in message
+    assert '"off"' in message and '"usage-api"' in message
+    assert read_cursor_limits_source(path) == "off"
+
+
+def test_cursor_limits_source_is_exposed_as_a_closed_set() -> None:
+    from remote_agents.config import CURSOR_LIMITS_SOURCES, DEFAULT_CURSOR_LIMITS_SOURCE
+
+    assert CURSOR_LIMITS_SOURCES == ("off", "usage-api")
+    assert DEFAULT_CURSOR_LIMITS_SOURCE == "off"
+
+
+def test_cursor_limits_source_reads_off_from_a_file_it_cannot_read(tmp_path: Path) -> None:
+    """Total, and failing toward no call: a broken file never starts a credential read."""
+    from remote_agents.config import read_cursor_limits_source
+
+    assert read_cursor_limits_source(tmp_path / "absent.toml") == "off"
+    assert read_cursor_limits_source(write_config(tmp_path, "not toml [[[")) == "off"
+    no_table = write_config(tmp_path, 'limits = "usage-api"\n')
+    assert read_cursor_limits_source(no_table) == "off"
+
+
+def test_cursor_limits_source_absent_from_a_deployed_file_is_not_drift(tmp_path: Path) -> None:
+    """DEC-058: a config lacking the new key is not drift and not ill health."""
+    from remote_agents.config import describe_schema_drift
+
+    drift = describe_schema_drift(write_config(tmp_path, example(tmp_path)))
+
+    assert drift["missing"] == []
+    assert drift["unknown"] == []
+
+
+def test_write_limits_key_flips_cursor_limits_source_and_changes_no_other_byte(
+    tmp_path: Path,
+) -> None:
+    from remote_agents.config import read_cursor_limits_source, write_limits_key
+
+    path = write_config(tmp_path, limits_source_body(tmp_path))
+    before = path.read_text(encoding="utf-8")
+
+    write_limits_key(path, "cursor_limits_source", "usage-api")
+    on = path.read_text(encoding="utf-8")
+    assert 'cursor_limits_source = "usage-api"' in on
+    assert load_config(path).cursor_limits_source == "usage-api"
+    assert read_cursor_limits_source(path) == "usage-api"
+    assert everything_but(on, "cursor_limits_source") == everything_but(
+        before, "cursor_limits_source"
+    )
+    assert load_config(path).claude_limits_source == "status-line", "Claude's switch is untouched"
+
+    write_limits_key(path, "cursor_limits_source", "off")
+    off = path.read_text(encoding="utf-8")
+    assert 'cursor_limits_source = "off"' in off
+    assert off.count("cursor_limits_source =") == 1
+    assert read_cursor_limits_source(path) == "off"
+
+
+@pytest.mark.parametrize("value", ["api", "status-line", "", True, 1])
+def test_write_limits_key_refuses_a_cursor_limits_source_outside_the_set(
+    tmp_path: Path, value: object
+) -> None:
+    from remote_agents.config import write_limits_key
+
+    path = write_config(tmp_path, limits_source_body(tmp_path))
+    before = path.read_bytes()
+
+    with pytest.raises(ConfigError, match="limits.cursor_limits_source"):
+        write_limits_key(path, "cursor_limits_source", value)  # type: ignore[arg-type]
+
+    assert path.read_bytes() == before
+
+
+def test_a_generated_config_carries_the_cursor_limits_source_a_caller_chose(
+    tmp_path: Path,
+) -> None:
+    from remote_agents.config import DEFAULT_LIMITS, render_config
+
+    paths = {
+        "dev_root": tmp_path,
+        "registry_path": tmp_path / "registry.yaml",
+        "database_path": tmp_path / "sessions.sqlite3",
+    }
+    assert "cursor_limits_source" not in render_config(**paths), "absent is off; nothing to write"
+
+    rendered = render_config(
+        **paths, limits={**DEFAULT_LIMITS, "cursor_limits_source": "usage-api"}
+    )
+    assert load_config(write_config(tmp_path, rendered)).cursor_limits_source == "usage-api"
+
+    with pytest.raises(ConfigError, match="limits.cursor_limits_source"):
+        render_config(**paths, limits={**DEFAULT_LIMITS, "cursor_limits_source": "api"})
+
+
+def test_the_selector_literal_for_cursor_limits_source_is_in_the_closed_set() -> None:
+    """`cursor/limits_source.py` may not import this module, so its one literal is pinned here."""
+    from remote_agents.adapters.agents.cursor.limits_source import USAGE_API
+    from remote_agents.config import CURSOR_LIMITS_SOURCES, DEFAULT_CURSOR_LIMITS_SOURCE
+
+    assert USAGE_API in CURSOR_LIMITS_SOURCES
+    assert USAGE_API != DEFAULT_CURSOR_LIMITS_SOURCE

@@ -44,6 +44,7 @@ from remote_agents.composition.tui import _console_composer, _local_runtime
 from remote_agents.config import (
     TelegramSecrets,
     read_claude_limits_source,
+    read_cursor_limits_source,
     read_resume_after_limit,
 )
 from remote_agents.ports.agent_activity import ActivityKind
@@ -95,6 +96,9 @@ def _private_boundary(
         # another, and the switch must be read back from the one the owner is editing.
         claude_limits_switch=partial(read_claude_limits_source, config.path or paths.config_path),
         claude_home=paths.home,
+        # Off unless the owner switched it on: the read uses the Cursor CLI's own login.
+        cursor_limits_switch=partial(read_cursor_limits_source, config.path or paths.config_path),
+        cursor_home=paths.home,
     )
     runtime = _local_runtime(config, paths, projects.paths, descriptors)
     terminal = runtime.terminal

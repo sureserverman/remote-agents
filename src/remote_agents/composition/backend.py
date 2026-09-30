@@ -35,7 +35,7 @@ from remote_agents.application.reconcile import SessionLocks
 from remote_agents.application.services import SessionService
 from remote_agents.application.store_watch import StoreWatch
 from remote_agents.composition.limits_source import ConfigLimitsSource, ConfigResumeSetting
-from remote_agents.config import read_claude_limits_source
+from remote_agents.config import read_claude_limits_source, read_cursor_limits_source
 from remote_agents.domain.models import ProjectId, SessionId
 from remote_agents.domain.profiles import ProfileCompatibility, closed_profiles
 from remote_agents.ports.agent_activity import AgentActivity
@@ -279,6 +279,9 @@ def compose_backend(
         # another, and the switch must be read back from the one the owner is editing.
         claude_limits_switch=partial(read_claude_limits_source, config.path or paths.config_path),
         claude_home=paths.home,
+        # Off unless the owner switched it on: the read uses the Cursor CLI's own login.
+        cursor_limits_switch=partial(read_cursor_limits_source, config.path or paths.config_path),
+        cursor_home=paths.home,
     )
     runtime = runtime or _local_runtime(config, paths, projects.paths, descriptors)
     registered = {str(descriptor.profile_id) for descriptor in descriptors}

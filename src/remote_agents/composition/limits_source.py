@@ -36,6 +36,7 @@ from pathlib import Path
 from remote_agents.config import (
     ConfigError,
     read_claude_limits_source,
+    read_cursor_limits_source,
     read_resume_after_limit,
     write_limits_key,
 )
@@ -82,6 +83,34 @@ class ConfigLimitsSource:
             _LOG.warning("the limits source could not be written to %s: %s", self._path, error)
         except Exception:
             _LOG.debug("the limits source could not be written", exc_info=True)
+
+
+class ConfigCursorLimitsSource:
+    """`ports.limits_source.LimitsSourcePort` over `limits.cursor_limits_source`.
+
+    `ConfigLimitsSource`'s twin for Cursor's switch, in this module for its reason, and total
+    on both verbs the same way. Read afresh on every call: it is the Settings rows' read, and
+    the Cursor limits router reads the same key through `read_cursor_limits_source` itself.
+    """
+
+    _KEY = "cursor_limits_source"
+
+    def __init__(self, path: Path) -> None:
+        self._path = path
+
+    async def read(self) -> str:
+        return await asyncio.to_thread(read_cursor_limits_source, self._path)
+
+    async def write(self, value: str) -> None:
+        """Record the choice, or log why it could not be recorded. Never raises."""
+        try:
+            await asyncio.to_thread(write_limits_key, self._path, self._KEY, value)
+        except ConfigError as error:
+            _LOG.warning(
+                "the Cursor limits source could not be written to %s: %s", self._path, error
+            )
+        except Exception:
+            _LOG.debug("the Cursor limits source could not be written", exc_info=True)
 
 
 class ConfigResumeSetting:

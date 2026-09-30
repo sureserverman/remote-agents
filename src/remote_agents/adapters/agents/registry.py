@@ -296,6 +296,8 @@ def provider_descriptors(
     claude_limits_path: Path | None = None,
     claude_limits_switch: Callable[[], str] | None = None,
     claude_home: Path | None = None,
+    cursor_limits_switch: Callable[[], str] | None = None,
+    cursor_home: Path | None = None,
 ) -> tuple[ProviderDescriptor, ...]:
     """One descriptor per provider, in stable UI order, each built by its own vertical.
 
@@ -303,7 +305,8 @@ def provider_descriptors(
     owner-configurable capability (DEC-061 — the ceiling reaches the reader only when the
     owner stated it), where the status-line hop records the plan's windows, the switch that
     names Claude's limits source and the home its credential file lives under -- all of which
-    only the composition root knows (DEC-046).
+    only the composition root knows (DEC-046). Cursor's two are the same pair for its own
+    opt-in account read.
     """
     return (
         claude.descriptor(
@@ -315,7 +318,7 @@ def provider_descriptors(
         ),
         codex.descriptor(),
         opencode.descriptor(),
-        cursor.descriptor(),
+        cursor.descriptor(limits_switch=cursor_limits_switch, home=cursor_home),
     )
 
 

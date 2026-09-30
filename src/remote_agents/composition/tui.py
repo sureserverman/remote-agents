@@ -34,7 +34,7 @@ from remote_agents.composition.backend import (
     compose_backend,
     require_frontend_capabilities,
 )
-from remote_agents.config import read_claude_limits_source
+from remote_agents.config import read_claude_limits_source, read_cursor_limits_source
 from remote_agents.domain.models import SessionId
 from remote_agents.domain.profiles import ProfileCompatibility, closed_profiles
 from remote_agents.production import ProductionPaths
@@ -376,6 +376,9 @@ def local_context(config, connection, paths: ProductionPaths):
         # another, and the switch must be read back from the one the owner is editing.
         claude_limits_switch=partial(read_claude_limits_source, config.path or paths.config_path),
         claude_home=paths.home,
+        # Off unless the owner switched it on: the read uses the Cursor CLI's own login.
+        cursor_limits_switch=partial(read_cursor_limits_source, config.path or paths.config_path),
+        cursor_home=paths.home,
     )
     runtime = _local_runtime(config, paths, projects.paths, descriptors)
 

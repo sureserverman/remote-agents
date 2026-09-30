@@ -152,3 +152,70 @@ async def test_the_service_reads_a_half_edited_resume_switch_as_off(tmp_path: Pa
     path.write_text("[limits]\nmax_label_length = 40\n", encoding="utf-8")
     assert await _resume_switch(object(), path)() is True
     assert await _resume_switch(None, path)() is False
+
+
+async def test_the_cursor_switch_defaults_off_and_round_trips_through_the_config(
+    tmp_path: Path,
+) -> None:
+    from remote_agents.composition.limits_source import ConfigCursorLimitsSource
+    from remote_agents.config import read_cursor_limits_source
+
+    path = _config(tmp_path)
+    setting = ConfigCursorLimitsSource(path)
+
+    assert await setting.read() == "off"
+    await setting.write("usage-api")
+    assert await setting.read() == "usage-api"
+    assert read_cursor_limits_source(path) == "usage-api"
+    await setting.write("off")
+    assert await setting.read() == "off"
+
+
+async def test_the_claude_and_cursor_switches_flip_without_disturbing_each_other(
+    tmp_path: Path,
+) -> None:
+    """Two keys, one writer: each flip changes its own line and leaves the other's value."""
+    from remote_agents.composition.limits_source import ConfigCursorLimitsSource
+
+    path = _config(tmp_path, _CONFIG + "\n# a comment the owner wrote\n")
+    claude = ConfigLimitsSource(path)
+    cursor = ConfigCursorLimitsSource(path)
+
+    await cursor.write("usage-api")
+    assert (await claude.read(), await cursor.read()) == ("status-line", "usage-api")
+
+    await claude.write("usage-api")
+    assert (await claude.read(), await cursor.read()) == ("usage-api", "usage-api")
+
+    await cursor.write("off")
+    assert (await claude.read(), await cursor.read()) == ("usage-api", "off")
+
+    await claude.write("status-line")
+    assert (await claude.read(), await cursor.read()) == ("status-line", "off")
+
+    written = path.read_text(encoding="utf-8")
+    assert "# a comment the owner wrote" in written
+    assert written.count("claude_limits_source =") == 1
+    assert written.count("cursor_limits_source =") == 1
+
+
+@pytest.mark.parametrize(
+    ("body", "why"),
+    [
+        ("this is not toml at all [[[", "a file that does not parse"),
+        ('[paths]\ndev_root = "/tmp/dev"\n', "a file with no [limits] table"),
+    ],
+)
+async def test_a_refused_cursor_write_is_not_an_exception_and_reads_back_off(
+    tmp_path: Path, body: str, why: str
+) -> None:
+    from remote_agents.composition.limits_source import ConfigCursorLimitsSource
+
+    path = _config(tmp_path, body)
+    setting = ConfigCursorLimitsSource(path)
+
+    await setting.write("usage-api")
+    await setting.write("carrier-pigeon")
+
+    assert await setting.read() == "off", why
+    assert path.read_text(encoding="utf-8") == body
