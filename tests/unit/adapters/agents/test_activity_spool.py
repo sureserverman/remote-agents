@@ -12,6 +12,7 @@ from typing import Any
 
 import pytest
 
+from remote_agents.adapters.agents import activity_spool
 from remote_agents.adapters.agents.activity_spool import (
     _PLAIN_TOKEN,
     MAXIMUM_PAYLOAD_BYTES,
@@ -462,6 +463,116 @@ def test_a_codex_permission_request_never_spools_the_layout_its_payload_carries(
     written = json.dumps(_record(directory))
     assert "/home/user/.codex" not in written
     assert "/home/user/workspace" not in written
+
+
+# --- Codex `auto_review` (2026-10-01) ----------------------------------------------------------
+#
+# Record shapes measured on codex-cli 0.159.3: `turn_context` carries the reviewer at
+# `payload.approvals_reviewer`; a `/permissions` change writes `thread_settings_applied` with it
+# at `payload.thread_settings.approvals_reviewer`.
+
+
+def _turn_context(reviewer: str) -> dict[str, Any]:
+    return {
+        "timestamp": "2026-10-01T06:08:45.486Z",
+        "type": "turn_context",
+        "payload": {"approval_policy": "on-request", "approvals_reviewer": reviewer},
+    }
+
+
+def _settings_applied(reviewer: str) -> dict[str, Any]:
+    return {
+        "timestamp": "2026-10-01T06:08:45.486Z",
+        "type": "event_msg",
+        "payload": {
+            "type": "thread_settings_applied",
+            "thread_settings": {"approval_policy": "on-request", "approvals_reviewer": reviewer},
+        },
+    }
+
+
+def _rollout(tmp_path: Path, *records: dict[str, Any], filler: int = 0) -> Path:
+    path = tmp_path / "rollout.jsonl"
+    lines = [json.dumps(record) for record in records]
+    noise = json.dumps({"type": "response_item", "payload": {"text": "x" * 200}})
+    path.write_text("\n".join(lines + [noise] * filler) + "\n", encoding="utf-8")
+    return path
+
+
+def _codex_permission_in(rollout: Path) -> dict[str, Any]:
+    return {**_codex_permission(command="ls"), "transcript_path": str(rollout)}
+
+
+def test_a_codex_permission_request_answered_by_its_auto_reviewer_is_not_spooled(
+    tmp_path: Path,
+) -> None:
+    """The owner sees no prompt under `auto_review`, so there is nothing to answer.
+
+    One such session sent about 340 `needs_answer` notifications in two days.
+    """
+    directory = _spool(tmp_path)
+    rollout = _rollout(tmp_path, _turn_context("user"), _turn_context("auto_review"))
+
+    _run(_stream(_codex_permission_in(rollout)), directory, provider="codex")
+
+    assert list(directory.iterdir()) == []
+
+
+def test_a_codex_permission_request_is_spooled_once_the_owner_reviews_again(
+    tmp_path: Path,
+) -> None:
+    """The newest setting wins, and a mid-session change is its own record shape."""
+    directory = _spool(tmp_path)
+    rollout = _rollout(tmp_path, _turn_context("auto_review"), _settings_applied("user"))
+
+    _run(_stream(_codex_permission_in(rollout)), directory, provider="codex")
+
+    assert _record(directory)["event"] == "PermissionRequest"
+
+
+def test_a_codex_permission_request_finds_a_setting_far_from_the_end(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A long turn writes no setting, so the newest one can sit many chunks back.
+
+    The chunk is shrunk so the setting is several chunks away and lines straddle chunk edges.
+    """
+    monkeypatch.setattr(activity_spool, "_ROLLOUT_CHUNK_BYTES", 97)
+    directory = _spool(tmp_path)
+    rollout = _rollout(tmp_path, _turn_context("auto_review"), filler=50)
+
+    _run(_stream(_codex_permission_in(rollout)), directory, provider="codex")
+
+    assert list(directory.iterdir()) == []
+
+
+def test_a_codex_permission_request_with_an_unreadable_rollout_is_still_spooled(
+    tmp_path: Path,
+) -> None:
+    """Not knowing who reviews costs a notification, never a silent ask."""
+    directory = _spool(tmp_path)
+    rollout = _rollout(tmp_path, filler=3)
+
+    _run(_stream(_codex_permission_in(rollout)), directory, provider="codex")
+    _run(_stream(_codex_permission_in(tmp_path / "missing.jsonl")), directory, provider="codex")
+
+    assert len(list(directory.iterdir())) == 2
+
+
+def test_a_codex_stop_is_spooled_under_auto_review(tmp_path: Path) -> None:
+    """Only the ask is the reviewer's to answer; a finished turn is still news."""
+    directory = _spool(tmp_path)
+    rollout = _rollout(tmp_path, _turn_context("auto_review"))
+    payload = {
+        **_CODEX_PERMISSION_PAYLOAD,
+        "hook_event_name": "Stop",
+        "transcript_path": str(rollout),
+        "last_assistant_message": "done",
+    }
+
+    _run(_stream(payload), directory, provider="codex")
+
+    assert _record(directory)["event"] == "Stop"
 
 
 # --- Claude `PermissionRequest` (DEC-098, DEC-051) --------------------------------------------

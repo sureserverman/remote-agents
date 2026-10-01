@@ -355,6 +355,8 @@ def _observed(
     if provider == "codex":
         if event not in {"Stop", "PermissionRequest"}:
             return None
+        if event == "PermissionRequest" and _codex_reviewer_decides(document):
+            return None
         # Widened on 2026-08-30 from "every payload field discarded" to "the one measured field
         # a notification renders" -- which supersedes nothing. DEC-013 clause (2) already allows
         # a hook to keep "one bounded single line of detail" beside the event name, session id
@@ -412,6 +414,80 @@ def _observed(
         detail=_first(document, _DETAIL_FIELDS, bounded_detail_line),
         observed_at=moment.astimezone(UTC),
     )
+
+
+#: The rollout key naming who answers a Codex escalation. Measured 2026-10-01 on codex-cli
+#: 0.159.3: `turn_context` carries it at `payload.approvals_reviewer`, and a mid-session
+#: `/permissions` change writes `thread_settings_applied` with it at
+#: `payload.thread_settings.approvals_reviewer`. Only `user` puts a prompt in front of the owner.
+_CODEX_REVIEWER_KEY = b'"approvals_reviewer"'
+_CODEX_HUMAN_REVIEWER = "user"
+_ROLLOUT_CHUNK_BYTES = 1024 * 1024
+
+
+def _codex_reviewer_decides(document: Mapping[str, object]) -> bool:
+    """Whether Codex's own reviewer, not the owner, answers this session's escalations (DEC-112).
+
+    Codex fires `PermissionRequest` for every escalation, including the ones its `auto_review`
+    reviewer then approves without showing the owner anything. On 2026-10-01 one such session
+    had produced about 340 `needs_answer` notifications in two days, none of them a question
+    the owner could see. The payload does not say who reviews -- its `permission_mode` enum has
+    no value for it -- so the session's own rollout is read for the newest setting.
+
+    The transcript path is used here and never leaves the hook's process (DEC-013 clause 2).
+    Anything unreadable answers `False`, so a missed setting costs a notification, never a
+    silent ask.
+    """
+    path = document.get("transcript_path")
+    if not isinstance(path, str) or not path:
+        return False
+    reviewer = _newest_codex_reviewer(Path(path))
+    return reviewer is not None and reviewer != _CODEX_HUMAN_REVIEWER
+
+
+def _newest_codex_reviewer(path: Path) -> str | None:
+    """Scan a rollout backwards for the newest record naming its reviewer.
+
+    Unbounded on purpose: on the measured session the newest setting sat 4.6 MB from the end,
+    nine times the tail the usage readers take, because a single long turn writes none.
+    """
+    try:
+        with path.open("rb") as handle:
+            position = handle.seek(0, os.SEEK_END)
+            pending = b""
+            while position > 0:
+                step = min(_ROLLOUT_CHUNK_BYTES, position)
+                position -= step
+                handle.seek(position)
+                pending = handle.read(step) + pending
+                # The first line is whole only at the start of the file; otherwise it waits
+                # for the next chunk to complete it.
+                start = 0 if position == 0 else pending.find(b"\n") + 1
+                if start == 0 and position > 0:
+                    continue
+                window, pending = pending[start:], pending[:start]
+                for line in reversed(window.splitlines()):
+                    if _CODEX_REVIEWER_KEY in line:
+                        reviewer = _codex_reviewer_of(line)
+                        if reviewer is not None:
+                            return reviewer
+    except OSError:
+        return None
+    return None
+
+
+def _codex_reviewer_of(line: bytes) -> str | None:
+    try:
+        record = json.loads(line)
+    except (UnicodeDecodeError, ValueError):
+        return None
+    payload = record.get("payload") if isinstance(record, dict) else None
+    if not isinstance(payload, dict):
+        return None
+    settings = payload.get("thread_settings")
+    source = settings if isinstance(settings, dict) else payload
+    reviewer = source.get("approvals_reviewer")
+    return reviewer if isinstance(reviewer, str) else None
 
 
 def _observed_opencode_event(
