@@ -32,7 +32,6 @@ from remote_agents.application.session_views import (
     NO_READING,
     NOT_REPORTED,
     UNREADABLE,
-    LimitPart,
     LimitWindow,
     StateGroup,
     _window_phrase,
@@ -901,9 +900,7 @@ def test_an_agent_that_never_reports_limits_is_not_listed() -> None:
     "no reading yet" and "unreadable" still get their own words (DEC-061), because there a
     missing number is news.
     """
-    profiles = tuple(
-        ProfileId(name) for name in ("claude", "codex", "opencode", "cursor-agent")
-    )
+    profiles = tuple(ProfileId(name) for name in ("claude", "codex", "opencode", "cursor-agent"))
     rows = limit_rows(
         (
             _account("claude", UsageWindow("5h", 9.0)),
@@ -972,31 +969,68 @@ def _cursor_month(resets: datetime | None = None) -> UsageWindow:
     )
 
 
-def test_a_cursor_window_carries_its_parts_rounded_by_the_one_rule() -> None:
-    """Each pool is a percentage of its own pool, so the parts ride along and are never summed."""
+def test_a_cursor_pool_is_placed_in_the_5h_column_and_the_other_pool_in_week() -> None:
+    """The owner's layout (2026-10-01): each pool is a cell of a fixed column, named for itself.
+
+    Each percent is rounded by the one rule and is of its own pool; both carry the window's
+    one reset, because the pools are metered over the same month.
+    """
     resets = datetime.now(UTC) + timedelta(days=4, hours=2)
     (row,) = limit_rows((_account("cursor-agent", _cursor_month(resets), stale="Cursor API"),))
 
-    (window,) = row.windows
-    assert (window.label, window.percent, window.resets_in) == ("month", 70, "4d")
-    assert window.parts == (LimitPart("cursor", 62), LimitPart("other", 18))
+    assert row.windows == (
+        LimitWindow("5h", 62, "4d", name="Cursor"),
+        LimitWindow("week", 18, "4d", name="other"),
+    )
     assert row.borrowed == "Cursor API"
 
 
-def test_a_window_without_parts_has_none_beside_a_cursor_one() -> None:
-    rows = limit_rows(
-        (_account("codex", UsageWindow("5h", 41.0)), _account("cursor-agent", _cursor_month()))
-    )
+def test_a_pool_row_draws_no_total() -> None:
+    """The total decides a stop (DEC-110); no surface draws it, so no cell carries it."""
+    (row,) = limit_rows((_account("cursor-agent", _cursor_month()),))
 
-    assert [[bool(window.parts) for window in row.windows] for row in rows] == [[False], [True]]
+    assert 70 not in [window.percent for window in row.windows]
 
 
-def test_a_cursor_month_has_no_pace() -> None:
-    """DEC-106 names `week` and `day`; a month is not one of them, parts or no parts."""
+def test_a_pool_has_no_pace() -> None:
+    """DEC-106 names `week` and `day`; a monthly pool in the week column is still a month."""
     resets = datetime.now(UTC) + timedelta(days=10)
     (row,) = limit_rows((_account("cursor-agent", _cursor_month(resets)),))
 
-    assert (row.windows[0].expected_percent, row.windows[0].pace_delta) == (None, None)
+    assert [(w.expected_percent, w.pace_delta) for w in row.windows] == [(None, None)] * 2
+
+
+def test_a_pool_window_beside_another_window_is_laid_out_by_kind() -> None:
+    """Only a row whose one window is pooled is placed; no provider publishes the other shape."""
+    (row,) = limit_rows((_account("cursor-agent", UsageWindow("5h", 9.0), _cursor_month()),))
+
+    assert [(w.label, w.percent, w.name) for w in row.windows] == [
+        ("5h", 9, None),
+        ("month", 70, None),
+    ]
+
+
+def test_a_third_pool_follows_the_fixed_columns_under_its_own_name() -> None:
+    window = UsageWindow(
+        "month",
+        50.0,
+        parts=(UsagePart("cursor", 10.0), UsagePart("other", 20.0), UsagePart("max", 30.0)),
+    )
+    (row,) = limit_rows((_account("cursor-agent", window),))
+
+    assert [(w.label, w.percent, w.name) for w in row.windows] == [
+        ("5h", 10, "Cursor"),
+        ("week", 20, "other"),
+        ("max", 30, "max"),
+    ]
+
+
+def test_the_one_line_form_names_the_pools_rather_than_the_columns() -> None:
+    resets = datetime.now(UTC) + timedelta(days=4, hours=2)
+
+    assert limit_lines((_account("cursor-agent", _cursor_month(resets)),)) == (
+        "cursor-agent: Cursor 62% (resets in 4d) · other 18% (resets in 4d)",
+    )
 
 
 def test_a_cursor_row_switched_off_keeps_its_place_and_says_where_the_switch_is() -> None:

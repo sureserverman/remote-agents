@@ -526,6 +526,13 @@ class LimitWindow:
     parts: tuple[LimitPart, ...] = ()
     """The window's pools, or empty for a window with one figure. Last, and defaulted, so the
     positional fixtures above it keep meaning what they meant."""
+    name: str | None = None
+    """What a line labelled on its own calls this cell, when the column's kind would misname it.
+
+    Set only on a pool `limit_rows` placed in a fixed column (`_placed`): Cursor's pool sits under
+    `5h` and is not a five-hour figure, so a stacked line or the bot's block says `Cursor`
+    where it would have said `5h`. None everywhere else, and the column's own word is used.
+    """
 
 
 _PART_LABELS = {"cursor": "Cursor"}
@@ -543,6 +550,31 @@ FIXED_LIMIT_WINDOWS = ("5h", "week")
 """The window kinds every row with a reading draws, in this order, whatever it published
 (DEC-100). A rule both surfaces follow, so it is spelled once; how a kind is labelled and laid
 out stays each surface's."""
+
+
+def _placed(windows: tuple[LimitWindow, ...]) -> tuple[LimitWindow, ...]:
+    """A row's windows with a pooled one taken apart into the fixed columns, one pool per column.
+
+    The owner's layout (2026-10-01): the first pool is drawn under `5h` and the second under
+    `week`, each a cell like any other -- its own percent, the window's one reset, no pace (a
+    month is not a window DEC-106 paces) -- and named for its pool, so a line that labels
+    itself says `Cursor` rather than `5h`. A third pool follows the fixed columns under its own
+    name. The total is drawn nowhere: it decides a stop (DEC-110), and each pool's percent is
+    of its own pool, so no cell could hold a sum.
+
+    Only a row whose one window is pooled is placed. A pooled window beside another is laid out
+    by kind, total and all; no provider publishes that shape.
+    """
+    if len(windows) != 1 or not windows[0].parts:
+        return windows
+    (window,) = windows
+    columns = FIXED_LIMIT_WINDOWS + tuple(part.label for part in window.parts[2:])
+    return tuple(
+        LimitWindow(
+            column, part.percent, window.resets_in, name=_PART_LABELS.get(part.label, part.label)
+        )
+        for column, part in zip(columns, window.parts, strict=False)
+    )
 
 
 def split_window(row: LimitRow) -> LimitWindow | None:
@@ -741,19 +773,21 @@ def limit_rows(
         rows.append(
             LimitRow(
                 profile=name,
-                windows=tuple(
-                    LimitWindow(
-                        window.label,
-                        percent,
-                        None if window.resets_at is None else until(window.resets_at),
-                        *_pace(window, percent, live=stale_for is None),
-                        parts=tuple(
-                            LimitPart(part.label, whole_percent(part.used_percent))
-                            for part in window.parts
-                        ),
+                windows=_placed(
+                    tuple(
+                        LimitWindow(
+                            window.label,
+                            percent,
+                            None if window.resets_at is None else until(window.resets_at),
+                            *_pace(window, percent, live=stale_for is None),
+                            parts=tuple(
+                                LimitPart(part.label, whole_percent(part.used_percent))
+                                for part in window.parts
+                            ),
+                        )
+                        for window in windows
+                        for percent in (whole_percent(window.used_percent),)
                     )
-                    for window in windows
-                    for percent in (whole_percent(window.used_percent),)
                 ),
                 borrowed=entry.stale_source if entry is not None else None,
                 stale_for=stale_for,
@@ -794,7 +828,7 @@ def limit_lines(limits: Iterable[AgentLimits]) -> tuple[str, ...]:
 
 
 def _window_phrase_of(window: LimitWindow) -> str:
-    spent = f"{window.label} {window.percent}%"
+    spent = f"{window.name or window.label} {window.percent}%"
     if window.resets_in is None:
         return spent
     return f"{spent} (resets in {window.resets_in})"
