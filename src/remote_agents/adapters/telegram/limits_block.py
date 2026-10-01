@@ -6,8 +6,8 @@
     wk █████░░░  61% ↻ 3d ▲ 8 over
     via status-line cache · live
     cursor-agent
-    █████░░░│██░░░░░░ ↻ 12d
-    Cursor 62% · other 18%
+    Cursor █████░░░  62% ↻ 12d
+    other  ██░░░░░░  18% ↻ 12d
     via Cursor API · live
     codex
     no reading yet
@@ -39,28 +39,28 @@ from remote_agents.application.session_views import (
     LimitRow,
     LimitWindow,
     countdown,
-    part_figures,
     percent_gauge,
-    split_window,
 )
 
 TITLE = "Plan limits"
 
 #: How many monospace characters a phone shows on one line of this block before it wraps.
-#: The layout keeps to it for labels of two characters, which every kind a reader publishes
-#: outside a split row has here. A longer provider label lengthens its block's lines by the
-#: difference.
+#: The layout keeps to it for labels of two characters, which every kind a reader publishes has
+#: here. A longer label -- a pool's name, a provider's own kind -- lengthens only its own
+#: agent's lines, because the label column is padded within each agent (`_row_lines`).
 WIDTH = 34
 
 #: A paced kind as a phone line writes it, in two characters: the pace words need the room.
 _WINDOW_LABELS = {"week": "wk", "day": "1d"}
 
-#: What divides the pools of a split bar.
-_PART_DIVIDER = "│"
-
 
 def _label(kind: str) -> str:
     return _WINDOW_LABELS.get(kind, kind)
+
+
+def _cell_label(kind: str, window: LimitWindow | None) -> str:
+    """A pool's own name where `limit_rows` placed one (`Cursor`, `other`), else the kind's."""
+    return window.name if window is not None and window.name else _label(kind)
 
 
 def _pace_words(delta: int) -> str:
@@ -76,16 +76,6 @@ def _reset(row: LimitRow, window: LimitWindow) -> str:
     return "" if left is None else f" ↻ {left}"
 
 
-def _split_lines(row: LimitRow, window: LimitWindow) -> list[str]:
-    """One gauge per pool, side by side, then each pool's own percent on the line under it.
-
-    Two lines, because bar and figures together outrun `WIDTH`. Never one fill: each percent
-    is of its own pool, so a bar summing them would draw a total the provider does not publish.
-    """
-    bar = _PART_DIVIDER.join(percent_gauge(part.percent) for part in window.parts)
-    return [f"{bar}{_reset(row, window)}", " · ".join(part_figures(window))]
-
-
 def _window_lines(row: LimitRow, label_width: int, percent_width: int) -> list[str]:
     """`5h ███░░░░░  34% ↻ 2h`: the fixed kinds first, then whatever else the row published.
 
@@ -97,8 +87,8 @@ def _window_lines(row: LimitRow, label_width: int, percent_width: int) -> list[s
     )
     lines = []
     for kind in kinds:
-        name = _label(kind).ljust(label_width)
         window = published.get(kind)
+        name = _cell_label(kind, window).ljust(label_width)
         if window is None:
             lines.append(f"{name} {percent_gauge(0)}")
             continue
@@ -114,12 +104,19 @@ def _stamp(row: LimitRow) -> str:
     return age if row.borrowed is None else f"via {row.borrowed} · {age}"
 
 
-def _row_lines(row: LimitRow, label_width: int, percent_width: int) -> list[str]:
+def _row_lines(row: LimitRow, percent_width: int) -> list[str]:
+    """One agent's lines, its labels padded to the widest *of its own*.
+
+    Within the agent rather than across the message: Cursor's `Cursor` is six characters, and
+    padded across the message it would push Claude's paced week line (`wk ░░░░░░░░   0% ↻ 23h
+    ▼ 100 under`, exactly `WIDTH`) four characters past the phone's line. The cost is that
+    Cursor's bars start four characters right of the others'.
+    """
     if not row.windows:
         return [row.absence or ""]
-    split = split_window(row)
-    if split is not None:
-        return [*_split_lines(row, split), _stamp(row)]
+    published = {window.label: window for window in row.windows}
+    kinds = {*FIXED_LIMIT_WINDOWS, *published}
+    label_width = max(len(_cell_label(kind, published.get(kind))) for kind in kinds)
     return [*_window_lines(row, label_width, percent_width), _stamp(row)]
 
 
@@ -129,20 +126,15 @@ def limits_block(rows: Sequence[LimitRow]) -> str:
     The heading is part of the block, so it goes when the block does: a bare `Plan limits`
     over nothing promises a block and delivers none.
 
-    The label and the percent are padded to a width measured across every row, so the bars of
-    neighbouring agents start in one column and the figures end in one.
+    The percent is padded to a width measured across every row, so the figures of neighbouring
+    agents end in one column; the label is padded within each agent (`_row_lines`).
     """
     if not rows:
         return ""
-    laid_out = [row for row in rows if row.windows and split_window(row) is None]
-    windows = [window for row in laid_out for window in row.windows]
-    kinds = {*FIXED_LIMIT_WINDOWS, *(window.label for window in windows)}
-    label_width = max(len(_label(kind)) for kind in kinds)
+    windows = [window for row in rows for window in row.windows]
     percent_width = max((len(f"{window.percent}%") for window in windows), default=0)
     lines = [f"<b>{TITLE}</b>"]
     for row in rows:
         lines.append(escape(row.profile))
-        lines.extend(
-            f"<code>{escape(line)}</code>" for line in _row_lines(row, label_width, percent_width)
-        )
+        lines.extend(f"<code>{escape(line)}</code>" for line in _row_lines(row, percent_width))
     return "\n".join(lines)

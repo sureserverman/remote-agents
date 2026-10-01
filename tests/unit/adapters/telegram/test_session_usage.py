@@ -13,7 +13,7 @@ from remote_agents.adapters.telegram.presenters import MAX_TELEGRAM_TEXT_UNITS
 from remote_agents.adapters.telegram.service import PrivateBotBoundary, build_private_bot
 from remote_agents.application.profiles import ProfileAvailability
 from remote_agents.application.project_catalog import CatalogProject
-from remote_agents.application.session_views import LimitPart, LimitRow, LimitWindow
+from remote_agents.application.session_views import LimitRow, LimitWindow
 from remote_agents.domain.models import (
     ProfileId,
     ProjectId,
@@ -320,9 +320,13 @@ _DATED = LimitRow(
     borrowed="status-line cache",
     stale_for="23h",
 )
-_SPLIT = LimitRow(
+#: Cursor's month as `limit_rows` places it: each pool a cell of a fixed column, named for it.
+_POOLS = LimitRow(
     "cursor-agent",
-    (LimitWindow("month", 100, "29d", parts=(LimitPart("cursor", 100), LimitPart("other", 100))),),
+    (
+        LimitWindow("5h", 100, "29d", name="Cursor"),
+        LimitWindow("week", 100, "29d", name="other"),
+    ),
     borrowed="Cursor API",
     stale_for=None,
 )
@@ -350,10 +354,10 @@ _DAILY = LimitRow(
 _LAYOUTS = {
     "two agents": (_FULL, _UNDER),
     "a daily window": (_FULL, _DAILY),
-    "four agents": (_FULL, _UNDER, _SPLIT, _ABSENT[3]),
+    "four agents": (_FULL, _UNDER, _POOLS, _ABSENT[3]),
     "a dated reading": (_DATED, _UNDER),
     "all absent": _ABSENT,
-    "Cursor split": (_SPLIT,),
+    "Cursor pools": (_POOLS,),
 }
 
 
@@ -378,9 +382,25 @@ def test_the_limits_block_at_its_widest_is_a_line_of_exactly_the_phone_width() -
     assert len("wk ░░░░░░░░   0% ↻ 23h ▼ 100 under") == WIDTH
 
 
+def test_cursors_pools_are_two_lines_labelled_by_pool() -> None:
+    """`Cursor` and `other`, never `5h` and `wk`: a monthly pool is not a five-hour figure."""
+    block = limits_block((_FULL, _UNDER, _POOLS))
+
+    assert "cursor-agent\n<code>Cursor ████████ 100% ↻ 29d</code>\n" in block, block
+    assert "<code>other  ████████ 100% ↻ 29d</code>\n<code>via Cursor API · live</code>" in block
+    assert "│" not in block
+
+
+def test_a_cursor_row_costs_no_other_agent_its_phone_width() -> None:
+    """The label column is padded within each agent's block, so `Cursor` widens only its own."""
+    assert "<code>wk ░░░░░░░░   0% ↻ 23h ▼ 100 under</code>" in limits_block(
+        (_FULL, _UNDER, _POOLS)
+    )
+
+
 def test_the_limits_block_of_four_agents_leaves_the_message_its_room() -> None:
     """Four agents at their widest are a small share of what one Telegram message may hold."""
-    block = limits_block((_FULL, _UNDER, _SPLIT, _ABSENT[3]))
+    block = limits_block((_FULL, _UNDER, _POOLS, _ABSENT[3]))
 
     assert len(block.encode("utf-16-le")) // 2 < MAX_TELEGRAM_TEXT_UNITS // 8
 
@@ -399,8 +419,8 @@ def test_the_limits_block_escapes_every_string_it_did_not_write() -> None:
             stale_for=None,
         ),
         LimitRow(
-            "split<er",
-            (LimitWindow("month", 50, None, parts=(LimitPart("o<ther>", 5), LimitPart("&", 6))),),
+            "pool<ed",
+            (LimitWindow("5h", 5, None, name="o<ther>"), LimitWindow("week", 6, None, name="&")),
             borrowed=None,
             stale_for=None,
         ),
@@ -416,8 +436,9 @@ def test_the_limits_block_escapes_every_string_it_did_not_write() -> None:
         "a&lt;b&gt;&amp;gent",
         "5&lt;h",
         "via cache &amp; &lt;file&gt; · live",
-        "split&lt;er",
-        "o&lt;ther&gt; 5% · &amp; 6%",
+        "pool&lt;ed",
+        "o&lt;ther&gt; █",
+        "&amp;       █",
         "absent&amp;",
         "sign in to &lt;absent&amp;&gt;",
     ):
