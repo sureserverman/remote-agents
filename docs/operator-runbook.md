@@ -1350,6 +1350,10 @@ Four facts that are easy to get wrong when a key appears not to work:
   binds gets it passed through to its own pane. OpenCode is the only one — it binds `F2` to
   `model_cycle_recent` — so `F2` at an OpenCode pane is the model switch, not Settings. Claude
   Code, Codex and Cursor bind no function key.
+- **`F2` is not forwarded to the pane you are in.** It always opens Settings in the projects
+  pane and selects that pane. With an agent in the left slot it runs `console projects` first
+  (F12's exchange), so the agent goes back to its own window. `,` and the palette in a
+  right-hand pane ask the console for the same thing.
 - **An agent this project does not curate will lose a function key it binds, and nothing
   reports it.** That is a stated, accepted cost of the row rather than a defect, tracked as
   BL-094.
@@ -1583,10 +1587,10 @@ uv run --locked remote-agents
 
     **Then check the one pass-through.** Display an **OpenCode** session and press `F2` in it.
     Confirm the model switch happens *in that pane* and that Settings does **not** open in the
-    sessions pane: OpenCode declares `F2` (`model_cycle_recent`) on its own descriptor, and the
+    projects pane: OpenCode declares `F2` (`model_cycle_recent`) on its own descriptor, and the
     binding reads the pane's profile at press time and hands the key over. Press `F2` from any
-    other pane, or at a Claude Code, Codex or Cursor session, and confirm Settings opens as
-    usual — none of those three declares a function key.
+    other pane, or at a Claude Code, Codex or Cursor session, and confirm Settings opens in the
+    projects pane, with focus there — none of those three declares a function key.
 
 15. **The fold, and it is three presses rather than one.** With an agent displayed as in step
     3, press `Ctrl-b h` (or `h` under your own prefix). Confirm the sessions, limits and feed

@@ -195,6 +195,10 @@ class RecordingConsole:
         self.calls.append(("swap_panes", source_pane, target_pane))
         self._raise_if_armed()
 
+    async def press_in_console_pane(self, pane_id: str, key: str) -> None:
+        self.calls.append(("press_in_console_pane", pane_id, key))
+        self._raise_if_armed()
+
     async def console_zoomed_pane(self) -> str | None:
         self.calls.append(("console_zoomed_pane",))
         self._raise_if_armed()
@@ -524,7 +528,7 @@ async def test_a_rebuild_puts_the_window_back_in_its_declared_proportions() -> N
     # The sessions share alone since the console facelift: the limits pane sizes itself to
     # its content and the feed takes what is left, so neither is named.
     assert named(console, "normalize_console_layout") == [
-        ("normalize_console_layout", 60, (("%1", 31),))
+        ("normalize_console_layout", 60, (("%1", 40),))
     ]
 
 
@@ -1563,7 +1567,7 @@ async def test_ensure_installs_the_layout_hooks_against_the_sessions_pane() -> N
     assert await _composer(console).ensure() is True
 
     hooks = [call for call in console.calls if call[0] == "install_layout_hooks"]
-    assert hooks == [("install_layout_hooks", 60, (("%1", 31),))], hooks
+    assert hooks == [("install_layout_hooks", 60, (("%1", 40),))], hooks
 
 
 def test_the_column_names_only_the_sessions_share() -> None:
@@ -1571,7 +1575,7 @@ def test_the_column_names_only_the_sessions_share() -> None:
     from remote_agents.application.console import CONSOLE_COLUMN
     from remote_agents.ports.console import ConsolePaneSlot
 
-    assert CONSOLE_COLUMN == ((ConsolePaneSlot.SESSIONS, 31),)
+    assert CONSOLE_COLUMN == ((ConsolePaneSlot.SESSIONS, 40),)
 
 
 async def test_layout_hooks_that_will_not_install_cost_the_hooks_and_not_the_console(
@@ -1596,3 +1600,41 @@ async def test_a_rebuild_re_issues_the_layout_hooks_with_the_new_pane_ids() -> N
     normalized = [call for call in console.calls if call[0] == "normalize_console_layout"]
     assert normalized and hooks, console.calls
     assert hooks[0][1:] == normalized[0][1:]
+
+
+# --- F2 is Settings, opened in the projects pane (2026-10-01) ------------------------------
+
+
+async def test_the_settings_key_runs_the_projects_command_to_fetch_the_surface_home() -> None:
+    """F2 brings the surface home when an agent holds the left slot, as F12 does."""
+    console = RecordingConsole()
+    await _composer(console).ensure()
+
+    by_key = {call[1]: (call[2], call[3]) for call in named(console, "install_console_binding")}
+    assert by_key["F2"] == (ConsoleBindingAction.SHOW_SETTINGS, _PROJECTS_COMMAND)
+
+
+async def test_show_settings_hands_the_key_to_the_projects_pane() -> None:
+    """What `,` and the palette do in a right-hand pane: Settings opens on the left."""
+    console = RecordingConsole(arrangement=_three_pane_console())
+
+    await _composer(console).show_settings()
+
+    assert named(console, "press_in_console_pane") == [("press_in_console_pane", "%0", "F2")]
+
+
+async def test_show_settings_presses_nothing_without_a_settings_key() -> None:
+    """A composer built without the Settings binding has no key to hand over."""
+    console = RecordingConsole(arrangement=_three_pane_console())
+    composer = ConsoleComposer(
+        console,
+        ("remote-agents", "tui"),
+        Path("/tmp"),
+        projects_command=_PROJECTS_COMMAND,
+        pane_commands=_PANE_COMMANDS,
+        bindings=(),
+    )
+
+    await composer.show_settings()
+
+    assert named(console, "press_in_console_pane") == []

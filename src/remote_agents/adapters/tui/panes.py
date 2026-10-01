@@ -43,7 +43,25 @@ class ProjectsPane(RemoteAgentsTui):
         return ProjectsPaneScreen()
 
 
-class SessionsPane(RemoteAgentsTui):
+class _RightHandPane(RemoteAgentsTui):
+    """A pane in the right-hand column, whose Settings key opens Settings on the left.
+
+    The owner asked for Settings in the projects pane only (2026-10-01). F2 never reaches this
+    process -- its root binding sends the key to the projects pane -- so this is for `,` and
+    the palette. Off a console there is no left pane, and Settings opens here as it always did.
+    """
+
+    async def action_settings(self) -> None:
+        show_settings = self.services.console_show_settings
+        if show_settings is None:
+            await super().action_settings()
+            return
+        if self.busy:
+            return
+        await show_settings()
+
+
+class SessionsPane(_RightHandPane):
     """The right-top pane: every managed session, and where a session is opened from.
 
     The sessions pane is the swap controller deliberately — it is the one pane that stays
@@ -61,7 +79,7 @@ class SessionsPane(RemoteAgentsTui):
         return SessionsPaneScreen()
 
 
-class LimitsPane(RemoteAgentsTui):
+class LimitsPane(_RightHandPane):
     """The right-middle pane: what each agent has spent against its plan, account-wide.
 
     Read-only and flowless, like the feed beside it. Nothing here belongs to a session — that
@@ -75,7 +93,7 @@ class LimitsPane(RemoteAgentsTui):
         return LimitsPaneScreen()
 
 
-class FeedPane(RemoteAgentsTui):
+class FeedPane(_RightHandPane):
     """The right-bottom pane: the durable notifications feed, newest first (DEC-037).
 
     The narrowest surface in the console, and a read-only one: it offers no flow at all.

@@ -16,6 +16,7 @@ from remote_agents.adapters.tmux.codec import (
     console_background_hook_args,
     console_binding_args,
     console_clients_args,
+    console_key_args,
     console_layout_args,
     console_layout_hook_args,
     console_option_args,
@@ -966,6 +967,11 @@ class TmuxGateway:
             pane.pane_id == pane_id and pane.on_console and pane.console_slot is not None
             for pane in await self.pane_arrangement()
         )
+
+    async def press_in_console_pane(self, pane_id: str, key: str) -> None:
+        """Select one of the console's panes and hand it one function key; the codec checks both."""
+        for arguments in console_key_args(pane_id, key):
+            await self._runner.run(*self._base_argv(), *arguments)
 
     async def swap_panes(self, source_pane: str, target_pane: str) -> None:
         """Exchange two panes between their windows, taking neither session with it.

@@ -544,6 +544,10 @@ straight over rather than taking it. OpenCode is the only one that declares anyt
 F2 to `model_cycle_recent` — so F2 at an OpenCode pane cycles its model, and F2 anywhere else
 on the console opens Settings. Claude Code, Codex and Cursor bind no function key.
 
+**Settings always opens in the left pane.** F2 from any of the four panes opens it in the
+projects pane and moves focus there. If an agent holds the left slot, F2 first brings the
+projects pane back, as F12 does. `,` and the palette in a right-hand pane do the same.
+
 **An agent this project does not curate loses any function key it binds, and nothing says so.**
 That is the accepted cost of taking the row at the root rather than a defect, and it is
 recorded as BL-094: the declaration that spares OpenCode comes from a curated provider's own

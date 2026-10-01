@@ -17,6 +17,7 @@ leaves the home session running.
 from __future__ import annotations
 
 import re
+import shlex
 
 import pytest
 
@@ -805,3 +806,95 @@ def test_the_layout_hooks_refuse_a_pane_id_that_is_not_one() -> None:
 
     with pytest.raises(ValueError):
         console_layout_hook_args(60, (("%5 ; kill-server", 31),))
+
+
+# --- F2 is Settings, opened in the projects pane (2026-10-01) ------------------------------
+
+
+def _settings_script(reserved=_RESERVED) -> str:
+    argv = console_binding_args(
+        "F2",
+        ConsoleBindingAction.SHOW_SETTINGS,
+        ("/opt/py thon/bin/python", "-m", "remote_agents", "console", "projects"),
+        reserved_keys=reserved,
+    )
+    assert argv[:4] == ("bind-key", "-n", "F2", "run-shell"), argv
+    shell, flag, script = shlex.split(argv[4])
+    assert (shell, flag) == ("sh", "-c"), argv
+    return script
+
+
+def test_the_settings_key_goes_to_the_projects_pane_and_selects_it() -> None:
+    script = _settings_script()
+
+    guard = (
+        f'test "$(tmux display-message -p "##{{client_session}}")" = "{CONSOLE_SESSION_NAME}" '
+        f"|| exit 0;"
+    )
+    assert guard in script, "the Settings key fires from clients outside the console"
+    assert f"##{{{CONSOLE_SLOT_OPTION}}},surface}}" in script, "the projects mark is never read"
+    assert 'grep -c .)" = 1 || exit 0' in script, "two projects panes must deliver nothing"
+    assert 'tmux select-pane -t "$panes"; tmux send-keys -t "$panes" F2' in script
+    assert "sessions" not in script, "Settings must not fall back to the sessions pane"
+
+
+def test_the_settings_key_fetches_a_parked_surface_with_the_projects_command() -> None:
+    script = _settings_script()
+
+    # Quoted for the inner shell, so a path with a space stays one word.
+    assert "|| '/opt/py thon/bin/python' -m remote_agents console projects;" in script, script
+    assert script.index("console projects") < script.index('send-keys -t "$panes"')
+
+
+def test_the_settings_key_still_hands_f2_to_opencode() -> None:
+    script = _settings_script()
+
+    assert 'if test "$profile" = "opencode"; then tmux send-keys -t "$active" F2; exit 0; fi;' in (
+        script
+    )
+    for absent in ("claude", "codex", "cursor-agent"):
+        assert absent not in script, f"{absent!r} reserves no F2: {script}"
+    assert '"$profile"' not in _settings_script(reserved={}), "nobody reserves F2 here"
+
+
+def test_the_settings_key_refuses_what_a_forward_refuses() -> None:
+    projects = ("true",)
+    with pytest.raises(ValueError, match="root"):
+        console_binding_args(
+            "F2",
+            ConsoleBindingAction.SHOW_SETTINGS,
+            projects,
+            table=ConsoleKeyTable.PREFIX,
+            reserved_keys={},
+        )
+    with pytest.raises(ValueError, match="command"):
+        console_binding_args("F2", ConsoleBindingAction.SHOW_SETTINGS, reserved_keys={})
+    with pytest.raises(ValueError, match="reservations"):
+        console_binding_args("F2", ConsoleBindingAction.SHOW_SETTINGS, projects)
+    for key in ("F11", "f2", "C-F2"):
+        with pytest.raises(ValueError):
+            console_binding_args(
+                key, ConsoleBindingAction.SHOW_SETTINGS, projects, reserved_keys={}
+            )
+    with pytest.raises(ValueError, match="unsafe"):
+        console_binding_args(
+            "F2",
+            ConsoleBindingAction.SHOW_SETTINGS,
+            projects,
+            reserved_keys={"bad name": frozenset({"F2"})},
+        )
+    assert not any(character in _settings_script() for character in "\n\r\t\x00")
+
+
+def test_a_key_handed_to_a_pane_is_a_function_key_at_an_exact_pane() -> None:
+    from remote_agents.adapters.tmux.codec import console_key_args
+
+    assert console_key_args("%4", "F2") == (
+        ("select-pane", "-t", "%4"),
+        ("send-keys", "-t", "%4", "F2"),
+    )
+    for key in ("f2", "Enter", "F2 ; kill-server", "F11x"):
+        with pytest.raises(ValueError):
+            console_key_args("%4", key)
+    with pytest.raises(ValueError):
+        console_key_args("%4 ; kill-server", "F2")

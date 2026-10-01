@@ -1039,3 +1039,32 @@ def test_f11_is_drawn_on_the_bar_and_bound_nowhere() -> None:
         pass
     else:  # pragma: no cover - the refusal is the assertion
         raise AssertionError("console_binding_args agreed to bind F11")
+
+
+async def test_settings_from_a_right_hand_console_pane_opens_in_the_projects_pane() -> None:
+    """On a console, Settings belongs to the left pane only (the owner's ask, 2026-10-01).
+
+    F2 itself never reaches a right-hand pane there -- the root binding sends it left -- so
+    this is `,` and the palette: they ask the console to open it on the left instead.
+    """
+    from remote_agents.adapters.tui.panes import LimitsPane
+    from remote_agents.adapters.tui.screens.settings import SettingsScreen
+
+    for surface in (SessionsPane, LimitsPane, FeedPane, ProjectsPane):
+        asked: list[str] = []
+
+        async def show_settings(asked=asked) -> None:
+            asked.append("settings")
+
+        app = surface(replace(_context(_Listing(())), console_show_settings=show_settings))
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            await app.run_action("settings")
+            await pilot.pause()
+
+            here = isinstance(app.screen, SettingsScreen)
+            if surface is ProjectsPane:
+                assert here and not asked, "the projects pane must open Settings itself"
+            else:
+                assert not here, f"Settings opened in {surface.__name__}"
+                assert asked == ["settings"], f"{surface.__name__} never asked the console"

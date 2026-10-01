@@ -95,6 +95,9 @@ class TuiContext:
     # screen binding inside our own process rather than a tmux root key, so `CONSOLE_BINDINGS`
     # is untouched and the root-key budget (DEC-093, eleven) is unaffected.
     console_show_projects: Callable[[], Awaitable[None]] | None = None
+    # Settings opened in the projects pane, from a right-hand pane's own Settings key. The F2
+    # root binding goes there by itself; this is the same act for `,` and the palette.
+    console_show_settings: Callable[[], Awaitable[None]] | None = None
     # What the console's start-only repair did and could not do, carried to the surface
     # rather than printed. The composition root runs `settle()` before Textual starts, so a
     # `print` there is erased by the alternate screen microseconds later — invisible for the

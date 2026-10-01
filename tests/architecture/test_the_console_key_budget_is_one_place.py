@@ -162,10 +162,12 @@ def test_the_root_set_is_the_function_key_row_and_nothing_else() -> None:
     assert actions["F12"] is ConsoleBindingAction.SHOW_PROJECTS, (
         "F12 is the exchange, which is the one console operation tmux cannot perform itself"
     )
+    # F2 is Settings since 2026-10-01: it opens in the projects pane, not the active one.
+    assert actions["F2"] is ConsoleBindingAction.SHOW_SETTINGS, actions
     assert all(
         action is ConsoleBindingAction.FORWARD_FUNCTION_KEY
         for key, action in actions.items()
-        if key != "F12"
+        if key not in ("F2", "F12")
     ), f"a member of the row is not a forward: {actions}"
 
 

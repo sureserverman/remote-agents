@@ -105,12 +105,12 @@ def _settled(console: Drill, width: int, height: int) -> dict[str, tuple[int, in
 
 
 def test_cell_budget_at_200x50(console: Drill) -> None:
-    """Left slot 119, right column 80, sessions 15 rows, limits exactly its content."""
+    """Left slot 119, right column 80, sessions 19 rows (40%), limits exactly its content."""
     geometry = _settled(console, 200, 50)
 
     assert geometry["surface"][0] == 119, geometry
     assert geometry["sessions"][0] == geometry["limits"][0] == geometry["feed"][0] == 80, geometry
-    assert geometry["sessions"][1] == 15, geometry
+    assert geometry["sessions"][1] == 19, geometry
     limits = _limits_screen(console)
     assert limits[0].startswith("╭─ Plan limits") and limits[-1].startswith("╰"), limits
     assert not any(line.strip("│ ") == "" for line in limits[1:-1][-1:]), (

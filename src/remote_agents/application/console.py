@@ -140,9 +140,12 @@ CONSOLE_LAYOUT: tuple[ConsolePane, ...] = (
 #: **The sessions share alone since the console facelift.** The design's budget at 200x50 is
 #: sessions 15 rows of the window's 49, the limits pane its content (7 rows), and the feed the
 #: rest. The limits pane sizes its own tmux pane to what it draws, which takes its rows from the
-#: feed below it, so the feed is what is left and neither of them is named here. 31% of 49 is
-#: 15. *Was:* sessions 53%, feed 35%.
-CONSOLE_COLUMN: tuple[tuple[ConsolePaneSlot, int], ...] = ((ConsolePaneSlot.SESSIONS, 31),)
+#: feed below it, so the feed is what is left and neither of them is named here. *Was:* 31%
+#: (15 of 49 rows), and before that sessions 53%, feed 35%.
+#:
+#: **40% since 2026-10-01**, at the owner's ask: a taller sessions list, paid for by the feed.
+#: On a 44-row window that is 17 sessions rows instead of 13, and the feed gives up the four.
+CONSOLE_COLUMN: tuple[tuple[ConsolePaneSlot, int], ...] = ((ConsolePaneSlot.SESSIONS, 40),)
 
 
 @dataclass(frozen=True, slots=True)
@@ -221,7 +224,8 @@ _FORWARD_COST = (
     "price accepted when DEC-041's budget was superseded."
 )
 
-#: The ten keys the console forwards. F11 is not among them and F12 is the exchange below.
+#: The nine keys the console forwards. F11 is not among them, F2 is Settings and F12 is the
+#: exchange below.
 #:
 #: **Spelled out rather than generated from a range**, for two reasons that both come down to
 #: what a reader can see. `test_the_key_budget_is_declared_in_one_place` sweeps this module for
@@ -231,7 +235,7 @@ _FORWARD_COST = (
 #: mistake and "fix".
 _FORWARDED_FUNCTION_KEYS: tuple[str, ...] = (
     "F1",
-    "F2",
+    # F2 is Settings, bound below: it goes to the projects pane rather than the active one.
     "F3",
     "F4",
     "F5",
@@ -254,6 +258,15 @@ CONSOLE_BINDINGS: tuple[ConsoleBinding, ...] = (
         "means *go home to the projects list* on both sides of the boundary -- the console "
         "exchanges the pane, and off a console the surface's own F12 returns to projects "
         "within the process. The owner presses one key and gets one idea either way.",
+    ),
+    ConsoleBinding(
+        "F2",
+        ConsoleBindingAction.SHOW_SETTINGS,
+        "Settings, opened in the projects pane whichever pane the owner is in (asked for on "
+        "2026-10-01: in a right-hand pane it had a third of the column). It costs what a "
+        "forward costs and no more: the same root key, still handed to OpenCode's own pane, "
+        "which binds it (DEC-070). It runs F12's command first when an agent holds the left "
+        "slot, so Settings never opens somewhere the owner cannot see it.",
     ),
     *(
         ConsoleBinding(key, ConsoleBindingAction.FORWARD_FUNCTION_KEY, _FORWARD_COST)
@@ -444,7 +457,9 @@ class ConsoleComposer:
         # agent. This task's own Tier-1 review predicted exactly that, so the omission is made
         # loud where it is visible instead of silent where it is not.
         if reserved_keys is None and any(
-            binding.action is ConsoleBindingAction.FORWARD_FUNCTION_KEY for binding in bindings
+            binding.action
+            in (ConsoleBindingAction.FORWARD_FUNCTION_KEY, ConsoleBindingAction.SHOW_SETTINGS)
+            for binding in bindings
         ):
             raise ValueError(
                 "a console that forwards function keys needs the reservations to pass through; "
@@ -513,11 +528,13 @@ class ConsoleComposer:
         # Caught by the Stage 2 gate evaluator, against a test whose *name* already said this
         # was the intended behaviour while its assertion said the opposite.
         for binding in self._bindings:
-            # Two actions run a program of ours, so this is a mapping rather than a
+            # Three actions run a program of ours, so this is a mapping rather than a
             # conditional: an action absent from it takes no command, which is what a
             # function-key forward needs (it derives its own from the key it is bound to).
+            # The Settings key runs the projects command, to bring the surface home first.
             command = {
                 ConsoleBindingAction.SHOW_PROJECTS: self._projects_command,
+                ConsoleBindingAction.SHOW_SETTINGS: self._projects_command,
                 ConsoleBindingAction.TOGGLE_PANES: self._panes_command,
             }.get(binding.action, ())
             try:
@@ -983,6 +1000,36 @@ class ConsoleComposer:
             # `finally`, for the reason `show` states: an exchange that raised part-way has
             # already unzoomed the window, and a tail call would be skipped exactly then.
             await self._reassert_panes()
+
+    async def show_settings(self) -> None:
+        """Open Settings in the projects pane, bringing that pane home first if it is away.
+
+        What a right-hand pane's own Settings key does (`,`, or the palette), so Settings opens
+        on the left from every route, not only from F2. The key is handed to the projects
+        surface rather than its screen pushed from here: the surface is a different process.
+        Degrades to a log line like every other arrangement here.
+        """
+        await self.show_projects()
+        try:
+            arrangement = await self._console.pane_arrangement()
+            projects = [
+                pane
+                for pane in arrangement
+                if pane.on_console and pane.console_slot == ConsolePaneSlot.PROJECTS.value
+            ]
+            settings = next(
+                (
+                    binding.key
+                    for binding in self._bindings
+                    if binding.action is ConsoleBindingAction.SHOW_SETTINGS
+                ),
+                None,
+            )
+            if len(projects) != 1 or settings is None:
+                return
+            await self._console.press_in_console_pane(projects[0].pane_id, settings)
+        except Exception:
+            _LOG.exception("Settings could not be opened in the projects pane")
 
     async def close(self) -> CloseReport:
         """Tear the console down: send any displayed agent home, verify, then kill (DEC-096).

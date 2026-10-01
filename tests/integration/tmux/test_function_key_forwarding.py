@@ -253,3 +253,99 @@ def test_two_panes_carrying_the_sessions_mark_deliver_nothing(server: _Server) -
     assert not _received(first_sink, "F5") and not _received(second_sink, "F5"), (
         "an ambiguous sessions mark still delivered the key to one of the candidates"
     )
+
+
+# --- F2 is Settings, and Settings opens in the projects pane (2026-10-01) -----------------
+
+
+def _install_settings(server: _Server, projects_command: tuple[str, ...] = ("true",)) -> None:
+    server.tmux(
+        *console_binding_args(
+            "F2", ConsoleBindingAction.SHOW_SETTINGS, projects_command, reserved_keys=_RESERVED
+        )
+    )
+
+
+def _active(server: _Server) -> str:
+    return server.tmux(
+        "display-message", "-p", "-t", f"{CONSOLE_SESSION_NAME}:", "#{pane_id}"
+    ).stdout.strip()
+
+
+def test_settings_pressed_in_a_right_hand_pane_opens_in_the_projects_pane(
+    server: _Server,
+) -> None:
+    """The owner's ask: Settings on the left, whichever of the console's panes is active."""
+    projects, sessions = server.panes()[0], server.add_pane()
+    projects_sink, sessions_sink = server.watch(projects), server.watch(sessions)
+    server.mark(projects, slot=ConsolePaneSlot.PROJECTS.value)
+    server.mark(sessions, slot=ConsolePaneSlot.SESSIONS.value)
+    _install_settings(server)
+    server.tmux("select-pane", "-t", sessions)
+
+    server.press(server.attach(), "F2")
+
+    assert _received(projects_sink, "F2"), "Settings did not reach the projects pane"
+    assert not _received(sessions_sink, "F2"), "F2 also opened Settings in the sessions pane"
+    assert _active(server) == projects, "the projects pane was not selected for the owner"
+
+
+def test_settings_at_an_opencode_pane_is_still_handed_to_opencode(server: _Server) -> None:
+    """OpenCode binds F2 (DEC-070); moving Settings must not take its model switch away."""
+    projects, agent = server.panes()[0], server.add_pane()
+    projects_sink, agent_sink = server.watch(projects), server.watch(agent)
+    server.mark(projects, slot=ConsolePaneSlot.PROJECTS.value)
+    server.mark(agent, profile="opencode")
+    _install_settings(server)
+    server.tmux("select-pane", "-t", agent)
+
+    server.press(server.attach(), "F2")
+
+    assert _received(agent_sink, "F2"), "OpenCode's own key was taken from its pane"
+    assert not _received(projects_sink, "F2"), "a reserved key also opened Settings"
+
+
+def test_settings_with_the_projects_pane_parked_runs_the_projects_command_first(
+    server: _Server,
+) -> None:
+    """An agent holds the left slot, so the surface is in another window and is fetched home.
+
+    The command here only leaves a marker: the exchange itself is `show_projects`, tested
+    where it lives. What this pins is that the script runs it, and still delivers the key.
+    """
+    agent = server.panes()[0]
+    server.watch(agent)
+    server.mark(agent, profile="claude")
+    server.tmux("new-window", "-d", "-t", f"{CONSOLE_SESSION_NAME}:", "cat")
+    time.sleep(0.3)
+    parked = server.tmux(
+        "list-panes", "-t", f"{CONSOLE_SESSION_NAME}:1", "-F", "#{pane_id}"
+    ).stdout.split()[0]
+    parked_sink = server.watch(parked)
+    server.mark(parked, slot=ConsolePaneSlot.PROJECTS.value)
+    marker = server.tmp / "fetched"
+    _install_settings(server, ("touch", str(marker)))
+
+    server.press(server.attach(), "F2")
+
+    assert marker.exists(), "the projects command never ran for a parked projects pane"
+    assert _received(parked_sink, "F2"), "Settings did not reach the projects pane"
+
+
+def test_settings_with_the_projects_pane_home_does_not_run_the_projects_command(
+    server: _Server,
+) -> None:
+    """The fast path: no Python start-up on every F2 when nothing needs exchanging."""
+    projects, sessions = server.panes()[0], server.add_pane()
+    projects_sink = server.watch(projects)
+    server.watch(sessions)
+    server.mark(projects, slot=ConsolePaneSlot.PROJECTS.value)
+    server.mark(sessions, slot=ConsolePaneSlot.SESSIONS.value)
+    marker = server.tmp / "fetched"
+    _install_settings(server, ("touch", str(marker)))
+    server.tmux("select-pane", "-t", sessions)
+
+    server.press(server.attach(), "F2")
+
+    assert _received(projects_sink, "F2")
+    assert not marker.exists(), "the projects command ran with the surface already home"

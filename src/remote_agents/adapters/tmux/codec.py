@@ -530,6 +530,67 @@ def _forward_function_key_command(
     return ("sh", "-c", script)
 
 
+def _settings_key_command(
+    key: str, reserved_keys: Mapping[str, frozenset[str]], projects_command: tuple[str, ...]
+) -> tuple[str, ...]:
+    """The `sh -c` argv for the Settings key: the projects pane, whichever pane is active.
+
+    Validated exactly as `_forward_function_key_command` is, and in the same place: `key` and
+    every profile name are checked in `console_binding_args` before this is called.
+    `projects_command` is a fixed argv built from `sys.executable`, and it is `shlex`-joined
+    here, so a path with a space stays one word to the inner shell.
+
+    The branches, in order:
+
+    1. **the active pane's profile reserves this key** -- the agent binds it (OpenCode's F2,
+       DEC-070), so it is handed over, exactly as a forward does;
+    2. **the projects pane is not in the active pane's window** -- an agent holds the left
+       slot and the surface is parked in that agent's window, so `projects_command` (F12's)
+       brings it home first, and the script waits for it;
+    3. **then always** -- the key goes to the projects pane and that pane is selected.
+
+    The projects pane is found by its mark at press time (DEC-038), and two panes claiming it
+    deliver nothing, for the forward's reason: a guess here would open Settings somewhere the
+    owner cannot see.
+    """
+    reserving = sorted(name for name, keys in reserved_keys.items() if key in keys)
+    handover = (
+        f'profile=$(tmux show-options -qv -pt "$active" {_PROFILE_OPTION}); '
+        + "".join(
+            f'if test "$profile" = "{name}"; then tmux send-keys -t "$active" {key}; exit 0; fi; '
+            for name in reserving
+        )
+        if reserving
+        else ""
+    )
+    script = (
+        f"{_PRESSED_FROM_THE_CONSOLE} "
+        f'active=$(tmux display-message -p "#{{pane_id}}"); '
+        f"{handover}"
+        f'panes=$(tmux list-panes -a -F "#{{pane_id}}" '
+        f'-f "#{{==:#{{{CONSOLE_SLOT_OPTION}}},{ConsolePaneSlot.PROJECTS.value}}}"); '
+        f'test "$(printf "%s\\n" "$panes" | grep -c .)" = 1 || exit 0; '
+        f'test "$(tmux display-message -p -t "$panes" "#{{window_id}}")" = '
+        f'"$(tmux display-message -p "#{{window_id}}")" || {shlex.join(projects_command)}; '
+        f'tmux select-pane -t "$panes"; tmux send-keys -t "$panes" {key}'
+    )
+    return ("sh", "-c", script)
+
+
+def console_key_args(pane_id: str, key: str) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    """The two argv suffixes that select one pane and hand it one function key.
+
+    `send-keys` writes into the pane's pty and consults no key table, so the key reaches the
+    surface running there rather than firing the console's own binding again. The key is
+    checked against `_FUNCTION_KEY` because it is a key *name* here, and a name tmux did not
+    know would be typed into the pane as literal text.
+    """
+    if not _FUNCTION_KEY.match(key):
+        raise ValueError("only a function key, in tmux's own spelling, is handed to a pane")
+    target = exact_pane_target(pane_id)
+    return ("select-pane", "-t", target), ("send-keys", "-t", target, key)
+
+
 def console_binding_args(
     key: str,
     action: ConsoleBindingAction,
@@ -595,7 +656,25 @@ def console_binding_args(
         # was deleted on the argument that a closed set leaves no third value to pass; this
         # is what makes that argument true at runtime rather than only for a type checker.
         raise ValueError(f"a console binding's table is a ConsoleKeyTable, not {table!r}")
-    if action is ConsoleBindingAction.FORWARD_FUNCTION_KEY:
+    if action is ConsoleBindingAction.SHOW_SETTINGS:
+        if table is not ConsoleKeyTable.ROOT:
+            raise ValueError("the settings key may only be bound in the root table")
+        if not command:
+            raise ValueError("the settings key needs the command that returns the surface")
+        if not _FUNCTION_KEY.match(key) or key == _TERMINALS_OWN_KEY:
+            raise ValueError("the settings key is one function key, in tmux's own spelling")
+        if reserved_keys is None:
+            # The forward's refusal, for the forward's reason: `{}` would silently take
+            # OpenCode's F2 from its own pane.
+            raise ValueError(
+                "the settings key needs the reservations to pass through; pass "
+                "reserved_keys={} only to state that no provider reserves one"
+            )
+        for name in reserved_keys:
+            if not _PROFILE_NAME.match(name):
+                raise ValueError(f"a profile name reaching the settings script is unsafe: {name!r}")
+        command = _settings_key_command(key, reserved_keys, command)
+    elif action is ConsoleBindingAction.FORWARD_FUNCTION_KEY:
         if table is not ConsoleKeyTable.ROOT:
             # The mirror of the retired prefix forward's refusal, and for the opposite
             # reason: a prefix key was affordable *because* tmux takes the prefix in the

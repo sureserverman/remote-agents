@@ -72,14 +72,15 @@ class ConsoleKeyTable(Enum):
 class ConsoleBindingAction(Enum):
     """What one console binding does — a closed set, not a description.
 
-    Root *and* prefix: `SHOW_PROJECTS` and `FORWARD_FUNCTION_KEY` are root-only and
-    `TOGGLE_PANES` is prefix-only, each refused in the other table where it is built. Which
+    Root *and* prefix: `SHOW_PROJECTS`, `SHOW_SETTINGS` and `FORWARD_FUNCTION_KEY` are
+    root-only and `TOGGLE_PANES` is prefix-only, each refused in the other table where it is
+    built. Which
     table a binding goes in is `ConsoleKeyTable`, not this.
 
     A binding's action decides tmux argv, so it is chosen from here rather than passed as
     free text (DEC-001).
 
-    **Three members, and two were removed.** `FORWARD_TO_SESSIONS` bound one prefix key per
+    **Two members were removed.** `FORWARD_TO_SESSIONS` bound one prefix key per
     Alt chord and retired with that layer: it existed because a chord typed inside a displayed
     agent reached the agent instead of the console, and a root function key does not have that
     problem. The other: A `FOCUS_NEXT_PANE` action bound a second root key
@@ -122,6 +123,19 @@ class ConsoleBindingAction(Enum):
     select a window by itself, but it cannot read our pane marks and work out which exchange
     brings the surface home. Under the tab model this key was `select-window 0`, which under
     the swap model selects the window the owner is already on.
+    """
+
+    SHOW_SETTINGS = "show_settings"
+    """Open Settings in the projects pane, from whichever pane the owner pressed it in.
+
+    The owner asked for it on 2026-10-01: Settings opened in whichever right-hand pane was
+    active, squeezed into a third of the column, and they wanted it on the left only. So the
+    key no longer goes back to the pane it was pressed in, as every forward does. It goes to
+    the projects surface, which is brought home first when an agent holds the left slot, and
+    that pane is selected so the owner's next key reaches the screen that just opened.
+
+    It keeps the forward's reservation branch: an agent whose provider declares the key
+    (OpenCode, `F2`, DEC-070) still receives it when its own pane is the active one.
     """
 
     TOGGLE_PANES = "toggle_panes"
@@ -380,6 +394,14 @@ class ConsolePort(Protocol):
     async def pane_arrangement(self) -> tuple[HostedPane, ...]: ...
 
     async def swap_panes(self, source_pane: str, target_pane: str) -> None: ...
+
+    async def press_in_console_pane(self, pane_id: str, key: str) -> None:
+        """Select one of the console's own panes and hand it one function key.
+
+        `send-keys` writes into the pane's pty and never consults a key table, so the key
+        reaches the surface running there rather than re-entering the console's own binding.
+        """
+        ...
 
     async def rejoin_console_pane(
         self,

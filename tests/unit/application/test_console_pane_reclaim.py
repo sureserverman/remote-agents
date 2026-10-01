@@ -230,7 +230,7 @@ async def test_the_reclaimed_console_is_put_back_in_its_declared_proportions() -
 
     await _composer(console).sync((_record(_A, SessionState.ENDED),))
 
-    assert console.normalized == [(60, (("%2", 31),))]
+    assert console.normalized == [(60, (("%2", 40),))]
     # The hooks name the sessions pane by id, so a reclaim that renumbered it re-issues them;
     # otherwise every later resize would aim its `resize-pane` at a pane that is gone.
     assert console.hooked == console.normalized

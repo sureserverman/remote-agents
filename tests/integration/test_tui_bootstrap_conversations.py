@@ -178,6 +178,8 @@ def test_no_further_capability_leaked_into_the_context() -> None:
         # and an *exchange* that writes no record and touches no lifecycle (DEC-040). It is not
         # a new kind of capability, it is the return trip of one already here.
         "console_show_projects",
+        # Settings opened in the projects pane from a right-hand pane (2026-10-01).
+        "console_show_settings",
         # Added by this plan's Task 1.5, and listed here because that is what this test is for:
         # growing the set is a decision, not a diff nobody reads. Same family as
         # `console_show_projects` on the axes that matter -- console hosting's alone, absent in
