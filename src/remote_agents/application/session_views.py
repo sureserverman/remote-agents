@@ -539,13 +539,6 @@ _PART_LABELS = {"cursor": "Cursor"}
 """A pool's name as both surfaces write it: the provider is a proper noun, the rest are words."""
 
 
-def part_figures(window: LimitWindow) -> tuple[str, ...]:
-    """`Cursor 62%`, `other 18%`: each pool's own percent under its name, for both surfaces."""
-    return tuple(
-        f"{_PART_LABELS.get(part.label, part.label)} {part.percent}%" for part in window.parts
-    )
-
-
 FIXED_LIMIT_WINDOWS = ("5h", "week")
 """The window kinds every row with a reading draws, in this order, whatever it published
 (DEC-100). A rule both surfaces follow, so it is spelled once; how a kind is labelled and laid
@@ -575,17 +568,6 @@ def _placed(windows: tuple[LimitWindow, ...]) -> tuple[LimitWindow, ...]:
         )
         for column, part in zip(columns, window.parts, strict=False)
     )
-
-
-def split_window(row: LimitRow) -> LimitWindow | None:
-    """The row's one window when it is metered as separate pools; else None (DEC-111).
-
-    Such a row draws one bar of a gauge per pool and never its total. A row that publishes a
-    split window *beside* another is laid out by kind like any other, on both surfaces.
-    """
-    if len(row.windows) == 1 and row.windows[0].parts:
-        return row.windows[0]
-    return None
 
 
 def countdown(row: LimitRow, window: LimitWindow) -> str | None:

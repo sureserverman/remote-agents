@@ -299,7 +299,10 @@ are separate processes and the dashboard is not one of them.
 **The terminal's pane carries one row per agent that publishes rate limits at all** — today
 Claude, Codex and Cursor; OpenCode publishes none, ever, so it gets no row rather than a
 permanent line saying nothing will appear there. Cursor's row reads *off in Settings* until its
-switch is on, and then draws its month as one bar in two halves, `Cursor N% · other M%`. Columns are keyed by window kind, so a weekly
+switch is on. Cursor meters its month as two pools, each a percent of its own pool: its own
+models' pool is drawn under the five-hour column and every other model's under the weekly one,
+each with the month's countdown, and where the pane stacks the two lines say `Cursor` and
+`other`. The month's total is not drawn. Every other window is keyed by its kind, so a weekly
 window is always under the weekly column and never under somebody else's five-hour one.
 
 **The week carries its pace.** Where a weekly (or daily) window has a live reading and a reset
@@ -319,8 +322,8 @@ there rather than on its row, so a row never shows both a countdown and a date.
 Sessions list each agent's name stands over one line per window: its label, bar, percent,
 `↻` countdown and, where the window has pace, `▲ 8 over`, `▼ 3 under` or `on pace`. The
 five-hour and weekly windows are always drawn, and one the agent did not publish is an empty
-bar. Cursor's month is its two gauges and countdown, with `Cursor N% · other M%` on the next
-line. The agent's last line says where the reading came from and how old it is:
+bar. Cursor's month is two lines, `Cursor` and `other`, each with its pool's bar, percent and
+the month's countdown. The agent's last line says where the reading came from and how old it is:
 `via status-line cache · live`. The block has no `┃` tick, no `expected` figure and no colour.
 An agent with no figure keeps its name and says which silence it is, and a read that fails
 marks every agent *unreadable* instead of removing the block.

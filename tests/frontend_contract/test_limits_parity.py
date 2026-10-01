@@ -3,7 +3,10 @@
 One `limit_rows` result is handed to both renderers, so the two cannot differ in what they
 were told, only in what they chose to say. The facts are read off that result: a profile's
 row, an absence's phrase, a window's label, bar and whole percent, its reset countdown, its
-pace direction and points, its source and age, and each pool of a split window.
+pace direction and points, its source and age, and each pool of Cursor's month, which
+`limit_rows` places in the fixed columns: its bar and percent on both surfaces, and its own name
+on the bot's line. The terminal's one-line layout names the column in its header instead, and
+its stacked layout names the pool (`test_limits_pane_narrow.py`).
 
 **Each fact is asked of both surfaces.** The terminal's half is the premise: a fact the pane
 does not draw is not owed by the bot, and a contract that only ever read the bot would keep
@@ -36,7 +39,6 @@ from remote_agents.application.session_views import (
     countdown,
     limit_rows,
     percent_gauge,
-    split_window,
 )
 from remote_agents.domain.models import ProfileId
 from remote_agents.ports.agent_usage import (
@@ -64,7 +66,7 @@ def _in(delta: timedelta) -> datetime:
 
 
 def _readings() -> tuple[LimitRow, ...]:
-    """Three live rows: two windows with a paced week, a week alone, and a split month."""
+    """Three live rows: two windows with a paced week, a week alone, and a pooled month."""
     return limit_rows(
         (
             AgentLimits(
@@ -141,8 +143,8 @@ def _stale() -> tuple[LimitRow, ...]:
     )
 
 
-def _split_beside() -> tuple[LimitRow, ...]:
-    """A split window beside another: both surfaces lay the row out by kind (DEC-111)."""
+def _pools_beside() -> tuple[LimitRow, ...]:
+    """A pooled window beside another: `limit_rows` places nothing, so it is laid out by kind."""
     return limit_rows(
         (_cursor(_month(73.0, 62.0, 18.0), UsageWindow("week", 26.0)),),
         (ProfileId("cursor-agent"),),
@@ -213,9 +215,8 @@ def _facts(rows: tuple[LimitRow, ...]) -> Iterator[tuple[str, str, dict[str, str
     for row in rows:
         if row.absence:
             yield row.profile, f"{row.absence!r}", both(re.escape(row.absence))
-        split = split_window(row)
         published = {window.label for window in row.windows}
-        if row.windows and split is None:
+        if row.windows:
             for label in FIXED_LIMIT_WINDOWS:
                 if label not in published:
                     # The terminal's one-line layout names the column once, in its header.
@@ -229,28 +230,19 @@ def _facts(rows: tuple[LimitRow, ...]) -> Iterator[tuple[str, str, dict[str, str
                         },
                     )
         for window in row.windows:
-            where = window.label
-            if window is split:
-                for part in window.parts:
-                    yield (
-                        row.profile,
-                        f"{where}: the {part.label} pool's percent",
-                        both(rf"(?i){re.escape(part.label)} {part.percent}%"),
-                    )
-                bar = "│".join(percent_gauge(part.percent) for part in window.parts)
-                yield row.profile, f"{where}: the split bar", both(re.escape(bar))
-            else:
-                yield (
-                    row.profile,
-                    f"{where}: label, bar and {window.percent}%",
-                    {
-                        "telegram": (
-                            rf"(?m)^{_kind(window.label)} +{percent_gauge(window.percent)} +"
-                            rf"{_figure(window.percent)}"
-                        ),
-                        "tui": _figure(window.percent),
-                    },
-                )
+            where = window.label if window.name is None else f"{window.name} pool"
+            label = _kind(window.label) if window.name is None else re.escape(window.name)
+            yield (
+                row.profile,
+                f"{where}: label, bar and {window.percent}%",
+                {
+                    "telegram": (
+                        rf"(?m)^{label} +{percent_gauge(window.percent)} +"
+                        rf"{_figure(window.percent)}"
+                    ),
+                    "tui": _figure(window.percent),
+                },
+            )
             left = countdown(row, window)
             if left is not None:
                 yield row.profile, f"{where}: resets in {left}", both(f"↻ {left}")
@@ -315,7 +307,7 @@ SCENARIOS = {
     "readings": _readings,
     "on pace": _on_pace,
     "stale": _stale,
-    "split beside": _split_beside,
+    "pools beside": _pools_beside,
     "absences": _absences,
 }
 
@@ -356,9 +348,8 @@ def test_limits_parity_the_scenarios_carry_every_kind_of_fact() -> None:
         "week: pace ▼",
         "week: on pace",
         "day: pace ▲",
-        "the cursor pool's percent",
-        "the other pool's percent",
-        "the split bar",
+        "Cursor pool: label, bar and 62%",
+        "other pool: label, bar and 18%",
         "month: label, bar and 73%",
         "stamped status-line cache · live",
         "codex: stamped live",
@@ -386,10 +377,12 @@ def test_limits_parity_a_fact_on_one_agent_does_not_stand_in_for_another() -> No
 def test_limits_parity_neither_surface_says_what_the_other_withholds(
     width: int, surface: str, render
 ) -> None:
-    """A split window's total, a stale reading's countdown and pace, a row that never reports."""
-    assert "97%" not in render(_readings(), width), "the split window's total is drawn"
+    """A pooled window's total, a stale reading's countdown and pace, a row that never reports."""
+    readings = render(_readings(), width)
+    assert "97%" not in readings, "the pooled window's total is drawn"
+    assert "│" not in readings, "the pools are still drawn as one split bar"
     stale = render(_stale(), width)
-    assert "88%" not in stale, "the split window's total is drawn"
+    assert "88%" not in stale, "the pooled window's total is drawn"
     assert re.search("[↻▲▼┃]", stale) is None, "a stale reading still counts down or paces"
     assert "opencode" not in render(_absences(), width), "a provider with no limits has a row"
 
