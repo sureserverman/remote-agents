@@ -419,10 +419,17 @@ def _observed(
 #: The rollout key naming who answers a Codex escalation. Measured 2026-10-01 on codex-cli
 #: 0.159.3: `turn_context` carries it at `payload.approvals_reviewer`, and a mid-session
 #: `/permissions` change writes `thread_settings_applied` with it at
-#: `payload.thread_settings.approvals_reviewer`. Only `user` puts a prompt in front of the owner.
+#: `payload.thread_settings.approvals_reviewer`. Re-measure when Codex changes either shape.
 _CODEX_REVIEWER_KEY = b'"approvals_reviewer"'
-_CODEX_HUMAN_REVIEWER = "user"
+#: The reviewers that answer without the owner: the binary's enum is `user`, `auto_review` and
+#: `guardian_subagent`, the older name for the same reviewer. An allowlist, so a value Codex
+#: adds later is heard rather than silenced.
+_CODEX_AUTOMATIC_REVIEWERS = frozenset({"auto_review", "guardian_subagent"})
 _ROLLOUT_CHUNK_BYTES = 1024 * 1024
+#: How far back the scan looks before it gives up and lets the ask through. The measured
+#: setting sat 4.6 MB from the end; a rollout that never names a reviewer must not cost every
+#: ask a read of the whole file inside Codex's hook.
+_ROLLOUT_SCAN_BYTES = 64 * 1024 * 1024
 
 
 def _codex_reviewer_decides(document: Mapping[str, object]) -> bool:
@@ -436,27 +443,32 @@ def _codex_reviewer_decides(document: Mapping[str, object]) -> bool:
 
     The transcript path is used here and never leaves the hook's process (DEC-013 clause 2).
     Anything unreadable answers `False`, so a missed setting costs a notification, never a
-    silent ask.
+    silent ask. The catch is broad for that reason: the caller swallows every exception and
+    spools nothing, which here would be the silent ask.
     """
-    path = document.get("transcript_path")
-    if not isinstance(path, str) or not path:
+    try:
+        path = document.get("transcript_path")
+        if not isinstance(path, str) or not path or not Path(path).is_file():
+            return False
+        return _newest_codex_reviewer(Path(path)) in _CODEX_AUTOMATIC_REVIEWERS
+    except Exception:
         return False
-    reviewer = _newest_codex_reviewer(Path(path))
-    return reviewer is not None and reviewer != _CODEX_HUMAN_REVIEWER
 
 
 def _newest_codex_reviewer(path: Path) -> str | None:
     """Scan a rollout backwards for the newest record naming its reviewer.
 
-    Unbounded on purpose: on the measured session the newest setting sat 4.6 MB from the end,
+    Not bounded to a tail: on the measured session the newest setting sat 4.6 MB from the end,
     nine times the tail the usage readers take, because a single long turn writes none.
     """
     try:
         with path.open("rb") as handle:
-            position = handle.seek(0, os.SEEK_END)
+            end = handle.seek(0, os.SEEK_END)
+            floor = max(0, end - _ROLLOUT_SCAN_BYTES)
+            position = end
             pending = b""
-            while position > 0:
-                step = min(_ROLLOUT_CHUNK_BYTES, position)
+            while position > floor:
+                step = min(_ROLLOUT_CHUNK_BYTES, position - floor)
                 position -= step
                 handle.seek(position)
                 pending = handle.read(step) + pending
@@ -477,16 +489,21 @@ def _newest_codex_reviewer(path: Path) -> str | None:
 
 
 def _codex_reviewer_of(line: bytes) -> str | None:
+    """The reviewer a `turn_context` or `thread_settings_applied` record names, else None."""
     try:
         record = json.loads(line)
     except (UnicodeDecodeError, ValueError):
         return None
-    payload = record.get("payload") if isinstance(record, dict) else None
-    if not isinstance(payload, dict):
+    if not isinstance(record, dict) or not isinstance(record.get("payload"), dict):
         return None
-    settings = payload.get("thread_settings")
-    source = settings if isinstance(settings, dict) else payload
-    reviewer = source.get("approvals_reviewer")
+    payload = record["payload"]
+    if record.get("type") == "turn_context":
+        source = payload
+    elif record.get("type") == "event_msg" and payload.get("type") == "thread_settings_applied":
+        source = payload.get("thread_settings")
+    else:
+        return None
+    reviewer = source.get("approvals_reviewer") if isinstance(source, dict) else None
     return reviewer if isinstance(reviewer, str) else None
 
 

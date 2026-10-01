@@ -491,11 +491,14 @@ def _settings_applied(reviewer: str) -> dict[str, Any]:
     }
 
 
-def _rollout(tmp_path: Path, *records: dict[str, Any], filler: int = 0) -> Path:
+def _rollout(
+    tmp_path: Path, *records: dict[str, Any], filler: int = 0, trailing_newline: bool = True
+) -> Path:
     path = tmp_path / "rollout.jsonl"
     lines = [json.dumps(record) for record in records]
     noise = json.dumps({"type": "response_item", "payload": {"text": "x" * 200}})
-    path.write_text("\n".join(lines + [noise] * filler) + "\n", encoding="utf-8")
+    text = "\n".join(lines + [noise] * filler) + ("\n" if trailing_newline else "")
+    path.write_text(text, encoding="utf-8")
     return path
 
 
@@ -557,6 +560,102 @@ def test_a_codex_permission_request_with_an_unreadable_rollout_is_still_spooled(
     _run(_stream(_codex_permission_in(tmp_path / "missing.jsonl")), directory, provider="codex")
 
     assert len(list(directory.iterdir())) == 2
+
+
+def test_the_older_name_for_the_auto_reviewer_is_silenced_too(tmp_path: Path) -> None:
+    directory = _spool(tmp_path)
+    rollout = _rollout(tmp_path, _turn_context("guardian_subagent"))
+
+    _run(_stream(_codex_permission_in(rollout)), directory, provider="codex")
+
+    assert list(directory.iterdir()) == []
+
+
+@pytest.mark.parametrize("reviewer", ["", "someone_new"])
+def test_a_reviewer_this_project_does_not_know_is_heard(reviewer: str, tmp_path: Path) -> None:
+    """An allowlist, not "anything but `user`": a new value may still prompt the owner."""
+    directory = _spool(tmp_path)
+    rollout = _rollout(tmp_path, _turn_context("auto_review"), _turn_context(reviewer))
+
+    _run(_stream(_codex_permission_in(rollout)), directory, provider="codex")
+
+    assert _record(directory)["event"] == "PermissionRequest"
+
+
+def test_a_reviewer_quoted_in_other_records_does_not_silence_an_ask(tmp_path: Path) -> None:
+    """Only `turn_context` and `thread_settings_applied` say who reviews.
+
+    Agent text quoting the setting, and a record of another type carrying the key, are newer
+    than the real setting here and must both be passed over.
+    """
+    directory = _spool(tmp_path)
+    rollout = _rollout(
+        tmp_path,
+        _turn_context("user"),
+        {"type": "session_meta", "payload": {"approvals_reviewer": "auto_review"}},
+        {"type": "event_msg", "payload": {"type": "other", "thread_settings": {
+            "approvals_reviewer": "auto_review"}}},
+        {"type": "response_item", "payload": {"text": '"approvals_reviewer": "auto_review"'}},
+    )
+
+    _run(_stream(_codex_permission_in(rollout)), directory, provider="codex")
+
+    assert _record(directory)["event"] == "PermissionRequest"
+
+
+def test_a_rollout_without_a_trailing_newline_is_read_to_its_last_line(tmp_path: Path) -> None:
+    directory = _spool(tmp_path)
+    rollout = _rollout(
+        tmp_path, _turn_context("user"), _turn_context("auto_review"), trailing_newline=False
+    )
+
+    _run(_stream(_codex_permission_in(rollout)), directory, provider="codex")
+
+    assert list(directory.iterdir()) == []
+
+
+def test_a_setting_longer_than_a_chunk_is_still_read(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(activity_spool, "_ROLLOUT_CHUNK_BYTES", 97)
+    directory = _spool(tmp_path)
+    context = _turn_context("auto_review")
+    context["payload"]["base_instructions"] = "y" * 1000
+    rollout = _rollout(tmp_path, context, filler=2)
+
+    _run(_stream(_codex_permission_in(rollout)), directory, provider="codex")
+
+    assert list(directory.iterdir()) == []
+
+
+def test_a_setting_past_the_scan_limit_is_heard(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A rollout that names no reviewer near its end costs one bounded read, then notifies."""
+    monkeypatch.setattr(activity_spool, "_ROLLOUT_CHUNK_BYTES", 97)
+    monkeypatch.setattr(activity_spool, "_ROLLOUT_SCAN_BYTES", 1000)
+    directory = _spool(tmp_path)
+    rollout = _rollout(tmp_path, _turn_context("auto_review"), filler=50)
+
+    _run(_stream(_codex_permission_in(rollout)), directory, provider="codex")
+
+    assert _record(directory)["event"] == "PermissionRequest"
+
+
+def test_a_failure_reading_the_reviewer_is_heard(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The spool swallows every exception and writes nothing, which here is the silent ask."""
+    def explode(path: Path) -> str:
+        raise RecursionError
+
+    monkeypatch.setattr(activity_spool, "_newest_codex_reviewer", explode)
+    directory = _spool(tmp_path)
+    rollout = _rollout(tmp_path, _turn_context("auto_review"))
+
+    _run(_stream(_codex_permission_in(rollout)), directory, provider="codex")
+
+    assert _record(directory)["event"] == "PermissionRequest"
 
 
 def test_a_codex_stop_is_spooled_under_auto_review(tmp_path: Path) -> None:
