@@ -546,7 +546,12 @@ def _settings_key_command(
        DEC-070), so it is handed over, exactly as a forward does;
     2. **the projects pane is not in the active pane's window** -- an agent holds the left
        slot and the surface is parked in that agent's window, so `projects_command` (F12's)
-       brings it home first, and the script waits for it;
+       brings it home first, and the script waits for it. **Then it asks again.** The
+       command degrades to a log line and exits 0 when it cannot exchange (a busy lock, a
+       surface parked somewhere it will not move from), so its exit status says nothing;
+       a surface still away means no key, rather than Settings opened out of sight. An
+       exchange racing in between this check and the press can still park it; that window
+       is a few milliseconds and is accepted;
     3. **then always** -- the key goes to the projects pane and that pane is selected.
 
     The projects pane is found by its mark at press time (DEC-038), and two panes claiming it
@@ -570,8 +575,9 @@ def _settings_key_command(
         f'panes=$(tmux list-panes -a -F "#{{pane_id}}" '
         f'-f "#{{==:#{{{CONSOLE_SLOT_OPTION}}},{ConsolePaneSlot.PROJECTS.value}}}"); '
         f'test "$(printf "%s\\n" "$panes" | grep -c .)" = 1 || exit 0; '
-        f'test "$(tmux display-message -p -t "$panes" "#{{window_id}}")" = '
-        f'"$(tmux display-message -p "#{{window_id}}")" || {shlex.join(projects_command)}; '
+        f'home() {{ test "$(tmux display-message -p -t "$panes" "#{{window_id}}")" = '
+        f'"$(tmux display-message -p "#{{window_id}}")"; }}; '
+        f"home || {{ {shlex.join(projects_command)}; home || exit 0; }}; "
         f'tmux select-pane -t "$panes"; tmux send-keys -t "$panes" {key}'
     )
     return ("sh", "-c", script)

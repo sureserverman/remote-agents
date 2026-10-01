@@ -310,8 +310,8 @@ def test_settings_with_the_projects_pane_parked_runs_the_projects_command_first(
 ) -> None:
     """An agent holds the left slot, so the surface is in another window and is fetched home.
 
-    The command here only leaves a marker: the exchange itself is `show_projects`, tested
-    where it lives. What this pins is that the script runs it, and still delivers the key.
+    The real exchange is `show_projects`, tested where it lives; a plain `swap-pane` stands in
+    for it here. What this pins is that the script runs it, and then delivers the key.
     """
     agent = server.panes()[0]
     server.watch(agent)
@@ -324,12 +324,15 @@ def test_settings_with_the_projects_pane_parked_runs_the_projects_command_first(
     parked_sink = server.watch(parked)
     server.mark(parked, slot=ConsolePaneSlot.PROJECTS.value)
     marker = server.tmp / "fetched"
-    _install_settings(server, ("touch", str(marker)))
+    # Stands in for `console projects`: leaves a marker, then makes the exchange it makes.
+    fetch = f"touch {marker}; tmux swap-pane -d -s {parked} -t {agent}"
+    _install_settings(server, ("sh", "-c", fetch))
 
     server.press(server.attach(), "F2")
 
     assert marker.exists(), "the projects command never ran for a parked projects pane"
     assert _received(parked_sink, "F2"), "Settings did not reach the projects pane"
+    assert _active(server) == parked, "the projects pane was not selected once home"
 
 
 def test_settings_with_the_projects_pane_home_does_not_run_the_projects_command(
@@ -349,3 +352,30 @@ def test_settings_with_the_projects_pane_home_does_not_run_the_projects_command(
 
     assert _received(projects_sink, "F2")
     assert not marker.exists(), "the projects command ran with the surface already home"
+
+
+def test_settings_sends_nothing_when_the_surface_could_not_be_fetched_home(
+    server: _Server,
+) -> None:
+    """The projects command degrades to a log line, so its failure is read off the panes.
+
+    A surface still parked after the command means no key: Settings opened in a hidden window
+    would also take the owner's next keystrokes there.
+    """
+    agent = server.panes()[0]
+    agent_sink = server.watch(agent)
+    server.mark(agent, profile="claude")
+    server.tmux("new-window", "-d", "-t", f"{CONSOLE_SESSION_NAME}:", "cat")
+    time.sleep(0.3)
+    parked = server.tmux(
+        "list-panes", "-t", f"{CONSOLE_SESSION_NAME}:1", "-F", "#{pane_id}"
+    ).stdout.split()[0]
+    parked_sink = server.watch(parked)
+    server.mark(parked, slot=ConsolePaneSlot.PROJECTS.value)
+    _install_settings(server, ("true",))
+
+    server.press(server.attach(), "F2")
+
+    assert not _received(parked_sink, "F2", timeout=2.0), "Settings opened out of sight"
+    assert not _received(agent_sink, "F2", timeout=0.5), "F2 leaked into the agent"
+    assert _active(server) == agent, "focus moved to a hidden pane"

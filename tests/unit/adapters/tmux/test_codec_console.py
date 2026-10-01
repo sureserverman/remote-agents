@@ -842,7 +842,9 @@ def test_the_settings_key_fetches_a_parked_surface_with_the_projects_command() -
     script = _settings_script()
 
     # Quoted for the inner shell, so a path with a space stays one word.
-    assert "|| '/opt/py thon/bin/python' -m remote_agents console projects;" in script, script
+    assert (
+        "home || { '/opt/py thon/bin/python' -m remote_agents console projects; home || exit 0; };"
+    ) in script, script
     assert script.index("console projects") < script.index('send-keys -t "$panes"')
 
 
