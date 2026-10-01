@@ -508,8 +508,9 @@ def test_a_cursor_row_never_cuts_a_gauge_or_leaves_padding_behind(width: int) ->
     for line in _cursor_lines(_with_cursor(), width):
         assert line == line.rstrip(), repr(line)
         for run in _GAUGE_RUN.finditer(line):
-            # Eight cells, or sixteen for the week column on a pane wide enough (DEC-106).
-            assert len(run.group()) in (GAUGE_CELLS, 2 * GAUGE_CELLS), line
+            # Eight cells; sixteen only for the week column from 70 cells wide (DEC-106).
+            allowed = (GAUGE_CELLS, 2 * GAUGE_CELLS) if width >= 70 else (GAUGE_CELLS,)
+            assert len(run.group()) in allowed, line
 
 
 @pytest.mark.parametrize("width", [NARROW, DASHBOARD_RIGHT, 60, CONSOLE])
@@ -566,3 +567,22 @@ def test_a_cursor_row_fits_the_pane_when_no_row_beside_it_has_pace(
     for line in lines:
         assert cell_len(line) <= width, f"at {width}: {line!r}"
         assert line == line.rstrip(), repr(line)
+
+
+def test_a_stacked_cell_too_wide_for_the_pane_moves_its_reset_under_its_bar() -> None:
+    """At 28 cells `Cursor ████████ 100% ↻ 31d` cannot follow even a three-cell name."""
+    lines = [c.plain for c in limit_rows_content(_quiet_with_cursor()[2:], SMALLEST)]
+    assert lines == [
+        "cu…  Cursor ████████ 100%",
+        "            ↻ 31d",
+        "     other  ████████ 100%",
+        "            ↻ 31d",
+    ], lines
+
+
+def test_a_stacked_cell_that_fits_keeps_its_reset_beside_its_bar() -> None:
+    lines = [c.plain for c in limit_rows_content(_quiet_with_cursor()[2:], 33)]
+    assert lines == [
+        "curs…  Cursor ████████ 100% ↻ 31d",
+        "       other  ████████ 100% ↻ 31d",
+    ], lines

@@ -852,11 +852,11 @@ def limit_row_content(
         # bar, as the paced week does: a `Cursor` label is four cells wider than `5h`, and at
         # the dashboard's 28-cell region that is what a two-digit day count would cost.
         moved: dict[int, str] = {}
+        unbounded = width is None or width <= 0
         for index, label in enumerate(columns.labels):
             window = published.get(label)
             reset = "" if window is None or index == at else _reset_text(row, window)
-            room = width is None or width <= 0
-            if reset and not room and indent.cell_length + cells[index].cell_length > width:
+            if reset and not unbounded and indent.cell_length + cells[index].cell_length > width:
                 cells[index] = _window_content(row, window, columns, last=True, reset=False)
                 cells[index] = cells[index].rstrip()
                 moved[index] = reset
