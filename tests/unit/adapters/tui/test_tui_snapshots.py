@@ -956,8 +956,8 @@ def _cursor_reader(cursor: AgentLimits):
     return read
 
 
-def _cursor_split_reader():
-    """Cursor's month with the switch on: two pools, one full, and a cycle end (DEC-111).
+def _cursor_pools_reader():
+    """Cursor's month with the switch on: two pools, one full, and a cycle end.
 
     The reset is an hour past four days for the reason the Codex one above is past three.
     """
@@ -988,9 +988,9 @@ def _cursor_off_reader():
 
 _STATES = (
     _State(
-        "LIMITS_PANE_CURSOR_SPLIT",
+        "LIMITS_PANE_CURSOR_POOLS",
         "LIMITS_PANE",
-        lambda: _context(limits=_cursor_split_reader(), cursor=True),
+        lambda: _context(limits=_cursor_pools_reader(), cursor=True),
         _to_limits_pane,
     ),
     _State(

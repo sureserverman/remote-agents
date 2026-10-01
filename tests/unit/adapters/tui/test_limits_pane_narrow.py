@@ -49,7 +49,7 @@ from remote_agents.application.remote_control_default import (
     REMOTE_CONTROL_DEFAULT_TITLE,
     remote_control_default_line,
 )
-from remote_agents.application.session_views import LimitPart, LimitRow, LimitWindow
+from remote_agents.application.session_views import LimitRow, LimitWindow
 
 #: Narrower than two windows with countdowns need, and close to the dashboard's own right
 #: column. Measured rather than picked: `limit_row_content`'s docstring records that region as
@@ -455,7 +455,7 @@ def test_the_readme_stacked_example() -> None:
     ]
 
 
-# --- Cursor's split bar, stacked (amends DEC-100) -------------------------------------------
+# --- Cursor's pools, stacked (the owner's layout, 2026-10-01) -----------------------------
 
 #: The console's limits pane on the owner's host, measured 2026-09-30: a 76-cell tmux pane.
 CONSOLE = 72
@@ -465,68 +465,67 @@ CONSOLE = 72
 SMALLEST = PANE_CELLS
 
 
-def _cursor_row(*, resets_in: str | None = "4d") -> LimitRow:
-    parts = (LimitPart("cursor", 62), LimitPart("other", 18))
-    return LimitRow(
-        "cursor-agent", (LimitWindow("month", 62, resets_in, parts=parts),), "Cursor API", None
+def _cursor_row(*, resets_in: str | None = "4d", cursor: int = 62, other: int = 18) -> LimitRow:
+    windows = (
+        LimitWindow("5h", cursor, resets_in, name="Cursor"),
+        LimitWindow("week", other, resets_in, name="other"),
     )
+    return LimitRow("cursor-agent", windows, "Cursor API", None)
 
 
 def _with_cursor() -> tuple[LimitRow, ...]:
     return (*_paced_rows(), _cursor_row())
 
 
-def _cursor_lines(width: int) -> list[str]:
-    lines = [content.plain for content in limit_rows_content(_with_cursor(), width)]
-    return lines[6:]
+def _cursor_lines(rows: tuple[LimitRow, ...], width: int) -> list[str]:
+    lines = [content.plain for content in limit_rows_content(rows, width)]
+    return lines[next(i for i, line in enumerate(lines) if line.startswith("cu")) :]
 
 
-def test_a_stacked_cursor_row_is_one_line_where_the_console_has_room() -> None:
-    """The bar sits under the other rows' bars, and carries no label of its own."""
-    lines = [content.plain for content in limit_rows_content(_with_cursor(), CONSOLE)]
-    gauge_column = _GAUGE_RUN.search(lines[0]).start()
-    assert lines[6:] == [
-        "cursor-agent"
-        + " " * (gauge_column - 12)
-        + "█████░░░│██░░░░░░  Cursor 62% · other 18%  ↻ 4d"
-    ], lines
-    assert " month " not in "\n".join(lines)
+def test_a_stacked_cursor_row_labels_each_line_by_its_pool() -> None:
+    """`Cursor` and `other`, never `5h` and `wk`: a monthly pool is not a five-hour figure."""
+    lines = [content.plain for content in limit_rows_content(_with_cursor(), DASHBOARD_RIGHT)]
+    assert "expected" not in lines[0], "the fixture no longer stacks at the dashboard's width"
+    first, second = _cursor_lines(_with_cursor(), DASHBOARD_RIGHT)
+    assert first.split()[1:] == ["Cursor", "█████░░░", "62%", "↻", "4d"], first
+    assert second.split() == ["other", "██░░░░░░", "18%", "↻", "4d"], second
 
 
-def test_a_stacked_cursor_row_too_wide_for_one_line_puts_its_figures_under_the_bar() -> None:
-    """The reset stays beside the bar, as it does on every other stacked window."""
-    first = limit_rows_content(_with_cursor(), DASHBOARD_RIGHT)[0].plain
-    gauge_column = _GAUGE_RUN.search(first).start()
-    bar, figures = _cursor_lines(DASHBOARD_RIGHT)
-    assert bar[gauge_column:] == "█████░░░│██░░░░░░ ↻ 4d", bar
-    assert figures == " " * gauge_column + "Cursor 62% · other 18%", figures
+def test_every_stacked_gauge_starts_in_one_column_beside_a_cursor_row() -> None:
+    """The label column widens to `Cursor` for every row, so the bars still line up."""
+    lines = [content.plain for content in limit_rows_content(_with_cursor(), DASHBOARD_RIGHT)]
+    starts = {_GAUGE_RUN.search(line).start() for line in lines if _GAUGE_RUN.search(line)}
+    assert len(starts) == 1, "\n".join(lines)
+
+
+def test_the_label_column_keeps_its_width_on_a_pane_with_no_pools() -> None:
+    lines = [content.plain for content in limit_rows_content(_paced_rows(), DASHBOARD_RIGHT)]
+    assert lines[0].startswith("claude  5h █"), lines[0]
 
 
 @pytest.mark.parametrize("width", [SMALLEST, NARROW, DASHBOARD_RIGHT, 60, CONSOLE])
 def test_a_cursor_row_never_cuts_a_gauge_or_leaves_padding_behind(width: int) -> None:
-    for line in _cursor_lines(width):
+    for line in _cursor_lines(_with_cursor(), width):
         assert line == line.rstrip(), repr(line)
         for run in _GAUGE_RUN.finditer(line):
-            assert len(run.group()) == GAUGE_CELLS, line
+            # Eight cells, or sixteen for the week column on a pane wide enough (DEC-106).
+            assert len(run.group()) in (GAUGE_CELLS, 2 * GAUGE_CELLS), line
 
 
 @pytest.mark.parametrize("width", [NARROW, DASHBOARD_RIGHT, 60, CONSOLE])
-def test_a_long_cursor_name_costs_no_other_row_its_pace_line(width: int) -> None:
-    """The profile column is the widest name, so one long name indents every row.
+def test_a_pane_with_a_cursor_row_fits_its_width(width: int) -> None:
+    """The profile column is the widest name, and the label column is now six cells wide.
 
-    Until this row existed the longest name on the owner's host was `claude`. `cursor-agent`
-    doubled the column, and the cap only reserved room for a window line, so a pace line ran six
-    cells past the dashboard's right region and lost its `under`.
+    Not at `SMALLEST`: a paced week's pace line has never fit 28 cells, Cursor or not.
     """
     for content in limit_rows_content(_with_cursor(), width):
         assert cell_len(content.plain) <= width, f"at {width}: {content.plain!r}"
 
 
-def test_a_cursor_row_without_a_reset_keeps_its_bar_line_bare() -> None:
+def test_a_cursor_row_without_a_reset_ends_each_line_at_its_figure() -> None:
     rows = (*_paced_rows(), _cursor_row(resets_in=None))
-    bar, figures = [content.plain for content in limit_rows_content(rows, NARROW)][6:]
-    assert bar.endswith("█████░░░│██░░░░░░"), bar
-    assert figures.strip() == "Cursor 62% · other 18%", figures
+    first, second = _cursor_lines(rows, NARROW)
+    assert first.endswith("62%") and second.endswith("18%"), (first, second)
 
 
 def test_a_switched_off_cursor_row_stacks_like_any_absence() -> None:
@@ -538,14 +537,19 @@ def test_a_switched_off_cursor_row_stacks_like_any_absence() -> None:
         assert cell_len(line) <= DASHBOARD_RIGHT, line
 
 
-def _quiet_with_cursor(resets_in: str = "31d") -> tuple[LimitRow, ...]:
+def _quiet_with_cursor() -> tuple[LimitRow, ...]:
     """Cursor the only row with a reading: no pace line is there to narrow the name column."""
-    parts = (LimitPart("cursor", 100), LimitPart("other", 100))
     return (
         LimitRow("claude", (), None, None, absence="no reading yet"),
         LimitRow("codex", (), None, None, absence="unreadable"),
         LimitRow(
-            "cursor-agent", (LimitWindow("month", 100, resets_in, parts=parts),), "Cursor API", None
+            "cursor-agent",
+            (
+                LimitWindow("5h", 100, "31d", name="Cursor"),
+                LimitWindow("week", 100, "31d", name="other"),
+            ),
+            "Cursor API",
+            None,
         ),
     )
 
@@ -555,24 +559,10 @@ def _quiet_with_cursor(resets_in: str = "31d") -> tuple[LimitRow, ...]:
 def test_a_cursor_row_fits_the_pane_when_no_row_beside_it_has_pace(
     rows: tuple[LimitRow, ...], width: int
 ) -> None:
-    """Found at the Stage 2 gate: the name column kept room for a pace line and not for this row.
-
-    With Claude and Codex unread the name column stayed twelve cells, and the bar's reset and
-    the second figure ran past a 38-cell pane. The widest figures and a two-digit day count,
-    because those are the longest lines the row has.
-    """
+    """The widest figures and a two-digit day count, because those are the longest lines."""
     lines = [content.plain for content in limit_rows_content(rows, width)]
-    cursor = lines[next(i for i, line in enumerate(lines) if line.startswith("cu")) :]
-    assert "Cursor 100%" in " ".join(cursor) and "other 100%" in " ".join(cursor), cursor
-    assert "↻ 31d" in " ".join(cursor), cursor
+    cursor = " ".join(_cursor_lines(rows, width))
+    assert cursor.count("100%") == 2 and cursor.count("↻ 31d") == 2, cursor
     for line in lines:
         assert cell_len(line) <= width, f"at {width}: {line!r}"
         assert line == line.rstrip(), repr(line)
-    for line in cursor:
-        for run in _GAUGE_RUN.finditer(line):
-            assert len(run.group()) == GAUGE_CELLS, line
-
-
-def test_a_cursor_row_in_the_smallest_pane_gives_each_figure_a_line() -> None:
-    cursor = [content.plain for content in limit_rows_content(_quiet_with_cursor()[2:], SMALLEST)]
-    assert [line.strip() for line in cursor[1:]] == ["Cursor 100%", "other 100%", "↻ 31d"], cursor
