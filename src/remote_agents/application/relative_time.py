@@ -47,6 +47,11 @@ def age_short(created_at: datetime) -> str:
     return _span(elapsed)
 
 
+def span(seconds: int) -> str:
+    """A duration in this module's one unit, clamped at zero -- for a span that is not an age."""
+    return _span(max(0, seconds))
+
+
 def _span(seconds: int) -> str:
     """One unit, never two -- see the module docstring for why `5h 12m` is refused."""
     if seconds < _HOUR:

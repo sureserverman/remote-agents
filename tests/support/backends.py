@@ -75,6 +75,7 @@ def backend_for(
     cursor_limits_source: object | None = _UNSET,
     state_events: object | None = _UNSET,
     close_usage_readers: Callable[[], Awaitable[None]] | None = _UNSET,  # type: ignore[assignment]
+    schedules: object | None = _UNSET,
     max_label_length: int = _UNSET,  # type: ignore[assignment]
 ) -> Backend:
     """A `Backend` carrying what the caller stated and `Backend`'s own defaults for the rest.
@@ -111,6 +112,7 @@ def backend_for(
         "state_events": state_events,
         "limits": limits,
         "close_usage_readers": close_usage_readers,
+        "schedules": schedules,
         "max_label_length": max_label_length,
     }
     return Backend(**{name: value for name, value in stated.items() if value is not _UNSET})

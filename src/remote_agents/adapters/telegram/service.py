@@ -56,6 +56,7 @@ from remote_agents.adapters.telegram.presenters import (
     render_message,
     uniform_keyboard,
 )
+from remote_agents.adapters.telegram.schedule_notifications import ScheduleNotifier
 from remote_agents.adapters.telegram.stops import CONFIRMED_FORCE, StopController
 from remote_agents.adapters.telegram.trust_notifications import (
     TrustNotifier,
@@ -143,6 +144,7 @@ from remote_agents.application.session_views import (
     limit_rows,
     listed_sessions,
     only_listed,
+    project_name,
     selectable_area,
     session_identity,
     session_lines,
@@ -720,6 +722,12 @@ class PrivateBotBoundary:
     separately and each kept going regardless.
     """
     notifier: ActivityNotifier = field(init=False)
+    schedule_notifier: ScheduleNotifier | None = None
+    """Says what each scheduled fire came to, or None where nothing manages schedules.
+
+    Bot-only, like the limit-reset notice: a missed or skipped fire is about no live session, and
+    the local feed is session-shaped (DEC-031 as amended for scheduled sessions).
+    """
     limit_reset_notifier: LimitResetNotifier | None = None
     """The pass that notices a provider wiping its meters early, or None where nothing can.
 
@@ -4196,6 +4204,10 @@ class PrivateBotBoundary:
             if str(record.session_id) in wanted and not notifiable(record.state)
         )
 
+    def _project_name(self, project_id: str) -> str:
+        """The catalogue's name for a project, for a message about no session record."""
+        return project_name(project_id, self.catalogue)
+
     async def _display_for(self, session_value: str) -> str | None:
         """Name a session for a message the owner did not ask for, or decline to.
 
@@ -4643,6 +4655,17 @@ def build_private_bot(
                 flood=bot.flood,
             ),
         )
+    if bot.backend.schedules is not None:
+        object.__setattr__(
+            bot,
+            "schedule_notifier",
+            ScheduleNotifier(
+                view=bot.view,
+                # The catalogue's own name for the project, the one every screen shows.
+                project_name=bot._project_name,  # noqa: SLF001 -- the cycle this factory pays
+                flood=bot.flood,
+            ),
+        )
     if trust_store is not None:
         object.__setattr__(
             bot,
@@ -4714,6 +4737,9 @@ async def run_private_bot(
     # update either, and a boundary whose providers publish no limits has none.
     if boundary.limit_reset_notifier is not None:
         boundary.limit_reset_notifier.attach(application.bot)
+    # And to the schedule notices, which answer no update either.
+    if boundary.schedule_notifier is not None:
+        boundary.schedule_notifier.attach(application.bot)
     try:
         await _sync_owner_metadata(
             application.bot, secrets.owner_chat_id, owner_commands(boundary.backend)

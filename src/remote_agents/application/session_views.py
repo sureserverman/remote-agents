@@ -281,6 +281,14 @@ def with_project_names(
     )
 
 
+def project_name(project_id: str, catalogue: Iterable[CatalogProject]) -> str:
+    """One project's catalogue name, for a line about a project rather than a session record --
+    its opaque id where the catalogue no longer names it, as `with_project_names` declines."""
+    return next(
+        (project.name for project in catalogue if project.opaque_id == project_id), project_id
+    )
+
+
 #: How long a surface waits before re-reading the catalogue again after a read that still did
 #: not name every project on screen.
 #:

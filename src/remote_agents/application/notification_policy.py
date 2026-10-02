@@ -32,6 +32,7 @@ from collections.abc import Iterable, MutableMapping, MutableSequence
 from dataclasses import dataclass
 from datetime import datetime
 
+from remote_agents.application.schedules import FireOutcome
 from remote_agents.ports.agent_activity import ActivityKind, AgentActivity
 
 
@@ -433,3 +434,16 @@ def _evict_loudest(pending: MutableSequence[AgentActivity]) -> tuple[str, int]:
             del pending[index]
             break
     return loudest, counts[loudest]
+
+
+def schedule_told(outcome: FireOutcome) -> bool:
+    """Whether a schedule's fire is worth a message: every fire is, but one a restart found
+    already launched (DEC-031 as amended for scheduled sessions).
+
+    A scheduled fire is about no live session when it is missed or skipped, which is DEC-031's
+    session clause; it is admitted, as DEC-097's kind was, on the clause that stays: a run that
+    did not happen, or happened without its prompt, changes what the owner does next. One
+    message per fire. A duplicate is the same fire seen again after a restart, so telling it
+    would be a second message about one run.
+    """
+    return outcome is not FireOutcome.DUPLICATE
