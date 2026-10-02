@@ -139,9 +139,7 @@ def test_the_surface_tables_are_gone_from_the_watched_store(
     try:
         present = {
             name
-            for (name,) in connection.execute(
-                "SELECT name FROM sqlite_master WHERE type = 'table'"
-            )
+            for (name,) in connection.execute("SELECT name FROM sqlite_master WHERE type = 'table'")
         }
     finally:
         connection.close()
@@ -276,7 +274,6 @@ def test_no_domain_open_bypasses_the_split() -> None:
     )
 
 
-
 def test_the_chokepoint_carries_the_rows_out_before_the_drop(tmp_path: Path) -> None:
     """The behaviour every entry point inherits by going through one function.
 
@@ -350,3 +347,35 @@ def test_a_failing_ui_open_does_not_leak_the_domain_connection(
     for connection in opened:
         with pytest.raises(sqlite3.ProgrammingError):
             connection.execute("SELECT 1")
+
+
+async def test_the_composed_backend_lists_schedules_from_the_migrated_store(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The Backend both surfaces hold manages schedules over the domain connection (DEC-090)."""
+    from datetime import UTC, datetime, time
+
+    from remote_agents.domain.models import ProfileId, ProjectId
+    from remote_agents.ports.schedules import Repeat, Schedule
+
+    composition, paths, connection, ui = _composition(tmp_path, monkeypatch)
+    try:
+        book = composition.boundary.backend.schedules
+        assert book is not None
+        assert await book.list() == ()
+        connection.execute(
+            "INSERT INTO schedules(schedule_id, project_id, profile_id, prompt, repeat_days,"
+            " repeat_time, next_fire_at, created_at) VALUES ('a1', 'p1', 'claude', 'hi',"
+            " '0,1,2,3,4', '09:00', '2026-10-05T07:00:00.000000+00:00',"
+            " '2026-10-02T07:00:00.000000+00:00')"
+        )
+        connection.commit()
+        (listed,) = await book.list()
+        assert isinstance(listed, Schedule)
+        assert listed.when == Repeat.weekdays(time(9, 0))
+        assert listed.project_id == ProjectId("p1") and listed.profile_id == ProfileId("claude")
+        assert listed.next_fire_at == datetime(2026, 10, 5, 7, 0, tzinfo=UTC)
+        assert _main_file(book._store._connection).resolve() == paths.database_path.resolve()  # noqa: SLF001
+    finally:
+        connection.close()
+        ui.close()

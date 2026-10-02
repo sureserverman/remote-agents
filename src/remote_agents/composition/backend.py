@@ -24,6 +24,7 @@ from remote_agents.adapters.projects.registry import load_registry
 from remote_agents.adapters.projects.registry_writer import RegistryProjectRecorder
 from remote_agents.adapters.projects.workspace import FilesystemProjectWorkspace
 from remote_agents.adapters.sqlite.database import watched_paths
+from remote_agents.adapters.sqlite.schedule_store import SQLiteScheduleStore
 from remote_agents.adapters.sqlite.session_store import SQLiteSessionStore
 from remote_agents.application.backend import Backend
 from remote_agents.application.conversations import ConversationService
@@ -32,6 +33,8 @@ from remote_agents.application.profiles import ProfileAvailability
 from remote_agents.application.project_admin import ProjectCreationService
 from remote_agents.application.project_catalog import CatalogProject, build_catalogue
 from remote_agents.application.reconcile import SessionLocks
+from remote_agents.application.schedule_book import ScheduleBook
+from remote_agents.application.schedule_times import host_zone
 from remote_agents.application.services import SessionService
 from remote_agents.application.store_watch import StoreWatch
 from remote_agents.composition.limits_source import (
@@ -362,6 +365,18 @@ def compose_backend(
         usage=_usage_reader(backend_store, projects.paths, provider_usage),
         limits=_limits_reader(provider_usage),
         close_usage_readers=provider_usage.aclose,
+        # Over the same connection as the session store: schedules are domain rows, so a change
+        # wakes the store watcher on both surfaces (DEC-090). Which profiles exist, and whether
+        # each can take a `/` command, is read from the descriptors (DEC-070); which projects
+        # exist, from the live catalogue, so a project added since start can be scheduled.
+        schedules=ScheduleBook(
+            SQLiteScheduleStore(connection),
+            composers={str(d.profile_id): d.composer for d in descriptors},
+            projects=lambda: tuple(
+                ProjectId(project.opaque_id) for project in projects.snapshot().catalogue
+            ),
+            zone=host_zone(),
+        ),
         max_label_length=config.max_label_length,
     )
 

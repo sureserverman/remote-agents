@@ -18,11 +18,18 @@ from __future__ import annotations
 
 import ast
 from dataclasses import FrozenInstanceError
+from datetime import UTC, datetime, time
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 import pytest
+from schedule_fakes import MemoryScheduleStore
 
 from remote_agents.application.backend import Backend
+from remote_agents.application.schedule_book import ScheduleBook, ScheduleRefusal, ScheduleRefused
+from remote_agents.domain.models import ProfileId, ProjectId
+from remote_agents.ports.provider_descriptor import ComposerScreen
+from remote_agents.ports.schedules import Once, Repeat, Schedule
 
 _SOURCE = Path(__file__).resolve().parents[3] / "src" / "remote_agents" / "application"
 
@@ -100,3 +107,133 @@ def test_a_host_that_wires_no_limits_reader_renders_no_limits() -> None:
 @pytest.fixture
 def backend() -> Backend:
     return Backend(sessions=object(), projects=object(), max_label_length=40)
+
+
+# --- schedules (Task 1.5) ---------------------------------------------------------------------
+
+_BERLIN = ZoneInfo("Europe/Berlin")
+_NOW = datetime(2026, 10, 2, 10, 0, tzinfo=UTC)  # Friday, 12:00 in Berlin
+_WITH_MENU = ComposerScreen(composer=r"(?P<draft>.*)\Z", command_menu=r"(?P<first>\S+)")
+_NO_MENU = ComposerScreen(composer=r"(?P<draft>.*)\Z")
+
+
+def _book(store: MemoryScheduleStore | None = None, *, now: datetime = _NOW) -> ScheduleBook:
+    return ScheduleBook(
+        store if store is not None else MemoryScheduleStore(),
+        composers={"claude": _WITH_MENU, "opencode": _NO_MENU, "silent": None},
+        projects=lambda: (ProjectId("remote-agents"),),
+        zone=_BERLIN,
+        now=lambda: now,
+    )
+
+
+async def _add(book: ScheduleBook, prompt: str, *, profile: str = "claude", when=None):
+    return await book.add(
+        ProjectId("remote-agents"),
+        ProfileId(profile),
+        prompt,
+        when if when is not None else Repeat.weekdays(time(9, 0)),
+    )
+
+
+async def test_a_schedule_is_added_with_its_next_local_fire_time() -> None:
+    book = _book()
+    added = await _add(book, "summarise the open PRs")
+
+    assert isinstance(added, Schedule)
+    # Friday noon in Berlin: the next weekday 09:00 is Monday.
+    assert added.next_fire_at == datetime(2026, 10, 5, 7, 0, tzinfo=UTC)
+    assert not added.paused
+    assert added.created_at == _NOW
+    assert await book.list() == (added,)
+
+
+async def test_a_schedule_whose_prompt_would_run_a_shell_command_is_refused() -> None:
+    book = _book()
+    refused = await _add(book, "!rm -rf build")
+
+    assert refused == ScheduleRefused(ScheduleRefusal.SHELL)
+    assert await book.list() == ()
+
+
+async def test_a_schedule_slash_command_is_refused_without_a_menu_and_kept_with_one() -> None:
+    book = _book()
+
+    assert await _add(book, "/review", profile="opencode") == ScheduleRefused(ScheduleRefusal.MENU)
+    assert isinstance(await _add(book, "/review", profile="claude"), Schedule)
+
+
+async def test_a_schedule_for_an_agent_with_no_composer_is_refused() -> None:
+    assert await _add(_book(), "hello", profile="silent") == ScheduleRefused(
+        ScheduleRefusal.NO_COMPOSER
+    )
+
+
+async def test_a_schedule_for_an_unknown_project_or_profile_is_refused() -> None:
+    book = _book()
+    assert await book.add(
+        ProjectId("elsewhere"), ProfileId("claude"), "hi", Repeat.daily(time(9, 0))
+    ) == ScheduleRefused(ScheduleRefusal.UNKNOWN_PROJECT)
+    assert await _add(book, "hi", profile="codex") == ScheduleRefused(
+        ScheduleRefusal.UNKNOWN_PROFILE
+    )
+
+
+async def test_a_schedule_one_shot_in_the_past_is_refused() -> None:
+    past = Once(datetime(2026, 10, 2, 11, 59))  # a minute before noon, Berlin
+    assert await _add(_book(), "hi", when=past) == ScheduleRefused(ScheduleRefusal.PAST)
+
+
+async def test_schedules_are_listed_soonest_first() -> None:
+    book = _book()
+    later = await _add(book, "later", when=Repeat.daily(time(18, 0)))
+    sooner = await _add(book, "sooner", when=Repeat.daily(time(13, 0)))
+
+    assert [schedule.id for schedule in await book.list()] == [sooner.id, later.id]
+
+
+async def test_a_resumed_schedule_after_a_missed_time_sets_the_next_future_time() -> None:
+    store = MemoryScheduleStore()
+    added = await _add(_book(store), "hi", when=Repeat.daily(time(13, 0)))
+    assert added.next_fire_at == datetime(2026, 10, 2, 11, 0, tzinfo=UTC)
+    paused = await _book(store).pause(added.id)
+    assert paused is not None and paused.paused
+
+    # Resumed a day and a half later: today's and yesterday's 13:00 have both passed, and
+    # neither is fired as a backlog.
+    later = datetime(2026, 10, 3, 22, 0, tzinfo=UTC)
+    resumed = await _book(store, now=later).resume(added.id)
+
+    assert resumed is not None and not resumed.paused
+    assert resumed.next_fire_at == datetime(2026, 10, 4, 11, 0, tzinfo=UTC)
+
+
+async def test_a_resumed_one_shot_schedule_whose_time_passed_is_deleted() -> None:
+    store = MemoryScheduleStore()
+    added = await _add(_book(store), "hi", when=Once(datetime(2026, 10, 2, 13, 0)))
+    await _book(store).pause(added.id)
+
+    later = datetime(2026, 10, 3, 22, 0, tzinfo=UTC)
+    assert await _book(store, now=later).resume(added.id) is None
+    assert await store.get(added.id) is None
+
+
+async def test_a_schedule_is_deleted() -> None:
+    book = _book()
+    added = await _add(book, "hi")
+
+    assert await book.delete(added.id) is True
+    assert await book.list() == ()
+    assert await book.delete(added.id) is False
+
+
+async def test_pausing_or_resuming_an_unknown_schedule_answers_none() -> None:
+    book = _book()
+    assert await book.pause("missing") is None
+    assert await book.resume("missing") is None
+
+
+def test_a_backend_carries_its_schedule_book() -> None:
+    book = _book()
+    assert Backend(sessions=object(), projects=object(), schedules=book).schedules is book
+    assert Backend(sessions=object(), projects=object()).schedules is None
