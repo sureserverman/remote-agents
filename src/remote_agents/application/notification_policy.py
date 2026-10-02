@@ -437,13 +437,17 @@ def _evict_loudest(pending: MutableSequence[AgentActivity]) -> tuple[str, int]:
 
 
 def schedule_told(outcome: FireOutcome) -> bool:
-    """Whether a schedule's fire is worth a message: every fire is, but one a restart found
-    already launched (DEC-031 as amended for scheduled sessions).
+    """Whether a schedule's fire is worth a message: every one is (DEC-031 as amended for
+    scheduled sessions, DEC-114).
 
     A scheduled fire is about no live session when it is missed or skipped, which is DEC-031's
     session clause; it is admitted, as DEC-097's kind was, on the clause that stays: a run that
-    did not happen, or happened without its prompt, changes what the owner does next. One
-    message per fire. A duplicate is the same fire seen again after a restart, so telling it
-    would be a second message about one run.
+    did not happen, or happened without its prompt, changes what the owner does next.
+
+    **A duplicate is told too**, and it is not a second message about one run. A fire is told
+    only after it is recorded, and a recorded fire is never due again -- so a pass that finds a
+    fire's key already claimed is one whose first attempt launched and then stopped before it
+    recorded, typed or told anything. Silence there would leave a session with no prompt and
+    nobody told.
     """
-    return outcome is not FireOutcome.DUPLICATE
+    return outcome in FireOutcome

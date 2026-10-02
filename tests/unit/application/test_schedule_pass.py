@@ -207,6 +207,65 @@ async def test_a_launch_that_raises_is_reported_with_its_error() -> None:
     assert rig.sends == []
 
 
+async def test_a_launch_error_is_carried_to_the_report() -> None:
+    store = MemoryScheduleStore(_schedule())
+    rig = Rig(launch_error=RuntimeError("tmux:\n  server   gone"))
+
+    (report,) = await _run(store, rig, FIRE)
+
+    assert report.detail == "RuntimeError: tmux: server gone"
+
+
+async def test_a_launch_that_answers_no_record_is_a_failed_launch() -> None:
+    store, rig = MemoryScheduleStore(_schedule()), Rig()
+
+    async def nothing(command):
+        rig.launches.append(command)
+        return None
+
+    rig.launch = nothing  # type: ignore[method-assign]
+    (report,) = await _run(store, rig, FIRE)
+
+    assert report.outcome is FireOutcome.LAUNCH_FAILED
+    assert rig.sends == []
+
+
+async def test_a_schedule_paused_or_deleted_during_the_pass_is_not_fired() -> None:
+    """The other process may pause or delete one while an earlier one is launching."""
+    store = MemoryScheduleStore(_schedule("a"), _schedule("b"), _schedule("c"))
+    rig = Rig()
+    asked: list[str] = []
+
+    async def stopped(profile_id):
+        asked.append(str(profile_id))
+        if len(asked) == 1:
+            await store.set_paused("b", True, next_fire_at=None)
+            await store.delete("c")
+        return False
+
+    rig.limit_stopped = stopped  # type: ignore[method-assign]
+    reports = await _run(store, rig, FIRE)
+
+    assert [report.schedule.id for report in reports] == ["a"]
+    assert len(rig.launches) == 1
+    paused = await store.get("b")
+    assert paused is not None and paused.paused and paused.next_fire_at is None
+
+
+async def test_a_one_shot_is_done_after_its_fire_whatever_the_zone_says_now() -> None:
+    """A host zone moved west would put the one-shot's instant ahead again."""
+    from zoneinfo import ZoneInfo
+
+    store = MemoryScheduleStore(_schedule(when=Once(datetime(2026, 10, 2, 9, 0))))
+    rig = Rig()
+    schedule_pass = rig.pass_for(store, FIRE)
+    schedule_pass._zone = lambda: ZoneInfo("America/Los_Angeles")  # noqa: SLF001
+
+    await schedule_pass.run()
+
+    assert await store.get("s1") is None
+
+
 async def test_a_launch_recorded_failed_is_reported_and_types_nothing() -> None:
     store, rig = MemoryScheduleStore(_schedule()), Rig(launched_state=SessionState.FAILED)
 
@@ -444,7 +503,8 @@ async def test_deliver_a_fire_that_typed_nothing_is_told_before_any_typing_ends(
     rig.notify = recording  # type: ignore[method-assign]
     await _run(store, rig, FIRE)
 
-    assert told_before_typed[0] == ("held", 0)
+    # Told while the slow one is still trying (it lands on its third send).
+    assert told_before_typed[0][0] == "held" and told_before_typed[0][1] < 3
     assert [schedule_id for schedule_id, _ in told_before_typed] == ["held", "slow"]
 
 

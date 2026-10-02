@@ -73,11 +73,12 @@ def test_started_reads_as_the_owner_asked() -> None:
         ("shell", "shell command"),
         ("no_composer", "cannot be read"),
         ("empty", "empty"),
+        ("unrecognised", "not recognised"),
     ],
 )
 def test_a_prompt_not_typed_says_why_and_that_the_session_is_open(reason, words) -> None:
     text = _message(_report(FireOutcome.NOT_TYPED, session_id="x", reason=reason))
-    assert text.startswith("Scheduled: claude in remote-agents started, but its prompt was not")
+    assert text.startswith("Scheduled: claude in remote-agents started, but its message was not")
     assert words in text
     assert "the session is open" in text
 
@@ -146,10 +147,36 @@ async def test_each_fire_is_one_message() -> None:
     assert all(sent["parse_mode"] == "HTML" for sent in view.sent)
 
 
-async def test_an_untold_outcome_sends_nothing() -> None:
-    view = _View()
-    await _notifier(view).notify(_report(FireOutcome.DUPLICATE))
-    assert view.sent == []
+def test_a_session_that_ended_before_its_message_is_not_called_open() -> None:
+    text = _message(_report(FireOutcome.NOT_TYPED, session_id="x", reason="not_running"))
+    assert text == (
+        "Scheduled: claude in remote-agents started, but its session ended before its message "
+        "could be typed"
+    )
+
+
+def test_a_launch_error_is_named_and_escaped() -> None:
+    text = _message(
+        _report(FireOutcome.LAUNCH_FAILED, reason="launch_error", detail="RuntimeError: <tmux>")
+    )
+    assert text == (
+        "Scheduled: claude in remote-agents did not start — the launch failed: "
+        "RuntimeError: &lt;tmux&gt;"
+    )
+
+
+def test_a_fire_a_restart_found_already_launched_is_told() -> None:
+    text = _message(_report(FireOutcome.DUPLICATE))
+    assert "may have started before a restart" in text
+    assert "check its sessions" in text
+
+
+def test_the_package_word_for_what_is_typed_is_message() -> None:
+    """DEC-075: `check_telegram_actions` forbids the other word in this package."""
+    for outcome, fields in _SAMPLE.items():
+        for reason in ("dialog", "not_running", "shell", None):
+            text = _message(_report(outcome, **{**fields, "reason": reason}))
+            assert "prompt" not in text.casefold()
 
 
 async def test_a_refused_message_is_sent_on_the_next_pass_and_not_twice() -> None:
@@ -164,14 +191,46 @@ async def test_a_refused_message_is_sent_on_the_next_pass_and_not_twice() -> Non
     assert [sent["text"] for sent in view.sent] == ["Scheduled: claude in remote-agents started"]
 
 
-async def test_a_message_refused_three_times_is_given_up() -> None:
-    view = _View(refuse=10)
-    notifier = _notifier(view)
+async def test_a_refused_message_is_held_for_ten_minutes_then_given_up() -> None:
+    view = _View(refuse=1000)
+    clock = [FIRE]
+    notifier = ScheduleNotifier(
+        view=view, project_name=lambda _: "remote-agents", flood=FloodGate(), now=lambda: clock[0]
+    )
+    notifier.attach(object())
 
     await notifier.notify(_report(FireOutcome.STARTED, session_id="x"))
-    for _ in range(5):
+    for minutes in range(1, 10):
+        clock[0] = FIRE + timedelta(minutes=minutes)
         await notifier.pass_once()
+    assert notifier.pending == ("Scheduled: claude in remote-agents started",)
+    clock[0] = FIRE + timedelta(minutes=10)
+    await notifier.pass_once()
+    assert notifier.pending == ()
 
+
+async def test_fires_told_together_are_each_sent_exactly_once() -> None:
+    """Typed side by side, fires finish together; two drains must not share one head."""
+    import asyncio
+
+    class _Slow(_View):
+        async def send_apart(self, bot, arguments) -> int:
+            await asyncio.sleep(0)
+            await asyncio.sleep(0)
+            return await super().send_apart(bot, arguments)
+
+    view = _Slow()
+    notifier = _notifier(view)
+    reports = [
+        _report(FireOutcome.STARTED, session_id="x"),
+        _report(FireOutcome.SKIPPED_LIMIT),
+        _report(FireOutcome.MISSED, late_by=timedelta(minutes=20)),
+    ]
+
+    await asyncio.gather(*(notifier.notify(report) for report in reports))
+
+    texts = [sent["text"] for sent in view.sent]
+    assert len(texts) == 3 and len(set(texts)) == 3
     assert notifier.pending == ()
 
 
@@ -193,8 +252,11 @@ def test_the_bot_names_the_project_from_its_catalogue_and_wires_the_notifier() -
 
     assert with_book.schedule_notifier is not None
     assert without.schedule_notifier is None
-    assert schedule_message(
-        _report(FireOutcome.STARTED),
-        project_name=with_book._project_name("p-opaque"),  # noqa: SLF001
-    ) == "Scheduled: claude in remote-agents started"
+    assert (
+        schedule_message(
+            _report(FireOutcome.STARTED),
+            project_name=with_book._project_name("p-opaque"),  # noqa: SLF001
+        )
+        == "Scheduled: claude in remote-agents started"
+    )
     assert with_book._project_name("gone") == "gone"  # noqa: SLF001

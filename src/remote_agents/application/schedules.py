@@ -37,7 +37,7 @@ from remote_agents.application.errors import DuplicateCommandError
 from remote_agents.application.prompt_delivery import DeliveryVerdict, delivery_verdict
 from remote_agents.application.schedule_times import next_fire
 from remote_agents.domain.models import ProfileId, SessionId, SessionState
-from remote_agents.ports.schedules import Schedule, ScheduleStore
+from remote_agents.ports.schedules import Once, Schedule, ScheduleStore
 from remote_agents.ports.terminal import PromptDelivery
 
 _LOG = logging.getLogger(__name__)
@@ -88,6 +88,18 @@ class FireReport:
     """Set on a missed fire: how far past its time the service came back."""
     reason: str | None = None
     """Why a prompt was not typed (a `PromptReason` key, or `dialog`), or a launch failed."""
+    detail: str | None = None
+    """A failed launch's error, bounded, for the owner to read; never agent text."""
+
+
+_DETAIL_LIMIT = 160
+
+
+def _error_detail(error: Exception) -> str:
+    """The launch error as one bounded line: its type, and its message where it has one."""
+    text = " ".join(str(error).split())
+    detail = f"{type(error).__name__}: {text}" if text else type(error).__name__
+    return detail if len(detail) <= _DETAIL_LIMIT else detail[: _DETAIL_LIMIT - 1] + "…"
 
 
 def _to_type(report: FireReport) -> bool:
@@ -133,28 +145,34 @@ class SchedulePass:
         fired: list[FireReport] = []
         for schedule in await self._store.due(now):
             try:
-                fired.append(await self._fire(schedule, now))
+                report = await self._fire(schedule, now)
             except Exception:
                 _LOG.exception("schedule %s could not be fired; it stays due", schedule.id)
-        for report in fired:
-            if not _to_type(report):
-                await self._told(report)
-        typed = await asyncio.gather(
-            *(self._delivered_and_told(report) for report in fired if _to_type(report))
+                continue
+            if report is not None:
+                fired.append(report)
+        # Side by side: a fire that typed nothing is told at once, and each typed one as its
+        # message lands, so no notice waits on another schedule's slow agent.
+        return tuple(
+            await asyncio.gather(
+                *(
+                    self._delivered_and_told(report) if _to_type(report) else self._told(report)
+                    for report in fired
+                )
+            )
         )
-        typing = iter(typed)
-        return tuple(next(typing) if _to_type(report) else report for report in fired)
 
     async def _delivered_and_told(self, report: FireReport) -> FireReport:
         delivered = await self._delivered(report)
         await self._told(delivered)
         return delivered
 
-    async def _told(self, report: FireReport) -> None:
+    async def _told(self, report: FireReport) -> FireReport:
         try:
             await self._notify(report)
         except Exception:
             _LOG.exception("the notice for schedule %s could not be handed on", report.schedule.id)
+        return report
 
     async def _delivered(self, report: FireReport) -> FireReport:
         """Type a started session's prompt, and say what that came to. Never raises: a fault
@@ -192,9 +210,15 @@ class SchedulePass:
                 return "not_ready"
             await self._sleep(RETRY_SECONDS)
 
-    async def _fire(self, schedule: Schedule, now: datetime) -> FireReport:
+    async def _fire(self, schedule: Schedule, now: datetime) -> FireReport | None:
         assert schedule.next_fire_at is not None  # `due` returns only rows with a time
         due_at = schedule.next_fire_at
+        # Read again: the owner may have paused or deleted it from the other process while an
+        # earlier schedule in this pass was launching. A schedule no longer due is left alone.
+        current = await self._store.get(schedule.id)
+        if current is None or current.paused or current.next_fire_at != due_at:
+            return None
+        schedule = current
         late = now - due_at
         if late > MISSED_GRACE:
             return await self._record(
@@ -224,16 +248,28 @@ class SchedulePass:
             return await self._record(
                 schedule, now, FireReport(schedule, FireOutcome.DUPLICATE, due_at)
             )
-        except Exception:
+        except Exception as error:
             # The launch may have got part-way, so this fire is over either way: recorded and
             # reported, never retried (its key is claimed already).
             _LOG.exception("launching schedule %s failed", schedule.id)
             return await self._record(
                 schedule,
                 now,
+                FireReport(
+                    schedule,
+                    FireOutcome.LAUNCH_FAILED,
+                    due_at,
+                    reason="launch_error",
+                    detail=_error_detail(error),
+                ),
+            )
+        record = getattr(outcome, "record", None)
+        if record is None:
+            return await self._record(
+                schedule,
+                now,
                 FireReport(schedule, FireOutcome.LAUNCH_FAILED, due_at, reason="launch_error"),
             )
-        record = outcome.record  # type: ignore[attr-defined]
         session_id = str(record.session_id)
         if record.state is SessionState.FAILED:
             return await self._record(
@@ -256,8 +292,12 @@ class SchedulePass:
 
     async def _record(self, schedule: Schedule, now: datetime, report: FireReport) -> FireReport:
         """Advance the schedule past this fire, from now: a missed or skipped run is not owed."""
-        after = max(now, report.fired_at)
-        following = next_fire(schedule.when, after, self._zone())
+        if isinstance(schedule.when, Once):
+            # Fired, or passed over: done either way. Never recomputed -- a host zone that moved
+            # west since it was set would put its instant ahead again and fire it twice.
+            following = None
+        else:
+            following = next_fire(schedule.when, max(now, report.fired_at), self._zone())
         await self._store.record_fire(schedule.id, now, report.session_id, following)
         return report
 
@@ -275,7 +315,15 @@ def limit_stopped_in(sessions: object, stops: object) -> Callable[[ProfileId], A
     return stopped
 
 
-def still_working_in(sessions: object, markers: object) -> Callable[[str], Awaitable[bool]]:
+STALE_TURN = timedelta(hours=6)
+"""How old a turn marker may be and still hold a schedule's next run back (rule 6)."""
+
+
+def still_working_in(
+    sessions: object,
+    markers: object,
+    now: Callable[[], datetime] = lambda: datetime.now(UTC),
+) -> Callable[[str], Awaitable[bool]]:
     """Rule 6's question: is the previous run's session still live, with a turn its agent's
     hooks say is running (DEC-104)? An agent without hooks never holds the next run back."""
 
@@ -286,6 +334,10 @@ def still_working_in(sessions: object, markers: object) -> Callable[[str], Await
             return False
         if record is None or record.state not in (SessionState.STARTING, SessionState.RUNNING):
             return False
-        return markers.started_at(session_id) is not None  # type: ignore[attr-defined]
+        started = markers.started_at(session_id)  # type: ignore[attr-defined]
+        # A turn ended by an Esc, or killed by a limit, fires no hook, so its marker stays until
+        # something reads the screen. Past `STALE_TURN` it is not believed: a forgotten marker
+        # must not hold every later run back.
+        return started is not None and now() - started < STALE_TURN
 
     return working

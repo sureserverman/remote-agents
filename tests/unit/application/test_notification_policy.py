@@ -472,9 +472,9 @@ def test_obsolete_rule_leaves_the_other_kinds_alone() -> None:
 # --- schedule notices (DEC-031 as amended for scheduled sessions) -------------------------------
 
 
-def test_a_schedule_fire_is_told_unless_a_restart_found_it_already_launched() -> None:
+def test_every_schedule_fire_is_told_even_one_a_restart_found_launched() -> None:
+    """A duplicate is a fire whose first attempt never got as far as telling anyone."""
     from remote_agents.application.notification_policy import schedule_told
     from remote_agents.application.schedules import FireOutcome
 
-    told = {outcome for outcome in FireOutcome if schedule_told(outcome)}
-    assert told == set(FireOutcome) - {FireOutcome.DUPLICATE}
+    assert {outcome for outcome in FireOutcome if schedule_told(outcome)} == set(FireOutcome)

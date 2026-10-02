@@ -154,7 +154,10 @@ async def test_a_restart_mid_fire_launches_nothing_again(connection) -> None:
     (report,) = await schedule_pass.run()
 
     assert report.outcome.value == "duplicate"
-    assert view.sent == []
+    assert view.sent == [
+        "Scheduled: claude in remote-agents may have started before a restart, and its message "
+        "was not typed — check its sessions"
+    ]
 
 
 async def test_a_running_session_with_an_undecided_limit_stop_skips_its_agent(connection) -> None:
@@ -194,6 +197,21 @@ async def test_a_previous_run_is_working_only_while_live_with_a_turn_marker(conn
     assert await working(str(ended)) is False
     assert await working(str(SessionId.new())) is False
     assert await idle(str(live)) is False
+
+
+async def test_a_turn_marker_left_by_an_esc_holds_runs_back_for_six_hours_at_most(
+    connection,
+) -> None:
+    sessions = SQLiteSessionStore(connection)
+    live = SessionId.new()
+    await sessions.save(_record(live))
+    markers = _Markers(str(live))  # started at FIRE
+
+    young = still_working_in(sessions, markers, now=lambda: FIRE + timedelta(hours=5, minutes=59))
+    stale = still_working_in(sessions, markers, now=lambda: FIRE + timedelta(hours=6))
+
+    assert await young(str(live)) is True
+    assert await stale(str(live)) is False
 
 
 async def test_a_pass_that_raises_does_not_end_the_loop() -> None:

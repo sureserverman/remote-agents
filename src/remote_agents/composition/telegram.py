@@ -211,7 +211,9 @@ def _private_boundary(
     # where the backend manages schedules, which `compose_backend` always does in production.
     schedule_pass = (
         None
-        if backend.schedules is None or boundary.schedule_notifier is None
+        if backend.schedules is None
+        or backend.sessions is None
+        or boundary.schedule_notifier is None
         else SchedulePass(
             SQLiteScheduleStore(connection),
             launch=backend.sessions.launch,
