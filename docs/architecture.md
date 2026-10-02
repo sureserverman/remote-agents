@@ -298,6 +298,30 @@ action on managed panes, and is built so the bot never decides anything about a 
   service's activity pass retries it on a `COMPLETED` activity only, then sweeps the rows of
   sessions that stopped or ended.
 
+## DEC-114 — scheduled sessions
+
+A schedule is a project, an agent profile, a message and a *when*, and the service fires it.
+
+- `ports/schedules.py` holds `Schedule`, its `when` (`Once` — a naive local date and time — or
+  `Repeat` — weekdays and a time) and the `ScheduleStore` protocol. Only `next_fire_at` is an
+  instant, in UTC.
+- `adapters/sqlite/schedule_store.py` stores them in the **domain** store (migration 17), so a
+  change wakes `StoreWatch` and both surfaces redraw (DEC-090). Instants are fixed-width UTC text,
+  which `due` compares as text.
+- `application/schedule_times.py` computes the next fire on the host's wall clock
+  (`next_fire`), and holds the presets and the typed-time parser both surfaces use.
+- `application/schedule_book.py` (`ScheduleBook`, `Backend.schedules`) is what both surfaces
+  manage schedules through. It checks a message with `ports/prompt_rules.pre_paste_refusal`,
+  the rule `TmuxTerminal.send_prompt` asks before it pastes (DEC-043).
+- `application/schedules.py` (`SchedulePass`) fires what is due: missed, limit-stopped and
+  still-working runs are passed over, the rest launched through `SessionService.launch` under
+  the key `sched:<id>:<time>` (DEC-005), recorded, then typed into through `send_prompt`.
+  `application/prompt_delivery.py` reads the send's answer; `limit_resume` reads it too.
+- `composition/service.py` runs the pass every 30 s in the bot's service only;
+  `adapters/telegram/schedule_notifications.py` says what each run came to, one message each.
+- `application/session_views.schedule_lines` is the listed line both surfaces draw (DEC-091);
+  `tests/frontend_contract/test_schedule_parity.py` holds them to it.
+
 ## The process model — one `serve`, three pane processes, two SQLite files
 
 The processes that *serve* the owner all open the same **domain** database file and refuse to

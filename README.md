@@ -964,6 +964,45 @@ command that reaches the pane instead. Resume has no key of its own: the functio
 spent on what acts on a session that already exists, and the two flows that *start* one are
 reached from the palette, where every navigation entry already lives.
 
+## Scheduled sessions
+
+A schedule starts an agent in a project at a set time and types a message into it, with nobody
+at the keys (DEC-114). Make one on the bot from **Launch**: choose the project, then
+**⏰ Schedule** under the agents. On the local terminal, choose the project and then
+**Schedule a session**. Both ask the same questions in the same order:
+
+1. **The agent.**
+2. **The time** — *in 1h*, *tonight 03:00*, *tomorrow 09:00*, or a typed `HH:MM` (its next
+   occurrence) or `YYYY-MM-DD HH:MM`. Times are this host's local wall-clock time, and a schedule
+   keeps its local time across a daylight-saving change.
+3. **How often** — once, daily, weekdays, or days you pick. There is no cron syntax.
+4. **The message** to type when the session starts. It is checked as you send it, by the same
+   rule a message to a running session meets: one starting with `!` is refused, and so is a `/`
+   command for an agent whose command menu cannot be read.
+5. **A review** with the next start time, then save.
+
+When a schedule is due, the bot's service starts a new session (labelled `scheduled`), waits for
+its input box (up to 90 s), types the message once, and tells you: *Scheduled: claude in
+remote-agents started*. Every run that does not happen is a message too, never silence:
+
+- **Missed** — the service was down at the time. On restart a run up to 15 minutes late still
+  starts; later than that it is skipped, and the message says how late.
+- **Skipped** — the agent is stopped at a usage limit, or the previous run of the same schedule
+  is still working.
+- **Started, message not typed** — a dialog came up on the new session (folder trust, a rate
+  limit), its input already held text, or the agent was not ready in time. The session is left
+  open for you.
+- **Did not start** — the launch failed, with the error.
+
+A repeating schedule then waits for its next time; a missed run is never made up later. A
+schedule never starts twice for one time, even across a restart.
+
+**Schedules** on the bot's sessions page, and **All schedules** on any project's chooser in the
+terminal, list every schedule with its next start, and pause, resume or delete it. Resuming
+starts from the next time after now. To change a schedule, delete it and make it again.
+Nothing fires while the bot's service is stopped; the local terminal manages schedules but never
+starts one.
+
 ## Creating a project
 
 A project can be created from this host, with the command below or with F7 in the local

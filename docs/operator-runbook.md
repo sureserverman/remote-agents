@@ -584,6 +584,38 @@ To drill it: send one message to an idle session and one to a busy one, and watc
 arrive after its turn ends. The automated drill is
 `uv run --locked pytest tests/live/test_prompt_relay.py -q`, on a scratch tmux server.
 
+## Scheduled sessions
+
+Schedules are rows in the domain store (`schedules`, migration 17). Only the bot's service fires
+them, on its own 30-second pass; the console panes list and change them but never fire one.
+
+- **Restart.** A run due while the service was down starts on the first pass after the restart
+  if it is no more than 15 minutes late; otherwise it is reported *missed* with how late, and a
+  repeating schedule moves to its next time. A restart in the middle of a run cannot launch it
+  twice: each run claims `sched:<id>:<time>` in `idempotency_claims` before it launches, and a
+  run found already claimed is reported (*may have started before a restart … check its
+  sessions*) rather than launched again. The message is typed at most once; a send that may have
+  typed is never retried.
+- **What the service keeps in memory.** A notice Telegram refused is retried each pass for ten
+  minutes, and lost if the service stops first. A one-shot is deleted when it fires, before its
+  message is typed, so a crash while typing loses that run without a trace.
+- **Host time zone.** `doctor` prints `schedule_zone`: the zone named by the `/etc/localtime`
+  symlink, or `UTC (fallback: /etc/localtime names no zone)`. The zone is read each time a next
+  start is worked out, so changing it needs no restart; a next start already worked out keeps
+  its instant until it fires.
+- **Rollback.** A build from before 0.58.0 never reads `schedules`, so nothing fires, and its
+  `doctor` reports the store not ready because the store is at a schema version it does not
+  know. Its rows are kept; upgrading again brings them back. Restoring the pre-migration backup
+  instead drops every schedule.
+
+To drill it: on the deployed service, schedule a one-shot for `claude` two minutes ahead with
+the message `reply with the word OK and nothing else`. Expect one session labelled `scheduled`,
+the message typed and answered in its pane (`tmux -L remote-agents capture-pane -p -t <pane>`),
+exactly one *Scheduled: claude in remote-agents started* message, and the schedule gone from
+the list afterwards. The automated drill is
+`uv run --locked pytest tests/e2e/test_terminal_scheduled_launch.py -q`, on a scratch tmux
+server, run alone.
+
 ## Telegram credential denial and recovery drill
 
 The test suite exercises a known-invalid credential against Telegram without reading or replacing
