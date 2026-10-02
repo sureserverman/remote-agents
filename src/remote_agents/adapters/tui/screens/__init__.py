@@ -41,6 +41,7 @@ from remote_agents.adapters.tui.screens.resume import (
     ResumeProfilesScreen,
     ResumeProjectsScreen,
 )
+from remote_agents.adapters.tui.screens.schedule import ScheduleScreen, SchedulesScreen
 from remote_agents.adapters.tui.screens.sessions import (
     InspectScreen,
     OpeningAction,
@@ -82,6 +83,9 @@ ALL_SCREENS = (
     ResumeProjectsScreen,
     ResumeProfilesScreen,
     ResumeConversationsScreen,
+    # A project's schedules, and the making of one: reached from its chooser (DEC-114).
+    ScheduleScreen,
+    SchedulesScreen,
     ForceConfirmModal,
     RemoteControlConfirmModal,
 )
@@ -106,6 +110,8 @@ __all__ = [
     "ResumeConversationsScreen",
     "ResumeProfilesScreen",
     "ResumeProjectsScreen",
+    "ScheduleScreen",
+    "SchedulesScreen",
     "SessionDetailScreen",
     "SessionsPaneScreen",
     "SessionsScreen",

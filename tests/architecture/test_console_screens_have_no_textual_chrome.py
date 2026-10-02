@@ -64,6 +64,11 @@ from remote_agents.adapters.tui.screens.confirm import (
     HostRemoteControlDirectionModal,
 )
 from remote_agents.adapters.tui.screens.launch import ProjectsScreen
+from remote_agents.adapters.tui.screens.schedule import (
+    ScheduleDeleteConfirmModal,
+    ScheduleScreen,
+    SchedulesScreen,
+)
 from remote_agents.application.profiles import ProfileAvailability
 from remote_agents.application.project_catalog import CatalogProject
 from remote_agents.domain.conversations import (
@@ -162,6 +167,9 @@ _ARRANGED: dict[type[Screen], Callable[[], Screen] | None] = {
     ProjectsScreen: ProjectsScreen,
     ProfilesScreen: ProfilesScreen,
     ProjectChooserScreen: lambda: ProjectChooserScreen(_PROJECT),
+    ScheduleScreen: lambda: ScheduleScreen(_PROJECT, "claude"),
+    SchedulesScreen: lambda: SchedulesScreen(_PROJECT),
+    ScheduleDeleteConfirmModal: ScheduleDeleteConfirmModal,
     AreasScreen: AreasScreen,
     NameScreen: lambda: NameScreen("infra"),
     ProjectReviewScreen: lambda: ProjectReviewScreen("infra", "new-project"),

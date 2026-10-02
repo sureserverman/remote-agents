@@ -1710,6 +1710,13 @@ class ProjectChooserScreen(ChoiceScreen):
         entries: tuple[tuple[str, str], ...] = (("launch", "Launch a new session"),)
         if self.services.backend.conversations is not None:
             entries = (*entries, ("resume", "Resume a conversation"))
+        if self.services.backend.schedules is not None:
+            # Beside the two flows that begin with a project, as on the bot (DEC-114).
+            entries = (
+                *entries,
+                ("schedule", "Schedule a session"),
+                ("schedules", "Schedules"),
+            )
         self.show_choices((*entries, (_BACK, "Back")))
 
     async def choose(self, key: str) -> None:
@@ -1721,6 +1728,16 @@ class ProjectChooserScreen(ChoiceScreen):
             # committed it: an agent left from an abandoned pass must not survive.
             self.tui.selection = replace(LaunchSelection(), project=self.project)
             await self.advance_to(ProfilesScreen())
+            return
+        if key == "schedule":
+            from remote_agents.adapters.tui.screens.schedule import ScheduleScreen
+
+            await self.advance_to(ScheduleScreen(self.project))
+            return
+        if key == "schedules":
+            from remote_agents.adapters.tui.screens.schedule import SchedulesScreen
+
+            await self.advance_to(SchedulesScreen(self.project))
             return
         if key == "resume":
             await advance_to_resume_profiles(self, self.project)

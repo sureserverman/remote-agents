@@ -198,6 +198,9 @@ _POSITIONS = (
     "SETTINGS",
     "PROJECT_CHOOSER",
     "PROFILES",
+    # A project's schedules and the making of one (DEC-114), both reached from its chooser.
+    "SCHEDULE",
+    "SCHEDULES",
     "AREAS",
     "NAME",
     "PROJECT_REVIEW",
@@ -684,6 +687,13 @@ async def _drive(app: RemoteAgentsTui, pilot, step: str) -> asyncio.Task[None] |
         # second copy, so a driver that pushed would be capturing a screen the surface itself
         # cannot arrive at twice.
         await app.show_settings()
+        await pilot.pause()
+        return None
+    if step in {"SCHEDULE", "SCHEDULES"}:
+        # Through the chooser's own rows, as the launch flow is reached above.
+        await app.screen.choose("opaque-existing")
+        await pilot.pause()
+        await app.screen.choose("schedule" if step == "SCHEDULE" else "schedules")
         await pilot.pause()
         return None
     if step in {"PROJECT_CHOOSER", "PROFILES"}:

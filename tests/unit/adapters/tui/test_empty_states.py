@@ -174,6 +174,8 @@ def test_the_emptiable_positions_are_exactly_the_ones_reading_a_runtime_source()
         "ResumeProjectsScreen",
         "ResumeProfilesScreen",
         "AreasScreen",
+        # A project's schedules, read from the store: a project with none is the usual case.
+        "SchedulesScreen",
     }
 
 

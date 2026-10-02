@@ -168,6 +168,8 @@ def _arrangements():
         ResumeConversationsScreen,
         ResumeProfilesScreen,
         ResumeProjectsScreen,
+        ScheduleScreen,
+        SchedulesScreen,
         SessionDetailScreen,
         SessionsPaneScreen,
         SessionsScreen,
@@ -185,6 +187,8 @@ def _arrangements():
         DashboardScreen: None,  # the resting position, already on the stack
         ProfilesScreen: ProfilesScreen,
         ProjectChooserScreen: lambda: ProjectChooserScreen(_PROJECT),
+        ScheduleScreen: lambda: ScheduleScreen(_PROJECT, "claude"),
+        SchedulesScreen: lambda: SchedulesScreen(_PROJECT),
         AreasScreen: AreasScreen,
         NameScreen: lambda: NameScreen("infra"),
         ProjectReviewScreen: lambda: ProjectReviewScreen("infra", "new-project"),
@@ -660,6 +664,8 @@ _PROTECTS_WORK = {
     "NameScreen",
     "RenameScreen",
     "ProjectReviewScreen",
+    # Gathers a typed time and the message to send, carried to a review step (DEC-114).
+    "ScheduleScreen",
 }
 
 
