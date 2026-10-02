@@ -12,7 +12,7 @@ from __future__ import annotations
 import asyncio
 import os
 import sys
-from datetime import UTC, datetime, time, timedelta
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from uuid import uuid4
 
@@ -68,9 +68,8 @@ async def test_a_due_schedule_launches_a_session_and_its_message_lands_once(
 ) -> None:
     agent = tmp_path / "fake_agent.py"
     agent.write_text(_AGENT, encoding="utf-8")
-    gateway = TmuxGateway(
-        f"remote-agents-test-{uuid4().hex}", AsyncTmuxRunner(), intent_directory=tmp_path / "i"
-    )
+    socket = f"remote-agents-test-{uuid4().hex}"
+    gateway = TmuxGateway(socket, AsyncTmuxRunner(), intent_directory=tmp_path / "i")
     terminal = TmuxTerminal(
         gateway,
         {PROJECT: tmp_path},
@@ -92,7 +91,8 @@ async def test_a_due_schedule_launches_a_session_and_its_message_lands_once(
             project_id=PROJECT,
             profile_id=PROFILE,
             prompt=MESSAGE,
-            when=Repeat.daily(time(3, 0)),
+            # Half a day from now, so the second tick can never find the next time due.
+            when=Repeat.daily((now + timedelta(hours=12)).time()),
             paused=False,
             next_fire_at=now - timedelta(seconds=1),
             created_at=now - timedelta(days=1),
@@ -103,10 +103,16 @@ async def test_a_due_schedule_launches_a_session_and_its_message_lands_once(
     async def notify(report: FireReport) -> None:
         reports.append(report)
 
+    sends: list[str] = []
+
+    async def counted_send(session_id, text):
+        sends.append(text)
+        return await terminal.send_prompt(session_id, text)
+
     fire_pass = SchedulePass(
         schedules,
         launch=SessionService(sessions, terminal).launch,
-        send=terminal.send_prompt,
+        send=counted_send,
         limit_stopped=limit_stopped_in(sessions, SQLiteLimitStopStore(connection)),
         working=still_working_in(sessions, _NoMarkers()),
         notify=notify,
@@ -126,6 +132,9 @@ async def test_a_due_schedule_launches_a_session_and_its_message_lands_once(
                 break
             await asyncio.sleep(0.1)
         assert f"GOT: {MESSAGE}" in screen, screen
+        assert len(sends) >= 2, "the first try met the booting screen and was tried again"
+        await asyncio.sleep(0.5)
+        screen = await terminal.capture(launched[0])
         assert screen.count(f"GOT: {MESSAGE}") == 1, "typed once"
         assert reports == [report]
 
@@ -144,4 +153,9 @@ async def test_a_due_schedule_launches_a_session_and_its_message_lands_once(
                 await gateway.destroy(session_id)
             except RuntimeError:
                 pass
+        # And the server itself, whatever a failed launch left on it.
+        killing = await asyncio.create_subprocess_exec(
+            "tmux", "-L", socket, "kill-server", stderr=asyncio.subprocess.DEVNULL
+        )
+        await killing.wait()
         connection.close()

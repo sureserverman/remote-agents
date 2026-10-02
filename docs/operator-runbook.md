@@ -598,7 +598,12 @@ them, on its own 30-second pass; the console panes list and change them but neve
   typed is never retried.
 - **What the service keeps in memory.** A notice Telegram refused is retried each pass for ten
   minutes, and lost if the service stops first. A one-shot is deleted when it fires, before its
-  message is typed, so a crash while typing loses that run without a trace.
+  message is typed, so a crash while typing loses the schedule, the message and the notice; the
+  session it started stays, labelled `scheduled`.
+- **Stopping the service mid-run.** A run's message is typed in the 90 s after its launch. A
+  stop or an upgrade in that window cancels the typing: the run is already recorded, so the
+  session stays open with no message typed, and no notice is sent. Upgrade away from schedule
+  times.
 - **Host time zone.** `doctor` prints `schedule_zone`: the zone named by the `/etc/localtime`
   symlink, or `UTC (fallback: /etc/localtime names no zone)`. The zone is read each time a next
   start is worked out, so changing it needs no restart; a next start already worked out keeps
@@ -1272,10 +1277,11 @@ suppresses another — past Telegram's per-chat rate, at which point its refusal
 a growing backlog. Nothing is dropped: the remainder stays queued and the next poll takes it, so a
 burst arrives spread over a minute or two instead of being refused.
 
-**One message the service sends is not about a session at all.** When a provider clears a plan's
+**Two kinds of message the service sends are not about a live session.** One is a scheduled
+run that did not start (**Scheduled sessions**, DEC-114). The other: when a provider clears a plan's
 usage windows ahead of the instant it had itself recorded for them, the owner gets one Telegram
 message for that provider — `Claude limits were reset early — 5h 91% → 2%, week 64% → 0%` —
-naming every window that moved and what it moved from. DEC-097 admits it as the single
+naming every window that moved and what it moved from. DEC-097 admits it as the
 account-level exception to the rule that a notification is about a live session, and admits it on
 that rule's own test: a wiped meter changes what the owner can do in the next hour. A rollover
 that arrives on the schedule the provider published is silent, a window merely filling up is

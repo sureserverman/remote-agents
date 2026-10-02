@@ -450,10 +450,11 @@ claims neither limit kind for the same reason Codex does not, and its `completed
 closing sentence — the event has no field that could hold one, so that is permanent rather than
 pending.
 
-One thing the service says unprompted is not about a session at all. When a provider clears a
+Two things the service says unprompted are not about a live session. One is a scheduled run
+that did not start (see **Scheduled sessions**, DEC-114). The other: when a provider clears a
 plan's usage windows ahead of the instant it had itself recorded for them, the owner gets one
 Telegram message for that provider — `Claude limits were reset early — 5h 91% → 2%, week 64%
-→ 0%` — naming every window that moved and what it moved from. DEC-097 admits it as the single
+→ 0%` — naming every window that moved and what it moved from. DEC-097 admits it as the
 account-level exception to the rule that a notification is about a live session, and admits it
 on that rule's own test: a wiped meter changes what the owner can do in the next hour. A
 rollover that arrives on the schedule the provider published is silent, a window merely filling
@@ -983,16 +984,19 @@ at the keys (DEC-114). Make one on the bot from **Launch**: choose the project, 
 
 When a schedule is due, the bot's service starts a new session (labelled `scheduled`), waits for
 its input box (up to 90 s), types the message once, and tells you: *Scheduled: claude in
-remote-agents started*. Every run that does not happen is a message too, never silence:
+remote-agents started*. Every run that does not happen is reported too (the runbook's
+**Scheduled sessions** names the few ways a report can be lost):
 
 - **Missed** — the service was down at the time. On restart a run up to 15 minutes late still
   starts; later than that it is skipped, and the message says how late.
-- **Skipped** — the agent is stopped at a usage limit, or the previous run of the same schedule
-  is still working.
+- **Skipped** — one of the agent's running sessions is stopped at a usage limit, or the previous
+  run of the same schedule is still working (for agents whose hooks report their turns). An agent
+  with no running session is launched even when its account is at its limit, and stops at once.
 - **Started, message not typed** — a dialog came up on the new session (folder trust, a rate
-  limit), its input already held text, or the agent was not ready in time. The session is left
-  open for you.
-- **Did not start** — the launch failed, with the error.
+  limit), its input already held text, its screen was not recognised, or the agent was not ready
+  in time. The session is left open for you. If the session itself ended first, the message says
+  that instead.
+- **Did not start** — the launch failed (with its error), or the agent never became ready.
 
 A repeating schedule then waits for its next time; a missed run is never made up later. A
 schedule never starts twice for one time, even across a restart.

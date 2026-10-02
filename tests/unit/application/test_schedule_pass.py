@@ -390,7 +390,7 @@ async def test_deliver_retries_what_a_booting_agent_shows(reason: PromptReason) 
         (_refused(PromptReason.DIALOG), "dialog"),
         (_refused(PromptReason.COMPOSING), "composing"),
         (_refused(PromptReason.SHELL), "shell"),
-        (_refused(PromptReason.MENU), "dialog"),
+        (_refused(PromptReason.MENU), "menu"),
         (_refused(PromptReason.NO_COMPOSER), "no_composer"),
     ],
     ids=["dialog", "composing", "shell", "menu", "no-composer"],

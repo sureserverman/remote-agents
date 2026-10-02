@@ -74,6 +74,7 @@ def test_started_reads_as_the_owner_asked() -> None:
         ("no_composer", "cannot be read"),
         ("empty", "empty"),
         ("unrecognised", "not recognised"),
+        ("menu", "command menu cannot be read"),
     ],
 )
 def test_a_prompt_not_typed_says_why_and_that_the_session_is_open(reason, words) -> None:

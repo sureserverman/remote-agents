@@ -38,7 +38,7 @@ from remote_agents.application.prompt_delivery import DeliveryVerdict, delivery_
 from remote_agents.application.schedule_times import next_fire
 from remote_agents.domain.models import ProfileId, SessionId, SessionState
 from remote_agents.ports.schedules import Once, Schedule, ScheduleStore
-from remote_agents.ports.terminal import PromptDelivery
+from remote_agents.ports.terminal import PromptDelivery, PromptReason
 
 _LOG = logging.getLogger(__name__)
 
@@ -163,7 +163,17 @@ class SchedulePass:
         )
 
     async def _delivered_and_told(self, report: FireReport) -> FireReport:
-        delivered = await self._delivered(report)
+        try:
+            delivered = await self._delivered(report)
+        except asyncio.CancelledError:
+            # The service is stopping. The fire is recorded and the session stays open; nothing
+            # can be told from here, so the journal is where it is said.
+            _LOG.warning(
+                "the service stopped before schedule %s's message was typed into %s",
+                report.schedule.id,
+                report.session_id,
+            )
+            raise
         await self._told(delivered)
         return delivered
 
@@ -205,6 +215,9 @@ class SchedulePass:
             if verdict not in _BOOTING:
                 if verdict is DeliveryVerdict.REFUSED and delivery.reason is not None:
                     return delivery.reason.value
+                if delivery.reason is PromptReason.MENU:
+                    # A `/` command whose menu cannot be read: no dialog is up, so say which.
+                    return PromptReason.MENU.value
                 return verdict.value
             if self._now() - started >= STARTUP_PATIENCE:
                 # Said as what the last look found: a pane that went away is not an agent

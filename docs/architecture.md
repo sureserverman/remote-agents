@@ -303,10 +303,11 @@ action on managed panes, and is built so the bot never decides anything about a 
 A schedule is a project, an agent profile, a message and a *when*, and the service fires it.
 
 - `ports/schedules.py` holds `Schedule`, its `when` (`Once` — a naive local date and time — or
-  `Repeat` — weekdays and a time) and the `ScheduleStore` protocol. Only `next_fire_at` is an
-  instant, in UTC.
+  `Repeat` — weekdays and a time) and the `ScheduleStore` protocol. `next_fire_at` is the
+  instant `when` resolves to, in UTC.
 - `adapters/sqlite/schedule_store.py` stores them in the **domain** store (migration 17), so a
-  change wakes `StoreWatch` and both surfaces redraw (DEC-090). Instants are fixed-width UTC text,
+  change wakes `StoreWatch`: the bot's list redraws, and the terminal's re-reads on Refresh
+  (DEC-090). Instants are fixed-width UTC text,
   which `due` compares as text.
 - `application/schedule_times.py` computes the next fire on the host's wall clock
   (`next_fire`), and holds the presets and the typed-time parser both surfaces use.

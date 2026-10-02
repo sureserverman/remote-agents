@@ -41,6 +41,7 @@ _NOT_TYPED = {
     "unrecognised": "the new session's screen was not recognised",
     "shell": "it would run as a shell command",
     "no_composer": "this agent's composer cannot be read",
+    "menu": "this agent's command menu cannot be read, so the / command was not typed",
     "empty": "it is empty",
 }
 _NOT_STARTED = {
