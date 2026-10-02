@@ -63,6 +63,7 @@ from remote_agents.application.doctor import (
 )
 from remote_agents.application.errors import ProjectCreationError
 from remote_agents.application.project_admin import CreateProjectCommand
+from remote_agents.application.schedule_times import schedule_zone_line
 from remote_agents.composition.backend import (
     ProjectCatalogueProvider,
     _project_creator,
@@ -779,6 +780,7 @@ def _doctor_report(paths: ProductionPaths, config, drift: dict[str, object]) -> 
         claude_limits=_claude_limits_state(paths),
         claude_limits_source=_claude_limits_source_line(config),
         cursor_limits_source=_cursor_limits_source_line(config),
+        schedule_zone=schedule_zone_line(),
     )
 
 

@@ -110,6 +110,7 @@ def production_doctor(
     claude_limits: str | None = None,
     claude_limits_source: str | None = None,
     cursor_limits_source: str | None = None,
+    schedule_zone: str | None = None,
 ) -> dict[str, object]:
     """Render the installed service's non-secret dependency health report.
 
@@ -182,6 +183,10 @@ def production_doctor(
     # Cursor's switch, reported the same way and for the same reason.
     if cursor_limits_source is not None:
         report["cursor_limits_source"] = cursor_limits_source
+    # The zone a schedule's wall-clock time is read in, or the UTC fallback named as one.
+    # Reported, never aggregated: a host with no readable zone still fires, an hour or so off.
+    if schedule_zone is not None:
+        report["schedule_zone"] = schedule_zone
     # Reported, deliberately not aggregated: nothing live depends on the console until the
     # console-surface plan's Stage 3 composes it, so an incapable tmux is worth naming to
     # the operator and not worth failing an otherwise healthy deploy over. The stage that

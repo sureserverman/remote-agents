@@ -22,9 +22,7 @@ def test_daily_carries_all_seven_days() -> None:
 def test_weekdays_carries_monday_to_friday() -> None:
     days = Repeat.weekdays(time(9, 0)).days
     assert len(days) == 5
-    assert days == frozenset(
-        {Weekday.MON, Weekday.TUE, Weekday.WED, Weekday.THU, Weekday.FRI}
-    )
+    assert days == frozenset({Weekday.MON, Weekday.TUE, Weekday.WED, Weekday.THU, Weekday.FRI})
 
 
 def test_a_once_must_be_naive_local_wall_time() -> None:
