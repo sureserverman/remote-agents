@@ -494,7 +494,7 @@ def test_a_draft_drawn_a_frame_late_is_read_again_before_giving_up() -> None:
     ids=["bom-slash", "zwsp-bang", "bidi", "line-separator"],
 )  # fmt: skip
 def test_invisible_format_characters_cannot_hide_a_command_prefix(text: str) -> None:
-    from remote_agents.adapters.tmux.composer import prompt_text
+    from remote_agents.ports.prompt_rules import prompt_text
 
     cleaned = prompt_text(text)
 

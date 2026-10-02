@@ -23,7 +23,6 @@ from remote_agents.adapters.tmux.composer import (
     enter_refusal,
     in_shell_mode,
     marker_is_young,
-    prompt_text,
     transcript_above_box,
     turn_ended,
 )
@@ -50,6 +49,7 @@ from remote_agents.domain.models import ProfileId, ProjectId, SessionId
 from remote_agents.domain.remote_control import RemoteControlState
 from remote_agents.domain.trust import TrustState
 from remote_agents.ports.private_directory import open_private_directory
+from remote_agents.ports.prompt_rules import pre_paste_refusal, prompt_text, text_refusal
 from remote_agents.ports.provider_descriptor import ProviderDescriptor, TrustDialog
 from remote_agents.ports.terminal import (
     AGENT_ASKING,
@@ -745,11 +745,10 @@ class TmuxTerminal:
         the pasted draft and no dialog (`composer.enter_refusal`). Anything that may have
         typed and was not seen to land is UNCONFIRMED, and is never tried again.
         """
+        refusal = text_refusal(text)
+        if refusal is not None:
+            return PromptDelivery(PromptOutcome.REFUSED, refusal)
         cleaned = prompt_text(text)
-        if not cleaned:
-            return PromptDelivery(PromptOutcome.REFUSED, PromptReason.EMPTY)
-        if cleaned.startswith("!"):
-            return PromptDelivery(PromptOutcome.REFUSED, PromptReason.SHELL)
         try:
             return await asyncio.wait_for(
                 self._deliver_prompt(session_id, cleaned), self._waits.prompt_bound
@@ -762,12 +761,10 @@ class TmuxTerminal:
         if observation is None or not observation.live:
             return PromptDelivery(PromptOutcome.REFUSED, PromptReason.NOT_RUNNING)
         descriptor = self._composers.get(str(observation.profile_id))
-        if descriptor is None or descriptor.composer is None:
-            return PromptDelivery(PromptOutcome.REFUSED, PromptReason.NO_COMPOSER)
-        if text.startswith("/") and descriptor.composer.command_menu is None:
-            # Pasted, it could never be submitted -- `Enter` would run whatever the unreadable
-            # menu offers -- and the stranded draft would refuse every later message.
-            return PromptDelivery(PromptOutcome.REFUSED, PromptReason.MENU)
+        refusal = pre_paste_refusal(text, None if descriptor is None else descriptor.composer)
+        if refusal is not None:
+            return PromptDelivery(PromptOutcome.REFUSED, refusal)
+        assert descriptor is not None
         judged: list[PaneState] = []
 
         def may_paste(capture: str, title: str) -> bool:

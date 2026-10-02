@@ -10,7 +10,6 @@ the verticals' (`ProviderDescriptor.composer`); nothing here names a provider.
 from __future__ import annotations
 
 import re
-import unicodedata
 from datetime import UTC, datetime
 from enum import Enum
 
@@ -305,27 +304,6 @@ REFUSAL_FOR: dict[PaneState, PromptReason] = {
     PaneState.UNKNOWN: PromptReason.UNRECOGNISED,
 }
 """The reason a pane that is not IDLE gives for refusing a message."""
-
-
-def prompt_text(text: str) -> str:
-    """The owner's message as it may be pasted: newlines kept, every other control removed.
-
-    A bracketed paste is ended early by `ESC [201~`, and a CR or an ETX inside it would act as a
-    key in an agent that stopped honouring the brackets, so none of them reaches the buffer.
-    Line endings are folded to `\\n` first, so a CRLF from a phone keeps its line break.
-    """
-    folded = text.replace("\r\n", "\n").replace("\r", "\n")
-    for separator in ("\u2028", "\u2029", "\u0085"):
-        folded = folded.replace(separator, "\n")
-    # Format characters too (Cf: BOM, zero-width space, bidi overrides): invisible, so they
-    # could stand in front of a `!` or `/` and hide it from the checks that refuse one, while
-    # an agent that trims them would still read the command.
-    kept = "".join(
-        character
-        for character in folded
-        if character == "\n" or unicodedata.category(character) not in ("Cc", "Cf")
-    )
-    return kept.strip()
 
 
 def _same_text(draft: str, text: str) -> bool:
