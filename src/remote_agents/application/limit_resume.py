@@ -38,9 +38,10 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 
+from remote_agents.application.prompt_delivery import DeliveryVerdict, delivery_verdict
 from remote_agents.domain.models import SessionId
 from remote_agents.ports.limit_stop_outcomes import LIFTED, NOT_RESUMED, RESUMED, LimitStop
-from remote_agents.ports.terminal import PromptDelivery, PromptOutcome, PromptReason
+from remote_agents.ports.terminal import PromptDelivery
 
 __all__ = [
     "BUSY_PATIENCE",
@@ -96,12 +97,6 @@ class Nudge:
 
     outcome: str | None
     reason: NotResumed | None = None
-
-
-#: Refusals that typed nothing and that a later pass can outlast: busy, another sender at the
-#: keys, and a tmux call that failed before the paste (a partway failure is UNCONFIRMED).
-_WAITS = frozenset({PromptReason.BUSY, PromptReason.KEYS_BUSY, PromptReason.TMUX_ERROR})
-_DIALOGS = frozenset({PromptReason.DIALOG, PromptReason.MENU})
 
 
 class LimitResume:
@@ -176,16 +171,17 @@ class LimitResume:
             _LOG.exception("the nudge failed partway; it is not tried again")
             self._busy_since.pop(key, None)
             return _given_up(NotResumed.UNCONFIRMED)
-        if delivery.outcome is PromptOutcome.SENT:
+        verdict = delivery_verdict(delivery)
+        if verdict is DeliveryVerdict.SENT:
             self._busy_since.pop(key, None)
             return Nudge(RESUMED)
-        if delivery.outcome is PromptOutcome.UNCONFIRMED:
+        if verdict is DeliveryVerdict.UNCONFIRMED:
             self._busy_since.pop(key, None)
             return _given_up(NotResumed.UNCONFIRMED)
-        if delivery.reason is PromptReason.NOT_RUNNING:
+        if verdict is DeliveryVerdict.NOT_RUNNING:
             self._busy_since.pop(key, None)
             return Nudge(LIFTED)
-        if delivery.reason in _WAITS:
+        if verdict is DeliveryVerdict.WAIT:
             now = self._now()
             since = self._busy_since.setdefault(key, now)
             if now - since < BUSY_PATIENCE:
@@ -193,10 +189,12 @@ class LimitResume:
             self._busy_since.pop(key, None)
             return _given_up(NotResumed.BUSY)
         self._busy_since.pop(key, None)
-        if delivery.reason in _DIALOGS:
+        if verdict is DeliveryVerdict.DIALOG:
             return _given_up(NotResumed.DIALOG)
-        if delivery.reason is PromptReason.COMPOSING:
+        if verdict is DeliveryVerdict.COMPOSING:
             return _given_up(NotResumed.COMPOSING)
+        # An unrecognised screen, and a refusal of the text or the agent, which "carry on" never
+        # earns: neither is one that waiting fixes.
         return _given_up(NotResumed.UNRECOGNISED)
 
 

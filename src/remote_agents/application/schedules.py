@@ -9,6 +9,14 @@ owner's order (rules 4-6), and either launched or passed over:
 - **otherwise** it is launched, under the key `sched:<id>:<fire instant>` (rule 8), so a restart
   part-way through a fire finds the key claimed and launches nothing a second time.
 
+A launched session is then given its prompt through the terminal's guarded send (rules 2 and 7,
+DEC-099): tried again while the new agent boots -- busy, not yet running, a screen not yet
+recognised -- for `STARTUP_PATIENCE`; given up at once on a dialog, a draft already in the
+composer, or a refusal of the text; and never tried again once it may have typed
+(unconfirmed). A session that came up on its folder-trust dialog is not typed into at all. A
+prompt that was not typed leaves the session open for the owner, and the notice says why. The
+send's answer is read by `prompt_delivery`, the table the limit nudge reads too (DEC-043).
+
 Every branch advances the schedule past this fire -- a recurring one to its next time from now,
 never a backlog; a one-shot is done -- and every branch is reported once (DEC-031 as amended for
 this kind). A check that raises leaves the schedule due, to be tried next pass; past the grace it
@@ -20,12 +28,13 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta, tzinfo
 from enum import StrEnum
 
 from remote_agents.application.commands import LaunchCommand
 from remote_agents.application.errors import DuplicateCommandError
+from remote_agents.application.prompt_delivery import DeliveryVerdict, delivery_verdict
 from remote_agents.application.schedule_times import next_fire
 from remote_agents.domain.models import ProfileId, SessionId, SessionState
 from remote_agents.ports.schedules import Schedule, ScheduleStore
@@ -35,6 +44,17 @@ _LOG = logging.getLogger(__name__)
 
 MISSED_GRACE = timedelta(minutes=15)
 """How late a fire may still start: a restart within this of its time fires it (rule 4)."""
+
+STARTUP_PATIENCE = timedelta(seconds=90)
+"""How long a new session's agent is given to show an idle composer before its prompt is dropped."""
+
+RETRY_SECONDS = 3.0
+"""How long a booting session is given between tries of its first prompt."""
+
+#: What a booting agent shows on its way to an idle composer, so a first prompt waits it out.
+_BOOTING = frozenset(
+    {DeliveryVerdict.WAIT, DeliveryVerdict.NOT_RUNNING, DeliveryVerdict.UNRECOGNISED}
+)
 
 SCHEDULED_LABEL = "scheduled"
 """The label a scheduled session is launched with, so the owner can tell it from their own."""
@@ -97,21 +117,59 @@ class SchedulePass:
         self._sleep = sleep
 
     async def run(self) -> tuple[FireReport, ...]:
-        """Fire everything due now, and return what each fire came to."""
+        """Fire everything due now, and return what each fire came to.
+
+        Every launch is made first and recorded before any prompt is typed, so a crash while
+        typing finds the fire recorded; the prompts are then typed side by side, so one slow
+        agent does not hold another's prompt back.
+        """
         now = self._now()
-        reports: list[FireReport] = []
+        fired: list[FireReport] = []
         for schedule in await self._store.due(now):
             try:
-                report = await self._fire(schedule, now)
+                fired.append(await self._fire(schedule, now))
             except Exception:
                 _LOG.exception("schedule %s could not be fired; it stays due", schedule.id)
-                continue
-            reports.append(report)
+        reports = await asyncio.gather(*(self._delivered(report) for report in fired))
+        for report in reports:
             try:
                 await self._notify(report)
             except Exception:
-                _LOG.exception("the notice for schedule %s could not be handed on", schedule.id)
+                _LOG.exception(
+                    "the notice for schedule %s could not be handed on", report.schedule.id
+                )
         return tuple(reports)
+
+    async def _delivered(self, report: FireReport) -> FireReport:
+        """Type a started session's prompt, and say what that came to."""
+        if report.outcome is not FireOutcome.STARTED or report.session_id is None:
+            return report
+        reason = await self._first_prompt(SessionId.parse(report.session_id), report.schedule)
+        if reason is None:
+            return report
+        return replace(report, outcome=FireOutcome.NOT_TYPED, reason=reason)
+
+    async def _first_prompt(self, session_id: SessionId, schedule: Schedule) -> str | None:
+        """None once the prompt landed, else why it was not typed."""
+        started = self._now()
+        while True:
+            try:
+                delivery = await self._send(session_id, schedule.prompt)
+            except Exception:
+                # The send never raises by contract; a raise here may have typed, so it is
+                # given up rather than tried again (DEC-099).
+                _LOG.exception("typing schedule %s's prompt failed partway", schedule.id)
+                return DeliveryVerdict.UNCONFIRMED.value
+            verdict = delivery_verdict(delivery)
+            if verdict is DeliveryVerdict.SENT:
+                return None
+            if verdict not in _BOOTING:
+                if verdict is DeliveryVerdict.REFUSED and delivery.reason is not None:
+                    return delivery.reason.value
+                return verdict.value
+            if self._now() - started >= STARTUP_PATIENCE:
+                return "not_ready"
+            await self._sleep(RETRY_SECONDS)
 
     async def _fire(self, schedule: Schedule, now: datetime) -> FireReport:
         assert schedule.next_fire_at is not None  # `due` returns only rows with a time
@@ -163,6 +221,13 @@ class SchedulePass:
                 FireReport(
                     schedule, FireOutcome.LAUNCH_FAILED, due_at, session_id, reason="not_ready"
                 ),
+            )
+        if record.state is SessionState.UNTRUSTED:
+            # Up on its folder-trust dialog: typing would answer the dialog (rule 7).
+            return await self._record(
+                schedule,
+                now,
+                FireReport(schedule, FireOutcome.NOT_TYPED, due_at, session_id, reason="dialog"),
             )
         return await self._record(
             schedule, now, FireReport(schedule, FireOutcome.STARTED, due_at, session_id)

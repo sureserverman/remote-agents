@@ -13,6 +13,7 @@ from remote_agents.application.commands import LaunchCommand
 from remote_agents.application.errors import DuplicateCommandError
 from remote_agents.application.schedules import (
     MISSED_GRACE,
+    STARTUP_PATIENCE,
     FireOutcome,
     FireReport,
     SchedulePass,
@@ -26,7 +27,7 @@ from remote_agents.domain.models import (
     SessionState,
 )
 from remote_agents.ports.schedules import Once, Repeat, Schedule
-from remote_agents.ports.terminal import PromptDelivery, PromptOutcome
+from remote_agents.ports.terminal import PromptDelivery, PromptOutcome, PromptReason
 
 BERLIN = ZoneInfo("Europe/Berlin")
 FIRE = datetime(2026, 10, 2, 7, 0, tzinfo=UTC)  # 09:00 Berlin, a Friday
@@ -279,3 +280,143 @@ async def test_a_report_names_the_schedule_it_is_about() -> None:
 
     assert report.schedule.id == "s1"
     assert report.schedule.profile_id == ProfileId("claude")
+
+
+# --- first-prompt delivery (Task 2.2) ----------------------------------------------------------
+
+
+def _refused(reason: PromptReason) -> PromptDelivery:
+    return PromptDelivery(PromptOutcome.REFUSED, reason)
+
+
+async def test_deliver_types_the_prompt_into_the_new_session() -> None:
+    store, rig = MemoryScheduleStore(_schedule()), Rig()
+
+    (report,) = await _run(store, rig, FIRE)
+
+    assert report.outcome is FireOutcome.STARTED
+    ((session_id, text),) = rig.sends
+    assert str(session_id) == report.session_id
+    assert text == "reply with OK"
+
+
+async def test_deliver_busy_twice_then_sent_is_started() -> None:
+    busy = _refused(PromptReason.BUSY)
+    store, rig = MemoryScheduleStore(_schedule()), Rig(deliveries=[busy, busy, SENT])
+
+    (report,) = await _run(store, rig, FIRE)
+
+    assert report.outcome is FireOutcome.STARTED
+    assert len(rig.sends) == 3
+
+
+@pytest.mark.parametrize(
+    "reason", [PromptReason.NOT_RUNNING, PromptReason.UNRECOGNISED, PromptReason.KEYS_BUSY]
+)
+async def test_deliver_retries_what_a_booting_agent_shows(reason: PromptReason) -> None:
+    store, rig = MemoryScheduleStore(_schedule()), Rig(deliveries=[_refused(reason), SENT])
+
+    (report,) = await _run(store, rig, FIRE)
+
+    assert report.outcome is FireOutcome.STARTED
+    assert len(rig.sends) == 2
+
+
+@pytest.mark.parametrize(
+    ("delivery", "reason"),
+    [
+        (_refused(PromptReason.DIALOG), "dialog"),
+        (_refused(PromptReason.COMPOSING), "composing"),
+        (_refused(PromptReason.SHELL), "shell"),
+        (_refused(PromptReason.MENU), "dialog"),
+        (_refused(PromptReason.NO_COMPOSER), "no_composer"),
+    ],
+    ids=["dialog", "composing", "shell", "menu", "no-composer"],
+)
+async def test_deliver_gives_up_at_once_where_waiting_cannot_help(
+    delivery: PromptDelivery, reason: str
+) -> None:
+    store, rig = MemoryScheduleStore(_schedule()), Rig(deliveries=[delivery, SENT])
+
+    (report,) = await _run(store, rig, FIRE)
+
+    assert report.outcome is FireOutcome.NOT_TYPED
+    assert report.reason == reason
+    assert report.session_id is not None
+    assert len(rig.sends) == 1
+
+
+async def test_deliver_unconfirmed_is_attempted_once_only() -> None:
+    unconfirmed = PromptDelivery(PromptOutcome.UNCONFIRMED, PromptReason.SUBMIT_NOT_SEEN)
+    store, rig = MemoryScheduleStore(_schedule()), Rig(deliveries=[unconfirmed, SENT])
+
+    (report,) = await _run(store, rig, FIRE)
+
+    assert report.outcome is FireOutcome.NOT_TYPED
+    assert report.reason == "unconfirmed"
+    assert len(rig.sends) == 1
+
+
+async def test_deliver_a_send_that_raises_is_not_retried() -> None:
+    store, rig = MemoryScheduleStore(_schedule()), Rig()
+
+    async def raising(session_id, text):
+        rig.sends.append((session_id, text))
+        raise RuntimeError("tmux went away")
+
+    rig.send = raising  # type: ignore[method-assign]
+    (report,) = await _run(store, rig, FIRE)
+
+    assert report.outcome is FireOutcome.NOT_TYPED
+    assert report.reason == "unconfirmed"
+    assert len(rig.sends) == 1
+
+
+async def test_deliver_patience_exhausted_is_not_typed() -> None:
+    busy = _refused(PromptReason.BUSY)
+    store, rig = MemoryScheduleStore(_schedule()), Rig(deliveries=[busy] * 1000)
+
+    (report,) = await _run(store, rig, FIRE)
+
+    assert report.outcome is FireOutcome.NOT_TYPED
+    assert report.reason == "not_ready"
+    assert rig.clock[0] - FIRE >= STARTUP_PATIENCE
+    assert rig.clock[0] - FIRE < STARTUP_PATIENCE + timedelta(seconds=10)
+    assert STARTUP_PATIENCE == timedelta(seconds=90)
+
+
+async def test_deliver_an_untrusted_launch_types_nothing() -> None:
+    store, rig = MemoryScheduleStore(_schedule()), Rig(launched_state=SessionState.UNTRUSTED)
+
+    (report,) = await _run(store, rig, FIRE)
+
+    assert report.outcome is FireOutcome.NOT_TYPED
+    assert report.reason == "dialog"
+    assert rig.sends == []
+
+
+async def test_deliver_happens_after_the_fire_is_recorded() -> None:
+    """A crash while typing must find the fire already recorded, never launch it again."""
+    store, rig = MemoryScheduleStore(_schedule()), Rig()
+    seen: list[datetime | None] = []
+
+    async def watching(session_id, text):
+        advanced = await store.get("s1")
+        seen.append(advanced.next_fire_at if advanced else None)
+        return SENT
+
+    rig.send = watching  # type: ignore[method-assign]
+    await _run(store, rig, FIRE)
+
+    assert seen == [FIRE + timedelta(days=1)]
+
+
+async def test_deliver_two_due_schedules_are_typed_side_by_side() -> None:
+    busy = _refused(PromptReason.BUSY)
+    store = MemoryScheduleStore(_schedule("a"), _schedule("b"))
+    rig = Rig(deliveries=[busy, busy, SENT, SENT])
+
+    reports = await _run(store, rig, FIRE)
+
+    assert [report.outcome for report in reports] == [FireOutcome.STARTED] * 2
+    assert [report.schedule.id for report in rig.reports] == ["a", "b"]
