@@ -265,6 +265,9 @@ def test_no_further_capability_leaked_into_the_context() -> None:
         # surfaces for `claude_limits_source`'s reason -- it decides whether this service reads
         # a credential and calls out.
         "cursor_limits_source",
+        # Scheduled sessions, 2026-10-02: both surfaces list and manage schedules through the
+        # one book, so it is a backend capability rather than a surface's own.
+        "schedules",
         "sessions",
         "projects",
         "conversations",
