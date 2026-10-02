@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime, time
+from datetime import UTC, datetime, time, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -121,3 +121,40 @@ def test_the_doctor_names_the_zone_or_the_fallback(tmp_path: Path) -> None:
         schedule_zone="Europe/Berlin",
     )
     assert report["schedule_zone"] == "Europe/Berlin"
+
+
+def test_in_one_hour_is_an_hour_of_elapsed_time_across_both_transitions() -> None:
+    from remote_agents.application.schedule_times import preset_time
+
+    for before in (_local(2026, 3, 29, 1, 30), _local(2026, 10, 25, 1, 30)):
+        at = preset_time("in_1h", before, BERLIN)
+        fired = next_fire(Once(at), before, BERLIN)
+        assert fired == before + timedelta(hours=1), (before, at, fired)
+
+
+def test_a_typed_date_outside_the_next_few_years_is_not_a_time() -> None:
+    from remote_agents.application.schedule_times import parse_time_text
+
+    now = _local(2026, 10, 2, 12, 0)
+    assert parse_time_text("2026-12-24 18:00", now, BERLIN) == datetime(2026, 12, 24, 18, 0)
+    assert parse_time_text("2031-01-01 00:00", now, BERLIN) is not None
+    for text in ("9999-12-31 23:59", "0001-01-01 00:00", "2032-01-01 00:00", "2024-12-31 23:59"):
+        assert parse_time_text(text, now, BERLIN) is None, text
+
+
+def test_only_ascii_digits_are_a_time() -> None:
+    from remote_agents.application.schedule_times import parse_time_text
+
+    now = _local(2026, 10, 2, 12, 0)
+    assert parse_time_text("٠٩:٣٠", now, BERLIN) is None
+    assert parse_time_text("24:00", now, BERLIN) is None
+    assert parse_time_text("09:60", now, BERLIN) is None
+    assert parse_time_text(" 9:05 ", now, BERLIN) == datetime(2026, 10, 3, 9, 5)
+
+
+def test_a_one_shot_at_the_edge_of_the_calendar_never_fires_rather_than_raising() -> None:
+    new_york = ZoneInfo("America/New_York")
+    assert (
+        next_fire(Once(datetime(9999, 12, 31, 23, 59)), _local(2026, 10, 2, 0, 0), new_york) is None
+    )
+    assert next_fire(Once(datetime(1, 1, 1, 0, 0)), _local(2026, 10, 2, 0, 0), BERLIN) is None

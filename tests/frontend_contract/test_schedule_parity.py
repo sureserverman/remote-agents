@@ -38,10 +38,12 @@ PROJECT = CatalogProject("opaque-infra", "remote-agents", "infra", "Registered")
 SRC = Path(__file__).resolve().parents[2] / "src" / "remote_agents"
 
 
-def _schedule(schedule_id: str, when, *, paused: bool = False, prompt: str = "hi") -> Schedule:
+def _schedule(
+    schedule_id: str, when, *, paused: bool = False, prompt: str = "hi", project: str = ""
+) -> Schedule:
     return Schedule(
         id=schedule_id,
-        project_id=ProjectId(PROJECT.opaque_id),
+        project_id=ProjectId(project or PROJECT.opaque_id),
         profile_id=ProfileId("claude"),
         prompt=prompt,
         when=when,
@@ -67,6 +69,8 @@ SCHEDULES = (
     _schedule("s3", Repeat(frozenset({Weekday.MON, Weekday.THU}), time(18, 30))),
     _schedule("s4", Once(datetime(2026, 10, 20, 7, 15)), prompt="a" * 60),
     _schedule("s5", Repeat.weekdays(time(12, 0)), paused=True),
+    # A project that has left the catalogue: both surfaces still list it, under its id.
+    _schedule("s6", Repeat.daily(time(6, 0)), project="opaque-gone"),
 )
 
 

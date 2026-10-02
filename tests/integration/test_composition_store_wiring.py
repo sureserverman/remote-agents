@@ -140,7 +140,9 @@ def test_the_surface_tables_are_gone_from_the_watched_store(
     try:
         present = {
             name
-            for (name,) in connection.execute("SELECT name FROM sqlite_master WHERE type = 'table'")
+            for (name,) in connection.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table'"
+            )
         }
     finally:
         connection.close()
@@ -273,6 +275,7 @@ def test_no_domain_open_bypasses_the_split() -> None:
         "a domain-store open outside _open_domain_store: it would apply migration 14 to a store "
         f"nothing has split, and silently disable every later split. Found: {offenders}"
     )
+
 
 
 def test_the_chokepoint_carries_the_rows_out_before_the_drop(tmp_path: Path) -> None:

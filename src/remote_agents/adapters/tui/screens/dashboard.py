@@ -1715,7 +1715,7 @@ class ProjectChooserScreen(ChoiceScreen):
             entries = (
                 *entries,
                 ("schedule", "Schedule a session"),
-                ("schedules", "Schedules"),
+                ("schedules", "All schedules"),
             )
         self.show_choices((*entries, (_BACK, "Back")))
 

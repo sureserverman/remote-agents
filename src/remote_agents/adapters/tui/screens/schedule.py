@@ -15,6 +15,7 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 from datetime import datetime
 
+from textual import events
 from textual.widgets import Input
 
 from remote_agents.adapters.tui.model import _BACK
@@ -82,8 +83,9 @@ class ScheduleScreen(ChoiceScreen):
 
     @property
     def work_in_flight(self) -> bool:
-        """Anything chosen so far is work escape cannot give back: the flow is one position,
-        so leaving it loses every step at once."""
+        """Anything chosen so far is work a flow jump or quit would discard: the flow is one
+        position, so leaving it loses every step at once. Escape does not -- it steps back one
+        question at a time (`key_escape`)."""
         return self._draft != _Draft() or super().work_in_flight
 
     @property
@@ -173,8 +175,14 @@ class ScheduleScreen(ChoiceScreen):
         first = " ".join(draft.message.split())
         words = notice or f"{draft.profile_id} · {self.project.name} · {repeat_words(when)} · {nxt}"
         self.set_status(words, severity="warning" if notice else "information")
+        # A time already passed is chosen again, never saved.
+        save = (
+            (_CONFIRM, "Save this schedule")
+            if fire is not None
+            else ("retime", "Choose another time")
+        )
         self.show_choices(
-            (("message", f"Message: {first}"), (_CONFIRM, "Save this schedule")),
+            (("message", f"Message: {first}"), save),
             highlight=0,
             trailing=((_BACK, "Back"),),
         )
@@ -228,9 +236,22 @@ class ScheduleScreen(ChoiceScreen):
         elif step == "review":
             if key == "message":
                 self._step = "message"
+            elif key == "retime":
+                self._step = "time"
             elif key == _CONFIRM:
                 await self._save()
                 return
+        self._render_step()
+
+    def key_escape(self, event: events.Key) -> None:
+        """Escape is the previous question, as the bot's Back is; only from the first does it
+        leave the flow, as the app's `back` does everywhere else."""
+        previous = self._back_one()
+        if previous is None:
+            return
+        event.stop()
+        event.prevent_default()
+        self._step = previous
         self._render_step()
 
     def on_input_changed(self, event: Input.Changed) -> None:
@@ -294,9 +315,11 @@ class ScheduleDeleteConfirmModal(ConfirmScreen):
 
 
 class SchedulesScreen(ChoiceScreen):
-    """One project's schedules, each with pause or resume and delete."""
+    """Every schedule on this host, as the bot lists them, each with pause or resume and
+    delete -- reached from a project's chooser, and listing them all, so one whose project
+    has left the catalogue can still be paused or deleted here."""
 
-    empty_state = "This project has no schedules. Choose Schedule a session to make one."
+    empty_state = "No schedules yet. Choose Schedule a session on a project to make one."
     position = "SCHEDULES"
     status = "Choose a schedule to pause, resume or delete it."
     can_refresh = True
@@ -321,12 +344,8 @@ class SchedulesScreen(ChoiceScreen):
         book = self.services.backend.schedules
         if book is None:
             return ()
-        mine = tuple(
-            schedule
-            for schedule in await book.list()
-            if str(schedule.project_id) == self.project.opaque_id
-        )
-        return schedule_lines(mine, (self.project,), book.zone, book.now())
+        catalogue = (self.project, *self.services.backend.catalogue)
+        return schedule_lines(await book.list(), catalogue, book.zone, book.now())
 
     async def _render_list(self, notice: str | None = None) -> None:
         if not self.showing:
@@ -369,22 +388,24 @@ class SchedulesScreen(ChoiceScreen):
             await self._render_actions(key)
             return
         schedule_id = self._acting_on
+        gone = "That schedule is no longer there."
         if key == "pause":
-            await book.pause(schedule_id)
-            await self._render_list()
+            paused = await book.pause(schedule_id)
+            await self._render_list(None if paused is not None else gone)
         elif key == "resume":
             resumed = await book.resume(schedule_id)
-            notice = (
-                "Its one time passed while it was paused, so it was removed."
-                if isinstance(resumed, ScheduleRefused)
-                else None
-            )
+            if resumed is None:
+                notice = gone
+            elif isinstance(resumed, ScheduleRefused):
+                notice = "Its one time passed while it was paused, so it was removed."
+            else:
+                notice = None
             await self._render_list(notice)
         elif key == "delete":
             async with self.holding_the_guard():
                 confirmed = await self.tui.ask_to_confirm(ScheduleDeleteConfirmModal())
             if confirmed:
-                await book.delete(schedule_id)
-                await self._render_list("Deleted.")
+                deleted = await book.delete(schedule_id)
+                await self._render_list("Deleted." if deleted else gone)
             else:
                 await self._render_actions(schedule_id)

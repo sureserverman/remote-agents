@@ -327,8 +327,6 @@ async def _redraw_sessions(composition: ServiceComposition) -> None:
     theirs: nobody asked for this edit, so a Telegram hiccup must not surface as an error the
     owner did not cause -- and must not take down the task that noticed the change."""
     try:
-        # The schedules list follows the store the same way; it draws only when it is on screen.
-        await composition.boundary.redraw_schedules_if_open()
         drew = await composition.boundary.redraw_sessions_if_open()
         if not drew:
             # A change the edit floor suppressed is owed rather than dropped, and this is
@@ -337,6 +335,12 @@ async def _redraw_sessions(composition: ServiceComposition) -> None:
             await composition.boundary.settle_owed_redraw()
     except Exception:
         _LOG.warning("the sessions page could not be redrawn after a store change", exc_info=True)
+    try:
+        # The schedules list follows the store the same way, drawing only while on screen; a
+        # failure here is its own, and costs the sessions page nothing.
+        await composition.boundary.redraw_schedules_if_open()
+    except Exception:
+        _LOG.warning("the schedules list could not be redrawn after a store change", exc_info=True)
 
 
 async def _close_host_remote_control(composition: ServiceComposition) -> None:

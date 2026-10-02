@@ -2009,7 +2009,9 @@ async def test_a_stale_trust_press_says_so_instead_of_going_silent() -> None:
         async def answer_trust(self, command):
             raise ValueError("that session is not waiting to be trusted")
 
-    untrusted = replace(_a_running_session(SessionState.UNTRUSTED), profile_id=ProfileId("claude"))
+    untrusted = replace(
+        _a_running_session(SessionState.UNTRUSTED), profile_id=ProfileId("claude")
+    )
     boundary = build_private_bot(
         7,
         11,
@@ -2298,7 +2300,9 @@ async def test_a_press_that_pressed_nothing_does_not_report_it_as_trusted() -> N
             # The pane is still asking -- this call simply refused to type into it.
             return TrustAnswer(pressed=False, observed=TrustState.AWAITING)
 
-    untrusted = replace(_a_running_session(SessionState.UNTRUSTED), profile_id=ProfileId("claude"))
+    untrusted = replace(
+        _a_running_session(SessionState.UNTRUSTED), profile_id=ProfileId("claude")
+    )
     boundary = build_private_bot(
         7,
         11,
@@ -2361,7 +2365,9 @@ async def test_a_press_whose_pane_stopped_asking_does_not_claim_it_is_still_wait
             self.answered.append(command.session_id)
             return TrustAnswer(pressed=False, observed=TrustState.UNKNOWN)
 
-    untrusted = replace(_a_running_session(SessionState.UNTRUSTED), profile_id=ProfileId("claude"))
+    untrusted = replace(
+        _a_running_session(SessionState.UNTRUSTED), profile_id=ProfileId("claude")
+    )
     boundary = build_private_bot(
         7,
         11,
@@ -2401,7 +2407,9 @@ async def test_a_press_that_landed_but_left_the_question_up_does_not_invite_a_de
             self.answered.append(command.session_id)
             return TrustAnswer(pressed=True, observed=TrustState.AWAITING)
 
-    untrusted = replace(_a_running_session(SessionState.UNTRUSTED), profile_id=ProfileId("claude"))
+    untrusted = replace(
+        _a_running_session(SessionState.UNTRUSTED), profile_id=ProfileId("claude")
+    )
     boundary = build_private_bot(
         7,
         11,

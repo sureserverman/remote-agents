@@ -159,7 +159,7 @@ async def test_create_a_typed_time_that_is_not_one_is_refused_in_words() -> None
 
 
 @pytest.mark.asyncio
-async def test_create_a_one_shot_in_the_past_is_refused_at_confirm() -> None:
+async def test_create_a_one_shot_in_the_past_is_not_offered_to_save() -> None:
     boundary, book = _bot()
     chat = FakeChat()
     anchor = await _to_time_step(chat, boundary)
@@ -167,10 +167,14 @@ async def test_create_a_one_shot_in_the_past_is_refused_at_confirm() -> None:
     await boundary.text(chat.message_update("2026-10-01 09:00"), None)
     await _press(chat, boundary, anchor, "Once")
     await boundary.text(chat.message_update("hi"), None)
-    await _press(chat, boundary, anchor, "Confirm")
 
-    assert await book.list() == ()
     assert "already passed" in chat.messages[anchor].text
+    assert not any("Confirm" in label for label in _labels(chat.messages[anchor])), (
+        "nothing past is offered to save"
+    )
+    await _press(chat, boundary, anchor, "Choose another time")
+    assert "tomorrow 09:00" in _labels(chat.messages[anchor])
+    assert await book.list() == ()
 
 
 @pytest.mark.asyncio
@@ -315,3 +319,76 @@ async def test_manage_no_schedules_entry_where_the_host_manages_none() -> None:
     await boundary.sessions_command(chat.message_update("/sessions"), None)
 
     assert not any("Schedules" in label for label in _labels(chat.bot_messages[0]))
+
+
+@pytest.mark.asyncio
+async def test_manage_a_long_list_is_paged() -> None:
+    store = MemoryScheduleStore(
+        *(_saved(f"s{index:02}", hour=9 + index % 10) for index in range(20))
+    )
+    boundary, _ = _bot(store)
+    chat = FakeChat()
+    anchor = await _open_schedules(chat, boundary)
+
+    first = chat.messages[anchor]
+    assert "Schedules 1/3" in first.text
+    assert "🗑 8" in _labels(first) and "🗑 9" not in _labels(first)
+    assert len(first.text) < 4096
+    await _press(chat, boundary, anchor, "Next")
+    second = chat.messages[anchor]
+    assert "Schedules 2/3" in second.text
+    assert "🗑 9" in _labels(second) and "🗑 16" in _labels(second)
+    await _press(chat, boundary, anchor, "⏸ 9")
+    assert "Schedules 2/3" in chat.messages[anchor].text, "a pause lands back on its page"
+
+
+@pytest.mark.asyncio
+async def test_manage_a_redraw_that_stood_down_for_a_press_is_still_owed() -> None:
+    store = MemoryScheduleStore()
+    boundary, book = _bot(store)
+    chat = FakeChat()
+    await _open_schedules(chat, boundary)
+    await store.add(_saved("s9"))
+    reads = book._store.list  # noqa: SLF001
+
+    async def pressed_meanwhile():
+        boundary._handling_press = True  # noqa: SLF001 -- a press arriving during the read
+        return await reads()
+
+    book._store.list = pressed_meanwhile  # noqa: SLF001
+    assert await boundary.redraw_schedules_if_open(chat.bot) is False
+    book._store.list = reads  # noqa: SLF001
+    boundary._handling_press = False  # noqa: SLF001
+
+    assert await boundary.redraw_schedules_if_open(chat.bot) is True
+
+
+@pytest.mark.asyncio
+async def test_create_cancel_from_changing_the_message_keeps_it_and_returns_to_review() -> None:
+    boundary, book = _bot()
+    chat = FakeChat()
+    anchor = await _to_time_step(chat, boundary)
+    await _press(chat, boundary, anchor, "tomorrow 09:00")
+    await _press(chat, boundary, anchor, "Daily")
+    await boundary.text(chat.message_update("first draft"), None)
+    await _press(chat, boundary, anchor, "Change the message")
+
+    await boundary.text(chat.message_update("Cancel"), None)
+
+    assert "first draft" in chat.messages[anchor].text
+    assert any("Confirm" in label for label in _labels(chat.messages[anchor]))
+
+
+@pytest.mark.asyncio
+async def test_create_cancel_at_the_message_after_picking_days_returns_to_the_days() -> None:
+    boundary, _ = _bot()
+    chat = FakeChat()
+    anchor = await _to_time_step(chat, boundary)
+    await _press(chat, boundary, anchor, "tomorrow 09:00")
+    await _press(chat, boundary, anchor, "Pick days")
+    await _press(chat, boundary, anchor, "Tue")
+    await _press(chat, boundary, anchor, "Done")
+
+    await boundary.text(chat.message_update("Cancel"), None)
+
+    assert "✅ Tue" in _labels(chat.messages[anchor])

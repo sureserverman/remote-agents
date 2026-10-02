@@ -185,3 +185,54 @@ async def test_the_chooser_offers_no_schedules_where_the_host_manages_none() -> 
         await app.screen.choose("opaque-infra")
         await pilot.pause()
         assert not any("chedule" in row for row in _rows(app))
+
+
+async def test_escape_steps_back_one_question_and_keeps_the_choices() -> None:
+    store = MemoryScheduleStore()
+    app, _ = _app(store)
+    async with app.run_test(size=(120, 30)) as pilot:
+        await pilot.pause()
+        await _to_message_step(app, pilot)
+
+        await pilot.press("escape")
+        await pilot.pause()
+
+        assert position(app) == "SCHEDULE"
+        assert "How often" in _status(app), "back at the repeat, with the time kept"
+        await pilot.press("escape")
+        await pilot.press("escape")
+        await pilot.press("escape")
+        await pilot.pause()
+        assert isinstance(app.screen, ProjectChooserScreen)
+
+
+async def test_the_list_shows_every_schedule_and_says_when_one_vanished() -> None:
+    from remote_agents.domain.models import ProfileId
+    from remote_agents.ports.schedules import Schedule
+
+    other = Schedule(
+        id="far1",
+        project_id=ProjectId("opaque-gone"),
+        profile_id=ProfileId("claude"),
+        prompt="from a project that left the catalogue",
+        when=Repeat.daily(time(9, 0)),
+        paused=False,
+        next_fire_at=datetime(2026, 10, 3, 7, 0, tzinfo=UTC),
+        created_at=NOW,
+    )
+    store = MemoryScheduleStore(other)
+    app, _ = _app(store)
+    async with app.run_test(size=(160, 30)) as pilot:
+        await pilot.pause()
+        await app.screen.choose("opaque-infra")
+        await pilot.pause()
+        await app.screen.choose("schedules")
+        await pilot.pause()
+        assert any("opaque-gone · daily 09:00" in row for row in _rows(app)), _rows(app)
+
+        await app.screen.choose("far1")
+        await pilot.pause()
+        await store.delete("far1")  # the bot deleted it meanwhile
+        await app.screen.choose("pause")
+        await pilot.pause()
+        assert "no longer there" in _status(app)

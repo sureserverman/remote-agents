@@ -27,7 +27,12 @@ _ZONEINFO_MARKER = "zoneinfo/"
 def next_fire(when: When, after: datetime, zone: tzinfo) -> datetime | None:
     """The first fire strictly after `after`, in UTC; None for a one-shot already past."""
     if isinstance(when, Once):
-        fired = _instant(when.at.date(), when.at.time(), zone)
+        try:
+            fired = _instant(when.at.date(), when.at.time(), zone)
+        except OverflowError:
+            # A date at the edge of what `datetime` holds, shifted past it by the zone: not a
+            # time anything can fire at.
+            return None
         return fired if fired > after else None
     return _next_repeat(when, after, zone)
 
@@ -121,7 +126,9 @@ def preset_time(key: str, now: datetime, zone: tzinfo) -> datetime:
     """The local wall-clock time a preset names, measured from `now`."""
     local = local_now(now, zone)
     if key == "in_1h":
-        return local + timedelta(hours=1)
+        # An hour of elapsed time, not an hour added to the wall clock: across a DST change
+        # the wall clock moves by thirty minutes or two hours in that same hour.
+        return local_now(now + timedelta(hours=1), zone)
     if key == "tonight_0300":
         night = datetime.combine(local.date(), time(3, 0))
         return night if night > local else night + timedelta(days=1)
@@ -130,8 +137,12 @@ def preset_time(key: str, now: datetime, zone: tzinfo) -> datetime:
     raise ValueError(f"no such time preset: {key}")
 
 
-_CLOCK = re.compile(r"(\d{1,2}):(\d{2})")
-_DATED = re.compile(r"(\d{4})-(\d{2})-(\d{2})[ T](\d{1,2}):(\d{2})")
+_CLOCK = re.compile(r"(\d{1,2}):(\d{2})", re.ASCII)
+_DATED = re.compile(r"(\d{4})-(\d{2})-(\d{2})[ T](\d{1,2}):(\d{2})", re.ASCII)
+
+#: How far ahead a typed date may be. Further is a typo, and near the edge of what `datetime`
+#: holds a zone's offset would carry it past the edge.
+MAX_YEARS_AHEAD = 5
 
 
 def parse_time_text(text: str, now: datetime, zone: tzinfo) -> datetime | None:
@@ -152,9 +163,13 @@ def parse_time_text(text: str, now: datetime, zone: tzinfo) -> datetime | None:
     dated = _DATED.fullmatch(typed)
     if dated is not None:
         try:
-            return datetime(*(int(part) for part in dated.groups()))
+            moment = datetime(*(int(part) for part in dated.groups()))
         except ValueError:
             return None
+        year = local_now(now, zone).year
+        if not year - 1 <= moment.year <= year + MAX_YEARS_AHEAD:
+            return None
+        return moment
     return None
 
 

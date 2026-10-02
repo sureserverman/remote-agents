@@ -148,6 +148,7 @@ from remote_agents.application.session_actions import (
 from remote_agents.application.session_views import (
     CATALOGUE_GAP_RETRY_SECONDS,
     SCHEDULE_PREVIEW_WIDTH,
+    ScheduleLine,
     StateGroup,
     fire_words,
     group_counts,
@@ -408,6 +409,9 @@ _TIME_PRESET_LABELS = {
 }
 _REPEAT_LABELS = {"once": "Once", "daily": "Daily", "weekdays": "Weekdays", "days": "Pick days"}
 _DAY_LABELS = ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
+#: Schedules per page of the list: two lines and a row of two buttons each, well inside a
+#: message's 4096 characters and a keyboard's 100 buttons.
+_SCHEDULES_PAGE_SIZE = 8
 
 
 #: Actions whose token lives on a message sent *apart* from the live view, and which must
@@ -831,6 +835,8 @@ class PrivateBotBoundary:
     #: What the schedules list last showed, so a store change that altered none of it draws
     #: nothing.
     _last_schedules_key: tuple[object, ...] = ()
+    #: The schedules page on screen, so a redraw and a pause land back on it.
+    _schedules_page: int = 1
     _attachment: tuple[str, int] | None = None
     #: The pairing-code message, until the owner's next interaction takes it out of the chat.
     #: A bare id rather than the attachment's `(scope, id)` pair, because a pairing code is
@@ -1324,7 +1330,13 @@ class PrivateBotBoundary:
         if entry.action in {"schedule.time", "schedule.message"}:
             if self._schedule_draft is None:
                 return _reply_arguments(self._projects_reply(self.catalogue, view_id="all"))
-            if entry.action == "schedule.message" and self._schedule_draft.at is not None:
+            draft = self._schedule_draft
+            if entry.action == "schedule.message" and draft.message is not None:
+                # Leaving "change the message" keeps the message it had.
+                return _reply_arguments(self._schedule_review_reply())
+            if entry.action == "schedule.message" and draft.at is not None:
+                if entry.entity_id == "days" and draft.days:
+                    return _reply_arguments(self._schedule_days_reply())
                 return _reply_arguments(self._schedule_repeat_reply())
             return _reply_arguments(self._schedule_time_reply())
         if entry.action == "project.name":
@@ -2481,18 +2493,26 @@ class PrivateBotBoundary:
     _SCHEDULES_SCREEN = "schedules"
 
     async def _schedules_reply(
-        self, notice: str | None = None, *, mark: bool = True
+        self,
+        notice: str | None = None,
+        *,
+        mark: bool = True,
+        lines: tuple[ScheduleLine, ...] | None = None,
     ) -> RenderedMessage:
         """Every schedule as one line of facts over its message's start, with pause or
-        resume and delete beside each, numbered in the order listed."""
+        resume and delete beside each, numbered in the order listed, a page at a time -- a
+        message holds 4096 characters and a keyboard 100 buttons."""
         book = self.backend.schedules
         if book is None:
             return self._message("Scheduling is unavailable.")
         if mark:
             self._drawing_screen = self._SCHEDULES_SCREEN
-        schedules = await book.list()
-        lines = schedule_lines(schedules, self.catalogue, book.zone, book.now())
-        self._last_schedules_key = tuple(lines)
+        if lines is None:
+            lines = schedule_lines(await book.list(), self.catalogue, book.zone, book.now())
+        if mark:
+            # A press draws what it read, so the watcher compares against this. The watcher's
+            # own redraw records its lines only once its edit has landed.
+            self._last_schedules_key = tuple(lines)
         lead = self._notice_line(notice)
         if not lines:
             return self._message(
@@ -2500,22 +2520,35 @@ class PrivateBotBoundary:
                 "then ⏰ Schedule.",
                 back=self._callback("sessions.open", "sessions"),
             )
+        page_count = max(1, ceil(len(lines) / _SCHEDULES_PAGE_SIZE))
+        page = min(max(self._schedules_page, 1), page_count)
+        self._schedules_page = page
+        start = (page - 1) * _SCHEDULES_PAGE_SIZE
+        shown = tuple(enumerate(lines, start=1))[start : start + _SCHEDULES_PAGE_SIZE]
         body = "\n\n".join(
             f"<b>{number}.</b> {escape(line.facts)}\n<code>{escape(line.preview)}</code>"
-            for number, line in enumerate(lines, start=1)
+            for number, line in shown
         )
-        rows = tuple(
+        rows: list[tuple[Button, ...]] = [
             (
                 Button(f"▶️ {number}", self._callback("schedules.resume", line.schedule_id))
                 if line.paused
                 else Button(f"⏸ {number}", self._callback("schedules.pause", line.schedule_id)),
                 Button(f"🗑 {number}", self._callback("schedules.delete", line.schedule_id)),
             )
-            for number, line in enumerate(lines, start=1)
-        )
+            for number, line in shown
+        ]
+        navigation = []
+        if page > 1:
+            navigation.append(Button("Previous", self._callback("schedules.page", str(page - 1))))
+        if page < page_count:
+            navigation.append(Button("Next", self._callback("schedules.page", str(page + 1))))
+        if navigation:
+            rows.append(tuple(navigation))
+        title = "Schedules" if page_count == 1 else f"Schedules {page}/{page_count}"
         return self._message(
-            f"{lead}<b>Schedules</b> · {len(lines)}\n\n{body}",
-            rows,
+            f"{lead}<b>{title}</b> · {len(lines)}\n\n{body}",
+            tuple(rows),
             back=self._callback("sessions.open", "sessions"),
         )
 
@@ -2526,6 +2559,10 @@ class PrivateBotBoundary:
         if book is None:
             return _reply_arguments(self._message("Scheduling is unavailable."))
         if action == "schedules.open":
+            self._schedules_page = 1
+            return _reply_arguments(await self._schedules_reply())
+        if action == "schedules.page":
+            self._schedules_page = _page_number(entity_id)
             return _reply_arguments(await self._schedules_reply())
         if action == "schedules.pause":
             paused = await book.pause(entity_id)
@@ -2590,10 +2627,12 @@ class PrivateBotBoundary:
         lines = schedule_lines(await book.list(), self.catalogue, book.zone, book.now())
         if tuple(lines) == self._last_schedules_key:
             return False
-        rendered = await self._schedules_reply(mark=False)
+        rendered = await self._schedules_reply(mark=False, lines=lines)
         if self._handling_press or not self.view.showing(self._SCHEDULES_SCREEN):
             return False
         await self.view.render(speaker, _reply_arguments(rendered), screen=self._SCHEDULES_SCREEN)
+        # Only now: a redraw that stood down for a press, or whose edit failed, is still owed.
+        self._last_schedules_key = tuple(lines)
         return True
 
     async def _context_for(self, record: SessionRecord) -> ContextWindow | None:
@@ -4779,6 +4818,8 @@ class PrivateBotBoundary:
         if action == "sched.time":
             self._schedule_draft = replace(draft, at=preset_time(entity_id, book.now(), book.zone))
             return _reply_arguments(self._schedule_repeat_reply())
+        if action == "sched.retime":
+            return _reply_arguments(self._schedule_time_reply())
         if action == "sched.repeat" and draft.at is not None:
             return _reply_arguments(self._schedule_repeat_reply())
         if action == "sched.days" and draft.at is not None:
@@ -4894,10 +4935,16 @@ class PrivateBotBoundary:
         ]
         if notice:
             lines.insert(0, escape(notice))
+        confirm = (
+            ((Button("✅ Confirm", self._callback("sched.confirm", "draft", mutation=True)),),)
+            if fire is not None
+            # Nothing to confirm: a time already passed is chosen again, not saved.
+            else ((Button("⏰ Choose another time", self._callback("sched.retime", "draft")),),)
+        )
         return self._message(
             "\n".join(lines),
-            (
-                (Button("✅ Confirm", self._callback("sched.confirm", "draft", mutation=True)),),
+            confirm
+            + (
                 (
                     Button(
                         "✏️ Change the message",
