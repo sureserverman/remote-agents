@@ -10,11 +10,13 @@ made in UTC.
 
 from __future__ import annotations
 
+import re
+from collections.abc import Iterable
 from datetime import UTC, date, datetime, time, timedelta, tzinfo
 from pathlib import Path
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from remote_agents.ports.schedules import Once, Repeat, When
+from remote_agents.ports.schedules import Once, Repeat, Weekday, When
 
 LOCALTIME = Path("/etc/localtime")
 """The host's zone, as a symlink into the zoneinfo tree on both Linux and macOS."""
@@ -101,3 +103,70 @@ def schedule_zone_line(path: Path = LOCALTIME) -> str:
     if zone is not None:
         return zone
     return f"UTC (fallback: {path} names no zone)"
+
+
+#: The times both surfaces offer as one press, each a local wall-clock time from now.
+TIME_PRESETS = ("in_1h", "tonight_0300", "tomorrow_0900")
+
+#: The repeats both surfaces offer. `days` is followed by a choice of weekdays.
+REPEATS = ("once", "daily", "weekdays", "days")
+
+
+def local_now(now: datetime, zone: tzinfo) -> datetime:
+    """`now` on the zone's wall clock, naive and to the minute -- what a schedule is set in."""
+    return now.astimezone(zone).replace(tzinfo=None, second=0, microsecond=0)
+
+
+def preset_time(key: str, now: datetime, zone: tzinfo) -> datetime:
+    """The local wall-clock time a preset names, measured from `now`."""
+    local = local_now(now, zone)
+    if key == "in_1h":
+        return local + timedelta(hours=1)
+    if key == "tonight_0300":
+        night = datetime.combine(local.date(), time(3, 0))
+        return night if night > local else night + timedelta(days=1)
+    if key == "tomorrow_0900":
+        return datetime.combine(local.date() + timedelta(days=1), time(9, 0))
+    raise ValueError(f"no such time preset: {key}")
+
+
+_CLOCK = re.compile(r"(\d{1,2}):(\d{2})")
+_DATED = re.compile(r"(\d{4})-(\d{2})-(\d{2})[ T](\d{1,2}):(\d{2})")
+
+
+def parse_time_text(text: str, now: datetime, zone: tzinfo) -> datetime | None:
+    """A typed time as a local wall-clock time, or None when it is not one.
+
+    `HH:MM` is its next occurrence -- today if still ahead, else tomorrow; `YYYY-MM-DD HH:MM` is
+    that date. Whether it is in the past is the caller's question (a one-shot refuses it).
+    """
+    typed = text.strip()
+    clock = _CLOCK.fullmatch(typed)
+    if clock is not None:
+        hour, minute = int(clock[1]), int(clock[2])
+        if hour > 23 or minute > 59:
+            return None
+        local = local_now(now, zone)
+        today = datetime.combine(local.date(), time(hour, minute))
+        return today if today > local else today + timedelta(days=1)
+    dated = _DATED.fullmatch(typed)
+    if dated is not None:
+        try:
+            return datetime(*(int(part) for part in dated.groups()))
+        except ValueError:
+            return None
+    return None
+
+
+def when_from(local: datetime, repeat: str, days: Iterable[Weekday] = ()) -> When:
+    """The schedule's `when` from a chosen local time and repeat: a repeat keeps the time of
+    day alone. Raises ValueError for `days` with none chosen, as `Repeat` does."""
+    if repeat == "once":
+        return Once(local)
+    if repeat == "daily":
+        return Repeat.daily(local.time())
+    if repeat == "weekdays":
+        return Repeat.weekdays(local.time())
+    if repeat == "days":
+        return Repeat(frozenset(days), local.time())
+    raise ValueError(f"no such repeat: {repeat}")

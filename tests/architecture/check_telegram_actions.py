@@ -19,7 +19,8 @@ def main() -> int:
         raise SystemExit(f"prohibited Telegram action surface: {', '.join(offenders)}")
     print(
         "approved Telegram action surface: "
-        "launch/resume/list/inspect/graceful/cleanup/force/create-project/trust/decline/message/navigation"
+        "launch/resume/list/inspect/graceful/cleanup/force/create-project/trust/decline/message/"
+        "schedule/navigation"
     )
     return 0
 

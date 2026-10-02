@@ -115,6 +115,15 @@ from remote_agents.application.remote_control_default import (
 )
 from remote_agents.application.resume_flow import RESUME_PAGE_SIZE, resume_capable
 from remote_agents.application.resume_setting import RESUME_LABELS, RESUME_TITLE
+from remote_agents.application.schedule_book import ScheduleRefusal, ScheduleRefused
+from remote_agents.application.schedule_times import (
+    REPEATS,
+    TIME_PRESETS,
+    next_fire,
+    parse_time_text,
+    preset_time,
+    when_from,
+)
 from remote_agents.application.session_actions import (
     ACTION_LABELS,
     CLEANUP,
@@ -138,13 +147,17 @@ from remote_agents.application.session_actions import (
 )
 from remote_agents.application.session_views import (
     CATALOGUE_GAP_RETRY_SECONDS,
+    SCHEDULE_PREVIEW_WIDTH,
     StateGroup,
+    fire_words,
     group_counts,
     group_emoji,
     limit_rows,
     listed_sessions,
     only_listed,
     project_name,
+    repeat_words,
+    schedule_lines,
     selectable_area,
     session_identity,
     session_lines,
@@ -185,6 +198,7 @@ from remote_agents.ports.message_relay import (
     RelayResult,
     WaitingMessage,
 )
+from remote_agents.ports.schedules import Weekday
 from remote_agents.ports.standing_notification import StandingNotificationPort
 from remote_agents.ports.terminal import PromptReason, TerminalTargetMissing
 
@@ -261,6 +275,15 @@ _GUIDED_TEXT_ENTRY = {
         "Reply with the message to type into this session. Send Cancel or Back to leave it.",
         "Message",
     ),
+    "schedule.time": (
+        "Reply with a time: HH:MM, or YYYY-MM-DD HH:MM. Send Cancel or Back to leave this step.",
+        "HH:MM",
+    ),
+    "schedule.message": (
+        "Reply with the message to type when the session starts. Send Cancel or Back to leave "
+        "this step.",
+        "Message",
+    ),
 }
 _ENTRY_INSTRUCTIONS = {
     "launch.search": "Reply below with a project name.",
@@ -268,10 +291,20 @@ _ENTRY_INSTRUCTIONS = {
     "project.name": "Reply below with the new project name.",
     "session.rename": "Reply below with a name for this session.",
     "session.message": "Reply below with the message to type into this session.",
+    "schedule.time": "Reply below with a time.",
+    "schedule.message": "Reply below with the message to type when the session starts.",
 }
 _SEARCH_ACTIONS = {"launch.search": "launch", "resume.search": "resume"}
 _TEXT_ENTRY_ACTIONS = frozenset(
-    {"launch.search", "resume.search", "project.area", "session.rename", "session.message"}
+    {
+        "launch.search",
+        "resume.search",
+        "project.area",
+        "session.rename",
+        "session.message",
+        "schedule.time",
+        "schedule.message",
+    }
 )
 """The actions that open a guided step, and so the only ones that may leave a box open."""
 
@@ -341,6 +374,40 @@ class _TextEntry:
     action: str
     entity_id: str
     input_message_id: int = 0
+
+
+@dataclass(frozen=True, slots=True)
+class _ScheduleDraft:
+    """A schedule part-way through being made: what has been chosen so far."""
+
+    project_id: str
+    profile_id: str
+    at: datetime | None = None
+    """The chosen local wall-clock time, naive -- a repeat keeps its time of day alone."""
+    repeat: str | None = None
+    days: frozenset[int] = frozenset()
+    message: str | None = None
+
+
+#: A refused schedule, in words (DEC-010). The text the owner typed is the *message* in this
+#: package (DEC-075).
+_SCHEDULE_REFUSALS = {
+    "empty": "The message is empty.",
+    "shell": "A message starting with ! would run as a shell command, so it is refused.",
+    "menu": "This agent's command menu cannot be read, so a message starting with / is refused.",
+    "no_composer": "This agent's screen cannot be read, so nothing can be typed into it.",
+    "unknown_project": "That project is no longer available.",
+    "unknown_profile": "That agent is not available.",
+    "past": "That time has already passed. Choose another.",
+}
+
+_TIME_PRESET_LABELS = {
+    "in_1h": "in 1h",
+    "tonight_0300": "tonight 03:00",
+    "tomorrow_0900": "tomorrow 09:00",
+}
+_REPEAT_LABELS = {"once": "Once", "daily": "Daily", "weekdays": "Weekdays", "days": "Pick days"}
+_DAY_LABELS = ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
 
 
 #: Actions whose token lives on a message sent *apart* from the live view, and which must
@@ -757,6 +824,10 @@ class PrivateBotBoundary:
     meant to end.
     """
     _awaiting_text: dict[tuple[int, int], _TextEntry] = field(default_factory=dict)
+    #: The schedule being made, one step at a time, until it is confirmed or abandoned.
+    #: Process-local like `_awaiting_text`: a restart mid-flow forgets it, and the next step
+    #: answers that the flow has to start again.
+    _schedule_draft: _ScheduleDraft | None = None
     _attachment: tuple[str, int] | None = None
     #: The pairing-code message, until the owner's next interaction takes it out of the chat.
     #: A bare id rather than the attachment's `(scope, id)` pair, because a pairing code is
@@ -1187,10 +1258,53 @@ class PrivateBotBoundary:
                 _reply_arguments(await self._relay_reply(entry.entity_id, result)),
             )
             return
+        if entry.action in {"schedule.time", "schedule.message"}:
+            await self._schedule_text(bot, entry, message, value)
+            return
         # Every remaining text step returns above. A step that reaches here is one whose
         # action was added to `_TEXT_ENTRY_ACTIONS` without a branch to answer it, which would
         # otherwise consume the owner's reply and draw nothing.
         raise AssertionError(f"no text handler for {entry.action!r}")
+
+    async def _schedule_text(self, bot, entry: _TextEntry, message, value: str) -> None:
+        """A typed time, or the message to type: checked here, while the owner is still at it."""
+        book = self.backend.schedules
+        draft = self._schedule_draft
+        if book is None or draft is None:
+            await self._finish_entry(
+                bot,
+                entry,
+                message,
+                _reply_arguments(
+                    self._message("That schedule is no longer being made. Start it again.")
+                ),
+            )
+            return
+        if entry.action == "schedule.time":
+            at = parse_time_text(value, book.now(), book.zone)
+            if at is None:
+                await self._ask_again(
+                    bot, entry, message, "Use HH:MM, or YYYY-MM-DD HH:MM, in this host's time."
+                )
+                return
+            self._schedule_draft = replace(draft, at=at)
+            await self._finish_entry(
+                bot, entry, message, _reply_arguments(self._schedule_repeat_reply())
+            )
+            return
+        refusal = book.refusal(ProfileId(draft.profile_id), value)
+        if refusal is not None:
+            await self._ask_again(
+                bot,
+                entry,
+                message,
+                _SCHEDULE_REFUSALS.get(refusal.value, "That message is refused."),
+            )
+            return
+        self._schedule_draft = replace(draft, repeat=entry.entity_id, message=value)
+        await self._finish_entry(
+            bot, entry, message, _reply_arguments(self._schedule_review_reply())
+        )
 
     @property
     def _entry_key(self) -> tuple[int, int]:
@@ -1204,6 +1318,12 @@ class PrivateBotBoundary:
         """
         if entry.action in {"session.rename", "session.message"}:
             return _reply_arguments(await self._detail_reply(entry.entity_id))
+        if entry.action in {"schedule.time", "schedule.message"}:
+            if self._schedule_draft is None:
+                return _reply_arguments(self._projects_reply(self.catalogue, view_id="all"))
+            if entry.action == "schedule.message" and self._schedule_draft.at is not None:
+                return _reply_arguments(self._schedule_repeat_reply())
+            return _reply_arguments(self._schedule_time_reply())
         if entry.action == "project.name":
             # `project.name` is what the *step* is called; `project.area` is the button that
             # opens it. Abandoning the name returns to the area picker that asked for it.
@@ -1619,6 +1739,8 @@ class PrivateBotBoundary:
             return _reply_arguments(self._profiles_reply(entity_id))
         if action == "launch.profile":
             return await self._launch_reply(entity_id, token, message_id)
+        if action.startswith("sched."):
+            return await self._schedule_step_reply(action, entity_id, token, message_id)
         if action == "sessions.open":
             return _reply_arguments(await self._sessions_reply())
         if action == "sessions.page":
@@ -4492,9 +4614,199 @@ class PrivateBotBoundary:
             for profile in self.profiles
             if profile.available
         )
+        schedule_row: tuple[tuple[Button, ...], ...] = ()
+        if self.backend.schedules is not None:
+            # Beside launching, not instead of it: the same agents, started later (DEC-114).
+            schedule_row = ((Button("⏰ Schedule", self._callback("sched.agents", project_id)),),)
         return self._message(
             "<b>Select an agent</b>",
-            _button_rows(buttons) + ((Button("Back", self._callback("launch.open", "projects")),),),
+            _button_rows(buttons)
+            + schedule_row
+            + ((Button("Back", self._callback("launch.open", "projects")),),),
+        )
+
+    # --- scheduling (DEC-114): project → agent → time → repeat → message → confirm ---------
+
+    async def _schedule_step_reply(
+        self, action: str, entity_id: str, token: str, message_id: int
+    ) -> dict[str, object]:
+        """One press of the schedule flow. Each step re-reads the draft, and a draft lost to a
+        restart sends the owner back to the start rather than guessing."""
+        book = self.backend.schedules
+        if book is None:
+            return _reply_arguments(self._message("Scheduling is unavailable."))
+        if action == "sched.agents":
+            return _reply_arguments(self._schedule_agents_reply(entity_id))
+        if action == "sched.profile":
+            project_id, profile_id = _split_launch(entity_id)
+            self._schedule_draft = _ScheduleDraft(project_id, profile_id)
+            return _reply_arguments(self._schedule_time_reply())
+        draft = self._schedule_draft
+        if draft is None:
+            return _reply_arguments(
+                self._message("That schedule is no longer being made. Start it again from Launch.")
+            )
+        if action == "sched.time":
+            self._schedule_draft = replace(draft, at=preset_time(entity_id, book.now(), book.zone))
+            return _reply_arguments(self._schedule_repeat_reply())
+        if action == "sched.repeat" and draft.at is not None:
+            return _reply_arguments(self._schedule_repeat_reply())
+        if action == "sched.days" and draft.at is not None:
+            return _reply_arguments(self._schedule_days_reply())
+        if action == "sched.day" and draft.at is not None:
+            day = int(entity_id)
+            days = draft.days - {day} if day in draft.days else draft.days | {day}
+            self._schedule_draft = replace(draft, days=frozenset(days))
+            return _reply_arguments(self._schedule_days_reply())
+        if action == "sched.confirm":
+            return await self._schedule_confirm_reply(token, message_id)
+        return _reply_arguments(self._message("That action is no longer available."))
+
+    def _schedule_agents_reply(self, project_id: str) -> RenderedMessage:
+        if not any(project.opaque_id == project_id for project in self.catalogue):
+            return self._message("The project is no longer available.")
+        buttons = tuple(
+            Button(
+                _profile_name(profile.profile_id),
+                self._callback("sched.profile", f"{project_id}|{profile.profile_id}"),
+            )
+            for profile in self.profiles
+            if profile.available
+        )
+        return self._message(
+            "<b>Schedule an agent</b>\nChoose the agent to start.",
+            _button_rows(buttons),
+            back=self._callback("launch.project", project_id),
+        )
+
+    def _schedule_heading(self, draft: _ScheduleDraft) -> str:
+        project = project_name(draft.project_id, self.catalogue)
+        return f"<b>Schedule</b> · {escape(draft.profile_id)} in {escape(project)}"
+
+    def _schedule_time_reply(self, notice: str | None = None) -> RenderedMessage:
+        draft = self._schedule_draft
+        assert draft is not None
+        presets = tuple(
+            Button(_TIME_PRESET_LABELS[key], self._callback("sched.time", key))
+            for key in TIME_PRESETS
+        )
+        lead = f"{escape(notice)}\n" if notice else ""
+        return self._message(
+            f"{lead}{self._schedule_heading(draft)}\nWhen should it start? Times are this host's "
+            "local time.",
+            _button_rows(presets, width=3)
+            + ((Button("⌨️ Type a time", self._callback("schedule.time", "draft")),),),
+            back=self._callback("sched.agents", draft.project_id),
+        )
+
+    def _schedule_repeat_reply(self) -> RenderedMessage:
+        draft = self._schedule_draft
+        assert draft is not None and draft.at is not None
+        repeats = tuple(
+            Button(
+                _REPEAT_LABELS[key],
+                # Every repeat but a choice of days opens the message step at once, carrying
+                # the repeat it was chosen with.
+                self._callback("sched.days", "draft")
+                if key == "days"
+                else self._callback("schedule.message", key),
+            )
+            for key in REPEATS
+        )
+        return self._message(
+            f"{self._schedule_heading(draft)}\nAt {draft.at:%H:%M} ({draft.at:%a %d %b}). "
+            "How often?",
+            _button_rows(repeats),
+            back=self._callback("sched.profile", f"{draft.project_id}|{draft.profile_id}"),
+        )
+
+    def _schedule_days_reply(self) -> RenderedMessage:
+        draft = self._schedule_draft
+        assert draft is not None and draft.at is not None
+        days = tuple(
+            Button(
+                f"✅ {label}" if index in draft.days else label,
+                self._callback("sched.day", str(index)),
+            )
+            for index, label in enumerate(_DAY_LABELS)
+        )
+        done = (
+            ((Button("Done", self._callback("schedule.message", "days")),),) if draft.days else ()
+        )
+        return self._message(
+            f"{self._schedule_heading(draft)}\nAt {draft.at:%H:%M} on which days?",
+            _button_rows(days, width=4) + done,
+            back=self._callback("sched.repeat", "draft"),
+        )
+
+    def _schedule_draft_when(self, draft: _ScheduleDraft):
+        assert draft.at is not None and draft.repeat is not None
+        return when_from(draft.at, draft.repeat, (Weekday(day) for day in draft.days))
+
+    def _schedule_review_reply(self, notice: str | None = None) -> RenderedMessage:
+        draft = self._schedule_draft
+        assert draft is not None and draft.message is not None
+        book = self.backend.schedules
+        when = self._schedule_draft_when(draft)
+        fire = next_fire(when, book.now(), book.zone)
+        first = " ".join(draft.message.split())
+        if len(first) > SCHEDULE_PREVIEW_WIDTH:
+            first = first[: SCHEDULE_PREVIEW_WIDTH - 1] + "…"
+        lines = [
+            self._schedule_heading(draft),
+            escape(repeat_words(when)),
+            (
+                f"next {fire_words(fire, book.zone, book.now())}"
+                if fire is not None
+                else _SCHEDULE_REFUSALS["past"]
+            ),
+            f"Message: <code>{escape(first)}</code>",
+        ]
+        if notice:
+            lines.insert(0, escape(notice))
+        return self._message(
+            "\n".join(lines),
+            (
+                (Button("✅ Confirm", self._callback("sched.confirm", "draft", mutation=True)),),
+                (
+                    Button(
+                        "✏️ Change the message",
+                        self._callback("schedule.message", draft.repeat or "once"),
+                    ),
+                ),
+            ),
+            back=self._callback("launch.project", draft.project_id),
+            back_label="Cancel",
+        )
+
+    async def _schedule_confirm_reply(self, token: str, message_id: int) -> dict[str, object]:
+        draft = self._schedule_draft
+        book = self.backend.schedules
+        assert draft is not None and book is not None
+        if draft.message is None or draft.at is None or draft.repeat is None:
+            return _reply_arguments(self._schedule_time_reply())
+        if not self.callbacks.claim_mutation(
+            token, owner_id=self.owner_user_id, chat_id=self.owner_chat_id, message_id=message_id
+        ):
+            return _reply_arguments(self._message("That action has already run."))
+        added = await book.add(
+            ProjectId(draft.project_id),
+            ProfileId(draft.profile_id),
+            draft.message,
+            self._schedule_draft_when(draft),
+        )
+        if isinstance(added, ScheduleRefused):
+            words = _SCHEDULE_REFUSALS.get(added.reason.value, "That schedule was refused.")
+            if added.reason is ScheduleRefusal.PAST:
+                return _reply_arguments(self._schedule_time_reply(notice=words))
+            return _reply_arguments(self._schedule_review_reply(notice=words))
+        self._schedule_draft = None
+        (line,) = schedule_lines((added,), self.catalogue, book.zone, book.now())
+        return _reply_arguments(
+            self._message(
+                f"<b>Scheduled</b>\n{escape(line.facts)}",
+                ((Button("⏰ Schedules", self._callback("schedules.open", "schedules")),),),
+            )
         )
 
     def _message(
@@ -4997,6 +5309,10 @@ _FLOW_OF_PREFIX = {
     "launch": "launch",
     "project": "launch",
     "resume": "resume",
+    # A schedule is made from the launch flow's agent list, and listed beside the sessions.
+    "sched": "launch",
+    "schedule": "launch",
+    "schedules": "sessions",
 }
 """Which flow an action's screen belongs to, keyed by the part before its dot.
 

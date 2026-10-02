@@ -66,16 +66,26 @@ class ScheduleBook:
         self._now = now
         self._new_id = new_id
 
+    def now(self) -> datetime:
+        """The book's clock, which a surface offering "in 1h" or "tomorrow" measures from."""
+        return self._now()
+
+    def refusal(self, profile_id: ProfileId, prompt: str) -> ScheduleRefusal | None:
+        """Whether `add` would refuse this message for this agent -- asked by a surface at the
+        message step, so the owner is told while still typing it (rule 3)."""
+        if str(profile_id) not in self._composers:
+            return ScheduleRefusal.UNKNOWN_PROFILE
+        refusal = pre_paste_refusal(prompt, self._composers[str(profile_id)])
+        return None if refusal is None else ScheduleRefusal(refusal.value)
+
     async def add(
         self, project_id: ProjectId, profile_id: ProfileId, prompt: str, when: When
     ) -> Schedule | ScheduleRefused:
         if project_id not in set(self._projects()):
             return ScheduleRefused(ScheduleRefusal.UNKNOWN_PROJECT)
-        if str(profile_id) not in self._composers:
-            return ScheduleRefused(ScheduleRefusal.UNKNOWN_PROFILE)
-        refusal = pre_paste_refusal(prompt, self._composers[str(profile_id)])
+        refusal = self.refusal(profile_id, prompt)
         if refusal is not None:
-            return ScheduleRefused(ScheduleRefusal(refusal.value))
+            return ScheduleRefused(refusal)
         now = self._now()
         fire = next_fire(when, now, self._zone())
         if fire is None:

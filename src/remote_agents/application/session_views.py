@@ -22,7 +22,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 from dataclasses import dataclass, replace
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime, timedelta, tzinfo
 from enum import Enum
 from math import ceil
 from typing import Protocol
@@ -45,6 +45,7 @@ from remote_agents.ports.agent_usage import (
     LimitsNote,
     UsageWindow,
 )
+from remote_agents.ports.schedules import Once, Repeat, Schedule, When
 
 
 def session_row(record: SessionRecord) -> str:
@@ -974,3 +975,75 @@ def _tokens(count: int) -> str:
     if count < 1_000_000:
         return f"{round(count / 1_000)}k"
     return f"{count / 1_000_000:.1f}M"
+
+
+#: How much of a schedule's message its listing shows, on the line under its facts.
+SCHEDULE_PREVIEW_WIDTH = 40
+
+_DAY_WORDS = ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
+
+
+@dataclass(frozen=True, slots=True)
+class ScheduleLine:
+    """One schedule as both surfaces list it (DEC-091): its facts, and its message's start."""
+
+    schedule_id: str
+    facts: str
+    """`claude · remote-agents · weekdays 09:00 · next Mon 09:00`, or `… · paused`."""
+    preview: str
+    paused: bool
+
+
+def repeat_words(when: When) -> str:
+    """When a schedule fires, in words: `daily 09:00`, `weekdays 09:00`, `Mon Thu 09:00`, or a
+    one-shot's date and time, `once 3 Oct 03:00`."""
+    if isinstance(when, Once):
+        return f"once {when.at.day} {when.at:%b %H:%M}"
+    assert isinstance(when, Repeat)
+    at = f"{when.time:%H:%M}"
+    if len(when.days) == 7:
+        return f"daily {at}"
+    if when.days == frozenset(range(5)):
+        return f"weekdays {at}"
+    return " ".join(_DAY_WORDS[day] for day in sorted(when.days)) + f" {at}"
+
+
+def fire_words(moment: datetime, zone: tzinfo, now: datetime) -> str:
+    """A fire instant on the local clock, as near as words allow: `today 09:00`, `tomorrow
+    09:00`, `Mon 09:00` within the week, else `12 Oct 09:00`."""
+    local = moment.astimezone(zone)
+    today = now.astimezone(zone).date()
+    at = f"{local:%H:%M}"
+    days = (local.date() - today).days
+    if days == 0:
+        return f"today {at}"
+    if days == 1:
+        return f"tomorrow {at}"
+    if 1 < days < 7:
+        return f"{_DAY_WORDS[local.weekday()]} {at}"
+    return f"{local.day} {local:%b} {at}"
+
+
+def schedule_lines(
+    schedules: Iterable[Schedule],
+    catalogue: Iterable[CatalogProject],
+    zone: tzinfo,
+    now: datetime,
+) -> tuple[ScheduleLine, ...]:
+    """Every schedule's line, in the order given. Plain text: each surface escapes and marks
+    it up for itself (DEC-014)."""
+    projects = tuple(catalogue)
+    lines = []
+    for schedule in schedules:
+        when = repeat_words(schedule.when)
+        if schedule.paused or schedule.next_fire_at is None:
+            state = "paused"
+        else:
+            state = "next " + fire_words(schedule.next_fire_at, zone, now)
+        project = project_name(str(schedule.project_id), projects)
+        facts = f"{schedule.profile_id} · {project} · {when} · {state}"
+        first = " ".join(schedule.prompt.split())
+        if len(first) > SCHEDULE_PREVIEW_WIDTH:
+            first = first[: SCHEDULE_PREVIEW_WIDTH - 1] + "…"
+        lines.append(ScheduleLine(schedule.id, facts, first, bool(schedule.paused)))
+    return tuple(lines)
