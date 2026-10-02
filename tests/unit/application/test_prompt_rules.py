@@ -12,19 +12,19 @@ _WITH_MENU = ComposerScreen(composer=r"(?P<draft>.*)\Z", command_menu=r"(?P<firs
 _NO_MENU = ComposerScreen(composer=r"(?P<draft>.*)\Z")
 
 
-@pytest.mark.parametrize("text", ["", "   ", "\n\t\n", "​"])
+@pytest.mark.parametrize("text", ["", "   ", "\n\t\n", "\u200b"])
 def test_an_empty_message_is_refused(text: str) -> None:
     assert pre_paste_refusal(text, _WITH_MENU) is PromptReason.EMPTY
 
 
-@pytest.mark.parametrize("text", ["!rm -rf build", "  !ls", "​!rm -rf build"])
+@pytest.mark.parametrize("text", ["!rm -rf build", "  !ls", "\u200b!rm -rf build"])
 def test_a_leading_bang_is_refused_as_shell(text: str) -> None:
     assert pre_paste_refusal(text, _WITH_MENU) is PromptReason.SHELL
 
 
 def test_a_slash_command_is_refused_where_the_menu_cannot_be_read() -> None:
     assert pre_paste_refusal("/review", _NO_MENU) is PromptReason.MENU
-    assert pre_paste_refusal("﻿/logout", _NO_MENU) is PromptReason.MENU
+    assert pre_paste_refusal("\ufeff/logout", _NO_MENU) is PromptReason.MENU
 
 
 def test_a_slash_command_is_allowed_where_the_menu_can_be_read() -> None:

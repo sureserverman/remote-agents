@@ -21,11 +21,13 @@ class MemoryScheduleStore:
         return self.rows.get(schedule_id)
 
     async def list(self) -> tuple[Schedule, ...]:
-        return tuple(self.rows.values())
+        return tuple(sorted(self.rows.values(), key=lambda row: (row.created_at, row.id)))
 
     async def set_paused(
         self, schedule_id: str, paused: bool, *, next_fire_at: datetime | None
     ) -> Schedule | None:
+        if not paused and next_fire_at is None:
+            raise ValueError("an unpaused schedule needs its next fire")
         schedule = self.rows.get(schedule_id)
         if schedule is None:
             return None
@@ -61,7 +63,7 @@ class MemoryScheduleStore:
             return
         self.rows[schedule_id] = replace(
             schedule,
-            next_fire_at=next_fire_at,
+            next_fire_at=None if schedule.paused else next_fire_at,
             last_fire_at=fired_at,
             last_session_id=session_id if session_id is not None else schedule.last_session_id,
         )

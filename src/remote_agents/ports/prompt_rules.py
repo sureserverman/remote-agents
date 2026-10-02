@@ -22,7 +22,7 @@ def prompt_text(text: str) -> str:
     Line endings are folded to `\\n` first, so a CRLF from a phone keeps its line break.
     """
     folded = text.replace("\r\n", "\n").replace("\r", "\n")
-    for separator in (" ", " ", "\u0085"):
+    for separator in ("\u2028", "\u2029", "\u0085"):
         folded = folded.replace(separator, "\n")
     # Format characters too (Cf: BOM, zero-width space, bidi overrides): invisible, so they
     # could stand in front of a `!` or `/` and hide it from the checks that refuse one, while

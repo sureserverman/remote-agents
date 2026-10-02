@@ -23,6 +23,7 @@ from remote_agents.adapters.sqlite.database import (
     ui_database_path,
 )
 from remote_agents.adapters.sqlite.migrations import MIGRATIONS, UI_TABLES
+from remote_agents.domain.models import ProjectId
 
 
 def _main_file(connection: sqlite3.Connection) -> Path:
@@ -376,6 +377,46 @@ async def test_the_composed_backend_lists_schedules_from_the_migrated_store(
         assert listed.project_id == ProjectId("p1") and listed.profile_id == ProfileId("claude")
         assert listed.next_fire_at == datetime(2026, 10, 5, 7, 0, tzinfo=UTC)
         assert _main_file(book._store._connection).resolve() == paths.database_path.resolve()  # noqa: SLF001
+    finally:
+        connection.close()
+        ui.close()
+
+
+async def test_the_composed_backend_adds_a_schedule_for_a_registered_project(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Every production-only input `add` reads -- the live project table and the send's own
+    composer fold -- exercised through the real composition, not a test double."""
+    from datetime import time
+
+    from remote_agents.application.schedule_book import ScheduleRefusal, ScheduleRefused
+    from remote_agents.domain.models import ProfileId
+    from remote_agents.ports.schedules import Repeat, Schedule
+
+    composition, paths, connection, ui = _composition(tmp_path, monkeypatch)
+    (tmp_path / "home" / "dev" / "infra" / "scheduled-project").mkdir(parents=True)
+    try:
+        backend = composition.boundary.backend
+        (project_id,) = (
+            ProjectId(item.opaque_id)
+            for item in backend.refresh_catalogue()
+            if item.name == "scheduled-project"
+        )
+        book = backend.schedules
+        added = await book.add(project_id, ProfileId("claude"), "hi", Repeat.daily(time(9, 0)))
+        assert isinstance(added, Schedule)
+        assert (await book.list()) == (added,)
+        assert await book.add(
+            project_id, ProfileId("claude"), "!ls", Repeat.daily(time(9, 0))
+        ) == ScheduleRefused(ScheduleRefusal.SHELL)
+        assert await book.add(
+            ProjectId("not-a-project"), ProfileId("claude"), "hi", Repeat.daily(time(9, 0))
+        ) == ScheduleRefused(ScheduleRefusal.UNKNOWN_PROJECT)
+        paused = await book.pause(added.id)
+        assert paused is not None and paused.paused
+        resumed = await book.resume(added.id)
+        assert isinstance(resumed, Schedule) and not resumed.paused
+        assert await book.delete(added.id) is True
     finally:
         connection.close()
         ui.close()

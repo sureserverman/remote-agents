@@ -122,7 +122,7 @@ def _book(store: MemoryScheduleStore | None = None, *, now: datetime = _NOW) -> 
         store if store is not None else MemoryScheduleStore(),
         composers={"claude": _WITH_MENU, "opencode": _NO_MENU, "silent": None},
         projects=lambda: (ProjectId("remote-agents"),),
-        zone=_BERLIN,
+        zone=lambda: _BERLIN,
         now=lambda: now,
     )
 
@@ -214,7 +214,7 @@ async def test_a_resumed_one_shot_schedule_whose_time_passed_is_deleted() -> Non
     await _book(store).pause(added.id)
 
     later = datetime(2026, 10, 3, 22, 0, tzinfo=UTC)
-    assert await _book(store, now=later).resume(added.id) is None
+    assert await _book(store, now=later).resume(added.id) == ScheduleRefused(ScheduleRefusal.PAST)
     assert await store.get(added.id) is None
 
 
@@ -237,3 +237,48 @@ def test_a_backend_carries_its_schedule_book() -> None:
     book = _book()
     assert Backend(sessions=object(), projects=object(), schedules=book).schedules is book
     assert Backend(sessions=object(), projects=object()).schedules is None
+
+
+async def test_resuming_a_schedule_that_is_not_paused_changes_nothing() -> None:
+    """A stale Resume tap must not skip a fire that is due, nor delete a pending one-shot."""
+    store = MemoryScheduleStore()
+    one_shot = await _add(_book(store), "hi", when=Once(datetime(2026, 10, 2, 13, 0)))
+    repeat = await _add(_book(store), "hi", when=Repeat.daily(time(13, 0)))
+
+    overdue = datetime(2026, 10, 2, 11, 30, tzinfo=UTC)  # both are due and not yet fired
+    assert await _book(store, now=overdue).resume(one_shot.id) == one_shot
+    assert await _book(store, now=overdue).resume(repeat.id) == repeat
+    assert await store.get(one_shot.id) == one_shot
+    assert await store.get(repeat.id) == repeat
+
+
+async def test_paused_schedules_are_listed_after_the_active_ones() -> None:
+    book = _book()
+    paused = await _add(book, "first", when=Repeat.daily(time(12, 30)))
+    active = await _add(book, "second", when=Repeat.daily(time(18, 0)))
+    await book.pause(paused.id)
+
+    assert [schedule.id for schedule in await book.list()] == [active.id, paused.id]
+
+
+async def test_the_schedule_zone_is_read_per_call() -> None:
+    zones = [_BERLIN]
+    book = ScheduleBook(
+        MemoryScheduleStore(),
+        composers={"claude": _WITH_MENU},
+        projects=lambda: (ProjectId("remote-agents"),),
+        zone=lambda: zones[0],
+        now=lambda: _NOW,
+    )
+    assert book.zone == _BERLIN
+    zones[0] = ZoneInfo("America/New_York")
+    added = await _add(book, "hi", when=Repeat.daily(time(9, 0)))
+    # 09:00 in New York (13:00Z) is still ahead today; 09:00 Berlin passed at 07:00Z.
+    assert added.next_fire_at == datetime(2026, 10, 2, 13, 0, tzinfo=UTC)
+
+
+@pytest.mark.parametrize("reason", ["empty", "shell", "menu", "no_composer"])
+def test_every_pre_paste_refusal_has_a_schedule_refusal(reason: str) -> None:
+    from remote_agents.ports.terminal import PromptReason
+
+    assert ScheduleRefusal(PromptReason(reason).value).value == reason

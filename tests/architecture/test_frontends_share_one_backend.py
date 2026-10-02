@@ -529,10 +529,14 @@ def test_the_backend_capability_set_is_read_from_the_dataclass() -> None:
 
     **Eighteen since `cursor_limits_source` joined them** (limit-lifecycle sub-plan 03,
     2026-09-30), for the same reason: both surfaces draw a Settings row for Cursor's switch.
+
+    **Nineteen since `schedules` joined them** (scheduled sessions, 2026-10-02): both surfaces
+    list and manage schedules, and a host that wired no schedule book offers no Schedules entry
+    -- read from a field that is `None`, never discovered by probing for an `add`.
     """
     fields = _backend_fields()
-    assert len(fields) == 18, (
-        f"`Backend` now declares {len(fields)} fields, not 18. That is fine — but it widens "
+    assert len(fields) == 19, (
+        f"`Backend` now declares {len(fields)} fields, not 19. That is fine — but it widens "
         "what Rule 2 forbids probing for, so confirm the new field is a capability an adapter "
         "should read as a declared field rather than discover."
     )

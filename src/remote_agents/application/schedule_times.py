@@ -25,7 +25,7 @@ _ZONEINFO_MARKER = "zoneinfo/"
 def next_fire(when: When, after: datetime, zone: tzinfo) -> datetime | None:
     """The first fire strictly after `after`, in UTC; None for a one-shot already past."""
     if isinstance(when, Once):
-        fired = _instant(when.at.date(), when.at, zone)
+        fired = _instant(when.at.date(), when.at.time(), zone)
         return fired if fired > after else None
     return _next_repeat(when, after, zone)
 
@@ -90,7 +90,7 @@ def host_zone_name(path: Path = LOCALTIME) -> str | None:
     key = target.rsplit(_ZONEINFO_MARKER, 1)[1]
     try:
         ZoneInfo(key)
-    except (ZoneInfoNotFoundError, ValueError):
+    except (ZoneInfoNotFoundError, ValueError, OSError):
         return None
     return key
 

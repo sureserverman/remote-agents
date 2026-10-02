@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import re
 import sqlite3
-from datetime import UTC, datetime, time, timedelta
+from datetime import UTC, datetime, time, timedelta, timezone
 from pathlib import Path
+
+import pytest
 
 from remote_agents.adapters.sqlite.database import open_database
 from remote_agents.adapters.sqlite.migrations import MIGRATIONS, UI_TABLES, current_version
@@ -142,3 +145,102 @@ def test_migrating_a_current_store_adds_the_table_and_keeps_every_other_row(
         assert after.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0] == count, table
     assert counts["sessions"] == 1 and counts["idempotency_claims"] == 1
     assert sqlite3.connect(path).execute("SELECT COUNT(*) FROM schedules").fetchone()[0] == 0
+
+
+async def test_due_orders_instants_given_in_any_zone_and_with_microseconds(
+    tmp_path: Path,
+) -> None:
+    """Text order must be time order whatever zone or precision an instant arrives in."""
+    store = SQLiteScheduleStore(open_database(tmp_path / "sessions.sqlite3"))
+    tokyo, los_angeles = timezone(timedelta(hours=9)), timezone(timedelta(hours=-8))
+    # Earliest first in time, but lexically last if the offset were kept.
+    await store.add(_schedule("east", next_fire_at=datetime(2026, 10, 2, 15, 0, tzinfo=tokyo)))
+    await store.add(
+        _schedule("west", next_fire_at=datetime(2026, 10, 1, 23, 0, 1, 500, tzinfo=los_angeles))
+    )
+    await store.add(_schedule("micro", next_fire_at=NOW.replace(microsecond=1)))
+
+    # 06:00Z, 07:00:01.0005Z; "micro" is 07:00:00.000001Z, after NOW.
+    assert [schedule.id for schedule in await store.due(NOW)] == ["east"]
+    later = datetime(2026, 10, 2, 0, 0, 2, tzinfo=los_angeles)  # 08:00:02Z
+    assert [schedule.id for schedule in await store.due(later)] == ["east", "micro", "west"]
+
+
+def test_instants_are_stored_as_fixed_width_utc_text(tmp_path: Path) -> None:
+    import asyncio
+
+    connection = open_database(tmp_path / "sessions.sqlite3")
+    store = SQLiteScheduleStore(connection)
+    asyncio.run(store.add(_schedule("a1", next_fire_at=datetime(2026, 10, 2, 9, 0, tzinfo=UTC))))
+    stored = connection.execute("SELECT next_fire_at, created_at FROM schedules").fetchone()
+    shape = re.compile(r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{6}\+00:00$")
+    assert all(shape.match(value) for value in stored), stored
+
+
+async def test_a_naive_instant_is_refused(tmp_path: Path) -> None:
+    store = SQLiteScheduleStore(open_database(tmp_path / "sessions.sqlite3"))
+    with pytest.raises(ValueError, match="zone"):
+        await store.add(_schedule("a1", next_fire_at=datetime(2026, 10, 2, 9, 0)))
+
+
+@pytest.mark.parametrize(
+    ("once_at", "repeat_days", "repeat_time"),
+    [
+        ("2026-10-02T09:00", "1", "09:00"),
+        (None, None, None),
+        (None, "1", None),
+        (None, None, "09:00"),
+        (None, "", "09:00"),
+        ("2026-10-02T09:00", None, "09:00"),
+    ],
+    ids=["both", "neither", "days-only", "time-only", "empty-days", "once-and-time"],
+)
+def test_the_table_refuses_a_row_that_is_not_one_kind_of_when(
+    tmp_path: Path, once_at, repeat_days, repeat_time
+) -> None:
+    connection = open_database(tmp_path / "sessions.sqlite3")
+    with pytest.raises(sqlite3.IntegrityError):
+        connection.execute(
+            "INSERT INTO schedules(schedule_id, project_id, profile_id, prompt, once_at,"
+            " repeat_days, repeat_time, created_at) VALUES ('x', 'p', 'claude', 'hi', ?, ?, ?,"
+            " '2026-10-02T07:00:00.000000+00:00')",
+            (once_at, repeat_days, repeat_time),
+        )
+
+
+@pytest.mark.parametrize(
+    ("once_at", "repeat_days", "repeat_time"),
+    [("2026-10-02T09:00", None, None), (None, "0,6", "09:00")],
+    ids=["once", "repeat"],
+)
+def test_the_table_accepts_each_kind_of_when(
+    tmp_path: Path, once_at, repeat_days, repeat_time
+) -> None:
+    connection = open_database(tmp_path / "sessions.sqlite3")
+    connection.execute(
+        "INSERT INTO schedules(schedule_id, project_id, profile_id, prompt, once_at,"
+        " repeat_days, repeat_time, created_at) VALUES ('x', 'p', 'claude', 'hi', ?, ?, ?,"
+        " '2026-10-02T07:00:00.000000+00:00')",
+        (once_at, repeat_days, repeat_time),
+    )
+
+
+async def test_a_fire_recorded_on_a_schedule_paused_meanwhile_leaves_it_without_a_time(
+    tmp_path: Path,
+) -> None:
+    store = SQLiteScheduleStore(open_database(tmp_path / "sessions.sqlite3"))
+    await store.add(_schedule("rep"))
+    await store.set_paused("rep", True, next_fire_at=None)
+
+    await store.record_fire("rep", NOW, "sess-1", NOW + timedelta(days=1))
+
+    kept = await store.get("rep")
+    assert kept is not None and kept.paused and kept.next_fire_at is None
+    assert kept.last_session_id == "sess-1"
+
+
+async def test_an_unpaused_schedule_without_a_next_time_is_refused(tmp_path: Path) -> None:
+    store = SQLiteScheduleStore(open_database(tmp_path / "sessions.sqlite3"))
+    await store.add(_schedule("rep"))
+    with pytest.raises(ValueError, match="next fire"):
+        await store.set_paused("rep", False, next_fire_at=None)

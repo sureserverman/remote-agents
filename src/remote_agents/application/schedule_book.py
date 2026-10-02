@@ -7,7 +7,8 @@ composer, which the composition root hands in from the provider descriptors (DEC
 
 **A resume never fires a backlog**: it computes the next fire from now, so a schedule paused
 over three of its times fires at the fourth, and a one-shot whose time passed while paused is
-deleted on resume rather than fired late.
+deleted on resume rather than fired late. A resume of a schedule that is not paused changes
+nothing -- recomputing an active schedule's time would skip a fire that is due.
 """
 
 from __future__ import annotations
@@ -35,6 +36,7 @@ class ScheduleRefusal(StrEnum):
     UNKNOWN_PROJECT = "unknown_project"
     UNKNOWN_PROFILE = "unknown_profile"
     PAST = "past"
+    """A one-shot whose time has passed: refused on add, and deleted on a resume."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -51,7 +53,7 @@ class ScheduleBook:
         *,
         composers: Mapping[str, ComposerScreen | None],
         projects: Callable[[], Iterable[ProjectId]],
-        zone: tzinfo,
+        zone: Callable[[], tzinfo],
         now: Callable[[], datetime] = lambda: datetime.now(UTC),
         new_id: Callable[[], str] = lambda: secrets.token_hex(4),
     ) -> None:
@@ -59,7 +61,8 @@ class ScheduleBook:
         #: Every registered profile, with its composer or None when it declares none.
         self._composers = dict(composers)
         self._projects = projects
-        self.zone = zone
+        #: Read per call, so a host whose zone changed is never answered from a stale one.
+        self._zone = zone
         self._now = now
         self._new_id = new_id
 
@@ -74,7 +77,7 @@ class ScheduleBook:
         if refusal is not None:
             return ScheduleRefused(ScheduleRefusal(refusal.value))
         now = self._now()
-        fire = next_fire(when, now, self.zone)
+        fire = next_fire(when, now, self._zone())
         if fire is None:
             return ScheduleRefused(ScheduleRefusal.PAST)
         schedule = Schedule(
@@ -107,16 +110,23 @@ class ScheduleBook:
     async def pause(self, schedule_id: str) -> Schedule | None:
         return await self._store.set_paused(schedule_id, True, next_fire_at=None)
 
-    async def resume(self, schedule_id: str) -> Schedule | None:
-        """Resume from now. None for an unknown schedule, or a one-shot whose time passed while
-        it was paused -- that one is deleted, since it can no longer fire."""
+    @property
+    def zone(self) -> tzinfo:
+        """The zone schedules are read in, now -- for a surface showing a local time."""
+        return self._zone()
+
+    async def resume(self, schedule_id: str) -> Schedule | ScheduleRefused | None:
+        """Resume from now; None for an unknown schedule. A one-shot whose time passed while
+        it was paused can no longer fire: it is deleted, and the answer says why."""
         schedule = await self._store.get(schedule_id)
         if schedule is None:
             return None
-        fire = next_fire(schedule.when, self._now(), self.zone)
+        if not schedule.paused:
+            return schedule
+        fire = next_fire(schedule.when, self._now(), self._zone())
         if fire is None:
             await self._store.delete(schedule_id)
-            return None
+            return ScheduleRefused(ScheduleRefusal.PAST)
         return await self._store.set_paused(schedule_id, False, next_fire_at=fire)
 
     async def delete(self, schedule_id: str) -> bool:

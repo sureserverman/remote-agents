@@ -56,6 +56,8 @@ class SQLiteScheduleStore:
     async def set_paused(
         self, schedule_id: str, paused: bool, *, next_fire_at: datetime | None
     ) -> Schedule | None:
+        if not paused and next_fire_at is None:
+            raise ValueError("an unpaused schedule needs its next fire")
         with self._connection:
             cursor = self._connection.execute(
                 "UPDATE schedules SET paused = ?, next_fire_at = ? WHERE schedule_id = ?",
@@ -92,9 +94,13 @@ class SQLiteScheduleStore:
                     "DELETE FROM schedules WHERE schedule_id = ?", (schedule_id,)
                 )
                 return
+            # A schedule paused while its fire was being decided keeps no next time: a resume
+            # computes one from then, and a paused row with a time would list as active.
             self._connection.execute(
-                "UPDATE schedules SET next_fire_at = ?, last_fire_at = ?,"
-                " last_session_id = COALESCE(?, last_session_id) WHERE schedule_id = ?",
+                "UPDATE schedules SET"
+                " next_fire_at = CASE WHEN paused = 0 THEN ? ELSE NULL END,"
+                " last_fire_at = ?, last_session_id = COALESCE(?, last_session_id)"
+                " WHERE schedule_id = ?",
                 (_stored(next_fire_at), _stored(fired_at), session_id, schedule_id),
             )
 
@@ -137,18 +143,20 @@ def _schedule(row: tuple) -> Schedule:
         when=_when(once_at, repeat_days, repeat_time),
         paused=bool(paused),
         next_fire_at=_instant(next_fire_at),
-        created_at=_instant(created_at) or datetime.fromtimestamp(0, UTC),
+        created_at=datetime.fromisoformat(created_at),
         last_fire_at=_instant(last_fire_at),
         last_session_id=last_session_id,
     )
 
 
 def _stored(value: datetime | None) -> str | None:
-    """Fixed-width UTC text, so `due` can compare instants as strings."""
+    """Fixed-width UTC text, so `due` can compare instants as strings. A naive value is
+    refused: an instant without a zone would be stored an offset away from what was meant."""
     if value is None:
         return None
-    moment = value if value.tzinfo is not None else value.replace(tzinfo=UTC)
-    return moment.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%S.%f+00:00")
+    if value.tzinfo is None:
+        raise ValueError("a schedule instant must carry its zone")
+    return value.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%S.%f+00:00")
 
 
 def _instant(value: str | None) -> datetime | None:

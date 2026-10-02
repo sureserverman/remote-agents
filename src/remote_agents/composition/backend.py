@@ -16,6 +16,7 @@ from remote_agents.adapters.agents.catalogue import ProfileConversationCatalogue
 from remote_agents.adapters.agents.registry import (
     ProfileUsageReaders,
     claude_remote_control_default,
+    profile_composers,
     provider_descriptors,
     usage_readers,
 )
@@ -367,18 +368,30 @@ def compose_backend(
         close_usage_readers=provider_usage.aclose,
         # Over the same connection as the session store: schedules are domain rows, so a change
         # wakes the store watcher on both surfaces (DEC-090). Which profiles exist, and whether
-        # each can take a `/` command, is read from the descriptors (DEC-070); which projects
-        # exist, from the live catalogue, so a project added since start can be scheduled.
+        # each can take a `/` command, is the send's own fold of the descriptors (DEC-070,
+        # DEC-043): `profile_composers` is what the relay types through, so a schedule is
+        # judged by the composer its send will read. Which projects exist is the live routing
+        # table, mutated in place by every refresh, so a project added since start can be
+        # scheduled. The zone is read per call, so a changed host zone is never stale here.
         schedules=ScheduleBook(
             SQLiteScheduleStore(connection),
-            composers={str(d.profile_id): d.composer for d in descriptors},
-            projects=lambda: tuple(
-                ProjectId(project.opaque_id) for project in projects.snapshot().catalogue
-            ),
-            zone=host_zone(),
+            composers=_schedule_composers(descriptors),
+            projects=lambda: tuple(projects.paths),
+            zone=host_zone,
         ),
         max_label_length=config.max_label_length,
     )
+
+
+def _schedule_composers(descriptors) -> dict[str, object]:
+    """Every curated profile, with the composer its send reads, or None where it has none."""
+    typed = profile_composers(descriptors)
+    return {
+        str(profile.profile_id): (
+            typed[str(profile.profile_id)].composer if str(profile.profile_id) in typed else None
+        )
+        for profile in closed_profiles()
+    }
 
 
 def _host_remote_control(descriptors, *, store, locks):
