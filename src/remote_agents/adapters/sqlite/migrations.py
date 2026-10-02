@@ -301,6 +301,33 @@ MIGRATIONS: tuple[tuple[int, str], ...] = (
         CREATE INDEX agent_activity_by_session ON agent_activity(session_id, activity_id);
         """,
     ),
+    # Scheduled sessions: owner records about sessions to start, so they live in the domain
+    # store and a change wakes the store watcher on both surfaces (DEC-090). `when` is kept as
+    # local wall-clock fields (a one-shot's date and time, or weekdays and a time) and never as
+    # an instant, so a DST change cannot move a schedule; `next_fire_at` is the one instant, in
+    # fixed-width UTC text so `due` compares it as text. Additive: a build without this table
+    # never reads it, so a rollback leaves the rows unread and harmless.
+    (
+        17,
+        """
+        CREATE TABLE schedules (
+            schedule_id TEXT PRIMARY KEY,
+            project_id TEXT NOT NULL,
+            profile_id TEXT NOT NULL,
+            prompt TEXT NOT NULL,
+            once_at TEXT,
+            repeat_days TEXT,
+            repeat_time TEXT,
+            paused INTEGER NOT NULL DEFAULT 0,
+            next_fire_at TEXT,
+            last_fire_at TEXT,
+            last_session_id TEXT,
+            created_at TEXT NOT NULL,
+            CHECK ((once_at IS NULL) <> (repeat_days IS NULL AND repeat_time IS NULL))
+        );
+        CREATE INDEX schedules_due ON schedules(paused, next_fire_at);
+        """,
+    ),
 )
 """Migration 14 takes the surface's bookkeeping out of the watched store.
 
