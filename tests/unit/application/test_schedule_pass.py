@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, time, timedelta
 from zoneinfo import ZoneInfo
@@ -91,6 +92,8 @@ class Rig:
 
     async def sleep(self, seconds: float) -> None:
         self.clock[0] += timedelta(seconds=seconds)
+        # Yield, as a real sleep does, so deliveries running side by side can interleave.
+        await asyncio.sleep(0)
 
     def pass_for(self, store: MemoryScheduleStore, now: datetime) -> SchedulePass:
         self.clock[:] = [now]
@@ -412,11 +415,49 @@ async def test_deliver_happens_after_the_fire_is_recorded() -> None:
 
 
 async def test_deliver_two_due_schedules_are_typed_side_by_side() -> None:
+    """Each busy reply sends its schedule to sleep, and the other is tried meanwhile."""
     busy = _refused(PromptReason.BUSY)
     store = MemoryScheduleStore(_schedule("a"), _schedule("b"))
     rig = Rig(deliveries=[busy, busy, SENT, SENT])
+    sessions: dict[str, str] = {}
 
     reports = await _run(store, rig, FIRE)
 
+    for report in reports:
+        sessions[str(report.session_id)] = report.schedule.id
     assert [report.outcome for report in reports] == [FireOutcome.STARTED] * 2
-    assert [report.schedule.id for report in rig.reports] == ["a", "b"]
+    assert [sessions[str(session_id)] for session_id, _ in rig.sends] == ["a", "b", "a", "b"]
+
+
+async def test_deliver_a_fire_that_typed_nothing_is_told_before_any_typing_ends() -> None:
+    """A missed or skipped fire is not held behind another schedule's slow first prompt."""
+    busy = _refused(PromptReason.BUSY)
+    store = MemoryScheduleStore(_schedule("slow"), _schedule("held", last="prev"))
+    rig = Rig(deliveries=[busy, busy, SENT], working={"prev"})
+    told_before_typed: list[tuple[str, int]] = []
+    notify = rig.notify
+
+    async def recording(report):
+        told_before_typed.append((report.schedule.id, len(rig.sends)))
+        await notify(report)
+
+    rig.notify = recording  # type: ignore[method-assign]
+    await _run(store, rig, FIRE)
+
+    assert told_before_typed[0] == ("held", 0)
+    assert [schedule_id for schedule_id, _ in told_before_typed] == ["held", "slow"]
+
+
+async def test_deliver_a_fault_while_typing_is_reported_not_raised() -> None:
+    store, rig = MemoryScheduleStore(_schedule()), Rig()
+
+    async def faulty(session_id, text):
+        rig.sends.append((session_id, text))
+        raise SystemError("unexpected")
+
+    rig.send = faulty  # type: ignore[method-assign]
+    (report,) = await _run(store, rig, FIRE)
+
+    assert report.outcome is FireOutcome.NOT_TYPED
+    assert report.reason == "unconfirmed"
+    assert rig.reports == [report]

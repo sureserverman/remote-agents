@@ -90,6 +90,11 @@ class FireReport:
     """Why a prompt was not typed (a `PromptReason` key, or `dialog`), or a launch failed."""
 
 
+def _to_type(report: FireReport) -> bool:
+    """Whether the fire launched a session whose prompt is still to be typed."""
+    return report.outcome is FireOutcome.STARTED and report.session_id is not None
+
+
 class SchedulePass:
     """One pass over the due schedules. Everything outside the application is handed in."""
 
@@ -120,8 +125,9 @@ class SchedulePass:
         """Fire everything due now, and return what each fire came to.
 
         Every launch is made first and recorded before any prompt is typed, so a crash while
-        typing finds the fire recorded; the prompts are then typed side by side, so one slow
-        agent does not hold another's prompt back.
+        typing finds the fire recorded. A fire that typed nothing is told at once; the prompts
+        are then typed side by side, so one slow agent holds back neither another's prompt nor
+        any other notice, and each is told as it lands.
         """
         now = self._now()
         fired: list[FireReport] = []
@@ -130,21 +136,36 @@ class SchedulePass:
                 fired.append(await self._fire(schedule, now))
             except Exception:
                 _LOG.exception("schedule %s could not be fired; it stays due", schedule.id)
-        reports = await asyncio.gather(*(self._delivered(report) for report in fired))
-        for report in reports:
-            try:
-                await self._notify(report)
-            except Exception:
-                _LOG.exception(
-                    "the notice for schedule %s could not be handed on", report.schedule.id
-                )
-        return tuple(reports)
+        for report in fired:
+            if not _to_type(report):
+                await self._told(report)
+        typed = await asyncio.gather(
+            *(self._delivered_and_told(report) for report in fired if _to_type(report))
+        )
+        typing = iter(typed)
+        return tuple(next(typing) if _to_type(report) else report for report in fired)
+
+    async def _delivered_and_told(self, report: FireReport) -> FireReport:
+        delivered = await self._delivered(report)
+        await self._told(delivered)
+        return delivered
+
+    async def _told(self, report: FireReport) -> None:
+        try:
+            await self._notify(report)
+        except Exception:
+            _LOG.exception("the notice for schedule %s could not be handed on", report.schedule.id)
 
     async def _delivered(self, report: FireReport) -> FireReport:
-        """Type a started session's prompt, and say what that came to."""
-        if report.outcome is not FireOutcome.STARTED or report.session_id is None:
-            return report
-        reason = await self._first_prompt(SessionId.parse(report.session_id), report.schedule)
+        """Type a started session's prompt, and say what that came to. Never raises: a fault
+        here may have typed, so it is reported unconfirmed and never tried again."""
+        try:
+            reason = await self._first_prompt(
+                SessionId.parse(str(report.session_id)), report.schedule
+            )
+        except Exception:
+            _LOG.exception("typing schedule %s's prompt failed", report.schedule.id)
+            reason = DeliveryVerdict.UNCONFIRMED.value
         if reason is None:
             return report
         return replace(report, outcome=FireOutcome.NOT_TYPED, reason=reason)
