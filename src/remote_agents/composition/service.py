@@ -11,6 +11,7 @@ from pathlib import Path
 
 from remote_agents.adapters.sqlite.activity_store import SQLiteActivityStore
 from remote_agents.adapters.telegram.limit_reset_notifications import LimitResetNotifier
+from remote_agents.adapters.telegram.schedule_notifications import ScheduleNotifier
 from remote_agents.adapters.telegram.service import PrivateBotBoundary
 from remote_agents.adapters.telegram.trust_notifications import TrustNotifier
 from remote_agents.adapters.tmux.runtime import TmuxTerminal
@@ -19,6 +20,7 @@ from remote_agents.application.backend import CLOSE_TIMEOUT_SECONDS
 from remote_agents.application.limit_lifts import LimitLiftWatcher
 from remote_agents.application.limit_stops import LimitScreenWatcher, LimitStopClassifier
 from remote_agents.application.reconcile import ReconciliationService
+from remote_agents.application.schedules import SchedulePass
 from remote_agents.config import TelegramSecrets
 from remote_agents.domain.models import SessionId
 from remote_agents.ports.agent_activity import ActivityConfidence, ActivityKind, AgentActivity
@@ -55,6 +57,10 @@ _LIMITS_POLL_SECONDS = 300.0
 #: lift is acted on within half a minute of its reset's grace minute, and a pass with no running
 #: session stopped by a limit is a session listing plus one indexed seek per running session.
 _LIMIT_STOP_POLL_SECONDS = 30.0
+
+#: How often due schedules are looked for. A schedule fires up to this late, well inside the
+#: fifteen minutes a fire may still start (`schedules.MISSED_GRACE`).
+_SCHEDULE_POLL_SECONDS = 30.0
 #: Bounds one limit-stop pass (a limits read, the session and outcome reads, a Telegram edit or
 #: delete per lifted stop), so one wedged call costs a pass rather than every later lift.
 _LIMIT_STOP_PASS_TIMEOUT_SECONDS = 20.0
@@ -181,6 +187,16 @@ class ServiceComposition:
     stop is recorded and delivered as it arrived, window-blind, exactly as before it existed.
     """
 
+    schedule_pass: SchedulePass | None = None
+    """The pass that fires due schedules (DEC-114), or None where nothing fires them.
+
+    The bot's composition only. The local surface manages schedules and never fires one, so a
+    schedule can be fired by one process alone.
+    """
+
+    schedule_notifier: ScheduleNotifier | None = None
+    """Where the pass's notices go, retried each tick while one is held, or None."""
+
 
 async def _serve_with_reconciliation(
     secrets: TelegramSecrets,
@@ -252,6 +268,11 @@ async def _serve_with_reconciliation(
         # condition and asking the backend again here would be a second opinion about it.
         periodic.append(
             asyncio.create_task(_watch_limits_periodically(composition, limits_interval))
+        )
+    if composition.schedule_pass is not None:
+        # Its own task and clock, like the watchers: a pass that raises costs one tick.
+        periodic.append(
+            asyncio.create_task(_fire_schedules_periodically(composition, _SCHEDULE_POLL_SECONDS))
         )
     if composition.limit_lift_watcher is not None:
         # Its own task and clock, on the same terms as the others: a pass that hangs or raises
@@ -413,6 +434,23 @@ async def _watch_limit_stops_periodically(composition: ServiceComposition, inter
             # on, so a pass lost here is asked again thirty seconds later. A nudge runs shielded
             # from this bound and finishes -- record and line -- after a pass is cancelled.
             _LOG.exception("the limit-stop watch could not complete a pass")
+
+
+async def _fire_schedules_periodically(composition: ServiceComposition, interval: float) -> None:
+    """Fire due schedules on a clock of their own, and resend a held notice -- never raising."""
+    while True:
+        await asyncio.sleep(interval)
+        try:
+            await composition.schedule_pass.run()
+        except Exception:
+            # One pass, logged. A schedule a pass could not reach stays due and is fired, or
+            # reported missed, on a later one.
+            _LOG.exception("the schedule pass failed; it will be retried")
+        if composition.schedule_notifier is not None:
+            try:
+                await composition.schedule_notifier.pass_once()
+            except Exception:
+                _LOG.exception("a held schedule notice could not be resent")
 
 
 async def _watch_activity_periodically(composition: ServiceComposition, interval: float) -> None:

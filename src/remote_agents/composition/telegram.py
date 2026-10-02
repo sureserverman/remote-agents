@@ -22,6 +22,7 @@ from remote_agents.adapters.sqlite.callback_state_store import SQLiteCallbackSta
 from remote_agents.adapters.sqlite.chat_view_store import SQLiteChatViewStore
 from remote_agents.adapters.sqlite.limit_stop_store import SQLiteLimitStopStore
 from remote_agents.adapters.sqlite.queued_prompt_store import SQLiteQueuedPromptStore
+from remote_agents.adapters.sqlite.schedule_store import SQLiteScheduleStore
 from remote_agents.adapters.sqlite.session_store import SQLiteSessionStore
 from remote_agents.adapters.sqlite.standing_notification_store import (
     SQLiteStandingNotificationStore,
@@ -35,6 +36,8 @@ from remote_agents.application.limit_resume import LimitResume
 from remote_agents.application.limit_stops import LimitScreenWatcher, LimitStopClassifier
 from remote_agents.application.prompt_relay import PromptRelay
 from remote_agents.application.reconcile import ReconciliationService, SessionLocks
+from remote_agents.application.schedule_times import host_zone
+from remote_agents.application.schedules import SchedulePass, limit_stopped_in, still_working_in
 from remote_agents.composition.backend import (
     ProjectCatalogueProvider,
     compose_backend,
@@ -202,6 +205,23 @@ def _private_boundary(
         message_relay=relay,
         relayable=frozenset(profile_composers(descriptors)),
     )
+    limit_stops = SQLiteLimitStopStore(connection)
+    # The fire pass (DEC-114): launches through the one session use case, types through the
+    # terminal's guarded send, and tells the owner through the boundary's notifier. Wired only
+    # where the backend manages schedules, which `compose_backend` always does in production.
+    schedule_pass = (
+        None
+        if backend.schedules is None or boundary.schedule_notifier is None
+        else SchedulePass(
+            SQLiteScheduleStore(connection),
+            launch=backend.sessions.launch,
+            send=terminal.send_prompt,
+            limit_stopped=limit_stopped_in(store, limit_stops),
+            working=still_working_in(store, turn_markers),
+            notify=boundary.schedule_notifier.notify,
+            zone=host_zone,
+        )
+    )
     return ServiceComposition(
         boundary,
         terminal,
@@ -238,7 +258,7 @@ def _private_boundary(
         # shared limits read as the classifier; without one, stops lift on their schedule only.
         limit_lift_watcher=LimitLiftWatcher(
             store,
-            SQLiteLimitStopStore(connection),
+            limit_stops,
             backend.limits if backend.limits is not None else _no_limits,
             lambda stop: boundary.notifier.retire_line(
                 stop.session_id, ActivityKind.LIMIT_REACHED, observed_at=stop.stopped_at
@@ -263,6 +283,8 @@ def _private_boundary(
             # Cursor keeps the owner's draft at its stop, so its lift is retired, never nudged.
             retire_only=profiles_keeping_a_draft(descriptors),
         ),
+        schedule_pass=schedule_pass,
+        schedule_notifier=boundary.schedule_notifier,
     )
 
 

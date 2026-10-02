@@ -239,3 +239,32 @@ class SchedulePass:
         following = next_fire(schedule.when, after, self._zone())
         await self._store.record_fire(schedule.id, now, report.session_id, following)
         return report
+
+
+def limit_stopped_in(sessions: object, stops: object) -> Callable[[ProfileId], Awaitable[bool]]:
+    """Rule 5's question, asked of the stores: does one of the agent's running sessions have a
+    limit stop not yet decided (lifted, or resumed)? An agent with no running session has no
+    stop anyone can know of, and is launched (DEC-114)."""
+
+    async def stopped(profile_id: ProfileId) -> bool:
+        running = await sessions.list((SessionState.STARTING, SessionState.RUNNING))  # type: ignore[attr-defined]
+        ids = [str(record.session_id) for record in running if record.profile_id == profile_id]
+        return bool(ids) and bool(await stops.unresolved(ids))  # type: ignore[attr-defined]
+
+    return stopped
+
+
+def still_working_in(sessions: object, markers: object) -> Callable[[str], Awaitable[bool]]:
+    """Rule 6's question: is the previous run's session still live, with a turn its agent's
+    hooks say is running (DEC-104)? An agent without hooks never holds the next run back."""
+
+    async def working(session_id: str) -> bool:
+        try:
+            record = await sessions.get(SessionId.parse(session_id))  # type: ignore[attr-defined]
+        except ValueError:
+            return False
+        if record is None or record.state not in (SessionState.STARTING, SessionState.RUNNING):
+            return False
+        return markers.started_at(session_id) is not None  # type: ignore[attr-defined]
+
+    return working
