@@ -828,6 +828,9 @@ class PrivateBotBoundary:
     #: Process-local like `_awaiting_text`: a restart mid-flow forgets it, and the next step
     #: answers that the flow has to start again.
     _schedule_draft: _ScheduleDraft | None = None
+    #: What the schedules list last showed, so a store change that altered none of it draws
+    #: nothing.
+    _last_schedules_key: tuple[object, ...] = ()
     _attachment: tuple[str, int] | None = None
     #: The pairing-code message, until the owner's next interaction takes it out of the chat.
     #: A bare id rather than the attachment's `(scope, id)` pair, because a pairing code is
@@ -1739,6 +1742,8 @@ class PrivateBotBoundary:
             return _reply_arguments(self._profiles_reply(entity_id))
         if action == "launch.profile":
             return await self._launch_reply(entity_id, token, message_id)
+        if action.startswith("schedules."):
+            return await self._schedules_action_reply(action, entity_id, token, message_id)
         if action.startswith("sched."):
             return await self._schedule_step_reply(action, entity_id, token, message_id)
         if action == "sessions.open":
@@ -2406,7 +2411,8 @@ class PrivateBotBoundary:
             # duplicating the one directly beneath it reads as a bug.
             return self._message(
                 f"{self._notice_line(notice)}<b>Sessions</b>{heading_counts}\n"
-                f"Nothing is running.{spent}{host}{claude}"
+                f"Nothing is running.{spent}{host}{claude}",
+                self._schedules_entry(),
             )
         page_count = max(1, ceil(len(records) / self.session_page_size))
         index = min(max(page, 1), page_count)
@@ -2463,8 +2469,132 @@ class PrivateBotBoundary:
         return self._message(
             f"{self._notice_line(notice)}<b>{title}</b>{heading_counts}\n\n{body}{spent}{host}"
             f"{claude}",
-            tuple(buttons),
+            tuple(buttons) + self._schedules_entry(),
         )
+
+    def _schedules_entry(self) -> tuple[tuple[Button, ...], ...]:
+        """The sessions page's way to the schedules, where this host manages any."""
+        if self.backend.schedules is None:
+            return ()
+        return ((Button("⏰ Schedules", self._callback("schedules.open", "schedules")),),)
+
+    _SCHEDULES_SCREEN = "schedules"
+
+    async def _schedules_reply(
+        self, notice: str | None = None, *, mark: bool = True
+    ) -> RenderedMessage:
+        """Every schedule as one line of facts over its message's start, with pause or
+        resume and delete beside each, numbered in the order listed."""
+        book = self.backend.schedules
+        if book is None:
+            return self._message("Scheduling is unavailable.")
+        if mark:
+            self._drawing_screen = self._SCHEDULES_SCREEN
+        schedules = await book.list()
+        lines = schedule_lines(schedules, self.catalogue, book.zone, book.now())
+        self._last_schedules_key = tuple(lines)
+        lead = self._notice_line(notice)
+        if not lines:
+            return self._message(
+                f"{lead}<b>Schedules</b>\nNo schedules. Make one from Launch: choose a project, "
+                "then ⏰ Schedule.",
+                back=self._callback("sessions.open", "sessions"),
+            )
+        body = "\n\n".join(
+            f"<b>{number}.</b> {escape(line.facts)}\n<code>{escape(line.preview)}</code>"
+            for number, line in enumerate(lines, start=1)
+        )
+        rows = tuple(
+            (
+                Button(f"▶️ {number}", self._callback("schedules.resume", line.schedule_id))
+                if line.paused
+                else Button(f"⏸ {number}", self._callback("schedules.pause", line.schedule_id)),
+                Button(f"🗑 {number}", self._callback("schedules.delete", line.schedule_id)),
+            )
+            for number, line in enumerate(lines, start=1)
+        )
+        return self._message(
+            f"{lead}<b>Schedules</b> · {len(lines)}\n\n{body}",
+            rows,
+            back=self._callback("sessions.open", "sessions"),
+        )
+
+    async def _schedules_action_reply(
+        self, action: str, entity_id: str, token: str, message_id: int
+    ) -> dict[str, object]:
+        book = self.backend.schedules
+        if book is None:
+            return _reply_arguments(self._message("Scheduling is unavailable."))
+        if action == "schedules.open":
+            return _reply_arguments(await self._schedules_reply())
+        if action == "schedules.pause":
+            paused = await book.pause(entity_id)
+            notice = None if paused is not None else "That schedule is no longer there."
+            return _reply_arguments(await self._schedules_reply(notice))
+        if action == "schedules.resume":
+            resumed = await book.resume(entity_id)
+            if resumed is None:
+                notice = "That schedule is no longer there."
+            elif isinstance(resumed, ScheduleRefused):
+                notice = "Its one time passed while it was paused, so it was removed."
+            else:
+                notice = None
+            return _reply_arguments(await self._schedules_reply(notice))
+        if action == "schedules.delete":
+            schedule = next((item for item in await book.list() if item.id == entity_id), None)
+            if schedule is None:
+                return _reply_arguments(
+                    await self._schedules_reply("That schedule is no longer there.")
+                )
+            (line,) = schedule_lines((schedule,), self.catalogue, book.zone, book.now())
+            return _reply_arguments(
+                self._message(
+                    f"<b>Delete this schedule?</b>\n{escape(line.facts)}\n"
+                    f"<code>{escape(line.preview)}</code>",
+                    (
+                        (
+                            Button(
+                                "🗑 Delete",
+                                self._callback("schedules.deleted", entity_id, mutation=True),
+                            ),
+                        ),
+                    ),
+                    back=self._callback("schedules.open", "schedules"),
+                )
+            )
+        if action == "schedules.deleted":
+            if not self.callbacks.claim_mutation(
+                token,
+                owner_id=self.owner_user_id,
+                chat_id=self.owner_chat_id,
+                message_id=message_id,
+            ):
+                return _reply_arguments(self._message("That action has already run."))
+            deleted = await book.delete(entity_id)
+            notice = "Deleted." if deleted else "That schedule is no longer there."
+            return _reply_arguments(await self._schedules_reply(notice))
+        return _reply_arguments(self._message("That action is no longer available."))
+
+    async def redraw_schedules_if_open(self, bot: Bot | None = None) -> bool:
+        """Redraw the schedules list in place when the store moved and it is on screen.
+
+        The sessions page's guards, cut to what this list needs: never over another screen,
+        never under a press, and never an edit that would say what the list already says --
+        drawing mints tokens, and a write the watcher saw would redraw again."""
+        speaker = bot if bot is not None else self._bot
+        if speaker is None or self.backend.schedules is None:
+            return False
+        if self._handling_press or not self.view.showing(self._SCHEDULES_SCREEN):
+            return False
+        book = self.backend.schedules
+        lines = schedule_lines(await book.list(), self.catalogue, book.zone, book.now())
+        if tuple(lines) == self._last_schedules_key:
+            return False
+        rendered = await self._schedules_reply(mark=False)
+        if self._handling_press or not self.view.showing(self._SCHEDULES_SCREEN):
+            return False
+        await self.view.render(speaker, _reply_arguments(rendered), screen=self._SCHEDULES_SCREEN)
+        return True
 
     async def _context_for(self, record: SessionRecord) -> ContextWindow | None:
         """One RUNNING session's context window for its row gauge, or nothing at all.

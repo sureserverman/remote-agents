@@ -221,3 +221,97 @@ def _saved(schedule_id: str, *, paused: bool = False, hour: int = 9) -> Schedule
         next_fire_at=None if paused else datetime(2026, 10, 5, hour - 2, 0, tzinfo=UTC),
         created_at=NOW,
     )
+
+
+async def _open_schedules(chat: FakeChat, boundary: PrivateBotBoundary) -> int:
+    await boundary.sessions_command(chat.message_update("/sessions"), None)
+    anchor = chat.bot_messages[0].message_id
+    await _press(chat, boundary, anchor, "Schedules")
+    return anchor
+
+
+@pytest.mark.asyncio
+async def test_manage_lists_each_schedule_with_its_facts_and_its_message() -> None:
+    store = MemoryScheduleStore(_saved("s1"), _saved("s2", paused=True, hour=18))
+    boundary, _ = _bot(store)
+    chat = FakeChat()
+
+    anchor = await _open_schedules(chat, boundary)
+
+    text = chat.messages[anchor].text
+    assert "claude · remote-agents · weekdays 09:00 · next Mon 09:00" in text
+    assert "claude · remote-agents · weekdays 18:00 · paused" in text
+    assert "summarise the open pull requests and sa…" in text
+    labels = _labels(chat.messages[anchor])
+    assert "⏸ 1" in labels and "▶️ 2" in labels and "🗑 1" in labels
+
+
+@pytest.mark.asyncio
+async def test_manage_pause_shows_paused_and_drops_it_from_due() -> None:
+    store = MemoryScheduleStore(_saved("s1"))
+    boundary, book = _bot(store)
+    chat = FakeChat()
+    anchor = await _open_schedules(chat, boundary)
+
+    await _press(chat, boundary, anchor, "⏸ 1")
+
+    assert "· paused" in chat.messages[anchor].text
+    assert await store.due(datetime(2026, 10, 9, tzinfo=UTC)) == ()
+    await _press(chat, boundary, anchor, "▶️ 1")
+    assert "next Mon 09:00" in chat.messages[anchor].text
+    assert len(await store.due(datetime(2026, 10, 9, tzinfo=UTC))) == 1
+
+
+@pytest.mark.asyncio
+async def test_manage_delete_asks_first_and_removes_the_row_after_confirm() -> None:
+    store = MemoryScheduleStore(_saved("s1"))
+    boundary, book = _bot(store)
+    chat = FakeChat()
+    anchor = await _open_schedules(chat, boundary)
+
+    await _press(chat, boundary, anchor, "🗑 1")
+    assert "Delete this schedule?" in chat.messages[anchor].text
+    assert len(await book.list()) == 1, "nothing is deleted before the confirmation"
+    await _press(chat, boundary, anchor, "🗑 Delete")
+
+    assert await book.list() == ()
+    assert "No schedules" in chat.messages[anchor].text
+
+
+@pytest.mark.asyncio
+async def test_manage_a_schedule_added_from_another_process_appears_after_the_watcher_fires() -> (
+    None
+):
+    store = MemoryScheduleStore()
+    boundary, _ = _bot(store)
+    chat = FakeChat()
+    anchor = await _open_schedules(chat, boundary)
+    assert "No schedules" in chat.messages[anchor].text
+
+    await store.add(_saved("s9"))  # the terminal surface's write, through the shared store
+    drew = await boundary.redraw_schedules_if_open(chat.bot)
+
+    assert drew is True
+    assert "weekdays 09:00 · next Mon 09:00" in chat.messages[anchor].text
+    assert await boundary.redraw_schedules_if_open(chat.bot) is False, "nothing new, no edit"
+
+
+@pytest.mark.asyncio
+async def test_manage_the_watcher_leaves_any_other_screen_alone() -> None:
+    store = MemoryScheduleStore()
+    boundary, _ = _bot(store)
+    chat = FakeChat()
+    await boundary.sessions_command(chat.message_update("/sessions"), None)
+
+    await store.add(_saved("s9"))
+
+    assert await boundary.redraw_schedules_if_open(chat.bot) is False
+
+
+@pytest.mark.asyncio
+async def test_manage_no_schedules_entry_where_the_host_manages_none() -> None:
+    boundary = build_private_bot(7, 11, backend=backend_for(sessions=_Launcher()))
+    chat = FakeChat()
+    await boundary.sessions_command(chat.message_update("/sessions"), None)
+
+    assert not any("Schedules" in label for label in _labels(chat.bot_messages[0]))

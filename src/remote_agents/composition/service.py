@@ -327,6 +327,8 @@ async def _redraw_sessions(composition: ServiceComposition) -> None:
     theirs: nobody asked for this edit, so a Telegram hiccup must not surface as an error the
     owner did not cause -- and must not take down the task that noticed the change."""
     try:
+        # The schedules list follows the store the same way; it draws only when it is on screen.
+        await composition.boundary.redraw_schedules_if_open()
         drew = await composition.boundary.redraw_sessions_if_open()
         if not drew:
             # A change the edit floor suppressed is owed rather than dropped, and this is
