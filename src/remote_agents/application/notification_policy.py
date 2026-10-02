@@ -450,4 +450,6 @@ def schedule_told(outcome: FireOutcome) -> bool:
     recorded, typed or told anything. Silence there would leave a session with no prompt and
     nobody told.
     """
+    # Kept as the one place a fire's worth is decided, though every outcome is told today:
+    # the next outcome somebody adds is decided here, not in the sentence that words it.
     return outcome in FireOutcome

@@ -207,6 +207,12 @@ class SchedulePass:
                     return delivery.reason.value
                 return verdict.value
             if self._now() - started >= STARTUP_PATIENCE:
+                # Said as what the last look found: a pane that went away is not an agent
+                # that was slow, and a screen nothing recognised is neither.
+                if verdict is DeliveryVerdict.NOT_RUNNING:
+                    return DeliveryVerdict.NOT_RUNNING.value
+                if verdict is DeliveryVerdict.UNRECOGNISED:
+                    return DeliveryVerdict.UNRECOGNISED.value
                 return "not_ready"
             await self._sleep(RETRY_SECONDS)
 

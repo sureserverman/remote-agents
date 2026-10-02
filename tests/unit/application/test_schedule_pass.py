@@ -521,3 +521,50 @@ async def test_deliver_a_fault_while_typing_is_reported_not_raised() -> None:
     assert report.outcome is FireOutcome.NOT_TYPED
     assert report.reason == "unconfirmed"
     assert rig.reports == [report]
+
+
+@pytest.mark.parametrize(
+    ("reason", "said"),
+    [
+        (PromptReason.BUSY, "not_ready"),
+        (PromptReason.NOT_RUNNING, "not_running"),
+        (PromptReason.UNRECOGNISED, "unrecognised"),
+    ],
+)
+async def test_deliver_patience_exhausted_says_what_the_last_look_found(
+    reason: PromptReason, said: str
+) -> None:
+    store, rig = MemoryScheduleStore(_schedule()), Rig(deliveries=[_refused(reason)] * 1000)
+
+    (report,) = await _run(store, rig, FIRE)
+
+    assert report.outcome is FireOutcome.NOT_TYPED
+    assert report.reason == said
+
+
+async def test_deliver_typing_goes_on_while_another_fires_notice_is_held() -> None:
+    """A notice stuck on Telegram must not hold back a booting agent's first message."""
+    store = MemoryScheduleStore(_schedule("slow"), _schedule("held", last="prev"))
+    rig = Rig(working={"prev"})
+    typed = asyncio.Event()
+    send = rig.send
+    notify = rig.notify
+
+    async def sending(session_id, text):
+        typed.set()
+        return await send(session_id, text)
+
+    async def blocking(report):
+        if report.schedule.id == "held":
+            await typed.wait()  # released only by the other schedule's typing
+        await notify(report)
+
+    rig.send = sending  # type: ignore[method-assign]
+    rig.notify = blocking  # type: ignore[method-assign]
+
+    reports = await asyncio.wait_for(_run(store, rig, FIRE), timeout=2)
+
+    assert {report.schedule.id: report.outcome for report in reports} == {
+        "slow": FireOutcome.STARTED,
+        "held": FireOutcome.SKIPPED_PREVIOUS,
+    }
