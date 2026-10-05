@@ -3,8 +3,6 @@
 from __future__ import annotations
 
 import json
-import pathlib
-import tempfile
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
@@ -2354,7 +2352,7 @@ async def test_an_untrusted_launch_of_an_agent_that_asks_nothing_offers_only_the
 
 
 @pytest.mark.asyncio
-async def test_a_bot_launch_stands_the_notification_pass_down_for_that_session() -> None:
+async def test_a_bot_launch_stands_the_notification_pass_down_for_that_session(tmp_path) -> None:
     """The reply *is* the question, so the pass must not send a second copy five seconds on.
 
     Driven through `_launch_reply` rather than by calling the notifier directly, because what
@@ -2366,28 +2364,35 @@ async def test_a_bot_launch_stands_the_notification_pass_down_for_that_session()
     untrusted = _record(SessionState.UNTRUSTED, "untrusted", ProjectId("a" * 24))
     launcher = _Launcher()
     launcher.launch_result = replace(untrusted, profile_id=ProfileId("claude"))
-    connection = open_database(pathlib.Path(tempfile.mkdtemp()) / "sessions.sqlite3")
-    boundary = build_private_bot(
-        7,
-        11,
-        backend=backend_for(
-            catalogue=(CatalogProject("a" * 24, "Demo", "tests", "Registered"),),
-            sessions=launcher,
-        ),
-        profiles=(ProfileAvailability("claude", True),),
-        trust_store=SQLiteTrustNotificationStore(connection),
-    )
-    token = boundary.callbacks.create(
-        "launch.profile", "a" * 24 + "|claude", 7, 11, 1, mutation=True
-    )
+    # `tmp_path`, not `mkdtemp`. The latter returns macOS's `/var/folders/...`, and `/var`
+    # is a symlink to `/private/var`. `open_database` refuses a directory that traverses a
+    # link, so the test died in `open_database` on every macOS runner and never reached the
+    # assertion. pytest resolves `tmp_path` first.
+    connection = open_database(tmp_path / "sessions.sqlite3")
+    try:
+        boundary = build_private_bot(
+            7,
+            11,
+            backend=backend_for(
+                catalogue=(CatalogProject("a" * 24, "Demo", "tests", "Registered"),),
+                sessions=launcher,
+            ),
+            profiles=(ProfileAvailability("claude", True),),
+            trust_store=SQLiteTrustNotificationStore(connection),
+        )
+        token = boundary.callbacks.create(
+            "launch.profile", "a" * 24 + "|claude", 7, 11, 1, mutation=True
+        )
 
-    await boundary._launch_reply("a" * 24 + "|claude", token, 1)
+        await boundary._launch_reply("a" * 24 + "|claude", token, 1)
 
-    assert boundary.trust_notifier is not None
-    assert str(launcher.launch_result.session_id) in boundary.trust_notifier._asked_on_screen, (
-        "the launch reply did not stand the pass down, so the owner will get the same "
-        "question again as a message"
-    )
+        assert boundary.trust_notifier is not None
+        assert str(launcher.launch_result.session_id) in boundary.trust_notifier._asked_on_screen, (
+            "the launch reply did not stand the pass down, so the owner will get the same "
+            "question again as a message"
+        )
+    finally:
+        connection.close()
 
 
 def test_a_codex_permission_request_carries_its_command_from_the_hook_to_the_message(

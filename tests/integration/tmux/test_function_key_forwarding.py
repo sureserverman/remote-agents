@@ -99,9 +99,20 @@ class _Server:
         )
 
     def attach(self, session: str = CONSOLE_SESSION_NAME) -> int:
-        """A real client on a real pty — the only thing that makes a root binding fire."""
+        """A real client on a real pty — the only thing that makes a root binding fire.
+
+        The client announces ``xterm-256color`` because that is the terminal whose bytes
+        `_SEQUENCES` sends, and because a runner's own ``TERM`` is not a terminal at all.
+        GitHub Actions, and any other non-interactive shell, exports ``TERM=dumb``. tmux
+        then exits at once with ``open terminal failed: terminal does not support clear``,
+        the write lands in a dead pty, and every positive case reports that the key never
+        arrived. Measured on tmux 3.5a, 2026-10-05: the same eight tests fail under
+        ``dumb`` and pass once the client claims a terminal that can clear. The hosted
+        Ubuntu job (tmux 3.4) fails those eight the same way.
+        """
         pid, fd = pty.fork()
         if pid == 0:  # pragma: no cover - the child execs away
+            os.environ["TERM"] = "xterm-256color"
             os.execvp("tmux", ["tmux", "-L", self.socket, "attach-session", "-t", session])
         self._clients.append(fd)
         time.sleep(1.0)
