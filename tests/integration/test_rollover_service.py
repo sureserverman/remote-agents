@@ -43,3 +43,25 @@ def test_the_bot_composition_wires_the_pass_and_both_surfaces_get_the_book(
     finally:
         connection.close()
         ui.close()
+
+
+def test_only_the_bot_composition_builds_or_runs_the_pass_anywhere_in_the_package() -> None:
+    """Swept across every module, not only `composition/`: a pass built from `bootstrap`, an
+    adapter or the TUI by any route -- the builder, the field, the loop -- would be a second
+    process acting on panes the first one owns (DEC-030)."""
+    allowed = {
+        "build_rollover_pass": {"composition/service.py", "composition/telegram.py"},
+        "rollover_pass=": {"composition/telegram.py"},
+        "_roll_over_periodically": {"composition/service.py"},
+        "RolloverPass(": {"composition/service.py"},
+    }
+    found: dict[str, set[str]] = {name: set() for name in allowed}
+    for path in SRC.rglob("*.py"):
+        text = path.read_text(encoding="utf-8")
+        for name in allowed:
+            if name in text:
+                found[name].add(str(path.relative_to(SRC)))
+    found["RolloverPass("].discard("application/rollover.py")  # its own definition
+    assert found["build_rollover_pass"], "the sweep found nothing to mean anything"
+    for name, modules in found.items():
+        assert modules <= allowed[name], (name, modules - allowed[name])

@@ -176,9 +176,12 @@ class FakeTerminal:
         return TerminalObservation(session_id, live=False, preserved=False)
 
     async def graceful_stop(
-        self, session_id: SessionId, profile_id: ProfileId
+        self, session_id: SessionId, profile_id: ProfileId, *, only_if_idle: bool = False
     ) -> TerminalObservation:
         """End the fake process while retaining its inspectable session.
+
+        A fake pane is always idle, so `only_if_idle` changes nothing here; a caller that needs
+        the refusal wants the real terminal over a pane fixture.
 
         **Ownership is carried through the transition, not dropped at it.** A preserved pane
         keeps its `@remote_agents_*` marks in the real runtime — verified against tmux 3.4
@@ -193,7 +196,7 @@ class FakeTerminal:
 
         This is the same reasoning `launch` records for recording them in the first place.
         """
-        del profile_id
+        del profile_id, only_if_idle
         previous = self._observations.get(session_id)
         observation = TerminalObservation(
             session_id,

@@ -139,6 +139,13 @@ class FileHandoffEnvelopes:
             return False
         return True
 
+    def requested(self, project_dir: Path) -> str | None:
+        try:
+            with _handoff_directory(project_dir, create=False) as directory:
+                return None if directory is None else _requested_session(directory)
+        except Exception:
+            return None
+
     def discard(self, project_dir: Path, handoff_id: str) -> None:
         if not _HANDOFF_ID.fullmatch(handoff_id):
             return

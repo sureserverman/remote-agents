@@ -71,6 +71,11 @@ class HandoffEnvelopes(Protocol):
         request was written; a refusal writes nothing."""
         ...
 
+    def requested(self, project_dir: Path) -> str | None:
+        """The session the project's `request.json` names, when it holds a well-formed
+        request; None otherwise. Never raises."""
+        ...
+
     def discard(self, project_dir: Path, handoff_id: str) -> None:
         """Remove a finished handoff's ready, accepted and failed envelopes; never raises.
         Called once its rollover is terminal, so the directory does not fill over time."""

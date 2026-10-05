@@ -57,6 +57,7 @@ from remote_agents.ports.terminal import (
     GRACEFUL_TIMEOUT,
     KEYS_BUSY,
     NOT_AWAITING_TRUST,
+    NOT_IDLE,
     OWNERSHIP_LOST,
     TERMINAL_NOT_LIVE,
     UNKNOWN_SESSION,
@@ -520,9 +521,14 @@ class TmuxTerminal:
             return None
 
     async def graceful_stop(
-        self, session_id: SessionId, profile_id: ProfileId
+        self, session_id: SessionId, profile_id: ProfileId, *, only_if_idle: bool = False
     ) -> TerminalObservation:
         """Send a known profile sequence only after rechecking current trusted ownership.
+
+        **`only_if_idle` is the rollover's stop (DEC-115)**: the keys go only onto an idle
+        composer, judged under the key lock they are sent under, and a running turn is never
+        interrupted for it. Anything else is NOT_IDLE with nothing typed -- so a turn that
+        started after the rollover looked is left running, and the owner decides.
 
         **A pane that is not live is a stop that was never sent** (DEC-022), and saying so is
         the whole reason this checks liveness before typing rather than after. tmux answers
@@ -576,12 +582,32 @@ class TmuxTerminal:
             # 150 ms gap is the one way in, and its `Enter` would keep the agent running.
             return not guarded or not dialog_on_screen(capture, descriptor)
 
+        if only_if_idle:
+            if descriptor is None or descriptor.composer is None:
+                # Nothing can tell an idle composer here, so nothing licenses the stop.
+                return TerminalObservation(session_id, live=True, preserved=False, detail=NOT_IDLE)
+            title = (await self._gateway.pane_title(session_id)).rstrip("\n")
+
+            def idle(capture: str) -> bool:
+                # Judged inside the hold the keys are sent under, so no turn can start between
+                # the look and the first key.
+                return self._judged(session_id, capture, descriptor, title) is PaneState.IDLE
+
         try:
-            if guarded and descriptor.composer is not None and descriptor.composer.interrupt:
-                await self._interrupt_running_turn(session_id, descriptor)
-            refused = await self._gateway.send_keys_when(
-                session_id, profile.graceful_keys, stoppable, between=unasked
-            )
+            if only_if_idle:
+                refused = await self._gateway.send_keys_when(
+                    session_id, profile.graceful_keys, idle, between=unasked
+                )
+                if refused is not None:
+                    return TerminalObservation(
+                        session_id, live=True, preserved=False, detail=NOT_IDLE
+                    )
+            else:
+                if guarded and descriptor.composer is not None and descriptor.composer.interrupt:
+                    await self._interrupt_running_turn(session_id, descriptor)
+                refused = await self._gateway.send_keys_when(
+                    session_id, profile.graceful_keys, stoppable, between=unasked
+                )
         except KeysInterrupted:
             # Partway: a dialog came up, and the rest was not sent. Reported as never sent, which
             # understates -- the first keys landed -- as DEC-103 records.
@@ -749,8 +775,12 @@ class TmuxTerminal:
         descriptor = self._composers.get(str(observation.profile_id))
         if descriptor is None or descriptor.composer is None:
             return False
-        title = (await self._gateway.pane_title(session_id)).rstrip("\n")
-        capture = await self._gateway.capture(session_id, styled=True)
+        try:
+            title = (await self._gateway.pane_title(session_id)).rstrip("\n")
+            capture = await self._gateway.capture(session_id, styled=True)
+        except (TerminalTargetMissing, RuntimeError):
+            # The pane went between the listing and the look, or tmux failed: not idle.
+            return False
         started = (
             None if self._turn_markers is None else self._turn_markers.started_at(str(session_id))
         )

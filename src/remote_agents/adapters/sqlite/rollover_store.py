@@ -219,10 +219,12 @@ class SQLiteRolloverStore:
         return row
 
     def _held(self, predecessor: SessionId) -> bool:
+        # A cancelled request is passed over: asking and then withdrawing is not asking, so it
+        # leaves the hold where the rollover before it put it.
         latest = self._connection.execute(
-            "SELECT state FROM rollovers WHERE predecessor_session_id = ?"
+            "SELECT state FROM rollovers WHERE predecessor_session_id = ? AND state <> ?"
             " ORDER BY updated_at DESC, rowid DESC LIMIT 1",
-            (str(predecessor),),
+            (str(predecessor), RolloverState.CANCELLED.value),
         ).fetchone()
         return latest is not None and RolloverState(latest[0]) in _HOLDING
 

@@ -38,6 +38,9 @@ class InspectQuery:
 class GracefulStopCommand:
     session_id: SessionId
     profile_id: ProfileId
+    only_if_idle: bool = False
+    """Send the exit keys only onto an idle composer, never interrupting a turn -- the
+    rollover's stop (DEC-115). An owner's stop leaves it off: it has to reach a running turn."""
 
 
 @dataclass(frozen=True, slots=True)

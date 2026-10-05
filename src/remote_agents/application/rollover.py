@@ -28,13 +28,25 @@ code it is recorded under:
 - `FAILED: adoption-timeout` -- no `accepted` within `ADOPTION_PATIENCE`
 - `FAILED: id-mismatch`, `FAILED: no-ready`, `FAILED: cwd-mismatch`,
   `FAILED: branch-mismatch`, `FAILED: plan-missing` -- the successor's own `failed` envelope
-- `STOP_FAILED` -- the graceful stop did not verify; its typed cause is the code, and
-  `stop-unconfirmed` when a restart found the stop in flight. Force stop stays the owner's.
+- `FAILED: not-rollable` -- the owner asked for a session whose agent writes no envelopes
+- `FAILED: no-handoff-root` -- the owner asked for a session whose project is in no checkout
+- `FAILED: request-unwritten` -- the owner's request could not be written for the workflow
+- `FAILED: request-lost` -- the written request is gone, or names another session, before the
+  workflow answered it; it is never written again (DEC-004)
+- `STOP_FAILED` -- the graceful stop was not sent or did not verify; its typed cause is the
+  code: `predecessor-not-idle` when the pane was not idle under the stop's own key lock or for
+  `NOT_IDLE_PATIENCE` before it, `stop-unconfirmed` when a restart found the stop in flight.
+  Force stop stays the owner's.
 
 The predecessor is untouched by every FAILED outcome: the only call that stops it sits behind
-`may_stop_predecessor`. At every terminal state the handoff's envelopes are discarded and a
-request naming the predecessor is withdrawn, so the directory does not fill and a later plan in
-the same pane does not hand off at its first gate.
+`may_stop_predecessor`, and that stop goes only onto an idle composer, judged under the key lock
+its keys are sent under -- it never interrupts a turn. At every terminal state the handoff's
+envelopes are discarded and, unless another rollover of the predecessor is open, a request
+naming it is withdrawn, so the directory does not fill and a later plan in the same pane does
+not hand off at its first gate.
+
+`request.json` is one file per checkout, so at most one owner's request per checkout is out at
+a time: the oldest open owner-asked rollover holds it until it ends, and later ones wait.
 """
 
 from __future__ import annotations
@@ -62,7 +74,12 @@ from remote_agents.domain.rollover import (
 )
 from remote_agents.ports.handoff_envelopes import HandoffEnvelope, HandoffEnvelopes, HandoffEvent
 from remote_agents.ports.rollover_store import IllegalRolloverMove, Rollover, RolloverStore
-from remote_agents.ports.terminal import PromptDelivery, PromptReason, TerminalObservation
+from remote_agents.ports.terminal import (
+    NOT_IDLE,
+    PromptDelivery,
+    PromptReason,
+    TerminalObservation,
+)
 
 _LOG = logging.getLogger(__name__)
 
@@ -85,6 +102,10 @@ SUCCESSOR_UNTRUSTED = "successor-untrusted"
 NOT_TYPED = "not-typed"
 ADOPTION_TIMEOUT = "adoption-timeout"
 STOP_UNCONFIRMED = "stop-unconfirmed"
+NOT_ROLLABLE = "not-rollable"
+NO_HANDOFF_ROOT = "no-handoff-root"
+REQUEST_UNWRITTEN = "request-unwritten"
+REQUEST_LOST = "request-lost"
 
 #: What a booting agent shows on its way to an idle composer, so the template waits it out.
 _BOOTING = frozenset(
@@ -152,16 +173,21 @@ class RolloverPass:
     async def run_once(self) -> None:
         """Walk every rollover one step, each from what is persisted now.
 
-        With the switch off nothing is opened, launched, typed or stopped; the pass only
-        withdraws requests no open rollover stands behind, which writes nothing and starts
-        nothing.
+        With the switch off nothing is opened, launched, typed or stopped, and no row is
+        written; the pass only withdraws requests no open rollover stands behind.
         """
         seen = await self._look()
         if await self._enabled():
             if not self._recovered:
                 await self._note_restart(seen)
                 self._recovered = True
-            await self._pick_up_ready(seen)
+            for project_id, root in seen.roots.items():
+                try:
+                    await self._pick_up_ready(project_id, root, seen)
+                except Exception:
+                    # One checkout's envelopes cost that checkout this pass, never the steps of
+                    # rollovers already open -- an accepted one's stop among them.
+                    _LOG.exception("handoffs in %s could not be read; tried next pass", root)
             for rollover in await self._store.open_rollovers():
                 try:
                     await self._step(rollover, seen)
@@ -177,6 +203,15 @@ class RolloverPass:
                         "rollover %s could not be walked; it is tried next pass", rollover.id
                     )
         await self._withdraw_stale_requests(seen)
+
+    async def _looks_idle(self, session_id: SessionId) -> bool:
+        """The idle look, with a look that raised read as not idle: the step then waits, and
+        its patience runs, rather than failing every pass on the same fault."""
+        try:
+            return await self._idle(session_id)
+        except Exception:
+            _LOG.exception("could not look at %s; read as not idle", session_id)
+            return False
 
     async def _note_restart(self, seen: _Seen) -> None:
         """This pass is new, so every rollover already open was left by one that is gone: say
@@ -205,39 +240,40 @@ class RolloverPass:
 
     # -- envelopes ---------------------------------------------------------------------------
 
-    async def _pick_up_ready(self, seen: _Seen) -> None:
-        """Open, or find again, the rollover each project's `ready` envelopes name."""
+    async def _pick_up_ready(self, project_id: ProjectId, root: Path, seen: _Seen) -> None:
+        """Open, or find again, the rollover each of the project's `ready` envelopes names."""
         held = {r.handoff_id for r in await self._store.open_rollovers() if r.handoff_id}
-        for project_id, root in seen.roots.items():
-            for handoff_id, group in _grouped(self._envelopes.events(root)).items():
-                ready = group.get(HandoffEvent.READY)
-                if ready is None:
-                    # An `accepted` or `failed` with no `ready` belongs to no rollover this
-                    # service can still act on -- one already finished, or a forgery.
-                    if handoff_id not in held:
-                        self._envelopes.discard(root, handoff_id)
-                    continue
-                predecessor = _session_id(ready.managed_session_id)
-                record = None if predecessor is None else seen.sessions.get(predecessor)
-                if (
-                    record is None
-                    or record.project_id != project_id
-                    or record.profile_id not in self._rollable
-                    or record.state is not SessionState.RUNNING
-                ):
-                    continue
-                rollover = await self._store.open_for_ready(
-                    record.session_id,
-                    handoff_id,
-                    project_id=project_id,
-                    profile_id=record.profile_id,
-                    plan=ready.plan,
-                    at=self._now(),
-                )
-                # None is not an error: another rollover is open for this predecessor, or its
-                # last one failed and the `ready` waits for the owner to ask again (DEC-115).
-                if rollover is not None and rollover.state in TERMINAL:
-                    self._finish(rollover, seen)
+        for handoff_id, group in _grouped(self._envelopes.events(root)).items():
+            ready = group.get(HandoffEvent.READY)
+            if ready is None:
+                # An `accepted` or `failed` with no `ready` belongs to no rollover this
+                # service can still act on -- one already finished, or a forgery.
+                if handoff_id not in held:
+                    self._envelopes.discard(root, handoff_id)
+                continue
+            predecessor = _session_id(ready.managed_session_id)
+            record = None if predecessor is None else seen.sessions.get(predecessor)
+            if (
+                record is None
+                or record.project_id != project_id
+                or record.profile_id not in self._rollable
+                or record.state is not SessionState.RUNNING
+            ):
+                continue
+            rollover = await self._store.open_for_ready(
+                record.session_id,
+                handoff_id,
+                project_id=project_id,
+                profile_id=record.profile_id,
+                plan=ready.plan,
+                at=self._now(),
+            )
+            # None is not an error: another rollover is open for this predecessor, or its
+            # last one failed and the `ready` waits for the owner to ask again (DEC-115).
+            if rollover is not None and rollover.state in TERMINAL:
+                # A replayed `ready` of a finished handoff: its envelopes go, and the
+                # predecessor's request is withdrawn only if none of its rollovers is open.
+                await self._finish(rollover, seen)
 
     def _adoption(self, rollover: Rollover, seen: _Seen) -> HandoffEnvelope | None:
         """The successor's own `accepted` or `failed` for this handoff, if it wrote one."""
@@ -273,15 +309,38 @@ class RolloverPass:
                 await self._reconcile_stop(rollover, seen)
 
     async def _signal(self, rollover: Rollover, seen: _Seen) -> None:
-        """The owner asked: write the request once, recorded first, so a restart never re-asks."""
-        if not seen.running(rollover.predecessor_session_id):
+        """The owner asked: write the request once, recorded first, so a restart never re-asks
+        (DEC-004). A request found gone is given up, never written again."""
+        predecessor = seen.sessions.get(rollover.predecessor_session_id)
+        if predecessor is None or predecessor.state is not SessionState.RUNNING:
             await self._fail(rollover, seen, PREDECESSOR_GONE)
+            return
+        if predecessor.profile_id not in self._rollable:
+            await self._fail(rollover, seen, NOT_ROLLABLE)
             return
         root = seen.roots.get(rollover.project_id)
         if root is None:
+            await self._fail(rollover, seen, NO_HANDOFF_ROOT)
             return
+        if not await self._holds_the_request_slot(rollover, root, seen):
+            return
+        wanted = str(rollover.predecessor_session_id)
         if await self._store.record_request(rollover.id, at=self._now()):
-            self._envelopes.write_request(root, str(rollover.predecessor_session_id))
+            if not self._envelopes.write_request(root, wanted):
+                await self._fail(rollover, seen, REQUEST_UNWRITTEN)
+        elif self._envelopes.requested(root) != wanted:
+            # Recorded as written, and not there: a crash between the record and the write, or
+            # the file removed or replaced by someone else. Never written twice (DEC-004).
+            await self._fail(rollover, seen, REQUEST_LOST)
+
+    async def _holds_the_request_slot(self, rollover: Rollover, root: Path, seen: _Seen) -> bool:
+        """Whether this is the oldest open owner-asked rollover in its checkout. `request.json`
+        is one file per checkout, and each owner-asked rollover holds it from its write until
+        it ends, so a later one waits rather than overwriting it."""
+        for other in await self._store.open_rollovers():
+            if other.reason == "owner" and seen.roots.get(other.project_id) == root:
+                return other.id == rollover.id
+        return False
 
     async def _start_successor(self, rollover: Rollover, seen: _Seen) -> None:
         if rollover.successor_session_id is not None:
@@ -292,7 +351,7 @@ class RolloverPass:
         if not seen.running(rollover.predecessor_session_id):
             await self._fail(rollover, seen, PREDECESSOR_GONE)
             return
-        if not await self._idle(rollover.predecessor_session_id):
+        if not await self._looks_idle(rollover.predecessor_session_id):
             if self._now() - rollover.updated_at >= NOT_IDLE_PATIENCE:
                 await self._fail(rollover, seen, PREDECESSOR_NOT_IDLE)
             return
@@ -414,7 +473,7 @@ class RolloverPass:
             return
         # Anything but a running, idle pane waits, and not forever: an ORPHANED or still-starting
         # predecessor is handed to the owner as a failed stop rather than left holding the row.
-        if predecessor.state is not SessionState.RUNNING or not await self._idle(
+        if predecessor.state is not SessionState.RUNNING or not await self._looks_idle(
             rollover.predecessor_session_id
         ):
             if self._now() - rollover.updated_at >= NOT_IDLE_PATIENCE:
@@ -427,8 +486,12 @@ class RolloverPass:
         if may_stop_predecessor(stopping):
             # The one stop in this module, and the only branch that reaches it.
             try:
+                # Only onto an idle composer, judged again under the stop's own key lock: a turn
+                # that started since the look above is never interrupted (DEC-115).
                 observation = await self._graceful_stop(
-                    GracefulStopCommand(rollover.predecessor_session_id, predecessor.profile_id)
+                    GracefulStopCommand(
+                        rollover.predecessor_session_id, predecessor.profile_id, only_if_idle=True
+                    )
                 )
             except Exception as error:
                 _LOG.exception("stopping the predecessor of rollover %s failed", rollover.id)
@@ -437,7 +500,12 @@ class RolloverPass:
             if observation.preserved:
                 await self._complete(stopping, seen)
             else:
-                await self._stop_failed(stopping, seen, observation.detail or STOP_UNCONFIRMED)
+                code = (
+                    PREDECESSOR_NOT_IDLE
+                    if observation.detail == NOT_IDLE
+                    else observation.detail or STOP_UNCONFIRMED
+                )
+                await self._stop_failed(stopping, seen, code)
 
     async def _reconcile_stop(self, rollover: Rollover, seen: _Seen) -> None:
         """A stop found in flight. It is never sent again (DEC-004): a stopped predecessor
@@ -460,7 +528,7 @@ class RolloverPass:
         ended = await self._store.advance(
             rollover.id, _S.FAILED, at=self._now(), failure_code=code, failure_detail=detail
         )
-        self._finish(ended, seen)
+        await self._finish(ended, seen)
 
     async def _stop_failed(
         self, rollover: Rollover, seen: _Seen, code: str, detail: str | None = None
@@ -468,19 +536,25 @@ class RolloverPass:
         ended = await self._store.advance(
             rollover.id, _S.STOP_FAILED, at=self._now(), failure_code=code, failure_detail=detail
         )
-        self._finish(ended, seen)
+        await self._finish(ended, seen)
 
     async def _complete(self, rollover: Rollover, seen: _Seen, detail: str | None = None) -> None:
         ended = await self._store.advance(rollover.id, _S.COMPLETED, at=self._now(), detail=detail)
-        self._finish(ended, seen)
+        await self._finish(ended, seen)
 
-    def _finish(self, rollover: Rollover, seen: _Seen) -> None:
-        """A terminal rollover leaves nothing behind: its envelopes, and its request."""
+    async def _finish(self, rollover: Rollover, seen: _Seen) -> None:
+        """A terminal rollover leaves nothing behind: its envelopes, and its predecessor's
+        request -- unless another rollover of that predecessor is open and the request is its."""
         root = seen.roots.get(rollover.project_id)
         if root is None:
             return
         if rollover.handoff_id is not None:
             self._envelopes.discard(root, rollover.handoff_id)
+        if any(
+            other.predecessor_session_id == rollover.predecessor_session_id
+            for other in await self._store.open_rollovers()
+        ):
+            return
         self._envelopes.clear_request(root, str(rollover.predecessor_session_id))
 
     async def _withdraw_stale_requests(self, seen: _Seen) -> None:

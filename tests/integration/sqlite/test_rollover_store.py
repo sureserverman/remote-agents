@@ -578,3 +578,18 @@ async def test_a_note_is_its_own_history_row_and_moves_nothing(tmp_path: Path) -
     assert (await store.get(opened.id)).state is RolloverState.HANDOFF_READY
     with pytest.raises(LookupError):
         await store.note("no-such-rollover", "x", at=NOW)
+
+
+async def test_an_owners_cancelled_request_does_not_release_the_hold(tmp_path: Path) -> None:
+    """Asking and then withdrawing is not asking: the failure still holds the next `ready`."""
+    store, predecessor = _store(tmp_path), SessionId.new()
+    first = await _open(store, predecessor)
+    assert first is not None
+    await store.advance(first.id, RolloverState.FAILED, at=NOW, failure_code="not-typed")
+    asked = await store.request(
+        predecessor, project_id=ProjectId("remote-agents"), profile_id=ProfileId("claude"), at=NOW
+    )
+    assert asked is not None
+    await store.advance(asked.id, RolloverState.CANCELLED, at=NOW + timedelta(seconds=1))
+
+    assert await _open(store, predecessor, OTHER_HANDOFF) is None

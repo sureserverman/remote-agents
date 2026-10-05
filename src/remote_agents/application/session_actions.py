@@ -64,6 +64,7 @@ from remote_agents.ports.terminal import (
     COMPOSER_HOLDS_TEXT,
     GRACEFUL_TIMEOUT,
     KEYS_BUSY,
+    NOT_IDLE,
     OWNERSHIP_LOST,
     UNKNOWN_SESSION,
     TerminalObservation,
@@ -525,6 +526,14 @@ _GRACEFUL_FAILURES: dict[str, tuple[str, str]] = {
         "Another sender held this session's keys — a relayed message, the Remote Control "
         "toggle, or a stop from the other surface — and did not finish in time. Nothing was "
         "typed and the session is still running. Try again in a moment, or force stop it.",
+    ),
+    NOT_IDLE: (
+        "The stop was not sent: the agent was not sitting idle.",
+        "A rollover stops the old session only onto an empty input with no turn running and no "
+        "question open, and never interrupts a turn to do it. This one was busy, held text, or "
+        "was asking something when the stop would have gone in, so nothing was typed and the "
+        "session is still running. Its successor already took over the work: stop this session "
+        "yourself when it is done, or force stop it.",
     ),
     AGENT_ASKING: (
         "The stop was not sent: the agent is asking a question, or a menu is open.",

@@ -32,6 +32,7 @@ from remote_agents.ports.handoff_envelopes import HandoffEnvelope, HandoffEvent
 from remote_agents.ports.rollover_store import Rollover
 from remote_agents.ports.terminal import (
     GRACEFUL_TIMEOUT,
+    NOT_IDLE,
     PromptDelivery,
     PromptOutcome,
     PromptReason,
@@ -77,12 +78,22 @@ class Envelopes:
 
     def events(self, project_dir: Path) -> tuple[HandoffEnvelope, ...]:
         assert project_dir == ROOT
+        if self.events_error:
+            raise OSError("the handoff directory could not be read")
         return tuple(self.files)
 
+    refuse_writes: bool = False
+    events_error: bool = False
+
     def write_request(self, project_dir: Path, managed_session_id: str) -> bool:
+        if self.refuse_writes:
+            return False
         self.requests.append(managed_session_id)
         self.request = managed_session_id
         return True
+
+    def requested(self, project_dir: Path) -> str | None:
+        return self.request
 
     def discard(self, project_dir: Path, handoff_id: str) -> None:
         self.discarded.append(handoff_id)
@@ -114,6 +125,8 @@ class Rig:
     idle_error: SessionId | None = None
     clock: list[datetime] = field(default_factory=lambda: [NOW])
     out_of_order: list[str] = field(default_factory=list)
+    idle_raises: bool = False
+    _pass: RolloverPass | None = None
     """Each action taken before the state licensing it was persisted; must stay empty."""
 
     def __post_init__(self) -> None:
@@ -140,7 +153,7 @@ class Rig:
         return rows[0] if len(rows) == 1 else None
 
     async def idle(self, session_id: SessionId) -> bool:
-        if session_id == self.idle_error:
+        if session_id == self.idle_error or self.idle_raises:
             raise OSError("tmux went away")
         return session_id not in self.not_idle
 
@@ -183,6 +196,13 @@ class Rig:
         self.clock[0] += delta
 
     def pass_(self) -> RolloverPass:
+        """One pass for the rig's life, as `serve` keeps one; restarts are the recovery
+        tests' subject."""
+        if self._pass is None:
+            self._pass = self._new_pass()
+        return self._pass
+
+    def _new_pass(self) -> RolloverPass:
         return RolloverPass(
             self.store,
             self.envelopes,
@@ -224,8 +244,10 @@ class _Launched:
 def rig(tmp_path: Path):
     rig = Rig(SQLiteRolloverStore(open_database(tmp_path / "sessions.sqlite3")))
     yield rig
-    # Every test: each action was licensed by a state already on disk when it was taken.
+    # Every test: each action was licensed by a state already on disk when it was taken, and
+    # every stop went only onto an idle composer -- never interrupting a turn (DEC-115).
     assert rig.out_of_order == []
+    assert all(command.only_if_idle for command in rig.stops)
 
 
 async def test_one_ready_across_five_passes_launches_exactly_once(rig: Rig) -> None:
@@ -250,7 +272,7 @@ async def test_the_whole_rollover_stops_the_predecessor_only_after_its_successor
     rig.accepted_by(rig.successor)
     await rig.run()
 
-    assert rig.stops == [GracefulStopCommand(rig.predecessor, CLAUDE)]
+    assert rig.stops == [GracefulStopCommand(rig.predecessor, CLAUDE, only_if_idle=True)]
     rollover = await rig.rollover()
     assert rollover.state is RolloverState.COMPLETED
     assert rollover.successor_session_id == rig.successor
@@ -423,6 +445,7 @@ async def test_every_failure_leaves_the_predecessor_unstopped(rig: Rig, case: st
     assert rollover.state is RolloverState.FAILED
     assert rollover.failure_code == case.split("/")[0]
     assert rig.stops == []
+    assert all(session != rig.predecessor for session, _ in rig.sends), "nothing typed into it"
     assert rig.sessions[rig.predecessor].state in (SessionState.RUNNING, SessionState.PRESERVED)
     assert len(rig.launches) <= 1
     assert HANDOFF not in {e.handoff_id for e in rig.envelopes.files}
@@ -651,3 +674,125 @@ async def test_why_the_template_was_not_typed_is_worded_as_the_schedules_word_it
 
     rollover = await rig.rollover()
     assert (rollover.failure_code, rollover.failure_detail) == ("not-typed", detail)
+
+
+async def test_a_stop_refused_under_its_own_key_lock_is_stop_failed_and_types_nothing(
+    rig: Rig,
+) -> None:
+    """The look said idle, and a turn started before the keys: the stop refuses, no key goes."""
+    rig.stop_answer = NOT_IDLE
+    rig.ready()
+    await rig.run()
+    rig.accepted_by(rig.successor)
+
+    await rig.run(passes=2)
+
+    rollover = await rig.rollover()
+    assert (rollover.state, rollover.failure_code) == (
+        RolloverState.STOP_FAILED,
+        "predecessor-not-idle",
+    )
+    assert len(rig.stops) == 1 and rig.stops[0].only_if_idle
+    assert rig.sessions[rig.predecessor].state is SessionState.RUNNING
+
+
+async def test_a_replayed_ready_of_a_finished_handoff_keeps_the_owners_live_request(
+    rig: Rig,
+) -> None:
+    rig.ready()
+    rig.deliveries = [PromptDelivery(PromptOutcome.REFUSED, PromptReason.DIALOG)]
+    await rig.run()
+    assert (await rig.rollover()).state is RolloverState.FAILED
+    asked = await rig.store.request(rig.predecessor, project_id=PROJECT, profile_id=CLAUDE, at=NOW)
+    assert asked is not None
+    await rig.run()
+    assert rig.envelopes.request == str(rig.predecessor)
+
+    rig.ready()  # the finished handoff's `ready`, written again
+    await rig.run(passes=2)
+
+    assert rig.envelopes.request == str(rig.predecessor)
+    assert (await rig.store.get(asked.id)).state is RolloverState.REQUESTED
+
+
+async def test_one_request_per_checkout_is_out_at_a_time(rig: Rig) -> None:
+    other = SessionId.new()
+    rig.sessions[other] = _record(other)
+    first = await rig.store.request(rig.predecessor, project_id=PROJECT, profile_id=CLAUDE, at=NOW)
+    second = await rig.store.request(
+        other, project_id=PROJECT, profile_id=CLAUDE, at=NOW + timedelta(seconds=1)
+    )
+    assert first is not None and second is not None
+
+    await rig.run(passes=2)
+    assert rig.envelopes.requests == [str(rig.predecessor)], "the later request waits"
+
+    await rig.store.advance(first.id, RolloverState.CANCELLED, at=NOW)
+    await rig.run()
+
+    assert rig.envelopes.requests == [str(rig.predecessor), str(other)]
+    assert rig.envelopes.request == str(other)
+
+
+async def test_a_request_that_could_not_be_written_fails_rather_than_waiting(rig: Rig) -> None:
+    rig.envelopes.refuse_writes = True
+    await rig.store.request(rig.predecessor, project_id=PROJECT, profile_id=CLAUDE, at=NOW)
+
+    await rig.run(passes=2)
+
+    rollover = await rig.rollover()
+    assert (rollover.state, rollover.failure_code) == (RolloverState.FAILED, "request-unwritten")
+
+
+async def test_a_request_found_gone_is_given_up_never_written_again(rig: Rig) -> None:
+    await rig.store.request(rig.predecessor, project_id=PROJECT, profile_id=CLAUDE, at=NOW)
+    await rig.run()
+    rig.envelopes.request = None  # a crash between record and write, or someone removed it
+
+    await rig.run(passes=2)
+
+    rollover = await rig.rollover()
+    assert (rollover.state, rollover.failure_code) == (RolloverState.FAILED, "request-lost")
+    assert rig.envelopes.requests == [str(rig.predecessor)]
+
+
+async def test_a_request_for_a_session_that_cannot_roll_over_fails_at_once(rig: Rig) -> None:
+    rig.sessions[rig.predecessor] = _record(rig.predecessor, profile=ProfileId("codex"))
+    await rig.store.request(
+        rig.predecessor, project_id=PROJECT, profile_id=ProfileId("codex"), at=NOW
+    )
+
+    await rig.run()
+
+    rollover = await rig.rollover()
+    assert (rollover.state, rollover.failure_code) == (RolloverState.FAILED, "not-rollable")
+    assert rig.envelopes.requests == []
+
+
+async def test_a_look_that_raises_reads_as_not_idle_and_its_patience_runs(rig: Rig) -> None:
+    rig.ready()
+    rig.idle_raises = True
+
+    await rig.run()
+    assert (await rig.rollover()).state is RolloverState.HANDOFF_READY
+    rig.later(NOT_IDLE_PATIENCE)
+    await rig.run()
+
+    rollover = await rig.rollover()
+    assert (rollover.state, rollover.failure_code) == (RolloverState.FAILED, "predecessor-not-idle")
+    assert rig.launches == []
+
+
+async def test_unreadable_envelopes_do_not_hold_back_an_accepted_rollovers_stop(rig: Rig) -> None:
+    rig.ready()
+    await rig.run()
+    successor = rig.successor
+    (row,) = await rig.store.open_rollovers()
+    await rig.store.advance(row.id, RolloverState.SUCCESSOR_ACCEPTED, at=NOW)
+    rig.envelopes.events_error = True
+
+    await rig.run()
+
+    assert len(rig.stops) == 1
+    assert (await rig.rollover()).state is RolloverState.COMPLETED
+    assert rig.sessions[successor].state is SessionState.RUNNING
