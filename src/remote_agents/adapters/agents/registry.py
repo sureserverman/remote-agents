@@ -496,7 +496,7 @@ def profiles_with_finished_events(
     return frozenset(finishing)
 
 
-def profiles_running_handoffs() -> frozenset[ProfileId]:
+def profiles_that_roll_over() -> frozenset[ProfileId]:
     """The profiles whose sessions may be rolled over (DEC-115): those whose agent runs the
     planning plugin's plan executor, the one writer of handoff envelopes.
 

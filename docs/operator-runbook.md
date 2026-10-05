@@ -699,6 +699,13 @@ if it is not needed.
 
 Each is recorded on the rollover as `FAILED: <code>`. None of them touches the old session.
 
+**"Ask again" takes two steps.** The old session ended its turn when it handed off, and its
+plan reads a request only at a gate. So press **Rollover now**, then tell the old session to
+carry on with its plan. At its next gate it hands off again, and the pending rollover picks up
+that new handoff. Until then the row reads *rollover pending · waiting for workflow boundary*,
+with no time limit. At the plan's last gate a request does not hand off, because the plan
+closes out instead, so cancel the pending rollover then.
+
 - **`predecessor-not-idle`** — the old session was not idle for 10 minutes, so nothing was
   launched. Let it finish its turn, clear its input or answer its question, then ask again.
 - **`predecessor-gone`** — the old session stopped before its successor was up. Nothing is left

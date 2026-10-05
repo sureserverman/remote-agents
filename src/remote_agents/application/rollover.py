@@ -208,7 +208,9 @@ class RolloverPass:
                 except Exception:
                     # One checkout's envelopes cost that checkout this pass, never the steps of
                     # rollovers already open -- an accepted one's stop among them.
-                    _LOG.exception("handoffs in %s could not be read; tried next pass", root)
+                    _LOG.exception(
+                        "handoff envelopes in %s could not be read; tried next pass", root
+                    )
             for rollover in await self._store.open_rollovers():
                 try:
                     await self._step(rollover, seen)

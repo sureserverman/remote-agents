@@ -458,7 +458,7 @@ def rollover_actions(
     session's open rollover -- so folding them in would widen a deliberately pinned signature.
 
     **Rollover now** on a RUNNING session of a `rollable` profile (the composition's
-    `profiles_running_handoffs`, handed in so this module names no provider), with the switch on
+    `profiles_that_roll_over`, handed in so this module names no provider), with the switch on
     and no rollover open. Pressing it writes a REQUESTED row and nothing else; the pass in
     `serve` acts on it at the workflow's own gate (brief §32).
 

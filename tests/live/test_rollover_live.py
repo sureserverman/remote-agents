@@ -101,7 +101,7 @@ import yaml
 from _pytest.mark.expression import Expression
 
 from remote_agents.adapters.agents.registry import (
-    profiles_running_handoffs,
+    profiles_that_roll_over,
     provider_descriptors,
 )
 from remote_agents.adapters.sqlite.database import open_database
@@ -431,7 +431,7 @@ def _compose(config, connection, paths: ProductionPaths) -> _Harness:
         terminal=runtime.terminal,
         enabled=backend.auto_rollover.read,
         project_paths=projects.paths,
-        rollable=profiles_running_handoffs(),
+        rollable=profiles_that_roll_over(),
         notify=notify,
     )
     composition = ServiceComposition(
@@ -447,7 +447,7 @@ async def _drive(harness: _Harness, repo: Path, periodic: list[asyncio.Task]) ->
     backend = harness.backend
     sessions = backend.sessions
     claude = ProfileId("claude")
-    assert claude in profiles_running_handoffs()
+    assert claude in profiles_that_roll_over()
     project_id = next((pid for pid, path in harness.projects.paths.items() if path == repo), None)
     assert project_id is not None, f"the fixture repository is not in the catalogue: {repo}"
     root = handoff_root(repo)

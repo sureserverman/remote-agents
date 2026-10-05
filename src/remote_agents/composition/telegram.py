@@ -13,7 +13,7 @@ from remote_agents.adapters.agents.registry import (
     profile_limit_screens,
     profile_trust_dialogs,
     profiles_keeping_a_draft,
-    profiles_running_handoffs,
+    profiles_that_roll_over,
     profiles_with_finished_events,
     provider_descriptors,
 )
@@ -302,7 +302,7 @@ def _private_boundary(
                 terminal=terminal,
                 enabled=backend.auto_rollover.read,
                 project_paths=projects.paths,
-                rollable=profiles_running_handoffs(),
+                rollable=profiles_that_roll_over(),
                 notify=(
                     None
                     if boundary.rollover_notifier is None

@@ -354,8 +354,8 @@ def _no_menu_for_arguments(capture: str, declared: ComposerScreen, text: str) ->
 
     An agent that hides its menu once arguments follow the command (Claude) submits the draft
     as typed then, which is what the menu rule protects. A bare command is not covered -- its
-    menu is drawn, so one not read did not agree -- and neither is a screen with anything above
-    the composer, which may be a menu this cannot read."""
+    menu is drawn, so one not read did not agree -- and neither is a screen with a menu-like row
+    (`  /`) directly above the composer, which may be a menu this cannot read."""
     if declared.menu_absent is None or len(text.split()) < 2:
         return False
     return re.search(declared.menu_absent, unstyled(capture)) is not None

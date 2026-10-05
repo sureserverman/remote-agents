@@ -41,7 +41,7 @@ class RolloverBook:
         now: Callable[[], datetime] = lambda: datetime.now(UTC),
     ) -> None:
         self._store = store
-        #: Which profiles roll over (`adapters.agents.registry.profiles_running_handoffs`),
+        #: Which profiles roll over (`adapters.agents.registry.profiles_that_roll_over`),
         #: handed in by the composition because neither this layer nor a surface may name a
         #: provider. Empty offers Rollover now on nothing.
         self._rollable = rollable
