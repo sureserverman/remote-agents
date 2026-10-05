@@ -4147,9 +4147,9 @@ class PrivateBotBoundary:
                 # route that still works, and DEC-047 is why it is the one named.
                 return _reply_arguments(
                     self._message(
-                        "That dialog could not be read, so nothing was sent to it. The session "
-                        "is still waiting — answer it at the keyboard, or close it from its "
-                        "screen."
+                        "No answer was confirmed: the dialog could not be read, or was not yet "
+                        "taking keys, so no Enter went to it. The session is still waiting — "
+                        "answer it at the keyboard, or close it from its screen."
                     )
                 )
             return _reply_arguments(

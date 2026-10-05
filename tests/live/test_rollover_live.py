@@ -128,6 +128,7 @@ from remote_agents.composition.tui import _local_runtime, _resolve_profile_execu
 from remote_agents.config import load_config, read_claude_limits_source, read_cursor_limits_source
 from remote_agents.domain.models import ProfileId, SessionId, SessionState
 from remote_agents.domain.rollover import TERMINAL, RolloverState
+from remote_agents.domain.trust import TrustState
 from remote_agents.production import ProductionPaths
 
 _MARKER = "live_acceptance"
@@ -467,7 +468,7 @@ async def _drive(harness: _Harness, repo: Path, periodic: list[asyncio.Task]) ->
     )
     predecessor = launched.record.session_id
     if launched.record.state is SessionState.UNTRUSTED:
-        await sessions.answer_trust(AnswerTrustCommand(predecessor, _key("rollover-trust")))
+        await _answer_trust(harness, predecessor)
     record = await _until_running(harness, predecessor)
 
     # Rollover now, through the call both surfaces make.
@@ -541,6 +542,27 @@ async def _drive(harness: _Harness, repo: Path, periodic: list[asyncio.Task]) ->
     note = rollover_note(marks[str(predecessor)]) if str(predecessor) in marks else None
     expected = f"continued as #{records[successor].display.sequence}"
     assert note is not None and expected in note.split(" · "), f"{note!r} does not say {expected!r}"
+
+
+async def _answer_trust(harness: _Harness, session_id: SessionId) -> None:
+    """Trust the folder through the product's own answer, pressed again while it is unanswered.
+
+    The answer confirms only once the cursor is seen on "Yes" (`TmuxTerminal.answer_trust`).
+    Claude draws the dialog before it takes keys, so a press made at once can be left
+    unconfirmed -- the 2026-10-05 run found a press at that moment answering "No, exit" -- and
+    an owner would press again. So does this, a second apart, within the startup bound.
+    """
+    started = time.monotonic()
+    while True:
+        answer = await harness.backend.sessions.answer_trust(
+            AnswerTrustCommand(session_id, _key("rollover-trust"))
+        )
+        if answer.pressed or answer.observed is not TrustState.AWAITING:
+            return
+        assert time.monotonic() - started < _STARTUP_SECONDS, await _diagnosis(
+            harness, None, session_id, "the trust question was never answered"
+        )
+        await asyncio.sleep(1.0)
 
 
 async def _until_running(harness: _Harness, session_id: SessionId):

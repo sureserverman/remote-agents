@@ -43,7 +43,12 @@ from remote_agents.adapters.tmux.remote_control import (
     remote_control_menu_is_open,
     remote_control_was_enabled,
 )
-from remote_agents.adapters.tmux.trust import classify_trust_capture, plan_trust_keys
+from remote_agents.adapters.tmux.trust import (
+    TRUST_CONFIRM_KEY,
+    classify_trust_capture,
+    plan_trust_keys,
+    trust_cursor_on,
+)
 from remote_agents.domain.conversations import ProviderConversationId
 from remote_agents.domain.models import ProfileId, ProjectId, SessionId
 from remote_agents.domain.remote_control import RemoteControlState
@@ -116,6 +121,11 @@ class TerminalWaits:
 
     trust_answer: float = float(_TRUST_ANSWER_WAIT_SECONDS)
     """The dialog clearing in one redraw -- the pump's time to repaint, not the agent's to think."""
+
+    trust_cursor: float = 2.0
+    """A trust dialog's cursor arriving on the chosen answer after the movement keys. Claude
+    draws the dialog before it takes keys, so a movement sent at once can be lost (measured on
+    the 2026-10-05 live run): past this, nothing is confirmed and a later press plans again."""
 
     decline: float = float(_TRUST_DECLINE_WAIT_SECONDS)
     """A declined agent running its own shutdown before its pane is killed."""
@@ -1241,8 +1251,8 @@ class TmuxTerminal:
             # press did nothing rather than being told it succeeded.
             return TrustAnswer(pressed=False, observed=TrustState.AWAITING)
         try:
-            await self._gateway.send_keys(session_id, keys)
-        except KeysBusy:
+            confirmed = await self._confirm_trust_answer(session_id, capture, dialog, accept=True)
+        except (KeysBusy, KeysInterrupted):
             # Another sender held the pane's keys: nothing was pressed, and the question is
             # still on screen for a retry.
             return TrustAnswer(pressed=False, observed=TrustState.AWAITING)
@@ -1252,6 +1262,10 @@ class TmuxTerminal:
             # received a keystroke. Reporting `True` here would be the guess this type exists
             # to stop anyone making.
             return TrustAnswer(pressed=False, observed=TrustState.UNKNOWN)
+        if not confirmed:
+            # The cursor never reached "Yes" (a movement the agent dropped while it was still
+            # starting), so no `Enter` went in: still asking, unanswered, for a later press.
+            return TrustAnswer(pressed=False, observed=TrustState.AWAITING)
         await asyncio.sleep(self._waits.trust_answer)
         try:
             after = await self._gateway.capture(session_id)
@@ -1320,10 +1334,15 @@ class TmuxTerminal:
             keys = plan_trust_keys(capture, dialog, accept=False)
             if keys is not None:
                 try:
-                    await self._gateway.send_keys(session_id, keys)
-                except KeysBusy:
+                    confirmed = await self._confirm_trust_answer(
+                        session_id, capture, dialog, accept=False
+                    )
+                except (KeysBusy, KeysInterrupted, TerminalTargetMissing):
                     # The declining keys could not be sent; end it the way a dialog this
                     # cannot read is ended, below.
+                    return await self.force_stop(session_id)
+                if not confirmed:
+                    # The cursor never reached "No": an `Enter` now could trust the folder.
                     return await self.force_stop(session_id)
                 deadline = asyncio.get_running_loop().time() + self._waits.decline
                 while asyncio.get_running_loop().time() < deadline:
@@ -1335,6 +1354,48 @@ class TmuxTerminal:
                     # tight poll: the thing being waited on is a process shutting down.
                     await asyncio.sleep(0.1)
         return await self.force_stop(session_id)
+
+    async def _confirm_trust_answer(
+        self, session_id: SessionId, capture: str, dialog: TrustDialog, *, accept: bool
+    ) -> bool:
+        """Move the cursor to the chosen answer and confirm it -- `Enter` only onto that row.
+
+        Three steps, each under the key lock: the movement keys, onto the screen they were
+        planned from; a wait, of at most `TerminalWaits.trust_cursor`, for a capture showing
+        the cursor on the answer; then `Enter`, onto a screen that still shows it. A movement
+        the agent dropped -- Claude draws the dialog before it takes keys -- leaves the cursor
+        where it was, and then nothing is confirmed: the dialog stays up for a later press,
+        never answered the other way. True once `Enter` went onto the chosen row.
+        """
+        keys = plan_trust_keys(capture, dialog, accept=accept)
+        if keys is None:
+            return False
+        movement = keys[:-1]
+        if movement:
+
+            def planned(now: str) -> bool:
+                return plan_trust_keys(_plain(now), dialog, accept=accept) == keys
+
+            if (
+                await self._gateway.send_keys_when(session_id, movement, planned, between=planned)
+                is not None
+            ):
+                return False
+            deadline = asyncio.get_running_loop().time() + self._waits.trust_cursor
+            while not trust_cursor_on(
+                await self._gateway.capture(session_id), dialog, accept=accept
+            ):
+                if asyncio.get_running_loop().time() >= deadline:
+                    return False
+                await asyncio.sleep(0.1)
+
+        def on_answer(now: str) -> bool:
+            return trust_cursor_on(_plain(now), dialog, accept=accept)
+
+        refused = await self._gateway.send_keys_when(
+            session_id, (TRUST_CONFIRM_KEY,), on_answer, between=on_answer
+        )
+        return refused is None
 
     async def _trust_capture(self, session_id: SessionId) -> tuple[str, TrustDialog] | None:
         """This pane's screen **and the dialog to read it with**, or None if it may not be asked.

@@ -172,6 +172,13 @@ def plan_trust_keys(
     return (*movement, TRUST_CONFIRM_KEY)
 
 
+def trust_cursor_on(capture: str, dialog: TrustDialog, *, accept: bool = True) -> bool:
+    """Whether the dialog is asking and its cursor already rests on the chosen answer -- the
+    one screen a confirming `Enter` may go onto. Read by `plan_trust_keys`'s own rule: the
+    cursor is there exactly when the plan is the confirm alone."""
+    return plan_trust_keys(capture, dialog, accept=accept) == (TRUST_CONFIRM_KEY,)
+
+
 def _option_block(lines: list[str], affirmative: str) -> list[str] | None:
     """The run of non-blank lines holding the affirmative option, or None if it is alone.
 
