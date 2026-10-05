@@ -73,6 +73,7 @@ def backend_for(
     claude_remote_control_default: object | None = _UNSET,
     claude_limits_source: object | None = _UNSET,
     cursor_limits_source: object | None = _UNSET,
+    auto_rollover: object | None = _UNSET,
     state_events: object | None = _UNSET,
     close_usage_readers: Callable[[], Awaitable[None]] | None = _UNSET,  # type: ignore[assignment]
     schedules: object | None = _UNSET,
@@ -110,6 +111,7 @@ def backend_for(
         "claude_remote_control_default": claude_remote_control_default,
         "claude_limits_source": claude_limits_source,
         "cursor_limits_source": cursor_limits_source,
+        "auto_rollover": auto_rollover,
         "state_events": state_events,
         "limits": limits,
         "close_usage_readers": close_usage_readers,

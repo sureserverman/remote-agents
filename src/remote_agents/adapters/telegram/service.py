@@ -127,10 +127,13 @@ from remote_agents.application.schedule_times import (
 )
 from remote_agents.application.session_actions import (
     ACTION_LABELS,
+    CANCEL_ROLLOVER,
     CLEANUP,
     FORCE,
     GRACEFUL,
     REMOTE_CONTROL_LABELS,
+    ROLLOVER,
+    ROLLOVER_ACTION_LABELS,
     RemoteControlDirection,
     StopFailure,
     available_actions,
@@ -517,6 +520,15 @@ _REMOTE_EMOJI = "\U0001f4e1"  # 📡
 # with the two settings it has nothing to do with.
 _LIMITS_EMOJI = "\U0001f4ca"  # 📊
 _MESSAGE_EMOJI = "\u2709\ufe0f"  # ✉️
+_ROLLOVER_EMOJI = "\U0001f501"  # 🔁
+
+_ROLLOVER_CALLBACKS: dict[str, str] = {
+    ROLLOVER: "session.rollover",
+    CANCEL_ROLLOVER: "session.rollover.cancel",
+}
+"""The press each shared rollover action rides on (DEC-046). Under `session.` so the marker
+stays on the sessions tab, as every other press about one session does."""
+_ROLLOVER_OF_CALLBACK = {callback: action for action, callback in _ROLLOVER_CALLBACKS.items()}
 _BACK_TO_SESSIONS = "\u2039 Back to sessions"  # ‹ Back to sessions
 
 _RELAY_REASON_WORDS: dict[PromptReason, str] = {
@@ -690,6 +702,7 @@ def unmarked(label: str) -> str:
         _REMOTE_EMOJI,
         _LIMITS_EMOJI,
         _MESSAGE_EMOJI,
+        _ROLLOVER_EMOJI,
     }
     return rest if separator and head in marks else label
 
@@ -1830,6 +1843,10 @@ class PrivateBotBoundary:
             return _reply_arguments(await self._inspect_reply(entity_id))
         if action == "session.unqueue":
             return _reply_arguments(self._unqueue_reply(entity_id))
+        if action in _ROLLOVER_OF_CALLBACK:
+            return await self._rollover_reply(
+                _ROLLOVER_OF_CALLBACK[action], entity_id, token, message_id
+            )
         return _reply_arguments(self._message("That action is no longer available."))
 
     async def _launch_reply(self, entity_id: str, token: str, message_id: int) -> dict[str, object]:
@@ -2783,6 +2800,23 @@ class PrivateBotBoundary:
             )
         if relay_row:
             buttons.append(tuple(relay_row))
+        # Rollover now / Cancel rollover (DEC-046, DEC-115): exactly what the shared policy
+        # offers over the switch and this session's open rollover, read through
+        # `Backend.rollovers`. A row of its own, never the stop row's: asking for a rollover
+        # writes one row and stops nothing. Rollover now is a mutation token, claimed once,
+        # because the request it writes is what later launches and stops sessions unattended;
+        # a cancel is not, for `session.unqueue`'s reason -- a second press finds nothing.
+        rollover_row = tuple(
+            Button(
+                f"{_ROLLOVER_EMOJI} {ROLLOVER_ACTION_LABELS[action]}",
+                self._callback(
+                    _ROLLOVER_CALLBACKS[action], session_value, mutation=action == ROLLOVER
+                ),
+            )
+            for action in await self._rollover_offer(record)
+        )
+        if rollover_row:
+            buttons.append(rollover_row)
         # **The two answers share one row, and the row is still the trust row's own.** The
         # owner asked for the pair to sit side by side on 2026-09-11, which supersedes
         # DEC-032's clause that gave each answer a row of its own; what that clause was
@@ -2931,6 +2965,56 @@ class PrivateBotBoundary:
         except Exception:
             _LOG.exception("reading the waiting message for %s failed", session_id)
             return None
+
+    async def _rollover_offer(self, record: SessionRecord) -> tuple[str, ...]:
+        """The rollover actions this session offers, or none where the backend wires no book.
+
+        Total: a failed read costs the row, never the detail it sits on.
+        """
+        book = self.backend.rollovers
+        if book is None:
+            return ()
+        try:
+            return await book.offered(record, self.backend.auto_rollover)
+        except Exception:
+            _LOG.exception("reading the rollover offer for %s failed", record.session_id)
+            return ()
+
+    async def _rollover_reply(
+        self, action: str, session_value: str, token: str, message_id: int
+    ) -> dict[str, object]:
+        """Rollover now or Cancel rollover, pressed: one row written or withdrawn, then the
+        shared outcome words (`RolloverBook.press`). Nothing is launched, typed or stopped here;
+        the pass in `serve` acts on the request at the workflow's own gate (brief §32)."""
+        book = self.backend.rollovers
+        record = await self._record(session_value)
+        if book is None or record is None:
+            return _reply_arguments(
+                self._message(
+                    "That session is no longer available.",
+                    back=self._sessions_back(),
+                    back_label=_BACK_TO_SESSIONS,
+                )
+            )
+        if action == ROLLOVER and not self.callbacks.claim_mutation(
+            token,
+            owner_id=self.owner_user_id,
+            chat_id=self.owner_chat_id,
+            message_id=message_id,
+        ):
+            return _reply_arguments(self._message("That action has already run."))
+        try:
+            said = await book.press(action, record, self.backend.auto_rollover)
+        except Exception:
+            _LOG.exception("the rollover press %s for %s failed", action, session_value)
+            said = "The rollover could not be recorded; nothing was changed."
+        return _reply_arguments(
+            self._message(
+                escape(said),
+                back=self._callback("session.detail", session_value),
+                back_label="Back to session",
+            )
+        )
 
     def _unqueue_reply(self, session_value: str) -> RenderedMessage:
         session_id = SessionId.parse(session_value)

@@ -11,16 +11,23 @@ import pytest
 from remote_agents.application.session_actions import (
     _FORCE_FAILURES,
     _GRACEFUL_FAILURES,
+    ACTION_LABELS,
+    CANCEL_ROLLOVER,
     GRACEFUL_TIMEOUT,
     OWNERSHIP_LOST,
+    ROLLOVER,
+    ROLLOVER_ACTION_LABELS,
     StopFailure,
     available_actions,
     decline_trust_available,
     force_stop_failure,
     notifiable,
+    rollover_actions,
+    rollover_outcome,
     stop_failure,
 )
 from remote_agents.domain.models import OrphanProvenance, ProfileId, SessionState
+from remote_agents.domain.rollover import RolloverState
 
 # Enumerated reflectively so a state added to the enum later fails here until it is
 # classified, rather than silently inheriting whatever the last branch returned.
@@ -479,3 +486,89 @@ def test_every_detail_a_graceful_stop_can_return_has_its_own_words() -> None:
         failure = stop_failure(_Observation(preserved=False, detail=detail))
         assert failure is not None
         assert failure.summary != "The terminal did not report a clean exit.", detail
+
+
+# `rollover_actions` — Rollover now and Cancel rollover (DEC-046, DEC-115) -----------------
+#
+# A hardcoded expectation per situation, for the reason `EXPECTED` above is one: the parity
+# contract derives both of its sides from the policy, so this is the only place the
+# classification is written down independently of it.
+
+_ROLLABLE = frozenset({ProfileId("claude")})
+
+
+def _rollover(
+    state: SessionState = SessionState.RUNNING,
+    profile: str = "claude",
+    *,
+    switch_on: bool = True,
+    open_state: RolloverState | None = None,
+) -> tuple[str, ...]:
+    return rollover_actions(
+        state, ProfileId(profile), _ROLLABLE, switch_on=switch_on, open_state=open_state
+    )
+
+
+def test_rollover_now_is_offered_on_a_running_rollable_session_with_the_switch_on() -> None:
+    assert _rollover() == (ROLLOVER,)
+
+
+def test_rollover_now_is_absent_with_the_switch_off() -> None:
+    assert _rollover(switch_on=False) == ()
+
+
+@pytest.mark.parametrize("open_state", list(RolloverState))
+def test_rollover_now_is_absent_while_a_rollover_is_open(open_state: RolloverState) -> None:
+    """One rollover at a time per session: whatever an open one's state, no second ask."""
+    assert ROLLOVER not in _rollover(open_state=open_state)
+
+
+@pytest.mark.parametrize(
+    "state", [state for state in SessionState if state is not SessionState.RUNNING]
+)
+def test_rollover_now_is_absent_on_a_session_that_is_not_running(state: SessionState) -> None:
+    assert _rollover(state) == ()
+
+
+@pytest.mark.parametrize("profile", ["codex", "opencode", "cursor-agent"])
+def test_rollover_now_is_absent_on_a_profile_that_writes_no_handoffs(profile: str) -> None:
+    assert _rollover(profile=profile) == ()
+
+
+@pytest.mark.parametrize("switch_on", [True, False])
+def test_cancel_is_offered_while_the_rollover_is_only_requested(switch_on: bool) -> None:
+    """Withdrawing a request is harmless, so the switch does not gate it (a request asked
+    while it was on must stay withdrawable after it is turned off)."""
+    assert _rollover(switch_on=switch_on, open_state=RolloverState.REQUESTED) == (CANCEL_ROLLOVER,)
+
+
+@pytest.mark.parametrize(
+    "open_state", [state for state in RolloverState if state is not RolloverState.REQUESTED]
+)
+def test_cancel_is_absent_outside_requested(open_state: RolloverState) -> None:
+    assert CANCEL_ROLLOVER not in _rollover(open_state=open_state)
+
+
+def test_nothing_open_offers_no_cancel() -> None:
+    assert CANCEL_ROLLOVER not in _rollover()
+
+
+def test_each_rollover_action_has_one_label_and_the_two_never_coincide() -> None:
+    assert set(ROLLOVER_ACTION_LABELS) == {ROLLOVER, CANCEL_ROLLOVER}
+    assert ROLLOVER_ACTION_LABELS[ROLLOVER] == "Rollover now"
+    assert ROLLOVER_ACTION_LABELS[CANCEL_ROLLOVER] == "Cancel rollover"
+    # Disjoint from the stop labels, so the parity contract's stop decoder can never read a
+    # rollover row as a stop or the other way round.
+    assert not set(ROLLOVER_ACTION_LABELS.values()) & set(ACTION_LABELS.values())
+
+
+def test_the_four_outcomes_are_four_different_sentences() -> None:
+    """Asked; already open; cancelled; nothing to cancel -- one wording, both surfaces."""
+    words = {
+        rollover_outcome(ROLLOVER, done=True),
+        rollover_outcome(ROLLOVER, done=False),
+        rollover_outcome(CANCEL_ROLLOVER, done=True),
+        rollover_outcome(CANCEL_ROLLOVER, done=False),
+    }
+    assert len(words) == 4
+    assert all(words)

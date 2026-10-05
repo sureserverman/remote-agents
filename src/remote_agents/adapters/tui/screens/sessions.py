@@ -49,6 +49,8 @@ from remote_agents.application.session_actions import (
     FORCE,
     GRACEFUL,
     REMOTE_CONTROL_LABELS,
+    ROLLOVER,
+    ROLLOVER_ACTION_LABELS,
     RemoteControlDirection,
     available_actions,
     explain_state,
@@ -56,6 +58,7 @@ from remote_agents.application.session_actions import (
     remote_control_directions,
     remote_control_reading,
     remote_control_target,
+    rollover_outcome,
 )
 from remote_agents.domain.models import SessionId, SessionRecord
 from remote_agents.ports.state_events import StoreChanged, Unsubscribe
@@ -233,10 +236,17 @@ class OpeningAction(Message):
 #:
 #: No trust key, deliberately (DEC-047): this surface answers the trust question in the pane
 #: the console exchanges in, so it has no trust row and must not grow a trust key either.
+#:
+#: `l` is Rollover now (DEC-046, DEC-115), and it behaves like `a`, `i` and `r`: it opens the
+#: detail and asks it to perform the action, so the press goes through the detail's own re-read
+#: of the policy (`RolloverBook.press`) and says in words when it is not offered -- the switch
+#: and the open rollover are store reads `check_action` cannot make. Cancel rollover has no key:
+#: it is the detail's row while a request waits, one `d` away.
 SESSION_ACTION_KEYS: tuple[tuple[str, str, str, str], ...] = (
     ("a", "attach", "Copy attach", "attach"),
     ("i", "inspect", "Inspect output", "inspect"),
     ("r", "rename", "Rename", "rename"),
+    ("l", ROLLOVER, ROLLOVER_ACTION_LABELS[ROLLOVER], "rollover"),
     ("s", GRACEFUL, ACTION_LABELS[GRACEFUL], "stop"),
     ("f", FORCE, ACTION_LABELS[FORCE], "force"),
     ("c", CLEANUP, ACTION_LABELS[CLEANUP], "clean up"),
@@ -1141,8 +1151,15 @@ class SessionsScreen(_SessionActionKeys, ChoiceScreen):
             keys.update(Content.styled(sentence, "$text-dim"))
             projects.display = False
             return
-        entries = [(key, word) for key, _action, _label, word in SESSION_ACTION_KEYS]
+        entries = [
+            (key, word) for key, action, _label, word in SESSION_ACTION_KEYS if action != ROLLOVER
+        ]
         entries.append((_REMOTE_CONTROL_KEY, _REMOTE_CONTROL_WORD))
+        # Rollover last: in the console's 80-cell column the line no longer fits beside
+        # `p projects` and ellipsizes, and the newest key is the one to lose, not `m remote`.
+        entries.extend(
+            (key, word) for key, action, _label, word in SESSION_ACTION_KEYS if action == ROLLOVER
+        )
         pieces: list[Content] = []
         for index, (key, word) in enumerate(entries):
             if index:
@@ -1975,6 +1992,9 @@ class SessionDetailScreen(ChoiceScreen):
             self.show_choices(((_BACK, "Back"),))
             self.set_status("That session is no longer available.")
             return
+        rollover = await self._rollover_offer(record)
+        if not self.showing:
+            return
         # The name goes to the header and the state's meaning to the status line. They were
         # three lines in one region, and the first of them — the session's own name — is the
         # part that was true of the whole position rather than of any moment in it, which is
@@ -1984,9 +2004,25 @@ class SessionDetailScreen(ChoiceScreen):
         self.set_status(
             f"State: {record.state.value}. {explain_state(record.state, record.orphan_provenance)}"
         )
-        self.show_choices(self.detail_entries(record))
+        self.show_choices(self.detail_entries(record, rollover))
 
-    def detail_entries(self, record: SessionRecord) -> tuple[tuple[str, str], ...]:
+    async def _rollover_offer(self, record: SessionRecord) -> tuple[str, ...]:
+        """The rollover actions this session offers, through `Backend.rollovers` (DEC-046).
+
+        Total, like the row marks: a failed read costs the rollover rows, never the detail.
+        """
+        backend = self.services.backend
+        if backend.rollovers is None:
+            return ()
+        try:
+            return await backend.rollovers.offered(record, backend.auto_rollover)
+        except Exception:
+            _LOG.debug("the rollover offer could not be read", exc_info=True)
+            return ()
+
+    def detail_entries(
+        self, record: SessionRecord, rollover: tuple[str, ...] = ()
+    ) -> tuple[tuple[str, str], ...]:
         """The actions this session offers, taken from the policy and not decided here.
 
         The stop entries are exactly `available_actions(record.state, record.orphan_provenance)`
@@ -2023,6 +2059,10 @@ class SessionDetailScreen(ChoiceScreen):
         # those are is now the shared policy's answer rather than a fixed pair, so the two
         # surfaces cannot drift on it.
         entries.extend(remote_control_entries(record))
+        # Rollover now / Cancel rollover: `rollover` is `RolloverBook.offered`, read by
+        # `render_detail` because it needs the switch and the open rollover, which this
+        # synchronous builder cannot read. Above the stops, which stay last.
+        entries.extend((action, ROLLOVER_ACTION_LABELS[action]) for action in rollover)
         entries.extend(
             (action, ACTION_LABELS[action])
             for action in available_actions(record.state, record.orphan_provenance)
@@ -2041,6 +2081,8 @@ class SessionDetailScreen(ChoiceScreen):
             await self.show_rename()
         elif key in _REMOTE_CONTROL_DIRECTIONS:
             await self.confirm_remote_control()
+        elif key in ROLLOVER_ACTION_LABELS:
+            await self.press_rollover(key)
         elif key == FORCE:
             await self.confirm_force()
         elif key in ACTION_LABELS and key != FORCE:
@@ -2050,6 +2092,37 @@ class SessionDetailScreen(ChoiceScreen):
             # Restructuring this chain into a dispatch table would silently remove the
             # confirmation step, and no existing test asserts the ordering itself.
             await self.tui.stop(key, self.session_value, self)
+
+    async def press_rollover(self, action: str) -> None:
+        """Rollover now or Cancel rollover: one row written or withdrawn, then the outcome.
+
+        Not confirmed, and stops nothing: `RolloverBook.press` writes a REQUESTED row (or
+        withdraws one) and the pass in `serve` acts on it at the workflow's own gate (brief
+        §32). The record is re-read here and the policy re-checked inside the press (DEC-007),
+        so a key pressed on a row that has since stopped, or with the switch since turned off,
+        asks for nothing and says so. The words are the shared ones the bot sends.
+        """
+        backend = self.services.backend
+        async with self.holding_the_guard():
+            try:
+                record = await self.tui.current_record(self.session_value)
+            except Exception as error:
+                self.tui.report_store_failure(error, self)
+                return
+            if record is None or backend.rollovers is None:
+                await self.refuse()
+                return
+            try:
+                said = await backend.rollovers.press(action, record, backend.auto_rollover)
+            except Exception as error:
+                _LOG.exception("the rollover press could not be recorded")
+                self.announce(f"The rollover could not be recorded: {error} Nothing was changed.")
+                return
+        if not self.showing:
+            return
+        done = said == rollover_outcome(action, done=True)
+        self.announce(said, severity="information" if done else "warning")
+        await self.render_detail()
 
     async def confirm_force(self, session_value: str | None = None) -> None:
         """Re-read the record, ask the modal, and issue only on a `True`.

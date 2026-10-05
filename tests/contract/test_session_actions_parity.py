@@ -25,6 +25,10 @@ docstring as the file's inventory would not know that check lives in it — the 
 predates the shared-use-cases sub-plan and survived its Task 2.4 re-read, and was found by
 the Stage 2 gate's evaluator.
 
+**And a third, at the end of the file:** the Rollover now / Cancel rollover rows, compared
+against `rollover_actions` over a real `RolloverBook`, plus what pressing each does -- one row
+written or cancelled, nothing stopped, the same outcome words on both surfaces.
+
 What this test does NOT check: whether the policy itself is right. Both sides of the
 assertion derive from `available_actions`, so changing it moves them together and this file
 stays green — verified by mutation, not assumed. The policy's own correctness is pinned by
@@ -36,6 +40,7 @@ everywhere.
 
 from __future__ import annotations
 
+import html
 from dataclasses import replace
 from datetime import UTC, datetime
 
@@ -44,6 +49,8 @@ from backends import SessionUseCaseDouble, backend_for
 from surfaces import surface_pairs
 from textual.widgets import OptionList
 
+from remote_agents.adapters.sqlite.database import open_database
+from remote_agents.adapters.sqlite.rollover_store import SQLiteRolloverStore
 from remote_agents.adapters.telegram.service import build_private_bot, unmarked
 from remote_agents.application.host_remote_control import (
     HOST_REMOTE_CONTROL_LABELS as _HOST_LABELS,
@@ -52,7 +59,17 @@ from remote_agents.application.host_remote_control import (
     host_remote_control_directions,
     pair_available,
 )
-from remote_agents.application.session_actions import ACTION_LABELS, available_actions
+from remote_agents.application.rollover_book import RolloverBook
+from remote_agents.application.session_actions import (
+    ACTION_LABELS,
+    CANCEL_ROLLOVER,
+    ROLLOVER,
+    ROLLOVER_ACTION_LABELS,
+    ROLLOVER_UNAVAILABLE,
+    available_actions,
+    rollover_actions,
+    rollover_outcome,
+)
 from remote_agents.domain.models import (
     OrphanProvenance,
     ProfileId,
@@ -67,6 +84,7 @@ from remote_agents.domain.remote_control import (
     HostRemoteControlStatus,
     RemoteControlState,
 )
+from remote_agents.domain.rollover import RolloverState
 
 # One decoder for both surfaces. This used to be a hand-written table mapping the bot's
 # title-cased spellings back to action ids, which existed only because the two surfaces
@@ -422,3 +440,277 @@ async def test_both_surfaces_offer_pairing_under_the_same_predicate(
     assert pairing is pair_available(status), (
         f"{surface_name} offers pairing where the policy does not, on {connection}"
     )
+
+
+# --- Rollover now and Cancel rollover (DEC-007, DEC-046) --------------------------------
+#
+# A third vocabulary, and the first whose availability needs more than the record: the switch
+# (`Backend.auto_rollover`) and the session's open rollover (`Backend.rollovers`). So every
+# situation below is a real `RolloverBook` over a real store, and each surface is read off what
+# it actually drew -- the bot's detail keyboard, the terminal's detail rows.
+
+_ROLLABLE = frozenset({ProfileId("claude")})
+_ROLLOVER_WORDS = {label: action for action, label in ROLLOVER_ACTION_LABELS.items()}
+_HANDOFF = "h-0123456789abcdef0042"
+
+
+class _Switch:
+    """`ports.rollover_setting`, answering one fixed position."""
+
+    def __init__(self, on: bool) -> None:
+        self.on = on
+
+    async def read(self) -> bool:
+        return self.on
+
+    async def write(self, value: bool) -> None:
+        self.on = value
+
+
+class _Stops(SessionUseCaseDouble):
+    """A session use case that records every stop or launch anything asks of it."""
+
+    def __init__(self, record: SessionRecord) -> None:
+        self.record = record
+        self.acted: list[str] = []
+
+    async def list_sessions(self):
+        return (self.record,)
+
+    async def refresh_readiness(self):
+        return (self.record,)
+
+    async def inspect(self, _query):
+        return None
+
+    async def copy_attach(self, _session_id):
+        return None
+
+    async def graceful_stop(self, *_args, **_kwargs):
+        self.acted.append("graceful_stop")
+
+    async def force_stop(self, *_args, **_kwargs):
+        self.acted.append("force_stop")
+
+    async def cleanup(self, *_args, **_kwargs):
+        self.acted.append("cleanup")
+
+    async def launch(self, *_args, **_kwargs):
+        self.acted.append("launch")
+
+
+def _rollover_record(state: SessionState, profile: str) -> SessionRecord:
+    return replace(_record(state), profile_id=ProfileId(profile))
+
+
+async def _book_with(
+    tmp_path, record: SessionRecord, open_state: RolloverState | None
+) -> tuple[RolloverBook, object]:
+    connection = open_database(tmp_path / "sessions.sqlite3")
+    store = SQLiteRolloverStore(connection)
+    book = RolloverBook(store, rollable=_ROLLABLE)
+    if open_state is RolloverState.REQUESTED:
+        assert await book.request(
+            record.session_id, project_id=record.project_id, profile_id=record.profile_id
+        )
+    elif open_state is RolloverState.HANDOFF_READY:
+        assert await store.open_for_ready(
+            record.session_id,
+            _HANDOFF,
+            project_id=record.project_id,
+            profile_id=record.profile_id,
+            plan=None,
+            at=datetime.now(UTC),
+        )
+    return book, connection
+
+
+def _rollover_backend(sessions, book, switch_on: bool):
+    return backend_for(sessions=sessions, rollovers=book, auto_rollover=_Switch(switch_on))
+
+
+async def _telegram_rollover_rows(record, book, switch_on) -> set[str]:
+    boundary = build_private_bot(7, 11, backend=_rollover_backend(_Stops(record), book, switch_on))
+    detail = await boundary._detail_reply(str(record.session_id))
+    return {
+        _ROLLOVER_WORDS[unmarked(button.text)]
+        for row in detail.keyboard
+        for button in row
+        if unmarked(button.text) in _ROLLOVER_WORDS
+    }
+
+
+def _tui_app(sessions, book, switch_on: bool):
+    from remote_agents.adapters.tui.app import RemoteAgentsTui
+    from remote_agents.adapters.tui.context import TuiContext
+    from remote_agents.application.profiles import ProfileAvailability
+
+    backend = _rollover_backend(sessions, book, switch_on)
+    return RemoteAgentsTui(
+        TuiContext(
+            backend=replace(backend, projects=object(), refresh_catalogue=tuple),
+            profiles=(ProfileAvailability("claude", True),),
+            attach_argv=lambda session_id: ("tmux", "attach-session", "-t", f"={session_id}"),
+        )
+    )
+
+
+async def _tui_rollover_rows(record, book, switch_on) -> set[str]:
+    app = _tui_app(_Stops(record), book, switch_on)
+    async with app.run_test() as pilot:
+        await app.show_detail(str(record.session_id))
+        await pilot.pause()
+        choices = app.screen.query_one("#choices", OptionList)
+        rows = [str(option.prompt) for option in choices.options]
+    return {_ROLLOVER_WORDS[row] for row in rows if row in _ROLLOVER_WORDS}
+
+
+ROLLOVER_SURFACES = surface_pairs(telegram=_telegram_rollover_rows, tui=_tui_rollover_rows)
+
+ROLLOVER_SITUATIONS: list[tuple[SessionState, str, bool, RolloverState | None]] = [
+    (SessionState.RUNNING, "claude", True, None),
+    (SessionState.RUNNING, "claude", False, None),
+    (SessionState.RUNNING, "claude", True, RolloverState.REQUESTED),
+    (SessionState.RUNNING, "claude", False, RolloverState.REQUESTED),
+    (SessionState.RUNNING, "claude", True, RolloverState.HANDOFF_READY),
+    (SessionState.RUNNING, "codex", True, None),
+    *((state, "claude", True, None) for state in SessionState if state is not SessionState.RUNNING),
+    (SessionState.PRESERVED, "claude", True, RolloverState.REQUESTED),
+]
+
+
+@pytest.mark.parametrize("surface_name,render", ROLLOVER_SURFACES)
+@pytest.mark.parametrize(("state", "profile", "switch_on", "open_state"), ROLLOVER_SITUATIONS)
+async def test_both_surfaces_offer_exactly_the_policy_s_rollover_actions(
+    tmp_path, surface_name, render, state, profile, switch_on, open_state
+) -> None:
+    record = _rollover_record(state, profile)
+    book, connection = await _book_with(tmp_path, record, open_state)
+    try:
+        rendered = await render(record, book, switch_on)
+    finally:
+        connection.close()
+
+    expected = rollover_actions(
+        state, ProfileId(profile), _ROLLABLE, switch_on=switch_on, open_state=open_state
+    )
+    assert rendered == set(expected), (
+        f"{surface_name} diverged from the rollover policy at {state.value}/{profile}, "
+        f"switch {'on' if switch_on else 'off'}, open {open_state}"
+    )
+
+
+@pytest.mark.parametrize("surface_name,render", ROLLOVER_SURFACES)
+async def test_the_rollover_parity_is_not_vacuous(tmp_path, surface_name, render) -> None:
+    """Both ends of the equality above come from the policy, so an all-empty render would pass
+    every situation that offers nothing. These two offer something on every surface."""
+    record = _rollover_record(SessionState.RUNNING, "claude")
+    book, connection = await _book_with(tmp_path, record, None)
+    try:
+        assert await render(record, book, True) == {ROLLOVER}, surface_name
+        await book.request(
+            record.session_id, project_id=record.project_id, profile_id=record.profile_id
+        )
+        assert await render(record, book, True) == {CANCEL_ROLLOVER}, surface_name
+    finally:
+        connection.close()
+
+
+def _rollover_rows(connection) -> list[str]:
+    return [state for (state,) in connection.execute("SELECT state FROM rollovers")]
+
+
+async def _telegram_press(record, book, switch_on, action: str) -> tuple[str, list[str]]:
+    """Press the drawn button (or, when it is not drawn, the press a stale one would make)."""
+    sessions = _Stops(record)
+    boundary = build_private_bot(7, 11, backend=_rollover_backend(sessions, book, switch_on))
+    detail = await boundary._detail_reply(str(record.session_id))
+    label = ROLLOVER_ACTION_LABELS[action]
+    tokens = [
+        button.callback_data
+        for row in detail.keyboard
+        for button in row
+        if unmarked(button.text) == label
+    ]
+    callback = "session.rollover" if action == ROLLOVER else "session.rollover.cancel"
+    token = (
+        tokens[0] if tokens else boundary._callback(callback, str(record.session_id), mutation=True)
+    )
+    reply = await boundary._reply_for(callback, str(record.session_id), token=token)
+    return html.unescape(str(reply["text"])), sessions.acted
+
+
+async def _tui_press(record, book, switch_on, action: str) -> tuple[str, list[str]]:
+    """Drive the detail the way the row key does: open it with the action to perform."""
+    from tui_feedback import announcements
+
+    sessions = _Stops(record)
+    app = _tui_app(sessions, book, switch_on)
+    async with app.run_test() as pilot:
+        await app.show_detail(str(record.session_id), action)
+        for _ in range(60):
+            await pilot.pause()
+            said = announcements(app)
+            if said:
+                break
+    return " ".join(said), sessions.acted
+
+
+PRESS_SURFACES = surface_pairs(telegram=_telegram_press, tui=_tui_press)
+
+
+@pytest.mark.parametrize("surface_name,press", PRESS_SURFACES)
+async def test_rollover_now_writes_one_requested_row_and_stops_nothing(
+    tmp_path, surface_name, press
+) -> None:
+    record = _rollover_record(SessionState.RUNNING, "claude")
+    book, connection = await _book_with(tmp_path, record, None)
+    try:
+        said, acted = await press(record, book, True, ROLLOVER)
+        assert _rollover_rows(connection) == ["requested"], surface_name
+        assert acted == [], f"{surface_name} acted on the session: {acted}"
+        assert rollover_outcome(ROLLOVER, done=True) in said, (surface_name, said)
+
+        said, acted = await press(record, book, True, ROLLOVER)
+        assert _rollover_rows(connection) == ["requested"], surface_name
+        assert acted == [], f"{surface_name} acted on the session: {acted}"
+        assert rollover_outcome(ROLLOVER, done=False) in said, (surface_name, said)
+    finally:
+        connection.close()
+
+
+@pytest.mark.parametrize("surface_name,press", PRESS_SURFACES)
+async def test_cancel_rollover_cancels_the_one_request_and_stops_nothing(
+    tmp_path, surface_name, press
+) -> None:
+    record = _rollover_record(SessionState.RUNNING, "claude")
+    book, connection = await _book_with(tmp_path, record, RolloverState.REQUESTED)
+    try:
+        said, acted = await press(record, book, True, CANCEL_ROLLOVER)
+        assert _rollover_rows(connection) == ["cancelled"], surface_name
+        assert acted == [], f"{surface_name} acted on the session: {acted}"
+        assert rollover_outcome(CANCEL_ROLLOVER, done=True) in said, (surface_name, said)
+
+        said, acted = await press(record, book, True, CANCEL_ROLLOVER)
+        assert _rollover_rows(connection) == ["cancelled"], surface_name
+        assert acted == [], f"{surface_name} acted on the session: {acted}"
+        assert rollover_outcome(CANCEL_ROLLOVER, done=False) in said, (surface_name, said)
+    finally:
+        connection.close()
+
+
+@pytest.mark.parametrize("surface_name,press", PRESS_SURFACES)
+async def test_a_stale_rollover_now_with_the_switch_off_writes_nothing(
+    tmp_path, surface_name, press
+) -> None:
+    """The press re-reads the policy at issue time (DEC-007): a button or key from before the
+    switch went off asks for nothing."""
+    record = _rollover_record(SessionState.RUNNING, "claude")
+    book, connection = await _book_with(tmp_path, record, None)
+    try:
+        said, acted = await press(record, book, False, ROLLOVER)
+        assert _rollover_rows(connection) == [], surface_name
+        assert acted == [], surface_name
+        assert ROLLOVER_UNAVAILABLE in said, (surface_name, said)
+    finally:
+        connection.close()

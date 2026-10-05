@@ -21,8 +21,17 @@ from __future__ import annotations
 
 import pytest
 
-from remote_agents.application.session_actions import CLEANUP, FORCE, GRACEFUL, available_actions
-from remote_agents.domain.models import OrphanProvenance, SessionState
+from remote_agents.application.session_actions import (
+    CANCEL_ROLLOVER,
+    CLEANUP,
+    FORCE,
+    GRACEFUL,
+    ROLLOVER,
+    available_actions,
+    rollover_actions,
+)
+from remote_agents.domain.models import OrphanProvenance, ProfileId, SessionState
+from remote_agents.domain.rollover import RolloverState, is_legal
 from remote_agents.domain.state_machine import InvalidTransition, LifecycleEvent, transition
 
 # The event each offerable action ultimately asks the domain to perform, mirroring
@@ -127,4 +136,63 @@ def test_the_resume_identity_index_releases_exactly_the_domain_s_terminal_states
 
     assert released == set(TERMINAL_STATES), (
         "the index releases a conversation for exactly the states the domain calls terminal"
+    )
+
+
+# --- Rollover now and Cancel rollover (DEC-046, DEC-115) ------------------------------------
+#
+# The same direction as the stops above, against the rollover's own matrix: an offered
+# rollover action must be one the store will perform. A cancel moves the open rollover to
+# CANCELLED, so it may be offered only from a state the matrix lets reach CANCELLED; and it is
+# narrower than that on purpose -- `RolloverBook.cancel` withdraws only a REQUESTED one,
+# because from HANDOFF_READY on the pass may already be launching a successor. A request
+# opens a *new* row, so it may be offered only where none is open: the store refuses a second.
+
+_SWITCH = (True, False)
+_OPEN: tuple[RolloverState | None, ...] = (None, *RolloverState)
+_ROLLABLE = frozenset({ProfileId("claude")})
+
+
+def _rollover_situations():
+    for state in SessionState:
+        for profile in ("claude", "codex"):
+            for switch_on in _SWITCH:
+                for open_state in _OPEN:
+                    yield state, ProfileId(profile), switch_on, open_state
+
+
+def test_every_offered_cancel_is_a_legal_rollover_move_the_book_performs() -> None:
+    for state, profile, switch_on, open_state in _rollover_situations():
+        offered = rollover_actions(
+            state, profile, _ROLLABLE, switch_on=switch_on, open_state=open_state
+        )
+        if CANCEL_ROLLOVER in offered:
+            assert open_state is not None
+            assert is_legal(open_state, RolloverState.CANCELLED), open_state
+            assert open_state is RolloverState.REQUESTED, (
+                f"cancel offered from {open_state.value}, which `RolloverBook.cancel` refuses"
+            )
+
+
+def test_rollover_now_is_never_offered_beside_an_open_rollover() -> None:
+    for state, profile, switch_on, open_state in _rollover_situations():
+        offered = rollover_actions(
+            state, profile, _ROLLABLE, switch_on=switch_on, open_state=open_state
+        )
+        if ROLLOVER in offered:
+            assert open_state is None, f"a second rollover offered beside {open_state}"
+            assert state is SessionState.RUNNING and profile in _ROLLABLE and switch_on
+
+
+def test_the_cancel_is_narrower_than_the_rollover_matrix() -> None:
+    """HANDOFF_READY may legally reach CANCELLED, and is still not offered a cancel: a
+    successor may be starting by the time the press lands. Pinned so the narrowing is read as
+    a decision, not as an oversight to widen."""
+    assert is_legal(RolloverState.HANDOFF_READY, RolloverState.CANCELLED)
+    assert CANCEL_ROLLOVER not in rollover_actions(
+        SessionState.RUNNING,
+        ProfileId("claude"),
+        _ROLLABLE,
+        switch_on=True,
+        open_state=RolloverState.HANDOFF_READY,
     )

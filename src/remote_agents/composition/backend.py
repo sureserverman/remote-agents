@@ -17,6 +17,7 @@ from remote_agents.adapters.agents.registry import (
     ProfileUsageReaders,
     claude_remote_control_default,
     profile_composers,
+    profiles_running_handoffs,
     provider_descriptors,
     usage_readers,
 )
@@ -385,8 +386,12 @@ def compose_backend(
         ),
         # Over the same connection again: rollover rows are domain rows, so a request from
         # either surface wakes the store watcher on both (DEC-090), and the pass in `serve`
-        # reads the same row the surface wrote.
-        rollovers=RolloverBook(SQLiteRolloverStore(connection)),
+        # reads the same row the surface wrote. Which profiles roll over is the registry's
+        # answer, the same one the pass is built with, so a surface offers Rollover now exactly
+        # where the pass would act on it.
+        rollovers=RolloverBook(
+            SQLiteRolloverStore(connection), rollable=profiles_running_handoffs()
+        ),
         max_label_length=config.max_label_length,
     )
 
