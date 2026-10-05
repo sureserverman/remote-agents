@@ -36,6 +36,7 @@ from remote_agents.application.notification_policy import (
     merged,
     shown_in_message,
 )
+from remote_agents.domain.rollover import RolloverState
 from remote_agents.ports.agent_activity import (
     ActivityConfidence,
     ActivityKind,
@@ -478,3 +479,12 @@ def test_every_schedule_fire_is_told_even_one_a_restart_found_launched() -> None
     from remote_agents.application.schedules import FireOutcome
 
     assert {outcome for outcome in FireOutcome if schedule_told(outcome)} == set(FireOutcome)
+
+
+@pytest.mark.parametrize("state", list(RolloverState), ids=lambda state: state.value)
+def test_only_a_rollover_that_failed_is_told(state: RolloverState) -> None:
+    """DEC-031: a rollover's success is a silent redraw; only FAILED and STOP_FAILED push, since
+    each leaves the owner something to do (DEC-115)."""
+    told = notification_policy.rollover_told(state)
+
+    assert told is (state in (RolloverState.FAILED, RolloverState.STOP_FAILED))

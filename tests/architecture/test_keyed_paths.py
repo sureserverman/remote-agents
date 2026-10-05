@@ -24,16 +24,6 @@ _ALLOWED: dict[tuple[str, str], tuple[int, str]] = {
         "`Escape` alone approves nothing: it dismisses the menu our own `/remote-control` opened, "
         "and at worst declines a dialog or interrupts a turn",
     ),
-    ("answer_trust", "keys"): (
-        1,
-        "types into the folder-trust dialog by design, keys planned from its reading (DEC-079); "
-        "read outside the send's lock hold, so only a second trust answer can race it",
-    ),
-    ("decline_trust", "keys"): (
-        1,
-        "declines the folder-trust dialog by design, gated on its reading (DEC-078); read "
-        "outside the send's lock hold, so only a second trust answer can race it",
-    ),
 }
 
 
@@ -103,9 +93,23 @@ def test_every_agent_whose_stop_submits_declares_a_composer() -> None:
 #: (method, keys expression) -> how many such guarded calls, and what their check refuses.
 _GUARDED: dict[tuple[str, str], tuple[str, str, str]] = {
     ("graceful_stop", "profile.graceful_keys"): (
-        "stoppable",
+        "check",
         "unasked",
-        "a draft, shell mode, a dialog or the open Remote Control menu; a dialog between keys",
+        "the owner's stop (`stoppable`): a draft, shell mode, a dialog or the open Remote Control "
+        "menu; the rollover's (`idle`, DEC-115): anything but an idle composer; a dialog between "
+        "keys",
+    ),
+    ("_confirm_trust_answer", "movement"): (
+        "planned",
+        "planned",
+        "a trust dialog the movement was not planned from (DEC-078/079); the same before each "
+        "later key",
+    ),
+    ("_confirm_trust_answer", "(TRUST_CONFIRM_KEY,)"): (
+        "on_answer",
+        "on_answer",
+        "anything but the cursor seen on the chosen answer -- an Enter onto the other row "
+        "answered no, or trusted a declined folder (2026-10-05 live run)",
     ),
     ("_interrupt_running_turn", "interrupt"): (
         "running",

@@ -265,9 +265,15 @@ def test_no_further_capability_leaked_into_the_context() -> None:
         # surfaces for `claude_limits_source`'s reason -- it decides whether this service reads
         # a credential and calls out.
         "cursor_limits_source",
+        # Workflow-rollover sub-plan 2 Task 2.1: the auto-rollover switch, a Settings row on
+        # both surfaces for `resume_after_limit`'s reason -- it decides what this service does.
+        "auto_rollover",
         # Scheduled sessions, 2026-10-02: both surfaces list and manage schedules through the
         # one book, so it is a backend capability rather than a surface's own.
         "schedules",
+        # Workflow rollover, 2026-10-05: both surfaces show a session's rollover and lineage
+        # and ask for or cancel one through the one book; acting on it is the service's alone.
+        "rollovers",
         "sessions",
         "projects",
         "conversations",

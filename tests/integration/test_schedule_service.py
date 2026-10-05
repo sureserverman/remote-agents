@@ -190,7 +190,7 @@ async def test_a_previous_run_is_working_only_while_live_with_a_turn_marker(conn
     live, ended = SessionId.new(), SessionId.new()
     await sessions.save(_record(live))
     await sessions.save(_record(ended, SessionState.ENDED))
-    working = still_working_in(sessions, _Markers(str(live), str(ended)))
+    working = still_working_in(sessions, _Markers(str(live), str(ended)), now=lambda: FIRE)
     idle = still_working_in(sessions, _Markers())
 
     assert await working(str(live)) is True

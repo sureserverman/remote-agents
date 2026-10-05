@@ -56,6 +56,7 @@ from remote_agents.adapters.telegram.presenters import (
     render_message,
     uniform_keyboard,
 )
+from remote_agents.adapters.telegram.rollover_notifications import RolloverNotifier
 from remote_agents.adapters.telegram.schedule_notifications import ScheduleNotifier
 from remote_agents.adapters.telegram.stops import CONFIRMED_FORCE, StopController
 from remote_agents.adapters.telegram.trust_notifications import (
@@ -115,6 +116,7 @@ from remote_agents.application.remote_control_default import (
 )
 from remote_agents.application.resume_flow import RESUME_PAGE_SIZE, resume_capable
 from remote_agents.application.resume_setting import RESUME_LABELS, RESUME_TITLE
+from remote_agents.application.rollover_setting import ROLLOVER_LABELS, ROLLOVER_TITLE
 from remote_agents.application.schedule_book import ScheduleRefusal, ScheduleRefused
 from remote_agents.application.schedule_times import (
     REPEATS,
@@ -126,10 +128,13 @@ from remote_agents.application.schedule_times import (
 )
 from remote_agents.application.session_actions import (
     ACTION_LABELS,
+    CANCEL_ROLLOVER,
     CLEANUP,
     FORCE,
     GRACEFUL,
     REMOTE_CONTROL_LABELS,
+    ROLLOVER,
+    ROLLOVER_ACTION_LABELS,
     RemoteControlDirection,
     StopFailure,
     available_actions,
@@ -158,6 +163,7 @@ from remote_agents.application.session_views import (
     only_listed,
     project_name,
     repeat_words,
+    rollover_marks,
     schedule_lines,
     selectable_area,
     session_identity,
@@ -515,6 +521,15 @@ _REMOTE_EMOJI = "\U0001f4e1"  # 📡
 # with the two settings it has nothing to do with.
 _LIMITS_EMOJI = "\U0001f4ca"  # 📊
 _MESSAGE_EMOJI = "\u2709\ufe0f"  # ✉️
+_ROLLOVER_EMOJI = "\U0001f501"  # 🔁
+
+_ROLLOVER_CALLBACKS: dict[str, str] = {
+    ROLLOVER: "session.rollover",
+    CANCEL_ROLLOVER: "session.rollover.cancel",
+}
+"""The press each shared rollover action rides on (DEC-046). Under `session.` so the marker
+stays on the sessions tab, as every other press about one session does."""
+_ROLLOVER_OF_CALLBACK = {callback: action for action, callback in _ROLLOVER_CALLBACKS.items()}
 _BACK_TO_SESSIONS = "\u2039 Back to sessions"  # ‹ Back to sessions
 
 _RELAY_REASON_WORDS: dict[PromptReason, str] = {
@@ -688,6 +703,7 @@ def unmarked(label: str) -> str:
         _REMOTE_EMOJI,
         _LIMITS_EMOJI,
         _MESSAGE_EMOJI,
+        _ROLLOVER_EMOJI,
     }
     return rest if separator and head in marks else label
 
@@ -793,6 +809,9 @@ class PrivateBotBoundary:
     separately and each kept going regardless.
     """
     notifier: ActivityNotifier = field(init=False)
+    rollover_notifier: RolloverNotifier | None = None
+    """Says when a rollover failed or its stop did not go through, or None where the backend
+    has no rollovers. Bot-only, like the schedule notices; only failures push (DEC-031)."""
     schedule_notifier: ScheduleNotifier | None = None
     """Says what each scheduled fire came to, or None where nothing manages schedules.
 
@@ -1504,6 +1523,7 @@ class PrivateBotBoundary:
             or self.backend.claude_limits_source is not None
             or self.backend.cursor_limits_source is not None
             or self.backend.resume_after_limit is not None
+            or self.backend.auto_rollover is not None
         ):
             # Conditional on a row being wired, unlike the `/settings` menu entry, and the two
             # rules are different on purpose: the menu is a door that always has something
@@ -1807,6 +1827,8 @@ class PrivateBotBoundary:
             return await self._settings_limits_source_reply(token, message_id)
         if action == "settings.resume_after_limit":
             return await self._settings_resume_reply(token, message_id)
+        if action == "settings.auto_rollover":
+            return await self._settings_rollover_reply(token, message_id)
         # Cursor's switch has three: the question, the write, and the way back from the
         # question. The write carries its direction, so a stale button never toggles.
         if action == "settings.cursor_limits.ask":
@@ -1825,6 +1847,10 @@ class PrivateBotBoundary:
             return _reply_arguments(await self._inspect_reply(entity_id))
         if action == "session.unqueue":
             return _reply_arguments(self._unqueue_reply(entity_id))
+        if action in _ROLLOVER_OF_CALLBACK:
+            return await self._rollover_reply(
+                _ROLLOVER_OF_CALLBACK[action], entity_id, token, message_id
+            )
         return _reply_arguments(self._message("That action is no longer available."))
 
     async def _launch_reply(self, entity_id: str, token: str, message_id: int) -> dict[str, object]:
@@ -2436,6 +2462,15 @@ class PrivateBotBoundary:
         shown = records[start : start + self.session_page_size]
         sections: list[str] = []
         pickers: list[Button] = []
+        # Through the one backend, as the local surface reads it (DEC-046, DEC-091), and as
+        # total as it is there: a rollover read that fails costs the notes, never the list.
+        try:
+            rollovers = await rollover_marks(
+                self.backend.rollovers, shown, sessions=self.backend.sessions
+            )
+        except Exception:
+            _LOG.debug("the session rollover marks could not be read", exc_info=True)
+            rollovers = {}
         for group in StateGroup:
             members = [record for record in shown if session_row_parts(record).group is group]
             if not members:
@@ -2443,8 +2478,9 @@ class PrivateBotBoundary:
             lines = [f"{group_emoji(group)} <b>{_GROUP_TITLES[group]}</b>"]
             for record in members:
                 context = await self._context_for(record)
-                parts = session_row_parts(record, context)
-                _first, second = session_lines(record, context)
+                rolled = rollovers.get(str(record.session_id))
+                parts = session_row_parts(record, context, rolled)
+                _first, second = session_lines(record, context, rolled)
                 # The sequence sits *outside* the bold, so the eye lands on the name and
                 # finds the number beside it, and the state line is monospace so the gauges
                 # of neighbouring rows line up.
@@ -2773,6 +2809,23 @@ class PrivateBotBoundary:
             )
         if relay_row:
             buttons.append(tuple(relay_row))
+        # Rollover now / Cancel rollover (DEC-046, DEC-115): exactly what the shared policy
+        # offers over the switch and this session's open rollover, read through
+        # `Backend.rollovers`. A row of its own, never the stop row's: asking for a rollover
+        # writes one row and stops nothing. Rollover now is a mutation token, claimed once,
+        # because the request it writes is what later launches and stops sessions unattended;
+        # a cancel is not, for `session.unqueue`'s reason -- a second press finds nothing.
+        rollover_row = tuple(
+            Button(
+                f"{_ROLLOVER_EMOJI} {ROLLOVER_ACTION_LABELS[action]}",
+                self._callback(
+                    _ROLLOVER_CALLBACKS[action], session_value, mutation=action == ROLLOVER
+                ),
+            )
+            for action in await self._rollover_offer(record)
+        )
+        if rollover_row:
+            buttons.append(rollover_row)
         # **The two answers share one row, and the row is still the trust row's own.** The
         # owner asked for the pair to sit side by side on 2026-09-11, which supersedes
         # DEC-032's clause that gave each answer a row of its own; what that clause was
@@ -2921,6 +2974,56 @@ class PrivateBotBoundary:
         except Exception:
             _LOG.exception("reading the waiting message for %s failed", session_id)
             return None
+
+    async def _rollover_offer(self, record: SessionRecord) -> tuple[str, ...]:
+        """The rollover actions this session offers, or none where the backend wires no book.
+
+        Total: a failed read costs the row, never the detail it sits on.
+        """
+        book = self.backend.rollovers
+        if book is None:
+            return ()
+        try:
+            return await book.offered(record, self.backend.auto_rollover)
+        except Exception:
+            _LOG.exception("reading the rollover offer for %s failed", record.session_id)
+            return ()
+
+    async def _rollover_reply(
+        self, action: str, session_value: str, token: str, message_id: int
+    ) -> dict[str, object]:
+        """Rollover now or Cancel rollover, pressed: one row written or withdrawn, then the
+        shared outcome words (`RolloverBook.press`). Nothing is launched, typed or stopped here;
+        the pass in `serve` acts on the request at the workflow's own gate (brief §32)."""
+        book = self.backend.rollovers
+        record = await self._record(session_value)
+        if book is None or record is None:
+            return _reply_arguments(
+                self._message(
+                    "That session is no longer available.",
+                    back=self._sessions_back(),
+                    back_label=_BACK_TO_SESSIONS,
+                )
+            )
+        if action == ROLLOVER and not self.callbacks.claim_mutation(
+            token,
+            owner_id=self.owner_user_id,
+            chat_id=self.owner_chat_id,
+            message_id=message_id,
+        ):
+            return _reply_arguments(self._message("That action has already run."))
+        try:
+            said = await book.press(action, record, self.backend.auto_rollover)
+        except Exception:
+            _LOG.exception("the rollover press %s for %s failed", action, session_value)
+            said = "The rollover could not be recorded; nothing was changed."
+        return _reply_arguments(
+            self._message(
+                escape(said),
+                back=self._callback("session.detail", session_value),
+                back_label="Back to session",
+            )
+        )
 
     def _unqueue_reply(self, session_value: str) -> RenderedMessage:
         session_id = SessionId.parse(session_value)
@@ -3313,6 +3416,7 @@ class PrivateBotBoundary:
         limits_source: str | None = None,
         resume: bool | None = None,
         cursor_limits: str | None = None,
+        rollover: bool | None = None,
     ) -> RenderedMessage:
         """The rows about this machine, each reading its own source.
 
@@ -3461,6 +3565,21 @@ class PrivateBotBoundary:
                     ),
                 )
             )
+        rollover_switch = self.backend.auto_rollover
+        if rollover_switch is None:
+            lines += ["", f"{escape(ROLLOVER_TITLE)} is unavailable."]
+        else:
+            # The caller's read-back where it has one, for the limits-source row's reason.
+            chosen_rollover = await rollover_switch.read() if rollover is None else rollover
+            rows.append(
+                (
+                    Button(
+                        f"{_LIMITS_EMOJI} {ROLLOVER_TITLE}: {ROLLOVER_LABELS[chosen_rollover]}",
+                        # `mutation=True`: a redelivered callback must not flip it back.
+                        self._callback("settings.auto_rollover", "service", mutation=True),
+                    ),
+                )
+            )
         return self._message(
             "\n".join(lines),
             tuple(rows),
@@ -3599,6 +3718,36 @@ class PrivateBotBoundary:
             self._message(
                 f"{escape(RESUME_TITLE)} could not be changed; it is still "
                 f"<code>{escape(RESUME_LABELS[landed])}</code>.",
+                screen.keyboard,
+            )
+        )
+
+    async def _settings_rollover_reply(self, token: str, message_id: int) -> dict[str, object]:
+        """Flip the auto-rollover switch by one press, then draw what the file says.
+
+        `_settings_resume_reply`'s shape: flip from a fresh read, write, and detect a refused
+        write by the read-back.
+        """
+        switch = self.backend.auto_rollover
+        if switch is None:
+            return _reply_arguments(self._message(f"{escape(ROLLOVER_TITLE)} is unavailable."))
+        if not self.callbacks.claim_mutation(
+            token,
+            owner_id=self.owner_user_id,
+            chat_id=self.owner_chat_id,
+            message_id=message_id,
+        ):
+            return _reply_arguments(self._message("That action has already run."))
+        intended = not await switch.read()
+        await switch.write(intended)
+        landed = await switch.read()
+        screen = await self._settings_screen(rollover=landed)
+        if landed == intended:
+            return _reply_arguments(screen)
+        return _reply_arguments(
+            self._message(
+                f"{escape(ROLLOVER_TITLE)} could not be changed; it is still "
+                f"<code>{escape(ROLLOVER_LABELS[landed])}</code>.",
                 screen.keyboard,
             )
         )
@@ -3998,9 +4147,9 @@ class PrivateBotBoundary:
                 # route that still works, and DEC-047 is why it is the one named.
                 return _reply_arguments(
                     self._message(
-                        "That dialog could not be read, so nothing was sent to it. The session "
-                        "is still waiting — answer it at the keyboard, or close it from its "
-                        "screen."
+                        "No answer was confirmed: the dialog could not be read, or was not yet "
+                        "taking keys, so no Enter went to it. The session is still waiting — "
+                        "answer it at the keyboard, or close it from its screen."
                     )
                 )
             return _reply_arguments(
@@ -5144,6 +5293,16 @@ def build_private_bot(
                 flood=bot.flood,
             ),
         )
+    if bot.backend.rollovers is not None:
+        object.__setattr__(
+            bot,
+            "rollover_notifier",
+            RolloverNotifier(
+                view=bot.view,
+                project_name=bot._project_name,  # noqa: SLF001 -- the cycle this factory pays
+                flood=bot.flood,
+            ),
+        )
     if bot.backend.schedules is not None:
         object.__setattr__(
             bot,
@@ -5229,6 +5388,9 @@ async def run_private_bot(
     # And to the schedule notices, which answer no update either.
     if boundary.schedule_notifier is not None:
         boundary.schedule_notifier.attach(application.bot)
+    # And to the rollover notices, which answer no update either.
+    if boundary.rollover_notifier is not None:
+        boundary.rollover_notifier.attach(application.bot)
     try:
         await _sync_owner_metadata(
             application.bot, secrets.owner_chat_id, owner_commands(boundary.backend)

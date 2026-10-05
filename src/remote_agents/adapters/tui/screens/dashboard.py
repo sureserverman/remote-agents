@@ -84,7 +84,7 @@ from remote_agents.application.remote_control_default import (
     remote_control_default_line,
     remote_control_default_word,
 )
-from remote_agents.application.session_views import LimitRow, limit_rows, session_row_parts
+from remote_agents.application.session_views import LimitRow, limit_rows
 from remote_agents.domain.models import ProfileId, SessionRecord
 from remote_agents.domain.remote_control import (
     HostConnection,
@@ -1585,10 +1585,7 @@ class DashboardScreen(LimitsRegion, FeedRegion, ProjectsPaneScreen):
         # sessions are what the counts describe and this is the one place they are drawn from
         # (one read, never two).
         self.set_status(session_counts_content(records), hint=DASHBOARD_HINT)
-        parts = [
-            session_row_parts(record, self.tui.context_window_for(record.session_id))
-            for record in records
-        ]
+        parts = [self.tui.row_parts(record) for record in records]
         contents = session_contents(parts, row_width(pane) or None)
         for record, content in zip(records, contents, strict=True):
             pane.add_option(

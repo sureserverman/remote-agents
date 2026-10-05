@@ -37,3 +37,10 @@ claude_limits_source = "status-line"
 # service otherwise never makes, which is why it is opt-in. The service never changes or
 # refreshes that token. Settings on either surface writes this key.
 cursor_limits_source = "off"
+
+[rollover]
+# Whether the service rolls a session over on its own when the session's workflow hands off. It
+# launches a fresh session in the same project and profile, asks it to adopt the handoff, and
+# stops the old session gracefully only after the new one accepts. Off by default, because that
+# is a launch and a stop nobody watched. Settings on either surface writes this key.
+auto_rollover = false

@@ -1020,3 +1020,102 @@ async def test_help_names_the_settings_screen_for_a_host_that_wired_only_cursor_
     await only_cursor.help_command(chat.message_update("/help"), None)
 
     assert "Settings" in chat.bot_messages[0].text
+
+
+# --- The auto-rollover row --------------------------------------------------------------------
+
+
+def _bot_with_rollover(setting: object | None) -> PrivateBotBoundary:
+    bot = _bot(None, None)
+    bot.backend = replace(bot.backend, auto_rollover=setting)
+    return bot
+
+
+async def _press_rollover(bot: PrivateBotBoundary, screen) -> dict[str, object]:
+    from remote_agents.application.rollover_setting import ROLLOVER_TITLE
+
+    token = _token(screen, _row_label(screen, ROLLOVER_TITLE))
+    bot.callbacks.bind_pending(CHAT, 1)
+    state = bot.callbacks.resolve(token, owner_id=OWNER, chat_id=CHAT, message_id=1)
+    assert state is not None and state.action == "settings.auto_rollover"
+    return await bot._reply_for(state.action, state.entity_id, token=token, message_id=1)
+
+
+async def test_the_rollover_row_reads_off_by_default() -> None:
+    from remote_agents.application.rollover_setting import ROLLOVER_LABELS, ROLLOVER_TITLE
+
+    setting = FakeResumeSetting(False)
+
+    screen = await _bot_with_rollover(setting)._settings_screen()
+
+    assert _row_label(screen, ROLLOVER_TITLE) == f"{ROLLOVER_TITLE}: {ROLLOVER_LABELS[False]}"
+    assert setting.calls == ["read"], "drawing the screen reads; it must not write"
+
+
+async def test_pressing_the_rollover_row_flips_it_and_reads_it_back() -> None:
+    from remote_agents.application.rollover_setting import ROLLOVER_LABELS, ROLLOVER_TITLE
+
+    setting = FakeResumeSetting(False)
+    bot = _bot_with_rollover(setting)
+    screen = await bot._settings_screen()
+
+    result = await _press_rollover(bot, screen)
+
+    assert setting.value is True
+    assert setting.calls == ["read", "read", "write:True", "read"], setting.calls
+    labels = [
+        unmarked(unpadded(button.text))
+        for row in result["reply_markup"].inline_keyboard
+        for button in row
+    ]
+    assert f"{ROLLOVER_TITLE}: {ROLLOVER_LABELS[True]}" in labels
+
+
+async def test_a_redelivered_rollover_callback_does_not_flip_twice() -> None:
+    from remote_agents.application.rollover_setting import ROLLOVER_TITLE
+
+    setting = FakeResumeSetting(False)
+    bot = _bot_with_rollover(setting)
+    screen = await bot._settings_screen()
+    token = _token(screen, _row_label(screen, ROLLOVER_TITLE))
+    bot.callbacks.bind_pending(CHAT, 1)
+    state = bot.callbacks.resolve(token, owner_id=OWNER, chat_id=CHAT, message_id=1)
+    assert state is not None
+
+    await bot._reply_for(state.action, state.entity_id, token=token, message_id=1)
+    again = await bot._reply_for(state.action, state.entity_id, token=token, message_id=1)
+
+    assert setting.value is True, "the first press landed and the retry did not undo it"
+    assert "already run" in str(again["text"]), again["text"]
+
+
+async def test_a_refused_rollover_write_says_so() -> None:
+    from remote_agents.application.rollover_setting import ROLLOVER_LABELS, ROLLOVER_TITLE
+
+    setting = FakeResumeSetting(False, refuse=True)
+    bot = _bot_with_rollover(setting)
+    screen = await bot._settings_screen()
+
+    result = await _press_rollover(bot, screen)
+
+    said = str(result["text"])
+    assert ROLLOVER_TITLE in said and "still" in said, said
+    assert ROLLOVER_LABELS[False] in said, said
+
+
+async def test_a_composition_with_no_rollover_setting_says_so_rather_than_hiding_the_row() -> None:
+    from remote_agents.application.rollover_setting import ROLLOVER_TITLE
+
+    screen = await _bot_with_rollover(None)._settings_screen()
+
+    assert f"{ROLLOVER_TITLE} is unavailable." in screen.text, screen.text
+    assert not any(label.startswith(ROLLOVER_TITLE) for label in _labels(screen))
+
+
+async def test_help_names_the_settings_screen_for_a_host_that_wired_only_auto_rollover() -> None:
+    chat = FakeChat(chat_id=CHAT, owner_id=OWNER)
+    only_rollover = _bot_with_rollover(FakeResumeSetting(False))
+
+    await only_rollover.help_command(chat.message_update("/help"), None)
+
+    assert "Settings" in chat.bot_messages[0].text

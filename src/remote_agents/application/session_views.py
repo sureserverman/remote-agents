@@ -20,7 +20,7 @@ and the Textual side still hands its rows to a widget.
 
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta, tzinfo
 from enum import Enum
@@ -33,10 +33,12 @@ from remote_agents.application.session_actions import state_word
 from remote_agents.domain.models import (
     OrphanProvenance,
     ProfileId,
+    SessionId,
     SessionRecord,
     SessionState,
 )
 from remote_agents.domain.projects import ProjectIdentity
+from remote_agents.domain.rollover import TERMINAL, RolloverState
 from remote_agents.ports.agent_usage import (
     AgentLimits,
     AgentUsage,
@@ -45,6 +47,7 @@ from remote_agents.ports.agent_usage import (
     LimitsNote,
     UsageWindow,
 )
+from remote_agents.ports.rollover_store import REQUEST_WRITTEN, Rollover, RolloverEvent
 from remote_agents.ports.schedules import Once, Repeat, Schedule, When
 
 
@@ -175,6 +178,157 @@ ORPHANED record again, so a pane that died weeks ago and one still working read 
 
 
 @dataclass(frozen=True, slots=True)
+class Lineage:
+    """The other end of a completed rollover, as a row names it.
+
+    `sequence` is that session's `display.sequence`, or None when no record of it could be
+    found -- the link is still a fact then, and the row says so without a number.
+    """
+
+    sequence: int | None
+
+
+@dataclass(frozen=True, slots=True)
+class RolloverMark:
+    """What one row says about its session's rollovers -- a value handed in, never read here.
+
+    `state` is the predecessor's latest non-cancelled rollover while it is open, or when it
+    ended FAILED or STOP_FAILED (the end that holds its next `ready`); lineage comes from
+    COMPLETED rollovers only, so a failure links nothing (DEC-115). Built by `rollover_marks`
+    from `Backend.rollovers`, so both surfaces hand their rows the same one (DEC-046).
+    """
+
+    state: RolloverState | None = None
+    continued_from: Lineage | None = None
+    continued_as: Lineage | None = None
+    waiting: bool = False
+    """A REQUESTED rollover held back behind another session's request in its checkout."""
+
+
+_ROLLOVER_NOTES: dict[RolloverState, str | None] = {
+    RolloverState.REQUESTED: "rollover pending · waiting for workflow boundary",
+    RolloverState.HANDOFF_READY: "starting successor",
+    RolloverState.SUCCESSOR_STARTING: "starting successor",
+    RolloverState.ADOPTING: "successor validating handoff",
+    # One line for both: the successor has accepted, and the predecessor is being stopped --
+    # waiting for its idle composer first, then the stop. The owner's next step is the same.
+    RolloverState.SUCCESSOR_ACCEPTED: "successor accepted · stopping",
+    RolloverState.PREDECESSOR_STOPPING: "successor accepted · stopping",
+    # No state line: a completed rollover is said by its lineage instead.
+    RolloverState.COMPLETED: None,
+    RolloverState.FAILED: "rollover failed · predecessor preserved",
+    RolloverState.STOP_FAILED: "stop failed · use force stop",
+    # No line: a withdrawn request is not asking, and `rollover_marks` never reports one.
+    RolloverState.CANCELLED: None,
+}
+"""Every state decided (brief §31), a line or a deliberate None, indexed rather than `.get`-ed
+so a state added without a decision raises on the first row that carries it."""
+
+_WAITING_NOTE = "rollover pending · waiting for another session's request"
+"""REQUESTED, held back: the checkout's one `request.json` is another session's until it ends."""
+
+
+def rollover_note(mark: RolloverMark) -> str | None:
+    """`state line[ · continued from #N][ · continued as #N]`, or None for nothing to say."""
+    pieces = []
+    if mark.state is RolloverState.REQUESTED and mark.waiting:
+        pieces.append(_WAITING_NOTE)
+    elif mark.state is not None and (line := _ROLLOVER_NOTES[mark.state]) is not None:
+        pieces.append(line)
+    if mark.continued_from is not None:
+        number = mark.continued_from.sequence
+        pieces.append(
+            "continued from an earlier session" if number is None else f"continued from #{number}"
+        )
+    if mark.continued_as is not None:
+        number = mark.continued_as.sequence
+        pieces.append(
+            "continued as a later session" if number is None else f"continued as #{number}"
+        )
+    return " · ".join(pieces) or None
+
+
+class _RolloverReads(Protocol):
+    """The three reads a row needs of `Backend.rollovers` (`application.rollover_book`)."""
+
+    async def latest_for(self, session_id: SessionId) -> Rollover | None: ...
+
+    async def continued_from(self, session_id: SessionId) -> SessionId | None: ...
+
+    async def continued_as(self, session_id: SessionId) -> SessionId | None: ...
+
+    async def events(self, rollover_id: str) -> Sequence[RolloverEvent]: ...
+
+
+class _SessionLister(Protocol):
+    async def list_sessions(self) -> Iterable[SessionRecord]: ...
+
+
+_REPORTED_ENDS = frozenset({RolloverState.FAILED, RolloverState.STOP_FAILED})
+"""The terminal states a row keeps showing: each holds the session's next `ready`."""
+
+
+async def rollover_marks(
+    rollovers: object | None,
+    records: Iterable[SessionRecord],
+    *,
+    sessions: object | None = None,
+) -> dict[str, RolloverMark]:
+    """Each record's rollover mark, keyed by session id as a string; only rows with one.
+
+    `rollovers` is `Backend.rollovers` and `sessions` is `Backend.sessions`, both typed
+    `object` for the reason `Backend` gives; None for `rollovers` marks nothing, which is how a
+    surface without the feature draws its rows unchanged. The other end of a lineage is named
+    from `records` first, and only when it is not there -- typically a predecessor its
+    completed rollover stopped, so ENDED and off the list -- from one `sessions` read.
+    """
+    if rollovers is None:
+        return {}
+    book: _RolloverReads = rollovers  # type: ignore[assignment]
+    listed = tuple(records)
+    sequences = {record.session_id: record.display.sequence for record in listed}
+    found: dict[str, tuple[RolloverState | None, SessionId | None, SessionId | None]] = {}
+    waiting: set[str] = set()
+    for record in listed:
+        latest = await book.latest_for(record.session_id)
+        state = latest.state if latest is not None else None
+        if state is not None and state in TERMINAL and state not in _REPORTED_ENDS:
+            # COMPLETED: its lineage says it. CANCELLED never comes back from `latest_for`.
+            state = None
+        if state in _REPORTED_ENDS and record.state is not SessionState.RUNNING:
+            # "predecessor preserved" and "use force stop" are about a running session; once it
+            # has stopped since, either line would say something no longer true.
+            state = None
+        if state is RolloverState.REQUESTED and latest is not None:
+            details = [event.detail or "" for event in await book.events(latest.id)]
+            if any(d.startswith("waiting:") for d in details) and REQUEST_WRITTEN not in details:
+                waiting.add(str(record.session_id))
+        before = await book.continued_from(record.session_id)
+        after = await book.continued_as(record.session_id)
+        if state is not None or before is not None or after is not None:
+            found[str(record.session_id)] = (state, before, after)
+    missing = {
+        other
+        for _state, before, after in found.values()
+        for other in (before, after)
+        if other is not None and other not in sequences
+    }
+    if missing and sessions is not None:
+        lister: _SessionLister = sessions  # type: ignore[assignment]
+        for record in await lister.list_sessions():
+            if record.session_id in missing:
+                sequences[record.session_id] = record.display.sequence
+
+    def lineage(other: SessionId | None) -> Lineage | None:
+        return None if other is None else Lineage(sequences.get(other))
+
+    return {
+        key: RolloverMark(state, lineage(before), lineage(after), waiting=key in waiting)
+        for key, (state, before, after) in found.items()
+    }
+
+
+@dataclass(frozen=True, slots=True)
 class SessionRowParts:
     """One listed session, taken apart so a surface can weight and colour each piece.
 
@@ -194,7 +348,9 @@ class SessionRowParts:
 
 
 def session_row_parts(
-    record: SessionRecord, context: ContextWindow | None = None
+    record: SessionRecord,
+    context: ContextWindow | None = None,
+    rollover: RolloverMark | None = None,
 ) -> SessionRowParts:
     """Take one listed record apart for a two-line or columned row.
 
@@ -207,6 +363,11 @@ def session_row_parts(
     Raises on ENDED rather than inventing a group for it, because no list is allowed to hand one
     in (`listed_in_sessions`), and a row quietly filed under "preserved" would hide exactly the
     widening DEC-017 forbids.
+
+    **The note composes, in a fixed order:** what qualifies the state word (an adopted orphan's
+    `ADOPTED_NOTE`) first, then the session's rollover (`rollover_note`: where it stands, then
+    its lineage), each joined by ` · `. `rollover` is handed in, never read here; None draws
+    the row exactly as it was before rollovers existed.
     """
     group = state_group(record.state)
     if group is None:
@@ -224,6 +385,9 @@ def session_row_parts(
         and record.orphan_provenance is OrphanProvenance.ADOPTED
         else None
     )
+    rolled = None if rollover is None else rollover_note(rollover)
+    if rolled is not None:
+        note = rolled if note is None else f"{note} · {rolled}"
     return SessionRowParts(
         identity=session_identity(record),
         sequence=record.display.sequence,
@@ -235,7 +399,11 @@ def session_row_parts(
     )
 
 
-def session_lines(record: SessionRecord, context: ContextWindow | None = None) -> tuple[str, str]:
+def session_lines(
+    record: SessionRecord,
+    context: ContextWindow | None = None,
+    rollover: RolloverMark | None = None,
+) -> tuple[str, str]:
     """The two-line row: `identity #n` over `state · age[ · gauge][ · note]`.
 
     Beside `session_row` rather than in place of it, as the redesign's handoff asked: that
@@ -243,7 +411,7 @@ def session_lines(record: SessionRecord, context: ContextWindow | None = None) -
     Plain strings, no markup -- the bot bolds the identity and leaves the sequence outside the
     bold, and that is its `escape()`-then-compose business (DEC-014), not this module's.
     """
-    parts = session_row_parts(record, context)
+    parts = session_row_parts(record, context, rollover)
     tail = " · ".join(piece for piece in (parts.state, parts.age, parts.gauge, parts.note) if piece)
     return f"{parts.identity} #{parts.sequence}", tail
 

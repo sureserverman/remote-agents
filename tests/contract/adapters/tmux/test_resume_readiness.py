@@ -248,6 +248,9 @@ class _DeclineGateway(Gateway):
         self.destroyed: list[SessionId] = []
         self.live = True
         self.dies_after_keys = False
+        #: The screen once a movement key has gone in, for a dialog whose answer is a row away:
+        #: the trust answer confirms only onto a screen showing the cursor there.
+        self.after_movement: str | None = None
 
     async def inventory(self) -> TmuxInventory:
         full = await super().inventory()
@@ -260,6 +263,17 @@ class _DeclineGateway(Gateway):
         self.sent.append(keys)
         if self.dies_after_keys:
             self.live = False
+
+    async def send_keys_when(self, session_id, keys, allowed, *, between=None):
+        """The real gateway's contract, on this fake's one screen: refused unless `allowed`
+        accepts it, and a movement redraws it to `after_movement` when one is given."""
+        del between
+        if not allowed(self._capture):
+            return self._capture
+        await self.send_keys(session_id, keys)
+        if keys != ("Enter",) and self.after_movement is not None:
+            self._capture = self.after_movement
+        return None
 
     async def destroy(self, session_id: SessionId) -> None:
         self.destroyed.append(session_id)
@@ -274,6 +288,10 @@ _CODEX_DIALOG = (
     f"  {_CODEX_BLOCKER} Codex can read, edit, and run files here.\n"
     "\u203a 1. Trust and continue\n"
     "  2. Back to Agent Command Center\n"
+)
+
+_CODEX_DIALOG_ON_BACK = _CODEX_DIALOG.replace(
+    "\u203a 1. Trust and continue\n  2. Back", "  1. Trust and continue\n\u203a 2. Back"
 )
 
 #: Claude's dialog, abbreviated — but no longer abbreviated past its own identifier.
@@ -362,11 +380,15 @@ async def test_codex_is_told_no_in_its_own_dialog_now_that_it_declares_one(tmp_p
     the decline walks one row down and confirms — the mirror of claude's, which is exactly why
     a fixed key sequence could never have served both.
     """
-    terminal, gateway, session_id = _decline_terminal(tmp_path, "codex", _CODEX_DIALOG)
+    terminal, gateway, session_id = _decline_terminal(
+        tmp_path, "codex", _CODEX_DIALOG, after_movement=_CODEX_DIALOG_ON_BACK
+    )
 
     observation = await terminal.decline_trust(session_id)
 
-    assert gateway.sent == [("Down", "Enter")], (
+    # Two sends since the 2026-10-05 trust guard: the movement, then `Enter` only once the
+    # cursor is seen on the negative row.
+    assert gateway.sent == [("Down",), ("Enter",)], (
         "codex rests its cursor on 'Trust and continue', so declining is one row down from it"
     )
     assert gateway.destroyed == [session_id]

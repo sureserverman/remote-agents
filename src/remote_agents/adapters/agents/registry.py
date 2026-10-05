@@ -496,6 +496,16 @@ def profiles_with_finished_events(
     return frozenset(finishing)
 
 
+def profiles_that_roll_over() -> frozenset[ProfileId]:
+    """The profiles whose sessions may be rolled over (DEC-115): those whose agent runs the
+    planning plugin's plan executor, the one writer of handoff envelopes.
+
+    Claude Code's alone, because the plugin is a Claude Code plugin. Named through its
+    package's own provider record rather than a literal, as the rest of this module names it.
+    """
+    return frozenset({ProfileId(_CLAUDE.name)})
+
+
 def profile_glyphs(descriptors: tuple[ProviderDescriptor, ...] | None = None) -> dict[str, str]:
     """Every curated profile's mark, as one mapping a composition can hand to a surface.
 

@@ -1019,3 +1019,120 @@ def test_the_selector_literal_for_cursor_limits_source_is_in_the_closed_set() ->
 
     assert USAGE_API in CURSOR_LIMITS_SOURCES
     assert USAGE_API != DEFAULT_CURSOR_LIMITS_SOURCE
+
+
+# --- the switch that says whether a ready handoff is rolled over unattended ------------------
+
+
+def test_auto_rollover_defaults_to_off_when_absent(tmp_path: Path) -> None:
+    """Absent means off: an unattended launch and stop happen only once the owner says so."""
+    from remote_agents.config import read_auto_rollover
+
+    path = write_config(tmp_path, example(tmp_path))
+
+    assert load_config(path).auto_rollover is False
+    assert read_auto_rollover(path) is False
+    assert read_auto_rollover(tmp_path / "absent.toml") is False
+
+
+def test_auto_rollover_absent_is_not_drift(tmp_path: Path) -> None:
+    """DEC-058: a config written before `[rollover]` existed is not drift, nor is an empty one."""
+    from remote_agents.config import describe_schema_drift
+
+    for body in (example(tmp_path), example(tmp_path) + "\n[rollover]\n"):
+        drift = describe_schema_drift(write_config(tmp_path, body))
+        assert drift["missing"] == [] and drift["unknown"] == [], (body, drift)
+        assert load_config(write_config(tmp_path, body)).auto_rollover is False
+
+
+def test_auto_rollover_loads_a_stated_true(tmp_path: Path) -> None:
+    from remote_agents.config import describe_schema_drift, read_auto_rollover
+
+    path = write_config(tmp_path, example(tmp_path) + "\n[rollover]\nauto_rollover = true\n")
+
+    assert load_config(path).auto_rollover is True
+    assert read_auto_rollover(path) is True
+    drift = describe_schema_drift(path)
+    assert drift["unknown"] == [] and drift["missing"] == []
+
+
+@pytest.mark.parametrize("value", ["1", '"false"', '"true"', "0"])
+def test_auto_rollover_refuses_anything_but_a_bool_by_name(tmp_path: Path, value: str) -> None:
+    """The loader refuses a non-bool; the fresh reader falls toward off instead."""
+    from remote_agents.config import read_auto_rollover
+
+    path = write_config(tmp_path, example(tmp_path) + f"\n[rollover]\nauto_rollover = {value}\n")
+
+    with pytest.raises(ConfigError, match="rollover.auto_rollover"):
+        load_config(path)
+    assert read_auto_rollover(path) is False
+
+
+def test_the_rollover_table_refuses_an_unknown_key(tmp_path: Path) -> None:
+    path = write_config(tmp_path, example(tmp_path) + "\n[rollover]\nauto_rolover = true\n")
+
+    with pytest.raises(ConfigError, match="rollover"):
+        load_config(path)
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        "this is not toml [[[",
+        '[rollover]\nauto_rollover = "true"\n',
+        "[rollover]\nauto_rollover = 1\n",
+        "rollover = 1\n",
+        "[limits]\nmax_label_length = 40\n",
+        "[rollover]\nauto_rollover = false\n",
+    ],
+)
+def test_the_fresh_read_of_auto_rollover_fails_toward_off(tmp_path: Path, body: str) -> None:
+    """The pass launches and stops sessions on this answer, so every doubt is off."""
+    from remote_agents.config import read_auto_rollover
+
+    assert read_auto_rollover(write_config(tmp_path, body)) is False
+
+
+def test_auto_rollover_writer_adds_the_table_and_changes_no_other_byte(tmp_path: Path) -> None:
+    """The first flip on a host that never had `[rollover]` appends it; later flips edit it."""
+    from remote_agents.config import read_auto_rollover, write_config_key
+
+    path = write_config(tmp_path, limits_source_body(tmp_path))
+    before = path.read_text(encoding="utf-8")
+
+    write_config_key(path, "rollover", "auto_rollover", True)
+    on = path.read_text(encoding="utf-8")
+    assert on.startswith(before)
+    assert "[rollover]\nauto_rollover = true" in on
+    assert load_config(path).auto_rollover is True
+    assert read_auto_rollover(path) is True
+
+    write_config_key(path, "rollover", "auto_rollover", False)
+    off = path.read_text(encoding="utf-8")
+    assert off.count("auto_rollover =") == 1 and off.count("[rollover]") == 1
+    assert everything_but(off, "auto_rollover") == everything_but(on, "auto_rollover")
+    assert load_config(path).auto_rollover is False
+    assert read_auto_rollover(path) is False
+
+
+@pytest.mark.parametrize("value", [1, 0, "false", "true", None])
+def test_auto_rollover_writer_refuses_a_non_bool(tmp_path: Path, value: object) -> None:
+    from remote_agents.config import write_config_key
+
+    path = write_config(tmp_path, limits_source_body(tmp_path))
+    before = path.read_bytes()
+
+    with pytest.raises(ConfigError, match="auto_rollover"):
+        write_config_key(path, "rollover", "auto_rollover", value)  # type: ignore[arg-type]
+
+    assert path.read_bytes() == before
+
+
+def test_the_shipped_example_carries_auto_rollover_off() -> None:
+    from remote_agents.config import describe_schema_drift
+
+    shipped = Path("config/remote-agents.example.toml").read_text(encoding="utf-8")
+    drift = describe_schema_drift(Path("config/remote-agents.example.toml"))
+
+    assert "[rollover]\n" in shipped and "auto_rollover = false" in shipped
+    assert drift["unknown"] == [] and drift["missing"] == []

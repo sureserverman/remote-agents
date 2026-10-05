@@ -58,12 +58,14 @@ from typing import Protocol
 
 from remote_agents.domain.models import OrphanProvenance, ProfileId, SessionRecord, SessionState
 from remote_agents.domain.remote_control import RemoteControlState
+from remote_agents.domain.rollover import RolloverState
 from remote_agents.domain.trust import TrustState, answerable
 from remote_agents.ports.terminal import (
     AGENT_ASKING,
     COMPOSER_HOLDS_TEXT,
     GRACEFUL_TIMEOUT,
     KEYS_BUSY,
+    NOT_IDLE,
     OWNERSHIP_LOST,
     UNKNOWN_SESSION,
     TerminalObservation,
@@ -418,6 +420,72 @@ def message_available(
     return state is SessionState.RUNNING and str(profile_id) in relayable
 
 
+ROLLOVER = "rollover"
+CANCEL_ROLLOVER = "cancel-rollover"
+
+ROLLOVER_ACTION_LABELS: dict[str, str] = {
+    ROLLOVER: "Rollover now",
+    CANCEL_ROLLOVER: "Cancel rollover",
+}
+"""What the two rollover actions are called on both surfaces (DEC-046), as `ACTION_LABELS`
+names the stops. Disjoint from those labels, so neither vocabulary can decode as the other."""
+
+ROLLOVER_UNAVAILABLE = "Rollover now is not available for this session."
+"""What a press says when the policy, re-read at issue time (DEC-007), no longer offers it."""
+
+_ROLLOVER_OUTCOMES: dict[tuple[str, bool], str] = {
+    (ROLLOVER, True): "Rollover asked for — it happens at the workflow's next handoff.",
+    (ROLLOVER, False): "A rollover is already open for this session.",
+    (CANCEL_ROLLOVER, True): "Rollover request cancelled.",
+    (CANCEL_ROLLOVER, False): "Nothing to cancel — the rollover is already under way or over.",
+}
+
+
+def rollover_actions(
+    state: SessionState,
+    profile_id: ProfileId,
+    rollable: Collection[ProfileId],
+    *,
+    switch_on: bool,
+    open_state: RolloverState | None,
+) -> tuple[str, ...]:
+    """The rollover actions a surface offers on one session: Rollover now, Cancel, or none.
+
+    A sibling of `available_actions` rather than a branch of it, for `message_available`'s
+    reason (DEC-007): that function is the *stop* policy, a pure function of the stored record
+    that the parity contract and `test_policy_matches_domain` pin, and these two are not stops.
+    Their answer also needs two things no record carries -- the auto-rollover switch and the
+    session's open rollover -- so folding them in would widen a deliberately pinned signature.
+
+    **Rollover now** on a RUNNING session of a `rollable` profile (the composition's
+    `profiles_that_roll_over`, handed in so this module names no provider), with the switch on
+    and no rollover open. Pressing it writes a REQUESTED row and nothing else; the pass in
+    `serve` acts on it at the workflow's own gate (brief §32).
+
+    **Cancel rollover** only while the open rollover is REQUESTED, whatever the switch or the
+    session's state: withdrawing a request is harmless, and one asked while the switch was on
+    must stay withdrawable after it is turned off. Narrower than the rollover matrix, which also
+    lets HANDOFF_READY reach CANCELLED -- from there a successor may be starting, and only the
+    pass ends the rollover (`RolloverBook.cancel`).
+    """
+    if open_state is RolloverState.REQUESTED:
+        return (CANCEL_ROLLOVER,)
+    if (
+        open_state is None
+        and switch_on
+        and state is SessionState.RUNNING
+        and profile_id in rollable
+    ):
+        return (ROLLOVER,)
+    return ()
+
+
+def rollover_outcome(action: str, *, done: bool) -> str:
+    """What a press of `action` says, in one wording for both surfaces: asked, already open,
+    cancelled, nothing to cancel. `done` is whether the book wrote (or withdrew) the row."""
+    return _ROLLOVER_OUTCOMES[(action, done)]
+
+
 def trust_available(
     record: _RemoteControllable,
     observed: TrustState,
@@ -525,6 +593,14 @@ _GRACEFUL_FAILURES: dict[str, tuple[str, str]] = {
         "Another sender held this session's keys — a relayed message, the Remote Control "
         "toggle, or a stop from the other surface — and did not finish in time. Nothing was "
         "typed and the session is still running. Try again in a moment, or force stop it.",
+    ),
+    NOT_IDLE: (
+        "The stop was not sent: the agent was not sitting idle.",
+        "A rollover stops the old session only onto an empty input with no turn running and no "
+        "question open, and never interrupts a turn to do it. This one was busy, held text, or "
+        "was asking something when the stop would have gone in, so nothing was typed and the "
+        "session is still running. Its successor already took over the work: stop this session "
+        "yourself when it is done, or force stop it.",
     ),
     AGENT_ASKING: (
         "The stop was not sent: the agent is asking a question, or a menu is open.",

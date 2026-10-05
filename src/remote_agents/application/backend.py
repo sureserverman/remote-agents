@@ -243,6 +243,15 @@ class Backend:
     unavailable from `is None` (DEC-061/067). Typed `object` for the reason `sessions` is.
     """
 
+    auto_rollover: object | None = None
+    """Whether a session is rolled over when its workflow hands off, a `ports.rollover_setting`.
+
+    `resume_after_limit`'s sibling: a switch in the operator's `config.toml` that decides what
+    this service does, off by default (DEC-115). The rollover pass reads it on every run.
+    Optional for the same reason, and its absence renders unavailable from `is None`
+    (DEC-061/067). Typed `object` for the reason `sessions` is.
+    """
+
     state_events: object | None = None
     """The store-change source (`application.store_watch.StoreWatch`), a `ports.state_events`.
 
@@ -258,6 +267,13 @@ class Backend:
     and delete -- what both surfaces manage them through. Firing them is the service's alone,
     and is not reached through this field. Optional for the reason the rest are, and typed
     `object` for the reason `sessions` is."""
+
+    rollovers: object | None = None
+    """Workflow rollovers (`application.rollover_book.RolloverBook`): ask for one, cancel a
+    request, and read the open ones and each session's lineage -- what both surfaces show and
+    offer through (DEC-115). Acting on one is the service's pass alone, and is not reached
+    through this field. Optional for the reason the rest are, and typed `object` for the reason
+    `sessions` is."""
 
     max_label_length: int = MAX_LABEL_LENGTH
     """The host's configured bound, clamped by `config` to 1..40 and never looser than the

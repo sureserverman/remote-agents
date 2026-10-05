@@ -98,8 +98,12 @@ from remote_agents.application.session_actions import (
 )
 from remote_agents.application.session_views import (
     CATALOGUE_GAP_RETRY_SECONDS,
+    RolloverMark,
+    SessionRowParts,
     listed_sessions,
     only_listed,
+    rollover_marks,
+    session_row_parts,
     unnamed_projects,
     with_project_names,
 )
@@ -502,6 +506,10 @@ class RemoteAgentsTui(App[AttachRequest | None]):
         dashboard's pane and the sessions list), and a cache per screen would read the same
         files twice and let the two disagree about one session.
         """
+        #: Each listed session's rollover mark, re-read with every list read
+        #: (`refresh_rollover_marks`) and drawn by every screen that draws session rows, so the
+        #: rows themselves stay pure functions of what they are handed (DEC-091).
+        self._rollover_marks: dict[str, RolloverMark] = {}
         self._catalogue = context.backend.catalogue
         #: Which of the two orders the projects list is in. Read once, from the file the
         #: composition root pointed at, and total in every failure -- an unreadable
@@ -2356,6 +2364,31 @@ class RemoteAgentsTui(App[AttachRequest | None]):
         """
         return self._context_windows.get(str(session_id))
 
+    def row_parts(self, record: SessionRecord) -> SessionRowParts:
+        """One listed row as every screen here draws it: the shared renderer, handed this
+        surface's cached context reading and rollover mark (DEC-091). One place, so a screen
+        cannot draw the row with one of them and another screen without it."""
+        return session_row_parts(
+            record,
+            self.context_window_for(record.session_id),
+            self._rollover_marks.get(str(record.session_id)),
+        )
+
+    async def refresh_rollover_marks(self, records: Iterable[SessionRecord]) -> None:
+        """Re-read the listed sessions' rollovers through `Backend.rollovers` (DEC-046).
+
+        Total like the context read: a rollover read that fails costs the notes, never the
+        list. Rebuilt rather than updated, so a rollover that ended stops being drawn.
+        """
+        backend = self._services.backend
+        try:
+            self._rollover_marks = await rollover_marks(
+                backend.rollovers, records, sessions=backend.sessions
+            )
+        except Exception:
+            _LOG.debug("the session rollover marks could not be read", exc_info=True)
+            self._rollover_marks = {}
+
     async def refresh_context_windows(self, records: Iterable[SessionRecord]) -> None:
         """Re-read every listed session's context, off the repaint path.
 
@@ -2411,6 +2444,7 @@ class RemoteAgentsTui(App[AttachRequest | None]):
         # Named *after* the sync, deliberately. The sync matches records against tmux panes,
         # and while naming touches only `display.project_slug` and no id, handing it the
         # exact tuple it saw before this task removes the question entirely.
+        await self.refresh_rollover_marks(records)
         return await self._with_names(records)
 
     async def raw_sessions(self) -> tuple[SessionRecord, ...]:
@@ -2434,7 +2468,9 @@ class RemoteAgentsTui(App[AttachRequest | None]):
         # same enum. `only_listed` is now the one of them, and DEC-017's "exactly ENDED" is
         # asserted over the whole `SessionState` set rather than over the states a reader
         # thought to name.
-        return only_listed(await self.raw_sessions())
+        records = only_listed(await self.raw_sessions())
+        await self.refresh_rollover_marks(records)
+        return records
 
     async def launch(self) -> LaunchFailure | None:
         """Issue the gathered launch, and return what to say if it did not take.

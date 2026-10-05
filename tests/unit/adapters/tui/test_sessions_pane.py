@@ -1875,7 +1875,7 @@ async def test_the_action_line_names_every_row_key_with_its_word() -> None:
         await pilot.pause()
         await pilot.pause()
         left, right = _action_line(app)
-    assert left == "a attach i inspect r rename s stop f force c clean up m remote"
+    assert left == "a attach i inspect r rename s stop f force c clean up m remote l rollover"
     assert right == "p projects"
 
 

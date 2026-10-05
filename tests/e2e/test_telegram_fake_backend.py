@@ -2321,7 +2321,10 @@ async def test_a_press_that_pressed_nothing_does_not_report_it_as_trusted() -> N
     assert "Trusted" not in reply["text"], (
         f"nothing was sent to the pane, so this may not report success: {reply['text']!r}"
     )
-    assert "nothing was sent to it" in reply["text"], reply["text"]
+    # Says no answer went in -- since the 2026-10-05 trust guard an arrow key may have, so the
+    # claim is about the confirming `Enter`, not about every key.
+    assert "No answer was confirmed" in reply["text"], reply["text"]
+    assert "no Enter went to it" in reply["text"], reply["text"]
     assert "at the keyboard" in reply["text"], (
         "the one-shot token is spent, so the reply must name the route that still works "
         "(DEC-047) rather than inviting a retry this button will refuse"

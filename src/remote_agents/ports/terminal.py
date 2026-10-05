@@ -66,6 +66,10 @@ KEYS_BUSY = "keys_busy"
 AGENT_ASKING = "agent_asking"
 """A stop was not sent because a dialog -- or Claude's Remote Control menu -- was up, where its
 `Enter` would have chosen for the owner (BL-055, DEC-103)."""
+NOT_IDLE = "not_idle"
+"""A stop asked to go only onto an idle composer was not sent: under the key lock the keys would
+have gone under, the pane showed a running turn, held text, a dialog, or nothing recognisable.
+The rollover's stop (DEC-115); an owner's stop never asks for it."""
 OWNERSHIP_LOST = "ownership_lost"
 NOT_AWAITING_TRUST = "not_awaiting_trust"
 """A live pane that is no longer sitting on its folder-trust question.
@@ -210,7 +214,7 @@ class TerminalPort(Protocol):
         self, session_id: SessionId, profile_id: ProfileId
     ) -> TerminalObservation: ...
     async def graceful_stop(
-        self, session_id: SessionId, profile_id: ProfileId
+        self, session_id: SessionId, profile_id: ProfileId, *, only_if_idle: bool = False
     ) -> TerminalObservation: ...
     async def cleanup(self, session_id: SessionId) -> None: ...
     async def force_stop(self, session_id: SessionId) -> TerminalObservation: ...

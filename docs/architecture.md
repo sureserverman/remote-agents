@@ -65,12 +65,13 @@ tests in `tests/architecture/`.
 
 ## ARCH-B1 — one `Backend`, and both frontends receive it
 
-`application/backend.py: Backend` is a frozen, slotted dataclass carrying eighteen fields
+`application/backend.py: Backend` is a frozen, slotted dataclass carrying twenty-one fields
 (DEC-046), in declaration order:
 `sessions`, `projects`, `conversations`, `catalogue`, `refresh_catalogue`, `profiles`,
 `capture`, `activity_feed`, `usage`, `limits`, `close_usage_readers`, `host_remote_control`,
 `claude_remote_control_default`, `claude_limits_source`, `cursor_limits_source`,
-`resume_after_limit`, `state_events`, `max_label_length`.
+`resume_after_limit`, `auto_rollover`, `state_events`, `schedules`, `rollovers`,
+`max_label_length`.
 (It read "nine" and omitted
 `usage` before `limits` was added beside it; a count in prose next to the list it counts is a
 second copy to keep agreeing, and this one had already drifted. **It then drifted a second
@@ -322,6 +323,29 @@ A schedule is a project, an agent profile, a message and a *when*, and the servi
   `adapters/telegram/schedule_notifications.py` says what each run came to, one message each.
 - `application/session_views.schedule_lines` is the listed line both surfaces draw (DEC-091);
   `tests/frontend_contract/test_schedule_parity.py` holds them to it.
+
+## DEC-115 — workflow rollover
+
+A plan-executing Claude session that hands off at a gate is replaced by one fresh session that
+adopts its work, and is stopped only after that successor accepted.
+
+- `domain/rollover.py` holds the states, the legal-move matrix, the restart table
+  (`recovery_action`) and `may_stop_predecessor`, the one gate on stopping.
+- `ports/handoff_envelopes.py` and `adapters/workflow/handoff_envelopes.py` read the planning
+  plugin's envelopes and write `request.json`, under the project's git top level
+  (`adapters/workflow/roots.py`). Every envelope is untrusted until checked.
+- `adapters/sqlite/rollover_store.py` stores rollovers and their append-only history in the
+  **domain** store (migration 18), so a move wakes `StoreWatch` (DEC-090). Lineage is derived
+  from COMPLETED rows, never stored on a session.
+- `application/rollover_book.py` (`RolloverBook`, `Backend.rollovers`) is what both surfaces
+  request, cancel and read rollovers through.
+- `application/rollover.py` (`RolloverPass`) walks each rollover one step a pass, persisting
+  each state before the action it licenses: it launches through `SessionService.launch` under
+  `rollover:<handoff_id>`, types the fixed template through `send_prompt`, and stops through
+  `SessionService.graceful_stop` -- only behind `may_stop_predecessor`, never by force.
+  `TmuxTerminal.pane_idle` is the idle look it launches and stops against.
+- `composition/service.py` builds the pass (`build_rollover_pass`) and runs it every 30 s in
+  the bot's service only; the switch `rollover.auto_rollover`, off by default, is read each pass.
 
 ## The process model — one `serve`, three pane processes, two SQLite files
 

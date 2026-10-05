@@ -50,6 +50,7 @@ from remote_agents.ports.terminal import (
     COMPOSER_HOLDS_TEXT,
     KEYS_BUSY,
     NOT_AWAITING_TRUST,
+    NOT_IDLE,
     TERMINAL_NOT_LIVE,
     TerminalObservation,
     TerminalPort,
@@ -85,6 +86,8 @@ _STOP_EVENTS: dict[str, LifecycleEvent] = {
     KEYS_BUSY: LifecycleEvent.GRACEFUL_STOP_NEVER_SENT,
     # Not sent: a dialog was up, and the stop's `Enter` would have answered it (BL-055).
     AGENT_ASKING: LifecycleEvent.GRACEFUL_STOP_NEVER_SENT,
+    # Not sent: the rollover's stop goes only onto an idle composer, and this one was not.
+    NOT_IDLE: LifecycleEvent.GRACEFUL_STOP_NEVER_SENT,
     GRACEFUL_TIMEOUT: LifecycleEvent.GRACEFUL_STOP_TIMED_OUT,
 }
 
@@ -628,7 +631,14 @@ class SessionService:
             await self._store.record_event(
                 command.session_id, LifecycleEvent.GRACEFUL_STOP_REQUESTED
             )
-            observation = await self._terminal.graceful_stop(command.session_id, command.profile_id)
+            if command.only_if_idle:
+                observation = await self._terminal.graceful_stop(
+                    command.session_id, command.profile_id, only_if_idle=True
+                )
+            else:
+                observation = await self._terminal.graceful_stop(
+                    command.session_id, command.profile_id
+                )
             if not observation.preserved:
                 # Two causes, two events (DEC-022). `unknown_session` means the terminal never
                 # matched the session to a live pane it owns, so no exit sequence left this

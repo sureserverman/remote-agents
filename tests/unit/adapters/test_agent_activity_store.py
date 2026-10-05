@@ -41,7 +41,12 @@ def _activity(kind: ActivityKind, *, minutes_ago: int = 0, detail: str | None = 
 async def test_the_migration_applies_over_an_existing_database(tmp_path: Path) -> None:
     """An operator's live database migrates forward; the new table starts empty."""
     path = tmp_path / "state.sqlite3"
-    open_database(path, migrations=MIGRATIONS[:-1]).close()
+    # By version, not by position: `MIGRATIONS[:-1]` stopped being "before agent_activity"
+    # (migration 9) the day migration 10 was appended, and then migrated nothing it was about.
+    old = open_database(path, migrations=tuple(m for m in MIGRATIONS if m[0] < 9))
+    tables = {row[0] for row in old.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+    old.close()
+    assert "agent_activity" not in tables, "the old store already has the table"
     connection = open_database(path, migrations=MIGRATIONS)
     try:
         rows = connection.execute("SELECT COUNT(*) FROM agent_activity").fetchone()
@@ -105,7 +110,7 @@ def test_the_migration_count_is_pinned_by_hand() -> None:
     """`len(MIGRATIONS)` comparisons elsewhere are conveniences; this literal is the one
     assertion an accidentally dropped migration cannot pass. Bump this — and only this —
     when adding a migration."""
-    assert len(MIGRATIONS) == 17  # 17: schedules (scheduled sessions, DEC-114)
+    assert len(MIGRATIONS) == 18  # 18: rollovers (workflow rollover, DEC-115)
 
 
 async def test_a_retired_kind_among_the_newest_rows_does_not_shorten_the_glance(store) -> None:

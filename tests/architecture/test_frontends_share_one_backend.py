@@ -533,10 +533,17 @@ def test_the_backend_capability_set_is_read_from_the_dataclass() -> None:
     **Nineteen since `schedules` joined them** (scheduled sessions, 2026-10-02): both surfaces
     list and manage schedules, and a host that wired no schedule book offers no Schedules entry
     -- read from a field that is `None`, never discovered by probing for an `add`.
+
+    **Twenty since `auto_rollover` joined them** (workflow-rollover sub-plan 02, 2026-10-05),
+    for `resume_after_limit`'s reason: both surfaces draw a Settings row for it.
+
+    **Twenty-one since `rollovers` joined them** (the same sub-plan, Task 2.4), for
+    `schedules`' reason: both surfaces show rollovers and offer to request or cancel one, and a
+    host that wired no rollover book offers neither -- read from a field that is `None`.
     """
     fields = _backend_fields()
-    assert len(fields) == 19, (
-        f"`Backend` now declares {len(fields)} fields, not 19. That is fine — but it widens "
+    assert len(fields) == 21, (
+        f"`Backend` now declares {len(fields)} fields, not 21. That is fine — but it widens "
         "what Rule 2 forbids probing for, so confirm the new field is a capability an adapter "
         "should read as a declared field rather than discover."
     )
@@ -601,8 +608,10 @@ def test_the_shared_use_case_set_is_read_from_its_modules() -> None:
     names = _shared_use_case_names()
     # 22 -> 23 on 2026-09-23: `session_actions.message_available`, the Send message action's
     # availability (DEC-099), is a shared rule like `trust_available`.
-    assert len(names) == 23, (
-        f"the shared use-case modules now define {len(names)} public names, not 23. Adding one "
+    # 23 -> 25 on 2026-10-05: `session_actions.rollover_actions` and `rollover_outcome`, the
+    # Rollover now / Cancel rollover availability and their outcome words (DEC-046, DEC-115).
+    assert len(names) == 25, (
+        f"the shared use-case modules now define {len(names)} public names, not 25. Adding one "
         "is ordinary; this assertion exists so that adding one is *noticed*, because every "
         "name here is a name no adapter may define."
     )
@@ -754,6 +763,7 @@ def test_the_sweep_reads_every_adapter_module() -> None:
         "telegram",
         "tmux",
         "tui",
+        "workflow",
     }, f"the sweep covered {sorted(packages)}, not every adapter package"
 
 

@@ -17,6 +17,7 @@ from remote_agents.adapters.agents.registry import (
     ProfileUsageReaders,
     claude_remote_control_default,
     profile_composers,
+    profiles_that_roll_over,
     provider_descriptors,
     usage_readers,
 )
@@ -25,6 +26,7 @@ from remote_agents.adapters.projects.registry import load_registry
 from remote_agents.adapters.projects.registry_writer import RegistryProjectRecorder
 from remote_agents.adapters.projects.workspace import FilesystemProjectWorkspace
 from remote_agents.adapters.sqlite.database import watched_paths
+from remote_agents.adapters.sqlite.rollover_store import SQLiteRolloverStore
 from remote_agents.adapters.sqlite.schedule_store import SQLiteScheduleStore
 from remote_agents.adapters.sqlite.session_store import SQLiteSessionStore
 from remote_agents.application.backend import Backend
@@ -34,6 +36,7 @@ from remote_agents.application.profiles import ProfileAvailability
 from remote_agents.application.project_admin import ProjectCreationService
 from remote_agents.application.project_catalog import CatalogProject, build_catalogue
 from remote_agents.application.reconcile import SessionLocks
+from remote_agents.application.rollover_book import RolloverBook
 from remote_agents.application.schedule_book import ScheduleBook
 from remote_agents.application.schedule_times import host_zone
 from remote_agents.application.services import SessionService
@@ -42,6 +45,7 @@ from remote_agents.composition.limits_source import (
     ConfigCursorLimitsSource,
     ConfigLimitsSource,
     ConfigResumeSetting,
+    ConfigRolloverSetting,
 )
 from remote_agents.config import read_claude_limits_source, read_cursor_limits_source
 from remote_agents.domain.models import ProjectId, SessionId
@@ -352,6 +356,7 @@ def compose_backend(
         claude_limits_source=ConfigLimitsSource(config.path or paths.config_path),
         cursor_limits_source=ConfigCursorLimitsSource(config.path or paths.config_path),
         resume_after_limit=ConfigResumeSetting(config.path or paths.config_path),
+        auto_rollover=ConfigRolloverSetting(config.path or paths.config_path),
         projects=_project_creator(config),
         conversations=_conversation_service(projects.paths, descriptors),
         catalogue=catalogue,
@@ -379,6 +384,12 @@ def compose_backend(
             projects=lambda: tuple(projects.paths),
             zone=host_zone,
         ),
+        # Over the same connection again: rollover rows are domain rows, so a request from
+        # either surface wakes the store watcher on both (DEC-090), and the pass in `serve`
+        # reads the same row the surface wrote. Which profiles roll over is the registry's
+        # answer, the same one the pass is built with, so a surface offers Rollover now exactly
+        # where the pass would act on it.
+        rollovers=RolloverBook(SQLiteRolloverStore(connection), rollable=profiles_that_roll_over()),
         max_label_length=config.max_label_length,
     )
 

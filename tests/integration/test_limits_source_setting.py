@@ -154,6 +154,36 @@ async def test_the_service_reads_a_half_edited_resume_switch_as_off(tmp_path: Pa
     assert await _resume_switch(None, path)() is False
 
 
+async def test_the_rollover_switch_defaults_off_and_round_trips_through_the_config(
+    tmp_path: Path,
+) -> None:
+    """Read afresh on every call: a later pass asks this each run, so a flip needs no restart."""
+    from remote_agents.composition.limits_source import ConfigRolloverSetting
+    from remote_agents.config import read_auto_rollover
+
+    path = _config(tmp_path)
+    setting = ConfigRolloverSetting(path)
+
+    assert await setting.read() is False
+    await setting.write(True)
+    assert await setting.read() is True
+    assert read_auto_rollover(path) is True
+    path.write_text(_CONFIG, encoding="utf-8")
+    assert await setting.read() is False, "a hand-edit underneath is read on the next call"
+
+
+async def test_a_refused_rollover_write_is_not_an_exception(tmp_path: Path) -> None:
+    from remote_agents.composition.limits_source import ConfigRolloverSetting
+
+    path = _config(tmp_path, "this is not toml [[[\n")
+    setting = ConfigRolloverSetting(path)
+
+    await setting.write(True)
+
+    assert await setting.read() is False
+    assert path.read_text(encoding="utf-8") == "this is not toml [[[\n"
+
+
 async def test_the_cursor_switch_defaults_off_and_round_trips_through_the_config(
     tmp_path: Path,
 ) -> None:

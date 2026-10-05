@@ -13,6 +13,7 @@ from remote_agents.adapters.agents.registry import (
     profile_limit_screens,
     profile_trust_dialogs,
     profiles_keeping_a_draft,
+    profiles_that_roll_over,
     profiles_with_finished_events,
     provider_descriptors,
 )
@@ -43,7 +44,7 @@ from remote_agents.composition.backend import (
     compose_backend,
     require_frontend_capabilities,
 )
-from remote_agents.composition.service import ServiceComposition
+from remote_agents.composition.service import ServiceComposition, build_rollover_pass
 from remote_agents.composition.tui import _console_composer, _local_runtime
 from remote_agents.config import (
     TelegramSecrets,
@@ -287,6 +288,29 @@ def _private_boundary(
         ),
         schedule_pass=schedule_pass,
         schedule_notifier=boundary.schedule_notifier,
+        # The rollover pass (DEC-115), built beside the loop that runs it. Wired only where the
+        # backend has sessions, the switch and the rollover rows, which production always does;
+        # the switch, read afresh each pass, is what keeps it idle until the owner turns it on.
+        rollover_pass=(
+            None
+            if backend.sessions is None
+            or backend.auto_rollover is None
+            or backend.rollovers is None
+            else build_rollover_pass(
+                connection=connection,
+                sessions=backend.sessions,
+                terminal=terminal,
+                enabled=backend.auto_rollover.read,
+                project_paths=projects.paths,
+                rollable=profiles_that_roll_over(),
+                notify=(
+                    None
+                    if boundary.rollover_notifier is None
+                    else boundary.rollover_notifier.notify
+                ),
+            )
+        ),
+        rollover_notifier=boundary.rollover_notifier,
     )
 
 

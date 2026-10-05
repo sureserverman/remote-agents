@@ -23,8 +23,11 @@ from uuid import UUID
 
 import pytest
 
+from remote_agents.adapters.sqlite.database import open_database
+from remote_agents.adapters.sqlite.rollover_store import SQLiteRolloverStore
 from remote_agents.application.project_catalog import CatalogProject
 from remote_agents.application.relative_time import age, age_short
+from remote_agents.application.rollover_book import RolloverBook
 from remote_agents.application.session_actions import state_word
 from remote_agents.application.session_views import (
     _ABSENCE_WORDS,
@@ -33,6 +36,8 @@ from remote_agents.application.session_views import (
     NOT_REPORTED,
     UNREADABLE,
     LimitWindow,
+    Lineage,
+    RolloverMark,
     StateGroup,
     _window_phrase,
     context_gauge,
@@ -44,6 +49,7 @@ from remote_agents.application.session_views import (
     listed_sessions,
     only_listed,
     percent_gauge,
+    rollover_marks,
     selectable_area,
     session_identity,
     session_lines,
@@ -62,6 +68,7 @@ from remote_agents.domain.models import (
     SessionRecord,
     SessionState,
 )
+from remote_agents.domain.rollover import RolloverState
 from remote_agents.ports.agent_usage import (
     AgentLimits,
     ContextWindow,
@@ -205,6 +212,229 @@ def test_the_row_parts_read_the_shared_state_word() -> None:
         session_row_parts(_record(SessionState.ORPHANED, OrphanProvenance.ADOPTED)).state
         == "adopted"
     )
+
+
+# A session's rollover on its row (Stage 3 Task 3.1, brief §31) -------------------------------
+
+_ROLLOVER_LINES: dict[RolloverState, str | None] = {
+    RolloverState.REQUESTED: "rollover pending · waiting for workflow boundary",
+    RolloverState.HANDOFF_READY: "starting successor",
+    RolloverState.SUCCESSOR_STARTING: "starting successor",
+    RolloverState.ADOPTING: "successor validating handoff",
+    RolloverState.SUCCESSOR_ACCEPTED: "successor accepted · stopping",
+    RolloverState.PREDECESSOR_STOPPING: "successor accepted · stopping",
+    # Deliberately no line: a completed rollover is said by its lineage instead, and a
+    # cancelled request is not asking (the store's hold passes over it for the same reason).
+    RolloverState.COMPLETED: None,
+    RolloverState.FAILED: "rollover failed · predecessor preserved",
+    RolloverState.STOP_FAILED: "stop failed · use force stop",
+    RolloverState.CANCELLED: None,
+}
+"""Literals, not the module's own table: a state added to `RolloverState` without a decision
+here fails the parametrization below with a KeyError, which is the gate this exists for."""
+
+
+@pytest.mark.parametrize("state", list(RolloverState), ids=lambda state: state.value)
+def test_every_rollover_state_has_its_row_line_or_deliberately_none(state: RolloverState) -> None:
+    expected = _ROLLOVER_LINES[state]
+    mark = RolloverMark(state=state)
+    plain = session_lines(_record())[1]
+
+    assert session_row_parts(_record(), rollover=mark).note == expected
+    assert session_lines(_record(), rollover=mark)[1] == (
+        plain if expected is None else f"{plain} · {expected}"
+    )
+
+
+def test_no_mark_and_an_empty_mark_draw_the_row_as_before() -> None:
+    assert session_lines(_record(), rollover=None) == session_lines(_record())
+    assert session_lines(_record(), rollover=RolloverMark()) == session_lines(_record())
+
+
+def test_a_rollover_note_follows_an_existing_note_and_lineage_follows_the_state() -> None:
+    """The order: what qualifies the state word first (the adopted orphan's confession), then
+    where the rollover stands, then where the session came from and went."""
+    mark = RolloverMark(state=RolloverState.FAILED, continued_from=Lineage(3))
+
+    parts = session_row_parts(_record(SessionState.ORPHANED, OrphanProvenance.ADOPTED), None, mark)
+
+    assert parts.note == (
+        f"{ADOPTED_NOTE} · rollover failed · predecessor preserved · continued from #3"
+    )
+
+
+def test_lineage_names_the_other_sessions_sequence_both_ways() -> None:
+    mark = RolloverMark(continued_from=Lineage(3), continued_as=Lineage(7))
+
+    assert session_row_parts(_record(), rollover=mark).note == "continued from #3 · continued as #7"
+
+
+def test_lineage_to_a_session_no_record_names_says_earlier_or_later() -> None:
+    """The fallback: the link is a fact even when the other record cannot be found, and
+    "earlier" and "later" are true of a predecessor and a successor whatever became of them."""
+    mark = RolloverMark(continued_from=Lineage(None), continued_as=Lineage(None))
+
+    assert session_row_parts(_record(), rollover=mark).note == (
+        "continued from an earlier session · continued as a later session"
+    )
+
+
+def _numbered(sequence: int, state: SessionState = SessionState.RUNNING) -> SessionRecord:
+    return SessionRecord(
+        session_id=SessionId(UUID(int=100 + sequence)),
+        project_id=ProjectId("demo"),
+        profile_id=ProfileId("claude"),
+        display=SessionDisplayIdentity("demo", "claude", "regular", sequence),
+        state=state,
+        created_at=_NOW - timedelta(minutes=5),
+    )
+
+
+_ROLL_AT = datetime(2026, 10, 5, 9, 0, tzinfo=UTC)
+
+
+async def _roll(
+    store: SQLiteRolloverStore,
+    predecessor: SessionRecord,
+    successor: SessionRecord,
+    last: RolloverState,
+    handoff: str = "h-0123456789abcdef0123",
+) -> None:
+    """Open a rollover from a `ready` and walk it, successor recorded, to `last`."""
+    opened = await store.open_for_ready(
+        predecessor.session_id,
+        handoff,
+        project_id=predecessor.project_id,
+        profile_id=predecessor.profile_id,
+        plan=None,
+        at=_ROLL_AT,
+    )
+    assert opened is not None
+    path = (
+        RolloverState.SUCCESSOR_STARTING,
+        RolloverState.ADOPTING,
+        RolloverState.SUCCESSOR_ACCEPTED,
+        RolloverState.PREDECESSOR_STOPPING,
+    )
+    at = _ROLL_AT
+    for state in path:
+        if last is RolloverState.FAILED and state is RolloverState.SUCCESSOR_ACCEPTED:
+            break
+        at += timedelta(seconds=1)
+        successor_id = successor.session_id if state is RolloverState.SUCCESSOR_STARTING else None
+        await store.advance(opened.id, state, at=at, successor_session_id=successor_id)
+    await store.advance(opened.id, last, at=at + timedelta(seconds=1))
+
+
+class _Lister:
+    def __init__(self, *records: SessionRecord) -> None:
+        self._records = records
+
+    async def list_sessions(self) -> tuple[SessionRecord, ...]:
+        return self._records
+
+
+@pytest.fixture
+def rollover_store(tmp_path: pathlib.Path) -> SQLiteRolloverStore:
+    return SQLiteRolloverStore(open_database(tmp_path / "sessions.sqlite3"))
+
+
+def _notes(
+    records: tuple[SessionRecord, ...], marks: dict[str, RolloverMark]
+) -> dict[int, str | None]:
+    return {
+        record.display.sequence: session_row_parts(
+            record, rollover=marks.get(str(record.session_id))
+        ).note
+        for record in records
+    }
+
+
+async def test_no_rollover_book_marks_nothing() -> None:
+    """A surface whose backend wires no rollovers shows no rollover note at all."""
+    assert await rollover_marks(None, (_numbered(1), _numbered(2))) == {}
+
+
+async def test_lineage_is_drawn_from_a_completed_rollover_on_both_rows(
+    rollover_store: SQLiteRolloverStore,
+) -> None:
+    predecessor, successor = _numbered(1, SessionState.PRESERVED), _numbered(2)
+    await _roll(rollover_store, predecessor, successor, RolloverState.COMPLETED)
+    listed = (predecessor, successor)
+
+    marks = await rollover_marks(RolloverBook(rollover_store), listed)
+
+    assert _notes(listed, marks) == {1: "continued as #2", 2: "continued from #1"}
+
+
+async def test_a_failed_rollover_links_nothing_and_holds_the_predecessors_line(
+    rollover_store: SQLiteRolloverStore,
+) -> None:
+    """A successor was launched and recorded, then the rollover failed: no lineage either way,
+    and the predecessor says what happened to it."""
+    predecessor, successor = _numbered(1), _numbered(2)
+    await _roll(rollover_store, predecessor, successor, RolloverState.FAILED)
+    listed = (predecessor, successor)
+
+    marks = await rollover_marks(RolloverBook(rollover_store), listed)
+
+    assert _notes(listed, marks) == {1: "rollover failed · predecessor preserved", 2: None}
+
+
+async def test_an_open_request_shows_while_open_and_replaces_an_earlier_failure(
+    rollover_store: SQLiteRolloverStore,
+) -> None:
+    predecessor, successor = _numbered(1), _numbered(2)
+    await _roll(rollover_store, predecessor, successor, RolloverState.FAILED)
+    book = RolloverBook(rollover_store, now=lambda: _ROLL_AT + timedelta(minutes=1))
+    await book.request(
+        predecessor.session_id,
+        project_id=predecessor.project_id,
+        profile_id=predecessor.profile_id,
+    )
+
+    marks = await rollover_marks(book, (predecessor,))
+
+    assert _notes((predecessor,), marks) == {1: "rollover pending · waiting for workflow boundary"}
+
+
+async def test_a_cancelled_request_leaves_the_failure_before_it_on_the_row(
+    rollover_store: SQLiteRolloverStore,
+) -> None:
+    """The row reads the latest *non-cancelled* rollover, as the store's hold does: asking and
+    then withdrawing is not asking, so the failure that holds the next `ready` still shows."""
+    predecessor, successor = _numbered(1), _numbered(2)
+    await _roll(rollover_store, predecessor, successor, RolloverState.STOP_FAILED)
+    book = RolloverBook(rollover_store, now=lambda: _ROLL_AT + timedelta(minutes=1))
+    await book.request(
+        predecessor.session_id,
+        project_id=predecessor.project_id,
+        profile_id=predecessor.profile_id,
+    )
+    assert await book.cancel(predecessor.session_id) is True
+
+    marks = await rollover_marks(book, (predecessor,))
+
+    assert _notes((predecessor,), marks) == {1: "stop failed · use force stop"}
+
+
+async def test_lineage_to_an_unlisted_session_is_found_through_the_store_or_falls_back(
+    rollover_store: SQLiteRolloverStore,
+) -> None:
+    """The common case: a completed rollover stopped its predecessor, which is ENDED and so
+    not on the list. Its sequence is still the store's to give; only a record nobody has
+    falls back to words."""
+    predecessor, successor = _numbered(1, SessionState.ENDED), _numbered(2)
+    await _roll(rollover_store, predecessor, successor, RolloverState.COMPLETED)
+    book = RolloverBook(rollover_store)
+
+    found = await rollover_marks(book, (successor,), sessions=_Lister(predecessor, successor))
+    unfound = await rollover_marks(book, (successor,), sessions=_Lister(successor))
+    unread = await rollover_marks(book, (successor,))
+
+    assert _notes((successor,), found) == {2: "continued from #1"}
+    assert _notes((successor,), unfound) == {2: "continued from an earlier session"}
+    assert _notes((successor,), unread) == {2: "continued from an earlier session"}
 
 
 def test_an_ended_session_has_no_row_parts() -> None:
@@ -488,6 +718,9 @@ def test_no_adapter_redefines_the_row_or_the_area_predicate() -> None:
         "def group_emoji",
         "def group_counts",
         "def age_short",
+        # Stage 3 Task 3.1: what a row says about a session's rollover, and the read behind it.
+        "def rollover_marks",
+        "def rollover_note",
     )
     offenders = {
         path.relative_to(adapters).as_posix(): sorted(found)
@@ -1151,3 +1384,45 @@ def test_pace_expected_is_clamped_to_0_100() -> None:
     already_reset = _paced("week", 99.0, -timedelta(hours=1))
     assert too_far.expected_percent == 0
     assert already_reset.expected_percent == 100
+
+
+@pytest.mark.parametrize("ending", [RolloverState.FAILED, RolloverState.STOP_FAILED])
+@pytest.mark.parametrize("now", [SessionState.PRESERVED, SessionState.FAILED])
+async def test_a_failure_line_is_shown_only_while_its_session_runs(
+    rollover_store: SQLiteRolloverStore, ending: RolloverState, now: SessionState
+) -> None:
+    """ "stop failed · use force stop" over a session already stopped would be false, and so
+    would "predecessor preserved" over one that ended since."""
+    predecessor, successor = _numbered(1), _numbered(2)
+    await _roll(rollover_store, predecessor, successor, ending)
+    stopped = _numbered(1, now)
+
+    marks = await rollover_marks(RolloverBook(rollover_store), (stopped, successor))
+
+    assert _notes((stopped,), marks) == {1: None}
+
+
+async def test_a_request_waiting_behind_another_says_so(
+    rollover_store: SQLiteRolloverStore,
+) -> None:
+    first, second = _numbered(1), _numbered(2)
+    await rollover_store.request(
+        first.session_id, project_id=ProjectId("demo"), profile_id=ProfileId("claude"), at=_ROLL_AT
+    )
+    waiting = await rollover_store.request(
+        second.session_id,
+        project_id=ProjectId("demo"),
+        profile_id=ProfileId("claude"),
+        at=_ROLL_AT + timedelta(seconds=1),
+    )
+    assert waiting is not None
+    await rollover_store.note(
+        waiting.id, f"waiting: {first.session_id}'s request holds this checkout", at=_ROLL_AT
+    )
+
+    marks = await rollover_marks(RolloverBook(rollover_store), (first, second))
+
+    assert _notes((first, second), marks) == {
+        1: "rollover pending · waiting for workflow boundary",
+        2: "rollover pending · waiting for another session's request",
+    }

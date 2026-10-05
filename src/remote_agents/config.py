@@ -91,6 +91,9 @@ DEFAULT_CURSOR_LIMITS_SOURCE = "off"
 DEFAULT_RESUME_AFTER_LIMIT = True
 """On unless the owner switches it off: they asked for the resume nudge after a lift by default."""
 
+DEFAULT_AUTO_ROLLOVER = False
+"""Off until the owner switches it on: a rollover launches and stops sessions alone (DEC-115)."""
+
 
 @dataclass(frozen=True, slots=True)
 class AppConfig:
@@ -167,6 +170,16 @@ class AppConfig:
     flip lands without a restart.
     """
 
+    auto_rollover: bool = DEFAULT_AUTO_ROLLOVER
+    """Whether the service rolls a session over to a fresh one when its workflow hands off.
+
+    Optional and **off** when absent, in its own `[rollover]` table: a rollover launches a
+    successor and stops the predecessor unattended, so it waits for the owner to say yes
+    (DEC-115). Written by the Settings row on either surface through `write_config_key`. The
+    rollover pass reads it afresh through `read_auto_rollover` on every run rather than off
+    this field, so a flip lands without a restart.
+    """
+
     path: Path | None = None
     """The file this configuration was loaded from, or `None` for one built in memory.
 
@@ -177,7 +190,13 @@ class AppConfig:
     """
 
 
-_TOP_LEVEL_KEYS = {"paths", "limits"}
+_TOP_LEVEL_KEYS = {"paths", "limits", "rollover"}
+_OPTIONAL_TOP_LEVEL_KEYS = frozenset({"rollover"})
+"""Tables the schema accepts but does not require: a host written before one existed lacks it.
+
+DEC-058 for a whole table rather than a key. `[rollover]` holds only optional keys, so a file
+without it states nothing, and that is the default.
+"""
 _PATH_KEYS = {"dev_root", "registry_path", "database_path"}
 _LIMIT_KEYS = {
     "max_label_length",
@@ -229,6 +248,10 @@ honest default; a host that has never stated a poll interval has a bug. The sour
 also refuse every config already deployed, which is a schema change breaking the hosts it was
 written for -- and DEC-058 says a config lacking a new key is not drift.
 """
+
+_ROLLOVER_KEYS = {"auto_rollover"}
+_OPTIONAL_ROLLOVER_KEYS = frozenset({"auto_rollover"})
+"""Every `[rollover]` key is optional: the switch is off until the owner writes it (DEC-058)."""
 
 _CLAUDE_CONTEXT_BOUNDS = (1_000, 20_000_000)
 """How far a stated ceiling may stray before it is refused rather than clamped.
@@ -355,7 +378,7 @@ def _schema_sections(
     if not isinstance(raw, dict):
         return []
     sections: list[tuple[Mapping[str, object], set[str], frozenset[str]]] = [
-        (raw, _TOP_LEVEL_KEYS, frozenset())
+        (raw, _TOP_LEVEL_KEYS, _OPTIONAL_TOP_LEVEL_KEYS)
     ]
     for name, allowed, optional in (
         ("paths", _PATH_KEYS, frozenset()),
@@ -366,6 +389,7 @@ def _schema_sections(
             _LIMIT_KEYS | _RETIRED_LIMIT_KEYS,
             _OPTIONAL_LIMIT_KEYS | _RETIRED_LIMIT_KEYS,
         ),
+        ("rollover", _ROLLOVER_KEYS, _OPTIONAL_ROLLOVER_KEYS),
     ):
         section = raw.get(name)
         if isinstance(section, dict):
@@ -391,9 +415,11 @@ def load_config(path: Path) -> AppConfig:
         if path.exists():
             raise ConfigError(_unreadable(path, error)) from error
         raise ConfigError(_unreadable(path, error)) from None
-    _require_exact_keys(raw, _TOP_LEVEL_KEYS, "root")
+    _require_exact_keys(raw, _TOP_LEVEL_KEYS, "root", _OPTIONAL_TOP_LEVEL_KEYS)
     paths = _mapping(raw["paths"], "paths")
     limits = _mapping(raw["limits"], "limits")
+    rollover = _mapping(raw.get("rollover", {}), "rollover")
+    _require_exact_keys(rollover, _ROLLOVER_KEYS, "rollover", _OPTIONAL_ROLLOVER_KEYS)
     _require_exact_keys(paths, _PATH_KEYS, "paths")
     _require_exact_keys(
         limits,
@@ -440,6 +466,9 @@ def load_config(path: Path) -> AppConfig:
     resume_after_limit = _flag(
         limits.get("resume_after_limit", DEFAULT_RESUME_AFTER_LIMIT), "limits.resume_after_limit"
     )
+    auto_rollover = _flag(
+        rollover.get("auto_rollover", DEFAULT_AUTO_ROLLOVER), "rollover.auto_rollover"
+    )
     return AppConfig(
         dev_root,
         registry_path,
@@ -453,6 +482,7 @@ def load_config(path: Path) -> AppConfig:
         claude_limits_source=claude_limits_source,
         cursor_limits_source=cursor_limits_source,
         resume_after_limit=resume_after_limit,
+        auto_rollover=auto_rollover,
     )
 
 
@@ -735,7 +765,11 @@ def _toml_string(value: Path | str) -> str:
     return f'"{escaped}"'
 
 
-_LIMITS_HEADER = re.compile(r"^\s*\[\s*limits\s*\]\s*(?:#.*)?\r?\n?$")
+def _table_header(table: str) -> re.Pattern[str]:
+    return re.compile(rf"^\s*\[\s*{re.escape(table)}\s*\]\s*(?:#.*)?\r?\n?$")
+
+
+_LIMITS_HEADER = _table_header("limits")
 _ANY_HEADER = re.compile(r"^\s*\[")
 _LINE_END = re.compile(r"\r?\n$")
 
@@ -802,8 +836,30 @@ def read_resume_after_limit(path: Path, *, when_unsure: bool = DEFAULT_RESUME_AF
     return value if isinstance(value, bool) else when_unsure
 
 
+def read_auto_rollover(path: Path) -> bool:
+    """The auto-rollover switch as the file states it right now; total, never raising.
+
+    Off for everything that is not a stated `true` under `[rollover]`: a missing or unreadable
+    file, a file that does not parse, no `[rollover]` table, no key, a value that is not a bool.
+    The default and the safe answer are the same here, so the Settings rows and the rollover
+    pass need no second, stricter read the way the resume switch does.
+    """
+    try:
+        raw = tomllib.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError):
+        return DEFAULT_AUTO_ROLLOVER
+    rollover = raw.get("rollover") if isinstance(raw, dict) else None
+    value = rollover.get("auto_rollover") if isinstance(rollover, dict) else None
+    return value if isinstance(value, bool) else DEFAULT_AUTO_ROLLOVER
+
+
 def write_limits_key(path: Path, key: str, value: bool | str | int) -> None:
-    """Rewrite one `key = value` line in `[limits]` and preserve every other byte of the file.
+    """`write_config_key` for `[limits]`, where every switch before `[rollover]` lives."""
+    write_config_key(path, "limits", key, value)
+
+
+def write_config_key(path: Path, table: str, key: str, value: bool | str | int) -> None:
+    """Rewrite one `key = value` line in `[table]` and preserve every other byte of the file.
 
     **Not a re-render.** `render_config` writes a fresh file for a host that has none; this
     writes one line into a file the owner may have annotated, reordered, or linked into place
@@ -826,6 +882,10 @@ def write_limits_key(path: Path, key: str, value: bool | str | int) -> None:
     in the meantime -- the edit is refused rather than overwriting theirs, the check
     `hook_settings._refuse_if_changed_since_it_was_read` makes for the settings file.
 
+    **`[rollover]` is the one table it may add.** Every key in it is optional (DEC-058), so a
+    host written before it existed has no such table; the first flip appends `[rollover]` and
+    the key at the end of the file. `[limits]` is required, so a file without it is refused.
+
     Two shapes it declines by design. A commented-out `# key = ...` line is a comment and is
     left as it is; the active line is appended after it. A `[limits]` table holding a value
     whose continuation lines begin with `[` at column 0 (a multi-line array or string) cannot
@@ -838,9 +898,13 @@ def write_limits_key(path: Path, key: str, value: bool | str | int) -> None:
     keeps its own mode when that is not 0600 -- an operator who chose 0644 chose it. Stdlib
     only: this is a root-layer module and may not reach for an adapter.
     """
-    if key not in _LIMIT_KEYS:
-        raise ConfigError(f"limits.{key} is not a key this schema writes")
-    if key == "claude_limits_source":
+    if table == "rollover":
+        if key not in _ROLLOVER_KEYS:
+            raise ConfigError(f"rollover.{key} is not a key this schema writes")
+        rendered = _toml_value(_flag(value, f"rollover.{key}"))
+    elif table != "limits" or key not in _LIMIT_KEYS:
+        raise ConfigError(f"{table}.{key} is not a key this schema writes")
+    elif key == "claude_limits_source":
         rendered = _toml_value(_limits_source(value))
     elif key == "cursor_limits_source":
         rendered = _toml_value(_cursor_limits_source(value))
@@ -861,16 +925,23 @@ def write_limits_key(path: Path, key: str, value: bool | str | int) -> None:
         if path.exists():
             raise ConfigError(_unreadable(path, error)) from error
         raise ConfigError(_unreadable(path, error)) from None
-    if not isinstance(raw.get("limits"), dict):
-        raise ConfigError("limits must be a TOML table")
-
-    rewritten = _replace_limits_line(text, key, f"{key} = {rendered}")
+    if table == "limits" or table in raw:
+        if not isinstance(raw.get(table), dict):
+            raise ConfigError(f"{table} must be a TOML table")
+        line = f"{key} = {rendered}"
+        rewritten = (
+            _replace_limits_line(text, key, line)
+            if table == "limits"
+            else _replace_table_line(text, table, key, line)
+        )
+    else:
+        rewritten = _append_table(text, table, f"{key} = {rendered}")
     try:
-        read_back = tomllib.loads(rewritten)["limits"][key]
+        read_back = tomllib.loads(rewritten)[table][key]
     except (tomllib.TOMLDecodeError, KeyError, TypeError) as error:
-        raise ConfigError(f"refusing to write limits.{key}: the result would not load") from error
+        raise ConfigError(f"refusing to write {table}.{key}: the result would not load") from error
     if read_back != value:
-        raise ConfigError(f"refusing to write limits.{key}: the result does not read back")
+        raise ConfigError(f"refusing to write {table}.{key}: the result does not read back")
 
     # A random suffix, never the pid: a temporary left by a killed process plus a reused pid
     # made `O_EXCL` refuse the next write for as long as the litter stood, and two flips racing
@@ -890,7 +961,7 @@ def write_limits_key(path: Path, key: str, value: bool | str | int) -> None:
                 os.fchmod(handle.fileno(), mode)
         if target.read_bytes() != data:
             raise ConfigError(
-                f"refusing to write limits.{key}: {path} changed since it was read; run this again"
+                f"refusing to write {table}.{key}: {path} changed since it was read; run this again"
             )
         os.replace(temporary, target)
     except OSError as error:
@@ -902,8 +973,27 @@ def write_limits_key(path: Path, key: str, value: bool | str | int) -> None:
             pass
 
 
+def _append_table(text: str, table: str, line: str) -> str:
+    """Add `[table]` holding one line at the end of the file, touching no earlier character.
+
+    One blank line before the header. The file's line ending is borrowed, and a file that had no
+    final newline still ends without one.
+    """
+    if not text:
+        return f"[{table}]\n{line}\n"
+    ending = "\r\n" if text.endswith("\r\n") else "\n"
+    if text.endswith("\n"):
+        return f"{text}{ending}[{table}]{ending}{line}{ending}"
+    return f"{text}\n\n[{table}]\n{line}"
+
+
 def _replace_limits_line(text: str, key: str, line: str) -> str:
-    """Swap or append one key line inside `[limits]`, touching no other character.
+    """`_replace_table_line` for `[limits]`."""
+    return _replace_table_line(text, "limits", key, line)
+
+
+def _replace_table_line(text: str, table: str, key: str, line: str) -> str:
+    """Swap or append one key line inside `[table]`, touching no other character.
 
     Split on `\\n` alone rather than `str.splitlines`, which also breaks on form feeds and the
     Unicode separators -- legal inside a TOML string, and a line split there would be a byte
@@ -918,9 +1008,10 @@ def _replace_limits_line(text: str, key: str, line: str) -> str:
         lines.pop()
     key_line = re.compile(rf"^\s*{re.escape(key)}\s*=")
 
-    start = next((index for index, item in enumerate(lines) if _LIMITS_HEADER.match(item)), None)
+    header = _LIMITS_HEADER if table == "limits" else _table_header(table)
+    start = next((index for index, item in enumerate(lines) if header.match(item)), None)
     if start is None:
-        raise ConfigError("limits must be a TOML table")
+        raise ConfigError(f"{table} must be a TOML table")
     end = next(
         (index for index in range(start + 1, len(lines)) if _ANY_HEADER.match(lines[index])),
         len(lines),

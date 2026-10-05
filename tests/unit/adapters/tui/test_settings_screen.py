@@ -792,7 +792,7 @@ def _with_limits_source(context: TuiContext, port: object | None) -> TuiContext:
     return replace(context, backend=replace(context.backend, claude_limits_source=port))
 
 
-async def test_the_screen_draws_seven_rows_in_the_declared_order(tmp_path: Path) -> None:
+async def test_the_screen_draws_eight_rows_in_the_declared_order(tmp_path: Path) -> None:
     """The set of rows swept from the screen's own table, so the count is the declaration and
     not a numeral in a docstring that the list grows past."""
     from remote_agents.adapters.tui.screens import settings as module
@@ -807,9 +807,9 @@ async def test_the_screen_draws_seven_rows_in_the_declared_order(tmp_path: Path)
         choices = app.screen.query_one("#choices", OptionList)
         drawn = [choices.get_option_at_index(i).id for i in range(choices.option_count)]
 
-        assert len(module.SETTINGS_ROWS) == 7
+        assert len(module.SETTINGS_ROWS) == 8
         assert drawn == list(module.SETTINGS_ROWS)
-        assert len(set(drawn)) == 7, "every row needs a stable id of its own"
+        assert len(set(drawn)) == 8, "every row needs a stable id of its own"
 
 
 async def test_the_limits_source_row_reads_the_hop_on_a_default_config(tmp_path: Path) -> None:
@@ -1230,3 +1230,100 @@ def test_the_cursor_limits_words_cover_exactly_the_config_s_closed_set() -> None
     assert next_cursor_limits_source("carrier-pigeon") == DEFAULT_CURSOR_LIMITS_SOURCE
     on = CURSOR_LIMITS_SOURCE_LABELS["usage-api"]
     assert "login" in on and "calls Cursor" in on, "the on label says what on costs"
+
+
+# --- The auto-rollover row --------------------------------------------------------------------
+
+
+def _with_rollover(context: TuiContext, port: object | None) -> TuiContext:
+    return replace(context, backend=replace(context.backend, auto_rollover=port))
+
+
+async def test_the_rollover_row_reads_off_by_default_and_a_press_flips_and_returns(
+    tmp_path: Path,
+) -> None:
+    from remote_agents.application.rollover_setting import ROLLOVER_LABELS, ROLLOVER_TITLE
+
+    port = FakeResumeSetting(False)
+    context = _with_rollover(_context(preferences_path=tmp_path / "preferences.json"), port)
+    app = RemoteAgentsTui(context)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await _open_settings(app, pilot)
+        assert _row(app, ROLLOVER_TITLE) == f"{ROLLOVER_TITLE} · {ROLLOVER_LABELS[False]}"
+
+        await _press_row(app, pilot, ROLLOVER_TITLE)
+        assert port.writes == [True]
+        assert _row(app, ROLLOVER_TITLE) == f"{ROLLOVER_TITLE} · {ROLLOVER_LABELS[True]}"
+
+        await _press_row(app, pilot, ROLLOVER_TITLE)
+        assert port.writes == [True, False]
+        assert _row(app, ROLLOVER_TITLE).endswith(ROLLOVER_LABELS[False])
+
+
+async def test_the_rollover_row_flips_the_stored_value_in_the_config_file(tmp_path: Path) -> None:
+    """Through the real writer: the press lands in `config.toml`, not only in a fake."""
+    from remote_agents.application.rollover_setting import ROLLOVER_LABELS, ROLLOVER_TITLE
+    from remote_agents.composition.limits_source import ConfigRolloverSetting
+    from remote_agents.config import read_auto_rollover
+
+    config = tmp_path / "config.toml"
+    config.write_text('[paths]\ndev_root = "/tmp"\n\n[limits]\nmax_label_length = 40\n')
+    context = _with_rollover(
+        _context(preferences_path=tmp_path / "preferences.json"), ConfigRolloverSetting(config)
+    )
+    app = RemoteAgentsTui(context)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await _open_settings(app, pilot)
+
+        await _press_row(app, pilot, ROLLOVER_TITLE)
+        assert read_auto_rollover(config) is True
+        assert _row(app, ROLLOVER_TITLE).endswith(ROLLOVER_LABELS[True])
+
+        await _press_row(app, pilot, ROLLOVER_TITLE)
+        assert read_auto_rollover(config) is False
+
+
+async def test_a_refused_rollover_write_reads_as_a_refusal(tmp_path: Path) -> None:
+    from remote_agents.application.rollover_setting import ROLLOVER_LABELS, ROLLOVER_TITLE
+
+    port = FakeResumeSetting(False, refuse=True)
+    context = _with_rollover(_context(preferences_path=tmp_path / "preferences.json"), port)
+    app = RemoteAgentsTui(context)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await _open_settings(app, pilot)
+
+        await _press_row(app, pilot, ROLLOVER_TITLE)
+
+        assert port.writes == [True]
+        assert _row(app, ROLLOVER_TITLE).endswith(ROLLOVER_LABELS[False])
+        said = " ".join(announcements(app))
+        assert ROLLOVER_TITLE in said and "still" in said.lower(), said
+
+
+async def test_an_unwired_rollover_row_says_unavailable_and_its_press_does_nothing(
+    tmp_path: Path,
+) -> None:
+    from remote_agents.application.remote_control_default import UNAVAILABLE
+    from remote_agents.application.rollover_setting import ROLLOVER_TITLE
+
+    context = _with_rollover(_context(preferences_path=tmp_path / "preferences.json"), None)
+    app = RemoteAgentsTui(context)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await _open_settings(app, pilot)
+
+        assert _row(app, ROLLOVER_TITLE).endswith(UNAVAILABLE)
+        await _press_row(app, pilot, ROLLOVER_TITLE)
+        assert _row(app, ROLLOVER_TITLE).endswith(UNAVAILABLE)
+
+
+def test_the_rollover_switch_is_a_declared_backend_field() -> None:
+    from dataclasses import fields
+
+    from remote_agents.application.backend import Backend
+
+    assert "auto_rollover" in {field.name for field in fields(Backend)}
+    assert Backend(sessions=object(), projects=object()).auto_rollover is None

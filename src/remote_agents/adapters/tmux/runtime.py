@@ -43,7 +43,12 @@ from remote_agents.adapters.tmux.remote_control import (
     remote_control_menu_is_open,
     remote_control_was_enabled,
 )
-from remote_agents.adapters.tmux.trust import classify_trust_capture, plan_trust_keys
+from remote_agents.adapters.tmux.trust import (
+    TRUST_CONFIRM_KEY,
+    classify_trust_capture,
+    plan_trust_keys,
+    trust_cursor_on,
+)
 from remote_agents.domain.conversations import ProviderConversationId
 from remote_agents.domain.models import ProfileId, ProjectId, SessionId
 from remote_agents.domain.remote_control import RemoteControlState
@@ -57,6 +62,7 @@ from remote_agents.ports.terminal import (
     GRACEFUL_TIMEOUT,
     KEYS_BUSY,
     NOT_AWAITING_TRUST,
+    NOT_IDLE,
     OWNERSHIP_LOST,
     TERMINAL_NOT_LIVE,
     UNKNOWN_SESSION,
@@ -115,6 +121,11 @@ class TerminalWaits:
 
     trust_answer: float = float(_TRUST_ANSWER_WAIT_SECONDS)
     """The dialog clearing in one redraw -- the pump's time to repaint, not the agent's to think."""
+
+    trust_cursor: float = 2.0
+    """A trust dialog's cursor arriving on the chosen answer after the movement keys. Claude
+    draws the dialog before it takes keys, so a movement sent at once can be lost (measured on
+    the 2026-10-05 live run): past this, nothing is confirmed and a later press plans again."""
 
     decline: float = float(_TRUST_DECLINE_WAIT_SECONDS)
     """A declined agent running its own shutdown before its pane is killed."""
@@ -520,9 +531,14 @@ class TmuxTerminal:
             return None
 
     async def graceful_stop(
-        self, session_id: SessionId, profile_id: ProfileId
+        self, session_id: SessionId, profile_id: ProfileId, *, only_if_idle: bool = False
     ) -> TerminalObservation:
         """Send a known profile sequence only after rechecking current trusted ownership.
+
+        **`only_if_idle` is the rollover's stop (DEC-115)**: the keys go only onto an idle
+        composer, judged under the key lock they are sent under, and a running turn is never
+        interrupted for it. Anything else is NOT_IDLE with nothing typed -- so a turn that
+        started after the rollover looked is left running, and the owner decides.
 
         **A pane that is not live is a stop that was never sent** (DEC-022), and saying so is
         the whole reason this checks liveness before typing rather than after. tmux answers
@@ -576,12 +592,43 @@ class TmuxTerminal:
             # 150 ms gap is the one way in, and its `Enter` would keep the agent running.
             return not guarded or not dialog_on_screen(capture, descriptor)
 
+        title = ""
+        if only_if_idle:
+            if descriptor is None or descriptor.composer is None:
+                # Nothing can tell an idle composer here, so nothing licenses the stop.
+                return TerminalObservation(session_id, live=True, preserved=False, detail=NOT_IDLE)
+            try:
+                # Read before the hold, as the owner's interrupt reads it: the turn marker and
+                # the screen, both read under the hold, are what show a Claude turn starting.
+                title = (await self._gateway.pane_title(session_id)).rstrip("\n")
+            except (TerminalTargetMissing, RuntimeError):
+                # The pane went before any key: never sent, as the sends below report it.
+                return TerminalObservation(
+                    session_id, live=False, preserved=False, detail=UNKNOWN_SESSION
+                )
+
+        def idle(capture: str) -> bool:
+            # Judged inside the hold the keys are sent under, so no turn can start between the
+            # look and the first key.
+            assert descriptor is not None
+            return self._judged(session_id, capture, descriptor, title) is PaneState.IDLE
+
+        # One send, whichever stop: the owner's takes any screen its keys cannot misfire on,
+        # the rollover's an idle composer alone.
+        check = idle if only_if_idle else stoppable
         try:
-            if guarded and descriptor.composer is not None and descriptor.composer.interrupt:
+            if (
+                not only_if_idle
+                and guarded
+                and descriptor.composer is not None
+                and descriptor.composer.interrupt
+            ):
                 await self._interrupt_running_turn(session_id, descriptor)
             refused = await self._gateway.send_keys_when(
-                session_id, profile.graceful_keys, stoppable, between=unasked
+                session_id, profile.graceful_keys, check, between=unasked
             )
+            if refused is not None and only_if_idle:
+                return TerminalObservation(session_id, live=True, preserved=False, detail=NOT_IDLE)
         except KeysInterrupted:
             # Partway: a dialog came up, and the rest was not sent. Reported as never sent, which
             # understates -- the first keys landed -- as DEC-103 records.
@@ -734,6 +781,32 @@ class TmuxTerminal:
                     host_session=pane.session_name,
                 )
         return None
+
+    async def pane_idle(self, session_id: SessionId) -> bool:
+        """Whether one managed pane shows its agent's empty composer, with no turn running and
+        no dialog up -- the screen the rollover launches and stops against (DEC-115).
+
+        A look, never an act: the turn marker is read and never ended here (`_judged` ends a
+        stale one only under the key lock a send holds). False on any doubt -- no live pane, a
+        profile with no composer to read, a screen nothing recognises (UNKNOWN is never idle).
+        """
+        observation = await self.inspect(session_id)
+        if observation is None or not observation.live:
+            return False
+        descriptor = self._composers.get(str(observation.profile_id))
+        if descriptor is None or descriptor.composer is None:
+            return False
+        try:
+            title = (await self._gateway.pane_title(session_id)).rstrip("\n")
+            capture = await self._gateway.capture(session_id, styled=True)
+        except (TerminalTargetMissing, RuntimeError):
+            # The pane went between the listing and the look, or tmux failed: not idle.
+            return False
+        started = (
+            None if self._turn_markers is None else self._turn_markers.started_at(str(session_id))
+        )
+        state = classify(capture, descriptor, title, turn_started_at=started, now=datetime.now(UTC))
+        return state is PaneState.IDLE
 
     async def send_prompt(self, session_id: SessionId, text: str) -> PromptDelivery:
         """Type an owner's message into one managed pane, only if it is sitting idle (DEC-099).
@@ -1178,8 +1251,8 @@ class TmuxTerminal:
             # press did nothing rather than being told it succeeded.
             return TrustAnswer(pressed=False, observed=TrustState.AWAITING)
         try:
-            await self._gateway.send_keys(session_id, keys)
-        except KeysBusy:
+            confirmed = await self._confirm_trust_answer(session_id, capture, dialog, accept=True)
+        except (KeysBusy, KeysInterrupted):
             # Another sender held the pane's keys: nothing was pressed, and the question is
             # still on screen for a retry.
             return TrustAnswer(pressed=False, observed=TrustState.AWAITING)
@@ -1189,6 +1262,10 @@ class TmuxTerminal:
             # received a keystroke. Reporting `True` here would be the guess this type exists
             # to stop anyone making.
             return TrustAnswer(pressed=False, observed=TrustState.UNKNOWN)
+        if not confirmed:
+            # The cursor never reached "Yes" (a movement the agent dropped while it was still
+            # starting), so no `Enter` went in: still asking, unanswered, for a later press.
+            return TrustAnswer(pressed=False, observed=TrustState.AWAITING)
         await asyncio.sleep(self._waits.trust_answer)
         try:
             after = await self._gateway.capture(session_id)
@@ -1257,10 +1334,15 @@ class TmuxTerminal:
             keys = plan_trust_keys(capture, dialog, accept=False)
             if keys is not None:
                 try:
-                    await self._gateway.send_keys(session_id, keys)
-                except KeysBusy:
+                    confirmed = await self._confirm_trust_answer(
+                        session_id, capture, dialog, accept=False
+                    )
+                except (KeysBusy, KeysInterrupted, TerminalTargetMissing):
                     # The declining keys could not be sent; end it the way a dialog this
                     # cannot read is ended, below.
+                    return await self.force_stop(session_id)
+                if not confirmed:
+                    # The cursor never reached "No": an `Enter` now could trust the folder.
                     return await self.force_stop(session_id)
                 deadline = asyncio.get_running_loop().time() + self._waits.decline
                 while asyncio.get_running_loop().time() < deadline:
@@ -1272,6 +1354,48 @@ class TmuxTerminal:
                     # tight poll: the thing being waited on is a process shutting down.
                     await asyncio.sleep(0.1)
         return await self.force_stop(session_id)
+
+    async def _confirm_trust_answer(
+        self, session_id: SessionId, capture: str, dialog: TrustDialog, *, accept: bool
+    ) -> bool:
+        """Move the cursor to the chosen answer and confirm it -- `Enter` only onto that row.
+
+        Three steps, each under the key lock: the movement keys, onto the screen they were
+        planned from; a wait, of at most `TerminalWaits.trust_cursor`, for a capture showing
+        the cursor on the answer; then `Enter`, onto a screen that still shows it. A movement
+        the agent dropped -- Claude draws the dialog before it takes keys -- leaves the cursor
+        where it was, and then nothing is confirmed: the dialog stays up for a later press,
+        never answered the other way. True once `Enter` went onto the chosen row.
+        """
+        keys = plan_trust_keys(capture, dialog, accept=accept)
+        if keys is None:
+            return False
+        movement = keys[:-1]
+        if movement:
+
+            def planned(now: str) -> bool:
+                return plan_trust_keys(_plain(now), dialog, accept=accept) == keys
+
+            if (
+                await self._gateway.send_keys_when(session_id, movement, planned, between=planned)
+                is not None
+            ):
+                return False
+            deadline = asyncio.get_running_loop().time() + self._waits.trust_cursor
+            while not trust_cursor_on(
+                await self._gateway.capture(session_id), dialog, accept=accept
+            ):
+                if asyncio.get_running_loop().time() >= deadline:
+                    return False
+                await asyncio.sleep(0.1)
+
+        def on_answer(now: str) -> bool:
+            return trust_cursor_on(_plain(now), dialog, accept=accept)
+
+        refused = await self._gateway.send_keys_when(
+            session_id, (TRUST_CONFIRM_KEY,), on_answer, between=on_answer
+        )
+        return refused is None
 
     async def _trust_capture(self, session_id: SessionId) -> tuple[str, TrustDialog] | None:
         """This pane's screen **and the dialog to read it with**, or None if it may not be asked.
