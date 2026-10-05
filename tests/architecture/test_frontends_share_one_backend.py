@@ -754,6 +754,7 @@ def test_the_sweep_reads_every_adapter_module() -> None:
         "telegram",
         "tmux",
         "tui",
+        "workflow",
     }, f"the sweep covered {sorted(packages)}, not every adapter package"
 
 
