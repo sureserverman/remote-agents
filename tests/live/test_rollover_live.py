@@ -62,14 +62,22 @@ and the reconciler run on `serve`'s own loop functions (`_roll_over_periodically
 **Side effects outside the temporary directories.** Claude writes its own transcript under
 `~/.claude/projects/`, and (without a trusted root) a trust entry for the throwaway folder in
 `~/.claude.json`. The owner's activity hooks may spool turns from these sessions into the
-production spool; the production service does not know the session ids. Nothing else is
-touched. Everything this test starts is torn down in `finally`: the periodic tasks, the private
-tmux server and every agent in it, the database connection and the fixture repository.
+production spool; the production service does not know the session ids. Those three outlive
+the run. The plan itself runs with the owner's real HOME, so the planning skills could in
+principle reach the owner's registers: the test fingerprints the project registry and the
+vault's Portfolio roll-ups before and after, and fails if either changed. Everything this test
+starts is torn down in `finally`: the periodic tasks, the private tmux server and every agent in
+it, the database connection and the fixture repository.
+
+**Permissions.** The sessions run in the owner's own Claude permission mode. Under a mode that
+asks before writing a file, Stage 1 waits on that question and the run fails at its deadline --
+honestly, with the panes in the diagnosis, never as a pass.
 
 **Opt-in.** It runs only when asked: `-m` naming `live_acceptance` (as the gate command above
 does), or `REMOTE_AGENTS_LIVE_ACCEPTANCE=1` as for every other live acceptance test. A plain run
-skips it, because it spends real model usage and runs for up to fifteen minutes. A missing
-prerequisite is a `BLOCKED:` skip naming it.
+skips it, because it spends real model usage and runs for up to fifteen minutes. **Once asked
+for, a missing prerequisite FAILS, naming it** -- never a skip: the master gate reads this run,
+and a skip there would be a green that proved nothing. The gate still wants `1 passed`.
 """
 
 from __future__ import annotations
@@ -169,6 +177,15 @@ def _opted_in(config: pytest.Config) -> bool:
     )
 
 
+#: The first planning release that writes envelopes and adopts a handoff (coder-plugins DEC-029).
+_PLANNING_AT_LEAST = (0, 55, 0)
+
+
+def _blocked(reason: str) -> None:
+    """A prerequisite missing from a run that was asked for: a failure, never a skip."""
+    pytest.fail(f"BLOCKED: {reason}", pytrace=False)
+
+
 def _planning_checkout() -> Path:
     """The planning plugin to load, which must write handoff envelopes and adopt a handoff."""
     configured = os.environ.get("REMOTE_AGENTS_PLANNING_PLUGIN_DIR")
@@ -179,10 +196,17 @@ def _planning_checkout() -> Path:
     )
     envelope = plugin / "skills" / "executing-plans" / "scripts" / "handoff-envelope.py"
     skill = plugin / "skills" / "executing-plans" / "SKILL.md"
-    if not (plugin / ".claude-plugin" / "plugin.json").is_file() or not envelope.is_file():
-        pytest.skip(f"BLOCKED: no planning plugin with handoff envelopes at {plugin}")
+    manifest = plugin / ".claude-plugin" / "plugin.json"
+    if not manifest.is_file() or not envelope.is_file():
+        _blocked(f"no planning plugin with handoff envelopes at {plugin}")
     if "--adopt-handoff" not in skill.read_text(encoding="utf-8"):
-        pytest.skip(f"BLOCKED: the planning plugin at {plugin} cannot adopt a handoff")
+        _blocked(f"the planning plugin at {plugin} cannot adopt a handoff")
+    version = str(json.loads(manifest.read_text(encoding="utf-8")).get("version", "0"))
+    parts = tuple(int(piece) for piece in version.split(".")[:3] if piece.isdigit())
+    if parts < _PLANNING_AT_LEAST:
+        # An older plugin ignores the request and adopts nothing: fifteen minutes of waiting
+        # that would fail with no word of why.
+        _blocked(f"the planning plugin at {plugin} is {version}; the rollover needs 0.55.0+")
     return plugin.resolve()
 
 
@@ -195,12 +219,12 @@ def _prerequisites(config: pytest.Config) -> tuple[Path, Path]:
         )
     for needed in ("tmux", "git"):
         if shutil.which(needed) is None:
-            pytest.skip(f"BLOCKED: executable_missing: {needed}")
+            _blocked(f"executable_missing: {needed}")
     claude = _resolve_profile_executable("claude", Path.home())
     if claude is None:
-        pytest.skip("BLOCKED: executable_missing: claude")
+        _blocked("executable_missing: claude")
     if not (Path.home() / ".claude" / ".credentials.json").is_file():
-        pytest.skip("BLOCKED: claude is not logged in (no ~/.claude/.credentials.json)")
+        _blocked("claude is not logged in (no ~/.claude/.credentials.json)")
     return claude, _planning_checkout()
 
 
@@ -314,6 +338,7 @@ async def test_rollover_now_hands_a_real_plan_to_a_fresh_session(
     repo: Path | None = None
     connection = None
     periodic: list[asyncio.Task] = []
+    owners_before = _owner_fingerprint()
     try:
         repo = _fixture_repository(repo_parent)
         paths = _isolated_home(tmp_path / "home", repo, claude, planning)
@@ -321,6 +346,10 @@ async def test_rollover_now_hands_a_real_plan_to_a_fresh_session(
         connection = open_database(paths.database_path, migrations=MIGRATIONS)
         harness = _compose(config, connection, paths)
         await _drive(harness, repo, periodic)
+        # Nothing the plan ran reached the owner's own registers.
+        assert _owner_fingerprint() == owners_before, (
+            "the run changed the owner's project registry or Portfolio roll-ups"
+        )
     finally:
         for task in periodic:
             task.cancel()
@@ -338,6 +367,20 @@ async def test_rollover_now_hands_a_real_plan_to_a_fresh_session(
         if repo is not None:
             shutil.rmtree(repo, ignore_errors=True)
         shutil.rmtree(tmux_directory, ignore_errors=True)
+
+
+def _owner_fingerprint() -> dict[str, tuple[int, int]]:
+    """Size and mtime of the owner's registers the planning skills know: the project registry
+    and the vault's Portfolio roll-ups. A file absent on this host is simply not listed."""
+    watched = [Path.home() / ".claude" / "projects-registry.yaml"]
+    portfolio = Path(os.environ.get("REMOTE_AGENTS_LIVE_VAULT", "/mnt/vault")) / "Portfolio"
+    if portfolio.is_dir():
+        watched.extend(sorted(portfolio.glob("*.md")))
+    return {
+        str(path): (path.stat().st_size, path.stat().st_mtime_ns)
+        for path in watched
+        if path.is_file()
+    }
 
 
 class _Harness:
@@ -477,17 +520,27 @@ async def _drive(harness: _Harness, repo: Path, periodic: list[asyncio.Task]) ->
         harness, repo, predecessor, f"no accept claim at {claim}"
     )
 
-    # 3. The predecessor ENDED.
+    # 3. The predecessor ENDED -- by the pass's own graceful stop, not on its own.
     records = {item.session_id: item for item in await sessions.list_sessions()}
     assert records[predecessor].state is SessionState.ENDED, await _diagnosis(
         harness, repo, predecessor, f"the predecessor is {records[predecessor].state}"
+    )
+    stopped_by_the_pass = [
+        event
+        for event in history
+        if event.from_state is RolloverState.PREDECESSOR_STOPPING
+        and event.to_state is RolloverState.COMPLETED
+        and event.detail != "the predecessor had already stopped"
+    ]
+    assert stopped_by_the_pass, await _diagnosis(
+        harness, repo, predecessor, "the predecessor ended on its own, not by the pass's stop"
     )
 
     # 4. Its row says which session it continued as, as both surfaces draw it.
     marks = await rollover_marks(backend.rollovers, records.values(), sessions=sessions)
     note = rollover_note(marks[str(predecessor)]) if str(predecessor) in marks else None
     expected = f"continued as #{records[successor].display.sequence}"
-    assert note is not None and expected in note, f"{note!r} does not say {expected!r}"
+    assert note is not None and expected in note.split(" · "), f"{note!r} does not say {expected!r}"
 
 
 async def _until_running(harness: _Harness, session_id: SessionId):

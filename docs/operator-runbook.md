@@ -631,8 +631,10 @@ it and ask for it but never act.
 - **The switch.** `rollover.auto_rollover`, in the `[rollover]` table of `config.toml`, is **off
   by default**. Flip it with *Roll over to a fresh session on handoff* in Settings, on either
   surface (`/settings` on the bot, F2 in the terminal); the first flip writes the table. A
-  missing table, a missing key, or anything but `true` reads as off. Each pass reads the file
-  afresh, so a flip needs no restart. With it off, nothing is opened, launched, typed or stopped,
+  missing table or key reads as off. A value that is not `true` or `false`, or an unknown key in
+  `[rollover]`, is refused when `serve` or the terminal starts (`rollover.auto_rollover must be
+  true or false`). Each pass reads the file afresh, so a flip needs no restart, and an edit that
+  breaks the value while running reads as off until it is fixed. With it off, nothing is opened, launched, typed or stopped,
   and an open rollover waits where it stands. Its patience counts from its last move, so one
   left waiting long may end `adoption-timeout` or `predecessor-not-idle` when the switch comes
   back on. Rolling back to 0.58.0 or earlier needs the table deleted first; see
@@ -706,15 +708,16 @@ Each is recorded on the rollover as `FAILED: <code>`. None of them touches the o
   mid-launch, or a launch key already claimed. Look in the project's sessions for a new `claude`
   session from that time, stop it if unwanted, then ask again.
 - **`successor-untrusted`** — the successor came up on its folder-trust question, and typing
-  would have answered it. It is left open. Trust the folder in that session, stop it, then ask
-  again.
-- **`successor-failed`** — the successor failed to start, its pane went away (also after it
-  accepted), or it wrote `failed` with no code. Inspect it, then ask again.
+  would have answered it. It is left open, still asking. Answer the question there (trust the
+  folder) so the next launch comes up trusted, stop that session, then ask again.
+- **`successor-failed`** — the successor failed to start, or its pane went away (also after it
+  accepted, before the old session was stopped). Inspect it, then ask again.
 - **`not-typed`** — the command could not be typed, or its send was not confirmed; the message
   names why. The successor is left open and may hold the half-typed command. Stop it, then ask
   again.
-- **`adoption-timeout`** — no `accepted` within 30 minutes. The successor is left open. Look at
-  it first: if it took the work over late, stop the old session yourself; otherwise stop the
+- **`adoption-timeout`** — no `accepted` within 30 minutes. The successor is left open. Its
+  envelopes are cleared, so look at its pane: if it says it adopted the handoff and is working
+  the plan, it took the work over late -- stop the old session yourself; otherwise stop the
   successor.
 - **`id-mismatch`**, **`no-ready`**, **`cwd-mismatch`**, **`branch-mismatch`**,
   **`plan-missing`** — the successor refused the handoff and wrote its own `failed`: the wrong
@@ -732,10 +735,11 @@ Each is recorded on the rollover as `FAILED: <code>`. None of them touches the o
 old session was not sent or did not verify. Stop the old session when it is done, or force stop
 it. The cause is recorded as the code:
 
-- **`predecessor-not-idle`** — not idle for 10 minutes before the stop, or not idle under the
-  stop's own key lock.
-- **`stop-unconfirmed`** — the stop raised, or a restart found it in flight with the session
-  still running or not settled within 10 minutes. The stop may have landed: check the session.
+- **`predecessor-not-idle`** — not idle (or not running: orphaned, still starting) for 10
+  minutes before the stop, or not idle under the stop's own key lock when the keys were due.
+- **`stop-unconfirmed`** — the stop raised, the terminal answered it not exited with no cause,
+  or a restart found it in flight with the session still running or not settled within 10
+  minutes. The stop may have landed: check the session.
 - **`graceful_timeout`** — the exit keys went in, and it did not exit in time.
 - **`composer_holds_text`** — its input held text.
 - **`keys_busy`** — something else was typing into it.
