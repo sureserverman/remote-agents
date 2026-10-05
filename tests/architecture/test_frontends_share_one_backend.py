@@ -536,10 +536,14 @@ def test_the_backend_capability_set_is_read_from_the_dataclass() -> None:
 
     **Twenty since `auto_rollover` joined them** (workflow-rollover sub-plan 02, 2026-10-05),
     for `resume_after_limit`'s reason: both surfaces draw a Settings row for it.
+
+    **Twenty-one since `rollovers` joined them** (the same sub-plan, Task 2.4), for
+    `schedules`' reason: both surfaces show rollovers and offer to request or cancel one, and a
+    host that wired no rollover book offers neither -- read from a field that is `None`.
     """
     fields = _backend_fields()
-    assert len(fields) == 20, (
-        f"`Backend` now declares {len(fields)} fields, not 20. That is fine — but it widens "
+    assert len(fields) == 21, (
+        f"`Backend` now declares {len(fields)} fields, not 21. That is fine — but it widens "
         "what Rule 2 forbids probing for, so confirm the new field is a capability an adapter "
         "should read as a declared field rather than discover."
     )

@@ -268,6 +268,13 @@ class Backend:
     and is not reached through this field. Optional for the reason the rest are, and typed
     `object` for the reason `sessions` is."""
 
+    rollovers: object | None = None
+    """Workflow rollovers (`application.rollover_book.RolloverBook`): ask for one, cancel a
+    request, and read the open ones and each session's lineage -- what both surfaces show and
+    offer through (DEC-115). Acting on one is the service's pass alone, and is not reached
+    through this field. Optional for the reason the rest are, and typed `object` for the reason
+    `sessions` is."""
+
     max_label_length: int = MAX_LABEL_LENGTH
     """The host's configured bound, clamped by `config` to 1..40 and never looser than the
     domain's.

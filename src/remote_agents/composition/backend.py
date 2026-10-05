@@ -25,6 +25,7 @@ from remote_agents.adapters.projects.registry import load_registry
 from remote_agents.adapters.projects.registry_writer import RegistryProjectRecorder
 from remote_agents.adapters.projects.workspace import FilesystemProjectWorkspace
 from remote_agents.adapters.sqlite.database import watched_paths
+from remote_agents.adapters.sqlite.rollover_store import SQLiteRolloverStore
 from remote_agents.adapters.sqlite.schedule_store import SQLiteScheduleStore
 from remote_agents.adapters.sqlite.session_store import SQLiteSessionStore
 from remote_agents.application.backend import Backend
@@ -34,6 +35,7 @@ from remote_agents.application.profiles import ProfileAvailability
 from remote_agents.application.project_admin import ProjectCreationService
 from remote_agents.application.project_catalog import CatalogProject, build_catalogue
 from remote_agents.application.reconcile import SessionLocks
+from remote_agents.application.rollover_book import RolloverBook
 from remote_agents.application.schedule_book import ScheduleBook
 from remote_agents.application.schedule_times import host_zone
 from remote_agents.application.services import SessionService
@@ -381,6 +383,10 @@ def compose_backend(
             projects=lambda: tuple(projects.paths),
             zone=host_zone,
         ),
+        # Over the same connection again: rollover rows are domain rows, so a request from
+        # either surface wakes the store watcher on both (DEC-090), and the pass in `serve`
+        # reads the same row the surface wrote.
+        rollovers=RolloverBook(SQLiteRolloverStore(connection)),
         max_label_length=config.max_label_length,
     )
 

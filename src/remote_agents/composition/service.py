@@ -5,24 +5,29 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 
 from remote_agents.adapters.sqlite.activity_store import SQLiteActivityStore
+from remote_agents.adapters.sqlite.rollover_store import SQLiteRolloverStore
 from remote_agents.adapters.telegram.limit_reset_notifications import LimitResetNotifier
 from remote_agents.adapters.telegram.schedule_notifications import ScheduleNotifier
 from remote_agents.adapters.telegram.service import PrivateBotBoundary
 from remote_agents.adapters.telegram.trust_notifications import TrustNotifier
 from remote_agents.adapters.tmux.runtime import TmuxTerminal
+from remote_agents.adapters.workflow.handoff_envelopes import FileHandoffEnvelopes
+from remote_agents.adapters.workflow.roots import handoff_root
 from remote_agents.application.activity import CodexApprovalWatcher, drain_activity
 from remote_agents.application.backend import CLOSE_TIMEOUT_SECONDS
 from remote_agents.application.limit_lifts import LimitLiftWatcher
 from remote_agents.application.limit_stops import LimitScreenWatcher, LimitStopClassifier
 from remote_agents.application.reconcile import ReconciliationService
+from remote_agents.application.rollover import RolloverPass
 from remote_agents.application.schedules import SchedulePass
+from remote_agents.application.services import SessionService
 from remote_agents.config import TelegramSecrets
-from remote_agents.domain.models import SessionId
+from remote_agents.domain.models import ProfileId, ProjectId, SessionId
 from remote_agents.ports.agent_activity import ActivityConfidence, ActivityKind, AgentActivity
 from remote_agents.ports.message_relay import MessageRelay, RelayOutcome, RelayResult
 from remote_agents.ports.state_events import StoreChanged
@@ -61,6 +66,10 @@ _LIMIT_STOP_POLL_SECONDS = 30.0
 #: How often due schedules are looked for. A schedule fires up to this late, well inside the
 #: fifteen minutes a fire may still start (`schedules.MISSED_GRACE`).
 _SCHEDULE_POLL_SECONDS = 30.0
+#: How often envelopes and open rollovers are walked (DEC-115). The schedules' clock: a `ready`
+#: is acted on within half a minute of the gate that wrote it, and every patience the pass
+#: counts (ten minutes for an idle pane, thirty for an adoption) is many ticks long.
+_ROLLOVER_POLL_SECONDS = 30.0
 #: Bounds one limit-stop pass (a limits read, the session and outcome reads, a Telegram edit or
 #: delete per lifted stop), so one wedged call costs a pass rather than every later lift.
 _LIMIT_STOP_PASS_TIMEOUT_SECONDS = 20.0
@@ -197,6 +206,14 @@ class ServiceComposition:
     schedule_notifier: ScheduleNotifier | None = None
     """Where the pass's notices go, retried each tick while one is held, or None."""
 
+    rollover_pass: RolloverPass | None = None
+    """The pass that turns a workflow's handoff into a successor (DEC-115), or None.
+
+    The bot's composition only, as `schedule_pass` is: the local surface asks for a rollover by
+    writing a row, and only this process launches, types or stops for one, so the pass's
+    in-memory view and the panes it acts on never belong to two processes (DEC-030).
+    """
+
 
 async def _serve_with_reconciliation(
     secrets: TelegramSecrets,
@@ -273,6 +290,12 @@ async def _serve_with_reconciliation(
         # Its own task and clock, like the watchers: a pass that raises costs one tick.
         periodic.append(
             asyncio.create_task(_fire_schedules_periodically(composition, _SCHEDULE_POLL_SECONDS))
+        )
+    if composition.rollover_pass is not None:
+        # Its own task and clock, like the schedule pass beside it: a pass that raises costs
+        # one tick, and every step is taken again from what is persisted.
+        periodic.append(
+            asyncio.create_task(_roll_over_periodically(composition, _ROLLOVER_POLL_SECONDS))
         )
     if composition.limit_lift_watcher is not None:
         # Its own task and clock, on the same terms as the others: a pass that hangs or raises
@@ -457,6 +480,50 @@ async def _fire_schedules_periodically(composition: ServiceComposition, interval
                 await composition.schedule_notifier.pass_once()
             except Exception:
                 _LOG.exception("a held schedule notice could not be resent")
+
+
+async def _roll_over_periodically(composition: ServiceComposition, interval: float) -> None:
+    """Walk envelopes and open rollovers on a clock of their own -- never raising."""
+    while True:
+        await asyncio.sleep(interval)
+        try:
+            await composition.rollover_pass.run_once()
+        except Exception:
+            # One pass, logged. Each state was persisted before its action, so the next pass
+            # takes up exactly where this one stopped.
+            _LOG.exception("the rollover pass failed; it will be retried")
+
+
+def build_rollover_pass(
+    *,
+    connection,
+    sessions: SessionService,
+    terminal: TmuxTerminal,
+    enabled: Callable[[], Awaitable[bool]],
+    project_paths: Mapping[ProjectId, Path],
+    rollable: frozenset[ProfileId],
+) -> RolloverPass:
+    """The rollover pass `serve` runs, and only `serve` (DEC-115, DEC-015/070: built here,
+    beside the loop that runs it, so no other composition has one to run).
+
+    Rows go in the domain store, so both surfaces redraw on a move (DEC-090). Launch and stop
+    are the one session service's, so the pass takes the same locks every other caller does;
+    typing is the terminal's guarded send (DEC-099). Envelopes are read under each project's
+    git top level, where the planning plugin writes them; a project in no checkout has no root
+    and is never rolled over. `project_paths` is the live routing table, read per pass.
+    """
+    return RolloverPass(
+        SQLiteRolloverStore(connection),
+        FileHandoffEnvelopes(),
+        rollable=rollable,
+        sessions=sessions.list_sessions,
+        handoff_root=lambda project: handoff_root(project_paths.get(project)),
+        enabled=enabled,
+        idle=terminal.pane_idle,
+        launch=sessions.launch,
+        send=terminal.send_prompt,
+        graceful_stop=sessions.graceful_stop,
+    )
 
 
 async def _watch_activity_periodically(composition: ServiceComposition, interval: float) -> None:

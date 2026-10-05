@@ -735,6 +735,28 @@ class TmuxTerminal:
                 )
         return None
 
+    async def pane_idle(self, session_id: SessionId) -> bool:
+        """Whether one managed pane shows its agent's empty composer, with no turn running and
+        no dialog up -- the screen the rollover launches and stops against (DEC-115).
+
+        A look, never an act: the turn marker is read and never ended here (`_judged` ends a
+        stale one only under the key lock a send holds). False on any doubt -- no live pane, a
+        profile with no composer to read, a screen nothing recognises (UNKNOWN is never idle).
+        """
+        observation = await self.inspect(session_id)
+        if observation is None or not observation.live:
+            return False
+        descriptor = self._composers.get(str(observation.profile_id))
+        if descriptor is None or descriptor.composer is None:
+            return False
+        title = (await self._gateway.pane_title(session_id)).rstrip("\n")
+        capture = await self._gateway.capture(session_id, styled=True)
+        started = (
+            None if self._turn_markers is None else self._turn_markers.started_at(str(session_id))
+        )
+        state = classify(capture, descriptor, title, turn_started_at=started, now=datetime.now(UTC))
+        return state is PaneState.IDLE
+
     async def send_prompt(self, session_id: SessionId, text: str) -> PromptDelivery:
         """Type an owner's message into one managed pane, only if it is sitting idle (DEC-099).
 

@@ -62,7 +62,7 @@ from remote_agents.domain.rollover import (
 )
 from remote_agents.ports.handoff_envelopes import HandoffEnvelope, HandoffEnvelopes, HandoffEvent
 from remote_agents.ports.rollover_store import IllegalRolloverMove, Rollover, RolloverStore
-from remote_agents.ports.terminal import PromptDelivery, TerminalObservation
+from remote_agents.ports.terminal import PromptDelivery, PromptReason, TerminalObservation
 
 _LOG = logging.getLogger(__name__)
 
@@ -350,12 +350,19 @@ class RolloverPass:
             verdict = delivery_verdict(delivery)
             if verdict is DeliveryVerdict.SENT:
                 return None
+            # Worded as the schedules' first prompt words it, so one reason reads the same
+            # whichever pass typed.
             if verdict not in _BOOTING:
                 if verdict is DeliveryVerdict.REFUSED and delivery.reason is not None:
                     return delivery.reason.value
+                if delivery.reason is PromptReason.MENU:
+                    # A `/` command whose menu cannot be read: no dialog is up, so say which.
+                    return PromptReason.MENU.value
                 return verdict.value
             if self._now() - started >= STARTUP_PATIENCE:
-                return verdict.value
+                if verdict in (DeliveryVerdict.NOT_RUNNING, DeliveryVerdict.UNRECOGNISED):
+                    return verdict.value
+                return "not_ready"
             await self._sleep(RETRY_SECONDS)
 
     async def _found_starting(self, rollover: Rollover, seen: _Seen) -> None:

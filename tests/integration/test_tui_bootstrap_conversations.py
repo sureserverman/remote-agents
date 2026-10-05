@@ -271,6 +271,9 @@ def test_no_further_capability_leaked_into_the_context() -> None:
         # Scheduled sessions, 2026-10-02: both surfaces list and manage schedules through the
         # one book, so it is a backend capability rather than a surface's own.
         "schedules",
+        # Workflow rollover, 2026-10-05: both surfaces show a session's rollover and lineage
+        # and ask for or cancel one through the one book; acting on it is the service's alone.
+        "rollovers",
         "sessions",
         "projects",
         "conversations",

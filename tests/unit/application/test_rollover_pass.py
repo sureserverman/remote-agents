@@ -628,3 +628,26 @@ async def test_one_rollovers_fault_does_not_hold_back_another(rig: Rig) -> None:
     assert [c.idempotency_key for c in rig.launches] == ["rollover:h-ffffffffffffffffffff"]
     rows = {r.predecessor_session_id: r.state for r in rig.store._select("1 = 1", ())}
     assert rows[rig.predecessor] is RolloverState.HANDOFF_READY
+
+
+@pytest.mark.parametrize(
+    ("deliveries", "detail"),
+    [
+        # A `/` command whose menu cannot be read: no dialog is up, so it is said as a menu.
+        ([PromptDelivery(PromptOutcome.REFUSED, PromptReason.MENU)], "menu"),
+        ([PromptDelivery(PromptOutcome.REFUSED, PromptReason.DIALOG)], "dialog"),
+        ([PromptDelivery(PromptOutcome.REFUSED, PromptReason.BUSY)] * 100, "not_ready"),
+        ([PromptDelivery(PromptOutcome.REFUSED, PromptReason.NOT_RUNNING)] * 100, "not_running"),
+    ],
+    ids=["menu", "dialog", "busy-throughout", "not-running-throughout"],
+)
+async def test_why_the_template_was_not_typed_is_worded_as_the_schedules_word_it(
+    rig: Rig, deliveries: list[PromptDelivery], detail: str
+) -> None:
+    rig.deliveries = list(deliveries)
+    rig.ready()
+
+    await rig.run()
+
+    rollover = await rig.rollover()
+    assert (rollover.failure_code, rollover.failure_detail) == ("not-typed", detail)
