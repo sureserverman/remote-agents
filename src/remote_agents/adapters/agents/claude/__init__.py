@@ -128,6 +128,10 @@ def descriptor(
             command_menu=(
                 r"^  (?P<first>/\S+)[^\n]*(?:\n(?:  /\S+| {10,}\S)[^\n]*)*\n─{10,}\n[❯!]"
             ),
+            # A blank row directly above the composer's top rule: nothing -- no menu, no hint --
+            # is drawn there, as with a `/` command and its arguments
+            # (`fixtures/panes/claude/composed_slash_arguments.txt`, 2.1.289).
+            menu_absent=r"\n[ \t\xa0]*\n─{10,}\n❯",
         ),
         # Read out of the 2.1.284 bundle (`docs/acceptance-2026-09-28-limit-screens.md`). Claude
         # reports the stop through `StopFailure`, so this is read for its hint, not watched for.

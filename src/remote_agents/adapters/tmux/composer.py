@@ -340,6 +340,22 @@ def enter_refusal(capture: str, descriptor: ProviderDescriptor, text: str) -> Pr
             return PromptReason.MENU
         # Fails closed: a menu the pattern cannot read is not a menu that agreed with the text.
         menu = re.search(declared.command_menu, screen, re.MULTILINE)
-        if menu is None or menu.group("first") != text.split()[0]:
+        if menu is not None:
+            if menu.group("first") != text.split()[0]:
+                return PromptReason.MENU
+        elif not _no_menu_for_arguments(capture, declared, text):
             return PromptReason.MENU
     return None
+
+
+def _no_menu_for_arguments(capture: str, declared: ComposerScreen, text: str) -> bool:
+    """Whether `Enter` may submit a `/` command no menu was read for: only one with arguments,
+    and only onto a screen the agent's `menu_absent` pattern positively shows menu-free.
+
+    An agent that hides its menu once arguments follow the command (Claude) submits the draft
+    as typed then, which is what the menu rule protects. A bare command is not covered -- its
+    menu is drawn, so one not read did not agree -- and neither is a screen with anything above
+    the composer, which may be a menu this cannot read."""
+    if declared.menu_absent is None or len(text.split()) < 2:
+        return False
+    return re.search(declared.menu_absent, unstyled(capture)) is not None

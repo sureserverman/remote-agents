@@ -81,11 +81,16 @@ while True:
             envelope("HANDOFF_FAILED", "failed", failure_code="branch-mismatch")
 """
 
-#: The fake draws no command menu, so its `command_menu` reads the command off the draft line:
-#: a stand-in for a menu whose first entry is the command typed. The guard against a menu that
-#: disagrees is the composer's own, tested on its own; this test is about the rollover.
+#: The fake draws no command menu at all, as Claude draws none once arguments follow a `/`
+#: command (2026-10-05 live run). So its `command_menu` never matches, and `menu_absent` -- the
+#: composer's rule with nothing drawn above it that is a menu -- says so: the adoption template
+#: goes in by the same rule real Claude's does. (It once read the command off the draft line,
+#: a stand-in for a menu that agrees, which no real screen shows; that is what let the real
+#: refusal through to the live run.)
 _COMPOSER = ComposerScreen(
-    composer=r"^─{10,}\n❯ ?(?P<draft>[^\n]*)\Z", command_menu=r"^❯ (?P<first>/\S+)"
+    composer=r"^─{10,}\n❯ ?(?P<draft>[^\n]*)\Z",
+    command_menu=r"(?!)",
+    menu_absent=r"─{10,}\n❯",
 )
 
 

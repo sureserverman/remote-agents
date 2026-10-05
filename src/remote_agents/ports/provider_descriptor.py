@@ -124,6 +124,13 @@ class ComposerScreen:
     message beginning with `/` is refused before anything is pasted, because `Enter` could run a
     different command than the one typed (OpenCode's menu is fuzzy), and a stranded draft would
     refuse every later message."""
+    menu_absent: str | None = None
+    """A pattern (multiline, read on the unstyled capture with its blank rows kept) that matches
+    only when **nothing** is drawn above the composer -- the positive sign no command menu is
+    open. Some agents hide the menu once arguments follow a `/` command (Claude, measured
+    2026-10-05); `Enter` then submits the draft as typed. A `/` command with arguments is
+    submitted when no `command_menu` matches and this does; None keeps every `/` command
+    behind a readable menu."""
     draft_line: str = r"^\s*"
     """What is stripped from the start of each draft line before the lines are compared
     (OpenCode draws its composer inside a `┃` box)."""
