@@ -31,6 +31,7 @@ LEGAL_MOVES = {
     (S.ADOPTING, S.SUCCESSOR_ACCEPTED),
     (S.ADOPTING, S.FAILED),
     (S.SUCCESSOR_ACCEPTED, S.PREDECESSOR_STOPPING),
+    (S.SUCCESSOR_ACCEPTED, S.FAILED),
     (S.PREDECESSOR_STOPPING, S.COMPLETED),
     (S.PREDECESSOR_STOPPING, S.STOP_FAILED),
 }
@@ -109,7 +110,16 @@ def test_every_non_terminal_state_has_a_recovery_action(
             RecoveryFacts(has_successor_id=True, timed_out=True),
             RecoveryAction.TIME_OUT,
         ),
-        (S.SUCCESSOR_ACCEPTED, RecoveryFacts(), RecoveryAction.STOP_PREDECESSOR),
+        (
+            S.SUCCESSOR_ACCEPTED,
+            RecoveryFacts(has_successor_id=True, successor_alive=True),
+            RecoveryAction.STOP_PREDECESSOR,
+        ),
+        (
+            S.SUCCESSOR_ACCEPTED,
+            RecoveryFacts(has_successor_id=True, successor_alive=False),
+            RecoveryAction.GIVE_UP_SUCCESSOR_FAILED,
+        ),
         (S.PREDECESSOR_STOPPING, RecoveryFacts(), RecoveryAction.RECONCILE_STOP),
     ],
     ids=lambda value: value.name if isinstance(value, RolloverState) else None,

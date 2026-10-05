@@ -23,6 +23,8 @@ _OPEN = "state NOT IN ({})".format(", ".join(f"'{state.value}'" for state in sor
 _HOLDING = (RolloverState.FAILED, RolloverState.STOP_FAILED)
 """A predecessor whose latest rollover ended in one of these opens no more from a `ready` until
 the owner asks: a forged envelope costs one extra session, never a stream of them (DEC-115)."""
+_REQUEST_WRITTEN = "request written"
+"""The history detail marking that the owner's request was handed to the workflow."""
 
 
 class SQLiteRolloverStore:
@@ -149,6 +151,31 @@ class SQLiteRolloverStore:
                 failure_detail=failure_detail,
                 detail=detail,
             )
+
+    async def record_request(self, rollover_id: str, *, at: datetime) -> bool:
+        stamp = _stored(at)
+        with self._connection:
+            # One transaction: the state test and the "already recorded" test are read under the
+            # same write as the row they guard, so two passes cannot both see it unrecorded.
+            row = self._connection.execute(
+                "SELECT state FROM rollovers WHERE rollover_id = ?", (rollover_id,)
+            ).fetchone()
+            if row is None or RolloverState(row[0]) is not RolloverState.REQUESTED:
+                return False
+            if self._connection.execute(
+                "SELECT 1 FROM rollover_events WHERE rollover_id = ? AND detail = ?",
+                (rollover_id, _REQUEST_WRITTEN),
+            ).fetchone():
+                return False
+            self._append(
+                rollover_id,
+                RolloverState.REQUESTED,
+                RolloverState.REQUESTED,
+                None,
+                _REQUEST_WRITTEN,
+                stamp,
+            )
+        return True
 
     async def get(self, rollover_id: str) -> Rollover | None:
         rows = self._select("rollover_id = ?", (rollover_id,))

@@ -45,10 +45,11 @@ TRANSITIONS: dict[RolloverState, frozenset[RolloverState]] = {
     _S.HANDOFF_READY: frozenset({_S.SUCCESSOR_STARTING, _S.FAILED, _S.CANCELLED}),
     _S.SUCCESSOR_STARTING: frozenset({_S.ADOPTING, _S.FAILED}),
     _S.ADOPTING: frozenset({_S.SUCCESSOR_ACCEPTED, _S.FAILED}),
-    # After acceptance there is no FAILED: the successor owns the work, so the only open
-    # question is whether the predecessor stopped. A stop that does not verify is STOP_FAILED
-    # and the owner uses force stop (DEC-007), which the rollover never does itself.
-    _S.SUCCESSOR_ACCEPTED: frozenset({_S.PREDECESSOR_STOPPING}),
+    # After acceptance the only way to FAILED is a successor gone before the stop was sent:
+    # stopping the predecessor then would leave nobody holding the work, so it is kept. Once the
+    # stop is under way the open question is only whether it verified. A stop that does not is
+    # STOP_FAILED and the owner uses force stop (DEC-007), which the rollover never does itself.
+    _S.SUCCESSOR_ACCEPTED: frozenset({_S.PREDECESSOR_STOPPING, _S.FAILED}),
     _S.PREDECESSOR_STOPPING: frozenset({_S.COMPLETED, _S.STOP_FAILED}),
 }
 """The legal-move matrix. No self-loops; a state absent as a key has no way out."""
@@ -126,6 +127,8 @@ def recovery_action(state: RolloverState, facts: RecoveryFacts) -> RecoveryActio
         case _S.ADOPTING:
             return RecoveryAction.TIME_OUT if facts.timed_out else RecoveryAction.WAIT
         case _S.SUCCESSOR_ACCEPTED:
+            if not facts.successor_alive:
+                return RecoveryAction.GIVE_UP_SUCCESSOR_FAILED
             return RecoveryAction.STOP_PREDECESSOR
         case _S.PREDECESSOR_STOPPING:
             return RecoveryAction.RECONCILE_STOP

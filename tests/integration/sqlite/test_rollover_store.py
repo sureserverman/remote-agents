@@ -541,3 +541,22 @@ async def test_a_row_without_a_successor_licenses_no_stop(tmp_path: Path) -> Non
 
     assert may_stop_predecessor(accepted) is True
     assert may_stop_predecessor(replace(accepted, successor_session_id=None)) is False
+
+
+async def test_a_request_is_recorded_once_and_only_while_requested(tmp_path: Path) -> None:
+    store, predecessor = _store(tmp_path), SessionId.new()
+    requested = await store.request(
+        predecessor, project_id=ProjectId("remote-agents"), profile_id=ProfileId("claude"), at=NOW
+    )
+    assert requested is not None
+
+    assert await store.record_request(requested.id, at=NOW) is True
+    assert await store.record_request(requested.id, at=NOW) is False
+    reopened = _store(tmp_path)
+    assert await reopened.record_request(requested.id, at=NOW) is False
+    assert [e.detail for e in await store.events(requested.id)].count("request written") == 1
+
+    ready = await _open(store, SessionId.new())
+    assert ready is not None
+    assert await store.record_request(ready.id, at=NOW) is False
+    assert await store.record_request("no-such-rollover", at=NOW) is False

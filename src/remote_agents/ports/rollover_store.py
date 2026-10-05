@@ -121,6 +121,13 @@ class RolloverStore(Protocol):
         """
         ...
 
+    async def record_request(self, rollover_id: str, *, at: datetime) -> bool:
+        """Record, while REQUESTED, that the owner's request is about to be written, as its own
+        history row. True the first time only: the request is written once, after this record,
+        so a restart finds it recorded and never asks again (DEC-004). False in any other state.
+        """
+        ...
+
     async def get(self, rollover_id: str) -> Rollover | None: ...
 
     async def open_rollovers(self) -> tuple[Rollover, ...]:
