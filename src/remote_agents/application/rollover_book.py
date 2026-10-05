@@ -64,6 +64,11 @@ class RolloverBook:
     async def open_rollovers(self) -> tuple[Rollover, ...]:
         return await self._store.open_rollovers()
 
+    async def latest_for(self, session_id: SessionId) -> Rollover | None:
+        """`session_id`'s newest rollover that was not cancelled, open or ended -- what its row
+        reports (`session_views.rollover_marks`)."""
+        return await self._store.latest_for(session_id)
+
     async def continued_from(self, session_id: SessionId) -> SessionId | None:
         return await self._store.continued_from(session_id)
 

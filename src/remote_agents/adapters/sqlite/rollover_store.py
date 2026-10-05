@@ -211,6 +211,14 @@ class SQLiteRolloverStore:
             for from_state, to_state, failure_code, detail, created_at in rows
         )
 
+    async def latest_for(self, predecessor: SessionId) -> Rollover | None:
+        row = self._connection.execute(
+            f"SELECT {_COLUMNS} FROM rollovers WHERE predecessor_session_id = ? AND state <> ?"
+            " ORDER BY updated_at DESC, rowid DESC LIMIT 1",
+            (str(predecessor), RolloverState.CANCELLED.value),
+        ).fetchone()
+        return None if row is None else _rollover(row)
+
     def _own(self, row: Rollover, predecessor: SessionId, project_id: ProjectId) -> Rollover | None:
         """The row for a handoff id, only when it is this predecessor's in this project: an id
         planted in another checkout must not hand back -- or advance -- someone else's."""

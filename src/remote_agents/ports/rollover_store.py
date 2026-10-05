@@ -141,6 +141,11 @@ class RolloverStore(Protocol):
 
     async def events(self, rollover_id: str) -> Sequence[RolloverEvent]: ...
 
+    async def latest_for(self, predecessor: SessionId) -> Rollover | None:
+        """The newest rollover of `predecessor` that was not cancelled, in any state -- the one
+        whose FAILED or STOP_FAILED holds the next `ready`, so the one a row reports."""
+        ...
+
     async def continued_from(self, session_id: SessionId) -> SessionId | None:
         """The predecessor this session completed a rollover from, if any."""
         ...

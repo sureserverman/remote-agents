@@ -159,6 +159,7 @@ from remote_agents.application.session_views import (
     only_listed,
     project_name,
     repeat_words,
+    rollover_marks,
     schedule_lines,
     selectable_area,
     session_identity,
@@ -2440,6 +2441,10 @@ class PrivateBotBoundary:
         shown = records[start : start + self.session_page_size]
         sections: list[str] = []
         pickers: list[Button] = []
+        # Through the one backend, as the local surface reads it (DEC-046, DEC-091).
+        rollovers = await rollover_marks(
+            self.backend.rollovers, shown, sessions=self.backend.sessions
+        )
         for group in StateGroup:
             members = [record for record in shown if session_row_parts(record).group is group]
             if not members:
@@ -2447,8 +2452,9 @@ class PrivateBotBoundary:
             lines = [f"{group_emoji(group)} <b>{_GROUP_TITLES[group]}</b>"]
             for record in members:
                 context = await self._context_for(record)
-                parts = session_row_parts(record, context)
-                _first, second = session_lines(record, context)
+                rolled = rollovers.get(str(record.session_id))
+                parts = session_row_parts(record, context, rolled)
+                _first, second = session_lines(record, context, rolled)
                 # The sequence sits *outside* the bold, so the eye lands on the name and
                 # finds the number beside it, and the state line is monospace so the gauges
                 # of neighbouring rows line up.

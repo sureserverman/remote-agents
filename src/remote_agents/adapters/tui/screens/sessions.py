@@ -57,7 +57,6 @@ from remote_agents.application.session_actions import (
     remote_control_reading,
     remote_control_target,
 )
-from remote_agents.application.session_views import session_row_parts
 from remote_agents.domain.models import SessionId, SessionRecord
 from remote_agents.ports.state_events import StoreChanged, Unsubscribe
 
@@ -1260,10 +1259,7 @@ class SessionsScreen(_SessionActionKeys, ChoiceScreen):
         keys = [str(record.session_id) for record in records]
         marked = self._marked_row
         active = keys.index(marked) if marked in keys else None
-        parts = [
-            session_row_parts(record, self.tui.context_window_for(record.session_id))
-            for record in records
-        ]
+        parts = [self.tui.row_parts(record) for record in records]
         held = {option.id for option in choices.options}
         contents = session_contents(parts, width, active, marks_active=True)
         for key, content in zip(keys, contents, strict=True):
@@ -1415,10 +1411,7 @@ class SessionsScreen(_SessionActionKeys, ChoiceScreen):
         # The counts are the frame's title on a framed pane, so the status says nothing idle.
         counts = "" if self.framed else session_counts_content(records)
         self.set_status(counts, hint=self.listing_hint)
-        parts = [
-            session_row_parts(record, self.tui.context_window_for(record.session_id))
-            for record in records
-        ]
+        parts = [self.tui.row_parts(record) for record in records]
         width = row_width(choices) or None
         # Recorded so `on_resize` can tell a width change from the several same-width resizes a
         # single layout pass emits. Set on every fill rather than only in `on_resize`, because

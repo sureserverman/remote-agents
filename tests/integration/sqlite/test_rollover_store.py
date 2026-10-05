@@ -593,3 +593,26 @@ async def test_an_owners_cancelled_request_does_not_release_the_hold(tmp_path: P
     await store.advance(asked.id, RolloverState.CANCELLED, at=NOW + timedelta(seconds=1))
 
     assert await _open(store, predecessor, OTHER_HANDOFF) is None
+
+
+async def test_latest_for_is_the_newest_rollover_that_was_not_cancelled(tmp_path: Path) -> None:
+    """What a row reports (Stage 3 Task 3.1), the same row the hold above reads: an open one
+    while open, a failure once ended, and never a withdrawn request."""
+    store, predecessor = _store(tmp_path), SessionId.new()
+    assert await store.latest_for(predecessor) is None
+    first = await _open(store, predecessor)
+    assert first is not None
+    assert (await store.latest_for(predecessor)).id == first.id
+    await store.advance(first.id, RolloverState.FAILED, at=NOW, failure_code="not-typed")
+    asked = await store.request(
+        predecessor, project_id=ProjectId("remote-agents"), profile_id=ProfileId("claude"), at=NOW
+    )
+    assert asked is not None
+    assert (await store.latest_for(predecessor)).id == asked.id
+    await store.advance(asked.id, RolloverState.CANCELLED, at=NOW + timedelta(seconds=1))
+
+    latest = await store.latest_for(predecessor)
+
+    assert latest is not None and latest.id == first.id
+    assert latest.state is RolloverState.FAILED
+    assert await store.latest_for(SessionId.new()) is None
