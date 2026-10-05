@@ -186,12 +186,23 @@ async def test_a_running_session_with_an_undecided_limit_stop_skips_its_agent(co
 
 
 async def test_a_previous_run_is_working_only_while_live_with_a_turn_marker(connection) -> None:
+    """Liveness and a marker, not the marker's age — the six-hour window is the next test.
+
+    `_Markers.started_at` returns the fixed `FIRE`. `still_working_in`'s default clock is the
+    wall, so once `FIRE` is more than six hours ago a live session reads as idle and this
+    assertion becomes a date. It passed on 2026-10-02, four hours after `FIRE`, and failed
+    on every runner after that.
+    """
     sessions = SQLiteSessionStore(connection)
     live, ended = SessionId.new(), SessionId.new()
     await sessions.save(_record(live))
     await sessions.save(_record(ended, SessionState.ENDED))
-    working = still_working_in(sessions, _Markers(str(live), str(ended)))
-    idle = still_working_in(sessions, _Markers())
+
+    def during_the_turn() -> datetime:
+        return FIRE + timedelta(minutes=1)
+
+    working = still_working_in(sessions, _Markers(str(live), str(ended)), now=during_the_turn)
+    idle = still_working_in(sessions, _Markers(), now=during_the_turn)
 
     assert await working(str(live)) is True
     assert await working(str(ended)) is False
