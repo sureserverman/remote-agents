@@ -587,7 +587,15 @@ class TmuxTerminal:
             if descriptor is None or descriptor.composer is None:
                 # Nothing can tell an idle composer here, so nothing licenses the stop.
                 return TerminalObservation(session_id, live=True, preserved=False, detail=NOT_IDLE)
-            title = (await self._gateway.pane_title(session_id)).rstrip("\n")
+            try:
+                # Read before the hold, as the owner's interrupt reads it: the turn marker and
+                # the screen, both read under the hold, are what show a Claude turn starting.
+                title = (await self._gateway.pane_title(session_id)).rstrip("\n")
+            except (TerminalTargetMissing, RuntimeError):
+                # The pane went before any key: never sent, as the sends below report it.
+                return TerminalObservation(
+                    session_id, live=False, preserved=False, detail=UNKNOWN_SESSION
+                )
 
         def idle(capture: str) -> bool:
             # Judged inside the hold the keys are sent under, so no turn can start between the

@@ -322,7 +322,9 @@ class RolloverPass:
         if root is None:
             await self._fail(rollover, seen, NO_HANDOFF_ROOT)
             return
-        if not await self._holds_the_request_slot(rollover, root, seen):
+        holder = await self._request_slot_holder(root, seen)
+        if holder is not None and holder.id != rollover.id:
+            await self._note_waiting(rollover, holder)
             return
         wanted = str(rollover.predecessor_session_id)
         if await self._store.record_request(rollover.id, at=self._now()):
@@ -333,14 +335,22 @@ class RolloverPass:
             # the file removed or replaced by someone else. Never written twice (DEC-004).
             await self._fail(rollover, seen, REQUEST_LOST)
 
-    async def _holds_the_request_slot(self, rollover: Rollover, root: Path, seen: _Seen) -> bool:
-        """Whether this is the oldest open owner-asked rollover in its checkout. `request.json`
-        is one file per checkout, and each owner-asked rollover holds it from its write until
-        it ends, so a later one waits rather than overwriting it."""
+    async def _request_slot_holder(self, root: Path, seen: _Seen) -> Rollover | None:
+        """The oldest open owner-asked rollover in a checkout. `request.json` is one file per
+        checkout, and each owner-asked rollover holds it from its write until it ends, so a
+        later one waits rather than overwriting it."""
         for other in await self._store.open_rollovers():
             if other.reason == "owner" and seen.roots.get(other.project_id) == root:
-                return other.id == rollover.id
-        return False
+                return other
+        return None
+
+    async def _note_waiting(self, rollover: Rollover, holder: Rollover) -> None:
+        """Say once, on the waiting row, whose request it waits behind -- a wait nothing else
+        would show, since a request has no patience of its own."""
+        detail = f"waiting: {holder.predecessor_session_id}'s request holds this checkout"
+        if any(event.detail == detail for event in await self._store.events(rollover.id)):
+            return
+        await self._store.note(rollover.id, detail, at=self._now())
 
     async def _start_successor(self, rollover: Rollover, seen: _Seen) -> None:
         if rollover.successor_session_id is not None:

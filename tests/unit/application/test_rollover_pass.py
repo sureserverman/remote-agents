@@ -724,8 +724,11 @@ async def test_one_request_per_checkout_is_out_at_a_time(rig: Rig) -> None:
     )
     assert first is not None and second is not None
 
-    await rig.run(passes=2)
+    await rig.run(passes=3)
     assert rig.envelopes.requests == [str(rig.predecessor)], "the later request waits"
+    # And says so on its own row, once, naming whose request holds the checkout.
+    waiting = [e.detail for e in await rig.store.events(second.id) if e.detail]
+    assert waiting.count(f"waiting: {rig.predecessor}'s request holds this checkout") == 1
 
     await rig.store.advance(first.id, RolloverState.CANCELLED, at=NOW)
     await rig.run()

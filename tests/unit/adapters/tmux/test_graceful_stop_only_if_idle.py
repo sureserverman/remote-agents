@@ -116,3 +116,21 @@ def test_an_agent_that_declares_an_interrupt_is_never_interrupted_by_this_stop()
 
     assert pane.keys == []
     assert observation.detail == NOT_IDLE
+
+
+def test_a_pane_that_goes_before_its_title_is_read_is_a_stop_never_sent() -> None:
+    from pathlib import Path
+
+    from remote_agents.ports.terminal import UNKNOWN_SESSION
+
+    from .test_send_prompt import PromptPane
+
+    fixtures = Path(__file__).resolve().parents[3] / "fixtures/panes/claude"
+    pane = PromptPane([(fixtures / "idle.txt").read_text()], fail_on="#{pane_title}")
+
+    observation = asyncio.run(
+        _composed_terminal(pane).graceful_stop(pane.session_id, _PROFILE, only_if_idle=True)
+    )
+
+    assert observation.detail == UNKNOWN_SESSION and not observation.live
+    assert pane.keys == []
