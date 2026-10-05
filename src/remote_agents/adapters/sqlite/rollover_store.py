@@ -13,7 +13,12 @@ from uuid import uuid4
 
 from remote_agents.domain.models import ProfileId, ProjectId, SessionId
 from remote_agents.domain.rollover import NEEDS_SUCCESSOR, TERMINAL, RolloverState, is_legal
-from remote_agents.ports.rollover_store import IllegalRolloverMove, Rollover, RolloverEvent
+from remote_agents.ports.rollover_store import (
+    REQUEST_WRITTEN,
+    IllegalRolloverMove,
+    Rollover,
+    RolloverEvent,
+)
 
 _COLUMNS = (
     "rollover_id, handoff_id, predecessor_session_id, successor_session_id, project_id,"
@@ -23,8 +28,7 @@ _OPEN = "state NOT IN ({})".format(", ".join(f"'{state.value}'" for state in sor
 _HOLDING = (RolloverState.FAILED, RolloverState.STOP_FAILED)
 """A predecessor whose latest rollover ended in one of these opens no more from a `ready` until
 the owner asks: a forged envelope costs one extra session, never a stream of them (DEC-115)."""
-_REQUEST_WRITTEN = "request written"
-"""The history detail marking that the owner's request was handed to the workflow."""
+_REQUEST_WRITTEN = REQUEST_WRITTEN
 
 
 class SQLiteRolloverStore:

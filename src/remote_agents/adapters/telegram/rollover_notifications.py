@@ -49,8 +49,8 @@ _MINUTES_ADOPT = int(ADOPTION_PATIENCE.total_seconds() // 60)
 _WHY = {
     "predecessor-not-idle": f"the session was not idle for {_MINUTES_IDLE} minutes",
     "predecessor-gone": "the session stopped before its successor was up",
-    "launch-failed": "the successor could not be launched",
-    "successor-unknown": "a successor may have started before a restart; check its sessions",
+    "launch-failed": "the successor's launch failed, perhaps part-way; check its sessions",
+    "successor-unknown": "a successor may have started unrecorded; check its sessions",
     "successor-untrusted": "the successor is waiting on its folder-trust question",
     "successor-failed": "the successor failed or went away",
     "not-typed": "the handoff command was not typed into the successor",

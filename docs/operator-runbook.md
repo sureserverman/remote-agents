@@ -641,7 +641,9 @@ it and ask for it but never act.
   [rollback](#rollback-and-local-recovery).
 - **What starts one.** Only `claude` sessions take part: Claude Code's planning plugin is the one
   writer of handoff envelopes. A `ready` envelope from a running one, under `.claude/handoffs/`
-  at the project's git top level (planning plugin 0.55.0 or later), opens a rollover. So does the
+  at the project's git top level (planning plugin 0.55.0 or later), opens a rollover -- if it is
+  seen within five minutes of being written. One written while the switch was off or `serve` was
+  down is cleared, never acted on: the plugin has already told you to resume by hand. So does the
   owner's **Rollover now**: the button on the bot's session screen, or `l` on the terminal's
   sessions list. It writes `request.json` for the workflow, which hands off at its next gate.
   The press says *Rollover asked for — it happens at the workflow's next handoff.* It is offered

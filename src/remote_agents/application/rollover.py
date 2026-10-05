@@ -4,7 +4,8 @@ The service runs `RolloverPass.run_once` on a clock of its own, in `serve` only 
 the `rollover.auto_rollover` switch on, each pass walks every open rollover one step further.
 Only sessions of a `rollable` profile -- one whose plan executor writes envelopes -- take part:
 
-- a `ready` envelope naming a RUNNING rollable session opens a rollover at HANDOFF_READY;
+- a `ready` envelope naming a RUNNING rollable session opens a rollover at HANDOFF_READY -- if
+  it is first seen within `READY_FRESHNESS` of being written; an older one is cleared;
 - HANDOFF_READY waits for the predecessor's pane to be IDLE, persists SUCCESSOR_STARTING, and
   launches the predecessor's own project and profile under the key `rollover:<handoff_id>`
   (DEC-114), recording the successor the moment the launch returns;
@@ -94,6 +95,13 @@ NOT_IDLE_PATIENCE = timedelta(minutes=10)
 """How long a predecessor may stay not-IDLE at a step that needs it idle before it is given up."""
 
 ADOPTION_PATIENCE = timedelta(minutes=30)
+
+READY_FRESHNESS = timedelta(minutes=5)
+"""How old a `ready` may be when first seen and still be acted on. The pass looks every 30 s,
+so a `ready` first seen older than this was written while nobody was watching -- the switch
+off, or `serve` down -- and the plugin then told the owner to resume by hand. Acting on it
+later could put a second session on a plan the owner already resumed (DEC-115: only when
+switched on), so it is cleared instead, which is the manual path it already fell to."""
 """How long a typed successor has to write `accepted`, counted from entering ADOPTING."""
 
 PREDECESSOR_NOT_IDLE = "predecessor-not-idle"
@@ -263,6 +271,10 @@ class RolloverPass:
                 # service can still act on -- one already finished, or a forgery.
                 if handoff_id not in held:
                     self._envelopes.discard(root, handoff_id)
+                continue
+            if handoff_id not in held and self._now() - ready.timestamp > READY_FRESHNESS:
+                # Nobody was watching when it was written (see `READY_FRESHNESS`).
+                self._envelopes.discard(root, handoff_id)
                 continue
             predecessor = _session_id(ready.managed_session_id)
             record = None if predecessor is None else seen.sessions.get(predecessor)

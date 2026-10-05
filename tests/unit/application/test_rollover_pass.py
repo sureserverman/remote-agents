@@ -17,6 +17,7 @@ from remote_agents.application.errors import DuplicateCommandError
 from remote_agents.application.rollover import (
     ADOPTION_PATIENCE,
     NOT_IDLE_PATIENCE,
+    READY_FRESHNESS,
     RolloverPass,
 )
 from remote_agents.domain.models import (
@@ -819,3 +820,42 @@ async def test_a_failure_is_told_even_when_its_clean_up_raises(rig: Rig) -> None
 
     assert (await rig.rollover()).state is RolloverState.FAILED
     assert [report.rollover.failure_code for report in rig.reports] == ["not-typed"]
+
+
+async def test_a_ready_nobody_was_watching_for_is_never_acted_on(rig: Rig) -> None:
+    """Written while the switch was off (the plugin then tells the owner to resume by hand) and
+    found only once it was turned on: acting on it would put a second session on a plan the
+    owner may already have resumed. It is cleared, and nothing is opened or launched."""
+    rig.envelopes.files.append(
+        HandoffEnvelope(
+            HandoffEvent.READY,
+            HANDOFF,
+            str(rig.predecessor),
+            NOW - READY_FRESHNESS - timedelta(seconds=1),
+            "/abs/plan.md",
+            None,
+        )
+    )
+
+    await rig.run(passes=2)
+
+    assert rig.store._select("1 = 1", ()) == ()
+    assert rig.launches == [] and rig.stops == []
+    assert HANDOFF in rig.envelopes.discarded
+
+
+async def test_a_ready_written_moments_ago_is_acted_on(rig: Rig) -> None:
+    rig.envelopes.files.append(
+        HandoffEnvelope(
+            HandoffEvent.READY,
+            HANDOFF,
+            str(rig.predecessor),
+            NOW - READY_FRESHNESS + timedelta(seconds=1),
+            "/abs/plan.md",
+            None,
+        )
+    )
+
+    await rig.run()
+
+    assert len(rig.launches) == 1

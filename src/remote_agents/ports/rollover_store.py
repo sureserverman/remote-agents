@@ -18,6 +18,10 @@ from typing import Protocol
 from remote_agents.domain.models import ProfileId, ProjectId, SessionId
 from remote_agents.domain.rollover import RolloverState
 
+REQUEST_WRITTEN = "request written"
+"""The history detail `record_request` writes: the owner's request was handed to the workflow.
+A row reads it to tell a written request from one still waiting for its checkout's slot."""
+
 
 class IllegalRolloverMove(ValueError):
     """An `advance` the domain matrix does not allow; nothing was written."""

@@ -47,7 +47,7 @@ from remote_agents.ports.agent_usage import (
     LimitsNote,
     UsageWindow,
 )
-from remote_agents.ports.rollover_store import Rollover, RolloverEvent
+from remote_agents.ports.rollover_store import REQUEST_WRITTEN, Rollover, RolloverEvent
 from remote_agents.ports.schedules import Once, Repeat, Schedule, When
 
 
@@ -301,7 +301,7 @@ async def rollover_marks(
             state = None
         if state is RolloverState.REQUESTED and latest is not None:
             details = [event.detail or "" for event in await book.events(latest.id)]
-            if any(d.startswith("waiting:") for d in details) and "request written" not in details:
+            if any(d.startswith("waiting:") for d in details) and REQUEST_WRITTEN not in details:
                 waiting.add(str(record.session_id))
         before = await book.continued_from(record.session_id)
         after = await book.continued_as(record.session_id)
