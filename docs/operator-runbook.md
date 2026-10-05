@@ -74,7 +74,7 @@ The same two steps without the fetched script:
 
 ```bash
 uv tool install --managed-python \
-  "remote-agents @ git+https://github.com/sureserverman/remote-agents@v0.58.0"
+  "remote-agents @ git+https://github.com/sureserverman/remote-agents@v0.59.0"
 remote-agents onboard --install-daemon
 ```
 
@@ -186,7 +186,7 @@ the repository and the version before installing anything:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/sureserverman/remote-agents/main/scripts/install.sh \
-  | REMOTE_AGENTS_VERSION=v0.58.0 bash
+  | REMOTE_AGENTS_VERSION=v0.59.0 bash
 remote-agents onboard --install-daemon
 ```
 
@@ -620,6 +620,128 @@ exactly one *Scheduled: claude in remote-agents started* message, and the schedu
 the list afterwards. The automated drill is
 `uv run --locked pytest tests/e2e/test_terminal_scheduled_launch.py -q`, on a scratch tmux
 server, run alone.
+
+## Session rollover
+
+A plan-executing Claude session that hands off at a gate is replaced by one fresh session that
+takes over its work. The old session is stopped only after that successor says it accepted
+(DEC-115). Only the bot's service does this, on its own 30-second pass; the console panes show
+it and ask for it but never act.
+
+- **The switch.** `rollover.auto_rollover`, in the `[rollover]` table of `config.toml`, is **off
+  by default**. Flip it with *Roll over to a fresh session on handoff* in Settings, on either
+  surface (`/settings` on the bot, F2 in the terminal); the first flip writes the table. A
+  missing table, a missing key, or anything but `true` reads as off. Each pass reads the file
+  afresh, so a flip needs no restart. With it off, nothing is opened, launched, typed or stopped,
+  and an open rollover waits where it stands. Its patience counts from its last move, so one
+  left waiting long may end `adoption-timeout` or `predecessor-not-idle` when the switch comes
+  back on. Rolling back to 0.58.0 or earlier needs the table deleted first; see
+  [rollback](#rollback-and-local-recovery).
+- **What starts one.** Only `claude` sessions take part: Claude Code's planning plugin is the one
+  writer of handoff envelopes. A `ready` envelope from a running one, under `.claude/handoffs/`
+  at the project's git top level (planning plugin 0.55.0 or later), opens a rollover. So does the
+  owner's **Rollover now**: the button on the bot's session screen, or `l` on the terminal's
+  sessions list. It writes `request.json` for the workflow, which hands off at its next gate.
+  The press says *Rollover asked for — it happens at the workflow's next handoff.* It is offered
+  on a running `claude` session with the switch on and no rollover open. **Cancel rollover**
+  withdraws a request while it is still only requested, on either surface (in the terminal it is
+  a row of the session's detail). Once the workflow has answered, only the pass ends the
+  rollover. `request.json` is one file per checkout: a second request in the same checkout waits
+  until the first rollover ends.
+- **The sequence.** The pass waits for the old session's pane to sit idle, for up to 10
+  minutes. It then launches **one** fresh session of the same project and profile, under the
+  key `rollover:<handoff_id>`. It types the fixed command
+  `/planning:executing-plans --adopt-handoff <id>` and nothing else; an envelope supplies the id,
+  never text. The new session checks the handoff and has 30 minutes to write `accepted`. Only
+  then is the old session stopped: gracefully, only onto an idle, empty composer, judged again
+  under the stop's own key lock. A turn is never interrupted to do it.
+- **Restart.** Every step is recorded before it is taken, so a `serve` restart part-way finds
+  the record and never repeats the step. A launch found in flight with no successor recorded is
+  given up (`successor-unknown`), never launched again. A successor found up is waited on, never
+  typed to twice. A stop found in flight is never sent again: a stopped predecessor completes the
+  rollover, a running one ends `STOP_FAILED`.
+
+**What the session row says**, on both surfaces, after the state word:
+
+| Note | Meaning |
+| --- | --- |
+| `rollover pending · waiting for workflow boundary` | Asked for; the workflow has not handed off yet |
+| `rollover pending · waiting for another session's request` | Another session's request holds this checkout |
+| `starting successor` | Waiting for the old session to go idle, or launching the new one |
+| `successor validating handoff` | The command is typed; waiting for `accepted` |
+| `successor accepted · stopping` | Accepted; the old session is being stopped |
+| `rollover failed · predecessor preserved` | `FAILED`; the old session was not touched |
+| `stop failed · use force stop` | `STOP_FAILED`; the old session is still yours to stop |
+| `continued from #N`, `continued as #N` | The lineage a completed rollover leaves |
+
+The two failure notes show while the old session is still running. A completed rollover has no
+state note, only its lineage.
+
+**Only failures send a Telegram message**: *Rollover failed: claude in remote-agents #3 — …;
+predecessor preserved*, or *Rollover stop failed: …*. A completed rollover is silent; the row
+redraws. A message Telegram refuses is retried for ten minutes, and lost if the service stops
+first. The row note is the standing record.
+
+**Force stop stays manual** (DEC-007). A rollover never force-stops. After `STOP_FAILED`, the
+owner stops or force-stops the old session.
+
+**A failure holds the next handoff.** After `FAILED` or `STOP_FAILED`, that session's next
+`ready` is not acted on until the owner presses **Rollover now** again. Every ending clears the
+handoff's envelopes, so its id cannot be adopted by hand afterwards. A failure after the launch
+can leave the successor open; the message says so (*Its successor #N is still open*). Stop it
+if it is not needed.
+
+### Failure codes and what to do next
+
+Each is recorded on the rollover as `FAILED: <code>`. None of them touches the old session.
+
+- **`predecessor-not-idle`** — the old session was not idle for 10 minutes, so nothing was
+  launched. Let it finish its turn, clear its input or answer its question, then ask again.
+- **`predecessor-gone`** — the old session stopped before its successor was up. Nothing is left
+  to stop; launch or resume by hand if the work should go on.
+- **`launch-failed`** — the launch raised, or answered with no session. Its key is claimed, so
+  it is never retried. Read the journal for the error, check the project's sessions for a stray
+  one, then ask again.
+- **`successor-unknown`** — a launch may have happened with no successor recorded: a restart
+  mid-launch, or a launch key already claimed. Look in the project's sessions for a new `claude`
+  session from that time, stop it if unwanted, then ask again.
+- **`successor-untrusted`** — the successor came up on its folder-trust question, and typing
+  would have answered it. It is left open. Trust the folder in that session, stop it, then ask
+  again.
+- **`successor-failed`** — the successor failed to start, its pane went away (also after it
+  accepted), or it wrote `failed` with no code. Inspect it, then ask again.
+- **`not-typed`** — the command could not be typed, or its send was not confirmed; the message
+  names why. The successor is left open and may hold the half-typed command. Stop it, then ask
+  again.
+- **`adoption-timeout`** — no `accepted` within 30 minutes. The successor is left open. Look at
+  it first: if it took the work over late, stop the old session yourself; otherwise stop the
+  successor.
+- **`id-mismatch`**, **`no-ready`**, **`cwd-mismatch`**, **`branch-mismatch`**,
+  **`plan-missing`** — the successor refused the handoff and wrote its own `failed`: the wrong
+  handoff, no handoff found, another directory, the checkout on another branch, or the plan not
+  found. It is left open. Fix what it names, stop it, then ask again.
+- **`not-rollable`** — the session's agent writes no envelopes. Only `claude` sessions roll over.
+- **`no-handoff-root`** — the project is in no git checkout, so there is nowhere for envelopes.
+  Rollover needs the project inside a git repository.
+- **`request-unwritten`** — `request.json` could not be written. Check that `.claude/handoffs/`
+  at the checkout's top level is writable, then ask again.
+- **`request-lost`** — the written request was gone, or named another session, before the
+  workflow answered. It is never written again. Ask again.
+
+**`STOP_FAILED`** means the successor accepted and holds the work, and the graceful stop of the
+old session was not sent or did not verify. Stop the old session when it is done, or force stop
+it. The cause is recorded as the code:
+
+- **`predecessor-not-idle`** — not idle for 10 minutes before the stop, or not idle under the
+  stop's own key lock.
+- **`stop-unconfirmed`** — the stop raised, or a restart found it in flight with the session
+  still running or not settled within 10 minutes. The stop may have landed: check the session.
+- **`graceful_timeout`** — the exit keys went in, and it did not exit in time.
+- **`composer_holds_text`** — its input held text.
+- **`keys_busy`** — something else was typing into it.
+- **`agent_asking`** — it was asking a question, or a menu was open.
+- **`unknown_session`** — its pane could not be found. The stop may have landed: check the
+  session.
 
 ## Telegram credential denial and recovery drill
 

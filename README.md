@@ -76,7 +76,7 @@ find `uv`, verify it, and sequence what follows, not to install anything differe
 
 ```bash
 uv tool install --managed-python \
-  "remote-agents @ git+https://github.com/sureserverman/remote-agents@v0.58.0"
+  "remote-agents @ git+https://github.com/sureserverman/remote-agents@v0.59.0"
 remote-agents onboard --install-daemon
 ```
 
@@ -1006,6 +1006,19 @@ terminal, list every schedule with its next start, and pause, resume or delete i
 starts from the next time after now. To change a schedule, delete it and make it again.
 Nothing fires while the bot's service is stopped; the local terminal manages schedules but never
 starts one.
+
+## Session rollover
+
+A `claude` session executing a plan can hand its work to a fresh session at one of the plan's gates
+(DEC-115). It is off until you turn on *Roll over to a fresh session on handoff* in Settings, on
+either surface. With it on, the bot's service starts one new session of the same project and agent,
+types `/planning:executing-plans --adopt-handoff <id>` into it, and stops the old session only
+after the new one has accepted the handoff, and only when the old one sits idle. It never
+interrupts a turn and never force-stops. **Rollover now** (`l` in the terminal) asks the workflow
+to hand off at its next gate. Only a failure sends a message: a failed rollover keeps the old
+session, and a failed stop leaves it for you to stop. The runbook's [session
+rollover](docs/operator-runbook.md#session-rollover) section covers what the row notes mean and
+what to do after each failure.
 
 ## Creating a project
 
