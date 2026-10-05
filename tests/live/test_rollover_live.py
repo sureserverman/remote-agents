@@ -548,16 +548,17 @@ async def _answer_trust(harness: _Harness, session_id: SessionId) -> None:
     """Trust the folder through the product's own answer, pressed again while it is unanswered.
 
     The answer confirms only once the cursor is seen on "Yes" (`TmuxTerminal.answer_trust`).
-    Claude draws the dialog before it takes keys, so a press made at once can be left
-    unconfirmed -- the 2026-10-05 run found a press at that moment answering "No, exit" -- and
-    an owner would press again. So does this, a second apart, within the startup bound.
+    Claude draws the dialog, then resets it while it starts (probed 2026-10-05): keys sent to
+    the first copy are lost, so a first press can come back pressed with the question still
+    up. An owner would press again; so does this, a second apart, until the question is gone,
+    within the startup bound.
     """
     started = time.monotonic()
     while True:
         answer = await harness.backend.sessions.answer_trust(
             AnswerTrustCommand(session_id, _key("rollover-trust"))
         )
-        if answer.pressed or answer.observed is not TrustState.AWAITING:
+        if answer.observed is not TrustState.AWAITING:
             return
         assert time.monotonic() - started < _STARTUP_SECONDS, await _diagnosis(
             harness, None, session_id, "the trust question was never answered"
