@@ -40,6 +40,9 @@ def test_the_bot_composition_wires_the_pass_and_both_surfaces_get_the_book(
     try:
         assert isinstance(composition.rollover_pass, RolloverPass)
         assert isinstance(composition.boundary.backend.rollovers, RolloverBook)
+        # Failures are told through the bot, and a held notice is retried by the loop.
+        assert composition.rollover_notifier is not None
+        assert composition.rollover_notifier is composition.boundary.rollover_notifier
     finally:
         connection.close()
         ui.close()

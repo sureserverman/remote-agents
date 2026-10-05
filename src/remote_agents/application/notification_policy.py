@@ -33,6 +33,7 @@ from dataclasses import dataclass
 from datetime import datetime
 
 from remote_agents.application.schedules import FireOutcome
+from remote_agents.domain.rollover import RolloverState
 from remote_agents.ports.agent_activity import ActivityKind, AgentActivity
 
 
@@ -453,3 +454,12 @@ def schedule_told(outcome: FireOutcome) -> bool:
     # Kept as the one place a fire's worth is decided, though every outcome is told today:
     # the next outcome somebody adds is decided here, not in the sentence that words it.
     return outcome in FireOutcome
+
+
+def rollover_told(state: RolloverState) -> bool:
+    """Whether a rollover's move is worth a message: only an end that leaves the owner something
+    to do (DEC-031, DEC-115). FAILED keeps the predecessor running and holds its next handoff
+    until the owner asks; STOP_FAILED leaves two sessions running and the stop to the owner.
+    Every other move -- a COMPLETED rollover above all -- is a silent redraw of the row (DEC-090).
+    """
+    return state in (RolloverState.FAILED, RolloverState.STOP_FAILED)

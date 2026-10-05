@@ -60,6 +60,7 @@ from pathlib import Path
 
 from remote_agents.application.commands import GracefulStopCommand, LaunchCommand
 from remote_agents.application.errors import DuplicateCommandError
+from remote_agents.application.notification_policy import rollover_told
 from remote_agents.application.prompt_delivery import DeliveryVerdict, delivery_verdict
 from remote_agents.application.schedules import RETRY_SECONDS, STARTUP_PATIENCE
 from remote_agents.domain.models import ProfileId, ProjectId, SessionId, SessionRecord, SessionState
@@ -121,6 +122,14 @@ _UP = frozenset({SessionState.RUNNING, SessionState.STARTING})
 
 
 @dataclass(frozen=True, slots=True)
+class RolloverReport:
+    """An ended rollover the owner is told about, with its predecessor as last seen."""
+
+    rollover: Rollover
+    predecessor: SessionRecord | None
+
+
+@dataclass(frozen=True, slots=True)
 class _Seen:
     """One pass's view: the sessions, and where each rollable project's envelopes live."""
 
@@ -153,6 +162,7 @@ class RolloverPass:
         launch: Callable[[LaunchCommand], Awaitable[object]],
         send: Callable[[SessionId, str], Awaitable[PromptDelivery]],
         graceful_stop: Callable[[GracefulStopCommand], Awaitable[TerminalObservation]],
+        notify: Callable[[RolloverReport], Awaitable[None]] | None = None,
         now: Callable[[], datetime] = lambda: datetime.now(UTC),
         sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
     ) -> None:
@@ -166,6 +176,7 @@ class RolloverPass:
         self._launch = launch
         self._send = send
         self._graceful_stop = graceful_stop
+        self._notify = notify
         self._now = now
         self._sleep = sleep
         self._recovered = False
@@ -539,6 +550,7 @@ class RolloverPass:
             rollover.id, _S.FAILED, at=self._now(), failure_code=code, failure_detail=detail
         )
         await self._finish(ended, seen)
+        await self._tell(ended, seen)
 
     async def _stop_failed(
         self, rollover: Rollover, seen: _Seen, code: str, detail: str | None = None
@@ -547,10 +559,23 @@ class RolloverPass:
             rollover.id, _S.STOP_FAILED, at=self._now(), failure_code=code, failure_detail=detail
         )
         await self._finish(ended, seen)
+        await self._tell(ended, seen)
 
     async def _complete(self, rollover: Rollover, seen: _Seen, detail: str | None = None) -> None:
         ended = await self._store.advance(rollover.id, _S.COMPLETED, at=self._now(), detail=detail)
         await self._finish(ended, seen)
+
+    async def _tell(self, rollover: Rollover, seen: _Seen) -> None:
+        """Hand an ended rollover to the notifier, once: called at the move itself, which the
+        store makes only once. Never raises -- a notice lost is logged, never a pass lost."""
+        if self._notify is None or not rollover_told(rollover.state):
+            return
+        try:
+            await self._notify(
+                RolloverReport(rollover, seen.sessions.get(rollover.predecessor_session_id))
+            )
+        except Exception:
+            _LOG.exception("the notice for rollover %s could not be handed on", rollover.id)
 
     async def _finish(self, rollover: Rollover, seen: _Seen) -> None:
         """A terminal rollover leaves nothing behind: its envelopes, and its predecessor's

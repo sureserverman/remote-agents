@@ -12,6 +12,7 @@ from pathlib import Path
 from remote_agents.adapters.sqlite.activity_store import SQLiteActivityStore
 from remote_agents.adapters.sqlite.rollover_store import SQLiteRolloverStore
 from remote_agents.adapters.telegram.limit_reset_notifications import LimitResetNotifier
+from remote_agents.adapters.telegram.rollover_notifications import RolloverNotifier
 from remote_agents.adapters.telegram.schedule_notifications import ScheduleNotifier
 from remote_agents.adapters.telegram.service import PrivateBotBoundary
 from remote_agents.adapters.telegram.trust_notifications import TrustNotifier
@@ -23,7 +24,7 @@ from remote_agents.application.backend import CLOSE_TIMEOUT_SECONDS
 from remote_agents.application.limit_lifts import LimitLiftWatcher
 from remote_agents.application.limit_stops import LimitScreenWatcher, LimitStopClassifier
 from remote_agents.application.reconcile import ReconciliationService
-from remote_agents.application.rollover import RolloverPass
+from remote_agents.application.rollover import RolloverPass, RolloverReport
 from remote_agents.application.schedules import SchedulePass
 from remote_agents.application.services import SessionService
 from remote_agents.config import TelegramSecrets
@@ -213,6 +214,9 @@ class ServiceComposition:
     writing a row, and only this process launches, types or stops for one, so the pass's
     in-memory view and the panes it acts on never belong to two processes (DEC-030).
     """
+
+    rollover_notifier: RolloverNotifier | None = None
+    """Where the pass's failure notices go, retried each tick while one is held, or None."""
 
 
 async def _serve_with_reconciliation(
@@ -492,6 +496,11 @@ async def _roll_over_periodically(composition: ServiceComposition, interval: flo
             # One pass, logged. Each state was persisted before its action, so the next pass
             # takes up exactly where this one stopped.
             _LOG.exception("the rollover pass failed; it will be retried")
+        if composition.rollover_notifier is not None:
+            try:
+                await composition.rollover_notifier.pass_once()
+            except Exception:
+                _LOG.exception("a held rollover notice could not be resent")
 
 
 def build_rollover_pass(
@@ -502,6 +511,7 @@ def build_rollover_pass(
     enabled: Callable[[], Awaitable[bool]],
     project_paths: Mapping[ProjectId, Path],
     rollable: frozenset[ProfileId],
+    notify: Callable[[RolloverReport], Awaitable[None]] | None = None,
 ) -> RolloverPass:
     """The rollover pass `serve` runs, and only `serve` (DEC-115, DEC-015/070: built here,
     beside the loop that runs it, so no other composition has one to run).
@@ -523,6 +533,8 @@ def build_rollover_pass(
         launch=sessions.launch,
         send=terminal.send_prompt,
         graceful_stop=sessions.graceful_stop,
+        # Only failures are told (DEC-031); the notifier decides which, and words them.
+        notify=notify,
     )
 
 

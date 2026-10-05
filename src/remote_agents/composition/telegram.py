@@ -303,8 +303,14 @@ def _private_boundary(
                 enabled=backend.auto_rollover.read,
                 project_paths=projects.paths,
                 rollable=profiles_running_handoffs(),
+                notify=(
+                    None
+                    if boundary.rollover_notifier is None
+                    else boundary.rollover_notifier.notify
+                ),
             )
         ),
+        rollover_notifier=boundary.rollover_notifier,
     )
 
 
