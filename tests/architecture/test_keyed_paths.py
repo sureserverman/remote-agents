@@ -103,9 +103,11 @@ def test_every_agent_whose_stop_submits_declares_a_composer() -> None:
 #: (method, keys expression) -> how many such guarded calls, and what their check refuses.
 _GUARDED: dict[tuple[str, str], tuple[str, str, str]] = {
     ("graceful_stop", "profile.graceful_keys"): (
-        "stoppable",
+        "check",
         "unasked",
-        "a draft, shell mode, a dialog or the open Remote Control menu; a dialog between keys",
+        "the owner's stop (`stoppable`): a draft, shell mode, a dialog or the open Remote Control "
+        "menu; the rollover's (`idle`, DEC-115): anything but an idle composer; a dialog between "
+        "keys",
     ),
     ("_interrupt_running_turn", "interrupt"): (
         "running",

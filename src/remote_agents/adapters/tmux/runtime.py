@@ -582,32 +582,35 @@ class TmuxTerminal:
             # 150 ms gap is the one way in, and its `Enter` would keep the agent running.
             return not guarded or not dialog_on_screen(capture, descriptor)
 
+        title = ""
         if only_if_idle:
             if descriptor is None or descriptor.composer is None:
                 # Nothing can tell an idle composer here, so nothing licenses the stop.
                 return TerminalObservation(session_id, live=True, preserved=False, detail=NOT_IDLE)
             title = (await self._gateway.pane_title(session_id)).rstrip("\n")
 
-            def idle(capture: str) -> bool:
-                # Judged inside the hold the keys are sent under, so no turn can start between
-                # the look and the first key.
-                return self._judged(session_id, capture, descriptor, title) is PaneState.IDLE
+        def idle(capture: str) -> bool:
+            # Judged inside the hold the keys are sent under, so no turn can start between the
+            # look and the first key.
+            assert descriptor is not None
+            return self._judged(session_id, capture, descriptor, title) is PaneState.IDLE
 
+        # One send, whichever stop: the owner's takes any screen its keys cannot misfire on,
+        # the rollover's an idle composer alone.
+        check = idle if only_if_idle else stoppable
         try:
-            if only_if_idle:
-                refused = await self._gateway.send_keys_when(
-                    session_id, profile.graceful_keys, idle, between=unasked
-                )
-                if refused is not None:
-                    return TerminalObservation(
-                        session_id, live=True, preserved=False, detail=NOT_IDLE
-                    )
-            else:
-                if guarded and descriptor.composer is not None and descriptor.composer.interrupt:
-                    await self._interrupt_running_turn(session_id, descriptor)
-                refused = await self._gateway.send_keys_when(
-                    session_id, profile.graceful_keys, stoppable, between=unasked
-                )
+            if (
+                not only_if_idle
+                and guarded
+                and descriptor.composer is not None
+                and descriptor.composer.interrupt
+            ):
+                await self._interrupt_running_turn(session_id, descriptor)
+            refused = await self._gateway.send_keys_when(
+                session_id, profile.graceful_keys, check, between=unasked
+            )
+            if refused is not None and only_if_idle:
+                return TerminalObservation(session_id, live=True, preserved=False, detail=NOT_IDLE)
         except KeysInterrupted:
             # Partway: a dialog came up, and the rest was not sent. Reported as never sent, which
             # understates -- the first keys landed -- as DEC-103 records.

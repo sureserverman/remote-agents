@@ -75,3 +75,44 @@ def test_a_look_at_a_pane_that_went_away_reads_not_idle() -> None:
     pane = PromptPane([(fixtures / "idle.txt").read_text()], fail_on="capture-pane")
 
     assert asyncio.run(_composed_terminal(pane).pane_idle(pane.session_id)) is False
+
+
+def test_an_agent_that_declares_an_interrupt_is_never_interrupted_by_this_stop() -> None:
+    """Codex declares `Escape` to end a running turn, and the owner's stop presses it first.
+    The rollover's stop never does: a busy Codex pane gets no key at all."""
+    from pathlib import Path
+
+    from remote_agents.adapters.agents.registry import profile_composers
+    from remote_agents.adapters.tmux.gateway import TmuxGateway
+    from remote_agents.adapters.tmux.runtime import LaunchProfile, TmuxTerminal
+    from remote_agents.domain.models import ProfileId
+
+    from .test_send_prompt import PromptPane
+
+    busy = Path(__file__).resolve().parents[3] / "fixtures/panes/codex/busy.txt"
+    pane = PromptPane([busy.read_text(encoding="utf-8")], profile="codex", title="⠏ ⠏ | w")
+    codex = ProfileId("codex")
+    terminal = TmuxTerminal(
+        TmuxGateway("remote-agents-test-graceful", pane),
+        {},
+        {
+            codex: LaunchProfile(
+                "/usr/bin/codex",
+                ("/usr/bin/codex",),
+                {},
+                None,
+                graceful_keys=("/exit", "Enter", "Enter"),
+            )
+        },
+        startup_timeout=0.05,
+        composers=profile_composers(),
+    )
+
+    asyncio.run(terminal.graceful_stop(pane.session_id, codex))
+    assert "Escape" in pane.keys, "the owner's stop does interrupt: the test can see it"
+    pane.calls.clear()
+
+    observation = asyncio.run(terminal.graceful_stop(pane.session_id, codex, only_if_idle=True))
+
+    assert pane.keys == []
+    assert observation.detail == NOT_IDLE
