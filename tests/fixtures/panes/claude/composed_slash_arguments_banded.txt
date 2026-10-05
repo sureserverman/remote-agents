@@ -1,0 +1,24 @@
+                                    ╭──────────────────────────────────────────╮
+ ▐▛███▛█   Claude Code v2.1.289     │ planning                                 │
+▝▜██████▀  Opus 5.5 with high effort│ The plan progress band now shows above   │
+ ▝▝   ▝▝   /…/test_rollover_now_hand│ the prompt; /planning:statusline remove  │
+                                    │ takes the duplicate status-line bar out. │
+  ⎿  SessionStart:startup says: [vau╰──────────────────────────────────────────╯
+     project yet. Run `/vault-context:link` to scan your vault and surface
+     relevant pages.
+
+
+
+
+
+
+
+
+rollover-fixture ▐█████░░░░░▌ 1/2 · S1/2 ⏸ HANDOFF rule reques… [ Plan ]    [-]
+                                                              ● high · /effort
+────────────────────────────────────────────────────────────────────────────────
+❯ /planning:executing-plans --adopt-handoff h-744b1f1d36390b9f6c87
+────────────────────────────────────────────────────────────────────────────────
+  Opus 5.5 | ra-rollover-lgqup1nz@rollover-fixture | 0/1m (0%) | effort: high…
+  ⚙ rollover-fixture ▐██████████░░░░░░░░░░▌ 1/2 (50%) · S1/2 ⏸ HANDOFF rule r…
+  ⏵⏵ auto mode on (shift+tab to cycle)

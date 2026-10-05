@@ -10,12 +10,14 @@ command, a drawn menu, or a screen that is not plainly menu-free is refused as b
 
 from __future__ import annotations
 
+import re
+import time
 from pathlib import Path
 
 import pytest
 
 from remote_agents.adapters.agents.registry import profile_composers
-from remote_agents.adapters.tmux.composer import enter_refusal
+from remote_agents.adapters.tmux.composer import enter_refusal, unstyled
 from remote_agents.ports.terminal import PromptReason
 
 _FIXTURES = Path(__file__).resolve().parents[3] / "fixtures/panes/claude"
@@ -78,9 +80,100 @@ def test_a_drawn_menu_still_decides_a_command_with_arguments() -> None:
     assert enter_refusal(disagreeing, CLAUDE, "/statu now") is PromptReason.MENU
 
 
-@pytest.mark.parametrize("above", ["  ⎿  a hook said something", "  /status   a menu row"])
-def test_anything_drawn_above_the_composer_fails_closed(above: str) -> None:
-    """Not a menu this reads, and not the blank row that says there is none: refused."""
-    screen = _with_menu_row(SCREEN, above)
+def test_a_menu_row_above_the_composer_refuses() -> None:
+    screen = _with_menu_row(SCREEN, "  /status   a menu row")
 
     assert enter_refusal(screen, CLAUDE, TYPED) is PromptReason.MENU
+
+
+def test_a_menu_the_menu_pattern_cannot_read_still_refuses() -> None:
+    """A `  /` row the menu pattern does not read -- here, a row it does not recognise sits
+    between it and the composer -- is not proof there is no menu: refused, never guessed at."""
+    lines = SCREEN.splitlines()
+    rule = max(index for index, line in enumerate(lines) if line.startswith("❯")) - 1
+    lines[rule - 2 : rule] = ["  /status   a menu row", "a row the menu pattern does not read"]
+    screen = "\n".join(lines) + "\n"
+
+    assert enter_refusal(screen, CLAUDE, TYPED) is PromptReason.MENU
+
+
+@pytest.mark.parametrize(
+    "above",
+    [
+        "  ⎿  a hook said something",
+        "rollover-fixture ▐█████░░░░░▌ 1/2 · S1/2 ⏸ HANDOFF rule reques… [ Plan ]    [-]",
+        "                                                              ● high · /effort",
+    ],
+    ids=["hook-line", "planning-band", "effort-hint"],
+)
+def test_rows_that_are_not_a_menu_do_not_block_it(above: str) -> None:
+    """The property is "no menu row", not "a blank row": the planning band and the effort hint
+    sat there on the 2026-10-05 run that a blank-row rule refused."""
+    screen = _with_menu_row(SCREEN, above)
+
+    assert enter_refusal(screen, CLAUDE, TYPED) is None
+
+
+_TEMPLATE = "/planning:executing-plans --adopt-handoff h-0123456789abcdef0123"
+
+#: Every real Claude capture, with the rollover template pasted into its composer: what the
+#: guard must say. Allowed exactly where no menu is drawn and the composer holds the draft; a
+#: drawn menu refuses, and a busy, shell-mode or dialog screen refuses for its own reason.
+_SWEEP = {
+    "busy.txt": PromptReason.DRAFT_NOT_SEEN,
+    "busy_plan_status.txt": PromptReason.DRAFT_NOT_SEEN,
+    "busy_starting.txt": PromptReason.DRAFT_NOT_SEEN,
+    "busy_tool.txt": PromptReason.DRAFT_NOT_SEEN,
+    "composed.txt": None,
+    "composed_long.txt": None,
+    "composed_shell_mode.txt": PromptReason.DRAFT_NOT_SEEN,
+    "composed_slash.txt": PromptReason.MENU,
+    "composed_slash_arguments.txt": None,
+    "composed_slash_arguments_banded.txt": None,
+    "composed_styled.txt": None,
+    "dialog_after_pasted_y.txt": PromptReason.DIALOG,
+    "dialog_approval.txt": PromptReason.DIALOG,
+    "idle.txt": None,
+    "idle_after_long_turn.txt": None,
+    "idle_after_turn.txt": None,
+    "idle_manual.txt": None,
+    "idle_multiline_status.txt": None,
+    "idle_narrow.txt": None,
+    "idle_remote_control_disconnected.txt": None,
+    "idle_remote_control_enabled.txt": PromptReason.MENU,
+    "idle_suggestion.txt": None,
+}
+
+
+def _pasted(name: str) -> str:
+    lines = unstyled((_FIXTURES / name).read_text(encoding="utf-8")).splitlines()
+    composer = max(i for i, line in enumerate(lines) if line.startswith("❯"))
+    end = next(j for j in range(composer + 1, len(lines)) if re.match(r"^─{10,}", lines[j]))
+    return "\n".join([*lines[:composer], f"❯\xa0{_TEMPLATE}", *lines[end:]]) + "\n"
+
+
+def test_the_sweep_covers_every_claude_capture_with_a_composer() -> None:
+    with_composer = {
+        path.name
+        for path in _FIXTURES.glob("*.txt")
+        if any(
+            line.startswith("❯") for line in unstyled(path.read_text(encoding="utf-8")).splitlines()
+        )
+    }
+    assert with_composer == set(_SWEEP)
+
+
+@pytest.mark.parametrize("name", sorted(_SWEEP))
+def test_every_real_capture_is_judged_as_its_screen_says(name: str) -> None:
+    assert enter_refusal(_pasted(name), CLAUDE, _TEMPLATE) is _SWEEP[name]
+
+
+def test_the_menu_free_check_is_linear_in_the_screen() -> None:
+    """A long line above the composer must not make the pattern backtrack: one first draft did,
+    and hung the guarded send."""
+    screen = _with_menu_row(SCREEN, "x " * 4000 + "y")
+    started = time.monotonic()
+
+    enter_refusal(screen, CLAUDE, TYPED)
+
+    assert time.monotonic() - started < 0.5
