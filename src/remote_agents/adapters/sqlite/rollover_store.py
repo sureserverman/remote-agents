@@ -137,10 +137,17 @@ class SQLiteRolloverStore:
         failure_code: str | None = None,
         failure_detail: str | None = None,
         detail: str | None = None,
+        expected_from: RolloverState | None = None,
     ) -> Rollover:
         current = await self.get(rollover_id)
         if current is None:
             raise LookupError(f"no rollover {rollover_id}")
+        if expected_from is not None and current.state is not expected_from:
+            # Read here, and held by `_move`'s `WHERE state = ?` against a later writer: the
+            # move is from the state the caller saw, or it is not made.
+            raise IllegalRolloverMove(
+                f"expected {expected_from.value}, found {current.state.value}"
+            )
         with self._connection:
             return self._move(
                 current,

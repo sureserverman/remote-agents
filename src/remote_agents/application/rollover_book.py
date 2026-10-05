@@ -9,7 +9,7 @@ successor may already be starting, and only the pass may end the rollover then.
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from datetime import UTC, datetime
 
 from remote_agents.application.session_actions import (
@@ -22,7 +22,12 @@ from remote_agents.application.session_actions import (
 from remote_agents.domain.models import ProfileId, ProjectId, SessionId, SessionRecord
 from remote_agents.domain.rollover import RolloverState
 from remote_agents.ports.rollover_setting import RolloverSettingPort
-from remote_agents.ports.rollover_store import IllegalRolloverMove, Rollover, RolloverStore
+from remote_agents.ports.rollover_store import (
+    IllegalRolloverMove,
+    Rollover,
+    RolloverEvent,
+    RolloverStore,
+)
 
 
 class RolloverBook:
@@ -105,7 +110,12 @@ class RolloverBook:
             return False
         try:
             await self._store.advance(
-                rollover.id, RolloverState.CANCELLED, at=self._now(), detail="owner cancelled"
+                rollover.id,
+                RolloverState.CANCELLED,
+                at=self._now(),
+                detail="owner cancelled",
+                # Only the request the owner saw: one the workflow answered since is the pass's.
+                expected_from=RolloverState.REQUESTED,
             )
         except IllegalRolloverMove:
             # The pass moved it first (the `ready` arrived): the rollover is under way, and the
@@ -122,6 +132,10 @@ class RolloverBook:
 
     async def open_rollovers(self) -> tuple[Rollover, ...]:
         return await self._store.open_rollovers()
+
+    async def events(self, rollover_id: str) -> Sequence[RolloverEvent]:
+        """A rollover's history, oldest first -- a row reads its notes (`waiting:`) from it."""
+        return await self._store.events(rollover_id)
 
     async def latest_for(self, session_id: SessionId) -> Rollover | None:
         """`session_id`'s newest rollover that was not cancelled, open or ended -- what its row

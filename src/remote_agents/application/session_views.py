@@ -20,7 +20,7 @@ and the Textual side still hands its rows to a widget.
 
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta, tzinfo
 from enum import Enum
@@ -47,7 +47,7 @@ from remote_agents.ports.agent_usage import (
     LimitsNote,
     UsageWindow,
 )
-from remote_agents.ports.rollover_store import Rollover
+from remote_agents.ports.rollover_store import Rollover, RolloverEvent
 from remote_agents.ports.schedules import Once, Repeat, Schedule, When
 
 
@@ -201,6 +201,8 @@ class RolloverMark:
     state: RolloverState | None = None
     continued_from: Lineage | None = None
     continued_as: Lineage | None = None
+    waiting: bool = False
+    """A REQUESTED rollover held back behind another session's request in its checkout."""
 
 
 _ROLLOVER_NOTES: dict[RolloverState, str | None] = {
@@ -222,11 +224,16 @@ _ROLLOVER_NOTES: dict[RolloverState, str | None] = {
 """Every state decided (brief §31), a line or a deliberate None, indexed rather than `.get`-ed
 so a state added without a decision raises on the first row that carries it."""
 
+_WAITING_NOTE = "rollover pending · waiting for another session's request"
+"""REQUESTED, held back: the checkout's one `request.json` is another session's until it ends."""
+
 
 def rollover_note(mark: RolloverMark) -> str | None:
     """`state line[ · continued from #N][ · continued as #N]`, or None for nothing to say."""
     pieces = []
-    if mark.state is not None and (line := _ROLLOVER_NOTES[mark.state]) is not None:
+    if mark.state is RolloverState.REQUESTED and mark.waiting:
+        pieces.append(_WAITING_NOTE)
+    elif mark.state is not None and (line := _ROLLOVER_NOTES[mark.state]) is not None:
         pieces.append(line)
     if mark.continued_from is not None:
         number = mark.continued_from.sequence
@@ -249,6 +256,8 @@ class _RolloverReads(Protocol):
     async def continued_from(self, session_id: SessionId) -> SessionId | None: ...
 
     async def continued_as(self, session_id: SessionId) -> SessionId | None: ...
+
+    async def events(self, rollover_id: str) -> Sequence[RolloverEvent]: ...
 
 
 class _SessionLister(Protocol):
@@ -279,12 +288,21 @@ async def rollover_marks(
     listed = tuple(records)
     sequences = {record.session_id: record.display.sequence for record in listed}
     found: dict[str, tuple[RolloverState | None, SessionId | None, SessionId | None]] = {}
+    waiting: set[str] = set()
     for record in listed:
         latest = await book.latest_for(record.session_id)
         state = latest.state if latest is not None else None
         if state is not None and state in TERMINAL and state not in _REPORTED_ENDS:
             # COMPLETED: its lineage says it. CANCELLED never comes back from `latest_for`.
             state = None
+        if state in _REPORTED_ENDS and record.state is not SessionState.RUNNING:
+            # "predecessor preserved" and "use force stop" are about a running session; once it
+            # has stopped since, either line would say something no longer true.
+            state = None
+        if state is RolloverState.REQUESTED and latest is not None:
+            details = [event.detail or "" for event in await book.events(latest.id)]
+            if any(d.startswith("waiting:") for d in details) and "request written" not in details:
+                waiting.add(str(record.session_id))
         before = await book.continued_from(record.session_id)
         after = await book.continued_as(record.session_id)
         if state is not None or before is not None or after is not None:
@@ -305,7 +323,7 @@ async def rollover_marks(
         return None if other is None else Lineage(sequences.get(other))
 
     return {
-        key: RolloverMark(state, lineage(before), lineage(after))
+        key: RolloverMark(state, lineage(before), lineage(after), waiting=key in waiting)
         for key, (state, before, after) in found.items()
     }
 

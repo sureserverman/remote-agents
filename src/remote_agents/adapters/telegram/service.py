@@ -2462,10 +2462,15 @@ class PrivateBotBoundary:
         shown = records[start : start + self.session_page_size]
         sections: list[str] = []
         pickers: list[Button] = []
-        # Through the one backend, as the local surface reads it (DEC-046, DEC-091).
-        rollovers = await rollover_marks(
-            self.backend.rollovers, shown, sessions=self.backend.sessions
-        )
+        # Through the one backend, as the local surface reads it (DEC-046, DEC-091), and as
+        # total as it is there: a rollover read that fails costs the notes, never the list.
+        try:
+            rollovers = await rollover_marks(
+                self.backend.rollovers, shown, sessions=self.backend.sessions
+            )
+        except Exception:
+            _LOG.debug("the session rollover marks could not be read", exc_info=True)
+            rollovers = {}
         for group in StateGroup:
             members = [record for record in shown if session_row_parts(record).group is group]
             if not members:

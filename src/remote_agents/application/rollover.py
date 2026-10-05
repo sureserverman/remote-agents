@@ -127,6 +127,8 @@ class RolloverReport:
 
     rollover: Rollover
     predecessor: SessionRecord | None
+    successor: SessionRecord | None = None
+    """The successor as last seen, when one was launched -- a FAILED rollover leaves it running."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -549,8 +551,10 @@ class RolloverPass:
         ended = await self._store.advance(
             rollover.id, _S.FAILED, at=self._now(), failure_code=code, failure_detail=detail
         )
-        await self._finish(ended, seen)
+        # Told before the clean-up, which touches the filesystem and may raise: the move is
+        # made once, so a notice skipped here would never be made again.
         await self._tell(ended, seen)
+        await self._finish(ended, seen)
 
     async def _stop_failed(
         self, rollover: Rollover, seen: _Seen, code: str, detail: str | None = None
@@ -558,8 +562,10 @@ class RolloverPass:
         ended = await self._store.advance(
             rollover.id, _S.STOP_FAILED, at=self._now(), failure_code=code, failure_detail=detail
         )
-        await self._finish(ended, seen)
+        # Told before the clean-up, which touches the filesystem and may raise: the move is
+        # made once, so a notice skipped here would never be made again.
         await self._tell(ended, seen)
+        await self._finish(ended, seen)
 
     async def _complete(self, rollover: Rollover, seen: _Seen, detail: str | None = None) -> None:
         ended = await self._store.advance(rollover.id, _S.COMPLETED, at=self._now(), detail=detail)
@@ -571,8 +577,13 @@ class RolloverPass:
         if self._notify is None or not rollover_told(rollover.state):
             return
         try:
+            successor = rollover.successor_session_id
             await self._notify(
-                RolloverReport(rollover, seen.sessions.get(rollover.predecessor_session_id))
+                RolloverReport(
+                    rollover,
+                    seen.sessions.get(rollover.predecessor_session_id),
+                    None if successor is None else seen.sessions.get(successor),
+                )
             )
         except Exception:
             _LOG.exception("the notice for rollover %s could not be handed on", rollover.id)

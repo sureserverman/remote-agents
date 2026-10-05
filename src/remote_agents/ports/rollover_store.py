@@ -102,8 +102,13 @@ class RolloverStore(Protocol):
         failure_code: str | None = None,
         failure_detail: str | None = None,
         detail: str | None = None,
+        expected_from: RolloverState | None = None,
     ) -> Rollover:
         """Move a rollover by the domain matrix and append the move to its history.
+
+        `expected_from` makes the move conditional on the state the caller read: a row moved
+        since by another writer -- the pass in `serve`, while a surface acts -- is refused with
+        `IllegalRolloverMove` rather than moved from wherever it now stands.
 
         A successor id, once recorded, is kept by later moves that pass None and never replaced.
         From ADOPTING on a successor must be recorded, and it is never the predecessor. Raises

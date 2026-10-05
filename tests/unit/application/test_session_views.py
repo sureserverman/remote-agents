@@ -1384,3 +1384,45 @@ def test_pace_expected_is_clamped_to_0_100() -> None:
     already_reset = _paced("week", 99.0, -timedelta(hours=1))
     assert too_far.expected_percent == 0
     assert already_reset.expected_percent == 100
+
+
+@pytest.mark.parametrize("ending", [RolloverState.FAILED, RolloverState.STOP_FAILED])
+@pytest.mark.parametrize("now", [SessionState.PRESERVED, SessionState.FAILED])
+async def test_a_failure_line_is_shown_only_while_its_session_runs(
+    rollover_store: SQLiteRolloverStore, ending: RolloverState, now: SessionState
+) -> None:
+    """ "stop failed · use force stop" over a session already stopped would be false, and so
+    would "predecessor preserved" over one that ended since."""
+    predecessor, successor = _numbered(1), _numbered(2)
+    await _roll(rollover_store, predecessor, successor, ending)
+    stopped = _numbered(1, now)
+
+    marks = await rollover_marks(RolloverBook(rollover_store), (stopped, successor))
+
+    assert _notes((stopped,), marks) == {1: None}
+
+
+async def test_a_request_waiting_behind_another_says_so(
+    rollover_store: SQLiteRolloverStore,
+) -> None:
+    first, second = _numbered(1), _numbered(2)
+    await rollover_store.request(
+        first.session_id, project_id=ProjectId("demo"), profile_id=ProfileId("claude"), at=_ROLL_AT
+    )
+    waiting = await rollover_store.request(
+        second.session_id,
+        project_id=ProjectId("demo"),
+        profile_id=ProfileId("claude"),
+        at=_ROLL_AT + timedelta(seconds=1),
+    )
+    assert waiting is not None
+    await rollover_store.note(
+        waiting.id, f"waiting: {first.session_id}'s request holds this checkout", at=_ROLL_AT
+    )
+
+    marks = await rollover_marks(RolloverBook(rollover_store), (first, second))
+
+    assert _notes((first, second), marks) == {
+        1: "rollover pending · waiting for workflow boundary",
+        2: "rollover pending · waiting for another session's request",
+    }

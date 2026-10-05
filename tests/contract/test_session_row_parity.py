@@ -303,3 +303,33 @@ async def test_without_a_rollover_book_neither_surface_draws_a_rollover_note() -
 
     for note in _EXPECTED_NOTES.values():
         assert note not in html.unescape(reply.text)
+
+
+class _BrokenBook:
+    """A rollover book whose every read fails, as a locked or corrupt store's would."""
+
+    async def latest_for(self, session_id):
+        raise RuntimeError("database is locked")
+
+    async def continued_from(self, session_id):
+        raise RuntimeError("database is locked")
+
+    async def continued_as(self, session_id):
+        raise RuntimeError("database is locked")
+
+    async def events(self, rollover_id):
+        raise RuntimeError("database is locked")
+
+    async def offered(self, record, switch):
+        raise RuntimeError("database is locked")
+
+
+async def test_a_rollover_read_that_fails_costs_both_surfaces_the_notes_never_the_list() -> None:
+    book = _BrokenBook()
+
+    bot = await _bot_notes(book)  # type: ignore[arg-type]
+    tui = await _tui_rows(book)  # type: ignore[arg-type]
+
+    assert set(bot) == set(tui) == set(_EXPECTED_NOTES), "every row still listed on both"
+    for sequence, note in _EXPECTED_NOTES.items():
+        assert note not in bot[sequence] and note not in tui[sequence]

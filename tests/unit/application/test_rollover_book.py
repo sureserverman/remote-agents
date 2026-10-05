@@ -87,3 +87,25 @@ async def test_lineage_reads_through_to_completed_rollovers(store: SQLiteRollove
 
     assert await book.continued_as(predecessor) == successor
     assert await book.continued_from(successor) == predecessor
+
+
+async def test_a_cancel_that_loses_the_race_to_the_workflow_withdraws_nothing(
+    store: SQLiteRolloverStore,
+) -> None:
+    """The book read REQUESTED; before its write, the pass (another process) answered it."""
+    book, session = _book(store), SessionId.new()
+    requested = await book.request(session, project_id=PROJECT, profile_id=CLAUDE)
+    assert requested is not None
+    real_open_for = book.open_for
+
+    async def read_then_lose_the_race(session_id: SessionId):
+        seen = await real_open_for(session_id)
+        await store.open_for_ready(
+            session, HANDOFF, project_id=PROJECT, profile_id=CLAUDE, plan=None, at=NOW
+        )
+        return seen
+
+    book.open_for = read_then_lose_the_race  # type: ignore[method-assign]
+
+    assert await book.cancel(session) is False
+    assert (await store.get(requested.id)).state is RolloverState.HANDOFF_READY

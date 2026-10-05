@@ -1,8 +1,14 @@
 """The one message a failed rollover sends: which session, why in words, and that it was kept.
 
-`Rollover failed: claude in remote-agents #3 — its successor did not accept within 30 minutes;
-predecessor preserved` -- or, for a stop that did not go through, that both sessions are running
-and the stop is the owner's to finish (force stop stays theirs, DEC-007). Only these two ends
+`Rollover failed: claude in remote-agents #3 — the successor did not take over within 30 minutes;
+predecessor preserved` -- naming a successor left open where the failure left one, and, for a
+stop that did not go through, that the successor has taken over and the stop is the owner's to
+finish (force stop stays theirs, DEC-007). "Preserved" is said only where it is known.
+
+**At most once, never twice.** The pass tells at the terminal move, which the store makes once,
+and the queue is in memory: a `serve` restart while a refused notice is held drops it, with no
+journal line. The row's note ("rollover failed · predecessor preserved") is the standing
+record. Only these two ends
 are told (`notification_policy.rollover_told`, DEC-031): every other move, a completed rollover
 above all, is the row's redraw (DEC-090).
 
@@ -60,6 +66,39 @@ _WHY = {
     "request-lost": "the request was gone before the workflow answered it",
 }
 
+#: Why the stop of a rollover's predecessor did not go through. No duration: the not-idle
+#: refusal may be an instant one, judged under the stop's own key lock.
+_WHY_STOP = {
+    "predecessor-not-idle": "it was not idle when the stop was due",
+    "not_idle": "it was not idle when the stop was due",
+    "stop-unconfirmed": "the stop could not be confirmed; check the session",
+    "graceful_timeout": "it did not exit in time",
+    "composer_holds_text": "its input held text",
+    "keys_busy": "something else was typing into it",
+    "agent_asking": "it was asking a question",
+    "unknown_session": "its pane could not be found",
+}
+
+#: FAILED codes that end with the predecessor no longer running: "preserved" would be false.
+_PREDECESSOR_NOT_KEPT = frozenset({"predecessor-gone"})
+
+#: FAILED codes that end with the launched successor still open, so the owner may want it gone.
+_SUCCESSOR_LEFT_OPEN = frozenset(
+    {
+        "not-typed",
+        "successor-untrusted",
+        "adoption-timeout",
+        "id-mismatch",
+        "no-ready",
+        "cwd-mismatch",
+        "branch-mismatch",
+        "plan-missing",
+    }
+)
+
+#: STOP_FAILED codes where the stop may have landed: the predecessor's fate is not known.
+_STOP_MAY_HAVE_LANDED = frozenset({"stop-unconfirmed", "unknown_session"})
+
 
 def rollover_message(report: RolloverReport, *, project_name: str) -> str:
     """The sentence for one ended rollover, or nothing for an end the policy does not tell."""
@@ -71,19 +110,22 @@ def rollover_message(report: RolloverReport, *, project_name: str) -> str:
         session = f"{session} #{report.predecessor.display.sequence}"
     code = rollover.failure_code or ""
     if rollover.state is RolloverState.STOP_FAILED:
-        why = (
-            f"it was not idle for {_MINUTES_IDLE} minutes"
-            if code == "predecessor-not-idle"
-            else escape(code or "the stop was not confirmed")
-        )
+        why = _WHY_STOP.get(code, escape(code) or "the stop was not confirmed")
+        kept = "" if code in _STOP_MAY_HAVE_LANDED else "; predecessor preserved"
         return (
-            f"Rollover stop failed: {session} — {why}; predecessor preserved. Its successor "
-            "has taken over, so both are running: stop it when it is done, or force stop it"
+            f"Rollover stop failed: {session} — {why}{kept}. Its successor has taken over: "
+            "stop this session when it is done, or force stop it"
         )
     why = _WHY.get(code, escape(code) or "it did not complete")
     if code == "not-typed" and rollover.failure_detail:
         why = f"{why} ({escape(rollover.failure_detail)})"
-    return f"Rollover failed: {session} — {why}; predecessor preserved"
+    text = f"Rollover failed: {session} — {why}"
+    if code not in _PREDECESSOR_NOT_KEPT:
+        text = f"{text}; predecessor preserved"
+    if code in _SUCCESSOR_LEFT_OPEN:
+        number = "" if report.successor is None else f" #{report.successor.display.sequence}"
+        text = f"{text}. Its successor{number} is still open: stop it if it is not needed"
+    return text
 
 
 @dataclass

@@ -75,6 +75,7 @@ class Envelopes:
     requests: list[str] = field(default_factory=list)
     request: str | None = None
     discarded: list[str] = field(default_factory=list)
+    discard_error: bool = False
 
     def events(self, project_dir: Path) -> tuple[HandoffEnvelope, ...]:
         assert project_dir == ROOT
@@ -96,6 +97,8 @@ class Envelopes:
         return self.request
 
     def discard(self, project_dir: Path, handoff_id: str) -> None:
+        if self.discard_error:
+            raise OSError("the handoff directory went read-only")
         self.discarded.append(handoff_id)
         self.files = [e for e in self.files if e.handoff_id != handoff_id]
 
@@ -126,6 +129,7 @@ class Rig:
     clock: list[datetime] = field(default_factory=lambda: [NOW])
     out_of_order: list[str] = field(default_factory=list)
     idle_raises: bool = False
+    reports: list = field(default_factory=list)
     _pass: RolloverPass | None = None
     """Each action taken before the state licensing it was persisted; must stay empty."""
 
@@ -188,6 +192,9 @@ class Rig:
         self.sessions[command.session_id] = _record(command.session_id, SessionState.ENDED)
         return TerminalObservation(command.session_id, False, True)
 
+    async def told(self, report) -> None:
+        self.reports.append(report)
+
     async def sleep(self, seconds: float) -> None:
         self.clock[0] += timedelta(seconds=seconds)
         await asyncio.sleep(0)
@@ -214,6 +221,7 @@ class Rig:
             launch=self.launch,
             send=self.send,
             graceful_stop=self.graceful_stop,
+            notify=self.told,
             now=lambda: self.clock[0],
             sleep=self.sleep,
         )
@@ -799,3 +807,15 @@ async def test_unreadable_envelopes_do_not_hold_back_an_accepted_rollovers_stop(
     assert len(rig.stops) == 1
     assert (await rig.rollover()).state is RolloverState.COMPLETED
     assert rig.sessions[successor].state is SessionState.RUNNING
+
+
+async def test_a_failure_is_told_even_when_its_clean_up_raises(rig: Rig) -> None:
+    """The move is made once, so a notice skipped behind a failed clean-up is never made."""
+    rig.deliveries = [PromptDelivery(PromptOutcome.REFUSED, PromptReason.DIALOG)]
+    rig.envelopes.discard_error = True
+    rig.ready()
+
+    await rig.run(passes=2)
+
+    assert (await rig.rollover()).state is RolloverState.FAILED
+    assert [report.rollover.failure_code for report in rig.reports] == ["not-typed"]
