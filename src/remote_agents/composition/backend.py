@@ -42,6 +42,7 @@ from remote_agents.composition.limits_source import (
     ConfigCursorLimitsSource,
     ConfigLimitsSource,
     ConfigResumeSetting,
+    ConfigRolloverSetting,
 )
 from remote_agents.config import read_claude_limits_source, read_cursor_limits_source
 from remote_agents.domain.models import ProjectId, SessionId
@@ -352,6 +353,7 @@ def compose_backend(
         claude_limits_source=ConfigLimitsSource(config.path or paths.config_path),
         cursor_limits_source=ConfigCursorLimitsSource(config.path or paths.config_path),
         resume_after_limit=ConfigResumeSetting(config.path or paths.config_path),
+        auto_rollover=ConfigRolloverSetting(config.path or paths.config_path),
         projects=_project_creator(config),
         conversations=_conversation_service(projects.paths, descriptors),
         catalogue=catalogue,

@@ -2125,7 +2125,8 @@ behind. **Rolling back below 0.55.0: delete `cursor_limits_source` and `resume_a
 from the `[limits]` table of `config.toml` first.** Either Settings switch writes its key there
 the first time it is used, and an older version refuses a config with a key it does not know,
 so `serve`, `tui` and `add-project` would all fail to start. A host that never touched either
-switch has neither key and needs nothing. The database needs nothing either: an older version
+switch has neither key and needs nothing. **Rolling back to 0.58.0 or earlier: delete the `[rollover]`
+table first**, for the same reason. The auto-rollover Settings switch adds it on first use. The database needs nothing either: an older version
 opens it, and its `doctor` reports `database_ready` false, as after any release that migrated.
 Do not remove a
 managed tmux session until its ownership and output have been inspected.

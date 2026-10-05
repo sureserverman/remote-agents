@@ -243,6 +243,15 @@ class Backend:
     unavailable from `is None` (DEC-061/067). Typed `object` for the reason `sessions` is.
     """
 
+    auto_rollover: object | None = None
+    """Whether a session is rolled over when its workflow hands off, a `ports.rollover_setting`.
+
+    `resume_after_limit`'s sibling: a switch in the operator's `config.toml` that decides what
+    this service does, off by default (DEC-115). The rollover pass reads it on every run.
+    Optional for the same reason, and its absence renders unavailable from `is None`
+    (DEC-061/067). Typed `object` for the reason `sessions` is.
+    """
+
     state_events: object | None = None
     """The store-change source (`application.store_watch.StoreWatch`), a `ports.state_events`.
 

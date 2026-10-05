@@ -35,9 +35,11 @@ from pathlib import Path
 
 from remote_agents.config import (
     ConfigError,
+    read_auto_rollover,
     read_claude_limits_source,
     read_cursor_limits_source,
     read_resume_after_limit,
+    write_config_key,
     write_limits_key,
 )
 
@@ -139,3 +141,31 @@ class ConfigResumeSetting:
             _LOG.warning("the resume switch could not be written to %s: %s", self._path, error)
         except Exception:
             _LOG.debug("the resume switch could not be written", exc_info=True)
+
+
+class ConfigRolloverSetting:
+    """`ports.rollover_setting.RolloverSettingPort` over the operator's `config.toml`.
+
+    `ConfigResumeSetting`'s twin for `rollover.auto_rollover`, in this module for its reason,
+    and through the same one writer. Read afresh on every call: it is the Settings rows' read
+    and the rollover pass's, which asks it on every run. Off is both the default and the answer
+    to every doubt, so one read serves both.
+    """
+
+    _TABLE = "rollover"
+    _KEY = "auto_rollover"
+
+    def __init__(self, path: Path) -> None:
+        self._path = path
+
+    async def read(self) -> bool:
+        return await asyncio.to_thread(read_auto_rollover, self._path)
+
+    async def write(self, value: bool) -> None:
+        """Record the choice, or log why it could not be recorded. Never raises."""
+        try:
+            await asyncio.to_thread(write_config_key, self._path, self._TABLE, self._KEY, value)
+        except ConfigError as error:
+            _LOG.warning("the rollover switch could not be written to %s: %s", self._path, error)
+        except Exception:
+            _LOG.debug("the rollover switch could not be written", exc_info=True)

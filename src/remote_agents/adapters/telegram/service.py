@@ -115,6 +115,7 @@ from remote_agents.application.remote_control_default import (
 )
 from remote_agents.application.resume_flow import RESUME_PAGE_SIZE, resume_capable
 from remote_agents.application.resume_setting import RESUME_LABELS, RESUME_TITLE
+from remote_agents.application.rollover_setting import ROLLOVER_LABELS, ROLLOVER_TITLE
 from remote_agents.application.schedule_book import ScheduleRefusal, ScheduleRefused
 from remote_agents.application.schedule_times import (
     REPEATS,
@@ -1504,6 +1505,7 @@ class PrivateBotBoundary:
             or self.backend.claude_limits_source is not None
             or self.backend.cursor_limits_source is not None
             or self.backend.resume_after_limit is not None
+            or self.backend.auto_rollover is not None
         ):
             # Conditional on a row being wired, unlike the `/settings` menu entry, and the two
             # rules are different on purpose: the menu is a door that always has something
@@ -1807,6 +1809,8 @@ class PrivateBotBoundary:
             return await self._settings_limits_source_reply(token, message_id)
         if action == "settings.resume_after_limit":
             return await self._settings_resume_reply(token, message_id)
+        if action == "settings.auto_rollover":
+            return await self._settings_rollover_reply(token, message_id)
         # Cursor's switch has three: the question, the write, and the way back from the
         # question. The write carries its direction, so a stale button never toggles.
         if action == "settings.cursor_limits.ask":
@@ -3313,6 +3317,7 @@ class PrivateBotBoundary:
         limits_source: str | None = None,
         resume: bool | None = None,
         cursor_limits: str | None = None,
+        rollover: bool | None = None,
     ) -> RenderedMessage:
         """The rows about this machine, each reading its own source.
 
@@ -3461,6 +3466,21 @@ class PrivateBotBoundary:
                     ),
                 )
             )
+        rollover_switch = self.backend.auto_rollover
+        if rollover_switch is None:
+            lines += ["", f"{escape(ROLLOVER_TITLE)} is unavailable."]
+        else:
+            # The caller's read-back where it has one, for the limits-source row's reason.
+            chosen_rollover = await rollover_switch.read() if rollover is None else rollover
+            rows.append(
+                (
+                    Button(
+                        f"{_LIMITS_EMOJI} {ROLLOVER_TITLE}: {ROLLOVER_LABELS[chosen_rollover]}",
+                        # `mutation=True`: a redelivered callback must not flip it back.
+                        self._callback("settings.auto_rollover", "service", mutation=True),
+                    ),
+                )
+            )
         return self._message(
             "\n".join(lines),
             tuple(rows),
@@ -3599,6 +3619,36 @@ class PrivateBotBoundary:
             self._message(
                 f"{escape(RESUME_TITLE)} could not be changed; it is still "
                 f"<code>{escape(RESUME_LABELS[landed])}</code>.",
+                screen.keyboard,
+            )
+        )
+
+    async def _settings_rollover_reply(self, token: str, message_id: int) -> dict[str, object]:
+        """Flip the auto-rollover switch by one press, then draw what the file says.
+
+        `_settings_resume_reply`'s shape: flip from a fresh read, write, and detect a refused
+        write by the read-back.
+        """
+        switch = self.backend.auto_rollover
+        if switch is None:
+            return _reply_arguments(self._message(f"{escape(ROLLOVER_TITLE)} is unavailable."))
+        if not self.callbacks.claim_mutation(
+            token,
+            owner_id=self.owner_user_id,
+            chat_id=self.owner_chat_id,
+            message_id=message_id,
+        ):
+            return _reply_arguments(self._message("That action has already run."))
+        intended = not await switch.read()
+        await switch.write(intended)
+        landed = await switch.read()
+        screen = await self._settings_screen(rollover=landed)
+        if landed == intended:
+            return _reply_arguments(screen)
+        return _reply_arguments(
+            self._message(
+                f"{escape(ROLLOVER_TITLE)} could not be changed; it is still "
+                f"<code>{escape(ROLLOVER_LABELS[landed])}</code>.",
                 screen.keyboard,
             )
         )

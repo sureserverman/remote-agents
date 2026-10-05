@@ -533,10 +533,13 @@ def test_the_backend_capability_set_is_read_from_the_dataclass() -> None:
     **Nineteen since `schedules` joined them** (scheduled sessions, 2026-10-02): both surfaces
     list and manage schedules, and a host that wired no schedule book offers no Schedules entry
     -- read from a field that is `None`, never discovered by probing for an `add`.
+
+    **Twenty since `auto_rollover` joined them** (workflow-rollover sub-plan 02, 2026-10-05),
+    for `resume_after_limit`'s reason: both surfaces draw a Settings row for it.
     """
     fields = _backend_fields()
-    assert len(fields) == 19, (
-        f"`Backend` now declares {len(fields)} fields, not 19. That is fine — but it widens "
+    assert len(fields) == 20, (
+        f"`Backend` now declares {len(fields)} fields, not 20. That is fine — but it widens "
         "what Rule 2 forbids probing for, so confirm the new field is a capability an adapter "
         "should read as a declared field rather than discover."
     )

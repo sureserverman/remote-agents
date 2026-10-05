@@ -266,3 +266,31 @@ async def test_the_owner_switches_resume_after_limit_off_and_back_on_through_the
     await boundary.callback(chat.press(_row(chat.messages[anchor], RESUME_TITLE)), None)
     assert read_resume_after_limit(config) is True
     assert len(chat.bot_messages) == 1, chat.transcript()
+
+
+async def test_the_owner_switches_auto_rollover_on_and_back_off_through_the_chat(
+    tmp_path,
+) -> None:
+    """Through the real config writer: the press lands in `config.toml`, not in a fake."""
+    from remote_agents.application.rollover_setting import ROLLOVER_LABELS, ROLLOVER_TITLE
+    from remote_agents.composition.limits_source import ConfigRolloverSetting
+    from remote_agents.config import read_auto_rollover
+
+    config = tmp_path / "config.toml"
+    config.write_text('[paths]\ndev_root = "/tmp"\n\n[limits]\nmax_label_length = 40\n')
+    boundary = _boundary(None, None)
+    boundary.backend = replace(boundary.backend, auto_rollover=ConfigRolloverSetting(config))
+    chat = FakeChat()
+
+    await boundary.settings_command(chat.message_update("/settings"), None)
+    anchor = chat.bot_messages[0].message_id
+    assert f"{ROLLOVER_TITLE}: {ROLLOVER_LABELS[False]}" in _labels(chat.messages[anchor])
+
+    await boundary.callback(chat.press(_row(chat.messages[anchor], ROLLOVER_TITLE)), None)
+    assert read_auto_rollover(config) is True
+    assert "[rollover]" in config.read_text(encoding="utf-8")
+    assert f"{ROLLOVER_TITLE}: {ROLLOVER_LABELS[True]}" in _labels(chat.messages[anchor])
+
+    await boundary.callback(chat.press(_row(chat.messages[anchor], ROLLOVER_TITLE)), None)
+    assert read_auto_rollover(config) is False
+    assert len(chat.bot_messages) == 1, chat.transcript()
