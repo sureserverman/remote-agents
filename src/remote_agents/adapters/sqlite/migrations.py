@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import sqlite3
-from collections.abc import Iterable
+from collections.abc import Iterable, Iterator
 
 MIGRATIONS: tuple[tuple[int, str], ...] = (
     (
@@ -336,6 +336,48 @@ MIGRATIONS: tuple[tuple[int, str], ...] = (
         CREATE INDEX schedules_due ON schedules(paused, next_fire_at);
         """,
     ),
+    (
+        18,
+        # Workflow rollover (DEC-115). Its own tables, never fields on `sessions`: lineage is
+        # derived from COMPLETED rows. The partial index is "at most one open rollover per
+        # predecessor"; its literals are the domain's TERMINAL values, pinned by a test.
+        """
+        CREATE TABLE rollovers (
+            rollover_id TEXT PRIMARY KEY,
+            handoff_id TEXT UNIQUE,
+            predecessor_session_id TEXT NOT NULL,
+            successor_session_id TEXT,
+            project_id TEXT NOT NULL,
+            profile_id TEXT NOT NULL,
+            reason TEXT NOT NULL,
+            plan TEXT,
+            state TEXT NOT NULL,
+            failure_code TEXT,
+            failure_detail TEXT,
+            requested_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+        CREATE UNIQUE INDEX rollovers_one_open ON rollovers(predecessor_session_id)
+            WHERE state NOT IN ('completed', 'failed', 'stop_failed', 'cancelled');
+        CREATE INDEX rollovers_successor ON rollovers(successor_session_id);
+        CREATE TABLE rollover_events (
+            event_id INTEGER PRIMARY KEY,
+            rollover_id TEXT NOT NULL REFERENCES rollovers(rollover_id),
+            from_state TEXT,
+            to_state TEXT NOT NULL,
+            detail TEXT,
+            created_at TEXT NOT NULL
+        );
+        CREATE TRIGGER rollover_events_no_update BEFORE UPDATE ON rollover_events
+        BEGIN
+            SELECT RAISE(ABORT, 'rollover_events is append-only');
+        END;
+        CREATE TRIGGER rollover_events_no_delete BEFORE DELETE ON rollover_events
+        BEGIN
+            SELECT RAISE(ABORT, 'rollover_events is append-only');
+        END;
+        """,
+    ),
 )
 """Migration 14 takes the surface's bookkeeping out of the watched store.
 
@@ -496,7 +538,7 @@ def apply_migrations(
             raise ValueError("migrations must be contiguous and monotonic")
         try:
             connection.execute("BEGIN")
-            for statement in (part.strip() for part in sql.split(";") if part.strip()):
+            for statement in _statements(sql):
                 connection.execute(statement)
             connection.execute("UPDATE schema_version SET version = ?", (target,))
             connection.commit()
@@ -504,3 +546,17 @@ def apply_migrations(
             connection.rollback()
             raise
         version = target
+
+
+def _statements(sql: str) -> Iterator[str]:
+    """Split a migration into whole statements. A bare split on `;` would cut a trigger body
+    (`BEGIN ...; END`) in two, so pieces are joined until SQLite calls the text complete."""
+    pending = ""
+    for piece in sql.split(";"):
+        pending += piece + ";"
+        if sqlite3.complete_statement(pending):
+            if pending.strip(" \t\n;"):
+                yield pending.strip()
+            pending = ""
+    if pending.strip(" \t\n;"):
+        raise ValueError("a migration ends inside an incomplete statement")
