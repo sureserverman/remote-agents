@@ -46,10 +46,13 @@ class Rollover:
 
 @dataclass(frozen=True, slots=True)
 class RolloverEvent:
-    """One row of a rollover's history. `from_state` is None on the row that created it."""
+    """One row of a rollover's history. `from_state` is None on the row that created it, and
+    equals `to_state` on a row that recorded something without a move (the successor)."""
 
     from_state: RolloverState | None
     to_state: RolloverState
+    failure_code: str | None
+    """The move's own cause, kept on the history row too, so the audit names it (DEC-022)."""
     detail: str | None
     created_at: datetime
 
@@ -70,9 +73,11 @@ class RolloverStore(Protocol):
         """Open a HANDOFF_READY rollover for a `ready` envelope.
 
         Idempotent on `handoff_id`: a handoff already seen returns its row as it stands, in any
-        state, so one envelope read on every pass opens one rollover. A REQUESTED row for this
-        predecessor is advanced instead of opening another. None when the predecessor already
-        has a different open rollover.
+        state, so one envelope read on every pass opens one rollover -- but only to the
+        predecessor and project it was opened for; any other caller gets None. A REQUESTED row
+        for this predecessor is advanced instead of opening another. None when the predecessor
+        already has a different open rollover, and None when its latest rollover FAILED or
+        STOP_FAILED and the owner has not asked again: then a `ready` waits for the owner.
         """
         ...
 
@@ -100,8 +105,19 @@ class RolloverStore(Protocol):
     ) -> Rollover:
         """Move a rollover by the domain matrix and append the move to its history.
 
-        A successor id, once recorded, is kept by later moves that pass None. Raises
-        `IllegalRolloverMove` for a move the matrix refuses and `LookupError` for no such row.
+        A successor id, once recorded, is kept by later moves that pass None and never replaced.
+        From ADOPTING on a successor must be recorded, and it is never the predecessor. Raises
+        `IllegalRolloverMove` for a move these rules or the matrix refuse, and `LookupError`
+        for no such row.
+        """
+        ...
+
+    async def record_successor(
+        self, rollover_id: str, successor: SessionId, *, at: datetime
+    ) -> Rollover:
+        """Record the session a launch just started, while SUCCESSOR_STARTING, as its own
+        history row. The launch mints the id, so it is known only after the state that licensed
+        the launch is persisted. Idempotent for the same id; any other is `IllegalRolloverMove`.
         """
         ...
 

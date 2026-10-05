@@ -117,7 +117,9 @@ def test_migrating_a_current_store_adds_the_table_and_keeps_every_other_row(
     tmp_path: Path,
 ) -> None:
     path = tmp_path / "sessions.sqlite3"
-    before = open_database(path, migrations=MIGRATIONS[:-1])
+    # By version, not by position: `MIGRATIONS[:-1]` stopped meaning "before schedules" when
+    # migration 18 was appended, as test_limit_hit_storage records for its own columns.
+    before = open_database(path, migrations=tuple(m for m in MIGRATIONS if m[0] < 17))
     before.execute(
         "INSERT INTO sessions(session_id, project_id, profile_id, display_identity, state,"
         " created_at) VALUES ('s1', 'p', 'claude', '{}', 'running', '2026-10-01T00:00:00+00:00')"

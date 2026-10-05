@@ -5,21 +5,28 @@ from __future__ import annotations
 
 import re
 import sqlite3
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
 
-from remote_agents.adapters.sqlite.database import open_database
+from remote_agents.adapters.sqlite.database import backup_path, open_database
 from remote_agents.adapters.sqlite.migrations import (
     MIGRATIONS,
     UI_MIGRATIONS,
     _statements,
     apply_migrations,
+    current_version,
 )
 from remote_agents.adapters.sqlite.rollover_store import SQLiteRolloverStore
 from remote_agents.domain.models import ProfileId, ProjectId, SessionId
-from remote_agents.domain.rollover import TERMINAL, RolloverState
+from remote_agents.domain.rollover import (
+    NEEDS_SUCCESSOR,
+    TERMINAL,
+    RolloverState,
+    may_stop_predecessor,
+)
 from remote_agents.ports.rollover_store import IllegalRolloverMove
 
 NOW = datetime(2026, 10, 5, 9, 0, tzinfo=UTC)
@@ -42,15 +49,21 @@ async def _open(store: SQLiteRolloverStore, predecessor: SessionId, handoff_id: 
     )
 
 
-async def _complete(store: SQLiteRolloverStore, rollover_id: str, successor: SessionId) -> None:
+async def _complete(
+    store: SQLiteRolloverStore,
+    rollover_id: str,
+    successor: SessionId,
+    last: RolloverState = RolloverState.COMPLETED,
+) -> None:
     at = NOW
-    for state in (
+    path = (
         RolloverState.SUCCESSOR_STARTING,
         RolloverState.ADOPTING,
         RolloverState.SUCCESSOR_ACCEPTED,
         RolloverState.PREDECESSOR_STOPPING,
-        RolloverState.COMPLETED,
-    ):
+        last,
+    )
+    for state in path[: path.index(last) + 1]:
         at += timedelta(seconds=1)
         successor_id = successor if state is RolloverState.SUCCESSOR_STARTING else None
         await store.advance(rollover_id, state, at=at, successor_session_id=successor_id)
@@ -265,10 +278,24 @@ def test_a_trigger_body_survives_the_migration_runner() -> None:
         connection.execute("DELETE FROM t")
 
 
-def test_migration_18_is_the_rollover_tables() -> None:
-    version, sql = MIGRATIONS[17]
-    assert version == 18
-    assert "CREATE TABLE rollovers" in sql and "CREATE TABLE rollover_events" in sql
+def test_an_existing_store_migrates_to_18_with_a_backup_and_every_row_kept(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "sessions.sqlite3"
+    before = open_database(path, migrations=tuple(m for m in MIGRATIONS if m[0] < 18))
+    before.execute(
+        "INSERT INTO sessions(session_id, project_id, profile_id, display_identity, state,"
+        " created_at) VALUES ('s1', 'p', 'claude', '{}', 'running', '2026-10-01T00:00:00+00:00')"
+    )
+    before.commit()
+    before.close()
+
+    after = open_database(path)
+
+    assert current_version(after) == 18
+    assert after.execute("SELECT COUNT(*) FROM sessions").fetchone() == (1,)
+    assert after.execute("SELECT COUNT(*) FROM rollovers").fetchone() == (0,)
+    assert current_version(sqlite3.connect(backup_path(path))) == 17
 
 
 class _BlindOnce(SQLiteRolloverStore):
@@ -286,15 +313,36 @@ class _BlindOnce(SQLiteRolloverStore):
 
 
 async def test_a_handoff_taken_by_a_racing_insert_returns_its_row(tmp_path: Path) -> None:
-    winner = _store(tmp_path)
-    first = await _open(winner, SessionId.new())
+    winner, predecessor = _store(tmp_path), SessionId.new()
+    first = await _open(winner, predecessor)
     assert first is not None
 
     racer = _BlindOnce(open_database(tmp_path / "sessions.sqlite3"))
-    again = await _open(racer, SessionId.new())
+    again = await _open(racer, predecessor)
 
     assert again is not None and again.id == first.id
     assert len(await winner.open_rollovers()) == 1
+
+
+async def test_a_handoff_id_reused_for_another_session_returns_nothing(tmp_path: Path) -> None:
+    """An id planted in another checkout must not hand back -- or advance -- someone else's."""
+    store = _store(tmp_path)
+    first = await _open(store, SessionId.new())
+    assert first is not None
+
+    assert await _open(store, SessionId.new()) is None
+    racer = _BlindOnce(open_database(tmp_path / "sessions.sqlite3"))
+    assert await _open(racer, SessionId.new()) is None
+    elsewhere = await store.open_for_ready(
+        first.predecessor_session_id,
+        HANDOFF,
+        project_id=ProjectId("another-project"),
+        profile_id=ProfileId("claude"),
+        plan=None,
+        at=NOW,
+    )
+    assert elsewhere is None
+    assert [r.id for r in await store.open_rollovers()] == [first.id]
 
 
 async def test_a_handoff_taken_while_advancing_a_request_leaves_the_request(
@@ -310,9 +358,8 @@ async def test_a_handoff_taken_while_advancing_a_request_leaves_the_request(
     assert requested is not None
 
     racer = _BlindOnce(open_database(tmp_path / "sessions.sqlite3"))
-    again = await _open(racer, asker)
 
-    assert again is not None and again.id == first.id
+    assert await _open(racer, asker) is None
     left = await winner.get(requested.id)
     assert left.state is RolloverState.REQUESTED and left.handoff_id is None
     assert len(await winner.events(requested.id)) == 1
@@ -347,3 +394,150 @@ def test_every_shipped_migration_splits_as_a_bare_split_did(migrations) -> None:
 def test_a_migration_ending_inside_a_statement_is_refused() -> None:
     with pytest.raises(ValueError, match="incomplete"):
         list(_statements("CREATE TABLE t (x TEXT DEFAULT 'a;b)"))
+
+
+async def test_a_successor_is_recorded_while_starting_as_its_own_history_row(
+    tmp_path: Path,
+) -> None:
+    store, successor = _store(tmp_path), SessionId.new()
+    opened = await _open(store, SessionId.new())
+    assert opened is not None
+    await store.advance(opened.id, RolloverState.SUCCESSOR_STARTING, at=NOW)
+
+    recorded = await store.record_successor(opened.id, successor, at=NOW)
+    again = await store.record_successor(opened.id, successor, at=NOW)
+
+    assert recorded.state is RolloverState.SUCCESSOR_STARTING
+    assert recorded.successor_session_id == successor == again.successor_session_id
+    last = (await store.events(opened.id))[-1]
+    assert (last.from_state, last.to_state) == (
+        RolloverState.SUCCESSOR_STARTING,
+        RolloverState.SUCCESSOR_STARTING,
+    )
+    assert len(await store.events(opened.id)) == 3
+    with pytest.raises(IllegalRolloverMove):
+        await store.record_successor(opened.id, SessionId.new(), at=NOW)
+
+
+async def test_a_successor_is_recorded_only_while_starting_and_never_the_predecessor(
+    tmp_path: Path,
+) -> None:
+    store, predecessor = _store(tmp_path), SessionId.new()
+    opened = await _open(store, predecessor)
+    assert opened is not None
+
+    with pytest.raises(IllegalRolloverMove):
+        await store.record_successor(opened.id, SessionId.new(), at=NOW)
+    await store.advance(opened.id, RolloverState.SUCCESSOR_STARTING, at=NOW)
+    with pytest.raises(IllegalRolloverMove):
+        await store.record_successor(opened.id, predecessor, at=NOW)
+    assert (await store.get(opened.id)).successor_session_id is None
+
+
+async def test_no_move_reaches_a_successor_state_without_a_recorded_successor(
+    tmp_path: Path,
+) -> None:
+    store = _store(tmp_path)
+    opened = await _open(store, SessionId.new())
+    assert opened is not None
+    await store.advance(opened.id, RolloverState.SUCCESSOR_STARTING, at=NOW)
+
+    with pytest.raises(IllegalRolloverMove):
+        await store.advance(opened.id, RolloverState.ADOPTING, at=NOW)
+
+    assert (await store.get(opened.id)).state is RolloverState.SUCCESSOR_STARTING
+
+
+@pytest.mark.parametrize("state", sorted(NEEDS_SUCCESSOR))
+def test_the_schema_refuses_a_successor_state_without_a_successor(
+    tmp_path: Path, state: RolloverState
+) -> None:
+    connection = open_database(tmp_path / "sessions.sqlite3")
+    with pytest.raises(sqlite3.IntegrityError):
+        _raw_row(connection, state, successor=None)
+
+
+@pytest.mark.parametrize("state", list(RolloverState))
+def test_the_schema_admits_every_domain_state_and_no_other(
+    tmp_path: Path, state: RolloverState
+) -> None:
+    """A state added to the domain without migration 18's CHECK would be unwritable."""
+    connection = open_database(tmp_path / "sessions.sqlite3")
+    _raw_row(connection, state, successor=str(SessionId.new()))
+    with pytest.raises(sqlite3.IntegrityError):
+        _raw_row(connection, "bogus", successor=str(SessionId.new()))
+
+
+def test_the_schema_refuses_a_session_succeeding_itself(tmp_path: Path) -> None:
+    connection = open_database(tmp_path / "sessions.sqlite3")
+    same = str(SessionId.new())
+    with pytest.raises(sqlite3.IntegrityError):
+        _raw_row(connection, RolloverState.SUCCESSOR_STARTING, successor=same, predecessor=same)
+
+
+def _raw_row(connection, state, *, successor, predecessor=None) -> None:
+    with connection:
+        connection.execute(
+            "INSERT INTO rollovers(rollover_id, predecessor_session_id, successor_session_id,"
+            " project_id, profile_id, reason, state, requested_at, updated_at)"
+            " VALUES (?, ?, ?, 'p', 'claude', 'workflow', ?, 't', 't')",
+            (
+                SessionId.new().value.hex,
+                predecessor or str(SessionId.new()),
+                successor,
+                getattr(state, "value", state),
+            ),
+        )
+
+
+@pytest.mark.parametrize("ending", [RolloverState.FAILED, RolloverState.STOP_FAILED])
+async def test_after_a_failed_rollover_a_ready_waits_for_the_owner(
+    tmp_path: Path, ending: RolloverState
+) -> None:
+    """A forged `ready` costs one extra session, never a stream of them (DEC-115)."""
+    store, predecessor = _store(tmp_path), SessionId.new()
+    first = await _open(store, predecessor)
+    assert first is not None
+    if ending is RolloverState.FAILED:
+        await store.advance(first.id, ending, at=NOW, failure_code="not-typed")
+    else:
+        await _complete(store, first.id, SessionId.new(), last=ending)
+
+    assert await _open(store, predecessor, OTHER_HANDOFF) is None
+
+    asked = await store.request(
+        predecessor, project_id=ProjectId("remote-agents"), profile_id=ProfileId("claude"), at=NOW
+    )
+    assert asked is not None
+    ready = await _open(store, predecessor, OTHER_HANDOFF)
+    assert ready is not None and ready.id == asked.id
+
+
+async def test_a_cancelled_rollover_does_not_hold_the_next(tmp_path: Path) -> None:
+    store, predecessor = _store(tmp_path), SessionId.new()
+    first = await _open(store, predecessor)
+    assert first is not None
+    await store.advance(first.id, RolloverState.CANCELLED, at=NOW)
+
+    assert await _open(store, predecessor, OTHER_HANDOFF) is not None
+
+
+async def test_a_failure_code_is_kept_on_its_history_row(tmp_path: Path) -> None:
+    store = _store(tmp_path)
+    opened = await _open(store, SessionId.new())
+    assert opened is not None
+
+    await store.advance(opened.id, RolloverState.FAILED, at=NOW, failure_code="not-typed")
+
+    assert (await store.events(opened.id))[-1].failure_code == "not-typed"
+
+
+async def test_a_row_without_a_successor_licenses_no_stop(tmp_path: Path) -> None:
+    store, successor = _store(tmp_path), SessionId.new()
+    opened = await _open(store, SessionId.new())
+    assert opened is not None
+    await _complete(store, opened.id, successor, last=RolloverState.SUCCESSOR_ACCEPTED)
+    accepted = await store.get(opened.id)
+
+    assert may_stop_predecessor(accepted) is True
+    assert may_stop_predecessor(replace(accepted, successor_session_id=None)) is False

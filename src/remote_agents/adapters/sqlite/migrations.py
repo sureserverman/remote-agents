@@ -340,7 +340,9 @@ MIGRATIONS: tuple[tuple[int, str], ...] = (
         18,
         # Workflow rollover (DEC-115). Its own tables, never fields on `sessions`: lineage is
         # derived from COMPLETED rows. The partial index is "at most one open rollover per
-        # predecessor"; its literals are the domain's TERMINAL values, pinned by a test.
+        # predecessor"; its literals are the domain's TERMINAL values, pinned by a test. The
+        # CHECKs are the invariants a stop relies on -- a successor that is not the predecessor,
+        # recorded from ADOPTING on -- and SQLite cannot add a CHECK later without a rebuild.
         """
         CREATE TABLE rollovers (
             rollover_id TEXT PRIMARY KEY,
@@ -355,7 +357,14 @@ MIGRATIONS: tuple[tuple[int, str], ...] = (
             failure_code TEXT,
             failure_detail TEXT,
             requested_at TEXT NOT NULL,
-            updated_at TEXT NOT NULL
+            updated_at TEXT NOT NULL,
+            CHECK (state IN ('requested', 'handoff_ready', 'successor_starting', 'adopting',
+                'successor_accepted', 'predecessor_stopping', 'completed', 'failed',
+                'stop_failed', 'cancelled')),
+            CHECK (successor_session_id IS NULL
+                OR successor_session_id <> predecessor_session_id),
+            CHECK (successor_session_id IS NOT NULL OR state NOT IN ('adopting',
+                'successor_accepted', 'predecessor_stopping', 'completed', 'stop_failed'))
         );
         CREATE UNIQUE INDEX rollovers_one_open ON rollovers(predecessor_session_id)
             WHERE state NOT IN ('completed', 'failed', 'stop_failed', 'cancelled');
@@ -365,6 +374,7 @@ MIGRATIONS: tuple[tuple[int, str], ...] = (
             rollover_id TEXT NOT NULL REFERENCES rollovers(rollover_id),
             from_state TEXT,
             to_state TEXT NOT NULL,
+            failure_code TEXT,
             detail TEXT,
             created_at TEXT NOT NULL
         );

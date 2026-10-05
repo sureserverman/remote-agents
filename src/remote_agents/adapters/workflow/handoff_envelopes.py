@@ -23,10 +23,15 @@ name in it, and the daemon reads it unattended. So:
 A refused file is dropped and the rest are still read; nothing here raises, and a failure
 reading one file never costs the others. A directory holding more than MAX_ENTRIES names is
 refused whole, so planted names cannot make one pass unbounded. The `plan` path is carried as
-an opaque string and never opened; one holding a control character is refused, because it is
-shown to the owner and a real path never holds one. Whether `managed_session_id` names a session
-of this project is not checked here: that needs the session store, and the rollover pass that
-holds it checks it.
+an opaque string and never opened. It must be absolute, as the writer records it, and hold no
+control, format or line-separator character (Unicode Cc, Cf, Zl, Zp): it is shown to the owner,
+and a real path never holds one, while a bidi override or an escape would rewrite what they see.
+
+`discard` removes a finished handoff's envelopes, so the directory does not fill over the
+project's life; the writer's `.<id>.claim` stays, as its one-outcome record.
+
+Whether `managed_session_id` names a session of this project is not checked here: that needs
+the session store, and the rollover pass that holds it checks it.
 
 Writes (`request.json`, and the `.gitignore` holding `*` that keeps all of it out of the
 project's history) follow the writer's rules too: the directories are opened `O_NOFOLLOW |
@@ -42,6 +47,7 @@ import os
 import re
 import secrets
 import stat
+import unicodedata
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from datetime import UTC, datetime
@@ -59,15 +65,15 @@ GITIGNORE = ".gitignore"
 GITIGNORE_BODY = b"*\n"
 #: The writer's own cap; an envelope is a few hundred bytes, so anything near this is not one.
 MAX_BYTES = 4096
-#: More names than this in the directory and none are read. A rollover leaves at most three
-#: (ready, accepted or failed, the writer's claim), so this is hundreds of rollovers deep.
-MAX_ENTRIES = 1024
+#: More names than this in the directory and none are read. A finished rollover's envelopes
+#: are discarded and leave one claim behind, so this is thousands of rollovers deep.
+MAX_ENTRIES = 4096
 TIMESTAMP_FORMAT = "%Y-%m-%dT%H:%M:%SZ"
 
 _HANDOFF_ID = re.compile(r"h-[0-9a-f]{20}")
 _ENVELOPE_NAME = re.compile(r"(h-[0-9a-f]{20})\.(ready|accepted|failed)\.json")
 _TIMESTAMP = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z")
-_CONTROL = re.compile(r"[\x00-\x1f\x7f]")
+_UNSHOWABLE = frozenset({"Cc", "Cf", "Zl", "Zp"})
 _EVENT_BY_SUFFIX = {
     "ready": HandoffEvent.READY,
     "accepted": HandoffEvent.ACCEPTED,
@@ -132,6 +138,22 @@ class FileHandoffEnvelopes:
         except Exception:
             return False
         return True
+
+    def discard(self, project_dir: Path, handoff_id: str) -> None:
+        if not _HANDOFF_ID.fullmatch(handoff_id):
+            return
+        try:
+            with _handoff_directory(project_dir, create=False) as directory:
+                if directory is None:
+                    return
+                for suffix in _EVENT_BY_SUFFIX:
+                    try:
+                        # unlink removes the name itself, never what a link there points at.
+                        os.unlink(f"{handoff_id}.{suffix}.json", dir_fd=directory)
+                    except FileNotFoundError:
+                        pass
+        except Exception:
+            pass
 
     def clear_request(self, project_dir: Path, managed_session_id: str) -> None:
         try:
@@ -264,7 +286,7 @@ def _parsed(raw: bytes | None, name_id: str, suffix: str) -> HandoffEnvelope | N
     plan = body["plan"]
     if not (isinstance(plan, str) or (plan is None and event is HandoffEvent.FAILED)):
         return None
-    if isinstance(plan, str) and _CONTROL.search(plan):
+    if isinstance(plan, str) and not _showable_path(plan):
         return None
     failure_code = body.get("failure_code")
     # A string first: `in` a frozenset hashes its operand, and a JSON list does not hash.
@@ -279,6 +301,12 @@ def _parsed(raw: bytes | None, name_id: str, suffix: str) -> HandoffEnvelope | N
         timestamp=timestamp,
         plan=plan,
         failure_code=failure_code,
+    )
+
+
+def _showable_path(plan: str) -> bool:
+    return plan.startswith("/") and not any(
+        unicodedata.category(character) in _UNSHOWABLE for character in plan
     )
 
 

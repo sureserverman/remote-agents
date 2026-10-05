@@ -71,6 +71,11 @@ class HandoffEnvelopes(Protocol):
         request was written; a refusal writes nothing."""
         ...
 
+    def discard(self, project_dir: Path, handoff_id: str) -> None:
+        """Remove a finished handoff's ready, accepted and failed envelopes; never raises.
+        Called once its rollover is terminal, so the directory does not fill over time."""
+        ...
+
     def clear_request(self, project_dir: Path, managed_session_id: str) -> None:
         """Withdraw the project's request if it names `managed_session_id`; nothing otherwise.
         Compared first, so ending one session's rollover never clears another's request."""

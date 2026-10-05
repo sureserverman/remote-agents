@@ -189,6 +189,12 @@ _BAD_ENVELOPES = [
     pytest.param(_body(plan="/p/a\nb"), id="plan-newline"),
     pytest.param(_body(plan="/p/\x1b[2Jx"), id="plan-escape"),
     pytest.param(_body(plan="/p/\x7f"), id="plan-delete"),
+    pytest.param(_body(plan="/p/\x85x"), id="plan-c1-control"),
+    pytest.param(_body(plan="/p/\u202etxt.md"), id="plan-bidi-override"),
+    pytest.param(_body(plan="/p/\u2028x"), id="plan-line-separator"),
+    pytest.param(_body(plan="/p/\u2029x"), id="plan-paragraph-separator"),
+    pytest.param(_body(plan="/p/\u200bx"), id="plan-zero-width"),
+    pytest.param(_body(plan="plans/relative.md"), id="plan-relative"),
     pytest.param(
         _body(timestamp="\u0662\u0660\u0662\u0666-10-05T12:34:56Z"), id="timestamp-unicode-digits"
     ),
@@ -391,7 +397,7 @@ def test_an_envelope_of_exactly_the_cap_is_read_and_one_byte_more_is_not(
 def test_a_directory_holding_too_many_names_is_not_read(tmp_path: Path, reader) -> None:
     directory = _handoffs(tmp_path)
     _write(directory, _body())
-    for index in range(1023):
+    for index in range(4095):
         (directory / f"junk-{index}").touch()
     assert len(reader.events(tmp_path)) == 1
 
@@ -407,3 +413,63 @@ def test_clear_request_leaves_a_request_naming_another_session(tmp_path: Path, r
     reader.clear_request(tmp_path, SESSION)
 
     assert request.read_bytes() == before
+
+
+def test_a_non_ascii_absolute_plan_is_read(tmp_path: Path, reader) -> None:
+    _write(_handoffs(tmp_path), _body(plan="/home/usér/планы/plan.md"))
+
+    assert [e.plan for e in reader.events(tmp_path)] == ["/home/usér/планы/plan.md"]
+
+
+def test_discard_removes_a_handoffs_envelopes_and_nothing_else(tmp_path: Path, reader) -> None:
+    directory = _handoffs(tmp_path)
+    _write(directory, _body())
+    _write(directory, _body("HANDOFF_ACCEPTED"))
+    kept = _write(directory, _body(handoff_id=OTHER_ID), OTHER_ID)
+    claim = directory / f".{HANDOFF_ID}.claim"
+    claim.touch()
+
+    reader.discard(tmp_path, HANDOFF_ID)
+
+    assert sorted(p.name for p in directory.iterdir()) == sorted([claim.name, kept.name])
+    reader.discard(tmp_path, HANDOFF_ID)
+    reader.discard(tmp_path / "absent", HANDOFF_ID)
+
+
+def test_discard_removes_a_planted_link_not_its_target(tmp_path: Path, reader) -> None:
+    project, elsewhere = tmp_path / "project", tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    target = elsewhere / "precious.json"
+    target.write_text("keep")
+    link = _handoffs(project) / f"{HANDOFF_ID}.ready.json"
+    link.symlink_to(target)
+
+    reader.discard(project, HANDOFF_ID)
+
+    assert not link.is_symlink() and target.read_text() == "keep"
+
+
+@pytest.mark.parametrize("linked", [".claude", ".claude/handoffs"])
+def test_discard_through_a_symlinked_directory_removes_nothing(
+    tmp_path: Path, reader, linked: str
+) -> None:
+    project, elsewhere = tmp_path / "project", tmp_path / "elsewhere"
+    _write(_handoffs(elsewhere), _body())
+    link = project / linked
+    link.parent.mkdir(parents=True, exist_ok=True)
+    link.symlink_to(elsewhere / linked)
+    before = _snapshot(tmp_path)
+
+    reader.discard(project, HANDOFF_ID)
+
+    assert _snapshot(tmp_path) == before
+
+
+@pytest.mark.parametrize("handoff_id", ["../x", "h-../../x", "*", ""])
+def test_discard_ignores_an_id_outside_the_pattern(tmp_path: Path, reader, handoff_id) -> None:
+    _write(_handoffs(tmp_path), _body())
+    before = _snapshot(tmp_path)
+
+    reader.discard(tmp_path, handoff_id)
+
+    assert _snapshot(tmp_path) == before

@@ -60,6 +60,19 @@ TERMINAL: frozenset[RolloverState] = frozenset(
 """States the matrix offers no way out of, derived so the two cannot drift apart."""
 
 
+NEEDS_SUCCESSOR: frozenset[RolloverState] = frozenset(
+    {
+        _S.ADOPTING,
+        _S.SUCCESSOR_ACCEPTED,
+        _S.PREDECESSOR_STOPPING,
+        _S.COMPLETED,
+        _S.STOP_FAILED,
+    }
+)
+"""States a rollover cannot be in without a recorded successor: from ADOPTING on, everything
+that happens is about one particular session this service launched."""
+
+
 def is_legal(from_state: RolloverState, to_state: RolloverState) -> bool:
     """Return whether the matrix allows moving from ``from_state`` to ``to_state``."""
     return to_state in TRANSITIONS.get(from_state, frozenset())
@@ -98,8 +111,9 @@ def recovery_action(state: RolloverState, facts: RecoveryFacts) -> RecoveryActio
         case _S.REQUESTED:
             return RecoveryAction.WAIT
         case _S.HANDOFF_READY:
-            # The successor id is recorded only after SUCCESSOR_STARTING is persisted, so one
-            # here is a contradiction; giving up is the reading that cannot launch twice.
+            # The successor id is recorded only once SUCCESSOR_STARTING is persisted (the store's
+            # `record_successor`), so one here is a contradiction; giving up is the reading
+            # that cannot launch twice.
             if facts.has_successor_id:
                 return RecoveryAction.GIVE_UP_SUCCESSOR_UNKNOWN
             return RecoveryAction.LAUNCH
@@ -134,6 +148,11 @@ def may_stop_predecessor(rollover: RolloverState | _HasState) -> bool:
 
     Takes a state or any object with a ``.state`` (a persisted rollover row). This is the sole
     gate on stopping the predecessor: every earlier state, and every failure, leaves it running.
+    A row that also carries ``successor_session_id`` licenses a stop only with one recorded:
+    "accepted" means accepted by a particular session, and a row naming none names no one.
     """
-    state = rollover if isinstance(rollover, RolloverState) else rollover.state
-    return state in _STOP_ALLOWED
+    if isinstance(rollover, RolloverState):
+        return rollover in _STOP_ALLOWED
+    if getattr(rollover, "successor_session_id", True) is None:
+        return False
+    return rollover.state in _STOP_ALLOWED
