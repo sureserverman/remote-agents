@@ -560,3 +560,21 @@ async def test_a_request_is_recorded_once_and_only_while_requested(tmp_path: Pat
     assert ready is not None
     assert await store.record_request(ready.id, at=NOW) is False
     assert await store.record_request("no-such-rollover", at=NOW) is False
+
+
+async def test_a_note_is_its_own_history_row_and_moves_nothing(tmp_path: Path) -> None:
+    store = _store(tmp_path)
+    opened = await _open(store, SessionId.new())
+    assert opened is not None
+
+    await store.note(opened.id, "restart: launch", at=NOW + timedelta(minutes=1))
+
+    last = (await store.events(opened.id))[-1]
+    assert (last.from_state, last.to_state, last.detail) == (
+        RolloverState.HANDOFF_READY,
+        RolloverState.HANDOFF_READY,
+        "restart: launch",
+    )
+    assert (await store.get(opened.id)).state is RolloverState.HANDOFF_READY
+    with pytest.raises(LookupError):
+        await store.note("no-such-rollover", "x", at=NOW)

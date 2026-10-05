@@ -55,8 +55,10 @@ from remote_agents.domain.rollover import (
     SUCCESSOR_FAILED,
     SUCCESSOR_UNKNOWN,
     TERMINAL,
+    RecoveryFacts,
     RolloverState,
     may_stop_predecessor,
+    recovery_action,
 )
 from remote_agents.ports.handoff_envelopes import HandoffEnvelope, HandoffEnvelopes, HandoffEvent
 from remote_agents.ports.rollover_store import IllegalRolloverMove, Rollover, RolloverStore
@@ -145,6 +147,7 @@ class RolloverPass:
         self._graceful_stop = graceful_stop
         self._now = now
         self._sleep = sleep
+        self._recovered = False
 
     async def run_once(self) -> None:
         """Walk every rollover one step, each from what is persisted now.
@@ -155,6 +158,9 @@ class RolloverPass:
         """
         seen = await self._look()
         if await self._enabled():
+            if not self._recovered:
+                await self._note_restart(seen)
+                self._recovered = True
             await self._pick_up_ready(seen)
             for rollover in await self._store.open_rollovers():
                 try:
@@ -171,6 +177,20 @@ class RolloverPass:
                         "rollover %s could not be walked; it is tried next pass", rollover.id
                     )
         await self._withdraw_stale_requests(seen)
+
+    async def _note_restart(self, seen: _Seen) -> None:
+        """This pass is new, so every rollover already open was left by one that is gone: say
+        so on each, with what the restart table makes of it (brief §26), before it is walked.
+        The walk itself agrees with the table; the row is what lets the audit see a restart."""
+        for rollover in await self._store.open_rollovers():
+            facts = RecoveryFacts(
+                has_successor_id=rollover.successor_session_id is not None,
+                successor_alive=seen.up(rollover.successor_session_id),
+                timed_out=rollover.state is _S.ADOPTING
+                and self._now() - rollover.updated_at >= ADOPTION_PATIENCE,
+            )
+            action = recovery_action(rollover.state, facts)
+            await self._store.note(rollover.id, f"restart: {action.value}", at=self._now())
 
     async def _look(self) -> _Seen:
         sessions = {record.session_id: record for record in await self._sessions()}

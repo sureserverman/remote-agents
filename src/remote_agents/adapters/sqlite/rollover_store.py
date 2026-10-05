@@ -177,6 +177,16 @@ class SQLiteRolloverStore:
             )
         return True
 
+    async def note(self, rollover_id: str, detail: str, *, at: datetime) -> None:
+        with self._connection:
+            row = self._connection.execute(
+                "SELECT state FROM rollovers WHERE rollover_id = ?", (rollover_id,)
+            ).fetchone()
+            if row is None:
+                raise LookupError(f"no rollover {rollover_id}")
+            state = RolloverState(row[0])
+            self._append(rollover_id, state, state, None, detail, _stored(at))
+
     async def get(self, rollover_id: str) -> Rollover | None:
         rows = self._select("rollover_id = ?", (rollover_id,))
         return rows[0] if rows else None

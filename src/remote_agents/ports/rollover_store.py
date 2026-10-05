@@ -128,6 +128,11 @@ class RolloverStore(Protocol):
         """
         ...
 
+    async def note(self, rollover_id: str, detail: str, *, at: datetime) -> None:
+        """Append a history row recording something that happened without a move -- a restart
+        finding the rollover where it stands. Nothing else changes; `LookupError` for no row."""
+        ...
+
     async def get(self, rollover_id: str) -> Rollover | None: ...
 
     async def open_rollovers(self) -> tuple[Rollover, ...]:
