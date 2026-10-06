@@ -58,10 +58,12 @@ def console():
 def test_a_client_whose_terminal_vanished_leaves_no_notice_over_a_pane(console) -> None:
     socket = console
     primary, secondary = os.openpty()
+    # Without `TMUX`: a suite run from inside tmux would otherwise refuse to nest the attach.
+    environment = {k: v for k, v in os.environ.items() if k != "TMUX"}
     client = subprocess.Popen(
         ("tmux", "-L", socket, "attach-session", "-t", console_target()),
         stdin=secondary, stdout=secondary, stderr=secondary,
-        start_new_session=True, env={**os.environ, "TERM": "xterm-256color"},
+        start_new_session=True, env={**environment, "TERM": "xterm-256color"},
     )  # fmt: skip
     os.close(secondary)
     try:
@@ -71,6 +73,7 @@ def test_a_client_whose_terminal_vanished_leaves_no_notice_over_a_pane(console) 
         # order a closed terminal window produces, and the one that left the tty gone by
         # the time `client-detached` ran.
         os.close(primary)
+        primary = None
         client.kill()
         client.wait()
         assert _wait(lambda: not os.path.exists(tty)), tty
@@ -79,6 +82,8 @@ def test_a_client_whose_terminal_vanished_leaves_no_notice_over_a_pane(console) 
         time.sleep(0.5)
         assert _tmux(socket, "list-panes", "-a", "-F", "#{pane_in_mode}").split() == ["0"]
     finally:
+        if primary is not None:
+            os.close(primary)
         if client.poll() is None:
             client.kill()
             client.wait()
