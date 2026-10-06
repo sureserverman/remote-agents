@@ -1043,9 +1043,15 @@ def _paint_shell(colour: str | None, tty: str) -> str:
     tmux has no command that reaches the terminal outside it, and a client's tty is the one
     place to write that reaches it. `#` is doubled because `run-shell` expands its command as a
     format first: measured, `#FAFAF7` arrived as `*AFAF7`, since `#F` is the window flags.
+
+    The line never fails and never prints. tmux shows a `run-shell -b` that exits non-zero, or
+    writes anything, in view mode over the active pane -- and a client whose terminal closed
+    under it has no tty left to write to by the time `client-detached` runs. Measured on the
+    live console (v0.59.0): the notice covered the projects pane, which F12 then brought back
+    still covered. `2>/dev/null` comes first so it also silences the redirection's own error.
     """
     sequence = r"\033]111\007" if colour is None else rf"\033]11;{colour.replace('#', '##')}\007"
-    return f"printf '{sequence}' > '{tty}'"
+    return f"printf '{sequence}' 2>/dev/null > '{tty}' || true"
 
 
 def _paint_hook(colour: str | None) -> str:

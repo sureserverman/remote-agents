@@ -778,11 +778,12 @@ def test_the_background_hooks_paint_on_attach_and_put_back_on_any_detach() -> No
 
     assert attached == (
         "set-hook", "-t", "ra-console:", "client-attached[1]",
-        "run-shell -b \"printf '\\\\033]11;##0F1115\\\\007' > '#{hook_client}'\"",
+        "run-shell -b \"printf '\\\\033]11;##0F1115\\\\007' 2>/dev/null > '#{hook_client}'"
+        " || true\"",
     )  # fmt: skip
     assert detached == (
         "set-hook", "-g", "client-detached[1]",
-        "run-shell -b \"printf '\\\\033]111\\\\007' > '#{hook_client}'\"",
+        "run-shell -b \"printf '\\\\033]111\\\\007' 2>/dev/null > '#{hook_client}' || true\"",
     )  # fmt: skip
 
 
@@ -792,7 +793,7 @@ def test_an_attached_client_is_painted_through_its_own_terminal_only() -> None:
     from remote_agents.adapters.tmux.codec import paint_client_args
 
     assert paint_client_args("/dev/pts/5", "#FAFAF7") == (
-        "run-shell", "-b", "printf '\\033]11;##FAFAF7\\007' > '/dev/pts/5'",
+        "run-shell", "-b", "printf '\\033]11;##FAFAF7\\007' 2>/dev/null > '/dev/pts/5' || true",
     )  # fmt: skip
     for name in ("/dev/pts/5'; rm -rf ~; '", "client-7", ""):
         with pytest.raises(ValueError):
