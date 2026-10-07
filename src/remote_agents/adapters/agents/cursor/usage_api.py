@@ -19,6 +19,8 @@ project never refreshes or writes Cursor's token.
 `totalPercentUsed`, and its two parts are the pools Cursor meters separately: `cursor` (its
 `auto` pool: Auto, Composer and its other own models) and `other` (its `api` pool: every other
 model). Each part is a percentage of its own pool, so the two do not add up to the total.
+The window carries the cycle's start as well as its end, so its pace is measured over the
+cycle's real length (DEC-117).
 
 **Every failure is `UNREADABLE`, never an invented window, and `limits` never raises.** There
 is no second source to fall back on. A missing or refused login also carries

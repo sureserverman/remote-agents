@@ -692,9 +692,10 @@ class LimitWindow:
     expected_percent: int | None = None
     """Where an even spend would stand today, in whole percent, or None when there is no pace.
 
-    Only a window `_PACED_WINDOWS` names a duration for has pace, and only on a live reading
-    with a reset time (DEC-106): a figure hours old says nothing about where the account is
-    *today*, the same reason `_stale_for` dates it. Defaulted so a fixture that builds a window
+    Only a window whose length is known has pace -- one that states its start, or one
+    `_PACED_WINDOWS` names a duration for -- and only on a live reading with a reset time
+    (DEC-106, DEC-117): a figure hours old says nothing about where the account is *today*, the
+    same reason `_stale_for` dates it. Defaulted so a fixture that builds a window
     positionally keeps meaning "no pace".
     """
     pace_delta: int | None = None
@@ -726,9 +727,10 @@ def _placed(windows: tuple[LimitWindow, ...]) -> tuple[LimitWindow, ...]:
     """A row's windows with a pooled one taken apart into the fixed columns, one pool per column.
 
     The owner's layout (2026-10-01): the first pool is drawn under `5h` and the second under
-    `week`, each a cell like any other -- its own percent, the window's one reset, no pace (a
-    month is not a window DEC-106 paces) -- and named for its pool, so a line that labels
-    itself says `Cursor` rather than `5h`. A third pool follows the fixed columns under its own
+    `week`, each a cell like any other -- its own percent, the window's one reset, the window's
+    expected share with the pool's own distance from it (DEC-117; none when the month states no
+    start) -- and named for its pool, so a line that labels itself says `Cursor` rather than
+    `5h`. A third pool follows the fixed columns under its own
     name. The total is drawn nowhere: it decides a stop (DEC-110), and each pool's percent is
     of its own pool, so no cell could hold a sum.
 
@@ -785,11 +787,13 @@ def countdown(row: LimitRow, window: LimitWindow) -> str | None:
 
 
 _PACED_WINDOWS = {"week": timedelta(days=7), "day": timedelta(days=1)}
-"""How long a window lasts, by the provider's own label (DEC-106).
+"""How long a window lasts, by the provider's own label, for a window that states no start
+(DEC-106).
 
-From the label because `UsageWindow` carries no duration: Codex's reader turns its
-`window_minutes` into the label and stops there. A 5h window has no pace -- it is gone before
-an even spend means anything -- and an unknown label is left without one rather than guessed.
+Codex's reader turns its `window_minutes` into the label and stops there. A window that states
+its start -- Cursor's month, 28 to 31 days -- is measured over its own two ends instead
+(DEC-117). A 5h window has no pace -- it is gone before an even spend means anything -- and an
+unknown label with no start is left without one rather than guessed.
 """
 
 
