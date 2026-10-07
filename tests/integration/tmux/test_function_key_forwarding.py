@@ -111,8 +111,12 @@ class _Server:
         """
         pid, fd = pty.fork()
         if pid == 0:  # pragma: no cover - the child execs away
-            os.environ["TERM"] = "xterm-256color"
-            os.execvp("tmux", ["tmux", "-L", self.socket, "attach-session", "-t", session])
+            # A child that fails to exec must not return into pytest as a second run.
+            try:
+                os.environ["TERM"] = "xterm-256color"
+                os.execvp("tmux", ["tmux", "-L", self.socket, "attach-session", "-t", session])
+            finally:
+                os._exit(127)
         self._clients.append(fd)
         time.sleep(1.0)
         return fd

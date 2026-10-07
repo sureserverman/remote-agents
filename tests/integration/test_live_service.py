@@ -574,7 +574,6 @@ def test_serve_command_loads_config_and_runs_the_injected_private_bot(
         encoding="utf-8",
     )
     received: list[TelegramSecrets] = []
-
     async def serve(secrets: TelegramSecrets, _boundary: PrivateBotBoundary) -> None:
         received.append(secrets)
 
