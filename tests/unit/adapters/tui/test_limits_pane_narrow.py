@@ -586,3 +586,24 @@ def test_a_stacked_cell_that_fits_keeps_its_reset_beside_its_bar() -> None:
         "curs…  Cursor ████████ 100% ↻ 31d",
         "       other  ████████ 100% ↻ 31d",
     ], lines
+
+
+def _paced_cursor_row() -> LimitRow:
+    """25 days left of a 30-day cycle: an even spend is at 17%, the Cursor pool 12 over it."""
+    windows = (
+        LimitWindow("5h", 29, "25d", 17, 12, name="Cursor"),
+        LimitWindow("week", 2, "25d", 17, -15, name="other"),
+    )
+    return LimitRow("cursor-agent", windows, "Cursor API", None)
+
+
+def test_a_paced_cursor_row_puts_its_pace_line_under_the_cursor_bar() -> None:
+    """Stacked, the row's one pace line belongs to the cell its pace slot shows: the Cursor
+    pool. Its reset moves onto that line, as a paced week's does (DEC-106)."""
+    rows = (*_paced_rows(), _paced_cursor_row())
+    first, pace, other = _cursor_lines(rows, NARROW)[:3]
+    assert "Cursor" in first and "↻" not in first, first
+    assert pace == " " * _GAUGE_RUN.search(first).start() + "↻ 25d · exp 17%  ▲ 12 over", pace
+    assert other.split()[0] == "other" and "┃" in other, other
+    for content in limit_rows_content(rows, NARROW):
+        assert cell_len(content.plain) <= NARROW, content.plain

@@ -1268,7 +1268,7 @@ async def test_the_limits_border_footer_is_drawn_only_on_a_wide_pane(size, foote
         pane = app.screen.query_one("#limits-pane", OptionList)
         width = pane.scrollable_content_region.width
         assert (width >= 70) is footer, width
-        expected = "┃ where an even week would be today · ↻ resets in" if footer else ""
+        expected = "┃ where an even spend would be today · ↻ resets in" if footer else ""
         assert str(pane.border_subtitle or "") == expected
 
 

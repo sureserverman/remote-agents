@@ -964,7 +964,7 @@ def test_absence_phrases_still_trail_the_bars_beside_the_stamp() -> None:
 
 
 def test_the_limits_border_footer_is_wide_only() -> None:
-    assert limits_border_footer(70) == "┃ where an even week would be today · ↻ resets in"
+    assert limits_border_footer(70) == "┃ where an even spend would be today · ↻ resets in"
     assert limits_border_footer(69) is None
 
 
@@ -1030,7 +1030,7 @@ def test_the_other_pool_widens_with_the_week_column_on_a_wide_pane() -> None:
     gauges = _labelled_gauges(header, line)
     assert gauges["5h"][1] - gauges["5h"][0] == 8, line
     assert gauges["week"][1] - gauges["week"][0] == 16, line
-    assert "┃" not in line, "a monthly pool has no pace tick"
+    assert "┃" not in line, "a pool read without its cycle start has no pace tick"
 
 
 @pytest.mark.parametrize(
@@ -1128,3 +1128,31 @@ def test_a_cursor_name_is_drawn_whole_where_the_table_has_the_room() -> None:
         for c in limit_rows_content((*_readme_rows(), _cursor_row(profile="cursor-agent")), 80)
     ]
     assert lines[3].startswith("cursor-agent  █"), lines[3]
+
+
+# --- Cursor's pace (the owner's pick, 2026-10-07; DEC-117) -----------------------------------
+
+
+def _paced_cursor_row() -> LimitRow:
+    """25 days left of a 30-day cycle: an even spend is at 17%, the Cursor pool 12 over it."""
+    windows = (
+        LimitWindow("5h", 29, "25d", 17, 12, name="Cursor"),
+        LimitWindow("week", 2, "25d", 17, -15, name="other"),
+    )
+    return LimitRow("cursor", windows, "Cursor API", None)
+
+
+@pytest.mark.parametrize("width", [WIDE, 80])
+def test_a_cursor_row_fills_the_pace_columns_from_its_cursor_pool(width: int) -> None:
+    rows = (*_readme_rows(), _paced_cursor_row())
+    header, claude, codex, cursor = [c.plain for c in limit_rows_content(rows, width)]
+    expected_end = header.index("expected") + len("expected")
+    assert cursor[expected_end - 3 : expected_end] == "17%", "\n".join((header, claude, cursor))
+    assert cursor[header.index("vs pace") :] == "▲ 12 over", "\n".join((header, claude, cursor))
+    # Both pools are paced over the one cycle, so each bar carries the tick.
+    ticked = [match.group() for match in _TICKED_GAUGE.finditer(cursor)]
+    assert [gauge.count("┃") for gauge in ticked] == [1, 1], cursor
+    # Pacing the Cursor row moves no other row: Claude and Codex draw exactly as they do beside
+    # the same Cursor row unpaced.
+    unpaced = (*_readme_rows(), _cursor_row(29, 2, resets_in="25d"))
+    assert [header, claude, codex] == [c.plain for c in limit_rows_content(unpaced, width)][:3]

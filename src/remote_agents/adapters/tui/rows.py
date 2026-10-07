@@ -40,6 +40,7 @@ from remote_agents.application.session_views import (
     StateGroup,
     countdown,
     group_counts,
+    pace_cell,
     percent_gauge,
 )
 from remote_agents.domain.models import SessionRecord
@@ -380,9 +381,9 @@ _WIDE_WEEK_GAUGE = 16
 #: The pace tick: where an even spend would stand today, drawn inside the bar it measures.
 PACE_TICK = "┃"
 
-#: The window whose pace the wide layout's two trailing columns carry. A `day` window keeps its
-#: tick; the columns are the week's, which is the question the owner asks of the pane.
-_PACE_WINDOW = "week"
+#: Which cell the wide layout's two trailing columns carry is `session_views.pace_cell`'s rule
+#: (the week, or a pooled row's Cursor pool), not this surface's. Every paced cell keeps its
+#: tick; the columns hold one per row.
 _EXPECTED_HEADING = "expected"
 _PACE_HEADING = "vs pace"
 
@@ -405,14 +406,6 @@ def pace_style(delta: int) -> str:
     if delta <= 25:
         return "$warning"
     return "$error"
-
-
-def _week_pace(row: LimitRow):
-    """The row's window that owns the pace columns, when it has pace; else None."""
-    window = next((w for w in row.windows if w.label == _PACE_WINDOW), None)
-    if window is None or window.expected_percent is None or window.pace_delta is None:
-        return None
-    return window
 
 
 @dataclass(frozen=True, slots=True)
@@ -495,7 +488,7 @@ def _limit_columns(rows: Sequence[LimitRow], width: int | None = None) -> _Limit
     profile = max((len(row.profile) for row in rows), default=0)
     # The absence phrase is deliberately *not* measured into any column width. It trails the
     # row's last column, so nothing is drawn after it and it aligns nothing.
-    paces = [_week_pace(row) for row in rows]
+    paces = [pace_cell(row) for row in rows]
     pace = max(
         (len(pace_text(window.pace_delta)) for window in paces if window is not None),
         default=0,
@@ -720,7 +713,7 @@ def _one_line(row: LimitRow, columns: _LimitColumns) -> Content:
             cell = _window_content(row, window, columns, last=False, labelled=False)
         line = line + Content(" " * _GROUP_GUTTER) + cell
     # The pace columns (DEC-106): blank at their widths for a row with no week pace.
-    paced = _week_pace(row)
+    paced = pace_cell(row)
     gutter = " " * _GROUP_GUTTER
     if paced is not None:
         line = line + Content.assemble(
@@ -842,8 +835,8 @@ def limit_row_content(
             ).rstrip()
             for label in columns.labels
         ]
-        paced = _week_pace(row)
-        at = None if paced is None else columns.labels.index(_PACE_WINDOW)
+        paced = pace_cell(row)
+        at = None if paced is None else columns.labels.index(paced.label)
         if paced is not None:
             # The week's reset moves onto its pace line, so the bar's own line stays short
             # enough for the dashboard's 39-cell right region (DEC-106).
@@ -884,7 +877,7 @@ def limit_row_content(
 _STAMP_GAP = 8
 
 #: What the wide limits pane's bottom border says, so the tick and the arrow are explained once.
-LIMITS_BORDER_FOOTER = f"{PACE_TICK} where an even week would be today · ↻ resets in"
+LIMITS_BORDER_FOOTER = f"{PACE_TICK} where an even spend would be today · ↻ resets in"
 
 
 def limits_border_footer(width: int | None) -> str | None:
