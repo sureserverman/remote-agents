@@ -42,9 +42,17 @@ CURSOR = ProfileId("cursor-agent")
 
 NOW = datetime(2026, 10, 10, 9, 0, tzinfo=UTC)
 
+CYCLE_START = datetime(2026, 9, 24, 12, 0, tzinfo=UTC)
+
 CYCLE_END = datetime(2026, 10, 24, 12, 0, tzinfo=UTC)
 
-MONTH = UsageWindow("month", 40.0, CYCLE_END, (UsagePart("cursor", 62.0), UsagePart("other", 18.5)))
+MONTH = UsageWindow(
+    "month",
+    40.0,
+    CYCLE_END,
+    (UsagePart("cursor", 62.0), UsagePart("other", 18.5)),
+    starts_at=CYCLE_START,
+)
 
 STAMP = "Cursor API"
 
@@ -239,6 +247,29 @@ def test_the_auth_file_is_opened_read_only_and_left_untouched(
 
 
 # --- a 200 that does not state the documented figures ---------------------------------------
+
+
+def test_the_month_carries_the_cycle_start_cursor_states(tmp_path: Path) -> None:
+    """`billingCycleStart` is what makes the month pace-able: a calendar month is 28 to 31 days,
+    so its length is read from Cursor's own two ends rather than guessed from the label."""
+    write_auth(tmp_path, auth_document())
+    (month,) = reader(tmp_path, ok_opener()).limits().windows
+    assert month.starts_at == CYCLE_START
+    assert month.resets_at == CYCLE_END
+
+
+@pytest.mark.parametrize(
+    "cycle_start",
+    [None, "abc", "1792843200000", "1795435200000", True],
+    ids=["missing", "garbled", "the same as the end", "after the end", "bool"],
+)
+def test_a_cycle_start_that_cannot_be_used_keeps_the_window_without_one(
+    tmp_path: Path, cycle_start: object
+) -> None:
+    """No start is no pace, never an error: the window still draws with its percent and pools."""
+    write_auth(tmp_path, auth_document())
+    answer = reader(tmp_path, ok_opener(billingCycleStart=cycle_start)).limits()
+    assert answer.windows == (UsageWindow("month", 40.0, CYCLE_END, MONTH.parts),)
 
 
 def test_a_cycle_end_that_cannot_be_read_keeps_the_window_without_a_reset(tmp_path: Path) -> None:
@@ -659,6 +690,14 @@ def test_a_usage_part_refuses_a_percent_outside_0_to_100_and_an_untrimmed_label(
     for label, percent in (("cursor", 100.5), ("cursor", -0.1), (" cursor", 5.0), ("", 5.0)):
         with pytest.raises(ValueError):
             UsagePart(label, percent)
+
+
+def test_a_window_refuses_a_start_at_or_after_its_reset() -> None:
+    with pytest.raises(ValueError):
+        UsageWindow("month", 1.0, CYCLE_END, starts_at=CYCLE_END)
+    with pytest.raises(ValueError):
+        UsageWindow("month", 1.0, CYCLE_START, starts_at=CYCLE_END)
+    assert UsageWindow("month", 1.0, None, starts_at=CYCLE_END).starts_at == CYCLE_END
 
 
 def test_a_window_has_no_parts_unless_a_reader_gives_it_some() -> None:

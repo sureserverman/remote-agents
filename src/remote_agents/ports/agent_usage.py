@@ -107,12 +107,23 @@ class UsageWindow:
     resets_at: datetime | None = None
     parts: tuple[UsagePart, ...] = ()
     """The window's separately metered pools, or empty for a window that has one figure."""
+    starts_at: datetime | None = None
+    """When the window opened, where the provider says. Only a window that states it can be
+    paced over its own length (DEC-117): Cursor's month is 28 to 31 days, so its length is
+    read from its two ends rather than guessed from the label. Last, and defaulted, so a
+    positional window keeps meaning what it meant."""
 
     def __post_init__(self) -> None:
         if not self.label or self.label != self.label.strip():
             raise ValueError("a usage window needs a trimmed, non-empty label")
         if not 0 <= self.used_percent <= 100:
             raise ValueError("a usage window percentage must fall between 0 and 100")
+        if (
+            self.starts_at is not None
+            and self.resets_at is not None
+            and self.starts_at >= self.resets_at
+        ):
+            raise ValueError("a usage window must start before it resets")
 
 
 @dataclass(frozen=True, slots=True)

@@ -265,13 +265,21 @@ class CursorUsageApiReader:
         # `_window` drops a cycle that has already ended rather than showing its figures
         # against a period that no longer exists.
         window = _window(
-            _WINDOW_LABEL, total, _cycle_end(document.get("billingCycleEnd")), now=self._now
+            _WINDOW_LABEL, total, _epoch_millis(document.get("billingCycleEnd")), now=self._now
         )
         if window is None:
             return AgentLimits(
                 self.limits_profile, absence=LimitsAbsence.NO_READING, stale_source=_STAMP
             )
-        month = UsageWindow(window.label, window.used_percent, window.resets_at, parts)
+        # The cycle's start makes the month pace-able over its own length (DEC-117). A start is
+        # kept only before a readable end: one without an end measures nothing, and one at or
+        # after it is not a cycle. Either way the window still draws, just without pace.
+        start = _epoch_millis(document.get("billingCycleStart"))
+        if start is None or window.resets_at is None or start >= window.resets_at:
+            start = None
+        month = UsageWindow(
+            window.label, window.used_percent, window.resets_at, parts, starts_at=start
+        )
         return AgentLimits(
             self.limits_profile, (month,), observed_at=asked_at, stale_source=_STAMP, live=True
         )
@@ -299,8 +307,9 @@ def _header_safe(token: str) -> bool:
     return bool(token) and token.isascii() and token.isprintable() and " " not in token
 
 
-def _cycle_end(value: object) -> datetime | None:
-    """`billingCycleEnd`: epoch milliseconds, which the server writes as a string of digits."""
+def _epoch_millis(value: object) -> datetime | None:
+    """`billingCycleStart` / `billingCycleEnd`: epoch milliseconds, which the server writes as a
+    string of digits. `None` for anything that is not one."""
     if isinstance(value, str):
         if not (value.isascii() and value.isdigit() and len(value) <= _MAX_EPOCH_DIGITS):
             return None
