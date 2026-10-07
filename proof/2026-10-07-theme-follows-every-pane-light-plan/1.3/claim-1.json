@@ -1,0 +1,11 @@
+{
+ "created": "2026-10-07T19:40:34+00:00",
+ "fingerprint": "2e8f8219d0758d39f042f4d73fa1a1cec57c3bb7f0e6547d6c1f23b6749e16eb",
+ "index": 1,
+ "kind": "claim-deviation",
+ "plan": "/mnt/vault/Portfolio/infra/remote-agents/plans/2026-10-07-theme-follows-every-pane-light-plan.md",
+ "schema": 2,
+ "task": "1.3",
+ "text": "`grep -c \"Every surface process follows the stored theme\" /mnt/vault/Portfolio/infra/remote-agents/decisions.md` prints `1`, and `! grep -rnE \"signal (is what|that) writes|_remember_theme. is what writes\" src/remote_agents/adapters/tui`",
+ "why": "Docs-only task: a decision record in the vault and one docstring. Its Test is a grep over prose; there is no product line whose reversion a test could catch. The grep was run and printed 1 / found no stale prose."
+}
