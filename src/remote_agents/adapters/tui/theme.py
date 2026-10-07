@@ -8,8 +8,10 @@ keeps `NO_COLOR` honest -- the glyph and the word stay the signal, and colour is
 
 `relay-night` is the default. The choice is remembered by `adapters/tui/preferences.py`, beside
 the project order and under the same total-read rule: an unreadable preference is a forgotten
-choice, never a surface that will not start. Switching happens through Textual's own command
-palette theme command; nothing here adds a key for it.
+choice, never a surface that will not start. Switching happens on the Settings theme row or
+through Textual's own command palette theme command; nothing here adds a key for it. Either way
+`RemoteAgentsTui.watch_theme` writes the file, and every other surface process -- each console
+pane is one -- follows the stored theme by watching that file.
 
 **Two variables are this project's own: `selection` and `text-dim`.** Textual's design system
 derives `text-muted` and friends from the theme's colours but knows nothing of either of these,
