@@ -48,6 +48,7 @@ from remote_agents.application.session_views import (
     listed_in_sessions,
     listed_sessions,
     only_listed,
+    pace_cell,
     percent_gauge,
     rollover_marks,
     selectable_area,
@@ -1225,12 +1226,90 @@ def test_a_pool_row_draws_no_total() -> None:
     assert 70 not in [window.percent for window in row.windows]
 
 
-def test_a_pool_has_no_pace() -> None:
-    """DEC-106 names `week` and `day`; a monthly pool in the week column is still a month."""
+def _cycle(cursor: float, other: float, *, left: timedelta, length: timedelta) -> UsageWindow:
+    """Cursor's month as its reader gives it: both ends stated, two pools."""
+    resets = datetime.now(UTC) + left
+    return UsageWindow(
+        "month",
+        14.0,
+        resets_at=resets,
+        parts=(UsagePart("cursor", cursor), UsagePart("other", other)),
+        starts_at=resets - length,
+    )
+
+
+def test_a_cycle_with_its_start_paces_both_pools_over_its_own_length() -> None:
+    """The owner's ask of 2026-10-07: 25 days left of a 30-day cycle is 5 days in, so an even
+    spend would stand at 17% today. Each pool carries that share and its own distance from it
+    (DEC-117, superseding DEC-113's "no pace" and DEC-106's label-only duration)."""
+    (row,) = limit_rows(
+        (
+            _account(
+                "cursor-agent",
+                _cycle(29.0, 2.0, left=timedelta(days=25), length=timedelta(days=30)),
+            ),
+        )
+    )
+
+    assert [(w.name, w.expected_percent, w.pace_delta) for w in row.windows] == [
+        ("Cursor", 17, 12),
+        ("other", 17, -15),
+    ]
+
+
+def test_a_cycle_of_another_length_is_paced_over_that_length() -> None:
+    """A 31-day cycle 10 days in is 32%, where a label table's 30 days would say 33%."""
+    (row,) = limit_rows(
+        (
+            _account(
+                "cursor-agent",
+                _cycle(40.0, 1.0, left=timedelta(days=21), length=timedelta(days=31)),
+            ),
+        )
+    )
+
+    assert [w.expected_percent for w in row.windows] == [32, 32]
+
+
+def test_a_month_without_its_start_has_no_pace() -> None:
+    """No start, no length: the label `month` names no duration, and none is guessed."""
     resets = datetime.now(UTC) + timedelta(days=10)
     (row,) = limit_rows((_account("cursor-agent", _cursor_month(resets)),))
 
     assert [(w.expected_percent, w.pace_delta) for w in row.windows] == [(None, None)] * 2
+
+
+def test_a_stale_cycle_has_no_pace() -> None:
+    window = _cycle(29.0, 2.0, left=timedelta(days=25), length=timedelta(days=30))
+    stale = datetime.now(UTC) - timedelta(hours=8)
+    (row,) = limit_rows((_account("cursor-agent", window, observed=stale),))
+
+    assert [(w.expected_percent, w.pace_delta) for w in row.windows] == [(None, None)] * 2
+
+
+def test_the_pace_slot_is_the_week_or_a_pooled_rows_first_pool() -> None:
+    """One `expected` / `vs pace` slot per row: the week for Claude and Codex, the Cursor pool
+    for Cursor (the owner's pick, 2026-10-07). Nothing paced, nothing in the slot."""
+    claude, cursor, codex = limit_rows(
+        (
+            _account(
+                "claude",
+                UsageWindow("5h", 3.0, resets_at=datetime.now(UTC) + timedelta(hours=2)),
+                UsageWindow("week", 30.0, resets_at=datetime.now(UTC) + timedelta(days=3)),
+            ),
+            _account(
+                "cursor-agent",
+                _cycle(29.0, 2.0, left=timedelta(days=25), length=timedelta(days=30)),
+            ),
+            _account(
+                "codex", UsageWindow("5h", 3.0, resets_at=datetime.now(UTC) + timedelta(hours=2))
+            ),
+        )
+    )
+
+    assert (pace_cell(claude).label, pace_cell(claude).pace_delta) == ("week", 30 - 57)
+    assert (pace_cell(cursor).name, pace_cell(cursor).pace_delta) == ("Cursor", 12)
+    assert pace_cell(codex) is None
 
 
 def test_a_pool_window_beside_another_window_is_laid_out_by_kind() -> None:

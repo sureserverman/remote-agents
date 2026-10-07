@@ -1,0 +1,28 @@
+{
+ "baseline": {
+  "elapsed_s": 0.4,
+  "exit": 0,
+  "tail": "...............                                                          [100%]\n15 passed, 127 deselected in 0.07s"
+ },
+ "break_patch": "diff --git a/src/remote_agents/application/session_views.py b/src/remote_agents/application/session_views.py\nindex 165fb3bc..1bf60398 100644\n--- a/src/remote_agents/application/session_views.py\n+++ b/src/remote_agents/application/session_views.py\n@@ -799,7 +799,7 @@ def _pace(window: UsageWindow, percent: int, live: bool) -> tuple[int | None, in\n         return None, None\n     duration = (\n         window.resets_at - window.starts_at\n-        if window.starts_at is not None\n+        if False\n         else _PACED_WINDOWS.get(window.label)\n     )\n     if duration is None:\n",
+ "build": null,
+ "created": "2026-10-07T20:04:09+00:00",
+ "fingerprint": "251971699b1827ace710b13f9ff6e58c80a2708af5244a9c381606f94115aab8",
+ "index": 1,
+ "kind": "claim",
+ "named_break": null,
+ "no_build_reason": "python tests, no build",
+ "plan": "/mnt/vault/Portfolio/infra/remote-agents/plans/2026-10-07-cursor-pace-light-plan.md",
+ "red": {
+  "elapsed_s": 0.4,
+  "exit": 1,
+  "tail": ">       assert [w.expected_percent for w in row.windows] == [32, 32]\nE       assert [None, None] == [32, 32]\nE         \nE         At index 0 diff: None != 32\nE         Use -v to get more diff\n\ntests/unit/application/test_session_views.py:1271: AssertionError\n__________ test_the_pace_slot_is_the_week_or_a_pooled_rows_first_pool __________\n\n    def test_the_pace_slot_is_the_week_or_a_pooled_rows_first_pool() -> None:\n        \"\"\"One `expected` / `vs pace` slot per row: the week for Claude and Codex, the Cursor pool\n        for Cursor (the owner's pick, 2026-10-07). Nothing paced, nothing in the slot.\"\"\"\n        claude, cursor, codex = limit_rows(\n            (\n                _account(\n                    \"claude\",\n                    UsageWindow(\"5h\", 3.0, resets_at=datetime.now(UTC) + timedelta(hours=2)),\n                    UsageWindow(\"week\", 30.0, resets_at=datetime.now(UTC) + timedelta(days=3)),\n                ),\n                _account(\n                    \"cursor-agent\",\n                    _cycle(29.0, 2.0, left=timedelta(days=25), length=timedelta(days=30)),\n                ),\n                _account(\n                    \"codex\", UsageWindow(\"5h\", 3.0, resets_at=datetime.now(UTC) + timedelta(hours=2))\n                ),\n            )\n        )\n    \n        assert (pace_cell(claude).label, pace_cell(claude).pace_delta) == (\"week\", 30 - 57)\n>       assert (pace_cell(cursor).name, pace_cell(cursor).pace_delta) == (\"Cursor\", 12)\n                ^^^^^^^^^^^^^^^^^^^^^^\nE       AttributeError: 'NoneType' object has no attribute 'name'\n\ntests/unit/application/test_session_views.py:1311: AttributeError\n=========================== short test summary info ============================\nFAILED tests/unit/application/test_session_views.py::test_a_cycle_with_its_start_paces_both_pools_over_its_own_length\nFAILED tests/unit/application/test_session_views.py::test_a_cycle_of_another_length_is_paced_over_that_length\nFAILED tests/unit/application/test_session_views.py::test_the_pace_slot_is_the_week_or_a_pooled_rows_first_pool\n3 failed, 12 passed, 127 deselected in 0.10s"
+ },
+ "schema": 2,
+ "task": "1.2",
+ "test": "uv run --locked pytest tests/unit/application/test_session_views.py -k \"pace\" -q -p no:randomly",
+ "text": "new cases with a frozen clock: a 30-day cycle with 25 d left gives `expected_percent == 17` on both pool cells, `pace_delta == 12` for a 29 % Cursor pool and `-15` for a 2 % other pool",
+ "touched": [
+  "src/remote_agents/application/session_views.py"
+ ]
+}

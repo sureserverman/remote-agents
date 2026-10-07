@@ -739,12 +739,37 @@ def _placed(windows: tuple[LimitWindow, ...]) -> tuple[LimitWindow, ...]:
         return windows
     (window,) = windows
     columns = FIXED_LIMIT_WINDOWS + tuple(part.label for part in window.parts[2:])
+    expected = window.expected_percent
     return tuple(
         LimitWindow(
-            column, part.percent, window.resets_in, name=_PART_LABELS.get(part.label, part.label)
+            column,
+            part.percent,
+            window.resets_in,
+            expected,
+            None if expected is None else part.percent - expected,
+            name=_PART_LABELS.get(part.label, part.label),
         )
         for column, part in zip(columns, window.parts, strict=False)
     )
+
+
+def pace_cell(row: LimitRow) -> LimitWindow | None:
+    """The cell whose pace a row's one pace slot shows, or None when it has no pace.
+
+    A surface has room for one `expected` / `vs pace` per row, so which cell fills it is a rule
+    both surfaces share rather than one each spells (DEC-043, DEC-091): the `week` cell, or for
+    a pooled row -- whose cells `_placed` named -- its first pool, which is Cursor's own (the
+    owner's pick, 2026-10-07; DEC-117).
+    """
+    pooled = any(w.name is not None for w in row.windows)
+    window = (
+        (row.windows[0] if row.windows else None)
+        if pooled
+        else next((w for w in row.windows if w.label == "week"), None)
+    )
+    if window is None or window.expected_percent is None or window.pace_delta is None:
+        return None
+    return window
 
 
 def countdown(row: LimitRow, window: LimitWindow) -> str | None:
@@ -770,8 +795,14 @@ an even spend means anything -- and an unknown label is left without one rather 
 
 def _pace(window: UsageWindow, percent: int, live: bool) -> tuple[int | None, int | None]:
     """A window's expected share and how far `percent` is from it; (None, None) for no pace."""
-    duration = _PACED_WINDOWS.get(window.label)
-    if duration is None or window.resets_at is None or not live:
+    if window.resets_at is None or not live:
+        return None, None
+    duration = (
+        window.resets_at - window.starts_at
+        if window.starts_at is not None
+        else _PACED_WINDOWS.get(window.label)
+    )
+    if duration is None:
         return None, None
     elapsed = duration - (window.resets_at - datetime.now(UTC))
     expected = min(100, max(0, round(100 * elapsed / duration)))
