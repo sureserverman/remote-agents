@@ -1,0 +1,28 @@
+{
+ "baseline": {
+  "elapsed_s": 27.7,
+  "exit": 0,
+  "tail": "........................................................................ [ 77%]\n.....................                                                    [100%]\n93 passed in 26.55s"
+ },
+ "break_patch": "diff --git a/src/remote_agents/adapters/tui/app.py b/src/remote_agents/adapters/tui/app.py\nindex 15b722e7..b8ac2491 100644\n--- a/src/remote_agents/adapters/tui/app.py\n+++ b/src/remote_agents/adapters/tui/app.py\n@@ -556,7 +556,8 @@ class RemoteAgentsTui(App[AttachRequest | None]):\n             return name\n         return Content.assemble(name, (\"  \", None), (sub_title, \"$text-muted\"))\n \n-    def watch_theme(self, theme_name: str) -> None:\n+    def _remember_theme(self, theme) -> None:\n+        theme_name = theme.name\n         \"\"\"Write the chosen theme beside the project order, or forget it (`write_theme`).\n \n         A public watcher rather than a `theme_changed_signal` subscriber, because Textual calls\n@@ -823,6 +824,7 @@ class RemoteAgentsTui(App[AttachRequest | None]):\n         )\n         # The theme is remembered by `watch_theme`, not here: the signal is published through\n         # `call_next`, a turn after the switch, and the Settings row reads the file back at once.\n+        self.theme_changed_signal.subscribe(self, self._remember_theme)\n         self.theme_changed_signal.subscribe(self, self._restyle_console_bar)\n \n     def get_default_screen(self) -> Screen[None]:\n",
+ "build": null,
+ "created": "2026-10-07T19:33:25+00:00",
+ "fingerprint": "89274f6680fa5d429fcb12173d811351049e9be28019da7bdd3f1218915222cd",
+ "index": 1,
+ "kind": "claim",
+ "named_break": null,
+ "no_build_reason": "python tests, no build",
+ "plan": "/mnt/vault/Portfolio/infra/remote-agents/plans/2026-10-07-theme-follows-every-pane-light-plan.md",
+ "red": {
+  "elapsed_s": 27.7,
+  "exit": 1,
+  "tail": "        path = tmp_path / \"preferences.json\"\n        app = RemoteAgentsTui(_context(preferences_path=path))\n        async with app.run_test() as pilot:\n            await pilot.pause()\n            await _open_settings(app, pilot)\n            await _press_row(app, pilot, THEME_TITLE)\n    \n            assert read_theme(path) == \"relay-day\"\n>           assert status(app) == f\"{THEME_TITLE} is now day.\"\nE           AssertionError: assert 'Press enter ...to change it.' == 'Theme is now day.'\nE             \nE             - Theme is now day.\nE             + Press enter on a row to change it.\n\ntests/unit/adapters/tui/test_settings_screen.py:701: AssertionError\n__________ test_a_theme_is_in_the_file_before_the_assignment_returns ___________\n\ntmp_path = PosixPath('/tmp/pytest-of-user/pytest-694/test_a_theme_is_in_the_file_be0')\n\n    async def test_a_theme_is_in_the_file_before_the_assignment_returns(tmp_path: Path) -> None:\n        \"\"\"The palette's path and the row's path share one writer, and it is synchronous: nothing\n        may run between the switch and the file holding it.\"\"\"\n        from remote_agents.adapters.tui.preferences import read_theme\n    \n        path = tmp_path / \"preferences.json\"\n        app = RemoteAgentsTui(_context(preferences_path=path))\n        async with app.run_test() as pilot:\n            await pilot.pause()\n            app.theme = \"relay-day\"\n>           assert read_theme(path) == \"relay-day\"\nE           AssertionError: assert 'relay-night' == 'relay-day'\nE             \nE             - relay-day\nE             + relay-night\n\ntests/unit/adapters/tui/test_settings_screen.py:716: AssertionError\n=========================== short test summary info ============================\nFAILED tests/unit/adapters/tui/test_settings_screen.py::test_a_stored_theme_switch_says_it_was_remembered\nFAILED tests/unit/adapters/tui/test_settings_screen.py::test_a_theme_is_in_the_file_before_the_assignment_returns\n2 failed, 91 passed in 26.52s"
+ },
+ "schema": 2,
+ "task": "1.1",
+ "test": "uv run --locked pytest tests/unit/adapters/tui/test_settings_screen.py tests/unit/adapters/tui/test_preferences.py -q -p no:randomly",
+ "text": "new cases: (a) pressing the theme row with a writable path leaves `status(app)` reading `Theme is now day.` and no announcement containing `remember` (red today: reproduced)",
+ "touched": [
+  "src/remote_agents/adapters/tui/app.py"
+ ]
+}

@@ -596,10 +596,10 @@ class SettingsScreen(ChoiceScreen):
             return
         async with self.holding_the_guard():
             intended = next_theme(self._theme)
-            # The assignment is the switch. `RemoteAgentsTui` subscribes to Textual's theme
-            # signal at mount and `_remember_theme` is what writes -- so this row deliberately
-            # does not call `write_theme` itself, or the palette and the row would be two
-            # writers of one preference.
+            # The assignment is the switch, and `RemoteAgentsTui.watch_theme` writes inside it,
+            # so the read-back on the next line sees this press. This row deliberately does not
+            # call `write_theme` itself, or the palette and the row would be two writers of one
+            # preference.
             self.tui.theme = intended
             stored = read_theme(self.services.preferences_path)
             self._read_preferences()

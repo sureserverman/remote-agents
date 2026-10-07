@@ -271,6 +271,23 @@ def test_a_written_theme_reads_back_and_keeps_the_order(tmp_path: Path) -> None:
     }
 
 
+def test_writing_the_theme_the_file_already_holds_leaves_the_file_alone(tmp_path: Path) -> None:
+    """Every surface process follows the file and then writes what it applied; a rewrite of the
+    same value would be a change every other process is woken for, about nothing."""
+    from remote_agents.adapters.tui.preferences import write_theme
+
+    path = tmp_path / "preferences.json"
+    write_theme(path, "relay-day")
+    before = path.stat()
+    os.utime(path, ns=(before.st_atime_ns, before.st_mtime_ns - 10_000_000))
+    pinned = path.stat().st_mtime_ns
+
+    write_theme(path, "relay-day")
+
+    assert path.stat().st_mtime_ns == pinned
+    assert path.stat().st_ino == before.st_ino
+
+
 def test_a_theme_this_surface_does_not_remember_is_not_stored(tmp_path: Path) -> None:
     """The palette offers Textual's built-ins too; they are used for the process and forgotten,
     because a stored name the reader ignores is a preference that never takes."""

@@ -681,6 +681,51 @@ async def test_the_theme_row_flips_the_app_theme_and_remembers_it(tmp_path: Path
         assert THEME_LABELS["relay-day"] in _row(app, THEME_TITLE)
 
 
+async def test_a_stored_theme_switch_says_it_was_remembered(tmp_path: Path) -> None:
+    """The owner's report of 2026-10-07: every press said the theme "could not be remembered".
+
+    The file did hold the new theme -- the write hung off Textual's theme signal, which
+    `App._watch_theme` publishes through `call_next`, so it landed *after* the row read the file
+    back. The row's sentence is the claim here, and it must match the file it reads.
+    """
+    from remote_agents.adapters.tui.preferences import THEME_TITLE, read_theme
+
+    path = tmp_path / "preferences.json"
+    app = RemoteAgentsTui(_context(preferences_path=path))
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await _open_settings(app, pilot)
+        await _press_row(app, pilot, THEME_TITLE)
+
+        assert read_theme(path) == "relay-day"
+        assert status(app) == f"{THEME_TITLE} is now day."
+        said = " ".join(announcements(app))
+        assert "remember" not in said.lower(), said
+
+
+async def test_a_theme_is_in_the_file_before_the_assignment_returns(tmp_path: Path) -> None:
+    """The palette's path and the row's path share one writer, and it is synchronous: nothing
+    may run between the switch and the file holding it."""
+    from remote_agents.adapters.tui.preferences import read_theme
+
+    path = tmp_path / "preferences.json"
+    app = RemoteAgentsTui(_context(preferences_path=path))
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        app.theme = "relay-day"
+        assert read_theme(path) == "relay-day"
+
+
+async def test_starting_the_surface_writes_no_theme(tmp_path: Path) -> None:
+    """The constructor's assignment is a reading of the file, not a choice: a fresh host keeps
+    no preference file until the owner picks something."""
+    path = tmp_path / "preferences.json"
+    app = RemoteAgentsTui(_context(preferences_path=path))
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        assert not path.exists()
+
+
 async def test_a_second_press_returns_the_theme_row_to_where_it_started(tmp_path: Path) -> None:
     from remote_agents.adapters.tui.preferences import THEME_TITLE, read_theme
 

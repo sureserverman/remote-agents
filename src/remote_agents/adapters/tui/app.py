@@ -556,9 +556,22 @@ class RemoteAgentsTui(App[AttachRequest | None]):
             return name
         return Content.assemble(name, ("  ", None), (sub_title, "$text-muted"))
 
-    def _remember_theme(self, theme: Theme) -> None:
-        """Write the chosen theme beside the project order, or forget it (`write_theme`)."""
-        write_theme(self._services.preferences_path, theme.name)
+    def watch_theme(self, theme_name: str) -> None:
+        """Write the chosen theme beside the project order, or forget it (`write_theme`).
+
+        A public watcher rather than a `theme_changed_signal` subscriber, because Textual calls
+        it inside the assignment while it publishes the signal through `call_next`. The
+        Settings row reads the file back on the line after its assignment to choose between
+        "is now day" and "could not be remembered", and a writer one turn late made it say the
+        second on every press (2026-10-07). The palette's theme command lands here too, so this
+        stays the one writer of the preference.
+
+        Not before the app runs: the constructor's own assignment is a reading of the file, not
+        a choice, and writing it would create a preference file on a host that never chose.
+        """
+        if not self.is_running:
+            return
+        write_theme(self._services.preferences_path, theme_name)
 
     def _restyle_console_bar(self, theme: Theme) -> None:
         """Recolour the console's status bar in the theme just chosen (DEC-105).
@@ -808,9 +821,8 @@ class RemoteAgentsTui(App[AttachRequest | None]):
         self._context_timer = self.set_interval(
             CONTEXT_AUTO_REFRESH, self._refresh_context_windows_tick
         )
-        # The palette's theme command is the switch; this is what makes the switch stick. The
-        # signal fires on every change, and `write_theme` keeps only the two relay names.
-        self.theme_changed_signal.subscribe(self, self._remember_theme)
+        # The theme is remembered by `watch_theme`, not here: the signal is published through
+        # `call_next`, a turn after the switch, and the Settings row reads the file back at once.
         self.theme_changed_signal.subscribe(self, self._restyle_console_bar)
 
     def get_default_screen(self) -> Screen[None]:
