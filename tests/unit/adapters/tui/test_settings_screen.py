@@ -50,6 +50,7 @@ from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 
+import pytest
 from backends import FakeHostRemoteControl, SessionUseCaseDouble, backend_for
 from textual.widgets import OptionList
 from tui_feedback import announcements, status
@@ -787,12 +788,85 @@ async def test_a_palette_theme_is_not_taken_back_by_an_unrelated_preference_writ
     app = RemoteAgentsTui(replace(_context(preferences_path=path), preference_events=watch))
     async with app.run_test() as pilot:
         await pilot.pause()
+        await _until(lambda: watch._seen is not None, why="the watcher's baseline")
         app.theme = "textual-dark"
         await pilot.pause()
+        seen = watch._seen
         write_project_order(path, ALPHABETICAL)
+        # The order write must have been seen, or this passes without testing anything.
+        await _until(lambda: watch._seen != seen, why="the order write to be polled")
 
         await asyncio.sleep(0.3)
         assert app.theme == "textual-dark"
+
+
+async def test_a_theme_stored_while_the_surface_starts_is_followed(tmp_path: Path) -> None:
+    """The watcher's first poll is its baseline, so a write between the constructor's read and
+    that poll -- four console panes starting together -- would otherwise never be seen."""
+    from remote_agents.adapters.tui.preferences import write_theme
+    from remote_agents.application.store_watch import StoreWatch
+
+    path = tmp_path / "preferences.json"
+    watch = StoreWatch((path,), interval=0.05)
+    app = RemoteAgentsTui(replace(_context(preferences_path=path), preference_events=watch))
+    write_theme(path, "relay-day")
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await _until(lambda: app.theme == "relay-day", why="the theme stored during start-up")
+
+
+async def test_a_following_surface_never_writes_the_theme(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A follower that wrote back could put a theme it read a moment ago over one another pane
+    has just chosen: only the pane the owner chose in writes."""
+    import remote_agents.adapters.tui.app as app_module
+    from remote_agents.adapters.tui.preferences import write_theme
+    from remote_agents.application.store_watch import StoreWatch
+
+    path = tmp_path / "preferences.json"
+    writes: list[str] = []
+    real_write = app_module.write_theme
+    monkeypatch.setattr(
+        app_module,
+        "write_theme",
+        lambda where, name: (writes.append(name), real_write(where, name)),
+    )
+    watch = StoreWatch((path,), interval=0.05)
+    app = RemoteAgentsTui(replace(_context(preferences_path=path), preference_events=watch))
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await _until(lambda: watch._seen is not None, why="the watcher's baseline")
+        write_theme(path, "relay-day")
+        await _until(lambda: app.theme == "relay-day", why="the follower to take up day")
+        assert writes == []
+
+
+async def test_a_choice_overtaken_by_another_panes_write_converges_on_the_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Two presses in two panes at once: this pane writes day and another's night lands right
+    after. The file says night, so this pane must end on night rather than stay on day."""
+    import remote_agents.adapters.tui.app as app_module
+    from remote_agents.adapters.tui.preferences import write_theme
+    from remote_agents.application.store_watch import StoreWatch
+
+    path = tmp_path / "preferences.json"
+    real_write = app_module.write_theme
+
+    def overtaken(where, name):
+        real_write(where, name)
+        write_theme(path, "relay-night" if name == "relay-day" else "relay-day")
+
+    watch = StoreWatch((path,), interval=0.05)
+    app = RemoteAgentsTui(replace(_context(preferences_path=path), preference_events=watch))
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await _until(lambda: watch._seen is not None, why="the watcher's baseline")
+        monkeypatch.setattr(app_module, "write_theme", overtaken)
+        app.theme = "relay-day"
+        monkeypatch.setattr(app_module, "write_theme", real_write)
+        await _until(lambda: app.theme == "relay-night", why="the pane to follow the later write")
 
 
 async def test_the_project_order_row_flips_the_file_and_the_launch_picker(tmp_path: Path) -> None:

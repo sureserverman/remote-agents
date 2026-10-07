@@ -69,7 +69,12 @@ from remote_agents.adapters.tui.screens.launch import ProjectsScreen
 from remote_agents.adapters.tui.screens.palette import NavigationCommands
 from remote_agents.adapters.tui.screens.sessions import perform_row_action
 from remote_agents.adapters.tui.screens.settings import SettingsScreen
-from remote_agents.adapters.tui.theme import THEMES, VARIABLE_DEFAULTS, status_bar_palette
+from remote_agents.adapters.tui.theme import (
+    RELAY_THEMES,
+    THEMES,
+    VARIABLE_DEFAULTS,
+    status_bar_palette,
+)
 from remote_agents.application.backend import CLOSE_TIMEOUT_SECONDS
 from remote_agents.application.commands import (
     LaunchCommand,
@@ -480,6 +485,7 @@ class RemoteAgentsTui(App[AttachRequest | None]):
         self._stored_theme = read_theme(context.preferences_path)
         self.theme = self._stored_theme
         self._preference_watch: Unsubscribe | None = None
+        self._following = False
         #: When each project was last launched, by opaque id, from the same usage read that
         #: ranks the catalogue. Read for the projects pane's age column and for nothing else.
         self._project_last_used: dict[str, datetime] = {}
@@ -573,11 +579,16 @@ class RemoteAgentsTui(App[AttachRequest | None]):
 
         Not before the app runs: the constructor's own assignment is a reading of the file, not
         a choice, and writing it would create a preference file on a host that never chose.
+        Nor while following: a follower that wrote back could put the theme it read a moment
+        ago over one another pane has just chosen. Only the pane the owner chose in writes.
         """
-        if not self.is_running:
+        if not self.is_running or self._following:
             return
         write_theme(self._services.preferences_path, theme_name)
-        self._stored_theme = read_theme(self._services.preferences_path)
+        # What this process chose, not a re-read: another pane's write landing between the two
+        # would be taken for this one's, and the follower would then never apply it.
+        if theme_name in RELAY_THEMES:
+            self._stored_theme = theme_name
 
     def _on_preferences_changed(self, change: StoreChanged) -> None:
         """Hand the re-read to the app's own pump; the watcher calls this on its polling task."""
@@ -598,7 +609,11 @@ class RemoteAgentsTui(App[AttachRequest | None]):
             return
         self._stored_theme = stored
         if self.theme != stored:
-            self.theme = stored
+            self._following = True
+            try:
+                self.theme = stored
+            finally:
+                self._following = False
 
     def _restyle_console_bar(self, theme: Theme) -> None:
         """Recolour the console's status bar in the theme just chosen (DEC-105).
@@ -825,13 +840,14 @@ class RemoteAgentsTui(App[AttachRequest | None]):
         close can run on the loop that started it. Bounded like the service's, for the same
         reason: a close that hangs must not keep the pane from exiting.
         """
+        # First, so the watcher's polling task stops even if a step below raises.
+        if self._preference_watch is not None:
+            self._preference_watch()
+            self._preference_watch = None
         # And unset the typing flag this process published, awaited because nothing runs after
         # this: a pane that exits mid-rename must not leave the bar saying `esc cancels`.
         if self._typing_written is not None:
             await self._settle_typing(None)
-        if self._preference_watch is not None:
-            self._preference_watch()
-            self._preference_watch = None
         close = self.services.backend.close_usage_readers
         if close is None:
             return
@@ -857,6 +873,9 @@ class RemoteAgentsTui(App[AttachRequest | None]):
         events = self._services.preference_events
         if events is not None:
             self._preference_watch = events.subscribe(self._on_preferences_changed)
+            # The watcher's first poll is its baseline, so a theme another pane stored between
+            # the constructor's read and that poll would never be seen as a change.
+            self._follow_stored_theme()
 
     def get_default_screen(self) -> Screen[None]:
         """The project list, installed as the bottom of the stack rather than pushed.
