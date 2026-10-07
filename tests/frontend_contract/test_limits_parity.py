@@ -38,6 +38,7 @@ from remote_agents.application.session_views import (
     LimitRow,
     countdown,
     limit_rows,
+    pace_cell,
     percent_gauge,
 )
 from remote_agents.domain.models import ProfileId
@@ -151,6 +152,25 @@ def _pools_beside() -> tuple[LimitRow, ...]:
     )
 
 
+def _cursor_paced() -> tuple[LimitRow, ...]:
+    """Cursor's month with its cycle start: both pools paced, the Cursor pool's in the slot."""
+    resets = _in(timedelta(days=25))
+    return limit_rows(
+        (
+            _cursor(
+                UsageWindow(
+                    "month",
+                    14.0,
+                    resets,
+                    parts=(UsagePart("cursor", 29.0), UsagePart("other", 2.0)),
+                    starts_at=resets - timedelta(days=30),
+                )
+            ),
+        ),
+        (ProfileId("cursor-agent"),),
+    )
+
+
 def _absences() -> tuple[LimitRow, ...]:
     """Every silence a row can have, and one provider that has no row at all."""
     return limit_rows(
@@ -254,11 +274,12 @@ def _facts(rows: tuple[LimitRow, ...]) -> Iterator[tuple[str, str, dict[str, str
                 arrow = "▲" if window.pace_delta > 0 else "▼"
                 said = f"pace {arrow} {abs(window.pace_delta)}"
                 points = rf"{arrow} {abs(window.pace_delta)}\b"
-            # The terminal words the week's pace; a daily window's is its tick alone.
+            # The terminal words the pace of the row's one pace cell (`pace_cell`: the week, or a
+            # pooled row's Cursor pool); every other paced cell is its tick alone.
             yield (
                 row.profile,
                 f"{where}: {said}",
-                {"telegram": points, "tui": points if window.label == "week" else "┃"},
+                {"telegram": points, "tui": points if window == pace_cell(row) else "┃"},
             )
         if row.windows:
             age = "live" if row.stale_for is None else f"as of {row.stale_for}"
@@ -267,8 +288,9 @@ def _facts(rows: tuple[LimitRow, ...]) -> Iterator[tuple[str, str, dict[str, str
                 row.profile,
                 f"stamped {source}{age}",
                 {
+                    # A pooled row's one shared reset ends its stamp line (DEC-117).
                     "telegram": rf"(?m)^{re.escape(f'via {source}' if source else '')}"
-                    rf"{re.escape(age)}$",
+                    rf"{re.escape(age)}(?: · ↻ \S+)?$",
                     "tui": re.escape(f"{row.profile} · {source}{age}"),
                 },
             )
@@ -308,6 +330,7 @@ SCENARIOS = {
     "on pace": _on_pace,
     "stale": _stale,
     "pools beside": _pools_beside,
+    "cursor paced": _cursor_paced,
     "absences": _absences,
 }
 
@@ -350,6 +373,8 @@ def test_limits_parity_the_scenarios_carry_every_kind_of_fact() -> None:
         "day: pace ▲",
         "Cursor pool: label, bar and 62%",
         "other pool: label, bar and 18%",
+        "Cursor pool: pace ▲",
+        "other pool: pace ▼",
         "month: label, bar and 73%",
         "stamped status-line cache · live",
         "codex: stamped live",

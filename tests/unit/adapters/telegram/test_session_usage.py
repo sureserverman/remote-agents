@@ -13,7 +13,7 @@ from remote_agents.adapters.telegram.presenters import MAX_TELEGRAM_TEXT_UNITS
 from remote_agents.adapters.telegram.service import PrivateBotBoundary, build_private_bot
 from remote_agents.application.profiles import ProfileAvailability
 from remote_agents.application.project_catalog import CatalogProject
-from remote_agents.application.session_views import LimitRow, LimitWindow
+from remote_agents.application.session_views import LimitRow, LimitWindow, percent_gauge
 from remote_agents.domain.models import (
     ProfileId,
     ProjectId,
@@ -330,6 +330,16 @@ _POOLS = LimitRow(
     borrowed="Cursor API",
     stale_for=None,
 )
+#: The same month paced at its widest: a spent pool, the longest pace words, a 31-day reset.
+_PACED_POOLS = LimitRow(
+    "cursor-agent",
+    (
+        LimitWindow("5h", 100, "31d", expected_percent=0, pace_delta=100, name="Cursor"),
+        LimitWindow("week", 0, "31d", expected_percent=100, pace_delta=-100, name="other"),
+    ),
+    borrowed="Cursor API",
+    stale_for=None,
+)
 _ABSENT = tuple(
     LimitRow(name, (), None, None, absence=phrase)
     for name, phrase in (
@@ -358,6 +368,7 @@ _LAYOUTS = {
     "a dated reading": (_DATED, _UNDER),
     "all absent": _ABSENT,
     "Cursor pools": (_POOLS,),
+    "Cursor pools paced": (_FULL, _UNDER, _PACED_POOLS),
 }
 
 
@@ -386,9 +397,43 @@ def test_cursors_pools_are_two_lines_labelled_by_pool() -> None:
     """`Cursor` and `other`, never `5h` and `wk`: a monthly pool is not a five-hour figure."""
     block = limits_block((_FULL, _UNDER, _POOLS))
 
-    assert "cursor-agent\n<code>Cursor ████████ 100% ↻ 29d</code>\n" in block, block
-    assert "<code>other  ████████ 100% ↻ 29d</code>\n<code>via Cursor API · live</code>" in block
+    assert "cursor-agent\n<code>Cursor ████████ 100%</code>\n" in block, block
+    assert "<code>other  ████████ 100%</code>\n<code>via Cursor API · live · ↻ 29d</code>" in block
     assert "│" not in block
+
+
+def test_cursors_pools_each_say_their_pace_and_share_one_reset_on_the_stamp_line() -> None:
+    """The owner's pick (2026-10-07): pace words on both pool lines. The pools share one reset,
+    so it is said once, on the stamp line -- which is what keeps a paced pool line inside a
+    phone's width (DEC-117)."""
+    pools = LimitRow(
+        "cursor-agent",
+        (
+            LimitWindow("5h", 29, "25d", expected_percent=17, pace_delta=12, name="Cursor"),
+            LimitWindow("week", 2, "25d", expected_percent=17, pace_delta=-15, name="other"),
+        ),
+        borrowed="Cursor API",
+        stale_for=None,
+    )
+    lines = limits_block((pools,)).split("\n")
+
+    assert lines[1:] == [
+        "cursor-agent",
+        f"<code>Cursor {percent_gauge(29)} 29% ▲ 12 over</code>",
+        f"<code>other  {percent_gauge(2)}  2% ▼ 15 under</code>",
+        "<code>via Cursor API · live · ↻ 25d</code>",
+    ], lines
+
+
+def test_a_stale_pooled_row_says_no_reset_on_its_stamp_line() -> None:
+    """A countdown on a stale figure is a claim about the present; the stamp dates it instead."""
+    stale = LimitRow(
+        "cursor-agent",
+        (LimitWindow("5h", 62, "4d", name="Cursor"), LimitWindow("week", 18, "4d", name="other")),
+        borrowed="Cursor API",
+        stale_for="2h",
+    )
+    assert limits_block((stale,)).split("\n")[-1] == "<code>via Cursor API · as of 2h</code>"
 
 
 def test_a_cursor_row_costs_no_other_agent_its_phone_width() -> None:

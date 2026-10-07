@@ -85,6 +85,9 @@ def _window_lines(row: LimitRow, label_width: int, percent_width: int) -> list[s
     kinds = FIXED_LIMIT_WINDOWS + tuple(
         kind for kind in published if kind not in FIXED_LIMIT_WINDOWS
     )
+    # A pooled row's cells share one reset, said once on its stamp line (`_stamp`): with pace
+    # words on each pool line, a reset there too would run past `WIDTH` (DEC-117).
+    pooled = _pooled(row)
     lines = []
     for kind in kinds:
         window = published.get(kind)
@@ -94,14 +97,29 @@ def _window_lines(row: LimitRow, label_width: int, percent_width: int) -> list[s
             continue
         figure = f"{window.percent}%".rjust(percent_width)
         pace = "" if window.pace_delta is None else f" {_pace_words(window.pace_delta)}"
-        lines.append(f"{name} {percent_gauge(window.percent)} {figure}{_reset(row, window)}{pace}")
+        reset = "" if pooled else _reset(row, window)
+        lines.append(f"{name} {percent_gauge(window.percent)} {figure}{reset}{pace}")
     return lines
 
 
+def _pooled(row: LimitRow) -> bool:
+    """Whether `limit_rows` placed this row's cells as pools of one window (they carry names)."""
+    return any(window.name is not None for window in row.windows)
+
+
 def _stamp(row: LimitRow) -> str:
-    """`via status-line cache · live`: where the reading came from and how old it is (DEC-061)."""
+    """`via status-line cache · live`: where the reading came from and how old it is (DEC-061).
+
+    A pooled row's one shared reset ends it (`via Cursor API · live · ↻ 25d`), since its pool
+    lines leave it out.
+    """
     age = "live" if row.stale_for is None else f"as of {row.stale_for}"
-    return age if row.borrowed is None else f"via {row.borrowed} · {age}"
+    stamp = age if row.borrowed is None else f"via {row.borrowed} · {age}"
+    if _pooled(row):
+        left = countdown(row, row.windows[0])
+        if left is not None:
+            stamp += f" · ↻ {left}"
+    return stamp
 
 
 def _row_lines(row: LimitRow, percent_width: int) -> list[str]:

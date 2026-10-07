@@ -1,0 +1,28 @@
+{
+ "baseline": {
+  "elapsed_s": 3.2,
+  "exit": 0,
+  "tail": "........................................................................ [ 98%]\n.                                                                        [100%]\n73 passed in 2.49s"
+ },
+ "break_patch": "diff --git a/src/remote_agents/adapters/telegram/limits_block.py b/src/remote_agents/adapters/telegram/limits_block.py\nindex 4652b6d7..5d4aba30 100644\n--- a/src/remote_agents/adapters/telegram/limits_block.py\n+++ b/src/remote_agents/adapters/telegram/limits_block.py\n@@ -97,7 +97,7 @@ def _window_lines(row: LimitRow, label_width: int, percent_width: int) -> list[s\n             continue\n         figure = f\"{window.percent}%\".rjust(percent_width)\n         pace = \"\" if window.pace_delta is None else f\" {_pace_words(window.pace_delta)}\"\n-        reset = \"\" if pooled else _reset(row, window)\n+        reset = _reset(row, window)\n         lines.append(f\"{name} {percent_gauge(window.percent)} {figure}{reset}{pace}\")\n     return lines\n \n",
+ "build": null,
+ "created": "2026-10-07T20:09:41+00:00",
+ "fingerprint": "c7e385d52d4fe4ea08b5599be32b4bad022d09d814cb7593472b3e0c665cb258",
+ "index": 1,
+ "kind": "claim",
+ "named_break": null,
+ "no_build_reason": "python tests, no build",
+ "plan": "/mnt/vault/Portfolio/infra/remote-agents/plans/2026-10-07-cursor-pace-light-plan.md",
+ "red": {
+  "elapsed_s": 3.4,
+  "exit": 1,
+  "tail": "E         <code>other  \u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588 100% \u21bb 29d</code>\nE         <code>via Cursor API \u00b7 live \u00b7 \u21bb 29d</code>\nE       assert 'cursor-agent\\n<code>Cursor \u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588 100%</code>\\n' in '<b>Plan limits</b>\\nclaude\\n<code>5h \u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588 100% \u21bb 59m</code>\\n<code>wk \u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588 100% \u21bb 23h \u25b2 100 over</code>\\n<cod...Cursor \u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588 100% \u21bb 29d</code>\\n<code>other  \u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588 100% \u21bb 29d</code>\\n<code>via Cursor API \u00b7 live \u00b7 \u21bb 29d</code>'\n\ntests/unit/adapters/telegram/test_session_usage.py:400: AssertionError\n_ test_cursors_pools_each_say_their_pace_and_share_one_reset_on_the_stamp_line _\n\n    def test_cursors_pools_each_say_their_pace_and_share_one_reset_on_the_stamp_line() -> None:\n        \"\"\"The owner's pick (2026-10-07): pace words on both pool lines. The pools share one reset,\n        so it is said once, on the stamp line -- which is what keeps a paced pool line inside a\n        phone's width (DEC-117).\"\"\"\n        pools = LimitRow(\n            \"cursor-agent\",\n            (\n                LimitWindow(\"5h\", 29, \"25d\", expected_percent=17, pace_delta=12, name=\"Cursor\"),\n                LimitWindow(\"week\", 2, \"25d\", expected_percent=17, pace_delta=-15, name=\"other\"),\n            ),\n            borrowed=\"Cursor API\",\n            stale_for=None,\n        )\n        lines = limits_block((pools,)).split(\"\\n\")\n    \n>       assert lines[1:] == [\n            \"cursor-agent\",\n            f\"<code>Cursor {percent_gauge(29)} 29% \u25b2 12 over</code>\",\n            f\"<code>other  {percent_gauge(2)}  2% \u25bc 15 under</code>\",\n            \"<code>via Cursor API \u00b7 live \u00b7 \u21bb 25d</code>\",\n        ], lines\nE       AssertionError: ['<b>Plan limits</b>', 'cursor-agent', '<code>Cursor \u2588\u2588\u2588\u2591\u2591\u2591\u2591\u2591 29% \u21bb 25d \u25b2 12 over</code>', '<code>other  \u2588\u2591\u2591\u2591\u2591\u2591\u2591\u2591  2% \u21bb 25d \u25bc 15 under</code>', '<code>via Cursor API \u00b7 live \u00b7 \u21bb 25d</code>']\nE       assert ['cursor-agen...\u21bb 25d</code>'] == ['cursor-agen...\u21bb 25d</code>']\nE         \nE         At index 1 diff: '<code>Cursor \u2588\u2588\u2588\u2591\u2591\u2591\u2591\u2591 29% \u21bb 25d \u25b2 12 over</code>' != '<code>Cursor \u2588\u2588\u2588\u2591\u2591\u2591\u2591\u2591 29% \u25b2 12 over</code>'\nE         Use -v to get more diff\n\ntests/unit/adapters/telegram/test_session_usage.py:420: AssertionError\n=========================== short test summary info ============================\nFAILED tests/unit/adapters/telegram/test_session_usage.py::test_the_limits_block_fits_a_phone_line[Cursor pools paced]\nFAILED tests/unit/adapters/telegram/test_session_usage.py::test_cursors_pools_are_two_lines_labelled_by_pool\nFAILED tests/unit/adapters/telegram/test_session_usage.py::test_cursors_pools_each_say_their_pace_and_share_one_reset_on_the_stamp_line\n3 failed, 70 passed in 2.63s"
+ },
+ "schema": 2,
+ "task": "1.4",
+ "test": "uv run --locked pytest tests/unit/adapters/telegram/test_session_usage.py tests/frontend_contract -q -p no:randomly",
+ "text": "new cases: the Cursor block reads `Cursor \u2588\u2588\u2591\u2591\u2591\u2591\u2591\u2591  29% \u25b2 12 over`, `other  \u2591\u2591\u2591\u2591\u2591\u2591\u2591\u2591   2% \u25bc 15 under`, then a stamp ending `\u21bb 25d`",
+ "touched": [
+  "src/remote_agents/adapters/telegram/limits_block.py"
+ ]
+}
