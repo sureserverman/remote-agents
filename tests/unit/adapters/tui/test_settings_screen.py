@@ -747,7 +747,7 @@ async def test_every_surface_process_follows_a_theme_another_one_stored(tmp_path
 
     Each console pane is its own process and read the theme once, at start. Two apps on one
     preference file stand in for two panes: a press in one reaches the other through the file,
-    and the follower's own write-back leaves the file untouched, so nothing echoes.
+    and the follower writes nothing back, so the file is untouched and nothing echoes.
     """
     from remote_agents.adapters.tui.preferences import THEME_TITLE
     from remote_agents.application.store_watch import StoreWatch

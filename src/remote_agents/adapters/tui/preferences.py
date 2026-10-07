@@ -168,8 +168,8 @@ def write_theme(path: Path | None, theme: str) -> None:
         _LOG.debug("not storing a theme this surface does not remember: %r", theme)
         return
     if _read_all(path).get(_THEME_KEY) == theme:
-        # Every surface process follows the file and then passes what it applied back through
-        # here. Rewriting the same value would wake every other process for nothing.
+        # Re-choosing the theme the file already holds would rewrite it and wake every other
+        # surface process for nothing. (A follower never gets here: DEC-116.)
         return
     _write_key(path, _THEME_KEY, theme)
 

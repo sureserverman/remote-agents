@@ -248,6 +248,10 @@ def test_no_further_capability_leaked_into_the_context() -> None:
         # host-shaped: `adapters/tui/preferences.py` reads and writes totally, so a host that
         # wires no path forgets the choice between runs and behaves identically otherwise.
         "preferences_path",
+        # Added 2026-10-07 (DEC-116): says when the file above moved, so a theme another surface
+        # process stored is followed here. Not a capability the surface acts with -- a watcher
+        # it listens to, composed per process beside the path and `None` in a test context.
+        "preference_events",
     }
     shared = {
         # Added by sub-plan 02's Task 1.3, and listed here because this is where growing the

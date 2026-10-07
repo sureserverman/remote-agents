@@ -601,8 +601,8 @@ class RemoteAgentsTui(App[AttachRequest | None]):
         The console's panes are four processes, and each read the theme once at start, so a
         switch in Settings repainted only the pane it was pressed in. Any change to the file
         lands here; only a change to its *theme* is acted on, so an order written elsewhere
-        does not drag a pane off a palette built-in it is showing. Applying it goes through
-        `watch_theme`, whose write is skipped because the file already says it.
+        does not drag a pane off a palette built-in it is showing. Applying it sets `_following`,
+        so `watch_theme` writes nothing: a follower never writes (DEC-116).
         """
         stored = read_theme(self._services.preferences_path)
         if stored == self._stored_theme:

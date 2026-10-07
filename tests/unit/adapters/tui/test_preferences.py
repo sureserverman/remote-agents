@@ -272,8 +272,8 @@ def test_a_written_theme_reads_back_and_keeps_the_order(tmp_path: Path) -> None:
 
 
 def test_writing_the_theme_the_file_already_holds_leaves_the_file_alone(tmp_path: Path) -> None:
-    """Every surface process follows the file and then writes what it applied; a rewrite of the
-    same value would be a change every other process is woken for, about nothing."""
+    """Re-choosing the theme the file already holds must not rewrite it: a rewrite of the same
+    value would be a change every other surface process is woken for, about nothing."""
     from remote_agents.adapters.tui.preferences import write_theme
 
     path = tmp_path / "preferences.json"
