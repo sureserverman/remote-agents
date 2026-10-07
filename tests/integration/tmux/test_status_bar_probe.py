@@ -49,8 +49,8 @@ class _NestedClient:
 
     def __init__(self, width: int, height: int = 10) -> None:
         tag = uuid4().hex
-        self.inner = f"remote-agents-probe-in-{tag}"
-        self.outer = f"remote-agents-probe-out-{tag}"
+        self.inner = f"remote-agents-test-probe-in-{tag}"
+        self.outer = f"remote-agents-test-probe-out-{tag}"
         self._size = (width, height)
 
     def inner_tmux(self, *args: str) -> str:
@@ -164,7 +164,7 @@ def test_the_numeric_width_switch_flips_above_160(nested, width: int, variant: s
 
 def test_the_string_compare_is_what_the_numeric_switch_avoids() -> None:
     """The measurement behind R4, kept so the reason survives the README it corrects."""
-    socket = f"remote-agents-probe-cmp-{uuid4().hex}"
+    socket = f"remote-agents-test-probe-cmp-{uuid4().hex}"
     try:
         _tmux(socket, "new-session", "-d", "-s", "cmp", "sleep 600")
         as_strings = _tmux(socket, "display-message", "-p", "#{>:99,160}").strip()
@@ -176,7 +176,7 @@ def test_the_string_compare_is_what_the_numeric_switch_avoids() -> None:
 
 
 def test_status_options_set_with_w_stay_on_the_one_session() -> None:
-    socket = f"remote-agents-probe-scope-{uuid4().hex}"
+    socket = f"remote-agents-test-probe-scope-{uuid4().hex}"
     try:
         _tmux(socket, "new-session", "-d", "-s", "console", "sleep 600")
         _tmux(socket, "new-session", "-d", "-s", "agent", "sleep 600")

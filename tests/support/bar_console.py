@@ -39,8 +39,8 @@ class BarConsole:
 
     def __init__(self, width: int) -> None:
         tag = uuid4().hex
-        self.inner = f"remote-agents-bar-in-{tag}"
-        self.outer = f"remote-agents-bar-out-{tag}"
+        self.inner = f"remote-agents-test-bar-in-{tag}"
+        self.outer = f"remote-agents-test-bar-out-{tag}"
         self.width = width
 
     def tmux(self, *args: str) -> str:

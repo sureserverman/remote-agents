@@ -43,7 +43,7 @@ class _Server:
     """A disposable tmux server with a console session and panes we can mark and watch."""
 
     def __init__(self, tmp_path: Path) -> None:
-        self.socket = f"remote-agents-fkey-{uuid4().hex}"
+        self.socket = f"remote-agents-test-fkey-{uuid4().hex}"
         self.tmp = tmp_path
         self._clients: list[int] = []
 
