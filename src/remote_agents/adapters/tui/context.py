@@ -11,6 +11,7 @@ from remote_agents.application.console import RecoveryReport
 from remote_agents.application.profiles import ProfileAvailability
 from remote_agents.domain.models import SessionId
 from remote_agents.ports.console import RemoteControlMark, StatusBarPalette
+from remote_agents.ports.state_events import StateEvents
 
 #: How many observations the feed shows and its reader fetches — one number, imported by
 #: both the composition root (the reader's LIMIT) and the dashboard (the render slice), so
@@ -165,6 +166,10 @@ class TuiContext:
     # both directions and answers `None` with the default order. A host that wired no path
     # forgets the choice between runs; it does not fail to draw a list.
     preferences_path: Path | None = None
+    # Says when the preference file above moved, so a theme stored by another surface process
+    # -- the console's other panes are each one -- is followed here rather than only read at
+    # start. Composed per process beside the path; `None` leaves the theme as it started.
+    preference_events: StateEvents | None = None
 
     def __post_init__(self) -> None:
         """Refuse a backend this surface cannot actually drive.

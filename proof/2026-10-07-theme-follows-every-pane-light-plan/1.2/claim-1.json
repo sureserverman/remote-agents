@@ -1,0 +1,28 @@
+{
+ "baseline": {
+  "elapsed_s": 1.8,
+  "exit": 0,
+  "tail": ".                                                                        [100%]\n1 passed, 54 deselected in 1.45s"
+ },
+ "break_patch": "diff --git a/src/remote_agents/adapters/tui/app.py b/src/remote_agents/adapters/tui/app.py\nindex f1823f2c..17a420b2 100644\n--- a/src/remote_agents/adapters/tui/app.py\n+++ b/src/remote_agents/adapters/tui/app.py\n@@ -856,7 +856,7 @@ class RemoteAgentsTui(App[AttachRequest | None]):\n         self.theme_changed_signal.subscribe(self, self._restyle_console_bar)\n         events = self._services.preference_events\n         if events is not None:\n-            self._preference_watch = events.subscribe(self._on_preferences_changed)\n+            pass\n \n     def get_default_screen(self) -> Screen[None]:\n         \"\"\"The project list, installed as the bottom of the stack rather than pushed.\n",
+ "build": null,
+ "created": "2026-10-07T19:39:38+00:00",
+ "fingerprint": "e68780db72ae33bad608199fc8da4f675083550fee1378d86720bd89a1517290",
+ "index": 1,
+ "kind": "claim",
+ "named_break": null,
+ "no_build_reason": "python tests, no build",
+ "plan": "/mnt/vault/Portfolio/infra/remote-agents/plans/2026-10-07-theme-follows-every-pane-light-plan.md",
+ "red": {
+  "elapsed_s": 6.6,
+  "exit": 1,
+  "tail": "        right = RemoteAgentsTui(\n            replace(\n                _context(preferences_path=path), preference_events=StoreWatch((path,), interval=0.05)\n            )\n        )\n        async with right.run_test() as right_pilot, left.run_test() as pilot:\n            await pilot.pause()\n            await right_pilot.pause()\n            await _open_settings(left, pilot)\n            await _press_row(left, pilot, THEME_TITLE)\n            written = path.stat().st_mtime_ns\n    \n>           await _until(lambda: right.theme == \"relay-day\", why=\"the right pane to follow day\")\n\ntests/unit/adapters/tui/test_settings_screen.py:772: \n_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ \n\ncondition = <function test_every_surface_process_follows_a_theme_another_one_stored.<locals>.<lambda> at 0x7a75ab4af060>\ntimeout = 5.0, why = 'the right pane to follow day'\n\n    async def _until(condition, *, timeout: float = 5.0, why: str = \"\") -> None:\n        \"\"\"Wait for a condition without waiting on a pump that is suspended by design.\n    \n        The same helper `test_tui_host_remote_control.py` carries, and for the same reason: a\n        confirmation raised from a screen handler suspends that screen's queue until it is\n        answered, and `Pilot.press` finishes by waiting for exactly that queue to drain. A test\n        that pressed and then awaited the press would be waiting for the thing under test to stop\n        being true.\n        \"\"\"\n        loop = asyncio.get_running_loop()\n        deadline = loop.time() + timeout\n        while not condition():\n            if loop.time() > deadline:\n>               raise AssertionError(f\"timed out after {timeout}s waiting for {why}\")\nE               AssertionError: timed out after 5.0s waiting for the right pane to follow day\n\ntests/unit/adapters/tui/test_settings_screen.py:218: AssertionError\n=========================== short test summary info ============================\nFAILED tests/unit/adapters/tui/test_settings_screen.py::test_every_surface_process_follows_a_theme_another_one_stored\n1 failed, 54 deselected in 6.27s"
+ },
+ "schema": 2,
+ "task": "1.2",
+ "test": "uv run --locked pytest tests/unit/adapters/tui/test_settings_screen.py -k \"follows\" -q -p no:randomly",
+ "text": "new case: two `RemoteAgentsTui` apps share one `preferences.json`, each with a `StoreWatch(interval=0.05)`. Pressing the theme row in app A leaves app B on `relay-day` within 2 s. B's apply does not change the file's `st_mtime_ns`. A third app that picked `textual-dark` from its palette stays on `textual-dark` after an unrelated `project_order` write",
+ "touched": [
+  "src/remote_agents/adapters/tui/app.py"
+ ]
+}

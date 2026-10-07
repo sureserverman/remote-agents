@@ -119,6 +119,7 @@ from remote_agents.domain.models import (
 from remote_agents.domain.remote_control import RemoteControlState
 from remote_agents.ports.agent_usage import ContextWindow
 from remote_agents.ports.console import StatusBarPalette
+from remote_agents.ports.state_events import StoreChanged, Unsubscribe
 
 _LOG = logging.getLogger(__name__)
 
@@ -474,7 +475,11 @@ class RemoteAgentsTui(App[AttachRequest | None]):
         # an unknown or unreadable value is the default, never an `InvalidThemeError` here.
         for theme in THEMES:
             self.register_theme(theme)
-        self.theme = read_theme(context.preferences_path)
+        #: The theme the preference file last said, which is what a later change is compared
+        #: with -- not `self.theme`, which a palette built-in may hold without the file knowing.
+        self._stored_theme = read_theme(context.preferences_path)
+        self.theme = self._stored_theme
+        self._preference_watch: Unsubscribe | None = None
         #: When each project was last launched, by opaque id, from the same usage read that
         #: ranks the catalogue. Read for the projects pane's age column and for nothing else.
         self._project_last_used: dict[str, datetime] = {}
@@ -572,6 +577,28 @@ class RemoteAgentsTui(App[AttachRequest | None]):
         if not self.is_running:
             return
         write_theme(self._services.preferences_path, theme_name)
+        self._stored_theme = read_theme(self._services.preferences_path)
+
+    def _on_preferences_changed(self, change: StoreChanged) -> None:
+        """Hand the re-read to the app's own pump; the watcher calls this on its polling task."""
+        del change
+        self.call_next(self._follow_stored_theme)
+
+    def _follow_stored_theme(self) -> None:
+        """Take up a theme another surface process stored (2026-10-07).
+
+        The console's panes are four processes, and each read the theme once at start, so a
+        switch in Settings repainted only the pane it was pressed in. Any change to the file
+        lands here; only a change to its *theme* is acted on, so an order written elsewhere
+        does not drag a pane off a palette built-in it is showing. Applying it goes through
+        `watch_theme`, whose write is skipped because the file already says it.
+        """
+        stored = read_theme(self._services.preferences_path)
+        if stored == self._stored_theme:
+            return
+        self._stored_theme = stored
+        if self.theme != stored:
+            self.theme = stored
 
     def _restyle_console_bar(self, theme: Theme) -> None:
         """Recolour the console's status bar in the theme just chosen (DEC-105).
@@ -802,6 +829,9 @@ class RemoteAgentsTui(App[AttachRequest | None]):
         # this: a pane that exits mid-rename must not leave the bar saying `esc cancels`.
         if self._typing_written is not None:
             await self._settle_typing(None)
+        if self._preference_watch is not None:
+            self._preference_watch()
+            self._preference_watch = None
         close = self.services.backend.close_usage_readers
         if close is None:
             return
@@ -824,6 +854,9 @@ class RemoteAgentsTui(App[AttachRequest | None]):
         # The theme is remembered by `watch_theme`, not here: the signal is published through
         # `call_next`, a turn after the switch, and the Settings row reads the file back at once.
         self.theme_changed_signal.subscribe(self, self._restyle_console_bar)
+        events = self._services.preference_events
+        if events is not None:
+            self._preference_watch = events.subscribe(self._on_preferences_changed)
 
     def get_default_screen(self) -> Screen[None]:
         """The project list, installed as the bottom of the stack rather than pushed.

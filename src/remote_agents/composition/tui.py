@@ -29,6 +29,7 @@ from remote_agents.adapters.tmux.profiles import (
 from remote_agents.adapters.tmux.runtime import AsyncTmuxRunner, TmuxTerminal
 from remote_agents.adapters.tui import FRONTEND
 from remote_agents.application.console import CONSOLE_BINDINGS, RecoveryReport
+from remote_agents.application.store_watch import StoreWatch
 from remote_agents.composition.backend import (
     ProjectCatalogueProvider,
     compose_backend,
@@ -542,6 +543,9 @@ def local_context(config, connection, paths: ProductionPaths):
         # The declared boundary's answer to where a surface preference lives, not this
         # surface's own (DEC-046): the path is wired here and read through a total reader.
         preferences_path=paths.preferences_path,
+        # Its own watcher rather than a path added to the store's: DEC-090 keeps the watched
+        # store free of anything a surface writes about itself. One per process, like the backend.
+        preference_events=StoreWatch((paths.preferences_path,)),
     )
 
 

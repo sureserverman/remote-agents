@@ -370,6 +370,11 @@ def test_the_local_context_wires_the_preference_the_surface_remembers(
 
         assert context.preferences_path == paths.preferences_path
         assert context.preferences_path.parent == paths.state_directory
+        # And says when that file moves, so a theme another pane stored is followed here.
+        from remote_agents.application.store_watch import StoreWatch
+
+        assert isinstance(context.preference_events, StoreWatch)
+        assert context.preference_events._paths == (paths.preferences_path,)
     finally:
         connection.close()
 

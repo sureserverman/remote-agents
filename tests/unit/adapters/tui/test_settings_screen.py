@@ -741,6 +741,60 @@ async def test_a_second_press_returns_the_theme_row_to_where_it_started(tmp_path
         assert read_theme(path) == "relay-night"
 
 
+async def test_every_surface_process_follows_a_theme_another_one_stored(tmp_path: Path) -> None:
+    """The owner's report of 2026-10-07: the console's right panes stayed dark.
+
+    Each console pane is its own process and read the theme once, at start. Two apps on one
+    preference file stand in for two panes: a press in one reaches the other through the file,
+    and the follower's own write-back leaves the file untouched, so nothing echoes.
+    """
+    from remote_agents.adapters.tui.preferences import THEME_TITLE
+    from remote_agents.application.store_watch import StoreWatch
+
+    path = tmp_path / "preferences.json"
+    left = RemoteAgentsTui(
+        replace(
+            _context(preferences_path=path), preference_events=StoreWatch((path,), interval=0.05)
+        )
+    )
+    right = RemoteAgentsTui(
+        replace(
+            _context(preferences_path=path), preference_events=StoreWatch((path,), interval=0.05)
+        )
+    )
+    async with right.run_test() as right_pilot, left.run_test() as pilot:
+        await pilot.pause()
+        await right_pilot.pause()
+        await _open_settings(left, pilot)
+        await _press_row(left, pilot, THEME_TITLE)
+        written = path.stat().st_mtime_ns
+
+        await _until(lambda: right.theme == "relay-day", why="the right pane to follow day")
+        await asyncio.sleep(0.2)
+        assert path.stat().st_mtime_ns == written
+
+
+async def test_a_palette_theme_is_not_taken_back_by_an_unrelated_preference_write(
+    tmp_path: Path,
+) -> None:
+    """A built-in picked from one pane's palette is that process's alone and is never stored;
+    an order change elsewhere moves the file, and must not drag this pane back to a relay theme."""
+    from remote_agents.adapters.tui.preferences import ALPHABETICAL, write_project_order
+    from remote_agents.application.store_watch import StoreWatch
+
+    path = tmp_path / "preferences.json"
+    watch = StoreWatch((path,), interval=0.05)
+    app = RemoteAgentsTui(replace(_context(preferences_path=path), preference_events=watch))
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        app.theme = "textual-dark"
+        await pilot.pause()
+        write_project_order(path, ALPHABETICAL)
+
+        await asyncio.sleep(0.3)
+        assert app.theme == "textual-dark"
+
+
 async def test_the_project_order_row_flips_the_file_and_the_launch_picker(tmp_path: Path) -> None:
     """The order is app state and the list re-sorts on the next draw, so this asserts both:
     what the file now says, and what the projects position draws when it is returned to."""
