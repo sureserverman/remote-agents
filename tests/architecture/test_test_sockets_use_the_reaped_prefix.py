@@ -17,7 +17,8 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-_TESTS = Path("tests")
+#: Anchored to this file, so a run from another directory still sweeps the real tree.
+_TESTS = Path(__file__).resolve().parents[1]
 
 #: The prefix `tests/conftest.py` reaps, restated so this module needs no conftest import; the
 #: second test pins the two equal.

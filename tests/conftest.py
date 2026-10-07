@@ -74,7 +74,14 @@ def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
     leaves it and its socket behind for good: thousands accumulated in /tmp before this
     existed. Only sockets absent at session start are touched, so a concurrent run — or
     the operator's own `remote-agents` server — is never disturbed.
+
+    **Not from an xdist worker.** A worker's `before` is taken when *it* starts, so a server a
+    sibling worker created since then looks like this run's, and a worker that finishes first
+    would kill one still in use. The controller starts before every worker and finishes after
+    all of them, so its `before` is the true one; it, or a plain run, does the teardown.
     """
+    if hasattr(session.config, "workerinput"):
+        return
     before = getattr(session.config, "_remote_agents_sockets_before", set())
     for socket in _test_sockets() - before:
         subprocess.run(
