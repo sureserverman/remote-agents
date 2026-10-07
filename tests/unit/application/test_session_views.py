@@ -43,6 +43,7 @@ from remote_agents.application.session_views import (
     context_gauge,
     group_counts,
     group_emoji,
+    is_pooled,
     limit_lines,
     limit_rows,
     listed_in_sessions,
@@ -1310,6 +1311,46 @@ def test_the_pace_slot_is_the_week_or_a_pooled_rows_first_pool() -> None:
     assert (pace_cell(claude).label, pace_cell(claude).pace_delta) == ("week", 30 - 57)
     assert (pace_cell(cursor).name, pace_cell(cursor).pace_delta) == ("Cursor", 12)
     assert pace_cell(codex) is None
+
+
+def test_a_five_hour_window_has_no_pace_even_with_its_start() -> None:
+    """DEC-106 keeps the 5h rule whatever a reader states: it turns over before a schedule means
+    anything. Held by a guard, not by no reader happening to give a 5h window a start."""
+    resets = datetime.now(UTC) + timedelta(hours=2)
+    window = UsageWindow("5h", 40.0, resets_at=resets, starts_at=resets - timedelta(hours=5))
+    (row,) = limit_rows((_account("claude", window),))
+
+    assert [(w.expected_percent, w.pace_delta) for w in row.windows] == [(None, None)]
+
+
+def test_no_pace_slot_for_a_stale_pooled_row_or_a_day_without_a_week() -> None:
+    stale = datetime.now(UTC) - timedelta(hours=8)
+    pooled, daily = limit_rows(
+        (
+            _account(
+                "cursor-agent",
+                _cycle(29.0, 2.0, left=timedelta(days=25), length=timedelta(days=30)),
+                observed=stale,
+            ),
+            _account(
+                "codex", UsageWindow("day", 30.0, resets_at=datetime.now(UTC) + timedelta(hours=12))
+            ),
+        )
+    )
+
+    assert pace_cell(pooled) is None
+    assert pace_cell(daily) is None
+
+
+def test_a_row_is_pooled_only_when_limit_rows_placed_its_pools() -> None:
+    cursor, claude = limit_rows(
+        (
+            _account("cursor-agent", _cursor_month()),
+            _account("claude", UsageWindow("week", 3.0)),
+        )
+    )
+
+    assert (is_pooled(cursor), is_pooled(claude)) == (True, False)
 
 
 def test_a_pool_window_beside_another_window_is_laid_out_by_kind() -> None:

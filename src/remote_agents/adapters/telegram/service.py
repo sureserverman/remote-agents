@@ -3091,7 +3091,7 @@ class PrivateBotBoundary:
         spend of whichever session it happens to sit beside, which is the report this block
         exists to answer. `limits_block` lays it out, and it carries what the terminal's limits
         pane carries: a row per agent that publishes limits or is a switch away from it, its
-        bars, reset countdowns, week pace, and its source and age (DEC-061).
+        bars, reset countdowns, pace, and its source and age (DEC-061).
 
         **The row set is the profile set's**, as it is on the terminal: an agent that answered
         nothing keeps its row and says which silence it is.

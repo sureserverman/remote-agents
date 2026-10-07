@@ -37,6 +37,7 @@ from remote_agents.application.session_views import (
     FIXED_LIMIT_WINDOWS,
     LimitRow,
     countdown,
+    is_pooled,
     limit_rows,
     pace_cell,
     percent_gauge,
@@ -282,15 +283,18 @@ def _facts(rows: tuple[LimitRow, ...]) -> Iterator[tuple[str, str, dict[str, str
                 {"telegram": points, "tui": points if window == pace_cell(row) else "┃"},
             )
         if row.windows:
+            left = countdown(row, row.windows[0])
+            shared_reset = re.escape(f" · ↻ {left}") if is_pooled(row) and left else ""
             age = "live" if row.stale_for is None else f"as of {row.stale_for}"
             source = "" if row.borrowed is None else f"{row.borrowed} · "
             yield (
                 row.profile,
                 f"stamped {source}{age}",
                 {
-                    # A pooled row's one shared reset ends its stamp line (DEC-117).
+                    # A pooled row's one shared reset ends its stamp line (DEC-117); no other
+                    # row's stamp may carry one.
                     "telegram": rf"(?m)^{re.escape(f'via {source}' if source else '')}"
-                    rf"{re.escape(age)}(?: · ↻ \S+)?$",
+                    rf"{re.escape(age)}{shared_reset}$",
                     "tui": re.escape(f"{row.profile} · {source}{age}"),
                 },
             )

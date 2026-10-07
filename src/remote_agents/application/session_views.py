@@ -755,6 +755,15 @@ def _placed(windows: tuple[LimitWindow, ...]) -> tuple[LimitWindow, ...]:
     )
 
 
+def is_pooled(row: LimitRow) -> bool:
+    """Whether `limit_rows` placed this row's cells as the pools of one window.
+
+    Only `_placed` names a cell, so a named cell is the mark. Spelled once here, because both
+    the pace slot (`pace_cell`) and the bot's layout (its shared reset on the stamp line) ask.
+    """
+    return any(window.name is not None for window in row.windows)
+
+
 def pace_cell(row: LimitRow) -> LimitWindow | None:
     """The cell whose pace a row's one pace slot shows, or None when it has no pace.
 
@@ -763,10 +772,9 @@ def pace_cell(row: LimitRow) -> LimitWindow | None:
     a pooled row -- whose cells `_placed` named -- its first pool, which is Cursor's own (the
     owner's pick, 2026-10-07; DEC-117).
     """
-    pooled = any(w.name is not None for w in row.windows)
     window = (
         (row.windows[0] if row.windows else None)
-        if pooled
+        if is_pooled(row)
         else next((w for w in row.windows if w.label == "week"), None)
     )
     if window is None or window.expected_percent is None or window.pace_delta is None:
@@ -797,9 +805,15 @@ unknown label with no start is left without one rather than guessed.
 """
 
 
+_UNPACED_WINDOWS = frozenset({"5h"})
+"""Windows that never have pace, even when their start is known (DEC-106)."""
+
+
 def _pace(window: UsageWindow, percent: int, live: bool) -> tuple[int | None, int | None]:
     """A window's expected share and how far `percent` is from it; (None, None) for no pace."""
-    if window.resets_at is None or not live:
+    # A 5h window turns over before a schedule means anything (DEC-106), whatever a reader
+    # states about its start.
+    if window.resets_at is None or not live or window.label in _UNPACED_WINDOWS:
         return None, None
     duration = (
         window.resets_at - window.starts_at

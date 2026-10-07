@@ -712,7 +712,7 @@ def _one_line(row: LimitRow, columns: _LimitColumns) -> Content:
         else:
             cell = _window_content(row, window, columns, last=False, labelled=False)
         line = line + Content(" " * _GROUP_GUTTER) + cell
-    # The pace columns (DEC-106): blank at their widths for a row with no week pace.
+    # The pace columns (DEC-106): blank at their widths for a row with no pace cell (`pace_cell`).
     paced = pace_cell(row)
     gutter = " " * _GROUP_GUTTER
     if paced is not None:
@@ -838,11 +838,12 @@ def limit_row_content(
         paced = pace_cell(row)
         at = None if paced is None else columns.labels.index(paced.label)
         if paced is not None:
-            # The week's reset moves onto its pace line, so the bar's own line stays short
-            # enough for the dashboard's 39-cell right region (DEC-106).
+            # The pace cell's reset (the week's, or Cursor's pool's) moves onto its pace line, so
+            # the bar's own line stays short enough for the dashboard's 39-cell right region
+            # (DEC-106).
             cells[at] = _window_content(row, paced, columns, last=True, reset=False).rstrip()
         # Any other cell too wide for the pane moves its reset onto a line of its own under the
-        # bar, as the paced week does: a `Cursor` label is four cells wider than `5h`, and at
+        # bar, as the pace cell's does: a `Cursor` label is four cells wider than `5h`, and at
         # the dashboard's 28-cell region that is what a two-digit day count would cost.
         moved: dict[int, str] = {}
         unbounded = width is None or width <= 0
