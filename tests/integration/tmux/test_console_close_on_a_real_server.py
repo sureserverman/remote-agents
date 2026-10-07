@@ -170,9 +170,14 @@ class _Server:
         return self.tmux("has-session", "-t", f"{CONSOLE_SESSION_NAME}:", check=False).returncode
 
     def attach_a_client(self) -> int:
-        """A client on a real pty, which is the only thing a root binding answers."""
+        """A client on a real pty, which is the only thing a root binding answers.
+
+        It claims ``xterm-256color`` for the reason `test_function_key_forwarding.py`'s
+        client does: under a runner's ``TERM=dumb`` tmux refuses the terminal and exits.
+        """
         pid, fd = pty.fork()
         if pid == 0:  # pragma: no cover - the child execs and never returns
+            os.environ["TERM"] = "xterm-256color"
             os.execvp("tmux", ["tmux", "-L", self.socket, "attach-session", "-t", "ra-console:"])
         self._clients.append(fd)
         time.sleep(1.0)

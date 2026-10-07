@@ -25,17 +25,34 @@ def _die(run, pane: str) -> str:
 
     Polled rather than slept on: the exit is asynchronous to tmux's own bookkeeping, and a
     fixed sleep either flakes on a loaded host or slows every run to the worst case.
+
+    The two queries are not one observation. A pane can leave the server between
+    `list-panes` and `display-message -t`, and the second command then exits 1
+    (`can't find pane`). That is "gone", the answer this helper already has a word for,
+    not a broken tmux. The same commit passed on one macOS runner and died here on the
+    other, on `#{pane_dead}` for a pane the list had just reported.
     """
     import os as _os
     import signal as _signal
+
+    def dead() -> str | None:
+        try:
+            return run("display-message", "-p", "-t", pane, "#{pane_dead}").strip()
+        except subprocess.CalledProcessError:
+            return None
 
     _os.kill(int(run("display-message", "-p", "-t", pane, "#{pane_pid}").strip()), _signal.SIGKILL)
     for _ in range(50):
         if pane not in run("list-panes", "-a", "-F", "#{pane_id}").split():
             return "gone"
-        if run("display-message", "-p", "-t", pane, "#{pane_dead}").strip() == "1":
+        flag = dead()
+        if flag == "1":
             return "1"
+        if flag is None and pane not in run("list-panes", "-a", "-F", "#{pane_id}").split():
+            return "gone"
         time.sleep(0.1)
+    if pane not in run("list-panes", "-a", "-F", "#{pane_id}").split():
+        return "gone"
     return run("display-message", "-p", "-t", pane, "#{pane_dead}").strip()
 
 
