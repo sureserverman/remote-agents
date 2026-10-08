@@ -212,6 +212,8 @@ def test_the_service_composition_wires_the_limit_stop_watch(tmp_path, monkeypatc
     # Cursor's lifted stop is retired and never nudged (DEC-110): a dropped keyword here would
     # type "carry on" into a Cursor session at its cycle end.
     assert composition.limit_lift_watcher._retire_only == frozenset({"cursor-agent"})
+    # BL-111: the same outcome rows reach the service, or the daily prune silently never runs.
+    assert composition.limit_stop_outcomes is not None
 
 
 def test_the_service_composition_lets_the_bot_step_the_console_aside(tmp_path, monkeypatch) -> None:

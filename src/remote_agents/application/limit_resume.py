@@ -40,7 +40,13 @@ from enum import StrEnum
 
 from remote_agents.application.prompt_delivery import DeliveryVerdict, delivery_verdict
 from remote_agents.domain.models import SessionId
-from remote_agents.ports.limit_stop_outcomes import LIFTED, NOT_RESUMED, RESUMED, LimitStop
+from remote_agents.ports.limit_stop_outcomes import (
+    LIFTED,
+    NOT_RESUMED,
+    RESUMED,
+    LimitStop,
+    LimitStopOutcomes,
+)
 from remote_agents.ports.terminal import PromptDelivery
 
 __all__ = [
@@ -69,6 +75,18 @@ A nudge into a window that had not really reopened stops the agent again at once
 might then call that new stop lifted early, and nudge it, and so on. Waiting for the published
 reset breaks the loop, and a stop with no published reset is never lifted at all.
 """
+
+OUTCOME_RETENTION = timedelta(days=90)
+"""How long a finished limit stop's outcome is kept (BL-111, owner ruling 2026-10-08).
+
+The table gains a row per stop and nothing else deletes one. A `NUDGING` intent is never pruned,
+because it is what stops a nudge being typed twice (DEC-099), and neither is the outcome of a
+session that can still act, because a stop whose outcome is missing reads as undecided again."""
+
+
+async def prune_outcomes(outcomes: LimitStopOutcomes, *, now: datetime) -> int:
+    """Remove finished outcomes older than `OUTCOME_RETENTION`, answering how many went."""
+    return await outcomes.prune(now - OUTCOME_RETENTION)
 
 
 class NotResumed(StrEnum):

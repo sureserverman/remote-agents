@@ -292,6 +292,8 @@ def _private_boundary(
         ),
         schedule_pass=schedule_pass,
         schedule_notifier=boundary.schedule_notifier,
+        # The same outcome rows the lift watcher writes, pruned daily by the service (BL-111).
+        limit_stop_outcomes=limit_stops,
         # The rollover pass (DEC-115), built beside the loop that runs it. Wired only where the
         # backend has sessions, the switch and the rollover rows, which production always does;
         # the switch, read afresh each pass, is what keeps it idle until the owner turns it on.

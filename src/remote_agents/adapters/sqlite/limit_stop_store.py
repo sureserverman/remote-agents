@@ -11,6 +11,7 @@ from collections.abc import Collection
 from datetime import UTC, datetime
 
 from remote_agents.adapters.sqlite.activity_store import _instant, _limit
+from remote_agents.domain.state_machine import TERMINAL_STATES
 from remote_agents.ports.agent_activity import ActivityKind
 from remote_agents.ports.limit_stop_outcomes import NUDGING, RESUMED, LimitStop
 
@@ -120,6 +121,33 @@ class SQLiteLimitStopStore:
             )
             for session_id, stamp, window, resets_at in rows
         )
+
+    async def prune(self, before: datetime) -> int:
+        """Delete old outcomes of finished sessions; `decided_at` is stored as UTC isoformat.
+
+        A session that can still act keeps every outcome: `unresolved` reads a stop with no
+        outcome row as undecided, so pruning a running session's newest stop would let it be
+        acted on twice. "Can still act" is every state the lifecycle matrix offers a way out
+        of -- `failed` returns to `running` on READY, `orphaned` and `preserved` can too -- so
+        only `TERMINAL_STATES` and sessions no longer in the table count as finished.
+        """
+        terminal = sorted(state.value for state in TERMINAL_STATES)
+        marks = ", ".join("?" * len(terminal))
+        with self._connection:
+            cursor = self._connection.execute(
+                f"""
+                DELETE FROM limit_stop_outcomes
+                WHERE decided_at < ?
+                AND outcome != ?
+                AND NOT EXISTS (
+                    SELECT 1 FROM sessions AS s
+                    WHERE s.session_id = limit_stop_outcomes.session_id
+                    AND s.state NOT IN ({marks})
+                )
+                """,
+                (before.astimezone(UTC).isoformat(), NUDGING, *terminal),
+            )
+        return cursor.rowcount
 
     async def last_resumed_at(self, session_id: str) -> datetime | None:
         """The newest `RESUMED` decision for the session, read back as an instant."""

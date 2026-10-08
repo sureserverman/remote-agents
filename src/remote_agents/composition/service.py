@@ -7,6 +7,7 @@ import logging
 import time
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from pathlib import Path
 
 from remote_agents.adapters.sqlite.activity_store import SQLiteActivityStore
@@ -22,6 +23,7 @@ from remote_agents.adapters.workflow.roots import handoff_root
 from remote_agents.application.activity import CodexApprovalWatcher, drain_activity
 from remote_agents.application.backend import CLOSE_TIMEOUT_SECONDS
 from remote_agents.application.limit_lifts import LimitLiftWatcher
+from remote_agents.application.limit_resume import prune_outcomes
 from remote_agents.application.limit_stops import LimitScreenWatcher, LimitStopClassifier
 from remote_agents.application.reconcile import ReconciliationService
 from remote_agents.application.rollover import RolloverPass, RolloverReport
@@ -30,6 +32,7 @@ from remote_agents.application.services import SessionService
 from remote_agents.config import TelegramSecrets
 from remote_agents.domain.models import ProfileId, ProjectId, SessionId
 from remote_agents.ports.agent_activity import ActivityConfidence, ActivityKind, AgentActivity
+from remote_agents.ports.limit_stop_outcomes import LimitStopOutcomes
 from remote_agents.ports.message_relay import MessageRelay, RelayOutcome, RelayResult
 from remote_agents.ports.state_events import StoreChanged
 from remote_agents.ports.turn_markers import TurnMarkers
@@ -68,6 +71,12 @@ _LIMIT_STOP_POLL_SECONDS = 30.0
 #: How often due schedules are looked for. A schedule fires up to this late, well inside the
 #: fifteen minutes a fire may still start (`schedules.MISSED_GRACE`).
 _SCHEDULE_POLL_SECONDS = 30.0
+
+#: How often finished limit-stop outcomes older than `OUTCOME_RETENTION` are pruned (BL-111).
+#: Daily, because the retention is ninety days; the first pass waits a minute after start so it
+#: never competes with the start-up passes.
+_PRUNE_POLL_SECONDS = 86400.0
+_PRUNE_FIRST_DELAY_SECONDS = 60.0
 #: How often envelopes and open rollovers are walked (DEC-115). The schedules' clock: a `ready`
 #: is acted on within half a minute of the gate that wrote it, and every patience the pass
 #: counts (ten minutes for an idle pane, thirty for an adoption) is many ticks long.
@@ -219,6 +228,9 @@ class ServiceComposition:
     rollover_notifier: RolloverNotifier | None = None
     """Where the pass's failure notices go, retried each tick while one is held, or None."""
 
+    limit_stop_outcomes: LimitStopOutcomes | None = None
+    """What became of each limit stop, pruned once a day after `OUTCOME_RETENTION`, or None."""
+
 
 async def _serve_with_reconciliation(
     secrets: TelegramSecrets,
@@ -308,6 +320,8 @@ async def _serve_with_reconciliation(
         periodic.append(
             asyncio.create_task(_watch_limit_stops_periodically(composition, limit_stop_interval))
         )
+    if composition.limit_stop_outcomes is not None:
+        periodic.append(asyncio.create_task(_prune_limit_stop_outcomes_periodically(composition)))
     # Not another periodic task, and the difference is the point: the loops above each poll
     # something on a clock of their own, while this *subscribes* to a watcher that already
     # polls. Subscribing is what starts it (`StoreWatch.subscribe`), so there is no task to
@@ -468,6 +482,29 @@ async def _watch_limit_stops_periodically(composition: ServiceComposition, inter
             # on, so a pass lost here is asked again thirty seconds later. A nudge runs shielded
             # from this bound and finishes -- record and line -- after a pass is cancelled.
             _LOG.exception("the limit-stop watch could not complete a pass")
+
+
+async def _prune_limit_stop_outcomes_periodically(
+    composition: ServiceComposition,
+    interval: float = _PRUNE_POLL_SECONDS,
+    first_delay: float = _PRUNE_FIRST_DELAY_SECONDS,
+) -> None:
+    """Prune finished limit-stop outcomes once a day -- never raising."""
+    await asyncio.sleep(first_delay)
+    while True:
+        await _prune_limit_stop_outcomes_once(composition)
+        await asyncio.sleep(interval)
+
+
+async def _prune_limit_stop_outcomes_once(composition: ServiceComposition) -> None:
+    """One prune, logged. A pass that raises costs a day, and nothing the rows guard is lost."""
+    try:
+        pruned = await prune_outcomes(composition.limit_stop_outcomes, now=datetime.now(UTC))
+    except Exception:
+        _LOG.exception("the limit-stop outcome prune could not complete")
+        return
+    if pruned:
+        _LOG.info("pruned %d limit-stop outcome(s) older than the retention", pruned)
 
 
 async def _fire_schedules_periodically(composition: ServiceComposition, interval: float) -> None:

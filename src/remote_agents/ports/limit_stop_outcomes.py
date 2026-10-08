@@ -77,3 +77,10 @@ class LimitStopOutcomes(Protocol):
     async def last_resumed_at(self, session_id: str) -> datetime | None:
         """When this session was last nudged (`RESUMED`), or `None` if it never was."""
         ...
+
+    async def prune(self, before: datetime) -> int:
+        """Delete finished outcomes decided before `before`, answering how many went.
+
+        Never a `NUDGING` intent, and never the outcome of a session that can still act: only
+        sessions in a terminal lifecycle state, or no longer recorded at all, lose theirs."""
+        ...
