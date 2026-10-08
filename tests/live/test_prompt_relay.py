@@ -419,7 +419,8 @@ def test_queue_behind_a_real_turn_and_deliver_after_its_stop(agent: str, tmp_pat
 
         asyncio.run(
             _retry_waiting_messages(
-                SimpleNamespace(prompt_relay=relay, relay_announcer=announce), activities
+                SimpleNamespace(prompt_relay=relay, relay_announcer=announce, relay_rechecks={}),
+                activities,
             )
         )
 
