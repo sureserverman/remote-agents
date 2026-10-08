@@ -255,3 +255,95 @@ def test_restore_refuses_to_roll_a_database_back_over_a_newer_schema(tmp_path, m
     assert not path.with_suffix(".sqlite3.corrupt").exists(), (
         "nothing may be moved aside when the restore was refused"
     )
+
+
+def _ui_store_with_a_backup(directory: Path) -> tuple[Path, Path]:
+    """A `ui.sqlite3` and a backup of it at the UI head, as `open_ui_database` leaves them."""
+    from remote_agents.adapters.sqlite.database import ui_database_path
+    from remote_agents.adapters.sqlite.migrations import UI_MIGRATIONS
+
+    ui = ui_database_path(directory / "sessions.sqlite3")
+    good = directory / "good-ui.sqlite3"
+    open_database(good, migrations=UI_MIGRATIONS).close()
+    backup = backup_path(ui)
+    good.replace(backup)
+    return ui, backup
+
+
+def test_a_corrupt_ui_store_is_restored_from_its_backup(tmp_path: Path) -> None:
+    """BL-092: a UI backup is at the UI head, never the domain head, and used to be refused."""
+    from remote_agents.adapters.sqlite.migrations import UI_MIGRATIONS
+
+    ui, backup = _ui_store_with_a_backup(tmp_path)
+    ui.write_bytes(b"not a SQLite database")
+
+    restore_database(ui, backup)
+
+    assert database_is_ready(ui, UI_MIGRATIONS)
+    assert ui.with_suffix(".sqlite3.corrupt").read_bytes() == b"not a SQLite database"
+
+
+def test_a_healthy_ui_store_is_never_replaced(tmp_path: Path) -> None:
+    from remote_agents.adapters.sqlite.migrations import UI_MIGRATIONS
+
+    ui, backup = _ui_store_with_a_backup(tmp_path)
+    open_database(ui, migrations=UI_MIGRATIONS).close()
+
+    with pytest.raises(ValueError, match="healthy"):
+        restore_database(ui, backup)
+
+
+def test_a_ui_store_ahead_of_its_backup_is_never_rolled_back(tmp_path: Path, monkeypatch) -> None:
+    """The newer-schema refusal holds for the UI store too, comparing UI with UI."""
+    from remote_agents.adapters.sqlite.migrations import UI_MIGRATIONS
+
+    ui, backup = _ui_store_with_a_backup(tmp_path)
+    open_database(backup, migrations=UI_MIGRATIONS[:-1]).close()
+    backup.unlink()
+    open_database(ui, migrations=UI_MIGRATIONS[:-1]).close()
+    open_database(ui, migrations=UI_MIGRATIONS).close()  # leaves the older snapshot as `.bak`
+    # A build one UI migration behind: the live store is ahead of the backup it would restore.
+    monkeypatch.setattr(database_module, "UI_MIGRATIONS", UI_MIGRATIONS[:-1])
+
+    with pytest.raises(ValueError, match="newer schema"):
+        restore_database(ui, backup_path(ui))
+
+
+def test_the_restore_command_restores_the_ui_store(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from remote_agents.adapters.sqlite.migrations import UI_MIGRATIONS
+
+    ui, _backup = _ui_store_with_a_backup(tmp_path)
+    ui.write_bytes(b"not a SQLite database")
+    monkeypatch.setattr(sys, "argv", ["remote-agents", "restore-database", "--database", str(ui)])
+
+    assert main() == 0
+    assert database_is_ready(ui, UI_MIGRATIONS)
+
+
+def test_a_domain_store_at_the_ui_version_is_never_restored_over_the_ui_store(
+    tmp_path: Path,
+) -> None:
+    """A version number alone does not say which store a file is (Tier-1 review, BL-092)."""
+    ui, _backup = _ui_store_with_a_backup(tmp_path)
+    ui.write_bytes(b"not a SQLite database")
+    old_domain = tmp_path / "old-domain.sqlite3"
+    open_database(old_domain, migrations=MIGRATIONS[:2]).close()  # version 2, like the UI head
+
+    with pytest.raises(ValueError, match="not a backup of the surface store"):
+        restore_database(ui, old_domain)
+    assert ui.read_bytes() == b"not a SQLite database", "the UI store was replaced anyway"
+
+
+def test_a_ui_store_is_never_restored_over_the_domain_store(tmp_path: Path) -> None:
+    from remote_agents.adapters.sqlite.migrations import UI_MIGRATIONS
+
+    domain = tmp_path / "sessions.sqlite3"
+    domain.write_bytes(b"not a SQLite database")
+    ui_copy = tmp_path / "ui-copy.sqlite3"
+    open_database(ui_copy, migrations=UI_MIGRATIONS).close()
+
+    with pytest.raises(ValueError):
+        restore_database(domain, ui_copy)
+    assert domain.read_bytes() == b"not a SQLite database"

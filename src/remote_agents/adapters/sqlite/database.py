@@ -245,9 +245,20 @@ def restore_database(path: Path, backup: Path | None = None) -> None:
     the newer build again.
     """
     source = backup_path(path) if backup is None else backup
-    if not database_is_ready(source):
+    # The surface store versions on its own counter (BL-092), so every check below judges a
+    # `ui.sqlite3` and its backup against `UI_MIGRATIONS`. The newer-schema comparison needs no
+    # such choice: it compares the file with its own backup, two stores of the same kind.
+    surface = path.name == ui_database_path(path).name
+    migrations = UI_MIGRATIONS if surface else MIGRATIONS
+    if not database_is_ready(source, migrations):
         raise ValueError("database backup is not a readable current schema")
-    if path.exists() and database_is_ready(path):
+    # A version number alone does not say which store a file is: an old domain store at
+    # version 2 reads as a current UI store. Every domain store has `sessions` (migration 1)
+    # and no UI store ever has, so that table decides the kind before anything is replaced.
+    if _has_table(source, "sessions") == surface:
+        kind = "the surface store (ui.sqlite3)" if surface else "the domain store"
+        raise ValueError(f"database backup is not a backup of {kind}")
+    if path.exists() and database_is_ready(path, migrations):
         raise ValueError("refusing to replace a healthy database")
     if path.exists() and _schema_version(path) > _schema_version(source):
         raise ValueError(
@@ -285,6 +296,21 @@ def _preserve_corrupt_database(path: Path) -> None:
     for source, destination in zip(sources, destinations, strict=True):
         if source.exists():
             os.replace(source, destination)
+
+
+def _has_table(path: Path, table: str) -> bool:
+    """Whether a readable database file carries `table`; False when it cannot be read."""
+    try:
+        connection = _read_only_connection(path)
+        try:
+            row = connection.execute(
+                "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?", (table,)
+            ).fetchone()
+            return row is not None
+        finally:
+            connection.close()
+    except (OSError, sqlite3.Error):
+        return False
 
 
 def _read_only_connection(path: Path) -> sqlite3.Connection:

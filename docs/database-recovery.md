@@ -23,6 +23,29 @@ The default backup path is `sessions.sqlite3.bak`; add `--backup /absolute/path/
 only when restoring a separately retained verified backup. Do not delete either the `.corrupt` or
 `.bak` file until the restored service has passed its health check.
 
+**The default `.bak` is usually one schema behind.** It is the snapshot taken just before a
+migration ran, so it sits at the schema of the release before the one that wrote it, and that
+release's own `restore-database` refuses it as "not a readable current schema". It restores on that
+earlier release; on the current one, pass a current-schema backup with `--backup`.
+
+The surface store, `ui.sqlite3` beside it, restores the same way. It holds the bot's button tokens
+and standing messages, and `remote-agents doctor` reports it as its own `ui_store` component. Its
+schema has its own version counter, and the command judges it and its backup against that counter,
+never the domain one:
+
+```bash
+systemctl --user stop remote-agents.service
+uv run --locked remote-agents restore-database \
+  --database "$HOME/.local/state/remote-agents/ui.sqlite3"
+systemctl --user start remote-agents.service
+```
+
+Its default backup is `ui.sqlite3.bak`, written just before a UI migration runs on an existing
+file, so like the domain `.bak` it is usually one UI schema behind and refused by the release that
+wrote it. The same refusals hold: a healthy `ui.sqlite3` is not replaced, one at a newer schema
+than its backup is not rolled back, and a backup of the other store is refused even when its
+version number matches. The target must be named `ui.sqlite3` for the UI counter to apply.
+
 ## Migration 13 rewrites profile ids
 
 Migration 13 (0.41.0) renames the retired `claude-remote` profile to `claude` in
