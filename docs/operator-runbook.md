@@ -1203,11 +1203,15 @@ the sessions afterwards rather than waiting on the notifications — they are no
 
 ### What each notification means
 
-Each message names the session by its display identity and carries a single `Open session`
-button that renders that session's detail into the live view. There is no other button: a
-notification is not a screen, so it may not carry navigation. It is sent apart from the live
-view, so navigating the live view (Back, a bar destination, a session detail) leaves it alone
-— the anchor's pruning does not own it.
+A message about what an agent reported names the session by its display identity and carries a
+single `Open session` button that renders that session's detail into the live view. There is no
+other button: a notification is not a screen, so it may not carry navigation. It is sent apart
+from the live view, so navigating the live view (Back, a bar destination, a session detail)
+leaves it alone — the anchor's pruning does not own it.
+
+The service's other messages are plain text and carry no button: a scheduled run starting or
+failing to start (**Scheduled sessions**), a rollover that failed (**Session rollover**), and a
+provider resetting its limits early (described at the end of this section, DEC-097).
 
 A session gets one message per delivery pass rather than one message per observation, so several
 things it has to report in one pass ride together instead of arriving as separate messages that

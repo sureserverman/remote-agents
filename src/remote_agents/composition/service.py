@@ -36,7 +36,8 @@ from remote_agents.ports.turn_markers import TurnMarkers
 
 _LOG = logging.getLogger(__name__)
 
-#: A shutdown courtesy, not a negotiation: past this the child is left to the OS.
+#: The activity pass's period when a caller names none. `bootstrap` passes the configured
+#: `limits.activity_poll_seconds`, whose own default is this same 30.
 _ACTIVITY_POLL_SECONDS = 30.0
 #: How often the folder-trust question is looked for. Six times the activity cadence, and the
 #: difference is what the two passes are waiting on. An activity report is news about work that

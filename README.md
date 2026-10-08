@@ -403,7 +403,9 @@ qualified enable/disable interaction; it never carries a prompt, transcript, or 
 
 The service also speaks first when a managed agent stops working: it has
 finished, it hit a usage limit, one reply hit its output length limit, or it is waiting for an
-answer. Those four are the whole vocabulary. `cursor-agent` contributes none of them — nobody has
+answer. Those four are everything an agent reports about a session. The service's own messages —
+a scheduled run, a failed rollover, a provider resetting its limits early — are separate, and the
+operator runbook's *What each notification means* lists them. `cursor-agent` contributes none of them — nobody has
 measured what, if anything, it publishes, so nothing observes it — while
 `claude`, `codex` and `opencode` each report for themselves. OpenCode joined
 on 2026-09-06 through a generated plugin rather than a hook command, and reports two of the

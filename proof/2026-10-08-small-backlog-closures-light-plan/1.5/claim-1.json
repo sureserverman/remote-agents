@@ -1,0 +1,28 @@
+{
+ "baseline": {
+  "elapsed_s": 17.1,
+  "exit": 0,
+  "tail": "bringing up nodes...\nbringing up nodes...\n\n........................................................................ [ 12%]\n........................................................................ [ 24%]\n........................................................................ [ 36%]\n........................................................................ [ 49%]\n........................................................................ [ 61%]\n........................................................................ [ 73%]\n...........................ssssssssssssssssss........................... [ 85%]\n................................s....................................... [ 98%]\n...........                                                              [100%]\n=========================== short test summary info ============================\nSKIPPED [1] tests/contract/test_handoff_envelope_compat.py:86: RA_CODER_PLUGINS is unset: no coder-plugins checkout to run against\nSKIPPED [15] tests/contract/test_handoff_envelope_compat.py:121: RA_CODER_PLUGINS is unset: no coder-plugins checkout to run against\nSKIPPED [1] tests/contract/test_handoff_envelope_compat.py:145: RA_CODER_PLUGINS is unset: no coder-plugins checkout to run against\nSKIPPED [1] tests/contract/test_handoff_envelope_compat.py:157: RA_CODER_PLUGINS is unset: no coder-plugins checkout to run against\nSKIPPED [1] tests/contract/test_session_row_parity.py:123: ORPHANED is the one state that does not use its own value\n568 passed, 19 skipped in 16.82s"
+ },
+ "break_patch": "diff --git b/README.md a/README.md\nindex 941a8d1c..9deb3105 100644\n--- b/README.md\n+++ a/README.md\n@@ -403,9 +403,7 @@ qualified enable/disable interaction; it never carries a prompt, transcript, or\n \n The service also speaks first when a managed agent stops working: it has\n finished, it hit a usage limit, one reply hit its output length limit, or it is waiting for an\n-answer. Those four are everything an agent reports about a session. The service's own messages \u2014\n-a scheduled run, a failed rollover, a provider resetting its limits early \u2014 are separate, and the\n-operator runbook's *What each notification means* lists them. `cursor-agent` contributes none of them \u2014 nobody has\n+answer. Those four are the whole vocabulary. `cursor-agent` contributes none of them \u2014 nobody has\n measured what, if anything, it publishes, so nothing observes it \u2014 while\n `claude`, `codex` and `opencode` each report for themselves. OpenCode joined\n on 2026-09-06 through a generated plugin rather than a hook command, and reports two of the\n",
+ "build": null,
+ "created": "2026-10-08T18:45:57+00:00",
+ "fingerprint": "93e88e230c417d2948ca8e22bc25d71a46e95d18a343b95672f09e41f2a405a8",
+ "index": 1,
+ "kind": "claim",
+ "named_break": null,
+ "no_build_reason": "prose and a comment; nothing to build",
+ "plan": "/mnt/vault/Portfolio/infra/remote-agents/plans/2026-10-08-small-backlog-closures-light-plan.md",
+ "red": {
+  "elapsed_s": 0.0,
+  "exit": 1,
+  "tail": "README.md:406:answer. Those four are the whole vocabulary. `cursor-agent` contributes none of them \u2014 nobody has"
+ },
+ "schema": 2,
+ "task": "1.5",
+ "test": "! grep -rn 'Those four are the whole vocabulary' README.md docs/ && ! grep -rn 'A shutdown courtesy' src/ && ! grep -n 'Each message names the session by its display identity and carries a single' docs/operator-runbook.md && uv run --locked pytest tests/contract -q -p no:randomly -n 3",
+ "text": "`! grep -rn 'Those four are the whole vocabulary' README.md docs/ && ! grep -rn 'A shutdown courtesy' src/ && ! grep -n 'Each message names the session by its display identity and carries a single' docs/operator-runbook.md && uv run --locked pytest tests/contract -q -p no:randomly -n 3`",
+ "touched": [
+  "README.md"
+ ]
+}
