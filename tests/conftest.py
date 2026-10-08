@@ -104,6 +104,12 @@ def pytest_addoption(parser: pytest.Parser) -> None:
 
 
 def pytest_configure(config: pytest.Config) -> None:
+    # **No test speaks for the pane it runs in.** Run from a managed pane, the suite inherits
+    # that pane's `REMOTE_AGENTS_SESSION_ID`, and every agent a live test launches inherits it
+    # in turn: its hook then marks the *pane's* session as mid-turn and, never ending, holds it
+    # busy for good (2026-10-08: a rollover against that pane failed `predecessor-not-idle`).
+    # Removed for the whole run; a test that needs one sets it explicitly.
+    os.environ.pop("REMOTE_AGENTS_SESSION_ID", None)
     config.addinivalue_line(
         "markers", "live_profile: opt-in qualification using a generated dedicated tmux socket"
     )
