@@ -508,6 +508,7 @@ def _enter_console(
     *,
     environment: Mapping[str, str] | None = None,
     ensure_console: Callable[[], Awaitable[bool]] | None = None,
+    show_projects: Callable[[], Awaitable[None]] | None = None,
     exec_argv: Callable[[str, tuple[str, ...]], None] = os.execvp,
 ) -> int:
     """Enter the console: ensure it exists and become its client, honoring the hosting.
@@ -524,6 +525,15 @@ def _enter_console(
     "Window 0 running `remote-agents tui`" until Sub-plan 3, which is what a single-pane
     console was. `_console_composer` supplies a command per pane now, so that is no longer
     the shape this builds.
+
+    **Entry starts at the projects surface** (BL-103). Re-entry used to come up with whichever
+    agent was last shown in front, with the projects surface parked in that agent's window,
+    and since F10 and every deploy go through close and re-enter, that was the usual sight.
+    So between a successful ensure and the attach, the surface is sent home, as `close()`
+    already does on the way out (DEC-096). It is not done in `ensure`, which every pane calls
+    at its own start. A move that fails is logged and the attach still happens: a cosmetic
+    step never stands between the owner and the console. When `ensure_console` is injected
+    and `show_projects` is not, nothing is moved, so a caller's stub never reaches real tmux.
     """
     from remote_agents.adapters.tmux.codec import console_attach_argv
     from remote_agents.adapters.tui.attach import HostingMode, hosting_mode
@@ -548,7 +558,10 @@ def _enter_console(
         )
         return 0
     if ensure_console is None:
-        ensure_console = _console_composer().ensure
+        composer = _console_composer()
+        ensure_console = composer.ensure
+        if show_projects is None:
+            show_projects = composer.show_projects
     if not asyncio.run(ensure_console()):
         print(
             "The console could not be prepared. Check tmux on this host, or run: "
@@ -556,6 +569,11 @@ def _enter_console(
             file=sys.stderr,
         )
         return 1
+    if show_projects is not None:
+        try:
+            asyncio.run(show_projects())
+        except Exception:
+            _LOG.exception("entering the console: the projects surface could not be brought home")
     argv = console_attach_argv()
     try:
         exec_argv(argv[0], argv)

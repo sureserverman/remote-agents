@@ -364,3 +364,41 @@ async def test_the_closer_outlives_the_process_that_started_it(tmp_path: Path) -
         assert outcome.read_text(encoding="utf-8") == "closed"
     finally:
         server.kill()
+
+
+@_SKIP_UNDER_XDIST
+def test_entering_a_console_that_shows_an_agent_brings_the_projects_surface_home(
+    tmp_path: Path,
+) -> None:
+    """BL-103 on a real server: entry starts at the projects surface, not at the shown agent.
+
+    The agent is displayed by the real `show()`, so the projects surface is parked in the
+    agent's own window -- the state re-entry used to come up in. Entry then runs with the real
+    composer's `ensure` and `show_projects`; only the exec of the attach is stubbed, since a
+    test cannot become a tmux client.
+    """
+    from remote_agents import bootstrap
+    from remote_agents.application.console import _left_slot
+
+    server = _Server(tmp_path)
+    attached: list[str] = []
+    try:
+        composer = asyncio.run(server.build())
+        assert asyncio.run(composer.show(server.session_id)) is None, "the agent would not show"
+        shown = _left_slot(asyncio.run(composer._console.pane_arrangement()))
+        assert shown is not None and shown.session_id == server.session_id
+
+        code = bootstrap._enter_console(
+            environment={},
+            ensure_console=composer.ensure,
+            show_projects=composer.show_projects,
+            exec_argv=lambda program, argv: attached.append(program),
+        )
+
+        assert code == 0 and attached == ["tmux"]
+        home = _left_slot(asyncio.run(composer._console.pane_arrangement()))
+        assert home is not None and home.session_id is None, (
+            f"entry left the agent in front: {home}"
+        )
+    finally:
+        server.kill()

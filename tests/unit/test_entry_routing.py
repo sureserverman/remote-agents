@@ -566,3 +566,62 @@ def test_serve_configures_logging_so_the_services_own_info_lines_reach_the_journ
     assert logging.getLogger().handlers, (
         "a fresh process gets an INFO level and no handler, which still reaches nothing"
     )
+
+
+def test_entry_brings_the_projects_surface_home_before_attaching() -> None:
+    """BL-103: re-entry starts at the projects surface, not at whichever agent was shown.
+
+    `close()` already sends the surface home; entry does the same, after the console is
+    ensured and before the attach, so the first frame the owner sees is the projects pane.
+    """
+    order: list[str] = []
+
+    async def ensured() -> bool:
+        order.append("ensure")
+        return True
+
+    async def show_projects() -> None:
+        order.append("show_projects")
+
+    code = bootstrap._enter_console(
+        environment={},
+        ensure_console=ensured,
+        show_projects=show_projects,
+        exec_argv=lambda program, argv: order.append("exec"),
+    )
+
+    assert code == 0
+    assert order == ["ensure", "show_projects", "exec"]
+
+
+def test_a_projects_surface_that_cannot_come_home_still_attaches(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A cosmetic move never stands between the owner and their console."""
+    calls: list[str] = []
+
+    async def refuse() -> None:
+        raise RuntimeError("tmux said no")
+
+    code = bootstrap._enter_console(
+        environment={},
+        ensure_console=_ensured,
+        show_projects=refuse,
+        exec_argv=lambda program, argv: calls.append(program),
+    )
+
+    assert code == 0
+    assert calls == ["tmux"]
+
+
+def test_an_unprepared_console_moves_nothing() -> None:
+    async def show_projects() -> None:
+        pytest.fail("a console that could not be ensured has no surface to move")
+
+    code = bootstrap._enter_console(
+        environment={},
+        ensure_console=_not_ensured,
+        show_projects=show_projects,
+        exec_argv=lambda p, a: pytest.fail("an unprepared console must not be attached"),
+    )
+    assert code == 1
