@@ -1,0 +1,28 @@
+{
+ "baseline": {
+  "elapsed_s": 0.3,
+  "exit": 0,
+  "tail": "...                                                                      [100%]\n3 passed in 0.06s"
+ },
+ "break_patch": "diff --git b/src/remote_agents/adapters/tmux/composer.py a/src/remote_agents/adapters/tmux/composer.py\nindex 0ee89751..ca090c4c 100644\n--- b/src/remote_agents/adapters/tmux/composer.py\n+++ a/src/remote_agents/adapters/tmux/composer.py\n@@ -292,9 +292,7 @@ def turn_ended(capture: str, descriptor: ProviderDescriptor, title: str = \"\") ->\n     above = [\n         line\n         for line in screen[: box.start()].splitlines()\n-        if line.strip()\n-        and len(line) - len(line.lstrip()) < _RIGHT_ALIGNED\n-        and not any(re.search(band, line) for band in declared.status_bands)\n+        if line.strip() and len(line) - len(line.lstrip()) < _RIGHT_ALIGNED\n     ]\n     return bool(above) and any(re.search(pattern, above[-1]) for pattern in declared.turn_ended)\n \n",
+ "build": null,
+ "created": "2026-10-08T20:55:12+00:00",
+ "fingerprint": "32eabe1c5cc7bda5a74d3c24ddc52396bbc1c76f9e87839df11976bbb5526d47",
+ "index": 1,
+ "kind": "claim",
+ "named_break": null,
+ "no_build_reason": "pure Python; nothing to build",
+ "plan": "/mnt/vault/Portfolio/infra/remote-agents/plans/2026-10-08-stuck-turn-marker-light-plan.md",
+ "red": {
+  "elapsed_s": 0.3,
+  "exit": 1,
+  "tail": "    \n>       assert asyncio.run(_terminal(pane, markers).pane_idle(pane.session_id)) is True\nE       AssertionError: assert False is True\nE        +  where False = <function run at 0x7da2e4664460>(<coroutine object TmuxTerminal.pane_idle at 0x7da2e4049f20>)\nE        +    where <function run at 0x7da2e4664460> = asyncio.run\nE        +    and   <coroutine object TmuxTerminal.pane_idle at 0x7da2e4049f20> = pane_idle(SessionId(value=UUID('4cd896c1-9112-4cda-b039-d2dbc133deb7')))\nE        +      where pane_idle = <remote_agents.adapters.tmux.runtime.TmuxTerminal object at 0x7da2e4098050>.pane_idle\nE        +        where <remote_agents.adapters.tmux.runtime.TmuxTerminal object at 0x7da2e4098050> = _terminal(<tmux.test_send_prompt.PromptPane object at 0x7da2e416ee40>, <remote_agents.adapters.agents.turn_markers.FileTurnMarkers object at 0x7da2e416ef90>)\nE        +      and   SessionId(value=UUID('4cd896c1-9112-4cda-b039-d2dbc133deb7')) = <tmux.test_send_prompt.PromptPane object at 0x7da2e416ee40>.session_id\n\ntests/unit/adapters/tmux/test_stuck_turn_marker.py:67: AssertionError\n________ test_a_send_into_the_idle_pane_ends_the_stuck_marker_for_good _________\n\ntmp_path = PosixPath('/tmp/pytest-of-user/pytest-821/test_a_send_into_the_idle_pane0')\n\n    def test_a_send_into_the_idle_pane_ends_the_stuck_marker_for_good(tmp_path) -> None:\n        pane = PromptPane(\n            [\n                _screen(\"claude\", \"idle_under_plan_band\"),\n                _screen(\"claude\", \"composed\"),\n                _screen(\"claude\", \"busy\"),\n            ],\n            title=\"\u2733 Project backlog\",\n        )\n        markers = _stuck(tmp_path, pane)\n    \n        asyncio.run(_terminal(pane, markers).send_prompt(pane.session_id, _DRAFTED))\n    \n>       assert markers.started_at(str(pane.session_id)) is None\nE       AssertionError: assert datetime.datetime(2026, 10, 8, 20, 45, 12, 329524, tzinfo=datetime.timezone.utc) is None\nE        +  where datetime.datetime(2026, 10, 8, 20, 45, 12, 329524, tzinfo=datetime.timezone.utc) = started_at('7b2c8ed0-664e-426d-977e-8fac133f30e1')\nE        +    where started_at = <remote_agents.adapters.agents.turn_markers.FileTurnMarkers object at 0x7da2e3ff7d90>.started_at\nE        +    and   '7b2c8ed0-664e-426d-977e-8fac133f30e1' = str(SessionId(value=UUID('7b2c8ed0-664e-426d-977e-8fac133f30e1')))\nE        +      where SessionId(value=UUID('7b2c8ed0-664e-426d-977e-8fac133f30e1')) = <tmux.test_send_prompt.PromptPane object at 0x7da2e3ff7c50>.session_id\n\ntests/unit/adapters/tmux/test_stuck_turn_marker.py:91: AssertionError\n=========================== short test summary info ============================\nFAILED tests/unit/adapters/tmux/test_stuck_turn_marker.py::test_an_idle_pane_under_the_plan_band_reads_idle_despite_a_stuck_marker\nFAILED tests/unit/adapters/tmux/test_stuck_turn_marker.py::test_a_send_into_the_idle_pane_ends_the_stuck_marker_for_good\n2 failed, 1 passed in 0.08s"
+ },
+ "schema": 2,
+ "task": "1.3",
+ "test": "uv run --locked pytest tests/unit/adapters/tmux/test_stuck_turn_marker.py -q -p no:randomly",
+ "text": "`uv run --locked pytest tests/unit/adapters/tmux/test_stuck_turn_marker.py -q -p no:randomly`",
+ "touched": [
+  "src/remote_agents/adapters/tmux/composer.py"
+ ]
+}
