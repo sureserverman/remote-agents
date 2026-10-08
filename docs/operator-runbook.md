@@ -1416,7 +1416,7 @@ suppresses another — past Telegram's per-chat rate, at which point its refusal
 a growing backlog. Nothing is dropped: the remainder stays queued and the next poll takes it, so a
 burst arrives spread over a minute or two instead of being refused.
 
-**Two kinds of message the service sends are not about a live session.** One is a scheduled
+**Two of those plain-text messages are not about a live session.** One is a scheduled
 run that did not start (**Scheduled sessions**, DEC-114). The other: when a provider clears a plan's
 usage windows ahead of the instant it had itself recorded for them, the owner gets one Telegram
 message for that provider — `Claude limits were reset early — 5h 91% → 2%, week 64% → 0%` —
