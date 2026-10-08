@@ -86,8 +86,8 @@ class PromptRelay:
             delivery = await self._terminal.send_prompt(session_id, prompt.text)
         except BaseException:
             # Cancelled mid-delivery (the service stopping on a deploy) or failed: it may have
-            # been typed. Left claimed, it would be claimed again after `_ABANDONED` and typed a
-            # second time -- and a double submit is worse than a lost one.
+            # been typed. Left claimed, it would be claimed again after `CLAIM_ABANDONED_AFTER`
+            # and typed a second time -- and a double submit is worse than a lost one.
             self._queue.settle(prompt)
             raise
         if delivery.outcome is PromptOutcome.REFUSED and delivery.reason in WAITABLE:

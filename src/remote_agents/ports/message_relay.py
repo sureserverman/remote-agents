@@ -12,11 +12,14 @@ from enum import StrEnum
 from typing import Protocol
 
 from remote_agents.domain.models import SessionId
-from remote_agents.ports.queued_prompts import QueuedPrompt
+from remote_agents.ports.queued_prompts import CLAIM_ABANDONED_AFTER, QueuedPrompt
 from remote_agents.ports.terminal import PromptReason
 
 WaitingMessage = QueuedPrompt
 """A message queued for a session, under the name the Telegram adapter may use."""
+
+CLAIM_ABANDONED_AFTER_FOR_MESSAGES = CLAIM_ABANDONED_AFTER
+"""The same abandonment threshold, under a name the Telegram adapter may import (DEC-075)."""
 
 
 class RelayOutcome(StrEnum):

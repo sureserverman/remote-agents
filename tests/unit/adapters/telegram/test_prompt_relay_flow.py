@@ -9,7 +9,7 @@ and its later delivery is announced. The relay itself is doubled here -- its rul
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
 import pytest
@@ -408,3 +408,61 @@ def test_nothing_in_the_flow_puts_the_word_the_scanner_forbids_in_the_adapter() 
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     assert module.main() == 0
+
+
+@pytest.mark.asyncio
+async def test_a_relay_notice_held_by_the_flood_hold_is_sent_once_the_hold_clears() -> None:
+    """BL-107 (1): a notice the hold stopped is kept, not dropped, so "You'll be told" holds."""
+    chat = FakeChat(chat_id=CHAT, owner_id=OWNER)
+    boundary = _boundary(_Relay())
+    boundary.attach_bot(chat.bot)
+    await _detail(chat, boundary)
+    before = len(chat.bot_messages)
+    boundary.flood.hold_off(60)
+
+    await boundary.announce_relayed(str(_SESSION), RelayResult(RelayOutcome.SENT, overtaken=True))
+    await boundary.flush_relay_notices()
+    assert len(chat.bot_messages) == before, "a notice went out under the flood hold"
+
+    boundary.flood._until = 0.0  # the hold runs out
+    await boundary.flush_relay_notices()
+
+    assert len(chat.bot_messages) == before + 1
+    assert "already being typed in" in chat.bot_messages[-1].text
+    await boundary.flush_relay_notices()
+    assert len(chat.bot_messages) == before + 1, "a held notice was sent twice"
+
+
+@pytest.mark.asyncio
+async def test_a_message_dropped_for_no_stated_reason_is_announced_cleanly() -> None:
+    """BL-107 (2): the service reports a drop it could not explain, with no dangling dash."""
+    chat = FakeChat(chat_id=CHAT, owner_id=OWNER)
+    boundary = _boundary(_Relay())
+    boundary.attach_bot(chat.bot)
+    await _detail(chat, boundary)
+
+    await boundary.announce_relayed(str(_SESSION), RelayResult(RelayOutcome.REFUSED))
+
+    text = chat.bot_messages[-1].text
+    assert "Dropped queued message for" in text
+    assert "—" not in text and text.rstrip().endswith(".")
+
+
+@pytest.mark.asyncio
+async def test_cancelling_a_message_whose_claim_was_abandoned_says_cancelled() -> None:
+    """BL-107 (3): a claim older than the abandonment threshold is nobody typing."""
+    from remote_agents.ports.queued_prompts import CLAIM_ABANDONED_AFTER
+
+    relay = _Relay()
+    stale = datetime.now(UTC) - CLAIM_ABANDONED_AFTER - timedelta(minutes=1)
+    relay.waiting = QueuedPrompt(str(_SESSION), "hello", stale, claimed_at=stale)
+    chat = FakeChat(chat_id=CHAT, owner_id=OWNER)
+    boundary = _boundary(relay)
+    anchor = await _detail(chat, boundary)
+
+    await boundary.callback(
+        chat.press(_token(chat.messages[anchor], "Cancel queued message")), None
+    )
+
+    assert "Queued message cancelled." in chat.messages[anchor].text
+    assert "may still arrive" not in chat.messages[anchor].text

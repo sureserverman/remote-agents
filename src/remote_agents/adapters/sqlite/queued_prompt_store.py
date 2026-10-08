@@ -10,22 +10,18 @@ cannot stop keys already being typed, but a refused delivery's `restore` can onl
 claim it made, so a message cancelled or replaced meanwhile never comes back, and `settle` answers
 whether the claim was still there, so the delivery can say it was overtaken.
 
-A claim abandoned by a crash is claimable again once it is older than `_ABANDONED`. That is the
-one path left that can type a message twice -- a process killed mid-paste -- because a clean stop
-settles its claim on the way out (`PromptRelay.retry`).
+A claim abandoned by a crash is claimable again once it is older than `CLAIM_ABANDONED_AFTER`.
+That is the one path left that can type a message twice -- a process killed mid-paste -- because
+a clean stop settles its claim on the way out (`PromptRelay.retry`).
 """
 
 from __future__ import annotations
 
 import sqlite3
 from contextlib import contextmanager
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 
-from remote_agents.ports.queued_prompts import QueuedPrompt
-
-_ABANDONED = timedelta(minutes=2)
-"""How old an in-flight claim must be before it is treated as abandoned. Far longer than one
-delivery, which is bounded at `TerminalWaits.prompt_bound` (20 s)."""
+from remote_agents.ports.queued_prompts import CLAIM_ABANDONED_AFTER, QueuedPrompt
 
 
 class SQLiteQueuedPromptStore:
@@ -64,7 +60,7 @@ class SQLiteQueuedPromptStore:
                 WHERE session_id = ? AND (claimed_at IS NULL OR claimed_at < ?)
                 RETURNING session_id, text, queued_at, claimed_at
                 """,
-                (moment.isoformat(), session_id, (moment - _ABANDONED).isoformat()),
+                (moment.isoformat(), session_id, (moment - CLAIM_ABANDONED_AFTER).isoformat()),
             ).fetchone()
         return None if row is None else _prompt(row)
 

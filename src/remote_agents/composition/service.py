@@ -231,6 +231,9 @@ class ServiceComposition:
     limit_stop_outcomes: LimitStopOutcomes | None = None
     """What became of each limit stop, pruned once a day after `OUTCOME_RETENTION`, or None."""
 
+    relay_notice_flush: Callable[[], Awaitable[None]] | None = None
+    """Sends the queued-message notices a flood hold kept, on every activity pass (BL-107)."""
+
 
 async def _serve_with_reconciliation(
     secrets: TelegramSecrets,
@@ -676,6 +679,11 @@ async def _retry_waiting_messages(
     relay = composition.prompt_relay
     if relay is None:
         return
+    if composition.relay_notice_flush is not None:
+        try:
+            await composition.relay_notice_flush()
+        except Exception:
+            _LOG.exception("sending held queued-message notices failed")
     finished = dict.fromkeys(
         activity.session_id for activity in activities if activity.kind is ActivityKind.COMPLETED
     )
@@ -684,6 +692,7 @@ async def _retry_waiting_messages(
             result = await relay.retry(SessionId.parse(session_id))
         except Exception:
             _LOG.exception("delivering a waiting message to %s failed", session_id)
+            await _announce_if_dropped(composition, session_id)
             continue
         if result is not None and result.outcome is RelayOutcome.QUEUED:
             composition.relay_rechecks[session_id] = time.monotonic()
@@ -696,6 +705,25 @@ async def _retry_waiting_messages(
         await relay.sweep()
     except Exception:
         _LOG.exception("sweeping waiting messages failed")
+
+
+async def _announce_if_dropped(composition: ServiceComposition, session_id: str) -> None:
+    """After a retry that raised, tell the owner if their message is gone (BL-107).
+
+    `PromptRelay.retry` settles a message it may have typed before re-raising, so the message
+    is gone and nobody was told. A retry that raised before it claimed anything leaves the
+    message waiting, and that is not news. So the queue is asked, not the exception: only a
+    message no longer pending is reported, as a drop with no stated reason.
+    """
+    relay, announce = composition.prompt_relay, composition.relay_announcer
+    if relay is None or announce is None:
+        return
+    try:
+        if relay.pending(SessionId.parse(session_id)) is not None:
+            return
+        await announce(session_id, RelayResult(RelayOutcome.REFUSED))
+    except Exception:
+        _LOG.exception("reporting a dropped waiting message for %s failed", session_id)
 
 
 async def _check_waiting_turns_periodically(
@@ -743,6 +771,7 @@ async def _check_waiting_turns_once(
             result = await relay.retry(session)
         except Exception:
             _LOG.exception("re-checking a waiting message for %s failed", session_id)
+            await _announce_if_dropped(composition, session_id)
             continue
         if result is None or result.outcome is RelayOutcome.QUEUED:
             continue

@@ -3,8 +3,16 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Protocol
+
+CLAIM_ABANDONED_AFTER = timedelta(minutes=2)
+"""How old an in-flight claim must be before it is treated as abandoned. Far longer than one
+delivery, which is bounded at `TerminalWaits.prompt_bound` (20 s).
+
+On the port, not in the store, because two readers need the same answer (DEC-011): the store
+re-claims an abandoned message, and the bot must not tell the owner such a message "is being
+typed in" when nothing is typing it (BL-107)."""
 
 
 @dataclass(frozen=True, slots=True)

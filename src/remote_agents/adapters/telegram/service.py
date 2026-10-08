@@ -200,6 +200,7 @@ from remote_agents.ports.agent_usage import AgentLimits, ContextWindow, LimitsAb
 from remote_agents.ports.callback_state import CallbackStatePort
 from remote_agents.ports.chat_view import ChatViewPort
 from remote_agents.ports.message_relay import (
+    CLAIM_ABANDONED_AFTER_FOR_MESSAGES,
     MessageRelay,
     RelayOutcome,
     RelayResult,
@@ -532,6 +533,9 @@ stays on the sessions tab, as every other press about one session does."""
 _ROLLOVER_OF_CALLBACK = {callback: action for action, callback in _ROLLOVER_CALLBACKS.items()}
 _BACK_TO_SESSIONS = "\u2039 Back to sessions"  # ‹ Back to sessions
 
+_HELD_RELAY_NOTICES = 20
+"""How many queued-message notices a flood hold may keep; past it the oldest is dropped, logged."""
+
 _RELAY_REASON_WORDS: dict[PromptReason, str] = {
     PromptReason.EMPTY: "the message was empty",
     PromptReason.SHELL: "a message starting with ! would run as a shell command",
@@ -767,6 +771,11 @@ class PrivateBotBoundary:
     registry at all: a profile with no mark renders exactly the label drawn before this
     field existed.
     """
+    held_relay_notices: list[str] = field(default_factory=list, repr=False)
+    """Queued-message notices the chat's flood hold stopped, oldest first (BL-107).
+
+    Kept rather than dropped, because the Cancel reply promises "You'll be told if it does". The
+    service flushes them on every activity pass through `flush_relay_notices`."""
     names: Mapping[str, str] = field(default_factory=dict)
     """Each curated profile's display name, read off the registry like `glyphs` (BL-101).
 
@@ -3041,7 +3050,13 @@ class PrivateBotBoundary:
         cancelled = self.message_relay is not None and self.message_relay.cancel(session_id)
         if not cancelled:
             text = "Nothing was waiting — the message had already been sent or dropped."
-        elif waiting is not None and waiting.claimed_at is not None:
+        elif (
+            waiting is not None
+            and waiting.claimed_at is not None
+            # An abandoned claim is nobody typing: the store re-claims it after this long, so
+            # "it was already being typed in" would describe a process that died (BL-107).
+            and datetime.now(UTC) - waiting.claimed_at < CLAIM_ABANDONED_AFTER_FOR_MESSAGES
+        ):
             text = (
                 "Cancelled, but it was already being typed in, so it may still arrive. "
                 "You'll be told if it does."
@@ -3069,9 +3084,6 @@ class PrivateBotBoundary:
         """
         if self._bot is None or result.outcome is RelayOutcome.QUEUED:
             return
-        if self.flood.held():
-            _LOG.debug("queued-message notice held by the chat's flood hold")
-            return
         name = await self._session_name(session_value)
         why = _RELAY_REASON_WORDS.get(result.reason, "") if result.reason else ""
         late = (
@@ -3086,9 +3098,35 @@ class PrivateBotBoundary:
                 f"{_MESSAGE_EMOJI} Typed queued message into {name}, but not confirmed — {why}. "
                 f"The text may still be in the agent's input.{late}"
             )
-        else:
+        elif why:
             text = f"{_MESSAGE_EMOJI} Dropped queued message for {name} — {why}."
-        await self.view.send_apart(self._bot, {"text": text, "parse_mode": ParseMode.HTML})
+        else:
+            # The service's own report of a retry that raised after the message was gone: it
+            # knows the message was dropped and not why (BL-107).
+            text = f"{_MESSAGE_EMOJI} Dropped queued message for {name}."
+        self.held_relay_notices.append(text)
+        if len(self.held_relay_notices) > _HELD_RELAY_NOTICES:
+            del self.held_relay_notices[0]
+            _LOG.warning("a held queued-message notice was dropped: too many were held")
+        await self.flush_relay_notices()
+
+    async def flush_relay_notices(self) -> None:
+        """Send every held notice, oldest first, unless the flood hold still stands.
+
+        A notice leaves the list only once it is sent; a send that fails keeps it, and the rest,
+        for the next flush. The service calls this on every activity pass, so a notice held by
+        the flood is sent once the hold runs out even when no new notice follows it.
+        """
+        if self._bot is None:
+            return
+        while self.held_relay_notices and not self.flood.held():
+            text = self.held_relay_notices[0]
+            try:
+                await self.view.send_apart(self._bot, {"text": text, "parse_mode": ParseMode.HTML})
+            except Exception:
+                _LOG.exception("sending a queued-message notice failed; it is kept for later")
+                return
+            self.held_relay_notices.pop(0)
 
     async def _limit_block(self) -> str:
         """Each agent's rate-limit windows, as a monospace block under the rows.

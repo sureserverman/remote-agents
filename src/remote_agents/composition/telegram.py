@@ -249,6 +249,7 @@ def _private_boundary(
         limit_reset_notifier=boundary.limit_reset_notifier,
         prompt_relay=relay,
         relay_announcer=boundary.announce_relayed,
+        relay_notice_flush=boundary.flush_relay_notices,
         turn_markers=turn_markers,
         # The limits read both surfaces share, and each vertical's own limit sentence: a limit
         # stop is given the window that stopped it before it is recorded or delivered.

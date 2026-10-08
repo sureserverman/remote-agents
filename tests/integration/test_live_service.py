@@ -2712,3 +2712,74 @@ async def test_fast_check_a_waiting_read_that_raises_costs_only_that_session() -
     await _check_waiting_turns_once(composition)
 
     assert announced == [(fine, RelayOutcome.SENT)]
+
+
+class _DroppingThenRaisingRelay(_WaitingRelay):
+    """A retry that settled the message -- so it is gone -- and then raised (BL-107)."""
+
+    async def retry(self, session_id):
+        key = str(session_id)
+        self.retried.append(key)
+        self.waiting.pop(key, None)
+        raise RuntimeError("tmux went away mid-send")
+
+
+async def test_fast_check_a_retry_that_raises_after_dropping_the_message_says_so() -> None:
+    from remote_agents.ports.message_relay import RelayOutcome
+
+    session = str(SessionId.new())
+    relay = _DroppingThenRaisingRelay({session: [RelayOutcome.SENT]})
+    announced: list[tuple[str, object]] = []
+    composition = _fast_composition(relay, _MarkedSessions(session), announced)
+
+    await _check_waiting_turns_once(composition)
+
+    assert announced == [(session, RelayOutcome.REFUSED)]
+
+
+async def test_a_finished_turn_whose_retry_raises_after_dropping_the_message_says_so() -> None:
+    from remote_agents.composition.service import _retry_waiting_messages
+    from remote_agents.ports.message_relay import RelayOutcome
+
+    session = str(SessionId.new())
+    relay = _DroppingThenRaisingRelay({session: [RelayOutcome.SENT]})
+    announced: list[tuple[str, object]] = []
+    composition = _fast_composition(relay, None, announced)
+    finished = AgentActivity(session, ActivityKind.COMPLETED, None, datetime.now(UTC))
+
+    await _retry_waiting_messages(composition, [finished])
+
+    assert announced == [(session, RelayOutcome.REFUSED)]
+
+
+async def test_a_finished_turn_whose_retry_raises_with_the_message_still_waiting_says_nothing() -> (
+    None
+):
+    from remote_agents.composition.service import _retry_waiting_messages
+
+    session = str(SessionId.new())
+    relay = _WaitingRelay({session: [RuntimeError("database is locked")]})
+    announced: list[tuple[str, object]] = []
+    composition = _fast_composition(relay, None, announced)
+    finished = AgentActivity(session, ActivityKind.COMPLETED, None, datetime.now(UTC))
+
+    await _retry_waiting_messages(composition, [finished])
+
+    assert announced == [], "the message is still waiting, so nothing was dropped"
+
+
+async def test_every_activity_pass_flushes_held_relay_notices() -> None:
+    from dataclasses import replace
+
+    from remote_agents.composition.service import _retry_waiting_messages
+
+    flushed: list[bool] = []
+
+    async def flush() -> None:
+        flushed.append(True)
+
+    composition = replace(_fast_composition(_WaitingRelay({}), None, []), relay_notice_flush=flush)
+
+    await _retry_waiting_messages(composition, [])
+
+    assert flushed == [True]
