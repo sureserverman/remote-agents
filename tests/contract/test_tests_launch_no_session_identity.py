@@ -32,3 +32,33 @@ def test_a_child_process_inherits_no_session_identity() -> None:
     ).stdout.strip()
 
     assert seen == ""
+
+
+def test_the_scrub_holds_when_the_shell_that_runs_pytest_carries_one() -> None:
+    """The two checks above pass vacuously where the variable was never set, which is CI.
+
+    So the suite is run again in a child with the variable set, selecting only the first check:
+    without the scrub in `tests/conftest.py` the child sees the variable and fails.
+    """
+    outer = os.environ | {VARIABLE: "11111111-1111-4111-8111-111111111111"}
+    child = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "pytest",
+            __file__,
+            "-q",
+            "-p",
+            "no:randomly",
+            "-p",
+            "no:xdist",
+            "-k",
+            "test_the_test_process_carries_no_session_identity",
+        ],
+        env=outer,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert child.returncode == 0, child.stdout + child.stderr

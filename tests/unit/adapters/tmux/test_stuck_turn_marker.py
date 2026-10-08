@@ -25,9 +25,9 @@ from remote_agents.adapters.agents.turn_markers import FileTurnMarkers
 from remote_agents.adapters.tmux.gateway import TmuxGateway
 from remote_agents.adapters.tmux.runtime import TmuxTerminal
 
-from .test_send_prompt import _DRAFTED, _WAITS, PromptPane, _screen
+from .test_send_prompt import _DRAFTED, _WAITS, PromptPane, _screen, _turn_state
 
-_FOREIGN_OWNER = "3eb63a06-5c77-4056-a2b6-41e98620ef85"
+_FOREIGN_OWNER = "11111111-1111-4111-8111-111111111111"
 
 
 def _terminal(pane: PromptPane, markers: FileTurnMarkers) -> TmuxTerminal:
@@ -51,7 +51,7 @@ def _stuck(tmp_path: Path, pane: PromptPane) -> FileTurnMarkers:
     """The session's marker, started by another agent that will never end it."""
     markers = FileTurnMarkers(tmp_path)
     markers.start(str(pane.session_id), owner=_FOREIGN_OWNER)
-    markers.end_if_owned_by(str(pane.session_id), "b437d9e3-4f0a-48ec-8979-ae5f953832cb")
+    markers.end_if_owned_by(str(pane.session_id), "22222222-2222-4222-8222-222222222222")
     assert markers.started_at(str(pane.session_id)) is not None, "the pane's own end refused"
     # Past the grace a fresh marker gets: the stuck one was minutes old by the time the pane sat
     # idle, its age measured from the owner's last submit.
@@ -68,8 +68,12 @@ def test_an_idle_pane_under_the_plan_band_reads_idle_despite_a_stuck_marker(tmp_
 
 
 def test_a_stuck_marker_on_a_busy_screen_still_reads_busy(tmp_path) -> None:
-    """The screen deciding is not a bypass: a turn still running stays BUSY."""
-    pane = PromptPane([_screen("claude", "busy")], title="◑ Project backlog")
+    """The screen deciding is not a bypass: a turn still running stays BUSY.
+
+    A streaming answer, so no spinner line makes it BUSY on its own: only the marker does,
+    because the last line above the box is the answer, not an end line. A `turn_ended` that
+    wrongly said "over" would make this pane read idle."""
+    pane = PromptPane([_turn_state("streaming_answer")], title="✳ Project backlog")
     markers = _stuck(tmp_path, pane)
 
     assert asyncio.run(_terminal(pane, markers).pane_idle(pane.session_id)) is False
