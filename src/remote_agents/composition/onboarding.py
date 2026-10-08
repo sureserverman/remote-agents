@@ -228,9 +228,10 @@ _COMPONENTS_ONBOARDING_OWNS = ("tmux", "telegram")
 _COMPONENT_OWNED_ONLY_WITH_A_DAEMON = "service"
 
 #: Named for what they are: real, reported, and nobody's to fix but the operator's. `core` wants
-#: a projects registry that appears when a project is registered; `store` wants a database the
-#: service creates on first run; `profiles` wants an optional third-party agent CLI (DEC-056).
-_COMPONENTS_THE_OPERATOR_FINISHES = ("core", "store", "profiles")
+#: a projects registry that appears when a project is registered; `store` and `ui_store` want the
+#: databases the service creates on first run; `profiles` wants an optional third-party agent CLI
+#: (DEC-056).
+_COMPONENTS_THE_OPERATOR_FINISHES = ("core", "store", "ui_store", "profiles")
 
 
 def _report_on_the_onboarded_host(paths: ProductionPaths, *, installed_daemon: bool) -> int:

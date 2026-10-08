@@ -32,7 +32,7 @@ from remote_agents.adapters.sqlite.database import (
     restore_database,
     ui_database_path,
 )
-from remote_agents.adapters.sqlite.migrations import MIGRATIONS
+from remote_agents.adapters.sqlite.migrations import MIGRATIONS, UI_MIGRATIONS
 from remote_agents.adapters.sqlite.session_store import SQLiteSessionStore
 from remote_agents.adapters.telegram.service import (
     PrivateBotBoundary,
@@ -778,6 +778,7 @@ def _doctor_report(paths: ProductionPaths, config, drift: dict[str, object]) -> 
     return production_doctor(
         core_ready=registry.error is None,
         database_ready=database_is_ready(config.database_path),
+        ui_store_ready=database_is_ready(ui_database_path(config.database_path), UI_MIGRATIONS),
         tmux_ready=_command_succeeds(("tmux", "-L", "remote-agents", "-V")),
         tmux_console_ready=_console_features_available(paths.home),
         telegram_ready=_telegram_credentials_are_private(paths),

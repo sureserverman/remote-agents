@@ -293,3 +293,61 @@ def test_a_host_that_could_not_check_for_releases_still_reports_healthy() -> Non
 def test_a_report_built_without_a_release_block_omits_it_entirely() -> None:
     """Absent rather than null: every existing caller keeps the report it had."""
     assert "release" not in _healthy_production()
+
+
+def _ready_report(**overrides):
+    arguments = dict(
+        core_ready=True,
+        database_ready=True,
+        tmux_ready=True,
+        telegram_ready=True,
+        service_ready=True,
+        profiles=(
+            ProfileCompatibility(ProfileId("claude"), True, "claude 1.2.3", "AVAILABLE", None),
+        ),
+        registered_projects=1,
+        discovered_projects=1,
+        catalogue_projects=1,
+    )
+    arguments.update(overrides)
+    return production_doctor(**arguments)
+
+
+def test_an_unready_ui_store_is_its_own_component_and_fails_the_report() -> None:
+    """BL-092: a bad `ui.sqlite3` used to leave doctor reporting a healthy host."""
+    report = _ready_report(ui_store_ready=False)
+
+    assert report["healthy"] is False
+    assert report["components"]["ui_store"] == {
+        "status": "degraded",
+        "reason": "ui_store_unavailable",
+    }
+    assert report["components"]["store"] == {"status": "healthy", "reason": None}
+
+
+def test_a_ready_ui_store_reports_healthy() -> None:
+    report = _ready_report(ui_store_ready=True)
+
+    assert report["healthy"] is True
+    assert report["components"]["ui_store"] == {"status": "healthy", "reason": None}
+
+
+def test_the_ui_store_is_judged_against_its_own_schema_head(tmp_path) -> None:
+    """Missing, corrupt and older-schema UI stores are not ready; one at the UI head is."""
+    from remote_agents.adapters.sqlite.database import database_is_ready, open_database
+    from remote_agents.adapters.sqlite.migrations import UI_MIGRATIONS
+
+    missing = tmp_path / "missing" / "ui.sqlite3"
+    corrupt = tmp_path / "corrupt.sqlite3"
+    corrupt.write_bytes(b"SQLite format 3\x00" + b"\x00" * 10)
+    older = tmp_path / "older.sqlite3"
+    open_database(older, migrations=UI_MIGRATIONS[:1]).close()
+    current = tmp_path / "current.sqlite3"
+    open_database(current, migrations=UI_MIGRATIONS).close()
+
+    assert database_is_ready(missing, UI_MIGRATIONS) is False
+    assert database_is_ready(corrupt, UI_MIGRATIONS) is False
+    assert database_is_ready(older, UI_MIGRATIONS) is False
+    assert database_is_ready(current, UI_MIGRATIONS) is True
+    # The domain head is a different counter: a current UI store is not a current domain store.
+    assert database_is_ready(current) is False

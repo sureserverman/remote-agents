@@ -111,6 +111,7 @@ def production_doctor(
     claude_limits_source: str | None = None,
     cursor_limits_source: str | None = None,
     schedule_zone: str | None = None,
+    ui_store_ready: bool | None = None,
 ) -> dict[str, object]:
     """Render the installed service's non-secret dependency health report.
 
@@ -139,16 +140,20 @@ def production_doctor(
     # is the question this component now asks. Which agents are missing is not lost: it is what
     # `doctor --profiles` reports, per profile, which is where a reader can act on it.
     profiles_ready = any(profile.available for profile in profiles)
-    report = health_report(
-        {
-            "core": (core_ready, "registry_unavailable"),
-            "store": (database_ready, "database_unavailable"),
-            "tmux": (tmux_ready, "tmux_unavailable"),
-            "telegram": (telegram_ready, "credentials_unavailable"),
-            "service": (service_ready, "service_inactive"),
-            "profiles": (profiles_ready, "no_profile_available"),
-        }
-    )
+    components = {
+        "core": (core_ready, "registry_unavailable"),
+        "store": (database_ready, "database_unavailable"),
+        "tmux": (tmux_ready, "tmux_unavailable"),
+        "telegram": (telegram_ready, "credentials_unavailable"),
+        "service": (service_ready, "service_inactive"),
+        "profiles": (profiles_ready, "no_profile_available"),
+    }
+    # The surface store (`ui.sqlite3`) holds the bot's callback tokens and standing messages. A
+    # missing or unreadable one used to leave this report healthy while the bot's buttons could
+    # not be read (BL-092). `None` is a caller that does not know, and adds no component.
+    if ui_store_ready is not None:
+        components["ui_store"] = (ui_store_ready, "ui_store_unavailable")
+    report = health_report(components)
     report["projects"] = {
         "registered": registered_projects,
         "discovered": discovered_projects,

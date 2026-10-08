@@ -1170,6 +1170,34 @@ class TestOnboardingEndsWithTheDoctor:
         assert "service (service_inactive)" in message
         assert "store" not in message
 
+    def test_an_unready_ui_store_alone_does_not_fail_onboarding(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """BL-092: the UI store is created by the service on first run, like the domain store.
+
+        So it is the operator's to finish, never onboarding's failure: an onboarding that ran
+        before the first `serve` must not exit 1 over a file nothing has created yet.
+        """
+        from remote_agents import bootstrap
+        from remote_agents.bootstrap import main
+
+        self._arrange(tmp_path, monkeypatch, healthy=False)
+        monkeypatch.setattr(
+            bootstrap,
+            "_doctor_report",
+            lambda *_a, **_k: {
+                "healthy": False,
+                "components": {
+                    "tmux": {"status": "healthy", "reason": None},
+                    "telegram": {"status": "healthy", "reason": None},
+                    "service": {"status": "healthy", "reason": None},
+                    "ui_store": {"status": "degraded", "reason": "ui_store_unavailable"},
+                },
+            },
+        )
+
+        assert main(["onboard", "--install-daemon"]) == 0
+
     def test_the_doctor_command_and_onboarding_emit_the_same_report(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
     ) -> None:
