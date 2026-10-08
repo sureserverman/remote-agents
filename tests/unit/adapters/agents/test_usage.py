@@ -986,11 +986,12 @@ def test_each_reader_files_the_silence_it_actually_means(tmp_path: Path) -> None
     assert _claude_reader(tmp_path, limits=absent_hop).limits().absence is (
         LimitsAbsence.NO_READING
     ), "claude does publish limits; no hop file is 'none found', not 'none published'"
-    assert CodexUsageReader(
-        sessions_root=tmp_path / "no-codex-sessions", now=lambda: LAUNCHED_AT
-    ).limits().absence is LimitsAbsence.NO_READING, (
-        "codex does publish limits; no rollout on disk is 'none found', not 'none published'"
-    )
+    assert (
+        CodexUsageReader(sessions_root=tmp_path / "no-codex-sessions", now=lambda: LAUNCHED_AT)
+        .limits()
+        .absence
+        is LimitsAbsence.NO_READING
+    ), "codex does publish limits; no rollout on disk is 'none found', not 'none published'"
 
 
 def test_a_reader_that_answers_with_windows_names_no_absence(tmp_path: Path) -> None:
@@ -1792,9 +1793,7 @@ class _StampedReader:
 
     def limits(self) -> AgentLimits:
         self.calls += 1
-        return AgentLimits(
-            self.limits_profile, (UsageWindow("5h", 1.0),), stale_source=self.stamp
-        )
+        return AgentLimits(self.limits_profile, (UsageWindow("5h", 1.0),), stale_source=self.stamp)
 
     def read(self, query: UsageQuery) -> AgentUsage | None:
         self.queries.append(query)

@@ -39,8 +39,18 @@ async def console(tmp_path):
     gateway = TmuxGateway(socket, runner)
     session = console_target().rstrip(":")
     await runner.run(
-        "tmux", "-L", socket, "new-session", "-d", "-s", session,
-        "-x", str(WINDOW_WIDTH), "-y", str(WINDOW_HEIGHT), "sleep 300",
+        "tmux",
+        "-L",
+        socket,
+        "new-session",
+        "-d",
+        "-s",
+        session,
+        "-x",
+        str(WINDOW_WIDTH),
+        "-y",
+        str(WINDOW_HEIGHT),
+        "sleep 300",
     )
     # projects | (sessions / limits / feed) -- the console's own shape.
     for direction in ("-h", "-v", "-v"):
@@ -48,12 +58,16 @@ async def console(tmp_path):
             "tmux", "-L", socket, "split-window", direction, "-t", console_target(), "sleep 300"
         )
     await runner.run(
-        "tmux", "-L", socket, "set-window-option", "-t", console_target(),
-        "main-pane-width", "60%",
+        "tmux",
+        "-L",
+        socket,
+        "set-window-option",
+        "-t",
+        console_target(),
+        "main-pane-width",
+        "60%",
     )
-    await runner.run(
-        "tmux", "-L", socket, "select-layout", "-t", console_target(), "main-vertical"
-    )
+    await runner.run("tmux", "-L", socket, "select-layout", "-t", console_target(), "main-vertical")
     try:
         yield gateway, runner, socket
     finally:
@@ -69,7 +83,13 @@ async def _widths(runner, socket) -> list[int]:
 
 async def _zoomed(runner, socket) -> str:
     output = await runner.run(
-        "tmux", "-L", socket, "display-message", "-p", "-t", console_target(),
+        "tmux",
+        "-L",
+        socket,
+        "display-message",
+        "-p",
+        "-t",
+        console_target(),
         "#{window_zoomed_flag}",
     )
     return output.strip()
@@ -299,9 +319,23 @@ async def console_with_surfaces(tmp_path):
     try:
         assert await composer.ensure() is True
         await _run(
-            "tmux", "-L", host_socket, "new-session", "-d", "-s", "host",
-            "-x", str(WINDOW_WIDTH), "-y", str(WINDOW_HEIGHT),
-            "tmux", "-L", console_socket, "attach-session", "-t", console_target(),
+            "tmux",
+            "-L",
+            host_socket,
+            "new-session",
+            "-d",
+            "-s",
+            "host",
+            "-x",
+            str(WINDOW_WIDTH),
+            "-y",
+            str(WINDOW_HEIGHT),
+            "tmux",
+            "-L",
+            console_socket,
+            "attach-session",
+            "-t",
+            console_target(),
         )
         yield gateway, console_socket, host_socket
     finally:
@@ -367,8 +401,14 @@ async def test_ten_toggles_at_a_real_client_leave_every_pane_idle(console_with_s
 
     pids = (
         await _run(
-            "tmux", "-L", console_socket, "list-panes", "-t", console_target(),
-            "-F", "#{pane_id}|#{pane_pid}",
+            "tmux",
+            "-L",
+            console_socket,
+            "list-panes",
+            "-t",
+            console_target(),
+            "-F",
+            "#{pane_id}|#{pane_pid}",
         )
     ).split()
     before = {entry: await _cpu_seconds(entry.split("|")[1]) for entry in pids}

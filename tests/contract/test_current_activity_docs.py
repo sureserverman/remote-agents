@@ -131,12 +131,10 @@ def test_current_docs_say_what_opencode_reports_and_what_it_never_will() -> None
     offenders = [
         f"{path.relative_to(_ROOT)}:{number}: {sentence}"
         for path in _CURRENT_ACTIVITY_DOCS
-        for number, sentence in _calls_opencode_unwatched(
-            path.read_text(encoding="utf-8")
-        )
+        for number, sentence in _calls_opencode_unwatched(path.read_text(encoding="utf-8"))
     ]
-    assert offenders == [], (
-        "a current document still calls opencode unwatched:\n" + "\n".join(offenders)
+    assert offenders == [], "a current document still calls opencode unwatched:\n" + "\n".join(
+        offenders
     )
 
     # **The exemption is asserted, not trusted.** A sweep that learns to ignore a subject can
@@ -151,9 +149,9 @@ def test_current_docs_say_what_opencode_reports_and_what_it_never_will() -> None
     assert _calls_opencode_unwatched(
         "OpenCode takes no hooks, so its rate limits are unknown too."
     ), "a real activity claim escaped by naming limits in the same breath"
-    assert _calls_opencode_unwatched(
-        "Nothing is installed for OpenCode, which\ntakes no hooks."
-    ), "a claim wrapped across two lines is invisible again, which is how this sweep read past"
+    assert _calls_opencode_unwatched("Nothing is installed for OpenCode, which\ntakes no hooks."), (
+        "a claim wrapped across two lines is invisible again, which is how this sweep read past"
+    )
 
 
 def test_no_current_document_still_offers_the_retired_pane_quiet_fallback() -> None:
@@ -200,11 +198,7 @@ def test_no_current_document_still_offers_the_retired_pane_quiet_fallback() -> N
         for text in (path.read_text(encoding="utf-8"),)
         for number, sentence in (
             *_claims_matching(text, retired),
-            *(
-                claim
-                for claim in _claims_matching(text, symptom)
-                if mechanism.search(claim[1])
-            ),
+            *(claim for claim in _claims_matching(text, symptom) if mechanism.search(claim[1])),
         )
     ]
 

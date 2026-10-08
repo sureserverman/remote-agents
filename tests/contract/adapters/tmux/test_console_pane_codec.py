@@ -145,9 +145,18 @@ async def test_the_hidden_option_round_trips_on_a_real_console_window(tmp_path) 
     gateway = TmuxGateway(socket, runner)
     try:
         await runner.run(
-            "tmux", "-L", socket, "new-session", "-d",
-            "-s", console_target().rstrip(":"),
-            "-x", "80", "-y", "24", "sleep 30",
+            "tmux",
+            "-L",
+            socket,
+            "new-session",
+            "-d",
+            "-s",
+            console_target().rstrip(":"),
+            "-x",
+            "80",
+            "-y",
+            "24",
+            "sleep 30",
         )
 
         assert await gateway.read_console_option(PANES_HIDDEN_OPTION) == "", (
@@ -185,9 +194,18 @@ async def test_the_geometry_read_answers_a_real_window_with_its_width(tmp_path) 
     gateway = TmuxGateway(socket, runner)
     try:
         await runner.run(
-            "tmux", "-L", socket, "new-session", "-d",
-            "-s", console_target().rstrip(":"),
-            "-x", "183", "-y", "44", "sleep 30",
+            "tmux",
+            "-L",
+            socket,
+            "new-session",
+            "-d",
+            "-s",
+            console_target().rstrip(":"),
+            "-x",
+            "183",
+            "-y",
+            "44",
+            "sleep 30",
         )
         await runner.run(
             "tmux", "-L", socket, "split-window", "-h", "-t", console_target(), "sleep 30"

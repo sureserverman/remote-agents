@@ -564,6 +564,7 @@ async def test_the_notification_still_shares_the_state_filter_it_was_credited_wi
 
     assert view.sent == [], "a running session is not asking, so no question is sent about it"
 
+
 async def test_a_question_too_old_to_delete_is_amended_so_it_stops_asking() -> None:
     """The 48-hour case, and the reason `render_trust_settled` is still here.
 

@@ -38,9 +38,7 @@ def test_opening_a_fresh_ui_store_creates_every_table_in_the_moved_set(tmp_path:
     try:
         present = {
             name
-            for (name,) in connection.execute(
-                "SELECT name FROM sqlite_master WHERE type = 'table'"
-            )
+            for (name,) in connection.execute("SELECT name FROM sqlite_master WHERE type = 'table'")
         }
     finally:
         connection.close()
@@ -55,9 +53,7 @@ def test_the_ui_store_carries_no_domain_table(tmp_path: Path) -> None:
     try:
         present = {
             name
-            for (name,) in connection.execute(
-                "SELECT name FROM sqlite_master WHERE type = 'table'"
-            )
+            for (name,) in connection.execute("SELECT name FROM sqlite_master WHERE type = 'table'")
         }
     finally:
         connection.close()
@@ -97,9 +93,7 @@ def test_opening_the_ui_store_twice_changes_nothing(tmp_path: Path) -> None:
             first.execute("SELECT version FROM schema_version").fetchone()[0],
             sorted(
                 name
-                for (name,) in first.execute(
-                    "SELECT name FROM sqlite_master WHERE type = 'table'"
-                )
+                for (name,) in first.execute("SELECT name FROM sqlite_master WHERE type = 'table'")
             ),
         )
     finally:
@@ -111,9 +105,7 @@ def test_opening_the_ui_store_twice_changes_nothing(tmp_path: Path) -> None:
             second.execute("SELECT version FROM schema_version").fetchone()[0],
             sorted(
                 name
-                for (name,) in second.execute(
-                    "SELECT name FROM sqlite_master WHERE type = 'table'"
-                )
+                for (name,) in second.execute("SELECT name FROM sqlite_master WHERE type = 'table'")
             ),
         )
     finally:

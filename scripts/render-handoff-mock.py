@@ -21,9 +21,7 @@ import sys
 import tempfile
 from pathlib import Path
 
-_MOCK = Path(
-    "/mnt/vault/Portfolio/infra/remote-agents/plans/2026-09-25-console-facelift-handoff"
-)
+_MOCK = Path("/mnt/vault/Portfolio/infra/remote-agents/plans/2026-09-25-console-facelift-handoff")
 _PAGE = "Console Facelift.dc.html"
 
 #: Each Tweak state as the four flags' values. The first is the mock's own default.

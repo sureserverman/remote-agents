@@ -360,10 +360,18 @@ def test_a_codex_permission_request_says_what_it_is_asking(tmp_path: Path) -> No
     """
     directory = _spool(tmp_path)
 
-    _run(_stream(_codex_permission(
-        command="whoami > /tmp/ra-drill-probe.txt",
-        description="Do you want to allow the exact command to write /tmp/ra-drill-probe.txt?",
-    )), directory, provider="codex")
+    _run(
+        _stream(
+            _codex_permission(
+                command="whoami > /tmp/ra-drill-probe.txt",
+                description=(
+                    "Do you want to allow the exact command to write /tmp/ra-drill-probe.txt?"
+                ),
+            )
+        ),
+        directory,
+        provider="codex",
+    )
 
     record = _record(directory)
     assert record["detail"] == (
@@ -384,10 +392,18 @@ def test_a_codex_apply_patch_permission_request_carries_its_command_alone(
     """
     directory = _spool(tmp_path)
 
-    _run(_stream(_codex_permission(
-        "apply_patch",
-        command="*** Begin Patch\n*** Update File: README.md\n@@\n drill\n+EDIT\n*** End Patch",
-    )), directory, provider="codex")
+    _run(
+        _stream(
+            _codex_permission(
+                "apply_patch",
+                command=(
+                    "*** Begin Patch\n*** Update File: README.md\n@@\n drill\n+EDIT\n*** End Patch"
+                ),
+            )
+        ),
+        directory,
+        provider="codex",
+    )
 
     record = _record(directory)
     assert record["detail"] is not None
@@ -402,8 +418,11 @@ def test_a_codex_permission_request_with_only_a_reason_renders_that_half_alone(
     """The mirror of the case above, so the formatter is pinned from both sides."""
     directory = _spool(tmp_path)
 
-    _run(_stream(_codex_permission(description="Allow writing in the working directory?")),
-         directory, provider="codex")
+    _run(
+        _stream(_codex_permission(description="Allow writing in the working directory?")),
+        directory,
+        provider="codex",
+    )
 
     record = _record(directory)
     assert record["detail"] == "Allow writing in the working directory?"
@@ -437,10 +456,16 @@ def test_a_codex_permission_request_detail_is_bounded_to_one_line(tmp_path: Path
     """
     directory = _spool(tmp_path)
 
-    _run(_stream(_codex_permission(
-        "apply_patch",
-        command="*** Begin Patch\n" + ("a" * 400) + "\n*** End Patch",
-    )), directory, provider="codex")
+    _run(
+        _stream(
+            _codex_permission(
+                "apply_patch",
+                command="*** Begin Patch\n" + ("a" * 400) + "\n*** End Patch",
+            )
+        ),
+        directory,
+        provider="codex",
+    )
 
     detail = _record(directory)["detail"]
     assert "\n" not in detail
@@ -457,8 +482,11 @@ def test_a_codex_permission_request_never_spools_the_layout_its_payload_carries(
     """
     directory = _spool(tmp_path)
 
-    _run(_stream(_codex_permission(command="ls", description="List files")),
-         directory, provider="codex")
+    _run(
+        _stream(_codex_permission(command="ls", description="List files")),
+        directory,
+        provider="codex",
+    )
 
     written = json.dumps(_record(directory))
     assert "/home/user/.codex" not in written
@@ -593,8 +621,10 @@ def test_a_reviewer_quoted_in_other_records_does_not_silence_an_ask(tmp_path: Pa
         tmp_path,
         _turn_context("user"),
         {"type": "session_meta", "payload": {"approvals_reviewer": "auto_review"}},
-        {"type": "event_msg", "payload": {"type": "other", "thread_settings": {
-            "approvals_reviewer": "auto_review"}}},
+        {
+            "type": "event_msg",
+            "payload": {"type": "other", "thread_settings": {"approvals_reviewer": "auto_review"}},
+        },
         {"type": "response_item", "payload": {"text": '"approvals_reviewer": "auto_review"'}},
     )
 
@@ -646,6 +676,7 @@ def test_a_failure_reading_the_reviewer_is_heard(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """The spool swallows every exception and writes nothing, which here is the silent ask."""
+
     def explode(path: Path) -> str:
         raise RecursionError
 
@@ -706,10 +737,15 @@ def test_a_claude_bash_permission_request_says_what_it_is_asking(tmp_path: Path)
     """
     directory = _spool(tmp_path)
 
-    _run(_stream(_claude_permission(
-        command='curl -s -o /dev/null -w "%{http_code}" https://example.com',
-        description="Check HTTP status code for example.com",
-    )), directory)
+    _run(
+        _stream(
+            _claude_permission(
+                command='curl -s -o /dev/null -w "%{http_code}" https://example.com',
+                description="Check HTTP status code for example.com",
+            )
+        ),
+        directory,
+    )
 
     record = _record(directory)
     assert record["detail"] == (
@@ -727,13 +763,18 @@ def test_a_claude_file_permission_request_names_the_file(tmp_path: Path) -> None
     """
     directory = _spool(tmp_path)
 
-    _run(_stream(_claude_permission(
-        "Edit",
-        file_path="/home/user/workspace/README.md",
-        old_string="a secret sentence from the file",
-        new_string="another secret sentence",
-        replace_all=False,
-    )), directory)
+    _run(
+        _stream(
+            _claude_permission(
+                "Edit",
+                file_path="/home/user/workspace/README.md",
+                old_string="a secret sentence from the file",
+                new_string="another secret sentence",
+                replace_all=False,
+            )
+        ),
+        directory,
+    )
 
     record = _record(directory)
     assert record["detail"] == "/home/user/workspace/README.md"
@@ -750,15 +791,22 @@ def test_a_claude_question_permission_request_carries_the_question(tmp_path: Pat
     """
     directory = _spool(tmp_path)
 
-    _run(_stream(_claude_permission(
-        "AskUserQuestion",
-        questions=[{
-            "question": "Do you prefer tabs or spaces for indentation?",
-            "header": "Indentation",
-            "options": [{"label": "Spaces", "description": "…"}],
-            "multiSelect": False,
-        }],
-    )), directory)
+    _run(
+        _stream(
+            _claude_permission(
+                "AskUserQuestion",
+                questions=[
+                    {
+                        "question": "Do you prefer tabs or spaces for indentation?",
+                        "header": "Indentation",
+                        "options": [{"label": "Spaces", "description": "…"}],
+                        "multiSelect": False,
+                    }
+                ],
+            )
+        ),
+        directory,
+    )
 
     record = _record(directory)
     assert record["detail"] == "Do you prefer tabs or spaces for indentation?"

@@ -264,8 +264,7 @@ def unsplit_stores(domain_path: Path) -> RestoreReport:
             restored: dict[str, int] = {}
             for table in MOVED_TABLES:
                 schema = connection.execute(
-                    "SELECT type, sql FROM ui.sqlite_master "
-                    "WHERE tbl_name = ? AND sql IS NOT NULL",
+                    "SELECT type, sql FROM ui.sqlite_master WHERE tbl_name = ? AND sql IS NOT NULL",
                     (table,),
                 ).fetchall()
                 if not any(kind == "table" for kind, _ in schema):

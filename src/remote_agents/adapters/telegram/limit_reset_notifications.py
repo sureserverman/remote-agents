@@ -217,9 +217,7 @@ class LimitResetNotifier:
                 )
                 break
             try:
-                await self._view.send_apart(
-                    self._bot, {"text": text, "parse_mode": ParseMode.HTML}
-                )
+                await self._view.send_apart(self._bot, {"text": text, "parse_mode": ParseMode.HTML})
             except Exception:
                 refused.append(key)
                 continue

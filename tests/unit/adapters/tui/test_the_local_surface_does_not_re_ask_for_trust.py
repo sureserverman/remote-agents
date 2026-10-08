@@ -171,9 +171,7 @@ async def test_the_row_is_not_missing_because_the_policy_refuses_it() -> None:
     from remote_agents.adapters.agents.registry import profile_trust_dialogs
     from remote_agents.application.session_actions import trust_available
 
-    assert trust_available(
-        _awaiting_record(), TrustState.AWAITING, profile_trust_dialogs()
-    ), (
+    assert trust_available(_awaiting_record(), TrustState.AWAITING, profile_trust_dialogs()), (
         "the record this file pins is no longer one the policy would offer the row for, so "
         "the assertions above no longer say anything about the trust row"
     )

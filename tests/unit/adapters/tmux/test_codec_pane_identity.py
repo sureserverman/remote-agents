@@ -174,4 +174,3 @@ def test_every_other_pane_mark_decodes_to_the_profile_it_names(profile: str) -> 
     the symptom is a codex pane answering as a Claude session.
     """
     assert parse_pane(pane_line(profile=profile)).profile_id == ProfileId(profile)
-

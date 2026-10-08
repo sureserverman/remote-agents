@@ -79,12 +79,12 @@ def test_either_marker_alone_is_not_enough() -> None:
     talking *about* the trust prompt be reported as blocked *on* it, and the owner would be
     offered a button that sends Enter into a working agent.
     """
-    assert classify_trust_capture(
-        "Is this a project you created or one you trust?", _dialog("claude")
-    ) is TrustState.UNKNOWN
     assert (
-        classify_trust_capture("Yes, I trust this folder", _dialog("claude"))
+        classify_trust_capture("Is this a project you created or one you trust?", _dialog("claude"))
         is TrustState.UNKNOWN
+    )
+    assert (
+        classify_trust_capture("Yes, I trust this folder", _dialog("claude")) is TrustState.UNKNOWN
     )
 
 

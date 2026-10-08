@@ -205,9 +205,11 @@ async def test_sqlite_store_composes_with_the_async_session_service(tmp_path: Pa
     store = SQLiteSessionStore(open_database(tmp_path / "sessions.sqlite3"))
     service = SessionService(store, FakeTerminal())
 
-    record = (await service.launch(
-        LaunchCommand(ProjectId("opaque-editor"), ProfileId("claude"), "launch-1")
-    )).record
+    record = (
+        await service.launch(
+            LaunchCommand(ProjectId("opaque-editor"), ProfileId("claude"), "launch-1")
+        )
+    ).record
 
     assert record.state is SessionState.RUNNING
     assert await service.list_sessions() == (record,)
@@ -235,14 +237,50 @@ def test_migration_thirteen_renames_the_retired_profile_and_touches_nothing_else
     assert current_version(sqlite3.connect(path)) == 12
 
     rows = (
-        ("s-running", "proj-a", "claude-remote", "proj-a · claude-remote · regular · #1",
-         "running", "2026-09-01T00:00:00+00:00", None, None, None),
-        ("s-ended", "proj-a", "claude-remote", "proj-a · claude-remote · regular · #2",
-         "ended", "2026-09-02T00:00:00+00:00", None, None, None),
-        ("s-resumed", "proj-b", "codex", "proj-b · codex · resumed · #1",
-         "running", "2026-09-03T00:00:00+00:00", None, "claude-remote", "conv-7"),
-        ("s-untouched", "proj-b", "opencode", "proj-b · opencode · regular · #1",
-         "running", "2026-09-04T00:00:00+00:00", None, None, None),
+        (
+            "s-running",
+            "proj-a",
+            "claude-remote",
+            "proj-a · claude-remote · regular · #1",
+            "running",
+            "2026-09-01T00:00:00+00:00",
+            None,
+            None,
+            None,
+        ),
+        (
+            "s-ended",
+            "proj-a",
+            "claude-remote",
+            "proj-a · claude-remote · regular · #2",
+            "ended",
+            "2026-09-02T00:00:00+00:00",
+            None,
+            None,
+            None,
+        ),
+        (
+            "s-resumed",
+            "proj-b",
+            "codex",
+            "proj-b · codex · resumed · #1",
+            "running",
+            "2026-09-03T00:00:00+00:00",
+            None,
+            "claude-remote",
+            "conv-7",
+        ),
+        (
+            "s-untouched",
+            "proj-b",
+            "opencode",
+            "proj-b · opencode · regular · #1",
+            "running",
+            "2026-09-04T00:00:00+00:00",
+            None,
+            None,
+            None,
+        ),
     )
     seed = sqlite3.connect(path)
     seed.executemany(
@@ -318,16 +356,48 @@ def test_migration_thirteen_survives_one_conversation_resumed_under_both_ids(
         "INSERT INTO sessions (session_id, project_id, profile_id, display_identity, state, "
         "created_at, resume_profile_id, resume_source_id) VALUES (?,?,?,?,?,?,?,?)",
         (
-            ("s-keeps", "p", "claude", "p · claude · resumed · #1", "running",
-             "2026-09-01T00:00:00+00:00", "claude", "conv-X"),
-            ("s-loses", "p", "claude-remote", "p · claude-remote · resumed · #2", "running",
-             "2026-09-01T00:00:01+00:00", "claude-remote", "conv-X"),
+            (
+                "s-keeps",
+                "p",
+                "claude",
+                "p · claude · resumed · #1",
+                "running",
+                "2026-09-01T00:00:00+00:00",
+                "claude",
+                "conv-X",
+            ),
+            (
+                "s-loses",
+                "p",
+                "claude-remote",
+                "p · claude-remote · resumed · #2",
+                "running",
+                "2026-09-01T00:00:01+00:00",
+                "claude-remote",
+                "conv-X",
+            ),
             # An *ended* pair on one conversation must survive untouched: ended rows are
             # outside the partial index, so they cannot collide and must keep their history.
-            ("s-ended-a", "p", "claude", "p · claude · resumed · #3", "ended",
-             "2026-09-01T00:00:02+00:00", "claude", "conv-Y"),
-            ("s-ended-b", "p", "claude-remote", "p · claude-remote · resumed · #4", "ended",
-             "2026-09-01T00:00:03+00:00", "claude-remote", "conv-Y"),
+            (
+                "s-ended-a",
+                "p",
+                "claude",
+                "p · claude · resumed · #3",
+                "ended",
+                "2026-09-01T00:00:02+00:00",
+                "claude",
+                "conv-Y",
+            ),
+            (
+                "s-ended-b",
+                "p",
+                "claude-remote",
+                "p · claude-remote · resumed · #4",
+                "ended",
+                "2026-09-01T00:00:03+00:00",
+                "claude-remote",
+                "conv-Y",
+            ),
         ),
     )
     seed.commit()

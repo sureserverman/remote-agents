@@ -378,8 +378,7 @@ def trust_dialog_of(profile_id: ProfileId) -> TrustDialog | None:
     render and a launch, and neither should take an unknown profile as an exception.
     """
     by_provider = {
-        str(descriptor.profile_id): descriptor.trust_dialog
-        for descriptor in provider_descriptors()
+        str(descriptor.profile_id): descriptor.trust_dialog for descriptor in provider_descriptors()
     }
     name = str(profile_id)
     if name in by_provider:
@@ -676,9 +675,7 @@ def claude_remote_control_default(home: Path) -> ClaudeRemoteControlDefault:
     resolves, so a descriptor field's only possible content is the call below (DEC-070: the
     tables stay closed, and this is not one of them).
     """
-    return ClaudeRemoteControlDefault(
-        default_settings_path(home, provider="claude")
-    )
+    return ClaudeRemoteControlDefault(default_settings_path(home, provider="claude"))
 
 
 #: How `doctor` names the usage-API source, in the API module's own words. Re-exported here
@@ -864,9 +861,7 @@ def install_agent_hooks(
         # The third thing this write owns is named when it changed: the runbook promises the
         # wrap, and a summary that counted only the hook groups undercounted what the owner's
         # file just gained.
-        if _draws_a_status_line(selected) and installed.get("statusLine") != base.get(
-            "statusLine"
-        ):
+        if _draws_a_status_line(selected) and installed.get("statusLine") != base.get("statusLine"):
             summary += " and wrapped the statusLine in the status-line hop"
     _write_atomically(settings_path, content, settings.mode)
     return HookInstallOutcome(settings_path, True, summary + note)

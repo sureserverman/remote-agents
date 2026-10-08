@@ -263,9 +263,7 @@ def test_the_composed_console_installs_the_row_and_the_fold_and_nothing_else() -
     assert len(composed) == len(root) + len(prefix), "a binding is in neither key table"
 
 
-def test_a_console_that_forwards_a_function_key_cannot_be_built_without_the_reservations() -> (
-    None
-):
+def test_a_console_that_forwards_a_function_key_cannot_be_built_without_the_reservations() -> None:
     """The omission that would be silent, made loud where it is visible.
 
     `reserved_keys` defaulting to `{}` is a valid mapping meaning "no agent reserves anything",
@@ -344,9 +342,7 @@ def test_the_settings_key_is_an_app_binding_and_costs_the_root_budget_nothing() 
         f"is bound; the app now binds {sorted(app_keys)}"
     )
 
-    console_keys = {binding.key for binding in CONSOLE_BINDINGS} | {
-        console_panes_binding().key
-    }
+    console_keys = {binding.key for binding in CONSOLE_BINDINGS} | {console_panes_binding().key}
     assert SETTINGS_KEY not in console_keys, (
         f"{SETTINGS_KEY!r} reached a console key table. A root binding takes that key from "
         "every agent on this tmux server and a prefix one spends the owner's memory; this key "

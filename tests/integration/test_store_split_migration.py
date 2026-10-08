@@ -73,9 +73,7 @@ def _counts(path: Path, tables: tuple[str, ...]) -> dict[str, int]:
     try:
         present = {
             name
-            for (name,) in connection.execute(
-                "SELECT name FROM sqlite_master WHERE type = 'table'"
-            )
+            for (name,) in connection.execute("SELECT name FROM sqlite_master WHERE type = 'table'")
         }
         return {
             table: connection.execute(f'SELECT COUNT(*) FROM "{table}"').fetchone()[0]

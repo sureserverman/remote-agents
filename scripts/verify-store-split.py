@@ -49,9 +49,7 @@ def _tables(path: Path) -> set[str]:
     try:
         return {
             name
-            for (name,) in connection.execute(
-                "SELECT name FROM sqlite_master WHERE type = 'table'"
-            )
+            for (name,) in connection.execute("SELECT name FROM sqlite_master WHERE type = 'table'")
         }
     finally:
         connection.close()

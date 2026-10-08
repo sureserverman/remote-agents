@@ -208,9 +208,7 @@ class _ScriptedRunner(_Runner):
         and on one that sent them twice, and the defect this file pins is entirely about which
         keys followed which reading.
         """
-        return tuple(
-            call[-1] for call in self.calls if "send-keys" in call
-        )
+        return tuple(call[-1] for call in self.calls if "send-keys" in call)
 
 
 _MENU = (

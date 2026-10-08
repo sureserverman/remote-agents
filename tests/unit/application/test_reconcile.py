@@ -633,9 +633,7 @@ async def test_no_origin_is_re_labelled_from_an_aged_screen_including_the_failed
 
         service = ReconciliationService(store, settle_after=timedelta(0), confirm_ready=blocked)
 
-        await service.reconcile(
-            (TerminalObservation(aged.session_id, live=True, preserved=False),)
-        )
+        await service.reconcile((TerminalObservation(aged.session_id, live=True, preserved=False),))
 
         assert store.records[aged.session_id].state is state, (
             f"a {state.value} session three hours old was moved to untrusted from what its "

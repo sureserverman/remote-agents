@@ -731,9 +731,7 @@ async def test_the_limits_watch_reports_one_early_reset_and_then_stops_talking(
             # Long enough for several ticks of a zero-interval watch, short enough to be a test.
             await asyncio.sleep(0.2)
 
-        await _serve_with_reconciliation(
-            _SECRETS, composition, poll, 3600, limits_interval=0
-        )
+        await _serve_with_reconciliation(_SECRETS, composition, poll, 3600, limits_interval=0)
 
     finally:
         connection.close()
@@ -774,9 +772,7 @@ async def test_the_limits_watch_is_not_created_when_no_notifier_is_wired(
             await asyncio.sleep(0.1)
 
         with caplog.at_level(logging.DEBUG, logger="remote_agents.composition.service"):
-            await _serve_with_reconciliation(
-                _SECRETS, composition, poll, 3600, limits_interval=0
-            )
+            await _serve_with_reconciliation(_SECRETS, composition, poll, 3600, limits_interval=0)
     finally:
         connection.close()
 

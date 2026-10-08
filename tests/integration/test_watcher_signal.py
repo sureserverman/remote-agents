@@ -58,9 +58,7 @@ async def _draw_the_sessions_page(boundary) -> None:
 
 
 @pytest.mark.asyncio
-async def test_watcher_ignores_render(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_watcher_ignores_render(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """A render writes to the UI store, and the watched file does not move.
 
     The measurement, not the intention: a full sessions render mints a callback token per button
