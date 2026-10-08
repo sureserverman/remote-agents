@@ -625,3 +625,24 @@ def test_an_unprepared_console_moves_nothing() -> None:
         exec_argv=lambda p, a: pytest.fail("an unprepared console must not be attached"),
     )
     assert code == 1
+
+
+def test_a_projects_surface_that_hangs_still_attaches() -> None:
+    """Stage 1 review: a hung tmux call must not keep the owner out of the console."""
+    import asyncio
+
+    calls: list[str] = []
+
+    async def hang() -> None:
+        await asyncio.sleep(3600)
+
+    code = bootstrap._enter_console(
+        environment={},
+        ensure_console=_ensured,
+        show_projects=hang,
+        show_projects_timeout=0.05,
+        exec_argv=lambda program, argv: calls.append(program),
+    )
+
+    assert code == 0
+    assert calls == ["tmux"]

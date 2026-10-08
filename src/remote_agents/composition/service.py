@@ -688,11 +688,18 @@ async def _retry_waiting_messages(
         activity.session_id for activity in activities if activity.kind is ActivityKind.COMPLETED
     )
     for session_id in finished:
+        # Asked before the retry, so a retry that raises can be judged against it: most finished
+        # sessions have nothing waiting, and a raise there is no drop.
+        try:
+            waited = relay.pending(SessionId.parse(session_id)) is not None
+        except Exception:
+            waited = False
         try:
             result = await relay.retry(SessionId.parse(session_id))
         except Exception:
             _LOG.exception("delivering a waiting message to %s failed", session_id)
-            await _announce_if_dropped(composition, session_id)
+            if waited:
+                await _announce_if_dropped(composition, session_id)
             continue
         if result is not None and result.outcome is RelayOutcome.QUEUED:
             composition.relay_rechecks[session_id] = time.monotonic()
@@ -710,10 +717,11 @@ async def _retry_waiting_messages(
 async def _announce_if_dropped(composition: ServiceComposition, session_id: str) -> None:
     """After a retry that raised, tell the owner if their message is gone (BL-107).
 
-    `PromptRelay.retry` settles a message it may have typed before re-raising, so the message
-    is gone and nobody was told. A retry that raised before it claimed anything leaves the
-    message waiting, and that is not news. So the queue is asked, not the exception: only a
-    message no longer pending is reported, as a drop with no stated reason.
+    Called only for a session that had a message waiting before the retry. `PromptRelay.retry`
+    settles a message it may have typed before re-raising, so the message is gone and nobody
+    was told. A retry that raised before it claimed anything leaves the message waiting, and
+    that is not news. So the queue is asked, not the exception: only a message no longer
+    pending is reported, as one that may have been typed.
     """
     relay, announce = composition.prompt_relay, composition.relay_announcer
     if relay is None or announce is None:

@@ -435,7 +435,7 @@ async def test_a_relay_notice_held_by_the_flood_hold_is_sent_once_the_hold_clear
 
 @pytest.mark.asyncio
 async def test_a_message_dropped_for_no_stated_reason_is_announced_cleanly() -> None:
-    """BL-107 (2): the service reports a drop it could not explain, with no dangling dash."""
+    """BL-107 (2): a failed delivery the service cannot explain, worded with no dangling dash."""
     chat = FakeChat(chat_id=CHAT, owner_id=OWNER)
     boundary = _boundary(_Relay())
     boundary.attach_bot(chat.bot)
@@ -444,7 +444,7 @@ async def test_a_message_dropped_for_no_stated_reason_is_announced_cleanly() -> 
     await boundary.announce_relayed(str(_SESSION), RelayResult(RelayOutcome.REFUSED))
 
     text = chat.bot_messages[-1].text
-    assert "Dropped queued message for" in text
+    assert "Queued message for" in text
     assert "—" not in text and text.rstrip().endswith(".")
 
 
@@ -466,3 +466,47 @@ async def test_cancelling_a_message_whose_claim_was_abandoned_says_cancelled() -
 
     assert "Queued message cancelled." in chat.messages[anchor].text
     assert "may still arrive" not in chat.messages[anchor].text
+
+
+@pytest.mark.asyncio
+async def test_a_failed_delivery_never_claims_the_message_was_not_typed() -> None:
+    """Stage 1 review: the retry settles a message that *may* have been typed, so telling the
+    owner it was dropped invites a re-send and a double submit (DEC-099)."""
+    chat = FakeChat(chat_id=CHAT, owner_id=OWNER)
+    boundary = _boundary(_Relay())
+    boundary.attach_bot(chat.bot)
+    await _detail(chat, boundary)
+
+    await boundary.announce_relayed(str(_SESSION), RelayResult(RelayOutcome.REFUSED))
+
+    text = chat.bot_messages[-1].text
+    assert "may have been typed" in text
+    assert "Dropped" not in text
+
+
+@pytest.mark.asyncio
+async def test_two_flushes_at_once_send_each_held_notice_exactly_once() -> None:
+    """Stage 1 review: the service pass and a bot handler can flush on the same loop."""
+    import asyncio
+
+    chat = FakeChat(chat_id=CHAT, owner_id=OWNER)
+    boundary = _boundary(_Relay())
+    boundary.attach_bot(chat.bot)
+    await _detail(chat, boundary)
+    boundary.flood.hold_off(60)
+    for _ in range(3):
+        await boundary.announce_relayed(str(_SESSION), RelayResult(RelayOutcome.SENT))
+    before = len(chat.bot_messages)
+    boundary.flood._until = 0.0
+    send_apart = boundary.view.send_apart
+
+    async def yielding_send(bot, arguments):
+        await asyncio.sleep(0)  # a real send suspends, which is what lets two flushes interleave
+        return await send_apart(bot, arguments)
+
+    boundary.view.send_apart = yielding_send
+
+    await asyncio.gather(boundary.flush_relay_notices(), boundary.flush_relay_notices())
+
+    assert len(chat.bot_messages) == before + 3
+    assert boundary.held_relay_notices == []

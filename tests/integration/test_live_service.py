@@ -117,7 +117,9 @@ def test_doctor_uses_the_private_default_config_and_reports_operational_componen
     )
     paths = _DoctorPaths(config)
     monkeypatch.setattr("remote_agents.bootstrap.ProductionPaths.for_home", lambda _home: paths)
-    monkeypatch.setattr("remote_agents.bootstrap.database_is_ready", lambda _path: True)
+    monkeypatch.setattr(
+        "remote_agents.bootstrap.database_is_ready", lambda _path, _migrations=None: True
+    )
     monkeypatch.setattr("remote_agents.bootstrap._command_succeeds", lambda _argv: True)
     monkeypatch.setattr(
         "remote_agents.bootstrap._telegram_credentials_are_private", lambda _paths: True
@@ -158,7 +160,16 @@ def test_doctor_uses_the_private_default_config_and_reports_operational_componen
 
     report = __import__("json").loads(capsys.readouterr().out)
     assert report["healthy"] is True
-    assert set(report["components"]) == {"core", "store", "tmux", "telegram", "service", "profiles"}
+    # `ui_store` joined in BL-092: the surface store is reported as its own component.
+    assert set(report["components"]) == {
+        "core",
+        "store",
+        "ui_store",
+        "tmux",
+        "telegram",
+        "service",
+        "profiles",
+    }
     # A green report says the config was compared, rather than leaving the operator to infer
     # it from the absence of a complaint.
     assert report["config"]["readable"] is True
@@ -1922,7 +1933,9 @@ def _arrange_doctor(tmp_path, monkeypatch, config_text: str) -> None:
     config.write_text(config_text, encoding="utf-8")
     paths = _DoctorPaths(config)
     monkeypatch.setattr("remote_agents.bootstrap.ProductionPaths.for_home", lambda _home: paths)
-    monkeypatch.setattr("remote_agents.bootstrap.database_is_ready", lambda _path: True)
+    monkeypatch.setattr(
+        "remote_agents.bootstrap.database_is_ready", lambda _path, _migrations=None: True
+    )
     monkeypatch.setattr("remote_agents.bootstrap._command_succeeds", lambda _argv: True)
     monkeypatch.setattr(
         "remote_agents.bootstrap._telegram_credentials_are_private", lambda _paths: True
@@ -2783,3 +2796,25 @@ async def test_every_activity_pass_flushes_held_relay_notices() -> None:
     await _retry_waiting_messages(composition, [])
 
     assert flushed == [True]
+
+
+async def test_a_raising_retry_for_a_session_with_nothing_waiting_announces_nothing() -> None:
+    """Stage 1 review: a finished session with no queued message whose retry raises (a locked
+    claim) must not be told its message was dropped -- there never was one."""
+    from remote_agents.composition.service import _retry_waiting_messages
+
+    session = str(SessionId.new())
+
+    class _NothingWaitingLocked(_WaitingRelay):
+        async def retry(self, session_id):
+            self.retried.append(str(session_id))
+            raise RuntimeError("database is locked")
+
+    relay = _NothingWaitingLocked({})
+    announced: list[tuple[str, object]] = []
+    composition = _fast_composition(relay, None, announced)
+    finished = AgentActivity(session, ActivityKind.COMPLETED, None, datetime.now(UTC))
+
+    await _retry_waiting_messages(composition, [finished])
+
+    assert announced == []

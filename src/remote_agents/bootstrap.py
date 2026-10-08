@@ -509,6 +509,7 @@ def _enter_console(
     environment: Mapping[str, str] | None = None,
     ensure_console: Callable[[], Awaitable[bool]] | None = None,
     show_projects: Callable[[], Awaitable[None]] | None = None,
+    show_projects_timeout: float = 5.0,
     exec_argv: Callable[[str, tuple[str, ...]], None] = os.execvp,
 ) -> int:
     """Enter the console: ensure it exists and become its client, honoring the hosting.
@@ -570,8 +571,10 @@ def _enter_console(
         )
         return 1
     if show_projects is not None:
+        # Bounded: the tmux runner has no timeout of its own, and a hung call here would keep
+        # the owner out of the console over a cosmetic move.
         try:
-            asyncio.run(show_projects())
+            asyncio.run(asyncio.wait_for(show_projects(), show_projects_timeout))
         except Exception:
             _LOG.exception("entering the console: the projects surface could not be brought home")
     argv = console_attach_argv()

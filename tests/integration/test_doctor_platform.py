@@ -84,7 +84,9 @@ def _arrange(tmp_path, monkeypatch, supervisor, *, liveness_exit_zero: bool) -> 
         return True
 
     monkeypatch.setattr("remote_agents.bootstrap.ProductionPaths.for_home", lambda _home: paths)
-    monkeypatch.setattr("remote_agents.bootstrap.database_is_ready", lambda _path: True)
+    monkeypatch.setattr(
+        "remote_agents.bootstrap.database_is_ready", lambda _path, _migrations=None: True
+    )
     monkeypatch.setattr("remote_agents.bootstrap._command_succeeds", _fake_command_succeeds)
     monkeypatch.setattr("remote_agents.bootstrap._supervisor_for_host", lambda: supervisor)
     monkeypatch.setattr(

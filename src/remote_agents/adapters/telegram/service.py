@@ -775,7 +775,9 @@ class PrivateBotBoundary:
     """Queued-message notices the chat's flood hold stopped, oldest first (BL-107).
 
     Kept rather than dropped, because the Cancel reply promises "You'll be told if it does". The
-    service flushes them on every activity pass through `flush_relay_notices`."""
+    service flushes them on every activity pass through `flush_relay_notices`. In memory only,
+    like the rollover and schedule notices (BL-127, owner ruling 2026-10-08): a restart while
+    one is held loses it, which a hold of minutes makes rare."""
     names: Mapping[str, str] = field(default_factory=dict)
     """Each curated profile's display name, read off the registry like `glyphs` (BL-101).
 
@@ -3101,9 +3103,14 @@ class PrivateBotBoundary:
         elif why:
             text = f"{_MESSAGE_EMOJI} Dropped queued message for {name} — {why}."
         else:
-            # The service's own report of a retry that raised after the message was gone: it
-            # knows the message was dropped and not why (BL-107).
-            text = f"{_MESSAGE_EMOJI} Dropped queued message for {name}."
+            # The service's own report of a retry that raised after the message was gone
+            # (BL-107). The retry settles a message that *may* have been typed, so "dropped"
+            # would be a claim nobody can make -- and one that invites a re-send, which types
+            # it twice (DEC-099).
+            text = (
+                f"{_MESSAGE_EMOJI} Queued message for {name} failed partway through delivery, "
+                "so it may have been typed. Check the session before sending it again."
+            )
         self.held_relay_notices.append(text)
         if len(self.held_relay_notices) > _HELD_RELAY_NOTICES:
             del self.held_relay_notices[0]
@@ -3120,13 +3127,15 @@ class PrivateBotBoundary:
         if self._bot is None:
             return
         while self.held_relay_notices and not self.flood.held():
-            text = self.held_relay_notices[0]
+            # Taken off the list before the send, not after: the service pass and a bot handler
+            # can flush on the same loop, and a notice read in place could be sent by both.
+            text = self.held_relay_notices.pop(0)
             try:
                 await self.view.send_apart(self._bot, {"text": text, "parse_mode": ParseMode.HTML})
             except Exception:
                 _LOG.exception("sending a queued-message notice failed; it is kept for later")
+                self.held_relay_notices.insert(0, text)
                 return
-            self.held_relay_notices.pop(0)
 
     async def _limit_block(self) -> str:
         """Each agent's rate-limit windows, as a monospace block under the rows.

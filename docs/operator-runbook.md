@@ -312,8 +312,8 @@ Profile entries are `AVAILABLE` when their executable is
 present; version reporting is informative and local updates remain launchable. A missing
 executable is `BLOCKED` and must not be launched from Telegram. Each launch still has to reach
 its agent-specific readiness state.
-The full doctor reports the non-secret state of core, store, tmux, Telegram credential-file
-boundary, service, each profile, and — since BL-029 — the deployed **config** checked against
+The full doctor reports the non-secret state of core, store, the surface store (`ui_store`,
+`ui.sqlite3`), tmux, Telegram credential-file boundary, service, each profile, and — since BL-029 — the deployed **config** checked against
 the schema this build requires. It must report `healthy: true` before normal operation. An
 unreadable config reports `healthy: false` with `checked: false` and an empty `components`,
 because the registry and database paths are read out of the config that would not load, so
