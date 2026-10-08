@@ -29,6 +29,8 @@ import pytest
 
 from remote_agents.adapters.agents.opencode.plugin import PLUGIN_RELATIVE_PATH, plugin_source
 
+pytestmark = pytest.mark.requires_node
+
 _FIXTURES = Path(__file__).resolve().parents[1] / "fixtures" / "opencode"
 
 #: The literal command the `permission.asked` capture carries in three separate places

@@ -1,0 +1,11 @@
+{
+ "created": "2026-10-08T19:43:13+00:00",
+ "fingerprint": "a6c7dfb5aa3eda015cc51a0959547bc642ef807f876c6fa1970c3da58dc14ac4",
+ "index": 1,
+ "kind": "claim-deviation",
+ "plan": "/mnt/vault/Portfolio/infra/remote-agents/plans/2026-10-08-decision-round-closures-plan.md",
+ "schema": 2,
+ "task": "1.1",
+ "text": "`uv run --locked pytest tests/contract/test_ci_claims_no_more_than_it_runs.py tests/provider_contract/per_provider/test_opencode_plugin.py -q -p no:randomly`. It goes red if the marker is removed from the opencode module (the equality fails).",
+ "why": "Every artifact this task changes is test infrastructure (a pytest marker registration in tests/conftest.py, a module pytestmark, and a contract test), so there is no product code to break. Shown able to fail by hand at 2026-10-08: with the pytestmark absent, test_every_node_dependent_test_carries_the_marker_and_nothing_else_does failed listing all 13 unmarked opencode-plugin tests; with it present, 19 passed."
+}

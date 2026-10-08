@@ -142,6 +142,15 @@ def pytest_configure(config: pytest.Config) -> None:
         "requires_session: needs a real login session (launchd's gui/<uid>), which no hosted "
         "CI runner has; excluded by name from the CI matrix so a green badge does not claim it",
     )
+    # **A third named set, and the opposite case** (BL-049, DEC-059). These tests need a `node`
+    # runtime and skip without one. CI runs them -- it asserts `node --version` first -- so the
+    # marker excludes nothing there; it makes the set a developer machine may skip enumerable
+    # with `--collect-only -m requires_node` instead of discoverable only by running it.
+    config.addinivalue_line(
+        "markers",
+        "requires_node: needs a `node` runtime and skips without one; CI asserts node and runs "
+        "these, so the marker names the set rather than excluding it",
+    )
 
 
 def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:

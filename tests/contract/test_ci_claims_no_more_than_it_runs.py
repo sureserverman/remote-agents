@@ -43,6 +43,12 @@ What the arrangement actually buys, both of which are real:
 So the assertions below are scoped to what can actually fail. `test_the_marker_and_the_path_list_
 agree_about_the_same_population` is the one with teeth today: it fails if a marked test appears
 inside CI's paths, which is the moment the flag stops being prospective and starts mattering.
+
+**A third mechanism, for the opposite case** (BL-049): `requires_node` names the tests that need
+a `node` runtime. CI runs them and asserts `node --version` first, so that marker excludes
+nothing in CI. It exists so the set a developer machine without node skips is a named set too.
+The three are a path omission (`tests/live`, `tests/e2e`), `requires_session`, and
+`requires_node`.
 """
 
 from __future__ import annotations
@@ -167,3 +173,53 @@ def test_the_session_dependent_set_is_not_empty() -> None:
         f"nothing carries the {MARKER} marker, so CI's exclusion names an empty set:\n"
         f"{completed.stdout}{completed.stderr}"
     )
+
+
+#: The third named set (BL-049): tests that need a `node` runtime. Unlike `requires_session`
+#: these DO run in CI -- `ci.yml` asserts `node --version` -- and the marker exists so a
+#: developer machine without node skips an enumerable set rather than an unlisted one.
+NODE_MARKER = "requires_node"
+_NODE_PROBE = 'shutil.which("node")'
+
+
+def _collected(*args: str) -> set[str]:
+    completed = subprocess.run(
+        [sys.executable, "-m", "pytest", "--collect-only", "-q", *args],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    return {line for line in completed.stdout.splitlines() if "::" in line}
+
+
+def test_every_node_dependent_test_carries_the_marker_and_nothing_else_does() -> None:
+    """The marked set is exactly the tests of every module that probes for `node`.
+
+    Swept over the test tree rather than naming the one module that probes today, so a second
+    node-dependent module that forgets the marker fails here, and so does a marker left on a
+    module that no longer needs node.
+    """
+    probing = sorted(
+        str(path)
+        for path in Path("tests").rglob("test_*.py")
+        # This file names the probe as a string to sweep for; it does not run node.
+        if path.resolve() != Path(__file__).resolve()
+        and _NODE_PROBE in path.read_text(encoding="utf-8")
+    )
+    assert probing, "no test module probes for node, so this contract would assert nothing"
+
+    marked = _collected("-m", NODE_MARKER, "tests")
+    expected = _collected(*probing)
+
+    assert expected, f"the node-probing modules collected no tests: {probing}"
+    assert marked == expected, (
+        f"`{NODE_MARKER}` should select exactly the tests of {probing}.\n"
+        f"marked but not node-dependent: {sorted(marked - expected)}\n"
+        f"node-dependent but unmarked: {sorted(expected - marked)}"
+    )
+
+
+def test_ci_runs_the_node_set_and_proves_node_is_there() -> None:
+    """CI runs the marked set rather than excluding it, and fails loudly if node is missing."""
+    assert f"not {NODE_MARKER}" not in _pytest_step()
+    assert "node --version" in WORKFLOW.read_text(encoding="utf-8")
