@@ -103,6 +103,9 @@ FEED_NARROW_ROOM = 24
 #: column grows to its widest member.
 GAUGE_COLUMN = 12
 
+#: The widest share a context gauge prints at or under its ceiling, `100%`.
+SHARE_CELLS = 4
+
 NO_GAUGE = "—"
 
 #: The mark on the row the sessions positions' keys act on -- the *active* session, which since
@@ -182,7 +185,10 @@ def gauge_content(gauge: str | None) -> Content:
     bar, _space, share = gauge.partition(" ")
     filled = bar.rstrip("░")
     empty = bar[len(filled) :]
-    return Content.assemble((filled, "$primary"), (empty, "$secondary"), (f" {share}", None))
+    # Right-aligned, as the limits pane's percents are: a column of figures is compared down
+    # its right edge (BL-047). A bare count carries no share and is drawn as it always was.
+    tail = f" {share:>{SHARE_CELLS}}" if share else " "
+    return Content.assemble((filled, "$primary"), (empty, "$secondary"), (tail, None))
 
 
 def session_content(
