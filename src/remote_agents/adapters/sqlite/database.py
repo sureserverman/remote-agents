@@ -311,18 +311,23 @@ def _schema_version(path: Path) -> int:
         return -1
 
 
-def database_is_ready(path: Path, migrations: Sequence[tuple[int, str]] = MIGRATIONS) -> bool:
+def database_is_ready(path: Path, migrations: Sequence[tuple[int, str]] | None = None) -> bool:
     """Check an existing database is readable and at the head of `migrations`.
 
     The domain store and the UI store version independently (`UI_MIGRATIONS`), so the head a
     file is judged against is the list it is migrated by: a current UI store is not a current
-    domain store, and the reverse (BL-092)."""
+    domain store, and the reverse (BL-092).
+
+    `None` means the domain list, read from this module **when called**, not bound as a default:
+    a default would freeze `MIGRATIONS` at import, and the rollback test reads it as a running
+    older build by patching it."""
+    head = (MIGRATIONS if migrations is None else migrations)[-1][0]
     if not path.is_file():
         return False
     try:
         connection = _read_only_connection(path)
         try:
-            return current_version(connection) == migrations[-1][0]
+            return current_version(connection) == head
         finally:
             connection.close()
     except (OSError, sqlite3.Error, TypeError):
