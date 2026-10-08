@@ -1,0 +1,28 @@
+{
+ "baseline": {
+  "elapsed_s": 6.3,
+  "exit": 0,
+  "tail": ".......                                                                  [100%]\n7 passed in 5.96s\nAll checks passed!\n658 files already formatted"
+ },
+ "break_patch": "diff --git b/.github/workflows/ci.yml a/.github/workflows/ci.yml\nindex a5166489..d84e5b62 100644\n--- b/.github/workflows/ci.yml\n+++ a/.github/workflows/ci.yml\n@@ -28,30 +28,6 @@ permissions:\n   contents: read\n \n jobs:\n-  lint:\n-    # The project's own linter and formatter, over the whole tree. Until BL-095 nothing ran\n-    # either, so 32 files drifted from `ruff format` and lint errors survived green tasks until\n-    # someone happened to run ruff by hand. Its own job, on one OS: formatting does not vary by\n-    # platform, and the `suites` job keeps its single pytest step.\n-    name: lint\n-    runs-on: ubuntu-latest\n-    steps:\n-      - uses: actions/checkout@v7\n-\n-      - name: Install uv\n-        uses: astral-sh/setup-uv@v10.0.1\n-        with:\n-          enable-cache: true\n-\n-      - name: Sync the locked environment\n-        run: uv sync --locked\n-\n-      - name: Lint\n-        run: uv run --locked ruff check .\n-\n-      - name: Formatting\n-        run: uv run --locked ruff format --check .\n-\n   suites:\n     name: suites (${{ matrix.os }})\n     runs-on: ${{ matrix.os }}\n",
+ "build": null,
+ "created": "2026-10-08T18:08:39+00:00",
+ "fingerprint": "b717e074fac7f8945a5f4eab3508423244f4dcee26702b9c2839180fff34a102",
+ "index": 1,
+ "kind": "claim",
+ "named_break": null,
+ "no_build_reason": "workflow YAML read by a test; nothing to build",
+ "plan": "/mnt/vault/Portfolio/infra/remote-agents/plans/2026-10-08-small-backlog-closures-light-plan.md",
+ "red": {
+  "elapsed_s": 6.5,
+  "exit": 1,
+  "tail": "FF.....                                                                  [100%]\n=================================== FAILURES ===================================\n_________________ test_ci_runs_the_linter_over_the_whole_tree __________________\n\n    def test_ci_runs_the_linter_over_the_whole_tree() -> None:\n>       assert \"uv run --locked ruff check .\" in _run_lines()\nE       assert 'uv run --locked ruff check .' in ['set -euo pipefail', 'if [ \"$RUNNER_OS\" = \"macOS\" ]; then', 'brew install tmux shellcheck', 'else', 'sudo apt-get update', 'sudo apt-get install -y tmux shellcheck', ...]\nE        +  where ['set -euo pipefail', 'if [ \"$RUNNER_OS\" = \"macOS\" ]; then', 'brew install tmux shellcheck', 'else', 'sudo apt-get update', 'sudo apt-get install -y tmux shellcheck', ...] = _run_lines()\n\ntests/contract/test_ci_enforces_ruff.py:29: AssertionError\n_____________ test_ci_runs_the_formatter_check_over_the_whole_tree _____________\n\n    def test_ci_runs_the_formatter_check_over_the_whole_tree() -> None:\n>       assert \"uv run --locked ruff format --check .\" in _run_lines()\nE       assert 'uv run --locked ruff format --check .' in ['set -euo pipefail', 'if [ \"$RUNNER_OS\" = \"macOS\" ]; then', 'brew install tmux shellcheck', 'else', 'sudo apt-get update', 'sudo apt-get install -y tmux shellcheck', ...]\nE        +  where ['set -euo pipefail', 'if [ \"$RUNNER_OS\" = \"macOS\" ]; then', 'brew install tmux shellcheck', 'else', 'sudo apt-get update', 'sudo apt-get install -y tmux shellcheck', ...] = _run_lines()\n\ntests/contract/test_ci_enforces_ruff.py:33: AssertionError\n=========================== short test summary info ============================\nFAILED tests/contract/test_ci_enforces_ruff.py::test_ci_runs_the_linter_over_the_whole_tree\nFAILED tests/contract/test_ci_enforces_ruff.py::test_ci_runs_the_formatter_check_over_the_whole_tree\n2 failed, 5 passed in 6.28s"
+ },
+ "schema": 2,
+ "task": "1.1",
+ "test": "uv run --locked pytest tests/contract/test_ci_enforces_ruff.py tests/contract/test_ci_claims_no_more_than_it_runs.py -q -p no:randomly && uv run --locked ruff check . && uv run --locked ruff format --check .",
+ "text": "`uv run --locked pytest tests/contract/test_ci_enforces_ruff.py tests/contract/test_ci_claims_no_more_than_it_runs.py -q -p no:randomly && uv run --locked ruff check . && uv run --locked ruff format --check .`, and `git show --stat --format= HEAD` lists exactly the 32 paths measured above, with no other path",
+ "touched": [
+  ".github/workflows/ci.yml"
+ ]
+}

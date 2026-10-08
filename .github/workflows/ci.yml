@@ -28,6 +28,30 @@ permissions:
   contents: read
 
 jobs:
+  lint:
+    # The project's own linter and formatter, over the whole tree. Until BL-095 nothing ran
+    # either, so 32 files drifted from `ruff format` and lint errors survived green tasks until
+    # someone happened to run ruff by hand. Its own job, on one OS: formatting does not vary by
+    # platform, and the `suites` job keeps its single pytest step.
+    name: lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v10.0.1
+        with:
+          enable-cache: true
+
+      - name: Sync the locked environment
+        run: uv sync --locked
+
+      - name: Lint
+        run: uv run --locked ruff check .
+
+      - name: Formatting
+        run: uv run --locked ruff format --check .
+
   suites:
     name: suites (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
