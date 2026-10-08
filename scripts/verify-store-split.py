@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Prove the store split moved every row and left the two files disjoint.
 
-The stage gates will call this once the split is wired in — nothing invokes it at HEAD.
+`tests/integration/test_verify_store_split_script.py` runs every claim below against a store it
+builds, so the suite catches this script drifting from the stores (BL-091).
 It exists because the claims are about a **set** — every moved table, in both
 directions — and a check that names one table cannot fail on the other three. `MOVED_TABLES` is
 imported rather than restated here so the set has one definition (DEC-011); a table added to

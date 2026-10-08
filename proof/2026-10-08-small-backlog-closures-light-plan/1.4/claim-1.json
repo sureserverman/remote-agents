@@ -1,0 +1,28 @@
+{
+ "baseline": {
+  "elapsed_s": 1.2,
+  "exit": 0,
+  "tail": "...........                                                              [100%]\n11 passed in 0.96s"
+ },
+ "break_patch": "--- a/scripts/verify-store-split.py\n+++ b/scripts/verify-store-split.py\n@@ -95,3 +95,3 @@\n     failures = []\n-    for table in MOVED_TABLES:\n+    for table in MOVED_TABLES[:-1]:\n         expected = was.get(table, 0)\n",
+ "build": null,
+ "created": "2026-10-08T18:44:09+00:00",
+ "fingerprint": "44728fc87faf01f5c422689abb298281061bf971ba2643cea869c319fc8ea4ff",
+ "index": 1,
+ "kind": "claim",
+ "named_break": null,
+ "no_build_reason": "script run through sys.executable; nothing to build",
+ "plan": "/mnt/vault/Portfolio/infra/remote-agents/plans/2026-10-08-small-backlog-closures-light-plan.md",
+ "red": {
+  "elapsed_s": 1.2,
+  "exit": 1,
+  "tail": "......F....                                                              [100%]\n=================================== FAILURES ===================================\n_ test_a_row_missing_from_the_ui_store_fails_and_is_named[trust_notifications] _\n\nsplit = (PosixPath('/tmp/pytest-of-user/pytest-764/test_a_row_missing_from_the_ui3/before.sqlite3'), PosixPath('/tmp/pytest-of...rom_the_ui3/sessions.sqlite3'), PosixPath('/tmp/pytest-of-user/pytest-764/test_a_row_missing_from_the_ui3/ui.sqlite3'))\ntable = 'trust_notifications'\n\n    @pytest.mark.parametrize(\"table\", MOVED_TABLES)\n    def test_a_row_missing_from_the_ui_store_fails_and_is_named(\n        split: tuple[Path, Path, Path], table: str\n    ) -> None:\n        before, domain, ui = split\n        connection = sqlite3.connect(ui)\n        try:\n            connection.execute(f'DELETE FROM \"{table}\"')\n            connection.commit()\n        finally:\n            connection.close()\n    \n        result = _verify(\"--counts\", \"--before\", before, \"--after\", domain, \"--ui\", ui)\n    \n>       assert result.returncode == 1, result.stdout + result.stderr\nE       AssertionError: OK every moved row is accounted for \u2014 swept 4 table(s): callback_states, chat_views, standing_notifications, trust_notifications\nE         \nE       assert 0 == 1\nE        +  where 0 = CompletedProcess(args=['/home/user/dev/infra/remote-agents/.venv/bin/python3', '/home/user/dev/infra/remote-agents/scr...counted for \u2014 swept 4 table(s): callback_states, chat_views, standing_notifications, trust_notifications\\n', stderr='').returncode\n\ntests/integration/test_verify_store_split_script.py:80: AssertionError\n=========================== short test summary info ============================\nFAILED tests/integration/test_verify_store_split_script.py::test_a_row_missing_from_the_ui_store_fails_and_is_named[trust_notifications]\n1 failed, 10 passed in 0.97s"
+ },
+ "schema": 2,
+ "task": "1.4",
+ "test": "uv run --locked pytest tests/integration/test_verify_store_split_script.py -q -p no:randomly",
+ "text": "`uv run --locked pytest tests/integration/test_verify_store_split_script.py -q -p no:randomly`, with every parametrized moved table covered by the `--counts` failure case (the set comes from `MOVED_TABLES`, not a list)",
+ "touched": [
+  "scripts/verify-store-split.py"
+ ]
+}
