@@ -534,6 +534,26 @@ def profile_glyphs(descriptors: tuple[ProviderDescriptor, ...] | None = None) ->
     return resolved
 
 
+def profile_names(descriptors: tuple[ProviderDescriptor, ...] | None = None) -> dict[str, str]:
+    """Every curated profile's display name, folded once for a composition to hand over.
+
+    `profile_glyphs`' fold for the descriptor's other surface-facing identity field, resolved
+    the same way: over the profiles, through the executable for a second spelling, and from
+    one build of the descriptors. A profile no descriptor names is left out, so the surface
+    that renders it says it has no name rather than inventing one (BL-101).
+    """
+    built = provider_descriptors() if descriptors is None else descriptors
+    by_provider = {str(descriptor.profile_id): descriptor.name for descriptor in built}
+    executables = {str(profile.profile_id): profile.executable for profile in closed_profiles()}
+    resolved = {}
+    for profile in closed_profiles():
+        name = str(profile.profile_id)
+        found = by_provider.get(name) or by_provider.get(executables.get(name, ""))
+        if found:
+            resolved[name] = found
+    return resolved
+
+
 def reserved_keys_by_profile(
     descriptors: tuple[ProviderDescriptor, ...] | None = None,
 ) -> dict[str, frozenset[str]]:

@@ -51,7 +51,12 @@ import typing
 #: capability half: `limit_screen` is how an agent words a usage-limit stop -- the markers the
 #: limit-screen watch looks for and the hint that names the window. A real `None`: an agent
 #: with nothing measured is never watched for a limit.
-_IDENTITY_FIELDS = ("profile_id", "glyph")
+#: It moved 11 -> 12 on 2026-10-08 by the plan `2026-10-08-small-backlog-closures-light-plan.md`
+#: (Task 1.3, BL-101), which grew the identity half: `name` is what a surface with room for a
+#: word calls the provider. It was a literal dict inside the Telegram adapter, so every other
+#: surface wanting a name had to reach into that module or spell its own; `glyph`'s argument
+#: (DEC-070) applies to it unchanged.
+_IDENTITY_FIELDS = ("profile_id", "glyph", "name")
 _CAPABILITY_FIELDS = (
     "sessions",
     "usage",
@@ -73,7 +78,10 @@ def _descriptor_fields() -> tuple[str, ...]:
 
 
 def test_the_descriptor_field_set_is_read_from_the_dataclass() -> None:
-    """Ten fields: two identity, seven capabilities, one reservation. An eleventh is a decision."""
+    """Twelve fields: three identity, eight capabilities, one reservation.
+
+    A thirteenth is a decision.
+    """
     fields = _descriptor_fields()
     expected = len(_IDENTITY_FIELDS) + len(_CAPABILITY_FIELDS) + len(_RESERVATION_FIELDS)
     assert len(fields) == expected, (
@@ -83,7 +91,7 @@ def test_the_descriptor_field_set_is_read_from_the_dataclass() -> None:
         "capability, or a reservation, and update this pin deliberately."
     )
     assert fields[: len(_IDENTITY_FIELDS)] == _IDENTITY_FIELDS, (
-        "the identity fields must come first and keep their order: both are required, and a "
+        "the identity fields must come first and keep their order: all are required, and a "
         "required field declared after a defaulted one is a dataclass the interpreter refuses"
     )
     assert set(fields[len(_IDENTITY_FIELDS) :]) == set(_CAPABILITY_FIELDS + _RESERVATION_FIELDS)

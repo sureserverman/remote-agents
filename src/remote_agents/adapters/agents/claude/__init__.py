@@ -57,6 +57,7 @@ def descriptor(
         # vertical declaring a second one for a single provider, which is still how a future
         # second spelling would reach a mark.
         glyph="✳️",
+        name="Claude",
         sessions=_sessions,
         usage=_usage(
             ClaudeUsageReader(

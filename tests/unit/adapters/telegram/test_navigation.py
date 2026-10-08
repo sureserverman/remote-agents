@@ -17,6 +17,7 @@ import pytest
 from backends import SessionUseCaseDouble, backend_for
 from fake_telegram import FakeChat
 
+from remote_agents.adapters.agents.registry import profile_names
 from remote_agents.adapters.telegram.notifications import render_activity
 from remote_agents.adapters.telegram.presenters import unpadded
 from remote_agents.adapters.telegram.service import PrivateBotBoundary, build_private_bot
@@ -138,6 +139,7 @@ def _boundary(*, with_resume: bool = True) -> PrivateBotBoundary:
             catalogue=(PROJECT,),
         ),
         profiles=(ProfileAvailability("claude", True, None),),
+        names=profile_names(),
     )
 
 
@@ -316,6 +318,7 @@ async def test_the_pending_screen_stays_barless_while_it_waits() -> None:
         CHAT,
         backend=backend_for(catalogue=(PROJECT,), sessions=_LaunchingLauncher(_record())),
         profiles=(ProfileAvailability("claude", True, None),),
+        names=profile_names(),
     )
     rendered = _recording(chat)
 
@@ -405,6 +408,7 @@ async def test_the_bar_abandons_entry_rather_than_stranding_its_input_box(
             projects=_Creator(),
         ),
         profiles=(ProfileAvailability("claude", True, None),),
+        names=profile_names(),
     )
 
     anchor = await _open_entry(chat, boundary, entry)
@@ -574,6 +578,7 @@ def _picker_boundary(*, creator: object | None) -> PrivateBotBoundary:
             projects=creator,
         ),
         profiles=(ProfileAvailability("claude", True, None),),
+        names=profile_names(),
     )
 
 
@@ -684,6 +689,7 @@ def _outcome_boundary(state: SessionState) -> PrivateBotBoundary:
             projects=_RealCreator(),
         ),
         profiles=(ProfileAvailability("claude", True, None),),
+        names=profile_names(),
     )
 
 
@@ -812,6 +818,7 @@ def _resume_boundary() -> tuple[PrivateBotBoundary, _ResumingLauncher]:
                 conversations=ConversationService(_Catalogue(_resolved())),
             ),
             profiles=(ProfileAvailability("claude", True, None),),
+            names=profile_names(),
         ),
         launcher,
     )
@@ -929,6 +936,7 @@ async def test_the_add_project_wizard_is_marked_as_the_launch_flow() -> None:
             projects=_Creator(),
         ),
         profiles=(ProfileAvailability("claude", True, None),),
+        names=profile_names(),
     )
 
     await boundary.launch_command(chat.message_update("/launch"), None)
@@ -1025,6 +1033,7 @@ async def test_resume_without_review_answers_every_state_it_can_return(
             conversations=ConversationService(_Catalogue(_resolved())),
         ),
         profiles=(ProfileAvailability("claude", True, None),),
+        names=profile_names(),
     )
     token = boundary._callback("resume.confirm", "c-0123456789abcdef", mutation=True)
     boundary.callbacks.bind_pending(CHAT, 1)
@@ -1049,6 +1058,7 @@ async def test_resume_without_review_does_not_claim_an_attachment_is_final() -> 
             conversations=ConversationService(_Catalogue(_resolved())),
         ),
         profiles=(ProfileAvailability("claude", True, None),),
+        names=profile_names(),
     )
     token = boundary._callback("resume.confirm", "c-0123456789abcdef", mutation=True)
     boundary.callbacks.bind_pending(CHAT, 1)
@@ -1082,6 +1092,7 @@ async def test_resume_without_review_says_when_nothing_was_started() -> None:
             conversations=ConversationService(_Catalogue(_resolved())),
         ),
         profiles=(ProfileAvailability("claude", True, None),),
+        names=profile_names(),
     )
     token = boundary._callback("resume.confirm", "c-0123456789abcdef", mutation=True)
     boundary.callbacks.bind_pending(CHAT, 1)
@@ -1115,6 +1126,7 @@ async def test_a_created_resume_that_failed_to_come_up_keeps_its_own_message() -
             conversations=ConversationService(_Catalogue(_resolved())),
         ),
         profiles=(ProfileAvailability("claude", True, None),),
+        names=profile_names(),
     )
     token = boundary._callback("resume.confirm", "c-0123456789abcdef", mutation=True)
     boundary.callbacks.bind_pending(CHAT, 1)
@@ -1142,6 +1154,7 @@ async def test_a_launch_survives_a_notification_arriving_while_it_waits() -> Non
         CHAT,
         backend=backend_for(catalogue=(PROJECT,), sessions=launcher),
         profiles=(ProfileAvailability("claude", True, None),),
+        names=profile_names(),
     )
     launcher.launched: list[object] = []
 
@@ -1197,6 +1210,7 @@ def test_a_stop_survives_a_notification_arriving_while_it_waits(action: str) -> 
         CHAT,
         backend=backend_for(catalogue=(PROJECT,), sessions=_Launcher(_record())),
         profiles=(ProfileAvailability("claude", True, None),),
+        names=profile_names(),
     )
     # `cleanup` is offered for PRESERVED and `graceful` for RUNNING (`available_actions`), so
     # each action is offered from the state that actually permits it rather than from one
@@ -1243,6 +1257,7 @@ async def test_the_force_confirmation_survives_a_notification_arriving_while_it_
         CHAT,
         backend=backend_for(catalogue=(PROJECT,), sessions=_Launcher(_record())),
         profiles=(ProfileAvailability("claude", True, None),),
+        names=profile_names(),
     )
     record = _record()
     token = boundary.stops.offer(

@@ -131,7 +131,7 @@ async def test_a_ready_rolls_over_to_one_successor_and_stops_only_on_accept(
                 "READY",
             )
         },
-        composers={"fake": ProviderDescriptor(PROFILE, "F", composer=_COMPOSER)},
+        composers={"fake": ProviderDescriptor(PROFILE, "F", "Fake", composer=_COMPOSER)},
     )
     connection = open_database(tmp_path / "sessions.sqlite3")
     sessions = SessionService(SQLiteSessionStore(connection), terminal)

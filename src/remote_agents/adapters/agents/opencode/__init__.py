@@ -58,6 +58,7 @@ def descriptor() -> ProviderDescriptor:
         # one basic shape nothing else here uses, so the four now differ by shape alone and
         # colour is only the second signal (DEC-010).
         glyph="🔺",
+        name="OpenCode",
         sessions=_sessions,
         usage=OpenCodeUsageReader(),
         hooks="opencode",

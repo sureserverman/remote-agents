@@ -31,6 +31,7 @@ def descriptor() -> ProviderDescriptor:
     return ProviderDescriptor(
         ProfileId("codex"),
         glyph="🔷",
+        name="Codex",
         sessions=_sessions,
         # The account reader asks the app server for the plan's windows and keeps the rollout
         # reader behind it for session reads and as the fallback (sub-plan 01, DEC-061 as

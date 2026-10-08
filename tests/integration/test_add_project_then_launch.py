@@ -10,6 +10,7 @@ import pytest
 from backends import backend_for
 from fake_telegram import LoneMessageBot
 
+from remote_agents.adapters.agents.registry import profile_names
 from remote_agents.adapters.projects.registry_writer import RegistryProjectRecorder
 from remote_agents.adapters.projects.workspace import FilesystemProjectWorkspace
 from remote_agents.adapters.sqlite.database import open_database
@@ -119,6 +120,7 @@ async def test_a_project_created_in_the_wizard_launches_through_the_ordinary_pat
                 refresh_catalogue=lambda: provider.refresh().catalogue,
             ),
             profiles=(ProfileAvailability("claude", True, None),),
+            names=profile_names(),
         )
 
         areas = await boundary._reply_for("project.open", "areas")

@@ -159,12 +159,16 @@ def test_every_curated_profile_has_a_label_on_the_bot() -> None:
     Nobody is about to add a sixth. But the guard that used to be free is gone, and this is
     what buys it back -- and it is cheaper than either re-coupling them or letting the next
     reader discover the fallback in production. Found by the Stage 1 gate evaluator.
-    """
-    from remote_agents.adapters.telegram.service import _profile_name
 
+    Since BL-101 the labels are each descriptor's `name`, folded by `profile_names` and handed
+    to the bot, so this asks that fold rather than the dict it replaced.
+    """
+    from remote_agents.adapters.agents.registry import profile_names
+
+    names = profile_names()
     for definition in closed_profiles():
         profile_id = str(definition.profile_id)
-        assert _profile_name(profile_id) != "Unavailable", (
+        assert names.get(profile_id), (
             f"{profile_id} is curated by the domain but has no label on the bot, so it would "
             'render as a launch button captioned "Unavailable"'
         )

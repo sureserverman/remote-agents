@@ -6,6 +6,7 @@ from datetime import UTC, datetime
 
 from backends import SessionUseCaseDouble, backend_for
 
+from remote_agents.adapters.agents.registry import profile_names
 from remote_agents.adapters.telegram.service import build_private_bot
 from remote_agents.application.conversations import ConversationService
 from remote_agents.application.profiles import ProfileAvailability
@@ -91,6 +92,7 @@ async def test_resume_picker_is_opaque_paginated_and_is_a_single_mutating_press(
             conversations=ConversationService(Catalogue(resolved)),
         ),
         profiles=(ProfileAvailability("claude", True), ProfileAvailability("cursor-agent", True)),
+        names=profile_names(),
     )
 
     profiles = await boundary._resume_profiles_reply(project.opaque_id)
@@ -133,6 +135,7 @@ async def test_resume_picker_renders_a_bounded_provider_title_without_its_source
             conversations=ConversationService(Catalogue(resolved)),
         ),
         profiles=(ProfileAvailability("claude", True),),
+        names=profile_names(),
     )
 
     catalogue = await boundary._resume_catalogue_reply(f"{project.opaque_id}|claude|1")

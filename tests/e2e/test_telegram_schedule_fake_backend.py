@@ -11,6 +11,7 @@ from backends import SessionUseCaseDouble, backend_for
 from fake_telegram import FakeChat
 from schedule_fakes import MemoryScheduleStore
 
+from remote_agents.adapters.agents.registry import profile_names
 from remote_agents.adapters.telegram.presenters import unpadded
 from remote_agents.adapters.telegram.service import PrivateBotBoundary, build_private_bot
 from remote_agents.application.profiles import ProfileAvailability
@@ -52,6 +53,7 @@ def _bot(store: MemoryScheduleStore | None = None) -> tuple[PrivateBotBoundary, 
             schedules=book,
         ),
         profiles=(ProfileAvailability("claude", True), ProfileAvailability("codex", True)),
+        names=profile_names(),
     )
     return boundary, book
 
@@ -205,6 +207,7 @@ async def test_create_offers_no_schedule_where_the_host_manages_none() -> None:
             profiles=(ProfileAvailability("claude", True),),
         ),
         profiles=(ProfileAvailability("claude", True),),
+        names=profile_names(),
     )
     chat = FakeChat()
     await boundary.launch_command(chat.message_update("/launch"), None)

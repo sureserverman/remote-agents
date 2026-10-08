@@ -103,3 +103,28 @@ def test_no_two_descriptors_share_a_glyph() -> None:
             "indistinguishable on a keyboard, which is the ask this field answers"
         )
         seen[descriptor.glyph] = profile
+
+
+def test_the_descriptor_declares_a_name(descriptor) -> None:
+    """A word for a surface with room for one, declared by the vertical (BL-101).
+
+    Pinned for presence only, like `glyph`: the owner may rename any of the four.
+    """
+    name = descriptor.name
+    assert isinstance(name, str), f"{descriptor.profile_id}'s name is {type(name).__name__}"
+    assert name.strip(), (
+        f"{descriptor.profile_id} declares an empty name; a launch button would carry no "
+        "caption at all"
+    )
+
+
+def test_no_two_descriptors_share_a_name() -> None:
+    """Two providers called the same thing are two buttons the owner cannot tell apart."""
+    descriptors = provider_descriptors()
+    assert descriptors, "the registry is empty; this contract would assert nothing"
+    seen: dict[str, str] = {}
+    for descriptor in descriptors:
+        profile = str(descriptor.profile_id)
+        clash = seen.get(descriptor.name)
+        assert clash is None, f"{profile} and {clash} are both called {descriptor.name!r}"
+        seen[descriptor.name] = profile

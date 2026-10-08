@@ -11,6 +11,7 @@ from uuid import uuid4
 from backends import backend_for
 from test_terminal_launch import STARTUP_BUDGET
 
+from remote_agents.adapters.agents.registry import profile_names
 from remote_agents.adapters.sqlite.database import open_database
 from remote_agents.adapters.sqlite.session_store import SQLiteSessionStore
 from remote_agents.adapters.telegram.service import build_private_bot, unmarked
@@ -103,6 +104,7 @@ async def test_integrated_resume_journey_uses_real_sqlite_and_an_isolated_tmux_s
             capture=terminal.capture,
         ),
         profiles=(ProfileAvailability("claude", True),),
+        names=profile_names(),
     )
     try:
         profiles = await boundary._resume_profiles_reply(project.opaque_id)

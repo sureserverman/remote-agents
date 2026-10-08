@@ -53,6 +53,7 @@ def descriptor(
     return ProviderDescriptor(
         ProfileId("cursor-agent"),
         glyph="🔶",
+        name="Cursor Agent",
         sessions=_sessions,
         usage=_usage(limits_switch, home),
         # Measured 2026-09-09 on 2026.09.08-6caf4ff: up 0.66 s after launch, cursor on the

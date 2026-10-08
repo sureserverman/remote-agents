@@ -161,7 +161,8 @@ class ComposerScreen:
 class ProviderDescriptor:
     """One provider's declared capability set, keyed by its profile.
 
-    `profile_id` and `glyph` are the two required fields — the identity half of the record.
+    `profile_id`, `glyph` and `name` are the three required fields — the identity half of the
+    record.
     A descriptor with no identity attaches its capabilities to nothing, and one with no mark
     attaches them to a provider the surfaces cannot tell apart. Each *capability* defaults to
     `None` so a composition that wires only what a provider publishes constructs the honest
@@ -185,6 +186,14 @@ class ProviderDescriptor:
     Not a capability, though it sits in the same record: there is no honest `None` here to
     read. That distinction is load-bearing for the contract kit, which drives capabilities
     from a requirements table and identity unconditionally.
+    """
+
+    name: str
+    """What a surface with room for a word calls this provider, such as a launch button.
+
+    Required for the reason `glyph` is (DEC-070): the vertical declares who it is, and no
+    surface keeps a table of its own. It was a literal dict inside the Telegram adapter until
+    BL-101, which left every other surface to reach into that module or spell its own.
     """
 
     sessions: object | None = None

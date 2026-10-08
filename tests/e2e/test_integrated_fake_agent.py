@@ -12,6 +12,7 @@ from backends import backend_for
 from stop_results import a_reader_for
 from test_terminal_launch import STARTUP_BUDGET
 
+from remote_agents.adapters.agents.registry import profile_names
 from remote_agents.adapters.projects.registry import RegisteredProject
 from remote_agents.adapters.sqlite.database import open_database
 from remote_agents.adapters.sqlite.session_store import SQLiteSessionStore
@@ -211,6 +212,7 @@ async def test_instant_launch_reaches_ready_over_real_sqlite_and_tmux(tmp_path: 
         11,
         backend=backend_for(catalogue=catalogue, sessions=service),
         profiles=(ProfileAvailability("claude", True),),
+        names=profile_names(),
     )
 
     try:
@@ -284,6 +286,7 @@ async def test_a_real_launch_reorders_the_catalogue_it_was_launched_from(tmp_pat
             catalogue=catalogue, refresh_catalogue=lambda: catalogue, sessions=service
         ),
         profiles=(ProfileAvailability("claude", True),),
+        names=profile_names(),
     )
     assert [project.name for project in boundary.catalogue] == ["alpha", "opaque-editor"]
 

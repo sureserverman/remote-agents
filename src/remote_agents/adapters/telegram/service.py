@@ -767,6 +767,13 @@ class PrivateBotBoundary:
     registry at all: a profile with no mark renders exactly the label drawn before this
     field existed.
     """
+    names: Mapping[str, str] = field(default_factory=dict)
+    """Each curated profile's display name, read off the registry like `glyphs` (BL-101).
+
+    Handed in for the reason the marks are: the names belong to the provider verticals
+    (DEC-070) and this adapter imports nothing under `adapters.agents`. A profile missing
+    from it is captioned "Unavailable" rather than given a name spelled here.
+    """
     message_relay: MessageRelay | None = None
     """What sends the owner's message into a session (DEC-099), or None where none is wired.
 
@@ -4803,7 +4810,7 @@ class PrivateBotBoundary:
             if profile.available and capability is not None and resume_capable(capability):
                 buttons.append(
                     Button(
-                        _profile_name(profile.profile_id),
+                        self._provider_name(profile.profile_id),
                         self._callback("resume.profile", f"{project_id}|{profile.profile_id}|1"),
                     )
                 )
@@ -4814,7 +4821,7 @@ class PrivateBotBoundary:
                 reason = profile.any_reason or (
                     capability.reason if capability is not None else "catalogue_unavailable"
                 )
-                unavailable.append(f"{_profile_name(profile.profile_id)} ({reason})")
+                unavailable.append(f"{self._provider_name(profile.profile_id)} ({reason})")
         text = "<b>Select a resumable agent</b>"
         if unavailable:
             text += "\nUnavailable: " + escape(", ".join(unavailable))
@@ -4910,12 +4917,15 @@ class PrivateBotBoundary:
             return None
         return await self.backend.conversations.resolve_for_resume(reference)
 
+    def _provider_name(self, profile_id: str) -> str:
+        return self.names.get(profile_id, "Unavailable")
+
     def _profiles_reply(self, project_id: str) -> RenderedMessage:
         if not any(project.opaque_id == project_id for project in self.catalogue):
             return self._message("The project is no longer available.")
         buttons = tuple(
             Button(
-                _profile_name(profile.profile_id),
+                self._provider_name(profile.profile_id),
                 # The mutation is claimed here rather than on a review screen that no longer
                 # exists. DEC-008 makes the *repeat* safe — a second press of the same button
                 # is dropped by the one-shot claim, never serviced into a second session, and
@@ -4987,7 +4997,7 @@ class PrivateBotBoundary:
             return self._message("The project is no longer available.")
         buttons = tuple(
             Button(
-                _profile_name(profile.profile_id),
+                self._provider_name(profile.profile_id),
                 self._callback("sched.profile", f"{project_id}|{profile.profile_id}"),
             )
             for profile in self.profiles
@@ -5289,7 +5299,7 @@ def build_private_bot(
                 view=bot.view,
                 # The existing naming site, passed in. The notifier is forbidden to spell a
                 # provider name of its own, and a test over its AST holds that.
-                name_for=_profile_name,
+                name_for=bot._provider_name,  # noqa: SLF001 -- the bot's own names
                 flood=bot.flood,
             ),
         )
@@ -5623,15 +5633,6 @@ def _with_remote_control(remote_control: bool) -> str:
     disagreed with the launch is the disagreement class this stage exists to remove.
     """
     return " · with Remote Control" if remote_control else ""
-
-
-def _profile_name(profile_id: str) -> str:
-    return {
-        "claude": "Claude",
-        "codex": "Codex",
-        "opencode": "OpenCode",
-        "cursor-agent": "Cursor Agent",
-    }.get(profile_id, "Unavailable")
 
 
 _ACTIVE_TAB = "• "

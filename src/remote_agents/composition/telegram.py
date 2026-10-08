@@ -11,6 +11,7 @@ from remote_agents.adapters.agents.registry import (
     profile_composers,
     profile_glyphs,
     profile_limit_screens,
+    profile_names,
     profile_trust_dialogs,
     profiles_keeping_a_draft,
     profiles_that_roll_over,
@@ -190,6 +191,9 @@ def _private_boundary(
         # and the bot is one that may import none, so the mapping is built on this side of
         # that line and handed over — the same shape `usage_readers` is folded in with.
         glyphs=profile_glyphs(descriptors),
+        # Each curated profile's name, folded and handed over for the same reason as the
+        # marks: the verticals declare it and this surface imports none of them (BL-101).
+        names=profile_names(descriptors),
         # The other provider fact this surface is handed rather than knowing: which
         # profiles it may offer *both* answers to. Read off the same registry as the
         # marks, and the same mapping the terminal is given, so the button and the

@@ -79,7 +79,7 @@ async def test_a_due_schedule_launches_a_session_and_its_message_lands_once(
             )
         },
         startup_timeout=10.0,
-        composers={"fake": ProviderDescriptor(PROFILE, "F", composer=_COMPOSER)},
+        composers={"fake": ProviderDescriptor(PROFILE, "F", "Fake", composer=_COMPOSER)},
     )
     connection = open_database(tmp_path / "sessions.sqlite3")
     sessions = SQLiteSessionStore(connection)

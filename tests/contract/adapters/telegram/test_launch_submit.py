@@ -6,6 +6,7 @@ import pytest
 from backends import SessionUseCaseDouble, backend_for
 from fake_telegram import FakeChat
 
+from remote_agents.adapters.agents.registry import profile_names
 from remote_agents.adapters.telegram.service import PrivateBotBoundary, build_private_bot
 from remote_agents.application.profiles import ProfileAvailability
 from remote_agents.application.project_catalog import CatalogProject
@@ -41,6 +42,7 @@ def _boundary() -> tuple[PrivateBotBoundary, _RecordingLauncher]:
                 sessions=launcher,
             ),
             profiles=(ProfileAvailability("claude", True),),
+            names=profile_names(),
         ),
         launcher,
     )
