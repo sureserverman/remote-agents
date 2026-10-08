@@ -150,6 +150,15 @@ class ComposerScreen:
     transcript and are skipped. Empty means the agent draws no end line, and its turn has ended
     when nothing on screen or in its title says busy -- Codex, whose title spinner runs for the
     whole turn."""
+    status_bands: tuple[str, ...] = ()
+    """Patterns for lines the agent's terminal draws above the input box that are **not**
+    transcript, skipped like the right-aligned hints when `turn_ended` looks for the last line.
+
+    Claude Code draws a plugin's status band there -- the planning plugin's plan-progress bar,
+    `⚙ <plan> ▐███░░░▌ 6/11 …` -- under the turn's `✻ … · done` footer. Read as the last line it
+    hid the footer, so a marked idle pane was never seen ended, and a rollover against it failed
+    `predecessor-not-idle` (2026-10-08). Each pattern names a band's shape, not just a glyph,
+    so a transcript line that merely mentions one is still read."""
     interrupt: tuple[str, ...] = ()
     """Keys that end a running turn, sent before a stop's own keys when the pane reads BUSY, for
     an agent whose exit leaves its turn running. Codex 0.158.0 runs turns in a shared app server,

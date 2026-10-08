@@ -292,7 +292,9 @@ def turn_ended(capture: str, descriptor: ProviderDescriptor, title: str = "") ->
     above = [
         line
         for line in screen[: box.start()].splitlines()
-        if line.strip() and len(line) - len(line.lstrip()) < _RIGHT_ALIGNED
+        if line.strip()
+        and len(line) - len(line.lstrip()) < _RIGHT_ALIGNED
+        and not any(re.search(band, line) for band in declared.status_bands)
     ]
     return bool(above) and any(re.search(pattern, above[-1]) for pattern in declared.turn_ended)
 

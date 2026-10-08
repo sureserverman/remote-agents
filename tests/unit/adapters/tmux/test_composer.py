@@ -472,3 +472,23 @@ def test_codex_0159_s_warning_status_line_does_not_hide_the_draft() -> None:
     screen = (_PANES / "codex" / "composed_0159_warning.txt").read_text(encoding="utf-8")
 
     assert composer_draft(screen, _descriptor("codex")) == "hello draft"
+
+
+def test_claude_reads_the_end_line_under_the_plan_progress_band() -> None:
+    """2026-10-08: the plan band sat between the end line and the box, so a marked idle pane
+    was never seen ended and a rollover against it failed `predecessor-not-idle`."""
+    screen = (_PANES / "claude" / "idle_under_plan_band.txt").read_text(encoding="utf-8")
+
+    assert turn_ended(screen, _descriptor("claude")) is True
+    marked = datetime(2020, 1, 1, tzinfo=UTC)  # long past the grace: the screen decides
+    assert classify(screen, _descriptor("claude"), turn_started_at=marked) is PaneState.IDLE
+
+
+def test_a_transcript_line_that_mentions_the_gear_is_not_a_band() -> None:
+    """Only the band's shape (a gear, then a progress bar) is skipped, not any line with `⚙`."""
+    finished = _turn_state("claude", "finished_footer")
+    lines = finished.rstrip("\n").splitlines()
+    box = next(i for i, line in enumerate(lines) if line.startswith("─"))
+    lines.insert(box, "⚙ settings were changed by the agent")
+
+    assert turn_ended("\n".join(lines) + "\n", _descriptor("claude")) is False

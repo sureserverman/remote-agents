@@ -121,6 +121,10 @@ def descriptor(
                 r"^✻ \S+ for (?:\d+[hm] )*\d+s · done\b",
                 r"^  ⎿\s+Interrupted · What should Claude do instead\?$",
             ),
+            # The planning plugin's plan-progress band, drawn between the turn's footer and the
+            # box (`idle_under_plan_band.txt`, `busy_plan_status.txt`): a gear, a plan name,
+            # then a progress bar. The bar is what makes it a band and not a transcript line.
+            status_bands=(r"^\s*(?:└─\s*)?⚙ \S.*▐[█░]*▌",),
             dialogs=(r"^ \S[^\n]*\bEsc to cancel\b", r"^ Do you want to proceed\?"),
             # A long paste folds to `[Pasted text #1]` (`composed_long.txt`).
             folded=(r"\[Pasted text #\d+[^\]]*\]",),

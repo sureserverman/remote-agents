@@ -142,6 +142,7 @@ _SWEEP = {
     "idle_remote_control_disconnected.txt": None,
     "idle_remote_control_enabled.txt": PromptReason.MENU,
     "idle_suggestion.txt": None,
+    "idle_under_plan_band.txt": None,
 }
 
 
