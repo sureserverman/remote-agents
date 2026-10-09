@@ -433,10 +433,11 @@ class SessionService:
             observed = await self._terminal.remote_control(
                 command.session_id, command.desired_state
             )
-            # Persisted so a surface can hide the action that would do nothing. Inside the
-            # session lock, after the pane has answered, and never before: recording the
-            # *desired* state would claim an outcome the terminal had not reported yet, and
-            # a toggle that fails would leave the record asserting a pane it never changed.
+            # Persisted so the next confirmation can name a direction when the pane reads
+            # nothing. Inside the session lock, after the pane has answered, and never before:
+            # recording the *desired* state would claim an outcome the terminal had not
+            # reported yet. A refused press raises `RemoteControlRefused` above and so never
+            # reaches this line -- the pane was left as it was, and so is the record (BL-109).
             await self._store.set_remote_control_state(command.session_id, observed)
             return observed
 

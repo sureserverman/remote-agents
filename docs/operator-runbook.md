@@ -469,16 +469,17 @@ lands where `/sessions` lands.
    remaining managed session has the same identity.
 10. Use `tmux -L remote-agents list-panes -a` only for local read-only confirmation. Never use
    the default tmux server for this service.
-11. For a live managed Claude session only, open Details. It offers the one Remote Control
-    direction the session's last observed state leaves open — Enable for one known inactive,
-    Disable for one known active — and both only while nothing has been observed for it, which
-    is how a session nobody has toggled and a record predating this release both read. Confirm
-    the change on the step that follows. The observed result is stored with the session, so the
-    detail offers the opposite direction next time, on this surface and in the terminal, and
-    still does after a service restart. A toggle whose result comes back unknown stores nothing
-    and leaves both directions offered: if its state is unknown, do not retry remotely; inspect
-    and recover locally. Never share the resulting Remote Control URL or a pane capture outside
-    the owner workflow.
+11. For a live managed Claude session only, open Details. It offers one `📡 Remote Control`
+    button. Its confirmation reads the pane first and names the direction that reading implies
+    — "Remote Control is on. Turn it off?" — and an unreadable pane offers only *on* (DEC-084).
+    Confirm the change on the step that follows. The observed result is stored with the session,
+    on this surface and in the terminal, and still is after a service restart. A press the pane
+    refuses — the agent is working, asking something, holding text in its composer, another key
+    is being sent, or the screen is not its prompt — answers `Remote Control: not changed — <why>.`
+    and keeps the stored reading: try again once the pane is idle. A press that ends on a pane
+    nothing can read answers `Remote Control: unknown.` and clears the stored reading: do not
+    retry remotely; inspect and recover locally. Never share the resulting Remote Control URL or
+    a pane capture outside the owner workflow.
 
 11a. **Codex Remote Control is a different thing with the same name, and it is host-level.**
     It appears beside `Plan limits` on both surfaces rather than on a session, because it is a
@@ -1260,7 +1261,8 @@ that every update notifies, and what keeps that from buzzing ninety-six times ov
 **silently**, and only something the owner has not been alerted to arrives. A `needs_answer`
 is the exception that proves the rule — a question whose text matches none of the standing
 ones is a *different* question, and the owner cannot answer what they were never shown, so it
-arrives (DEC-048).
+arrives (DEC-048). A `limit_reached` on a window the standing message does not already name
+arrives too: a 5-hour stop and then a weekly one are two different waits (DEC-034, narrowed).
 
 The message is replaced from scratch — starting over from the next report rather than
 continuing the story — only once the old one has left the chat, which is what pressing
@@ -1414,6 +1416,12 @@ Since 2026-09-19 that text is the real command or question (see the approval sec
 which is what makes the comparison meaningful: before it, every Codex ask carried identical
 words, so a genuinely different second question was indistinguishable from the first and the
 owner was never shown it.
+
+`limit_reached` is the second exception, since 2026-10-09. A stop whose window is named — `5h`,
+`week` — arrives when the standing message names at least one window and not that one, because
+the second wait is a different length. A window nothing could name matches any, so a stop with
+no window, or a message written before windows were recorded, never alerts on that account. The
+accepted cost: a session stopped `5h`, then `week`, then `5h` again arrives each time.
 
 An identical re-render is not sent at all — it would say exactly what the message already says.
 
@@ -2112,10 +2120,10 @@ uv run --locked remote-agents tui
    same action and the session reaches ENDED, so its output is not left to read. Clean up is
    therefore the answer to a pane that died on its own, which reconciliation preserves for
    inspection until the owner closes it. Claude Remote Control is offered only for a RUNNING
-   Claude session, and only in the one direction its last observed state leaves open — both
-   directions appear only while nothing has been observed for that session. That answer comes
-   from the same shared policy Telegram reads, so the two surfaces cannot disagree about which
-   direction a session is offered. The record is read again and the policy re-checked at the
+   Claude session, as one row whose confirmation names the direction the pane read implies. That
+   answer comes from the same shared policy Telegram reads, so the two surfaces cannot disagree
+   about which direction a session is offered, and a refused press shows the same
+   `Remote Control: not changed — <why>.` line on both. The record is read again and the policy re-checked at the
    moment the action is issued, so an action that has become illegal since the list was drawn is
    explained rather than attempted.
    Two of those actions — Stop and close, and Clean up — are not confirmed, on either surface

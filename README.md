@@ -397,10 +397,12 @@ holds it. Pressing it before then reports what it is attached to and what became
 than claiming a resume, and closing that session releases the conversation. The ended record keeps the
 conversation it was resumed from, so the history still answers what was resumed.
 Copy Attach is offered only for a currently trusted live managed pane. Claude Remote Control is
-available only on a live managed Claude pane, offers the one direction its last observed state
-leaves open — Enable for a session known inactive, Disable for one known active, and both only
-while nothing has been observed for it — requires a second confirmation, and uses the single
-qualified enable/disable interaction; it never carries a prompt, transcript, or session URL.
+available only on a live managed Claude pane as one `📡 Remote Control` button. Its confirmation
+reads the pane first and names the direction that reading implies, and the press uses the single
+qualified enable/disable interaction; it never carries a prompt, transcript, or session URL. A
+press the pane refuses — a turn running, a question open, text in the composer, another key
+being sent, or a screen that is not the agent's prompt — answers `Remote Control: not changed`
+with that reason, and the stored reading stays as it was.
 
 The service also speaks first when a managed agent stops working: it has
 finished, it hit a usage limit, one reply hit its output length limit, or it is waiting for an
@@ -422,7 +424,9 @@ chat rather than ninety-six, and it is the newest thing there rather than buried
 first report landed. Because a replacement notifies like any other message, a
 replacement the owner has already been alerted about is amended in silently rather than
 arriving again — and a **different** question is news and does arrive, because the owner
-cannot answer what they were never shown (DEC-048). The message stands beside the live view with one button that opens the session it names,
+cannot answer what they were never shown (DEC-048). So is a usage limit on a different window
+from the one the message already names: a 5-hour stop followed by a weekly one arrives twice,
+because the second wait is a different length. The message stands beside the live view with one button that opens the session it names,
 and it starts over from the next report only once it has left the chat — pressing `Open
 session` deletes it. A
 managed Claude session reports this itself through a global Claude Code hook, installed once with
@@ -955,9 +959,10 @@ mistaken for a surface that forgot to draw the entry. Inspect output renders the
 through the same sanitizer the bot uses, in a scrollable pane rather than under Telegram's message
 bound, and refuses output containing a NUL byte for the reason the bot refuses it: a pane emitting
 NUL is not rendering text, and printing it can corrupt the terminal. Claude Remote Control appears
-only on a running Claude pane, offering the one direction its last observed state leaves open
-exactly as Telegram does; the observation is stored with the session, so it holds across a restart
-and across the other surface. It and Force stop each move to a step of their own before anything
+only on a running Claude pane as one row whose confirmation names the direction the pane read
+implies, exactly as Telegram does; the observation is stored with the session, so it holds across
+a restart and across the other surface. A refused press says why on the status line and leaves
+that stored observation alone. It and Force stop each move to a step of their own before anything
 is issued, with Cancel first and resting under the cursor, so going through with either means
 choosing a different row on purpose rather than repeating the keystroke that raised it.
 

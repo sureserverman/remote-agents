@@ -310,11 +310,13 @@ class SQLiteSessionStore:
     async def set_remote_control_state(
         self, session_id: SessionId, state: RemoteControlState
     ) -> SessionRecord:
-        """Record what a Remote Control toggle returned, so a surface can hide the no-op.
+        """Record what a Remote Control press read off the pane afterwards.
 
-        `UNKNOWN` **clears** rather than stores. It is the runtime saying it could not tell,
-        and writing it as a value would let a surface hide an action on the strength of
-        something nobody observed — the same reasoning that keeps migration 7 unbackfilled.
+        `UNKNOWN` **clears** rather than stores. It is the runtime saying it could not read the
+        pane, and writing it as a value would let a confirmation name a direction on the strength
+        of something nobody observed — the same reasoning that keeps migration 7 unbackfilled.
+        A *refused* press never reaches here: it raises `RemoteControlRefused` and the stored
+        reading stays, because the pane was left as it was (BL-109).
 
         Raises `KeyError` for a session that is not stored, like `set_label`: answering
         "recorded" for a session that does not exist lets a stale button report success

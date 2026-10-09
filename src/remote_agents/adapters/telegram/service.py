@@ -3343,6 +3343,7 @@ class PrivateBotBoundary:
             )
         except RemoteControlRefused as refused:
             return _reply_arguments(self._message(remote_control_refusal(refused)))
+        # A refusal is answered above with its reason; what remains is a reading.
         # Just the resulting state. Distinguishing "was already active" from "is now active"
         # is not knowable here: `remote_control` returns the desired state both when it had
         # to send keys and when it found the pane already there, so a message claiming the
