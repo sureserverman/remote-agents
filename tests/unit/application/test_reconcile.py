@@ -726,6 +726,31 @@ async def test_no_pane_read_sets_untrusted_from_any_state(
         assert store.records[item.session_id].state is state
 
 
+async def test_a_working_session_costs_no_pane_read() -> None:
+    """With nothing left for the check to add, a record the pure policy leaves alone is not read.
+
+    The reconciler used to read every live record's pane, RUNNING included, because the check
+    could add TRUST_REQUIRED there. DEC-081 retired that, so a read of a RUNNING pane could
+    only ever confirm the policy's own answer of nothing: one wasted capture per working
+    session per pass.
+    """
+    running = record(SessionState.RUNNING)
+    store = InMemoryStore((running,))
+    reads: list[SessionId] = []
+
+    async def counting(session_id, profile_id):
+        del profile_id
+        reads.append(session_id)
+        return TerminalObservation(session_id, live=True, preserved=False, awaiting_trust=True)
+
+    service = ReconciliationService(store, settle_after=timedelta(0), confirm_ready=counting)
+
+    await service.reconcile((TerminalObservation(running.session_id, live=True, preserved=False),))
+
+    assert reads == []
+    assert store.events == []
+
+
 async def test_an_untrusted_record_whose_pane_became_ready_is_promoted() -> None:
     """Answered at the keyboard, in the pane the console displays (DEC-047)."""
     untrusted = record(SessionState.UNTRUSTED)

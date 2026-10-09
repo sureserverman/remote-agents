@@ -478,29 +478,23 @@ class TmuxTerminal:
         *pre-trust* screen, so a pane resting on the question itself matches no blocker at
         all.
         """
-        # **A blocker alone decides this, and that is a known hole — not an oversight.**
-        # codex's declared blocker *is* the shared question, `Do you trust the contents of this
-        # directory?`, which appears in **fourteen** files of this repository as of
-        # 2026-09-10 -- thirteen before the plan that measured this, whose own acceptance
-        # document became the fourteenth. So an agent
-        # displaying `profiles.py`, `trust.py`, either acceptance document or the fixtures
-        # satisfies this line, and this line writes the record (`services.py`, `reconcile.py`)
-        # and guards DEC-078's unconfirmed kill. `classify_trust_capture` below wants three
-        # markers cross-checked against every other agent's real capture, and never runs.
+        # **A blocker alone decides this, and since DEC-081 that is safe.** codex's declared
+        # blocker is a phrase this repository's own files carry, so an agent displaying one of
+        # them satisfies this line. That used to matter: two pane re-reads wrote the record from
+        # it and could hand a working session DEC-078's unconfirmed kill. They no longer can --
+        # a pane read may clear `untrusted` and may no longer set it. So the only place this
+        # line can *mark* a session is a launch or resume settle, where the agent has drawn
+        # nothing but its own startup. Its other readers (`confirm_ready`, the decline guard in
+        # `decline_trust`) act only on a record that settle already marked UNTRUSTED; there a
+        # misreading can keep the record UNTRUSTED, but cannot reach a session the settle did
+        # not mark.
         #
-        # **The obvious repair — require the dialog wherever one is declared — is not a
-        # contained fix, which is why it is not made here.** claude's blocker is its
-        # *pre-trust screen*, a different screen from its dialog, so requiring the classifier
-        # changes what a claude launch concludes: `a blocker answers the launch instead of
-        # prolonging it` was a deliberate design (sub-plan 1, Task 1.2), and undoing it for one
-        # provider is a lifecycle decision rather than a patch. Tried, measured, reverted — it
-        # turns `test_a_blocker_answers_the_launch_instead_of_waiting_out_the_budget` red for
-        # exactly that reason.
-        #
-        # What stands in the meantime is narrower and real: both correctors are now bounded to
-        # five minutes from launch (`services._LATE_DIALOG_WINDOW`,
-        # `reconcile._LATE_DIALOG_WINDOW`), so a screen that carries these words hours later no
-        # longer rewrites a working session's record. **BL-053** carries the design.
+        # **Requiring the dialog wherever one is declared is still not the fix.** claude's
+        # blocker is its *pre-trust screen*, a different screen from its dialog, so requiring
+        # the classifier changes what a claude launch concludes: `a blocker answers the launch
+        # instead of prolonging it` is deliberate (sub-plan 1, Task 1.2), and
+        # `test_a_blocker_answers_the_launch_instead_of_waiting_out_the_budget` pins it. BL-052
+        # carries where the blocker strings live.
         if any(blocker in capture for blocker in profile.readiness_blockers):
             return True
         dialog = self._trust_dialogs.get(str(profile_id))

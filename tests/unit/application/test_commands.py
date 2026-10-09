@@ -654,8 +654,9 @@ async def test_a_recheck_never_probes_the_pane_of_a_running_session() -> None:
     listing — the exact periodic workload `adapters/tui/screens/feed.py` refuses for the feed
     pane, citing this method's cost as "a tmux capture per FAILED session".
 
-    The late-dialog race is real and is corrected; it is corrected in
-    `ReconciliationService`, which is off this path and runs on its own timer. Pinned here
+    It would also gain nothing: since DEC-081 a re-read never sets `untrusted`, so a RUNNING
+    record has no answer a capture could change; the late-dialog race is caught by the launch
+    settle instead. Pinned here
     because the widening was made once, was correct in isolation, and was invisible until a
     strict double in `tests/integration/sqlite/test_session_rename.py` failed at a gate.
     """

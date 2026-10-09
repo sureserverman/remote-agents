@@ -205,24 +205,20 @@ class ReconciliationService:
         question it cannot answer. Both look identical from `managed_observations`, so the
         difference has to come from the check that already knows it.
 
-        **Narrowings, plus exactly one addition -- and the addition is named because an
-        earlier version of this docstring claimed there were none.** The check can turn a
-        promotion into nothing at all (a slow agent, or one whose readiness cannot be read),
-        and it can turn one into a trust correction. It also *adds* one event the pure policy
-        cannot reach: a RUNNING record whose pane is live is a no-op to `reconcile()` -- the
-        observed state equals the stored one -- so TRUST_REQUIRED from RUNNING has no other
-        producer. That is the late-dialog race, and it is the whole reason this method reads
-        the check for every `terminal_live` result rather than only for promotions.
-
-        What it never does is manufacture an event for a state the matrix has no edge for;
-        `_TRUST_CORRECTABLE` is exactly the three origins of TRUST_REQUIRED, named in both
-        this module and `services.py` rather than inlined, so the two cannot drift.
+        **Narrowings only.** The check can turn a promotion into nothing at all: a slow agent,
+        one whose readiness cannot be read, or one whose pane shows the trust dialog. It never
+        adds an event. It used to add one -- TRUST_REQUIRED for a RUNNING record whose pane
+        carried the dialog, the late-dialog correction -- and that was the reason it read the
+        check for every live record. DEC-081 retired it: a pane read may clear `untrusted` and
+        may no longer set it, so only the launch or resume settle records it. With nothing
+        left to add, a result the pure policy has no event for is not read at all, which saves
+        a capture per working session every pass.
 
         With no check wired, the pure policy stands exactly as it did -- a composition that
         does not supply one gets the old behaviour rather than a silently different one.
         """
         fallback = _event_for_reconciliation(record, result)
-        if result.reason != "terminal_live" or self._confirm_ready is None:
+        if fallback is None or result.reason != "terminal_live" or self._confirm_ready is None:
             return fallback
         reading = await self._readiness(record)
         if reading is None:

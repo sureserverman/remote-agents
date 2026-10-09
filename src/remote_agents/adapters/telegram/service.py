@@ -4062,13 +4062,12 @@ class PrivateBotBoundary:
         question. The conclusion drawn was that state says nothing and the pane is the only
         authority.
 
-        What has changed is not the race but who handles it. `ReconciliationService` now reads
-        the same readiness check on **every** live observation and issues `TRUST_REQUIRED`
-        from RUNNING, STARTING or FAILED (`application/reconcile.py`, "that is the late-dialog
-        race, and it is the whole reason this method reads the check for every `terminal_live`
-        result"). A stuck session therefore *becomes* `untrusted` on its own, and the button
-        follows it. The cost is bounded and real: a session caught by the race waits one
-        reconciliation pass for its row, where before it had one immediately.
+        What has changed is how the race is handled. The launch settle is sized from
+        measurement so that the launch itself catches a late dialog (codex: 0.75 s against a
+        worst gap of 0.46 s over 60 launches, `docs/acceptance-2026-10-09-codex-trust-settle.md`)
+        and records `untrusted`, and the button follows the record. A dialog that outruns the
+        settle anyway gets no row; it is answered at the keyboard (DEC-047), which is the cost
+        DEC-081 accepted.
 
         **What the pane-only version cost, which is why that trade is worth taking.** The
         classifier decides "this pane is asking" by matching text, and text is not proof that
@@ -4096,23 +4095,12 @@ class PrivateBotBoundary:
         notification's button cannot fire a keypress into a session that is no longer asking,
         and a press that read nothing now says so instead of claiming the folder was trusted.
 
-        **What DEC-081 does and does not change, stated in the right tense.** It *decides* that
-        a pane may **clear** `untrusted` and may no longer **set** it -- and that is a decision,
-        not code. No implementation ships with it, deliberately: the plan that recorded it
-        (2026-09-10) authored no task for the evidence change, because what it costs differs by
-        an order of magnitude between the routes and that plan is written from the decision
-        rather than before it.
-
-        So the state half of this gate is **still conjurable today**, and the bound is the only
-        thing narrowing it. `reconcile._TRUST_CORRECTABLE` is `{STARTING, RUNNING, FAILED}` and
-        `reading.awaiting_trust` is still the one-substring blocker check, so inside
-        `_LATE_DIALOG_WINDOW` -- five minutes from `created_at` -- an agent displaying any of
-        the fourteen files carrying codex's blocker can still move a working session to
-        `untrusted`, which is the state this gate consults and the state DEC-078's unconfirmed
-        kill is offered from. Past that window the reading is refused and the record stands.
-        That is a mitigation, not an elimination; BL-053 carries the residual, and an earlier
-        draft of this very paragraph asserted the hole was closed, which is the same false
-        claim about trust evidence that BL-053 is itself about.
+        **What DEC-081 changed, implemented 2026-10-09.** A pane may **clear** `untrusted` and
+        may no longer **set** it: the reconciler and the list-open re-read return no event for
+        a pane showing the dialog, and the state machine has no TRUST_REQUIRED edge from
+        anything but STARTING. So the state half of this gate can no longer be conjured by an
+        agent *displaying* the dialog's words -- only a launch or resume settle, reading a pane
+        that has drawn nothing but its own startup, puts a record where this gate looks.
         """
         if record.state is not SessionState.UNTRUSTED:
             return False

@@ -136,16 +136,13 @@ class LaunchOutcome:
 #: launch whose pane recovered, and an UNTRUSTED one whose dialog was answered at the keyboard
 #: where nothing reports it back (DEC-047).
 #:
-#: **RUNNING is deliberately absent, and it was briefly here.** A live pane really is two facts
-#: rather than one, and correcting a RUNNING record whose pane is secretly on a dialog is worth
-#: doing -- but this method is on the *list-rendering* path (`session_views.listed_sessions`),
-#: which both surfaces call on every render. Walking RUNNING here would cost one tmux capture
-#: per *live* session on every listing, on both surfaces, rather than one per member of this
-#: set. That is the same periodic workload `adapters/tui/screens/feed.py` declines to take on
-#: for the feed pane, and the invariant that widening silently broke -- caught at the Stage 1
-#: gate by a strict double in `tests/integration/sqlite/test_session_rename.py`.
-#:
-#: The RUNNING correction lives in `ReconciliationService._event_for` instead, which is off the
+#: **RUNNING is deliberately absent.** This method is on the *list-rendering* path
+#: (`session_views.listed_sessions`), which both surfaces call on every render, so walking
+#: RUNNING would cost one tmux capture per *live* session on every listing. It would also gain
+#: nothing: since DEC-081 a re-read can clear `untrusted` but never set it, so a RUNNING record
+#: has no answer a capture could change. (Walking it was tried once, for the correction DEC-081
+#: later retired, and caught at a gate by a strict double in
+#: `tests/integration/sqlite/test_session_rename.py`.)
 _READINESS_REREAD = frozenset({SessionState.FAILED, SessionState.UNTRUSTED})
 
 
@@ -366,9 +363,8 @@ class SessionService:
         UNTRUSTED is also re-read to *stay* UNTRUSTED, and deliberately writes nothing when
         it does: an unanswered question is not news on every pass.
 
-        The third repair -- a RUNNING record found sitting on a dialog -- belongs to
-        reconciliation rather than here, because this runs on the list-rendering path. See
-        `_READINESS_REREAD`.
+        A pane showing the dialog never *moves* a record here, from any state: only a launch
+        or resume settle records `untrusted` (DEC-081). See `_READINESS_REREAD`.
         """
         async with self._locks.operation():
             records = tuple(await self._store.list())
