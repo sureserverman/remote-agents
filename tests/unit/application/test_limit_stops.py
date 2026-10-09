@@ -379,19 +379,20 @@ def _claude_live(five_hour: float) -> AgentLimits:
     )
 
 
-async def test_an_undated_claude_stop_is_held_for_the_live_reading_that_dates_it() -> None:
-    """The screen named the five-hour window and nothing dated it; the live reading publishes it."""
-    readings = [_claude_live(97), _claude_live(100)]
+async def test_a_reported_claude_stop_is_recorded_at_once_even_with_a_live_reading() -> None:
+    """DEC-107's hold is for a stop read off the pane (INFERRED). Claude's stop arrives REPORTED
+    from its `StopFailure` hook, so marking its usage API live (DEC-118) holds nothing: the stop
+    is recorded in the pass it arrives, undated, as before. The plan and a first draft of DEC-118
+    assumed otherwise; the Stage 2 gate evaluator found it."""
 
     async def limits():
-        return (readings.pop(0) if len(readings) > 1 else readings[0],)
+        return (_claude_live(97),)
 
     screen = LimitScreen(markers=(".",), hint=lambda text, now: LimitHit("5h", None))
     classifier = LimitStopClassifier(_ClaudeStore(), limits, {"claude": screen}, now=lambda: _NOW)
 
-    assert await classifier.classified([_stop(ActivityConfidence.INFERRED)]) == []
-    (released,) = await classifier.classified([])
-    assert released.limit == LimitHit("5h", _IN_2H)
+    (stop,) = await classifier.classified([_stop(ActivityConfidence.REPORTED)])
+    assert stop.limit == LimitHit("5h", None)
 
 
 def test_the_classifier_still_records_a_claude_stop_at_99_5() -> None:

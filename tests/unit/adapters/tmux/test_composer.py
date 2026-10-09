@@ -508,3 +508,20 @@ def test_a_busy_screen_holds_no_draft(agent: str, name: str) -> None:
     screen = (_PANES / agent / f"{name}.txt").read_text(encoding="utf-8")
 
     assert composer_draft(screen, _descriptor(agent)) in ("", None)
+
+
+def test_a_cursor_hint_with_no_placeholder_beside_it_is_no_draft() -> None:
+    """The hint is stripped wherever it sits on the line, not only after the placeholder."""
+    screen = (_PANES / "cursor" / "busy_after_submit.txt").read_text(encoding="utf-8")
+    bare = screen.replace("→ Add a follow-up", "→" + " " * len(" Add a follow-up"))
+
+    assert "Add a follow-up" not in bare
+    assert composer_draft(bare, _descriptor("cursor")) == ""
+
+
+def test_a_cursor_draft_that_ends_in_the_hints_words_keeps_them() -> None:
+    """Only the right-aligned hint is stripped; text typed up against it is the owner's."""
+    screen = (_PANES / "cursor" / "idle.txt").read_text(encoding="utf-8")
+    typed = re.sub(r"^  → .*$", "  → press ctrl+c to stop", screen, count=1, flags=re.MULTILINE)
+
+    assert composer_draft(typed, _descriptor("cursor")) == "press ctrl+c to stop"
