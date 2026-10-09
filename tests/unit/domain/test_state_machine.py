@@ -39,8 +39,6 @@ LEGAL_TRANSITIONS = {
     (SessionState.FAILED, LifecycleEvent.AMBIGUOUS_TERMINAL_EVIDENCE): SessionState.ORPHANED,
     (SessionState.ORPHANED, LifecycleEvent.VERIFIED_FORCE_STOP): SessionState.ENDED,
     (SessionState.STARTING, LifecycleEvent.TRUST_REQUIRED): SessionState.UNTRUSTED,
-    (SessionState.RUNNING, LifecycleEvent.TRUST_REQUIRED): SessionState.UNTRUSTED,
-    (SessionState.FAILED, LifecycleEvent.TRUST_REQUIRED): SessionState.UNTRUSTED,
     (SessionState.UNTRUSTED, LifecycleEvent.READY): SessionState.RUNNING,
     (SessionState.UNTRUSTED, LifecycleEvent.STARTUP_ERROR): SessionState.FAILED,
     (SessionState.UNTRUSTED, LifecycleEvent.TRUST_DECLINED): SessionState.ENDED,
@@ -167,16 +165,17 @@ def test_untrusted_is_not_terminal_and_names_every_way_out() -> None:
             transition(SessionState.UNTRUSTED, event)
 
 
-def test_every_state_a_launch_can_be_in_can_reach_untrusted() -> None:
-    """The dialog can be read late, so the correction has to be reachable from three states.
+def test_only_a_starting_record_can_become_untrusted() -> None:
+    """DEC-081: only the launch or resume settle records `untrusted`, and both start in STARTING.
 
-    `claude-remote` prints its readiness marker *before* the trust dialog, so whether the
-    first capture that decides a launch sees the marker or the blocker is a race: the record
-    can already be RUNNING, or already FAILED on a startup-budget timeout, when the dialog is
-    finally observed. Both must be correctable, which is why TRUST_REQUIRED has three origins
-    rather than only STARTING.
+    TRUST_REQUIRED used to have three origins, because two pane re-reads could correct a
+    RUNNING or FAILED record after the fact. Those correctors no longer set the state, so the
+    machine itself refuses the move from anywhere but STARTING: a fourth producer added later
+    fails here rather than quietly writing the record.
     """
-    for origin in (SessionState.STARTING, SessionState.RUNNING, SessionState.FAILED):
-        assert transition(origin, LifecycleEvent.TRUST_REQUIRED).to_state is (
-            SessionState.UNTRUSTED
-        )
+    assert transition(SessionState.STARTING, LifecycleEvent.TRUST_REQUIRED).to_state is (
+        SessionState.UNTRUSTED
+    )
+    for origin in set(SessionState) - {SessionState.STARTING}:
+        with pytest.raises(InvalidTransition):
+            transition(origin, LifecycleEvent.TRUST_REQUIRED)

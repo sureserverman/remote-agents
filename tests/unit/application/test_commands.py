@@ -14,11 +14,16 @@ from remote_agents.application.commands import (
     ForceStopCommand,
     GracefulStopCommand,
     LaunchCommand,
+    ResumeCommand,
 )
 from remote_agents.application.errors import DuplicateCommandError
 from remote_agents.application.services import SessionService, _event_for_recheck
 from remote_agents.domain.conversations import (
+    ConversationReference,
+    ConversationState,
+    ConversationSummary,
     ProviderConversationId,
+    ResolvedConversation,
 )
 from remote_agents.domain.models import (
     ProfileId,
@@ -792,6 +797,47 @@ async def test_no_pane_read_sets_untrusted_on_a_list_open(
     assert store.events == [], (state, store.events)
     assert store.records[item.session_id].state is state
     assert _event_for_recheck(state, blocked) is None, state
+
+
+async def test_a_resume_blocked_at_its_settle_is_untrusted() -> None:
+    """DEC-081 close-out (a): resume keeps its settle conclusion, and is not carved out.
+
+    "A launch conclusion only" covers resume too, and it is kept on evidence of its own: a
+    resume spawns a fresh pane whose record starts in STARTING, and its settle reads that pane
+    at start -- the same evidence a launch has. What lost the setting arm is the two
+    correctors that read a pane long after it started.
+    """
+
+    class _ResumingTerminal(FakeTerminal):
+        async def resume(self, session_id, project_id, profile_id, source_id):
+            del source_id
+            return await self.launch(session_id, project_id, profile_id)
+
+    class _ResumeStore(FakeStore):
+        async def get_by_resume_source(self, profile_id, source_id):
+            del profile_id, source_id
+            return None
+
+    store = _ResumeStore()
+    service = SessionService(store, _ResumingTerminal(live=True, awaiting_trust=True))
+    summary = ConversationSummary(
+        ConversationReference("c-0123456789abcdef"),
+        ProfileId("codex"),
+        ProjectId("opaque-editor"),
+        ConversationState.RESUMABLE,
+        datetime.now(UTC),
+    )
+    command = ResumeCommand(
+        ProjectId("opaque-editor"),
+        ProfileId("codex"),
+        ResolvedConversation(summary, ProviderConversationId("source-123")),
+        "resume-blocked",
+    )
+
+    outcome = await service.resume(command)
+
+    assert outcome.record.state is SessionState.UNTRUSTED
+    assert store.events == [LifecycleEvent.TRUST_REQUIRED]
 
 
 class _StoredDefault:

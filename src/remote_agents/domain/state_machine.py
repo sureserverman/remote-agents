@@ -86,16 +86,10 @@ _TRANSITIONS: dict[tuple[SessionState, LifecycleEvent], SessionState] = {
     # offer to the adopted branch. That is the established direction (availability narrows the
     # domain, never widens it), but it does mean the domain alone is not the guard here.
     (SessionState.ORPHANED, LifecycleEvent.VERIFIED_FORCE_STOP): SessionState.ENDED,
-    # A folder-trust dialog is observable from three states, because when it is *seen* is a
-    # race rather than a fact about the launch. `claude-remote` prints its readiness marker
-    # before the dialog, so the capture that decided the launch may already have moved the
-    # record to RUNNING; and a launch that burned its whole startup budget waiting for a
-    # marker that could never arrive is already FAILED. Both are corrected by the first
-    # capture that actually shows the dialog, which is why TRUST_REQUIRED has three origins
-    # and not one.
+    # One origin: only a launch or resume settle records `untrusted`, and both start in
+    # STARTING (DEC-081). A pane read later may clear it but never set it, so there is no edge
+    # from RUNNING or FAILED for a re-read to take.
     (SessionState.STARTING, LifecycleEvent.TRUST_REQUIRED): SessionState.UNTRUSTED,
-    (SessionState.RUNNING, LifecycleEvent.TRUST_REQUIRED): SessionState.UNTRUSTED,
-    (SessionState.FAILED, LifecycleEvent.TRUST_REQUIRED): SessionState.UNTRUSTED,
     # The five ways out, and DEC-020's rule holds for every one of them: each is the
     # consequence of something observed happening to the pane, never of dismissing the row.
     # The owner trusts the folder and the agent comes ready; the agent gives up or the pane

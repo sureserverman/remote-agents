@@ -1,0 +1,28 @@
+{
+ "baseline": {
+  "elapsed_s": 2.0,
+  "exit": 0,
+  "tail": "........................................................................ [ 38%]\n........................................................................ [ 77%]\n..........................................                               [100%]\n186 passed in 1.79s"
+ },
+ "break_patch": "--- a/src/remote_agents/domain/state_machine.py\n+++ b/src/remote_agents/domain/state_machine.py\n@@ -90,6 +90,7 @@\n     # STARTING (DEC-081). A pane read later may clear it but never set it, so there is no edge\n     # from RUNNING or FAILED for a re-read to take.\n     (SessionState.STARTING, LifecycleEvent.TRUST_REQUIRED): SessionState.UNTRUSTED,\n+    (SessionState.RUNNING, LifecycleEvent.TRUST_REQUIRED): SessionState.UNTRUSTED,\n     # The five ways out, and DEC-020's rule holds for every one of them: each is the\n     # consequence of something observed happening to the pane, never of dismissing the row.\n     # The owner trusts the folder and the agent comes ready; the agent gives up or the pane\n",
+ "build": null,
+ "created": "2026-10-09T19:45:31+00:00",
+ "fingerprint": "82f79db4c1c46c148658b54c69eb4020098da36c8a12aefed3c1ac383b5d9eb5",
+ "index": 1,
+ "kind": "claim",
+ "named_break": null,
+ "no_build_reason": "pure Python, no build",
+ "plan": "/mnt/vault/Portfolio/infra/remote-agents/plans/2026-10-09-decisions-and-worktrees-sub-01-trust-and-surfaces-plan.md",
+ "red": {
+  "elapsed_s": 2.0,
+  "exit": 1,
+  "tail": "    @pytest.mark.parametrize(\n        (\"from_state\", \"event\"),\n        [\n            (state, event)\n            for state in SessionState\n            for event in LifecycleEvent\n            if (state, event) not in LEGAL_TRANSITIONS\n        ],\n    )\n    def test_transition_rejects_every_unlisted_pair(\n        from_state: SessionState, event: LifecycleEvent\n    ) -> None:\n>       with pytest.raises(InvalidTransition):\n             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nE       Failed: DID NOT RAISE InvalidTransition\n\ntests/unit/domain/test_state_machine.py:73: Failed\n_______________ test_only_a_starting_record_can_become_untrusted _______________\n\n    def test_only_a_starting_record_can_become_untrusted() -> None:\n        \"\"\"DEC-081: only the launch or resume settle records `untrusted`, and both start in STARTING.\n    \n        TRUST_REQUIRED used to have three origins, because two pane re-reads could correct a\n        RUNNING or FAILED record after the fact. Those correctors no longer set the state, so the\n        machine itself refuses the move from anywhere but STARTING: a fourth producer added later\n        fails here rather than quietly writing the record.\n        \"\"\"\n        assert transition(SessionState.STARTING, LifecycleEvent.TRUST_REQUIRED).to_state is (\n            SessionState.UNTRUSTED\n        )\n        for origin in set(SessionState) - {SessionState.STARTING}:\n>           with pytest.raises(InvalidTransition):\n                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nE           Failed: DID NOT RAISE InvalidTransition\n\ntests/unit/domain/test_state_machine.py:180: Failed\n=========================== short test summary info ============================\nFAILED tests/unit/domain/test_state_machine.py::test_transition_rejects_every_unlisted_pair[running-trust_required]\nFAILED tests/unit/domain/test_state_machine.py::test_only_a_starting_record_can_become_untrusted\n2 failed, 184 passed in 1.80s"
+ },
+ "schema": 2,
+ "task": "1.3",
+ "test": "uv run --locked pytest tests/unit/domain/test_state_machine.py tests/unit/application/test_commands.py tests/contract/adapters/tmux/test_resume_readiness.py -q -p no:randomly",
+ "text": "`uv run --locked pytest tests/unit/domain/test_state_machine.py tests/unit/application/test_commands.py tests/contract/adapters/tmux/test_resume_readiness.py -q -p no:randomly`. It goes red if the RUNNING edge is restored, or if resume's settle is made to record READY over a dialog.",
+ "touched": [
+  "src/remote_agents/domain/state_machine.py"
+ ]
+}

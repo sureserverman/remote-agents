@@ -817,10 +817,10 @@ def _trust_blocked() -> tuple[PrivateBotBoundary, _TrustLauncher]:
     `SessionState.FAILED` until 2026-09-10, which was the state a trust-blocked launch landed
     in before sub-plan 1 gave it one of its own — and which, now that the row is gated on the
     record, is no longer a state that carries the button. A FAILED session whose pane really
-    is asking becomes `untrusted` on the next reconciliation pass (`TRUST_REQUIRED` has an edge
-    from FAILED) and gets its row then; that transition is `ReconciliationService`'s to make,
-    and asserting the button over a FAILED record here would be asserting the defect the gate
-    removed.
+    is asking stays FAILED: since DEC-081 only a launch or resume settle records `untrusted`,
+    and `TRUST_REQUIRED` has no edge from FAILED. Its dialog is answered at the keyboard
+    (DEC-047), so asserting the button over a FAILED record here would be asserting the defect
+    the gate removed.
     """
     launcher = _TrustLauncher(_a_running_session(SessionState.UNTRUSTED))
     boundary = build_private_bot(
@@ -2033,12 +2033,12 @@ async def test_a_stale_trust_press_says_so_instead_of_going_silent() -> None:
 async def test_a_session_the_lifecycle_has_not_caught_up_with_waits_for_it() -> None:
     """The accepted cost of the gate, pinned so it is a decision rather than a surprise.
 
-    `claude-remote` prints its readiness banner before the dialog renders, so a launch can be
-    recorded RUNNING — or, before sub-plan 1, FAILED — over an agent that is in fact stuck. The
-    row does not appear for such a record, and that is the trade: `ReconciliationService` reads
-    the readiness check on every live observation and issues `TRUST_REQUIRED` from any of the
-    three origin states, so the session becomes `untrusted` on its own and the row follows.
-    What the owner pays is one reconciliation pass, not the row (DEC-080).
+    An agent that prints its readiness banner before its dialog can be recorded RUNNING — or,
+    before sub-plan 1, FAILED — over an agent that is in fact stuck, if the dialog outruns the
+    launch settle. The row does not appear for such a record, and that is the trade DEC-081
+    accepted: no pane read sets `untrusted` any more, so the record stays where it is and the
+    owner answers the dialog at the keyboard (DEC-047). The settle is sized from measurement to
+    make this rare (`docs/acceptance-2026-10-09-codex-trust-settle.md`).
     """
     stuck = replace(_a_running_session(SessionState.FAILED), profile_id=ProfileId("claude"))
     boundary = build_private_bot(
