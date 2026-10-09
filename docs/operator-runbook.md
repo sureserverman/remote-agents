@@ -552,14 +552,17 @@ screen. Send Cancel or Back instead to leave the step without sending.
 - **Busy — queued.** Working, or asking a question: the message waits in `ui.sqlite3`. Only
   these two are queued, because only they end in a "finished" event. There is one per session; a newer message replaces it, and the reply says so. It
   is typed after that session's next "finished" event (Claude and Codex `Stop`, OpenCode
-  `session.idle`), and the pane is checked again first. Still busy means it keeps waiting. On
+  `session.idle`, Cursor Agent `stop`), and the pane is checked again first. Still busy means it keeps waiting. On
   Claude and Codex, since 0.49.0 and once the hooks are re-installed, a turn that is streaming
   its answer counts as busy too, and a message queued behind a turn stopped with Esc -- which
   fires no "finished" event -- is typed within about 3 s of the stop (DEC-104). The
   owner is told *Sent queued message to …* when it goes, or *Dropped queued message …* with the
   reason when the retry meets something waiting cannot fix (the session stopped, a draft in the
   input, a tmux failure). A service stop that interrupts a retry drops the message rather than
-  risk typing it twice after the restart.
+  risk typing it twice after the restart. A retry that fails partway is reported too, as a
+  message that *may have been typed* — check the session before sending it again (BL-107). A
+  notice due while Telegram's flood hold is on is kept and sent once the hold clears, rather
+  than lost.
 - **Refused — not sent.** The reply names the reason: the session isn't running, the message was
   empty, it starts with `!`, the agent has no readable composer, a `/` command went to an agent
   whose command menu cannot be read, the input already holds a half-typed draft, the screen was
@@ -576,7 +579,9 @@ screen. Send Cancel or Back instead to leave the step without sending.
 - **Cancel.** A queued reply carries **Cancel queued message**, and so does the session screen,
   under the waiting message's first line (`queued` fact). A stop or an end clears it too. There
   is no expiry. A Cancel that lands while the message is already being typed cannot stop it: the
-  reply says it may still arrive, and the delivery notice says it overtook the cancel.
+  reply says it may still arrive, and the delivery notice says it overtook the cancel. A claim
+  older than two minutes is one a crashed retry left behind, not one being typed, so a Cancel
+  then answers *Queued message cancelled.*
 
 What the relay never does: type into a dialog, press `Enter` on one, send a keystroke or a key
 name, run a `!` shell command, or answer an approval. Slash commands are reachable where the
@@ -827,6 +832,9 @@ creates. Enumerate everything CI therefore never runs with:
 ```bash
 uv run --locked pytest --collect-only -m requires_session -q
 ```
+
+The tests that need `node` are a marked set too, `requires_node`, which CI does run (it installs
+and asserts `node`); list them with `-m requires_node` in place of `requires_session`.
 
 What the drill asserts, in order: that no probe session exists beforehand — so its presence
 afterwards proves the job created it — then that `bootstrap` succeeds, `kickstart` succeeds, the
@@ -1832,6 +1840,11 @@ surface is used. The structure those processes share — the layers, which of th
 which, and what each surface owns — is in [`docs/architecture.md`](architecture.md); what follows
 is the operational half, what sharing one store costs the operator.
 
+One table in the domain store is pruned on a clock: `limit_stop_outcomes`, what became of each
+usage-limit stop. Once a day `serve` deletes outcomes decided more than 90 days ago, except a
+`nudging` row (the record that keeps "carry on" from being typed twice) and any row of a session
+that has not finished (since 0.61.0, BL-111).
+
 Duplicate-command protection is durable and does hold across processes: every launch claims an
 idempotency key with a unique insert into the database, so a key one process has claimed is
 refused in the other. The per-process `SessionLocks` do not hold across processes. Each
@@ -1999,6 +2012,10 @@ an old surface, which you can kill by hand.
 
 Note that *re-attaching* is not restarting: running `remote-agents` while the console already
 exists attaches a second client to the running dashboard, and does not re-run that repair.
+**Entering always starts at the projects surface** (since 0.61.0, BL-103): before attaching, an
+agent shown in the left slot is sent back to its own window, as `console close` does on the way
+out. The console is one shared layout, so a second terminal entering moves the agent out of the
+left slot for a client already attached too. If the move fails, entry goes ahead regardless.
 
 If the console cannot be prepared at all, the bare command says so and exits non-zero.
 `remote-agents doctor` reports whether this host's tmux supports what the console needs, under
@@ -2051,6 +2068,12 @@ uv run --locked remote-agents tui
    why it is a switch you throw and not a fallback the service reaches for; the file is
    consulted on every read, so flipping it needs no restart. `remote-agents doctor` reports
    the source in force in its `claude_limits_source` line, worded with that cost.
+   **It also changes when a Claude limit stop lifts** (since 0.61.0, DEC-118). The usage API is
+   asked live, so a reading taken more than a minute after the stop that shows the stop's own
+   window below 95% lifts it ahead of its published reset: the limit line is retired, and with
+   `resume_after_limit` on, "carry on" is typed into the session. On the status-line source a
+   Claude stop still waits for its reset or a new period. Cursor's usage API lifts early by the
+   same 95% rule.
    Cursor's usage is opt-in the same way and off by default: `cursor_limits_source` under
    `[limits]` is `"off"`; set it to `"usage-api"` (Settings on either surface asks first) and
    the service reads the login token out of `~/.config/cursor/auth.json` and calls

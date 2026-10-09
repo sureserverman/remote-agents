@@ -671,7 +671,8 @@ async def _retry_waiting_messages(
     """Deliver each finished session's waiting message, then drop those of ended sessions.
 
     Only a COMPLETED activity retries -- the one "finished" event (Claude and Codex `Stop`,
-    OpenCode `session.idle`); a session waiting on an answer is exactly the one not to type into.
+    OpenCode `session.idle`, Cursor `stop`); a session waiting on an answer is exactly the one not
+    to type into.
     The relay checks the pane again before typing (DEC-099), so a retry that finds it still busy
     leaves the message waiting for the next one. Guarded per session, like every step here: one
     failure costs that session one pass.
