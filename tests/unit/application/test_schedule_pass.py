@@ -211,16 +211,28 @@ async def test_a_fire_refused_by_the_shutdown_drain_stays_due() -> None:
     """BL-130: a launch refused at the shut gate never started, so it is not a failed fire.
 
     Recorded as LAUNCH_FAILED it would be told to the owner and never retried, spending a fire
-    on a shutdown. Raised instead, the schedule stays due and fires on the next start.
+    on a shutdown. The pass stops at the gate instead: the refused schedule stays due, and one
+    it fired before meeting the gate is still typed and told rather than dropped.
     """
-    store = MemoryScheduleStore(_schedule())
-    rig = Rig(launch_error=MutationsDraining("mutations are draining"))
+    store = MemoryScheduleStore(_schedule("s1"), _schedule("s2"))
+    rig = Rig()
+    plain = rig.launch
 
-    with pytest.raises(MutationsDraining):
-        await _run(store, rig, FIRE)
+    async def gate_shuts_after_the_first(command):
+        if rig.launches:
+            rig.launches.append(command)
+            raise MutationsDraining("mutations are draining")
+        return await plain(command)
 
-    assert rig.reports == []
-    still = await store.get("s1")
+    rig.launch = gate_shuts_after_the_first  # type: ignore[method-assign]
+
+    reports = await _run(store, rig, FIRE)
+
+    assert [report.outcome for report in reports] == [FireOutcome.STARTED]
+    (fired,) = reports
+    assert rig.reports == [fired], "the fire before the gate was dropped untold"
+    refused = "s2" if fired.schedule.id == "s1" else "s1"
+    still = await store.get(refused)
     assert still is not None and still.next_fire_at == FIRE
 
 

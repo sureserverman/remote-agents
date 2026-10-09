@@ -148,8 +148,10 @@ class SchedulePass:
                 report = await self._fire(schedule, now)
             except MutationsDraining:
                 # The service is stopping and the gate is shut, so every schedule after this
-                # one would meet it too. None was launched; each stays due for the next start.
-                raise
+                # one would meet it too. None of those was launched; each stays due for the
+                # next start. The ones fired before it still go on to be typed and told.
+                _LOG.debug("the schedule pass met the shutdown drain; the rest stay due")
+                break
             except Exception:
                 _LOG.exception("schedule %s could not be fired; it stays due", schedule.id)
                 continue

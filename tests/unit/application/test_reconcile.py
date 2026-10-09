@@ -6,6 +6,7 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
+from remote_agents.application.errors import MutationsDraining
 from remote_agents.application.reconcile import (
     ReconciliationResult,
     ReconciliationService,
@@ -331,6 +332,35 @@ async def test_mutation_drain_waits_for_active_operation_and_closes_admission() 
     with pytest.raises(RuntimeError, match="mutations are draining"):
         async with locks.operation():
             pass
+
+
+async def test_work_nested_in_an_admitted_operation_is_admitted_while_draining() -> None:
+    """A caller holding an operation across "persist, then act" must be let finish the act.
+
+    The rollover pass persists SUCCESSOR_STARTING and then launches, and the launch enters the
+    gate again. A drain that began between the two used to refuse the launch after the persist,
+    which no state can step back from. A new operation from elsewhere is still refused.
+    """
+    locks = SessionLocks()
+    persisted, nested_entered = asyncio.Event(), asyncio.Event()
+
+    async def persist_then_act() -> None:
+        async with locks.operation():
+            persisted.set()
+            await asyncio.sleep(0.01)  # the drain begins here
+            async with locks.operation():
+                nested_entered.set()
+
+    caller = asyncio.create_task(persist_then_act())
+    await persisted.wait()
+    draining = asyncio.create_task(locks.drain())
+    await asyncio.sleep(0)
+    with pytest.raises(MutationsDraining):
+        async with locks.operation():
+            pass
+    await caller
+    await draining
+    assert nested_entered.is_set()
 
 
 async def test_a_stop_in_flight_is_left_alone_however_old_the_session_is() -> None:

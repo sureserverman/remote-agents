@@ -724,3 +724,28 @@ async def test_a_successful_settle_resets_the_settle_streak() -> None:
         await notifier.pass_once()
 
     assert view.discard_attempts.count(second) == 3
+
+
+async def test_a_question_asked_again_after_its_settle_was_abandoned_is_settled() -> None:
+    """Abandoning a settle is about that message. The same session asked again later has a
+    new one, and leaving it on the old give-up would strand it "Waiting to be trusted"."""
+    traffic, store, view = _Traffic(_record()), _Store(), _View()
+    notifier = _notifier(traffic, store, view)
+    await notifier.pass_once()
+    first = store.rows[str(_SESSION)]["message_id"]
+    view.explode_discards_of = frozenset({first})
+    traffic.record = replace(traffic.record, state=SessionState.RUNNING)
+    for _ in range(4):
+        await notifier.pass_once()
+    assert view.discard_attempts.count(first) == 3, "the premise: it was abandoned"
+
+    traffic.record = replace(traffic.record, state=SessionState.UNTRUSTED)
+    store.rows[str(_SESSION)]["settled"] = True  # as an answer from the detail screen leaves it
+    await notifier.pass_once()
+    second = store.rows[str(_SESSION)]["message_id"]
+    assert second != first
+    traffic.record = replace(traffic.record, state=SessionState.RUNNING)
+    await notifier.pass_once()
+
+    assert second in view.discarded
+    assert store.rows[str(_SESSION)]["settled"] is True

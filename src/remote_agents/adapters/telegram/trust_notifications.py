@@ -270,6 +270,14 @@ class TrustNotifier:
                 "an outage rather than as evidence about any one session",
                 len(refused),
             )
+        # A session gone from the listing, or back on the question, is not on a streak: the
+        # next answer is to a new message. Dropping it here keeps the count consecutive, lets
+        # a re-asked question be settled, and prunes what would otherwise grow for good.
+        for key in [*self._settle_raises, *self._settle_abandoned]:
+            record = records.get(key)
+            if record is None or record.state is SessionState.UNTRUSTED:
+                self._settle_raises.pop(key, None)
+                self._settle_abandoned.discard(key)
         raised: list[str] = []
         settled = 0
         for standing in await self._store.unsettled():

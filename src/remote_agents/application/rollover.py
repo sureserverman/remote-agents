@@ -59,12 +59,13 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import Awaitable, Callable, Sequence
+from contextlib import AbstractAsyncContextManager, nullcontext
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from remote_agents.application.commands import GracefulStopCommand, LaunchCommand
-from remote_agents.application.errors import DuplicateCommandError
+from remote_agents.application.errors import DuplicateCommandError, MutationsDraining
 from remote_agents.application.notification_policy import rollover_told
 from remote_agents.application.prompt_delivery import DeliveryVerdict, delivery_verdict
 from remote_agents.application.schedules import RETRY_SECONDS, STARTUP_PATIENCE
@@ -189,6 +190,7 @@ class RolloverPass:
         notify: Callable[[RolloverReport], Awaitable[None]] | None = None,
         now: Callable[[], datetime] = lambda: datetime.now(UTC),
         sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
+        operation: Callable[[], AbstractAsyncContextManager[object]] = nullcontext,
     ) -> None:
         self._store = store
         self._envelopes = envelopes
@@ -203,6 +205,12 @@ class RolloverPass:
         self._notify = notify
         self._now = now
         self._sleep = sleep
+        #: The session service's shutdown gate (`SessionLocks.operation`), held from persisting
+        #: a launch or stop to finishing it. Shut, it refuses before anything is persisted, so
+        #: the rollover waits for the next start instead of failing; open, the drain waits for
+        #: the act to finish (BL-130). Persisted states never move back, so this is the only
+        #: order in which a shutdown cannot spend a rollover.
+        self._operation = operation
         self._recovered = False
 
     async def run_once(self) -> None:
@@ -232,6 +240,11 @@ class RolloverPass:
                     # Another writer moved it since it was read (the owner's cancel); its move
                     # stands, and the next pass reads where it now is.
                     _LOG.info("rollover %s moved under this pass; left as it is", rollover.id)
+                except MutationsDraining:
+                    # The service is stopping and the gate is shut. Nothing was persisted for
+                    # this step, and every later rollover would meet the same gate.
+                    _LOG.debug("the rollover pass met the shutdown drain; resumed next start")
+                    break
                 except Exception:
                     # One rollover's fault costs that rollover this pass, never the others'.
                     # It is not marked failed: what went wrong is unknown, and every step is
@@ -411,32 +424,38 @@ class RolloverPass:
                 await self._fail(rollover, seen, PREDECESSOR_NOT_IDLE)
             return
         assert rollover.handoff_id is not None  # HANDOFF_READY is opened from a `ready` only
-        starting = await self._store.advance(rollover.id, _S.SUCCESSOR_STARTING, at=self._now())
-        try:
-            outcome = await self._launch(
-                LaunchCommand(
-                    rollover.project_id,
-                    rollover.profile_id,
-                    f"rollover:{rollover.handoff_id}",
+        async with self._operation():
+            starting = await self._store.advance(rollover.id, _S.SUCCESSOR_STARTING, at=self._now())
+            try:
+                outcome = await self._launch(
+                    LaunchCommand(
+                        rollover.project_id,
+                        rollover.profile_id,
+                        f"rollover:{rollover.handoff_id}",
+                    )
                 )
+            except DuplicateCommandError:
+                await self._fail(
+                    starting, seen, SUCCESSOR_UNKNOWN, "the launch key was already claimed"
+                )
+                return
+            except Exception as error:
+                # The launch may have got part-way; its key is claimed, so it is never tried
+                # again.
+                _LOG.exception("launching the successor for rollover %s failed", rollover.id)
+                await self._fail(starting, seen, LAUNCH_FAILED, type(error).__name__)
+                return
+            record = getattr(outcome, "record", None)
+            if record is None:
+                await self._fail(
+                    starting, seen, LAUNCH_FAILED, "the launch answered with no session"
+                )
+                return
+            # Inside the hold too: a successor launched but not recorded is the one state a
+            # restart can only give up on (successor-unknown).
+            starting = await self._store.record_successor(
+                rollover.id, record.session_id, at=self._now()
             )
-        except DuplicateCommandError:
-            await self._fail(
-                starting, seen, SUCCESSOR_UNKNOWN, "the launch key was already claimed"
-            )
-            return
-        except Exception as error:
-            # The launch may have got part-way; its key is claimed, so it is never tried again.
-            _LOG.exception("launching the successor for rollover %s failed", rollover.id)
-            await self._fail(starting, seen, LAUNCH_FAILED, type(error).__name__)
-            return
-        record = getattr(outcome, "record", None)
-        if record is None:
-            await self._fail(starting, seen, LAUNCH_FAILED, "the launch answered with no session")
-            return
-        starting = await self._store.record_successor(
-            rollover.id, record.session_id, at=self._now()
-        )
         if record.state is SessionState.UNTRUSTED:
             # Up on its folder-trust dialog: typing would answer the dialog (DEC-099).
             await self._fail(starting, seen, SUCCESSOR_UNTRUSTED)
@@ -537,30 +556,35 @@ class RolloverPass:
                 )
                 await self._stop_failed(stopping, seen, PREDECESSOR_NOT_IDLE)
             return
-        stopping = await self._store.advance(rollover.id, _S.PREDECESSOR_STOPPING, at=self._now())
-        if may_stop_predecessor(stopping):
-            # The one stop in this module, and the only branch that reaches it.
-            try:
-                # Only onto an idle composer, judged again under the stop's own key lock: a turn
-                # that started since the look above is never interrupted (DEC-115).
-                observation = await self._graceful_stop(
-                    GracefulStopCommand(
-                        rollover.predecessor_session_id, predecessor.profile_id, only_if_idle=True
+        async with self._operation():
+            stopping = await self._store.advance(
+                rollover.id, _S.PREDECESSOR_STOPPING, at=self._now()
+            )
+            if may_stop_predecessor(stopping):
+                # The one stop in this module, and the only branch that reaches it.
+                try:
+                    # Only onto an idle composer, judged again under the stop's own key lock: a turn
+                    # that started since the look above is never interrupted (DEC-115).
+                    observation = await self._graceful_stop(
+                        GracefulStopCommand(
+                            rollover.predecessor_session_id,
+                            predecessor.profile_id,
+                            only_if_idle=True,
+                        )
                     )
-                )
-            except Exception as error:
-                _LOG.exception("stopping the predecessor of rollover %s failed", rollover.id)
-                await self._stop_failed(stopping, seen, STOP_UNCONFIRMED, type(error).__name__)
-                return
-            if observation.preserved:
-                await self._complete(stopping, seen)
-            else:
-                code = (
-                    PREDECESSOR_NOT_IDLE
-                    if observation.detail == NOT_IDLE
-                    else observation.detail or STOP_UNCONFIRMED
-                )
-                await self._stop_failed(stopping, seen, code)
+                except Exception as error:
+                    _LOG.exception("stopping the predecessor of rollover %s failed", rollover.id)
+                    await self._stop_failed(stopping, seen, STOP_UNCONFIRMED, type(error).__name__)
+                    return
+                if observation.preserved:
+                    await self._complete(stopping, seen)
+                else:
+                    code = (
+                        PREDECESSOR_NOT_IDLE
+                        if observation.detail == NOT_IDLE
+                        else observation.detail or STOP_UNCONFIRMED
+                    )
+                    await self._stop_failed(stopping, seen, code)
 
     async def _reconcile_stop(self, rollover: Rollover, seen: _Seen) -> None:
         """A stop found in flight. It is never sent again (DEC-004): a stopped predecessor

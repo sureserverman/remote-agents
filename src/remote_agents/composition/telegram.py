@@ -316,6 +316,8 @@ def _private_boundary(
                     if boundary.rollover_notifier is None
                     else boundary.rollover_notifier.notify
                 ),
+                # The same gate `drain` shuts (DEC-046), held across each persist-and-act.
+                operation=locks.operation,
             )
         ),
         rollover_notifier=boundary.rollover_notifier,

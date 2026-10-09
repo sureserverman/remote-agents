@@ -14,6 +14,7 @@ from remote_agents.adapters.sqlite.database import open_database
 from remote_agents.adapters.sqlite.rollover_store import SQLiteRolloverStore
 from remote_agents.application.commands import GracefulStopCommand, LaunchCommand
 from remote_agents.application.errors import DuplicateCommandError
+from remote_agents.application.reconcile import SessionLocks
 from remote_agents.application.rollover import (
     ADOPTION_PATIENCE,
     NOT_IDLE_PATIENCE,
@@ -131,6 +132,7 @@ class Rig:
     out_of_order: list[str] = field(default_factory=list)
     idle_raises: bool = False
     reports: list = field(default_factory=list)
+    locks: SessionLocks | None = None
     _pass: RolloverPass | None = None
     """Each action taken before the state licensing it was persisted; must stay empty."""
 
@@ -225,6 +227,7 @@ class Rig:
             notify=self.told,
             now=lambda: self.clock[0],
             sleep=self.sleep,
+            **({} if self.locks is None else {"operation": self.locks.operation}),
         )
 
     async def run(self, passes: int = 1) -> None:
@@ -897,3 +900,57 @@ async def test_a_request_23_hours_59_minutes_old_keeps_waiting(rig: Rig) -> None
     assert rollover.state is RolloverState.REQUESTED
     assert rig.envelopes.request == str(rig.predecessor)
     assert rig.reports == []
+
+
+async def test_a_rollover_met_by_the_shutdown_drain_launches_nothing_and_stays_ready(
+    rig: Rig,
+) -> None:
+    """BL-130: a pass waking during `serve`'s drain used to fail the rollover for good, as
+    LAUNCH_FAILED. The gate now refuses before SUCCESSOR_STARTING is persisted."""
+    rig.locks = SessionLocks()
+    await rig.locks.drain()
+    rig.ready()
+
+    await rig.run()
+
+    assert rig.launches == []
+    assert (await rig.rollover()).state is RolloverState.HANDOFF_READY
+
+
+async def test_a_rollover_launching_when_the_drain_begins_finishes_its_launch(rig: Rig) -> None:
+    """The hold spans persist-and-launch, and the session service's own gate inside the launch
+    is admitted as part of it, so the drain waits for the launch rather than refusing it."""
+    locks = rig.locks = SessionLocks()
+    plain = rig.launch
+    draining: list[asyncio.Task] = []
+
+    async def launch_as_the_service_does(command):
+        draining.append(asyncio.create_task(locks.drain()))
+        await asyncio.sleep(0)
+        async with locks.operation():
+            return await plain(command)
+
+    rig.launch = launch_as_the_service_does  # type: ignore[method-assign]
+    rig.ready()
+
+    await rig.run()
+
+    (drain,) = draining
+    await asyncio.wait_for(drain, timeout=1)
+    assert len(rig.launches) == 1
+    assert (await rig.rollover()).successor_session_id is not None
+    assert rig.out_of_order == []
+
+
+async def test_a_predecessor_stop_met_by_the_shutdown_drain_is_not_spent(rig: Rig) -> None:
+    rig.locks = SessionLocks()
+    rig.ready()
+    await rig.run()
+    assert (await rig.rollover()).state is RolloverState.ADOPTING, "the premise"
+    rig.accepted_by(rig.successor)
+    await rig.locks.drain()
+
+    await rig.run()
+
+    assert rig.stops == []
+    assert (await rig.rollover()).state is RolloverState.SUCCESSOR_ACCEPTED

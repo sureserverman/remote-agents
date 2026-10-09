@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Awaitable, Callable
 from contextlib import asynccontextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
@@ -455,6 +456,11 @@ class SessionLocks:
         self._accepting_operations = True
         self._drained = asyncio.Event()
         self._drained.set()
+        #: Set inside an admitted operation, so one nested in it is admitted too. Without it a
+        #: caller holding an operation across "persist, then act" (the rollover pass) would
+        #: have its act refused by a drain that began in between -- after the persist, which
+        #: is the one order that cannot be undone. The drain waits for the outer one instead.
+        self._inside: ContextVar[bool] = ContextVar(f"inside_operation_{id(self)}", default=False)
 
     def for_session(self, session_id: SessionId) -> asyncio.Lock:
         return self._locks.setdefault(session_id, asyncio.Lock())
@@ -486,14 +492,20 @@ class SessionLocks:
 
     @asynccontextmanager
     async def operation(self):
-        """Track a mutation so shutdown can finish it without admitting new work."""
-        if not self._accepting_operations:
+        """Track a mutation so shutdown can finish it without admitting new work.
+
+        Work nested inside an operation already admitted is part of it, not new work, so it is
+        admitted while draining.
+        """
+        if not self._accepting_operations and not self._inside.get():
             raise MutationsDraining("mutations are draining")
         self._active_operations += 1
         self._drained.clear()
+        token = self._inside.set(True)
         try:
             yield
         finally:
+            self._inside.reset(token)
             self._active_operations -= 1
             if self._active_operations == 0:
                 self._drained.set()
