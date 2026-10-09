@@ -1,0 +1,23 @@
+# Preflight probes, sub-plan 2 (robustness)
+# Run at Preflight 2026-10-09 in session 72ea58a1; the access probes below are re-run at the Stage 1 gate (2026-10-09T21:37:39Z) because the Preflight output was not committed then.
+## tools
+uv: /home/user/.local/bin/uv
+tmux: /usr/bin/tmux
+git: /usr/bin/git
+codex: /home/user/.local/bin/codex
+claude: /home/user/.local/bin/claude
+tmux 3.4
+codex-cli 0.162.1
+  ✓ Logged in to github.com account sureserverman (keyring)
+## environment
+branch: robustness
+branch base: ab273acf (trust-and-surfaces tip: ab273acf)
+first commit on branch: 4b8ccf73 Stage 1 Task 1.1: restore migrates a one-behind backup before publishing
+## baseline stage-scope at ab273acf (captured at Preflight, alone, foreground)
+7874 passed, 63 skipped, 17 warnings in 320.70s (0:05:20)
+3 passed in 4.14s
+real	5m26.140s
+## Stage 1 stage-scope at 8b0f9191 (alone, foreground)
+7889 passed, 63 skipped, 17 warnings in 329.92s (0:05:29)
+3 passed in 4.14s
+real	5m35.154s
