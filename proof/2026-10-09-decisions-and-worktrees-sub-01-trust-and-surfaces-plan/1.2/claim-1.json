@@ -1,0 +1,28 @@
+{
+ "baseline": {
+  "elapsed_s": 1.3,
+  "exit": 0,
+  "tail": "........................................................................ [ 64%]\n........................................                                 [100%]\n112 passed in 0.66s\n................................                                         [100%]\n32 passed, 64 deselected in 0.08s"
+ },
+ "break_patch": "--- a/src/remote_agents/application/reconcile.py\n+++ b/src/remote_agents/application/reconcile.py\n@@ -238,7 +238,7 @@\n                 # so falling through would *promote* a pane that just told us it was showing a\n                 # dialog -- the promotion `_is_ready` refuses a trust-blocked observation for,\n                 # arrived at by another road.\n-                return None\n+                return LifecycleEvent.TRUST_REQUIRED\n             if record.state is SessionState.UNTRUSTED:\n                 # Already the answer. **Returning `fallback` here instead flapped the record\n                 # forever**: the pure policy promotes UNTRUSTED on a live pane (it is how a\n",
+ "build": null,
+ "created": "2026-10-09T19:43:46+00:00",
+ "fingerprint": "02e6359127cf5a8a0eb6a1a4405345fb2cbf16b105ceb17f131fe3ce0dc56ec4",
+ "index": 1,
+ "kind": "claim",
+ "named_break": null,
+ "no_build_reason": "pure Python, no build",
+ "plan": "/mnt/vault/Portfolio/infra/remote-agents/plans/2026-10-09-decisions-and-worktrees-sub-01-trust-and-surfaces-plan.md",
+ "red": {
+  "elapsed_s": 1.0,
+  "exit": 1,
+  "tail": "        Every state rather than the three the corrector used to accept, because what is pinned is\n        an absence, and an absence asserted over a hand-picked list survives an arm added for a\n        state the list forgot. The four states the readiness check reads get no event at all:\n        STARTING and FAILED no READY, because a pane showing a dialog is not evidence that the\n        agent is ready, and RUNNING and UNTRUSTED nothing, because nothing about them changed.\n        \"\"\"\n        now = datetime.now(UTC)\n        item = replace(record(state), created_at=now - age)\n        store = InMemoryStore((item,))\n    \n        async def blocked(session_id, profile_id):\n            del profile_id\n            return TerminalObservation(session_id, live=True, preserved=False, awaiting_trust=True)\n    \n        service = ReconciliationService(\n            store, settle_after=timedelta(0), now=lambda: now, confirm_ready=blocked\n        )\n    \n        await service.reconcile((TerminalObservation(item.session_id, live=True, preserved=False),))\n    \n>       assert LifecycleEvent.TRUST_REQUIRED not in store.events, (state, store.events)\nE       AssertionError: (<SessionState.FAILED: 'failed'>, [<LifecycleEvent.TRUST_REQUIRED: 'trust_required'>])\nE       assert <LifecycleEvent.TRUST_REQUIRED: 'trust_required'> not in [<LifecycleEvent.TRUST_REQUIRED: 'trust_required'>]\nE        +  where <LifecycleEvent.TRUST_REQUIRED: 'trust_required'> = LifecycleEvent.TRUST_REQUIRED\nE        +  and   [<LifecycleEvent.TRUST_REQUIRED: 'trust_required'>] = <test_reconcile.InMemoryStore object at 0x7950104102f0>.events\n\ntests/unit/application/test_reconcile.py:718: AssertionError\n=========================== short test summary info ============================\nFAILED tests/unit/application/test_reconcile.py::test_a_running_record_whose_pane_shows_a_dialog_is_left_running\nFAILED tests/unit/application/test_reconcile.py::test_a_long_running_session_is_not_re_labelled_from_what_its_screen_shows\nFAILED tests/unit/application/test_reconcile.py::test_no_origin_is_re_labelled_from_an_aged_screen_including_the_failed_one\nFAILED tests/unit/application/test_reconcile.py::test_no_origin_is_corrected_even_while_the_record_is_fresh\nFAILED tests/unit/application/test_reconcile.py::test_a_trust_blocked_pane_is_never_promoted_to_running\nFAILED tests/unit/application/test_reconcile.py::test_no_pane_read_sets_untrusted_from_any_state[starting-1s]\nFAILED tests/unit/application/test_reconcile.py::test_no_pane_read_sets_untrusted_from_any_state[starting-1h]\nFAILED tests/unit/application/test_reconcile.py::test_no_pane_read_sets_untrusted_from_any_state[running-1s]\nFAILED tests/unit/application/test_reconcile.py::test_no_pane_read_sets_untrusted_from_any_state[running-1h]\nFAILED tests/unit/application/test_reconcile.py::test_no_pane_read_sets_untrusted_from_any_state[failed-1s]\nFAILED tests/unit/application/test_reconcile.py::test_no_pane_read_sets_untrusted_from_any_state[failed-1h]\n11 failed, 101 passed in 0.77s"
+ },
+ "schema": 2,
+ "task": "1.2",
+ "test": "uv run --locked pytest tests/unit/application/test_reconcile.py tests/unit/application/test_commands.py tests/integration/sqlite/test_trust_through_the_real_service.py -q -p no:randomly && uv run --locked pytest tests/unit/application/test_reconcile.py tests/unit/application/test_commands.py -q -p no:randomly -k no_pane_read_sets_untrusted",
+ "text": "the second command must collect the two new tests (every parametrised state), not zero.",
+ "touched": [
+  "src/remote_agents/application/reconcile.py"
+ ]
+}

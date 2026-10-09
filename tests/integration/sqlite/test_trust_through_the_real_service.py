@@ -160,8 +160,13 @@ async def test_a_list_open_does_not_relabel_an_aged_failed_session(tmp_path: Pat
     )
 
 
-async def test_a_fresh_failed_session_is_still_corrected_on_a_list_open(tmp_path: Path) -> None:
-    """The bound narrows *when*, not *whether* — the rescue path still works while it is fresh."""
+async def test_a_fresh_failed_session_is_not_relabelled_on_a_list_open(tmp_path: Path) -> None:
+    """DEC-081: a fresh FAILED record is no more correctable than an aged one.
+
+    This was the rescue path the five-minute window kept open. With the launch settle as the
+    only thing that records `untrusted`, a list open that reads a dialog leaves the record
+    where it is, and the owner answers the pane at the keyboard (DEC-047).
+    """
     store = _store(tmp_path)
     fresh = replace(_answerable_record("codex"), state=SessionState.FAILED)
     await store.save(fresh)
@@ -175,21 +180,7 @@ async def test_a_fresh_failed_session_is_still_corrected_on_a_list_open(tmp_path
 
     await service.refresh_readiness()
 
-    assert (await store.get(fresh.session_id)).state is SessionState.UNTRUSTED
-
-
-async def test_the_two_late_dialog_windows_are_the_same_number(tmp_path: Path) -> None:
-    """Two copies of one bound, in two modules, because reconcile imports services.
-
-    The duplication is a deliberate cycle avoidance and this is what keeps it honest: a window
-    widened in one place and not the other would leave the faster door open again, which is
-    exactly how this defect survived its first fix.
-    """
-    del tmp_path
-    from remote_agents.application.reconcile import _LATE_DIALOG_WINDOW as reconciler
-    from remote_agents.application.services import _LATE_DIALOG_WINDOW as service
-
-    assert reconciler == service, (reconciler, service)
+    assert (await store.get(fresh.session_id)).state is SessionState.FAILED
 
 
 async def test_a_session_that_is_no_longer_untrusted_is_refused_the_answer(tmp_path: Path) -> None:

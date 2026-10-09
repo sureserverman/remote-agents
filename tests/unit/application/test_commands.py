@@ -4,6 +4,7 @@ import asyncio
 import logging
 from collections.abc import Collection, Sequence
 from dataclasses import replace
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
@@ -15,9 +16,18 @@ from remote_agents.application.commands import (
     LaunchCommand,
 )
 from remote_agents.application.errors import DuplicateCommandError
-from remote_agents.application.services import SessionService
-from remote_agents.domain.conversations import ProviderConversationId
-from remote_agents.domain.models import ProfileId, ProjectId, SessionId, SessionRecord, SessionState
+from remote_agents.application.services import SessionService, _event_for_recheck
+from remote_agents.domain.conversations import (
+    ProviderConversationId,
+)
+from remote_agents.domain.models import (
+    ProfileId,
+    ProjectId,
+    SessionDisplayIdentity,
+    SessionId,
+    SessionRecord,
+    SessionState,
+)
 from remote_agents.domain.remote_control import RemoteControlDefault
 from remote_agents.domain.state_machine import LifecycleEvent, transition
 from remote_agents.ports.terminal import TERMINAL_NOT_LIVE, TerminalObservation
@@ -749,6 +759,39 @@ async def test_a_recheck_does_not_end_an_untrusted_session_whose_agent_is_merely
 
     assert refreshed.state is SessionState.UNTRUSTED
     assert store.events == before
+
+
+@pytest.mark.parametrize("age", (timedelta(seconds=1), timedelta(hours=1)), ids=("1s", "1h"))
+@pytest.mark.parametrize("state", tuple(SessionState), ids=lambda state: state.value)
+async def test_no_pane_read_sets_untrusted_on_a_list_open(
+    state: SessionState, age: timedelta
+) -> None:
+    """DEC-081 on the list-open path: a re-read never records TRUST_REQUIRED, from any state.
+
+    Asserted twice, because the two halves fail differently. Through `refresh_readiness`, which
+    walks only FAILED and UNTRUSTED, so a restored FAILED arm turns this red; and through
+    `_event_for_recheck` directly, which is total over `SessionState`, so an arm restored for
+    a state the walk skips today is caught before the walk widens to reach it.
+    """
+    now = datetime.now(UTC)
+    item = SessionRecord(
+        SessionId.new(),
+        ProjectId("opaque-editor"),
+        ProfileId("codex"),
+        SessionDisplayIdentity("opaque-editor", "codex", "regular", 1),
+        state,
+        now - age,
+    )
+    store = FakeStore()
+    await store.save(item)
+    blocked = TerminalObservation(item.session_id, live=True, preserved=False, awaiting_trust=True)
+    service = SessionService(store, FakeTerminal(live=True, awaiting_trust=True))
+
+    await service.refresh_readiness()
+
+    assert store.events == [], (state, store.events)
+    assert store.records[item.session_id].state is state
+    assert _event_for_recheck(state, blocked) is None, state
 
 
 class _StoredDefault:

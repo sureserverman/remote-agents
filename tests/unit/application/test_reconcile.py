@@ -539,14 +539,14 @@ def test_reconciliation_never_reads_the_host_at_all() -> None:
     )
 
 
-async def test_a_running_record_whose_pane_shows_a_dialog_is_corrected_to_untrusted() -> None:
-    """The pane is live and the record already says RUNNING, so nothing else would look.
+async def test_a_running_record_whose_pane_shows_a_dialog_is_left_running() -> None:
+    """DEC-081: a pane read may clear `untrusted`, and may no longer set it.
 
-    `_event_for_reconciliation` returns None the moment the observed state matches the
-    record's, which is the right answer for every reason *except* this one: a live pane is
-    not one fact but two, and which of them it is only the readiness check knows. Without
-    this the late-dialog race (claude-remote prints its banner before its question) leaves a
-    green row over an agent that will never run.
+    This test used to assert the opposite -- the late-dialog correction, which moved a RUNNING
+    record to UNTRUSTED when its pane carried the dialog's words. Text on a screen is not
+    evidence that a dialog was drawn (DEC-080), and `untrusted` carries DEC-078's unconfirmed
+    kill, so the launch settle is now the only thing that records it. A dialog raised after
+    the settle is answered at the keyboard (DEC-047).
     """
     running = record(SessionState.RUNNING)
     store = InMemoryStore((running,))
@@ -559,8 +559,8 @@ async def test_a_running_record_whose_pane_shows_a_dialog_is_corrected_to_untrus
 
     await service.reconcile((TerminalObservation(running.session_id, live=True, preserved=False),))
 
-    assert store.records[running.session_id].state is SessionState.UNTRUSTED
-    assert store.events == [LifecycleEvent.TRUST_REQUIRED]
+    assert store.records[running.session_id].state is SessionState.RUNNING
+    assert store.events == []
 
 
 async def test_a_long_running_session_is_not_re_labelled_from_what_its_screen_shows() -> None:
@@ -641,8 +641,12 @@ async def test_no_origin_is_re_labelled_from_an_aged_screen_including_the_failed
         )
 
 
-async def test_every_origin_is_still_corrected_inside_the_window() -> None:
-    """The bound narrows *when*, not *which*: all three origins still work while it is fresh."""
+async def test_no_origin_is_corrected_even_while_the_record_is_fresh() -> None:
+    """There is no window any more: a fresh record is no more correctable than an aged one.
+
+    This was `test_every_origin_is_still_corrected_inside_the_window`, the other half of the
+    five-minute bound DEC-081 retired along with the correction it bounded.
+    """
     for state in (SessionState.STARTING, SessionState.FAILED):
         fresh = record(state)
         store = InMemoryStore((fresh,))
@@ -657,8 +661,8 @@ async def test_every_origin_is_still_corrected_inside_the_window() -> None:
             (TerminalObservation(fresh.session_id, live=True, preserved=False),)
         )
 
-        assert store.records[fresh.session_id].state is SessionState.UNTRUSTED, state
-        assert store.events == [LifecycleEvent.TRUST_REQUIRED], state
+        assert store.records[fresh.session_id].state is state, state
+        assert store.events == [], state
 
 
 async def test_a_trust_blocked_pane_is_never_promoted_to_running() -> None:
@@ -680,8 +684,46 @@ async def test_a_trust_blocked_pane_is_never_promoted_to_running() -> None:
 
     await service.reconcile((TerminalObservation(failed.session_id, live=True, preserved=False),))
 
-    assert store.records[failed.session_id].state is SessionState.UNTRUSTED
+    assert store.records[failed.session_id].state is SessionState.FAILED
     assert LifecycleEvent.READY not in store.events
+
+
+@pytest.mark.parametrize("age", (timedelta(seconds=1), timedelta(hours=1)), ids=("1s", "1h"))
+@pytest.mark.parametrize("state", tuple(SessionState), ids=lambda state: state.value)
+async def test_no_pane_read_sets_untrusted_from_any_state(
+    state: SessionState, age: timedelta
+) -> None:
+    """DEC-081 over the whole state set: the reconciler never records TRUST_REQUIRED.
+
+    Every state rather than the three the corrector used to accept, because what is pinned is
+    an absence, and an absence asserted over a hand-picked list survives an arm added for a
+    state the list forgot. The four states the readiness check reads get no event at all:
+    STARTING and FAILED no READY, because a pane showing a dialog is not evidence that the
+    agent is ready, and RUNNING and UNTRUSTED nothing, because nothing about them changed.
+    """
+    now = datetime.now(UTC)
+    item = replace(record(state), created_at=now - age)
+    store = InMemoryStore((item,))
+
+    async def blocked(session_id, profile_id):
+        del profile_id
+        return TerminalObservation(session_id, live=True, preserved=False, awaiting_trust=True)
+
+    service = ReconciliationService(
+        store, settle_after=timedelta(0), now=lambda: now, confirm_ready=blocked
+    )
+
+    await service.reconcile((TerminalObservation(item.session_id, live=True, preserved=False),))
+
+    assert LifecycleEvent.TRUST_REQUIRED not in store.events, (state, store.events)
+    if state in (
+        SessionState.STARTING,
+        SessionState.RUNNING,
+        SessionState.FAILED,
+        SessionState.UNTRUSTED,
+    ):
+        assert store.events == [], (state, store.events)
+        assert store.records[item.session_id].state is state
 
 
 async def test_an_untrusted_record_whose_pane_became_ready_is_promoted() -> None:
