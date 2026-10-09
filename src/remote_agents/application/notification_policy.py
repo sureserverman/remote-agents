@@ -296,16 +296,37 @@ def unheard(
     alert is: `completed` means the session stopped and wants them, and it means that exactly
     once until it stops meaning it. Comparing the observations themselves instead would make
     every repeat an alert again, which is the shape the owner asked to be rid of.
+
+    Two exceptions, each a second fact the kind does not carry. A new question is news
+    (DEC-048). So is a limit stop on a window the message does not already name (BL-110): a
+    session stopped by its 5-hour window and then by its weekly one is told twice, because the
+    second wait is a different length. Only a window both sides name counts -- an unnamed one
+    matches any, so a legacy `LimitHit(None, None)` row never alerts -- and the cost is that a
+    5h -> week -> 5h sequence alerts on each change.
     """
     known = {activity.kind for activity in standing}
     heard_questions = {
         activity.detail for activity in standing if activity.kind is ActivityKind.NEEDS_ANSWER
+    }
+    heard_windows = {
+        activity.limit.window
+        for activity in standing
+        if activity.kind is ActivityKind.LIMIT_REACHED
+        and activity.limit is not None
+        and activity.limit.window is not None
     }
     return tuple(
         activity.kind
         for activity in shown
         if activity.kind not in known
         or (activity.kind is ActivityKind.NEEDS_ANSWER and activity.detail not in heard_questions)
+        or (
+            activity.kind is ActivityKind.LIMIT_REACHED
+            and activity.limit is not None
+            and activity.limit.window is not None
+            and bool(heard_windows)
+            and activity.limit.window not in heard_windows
+        )
     )
 
 

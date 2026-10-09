@@ -1,0 +1,28 @@
+{
+ "baseline": {
+  "elapsed_s": 0.5,
+  "exit": 0,
+  "tail": ".................................                                        [100%]\n33 passed, 131 deselected in 0.19s"
+ },
+ "break_patch": "diff --git a/src/remote_agents/application/notification_policy.py b/src/remote_agents/application/notification_policy.py\nindex 6130ed97..53999d3f 100644\n--- a/src/remote_agents/application/notification_policy.py\n+++ b/src/remote_agents/application/notification_policy.py\n@@ -320,13 +320,6 @@ def unheard(\n         for activity in shown\n         if activity.kind not in known\n         or (activity.kind is ActivityKind.NEEDS_ANSWER and activity.detail not in heard_questions)\n-        or (\n-            activity.kind is ActivityKind.LIMIT_REACHED\n-            and activity.limit is not None\n-            and activity.limit.window is not None\n-            and bool(heard_windows)\n-            and activity.limit.window not in heard_windows\n-        )\n     )\n \n \n",
+ "build": null,
+ "created": "2026-10-09T20:18:51+00:00",
+ "fingerprint": "83ba50053a41005370a0f80736c605d79052c6624a9588e194f92baec8e8037e",
+ "index": 1,
+ "kind": "claim",
+ "named_break": null,
+ "no_build_reason": "python; no build",
+ "plan": "/mnt/vault/Portfolio/infra/remote-agents/plans/2026-10-09-decisions-and-worktrees-sub-01-trust-and-surfaces-plan.md",
+ "red": {
+  "elapsed_s": 0.6,
+  "exit": 1,
+  "tail": "E         Right contains one more item: <ActivityKind.LIMIT_REACHED: 'limit_reached'>\nE         Use -v to get more diff\n\ntests/unit/application/test_notification_policy.py:511: AssertionError\n_________ test_a_second_stop_on_a_new_limit_window_alerts_and_names_it _________\n\n    async def test_a_second_stop_on_a_new_limit_window_alerts_and_names_it() -> None:\n        \"\"\"BL-110: a session stopped by its 5-hour window, then by its weekly one, is told twice.\n    \n        The second wait is a different length, so it is news; the kind alone would have amended it\n        in silently. `len(view.sent)` is the reached-the-phone assertion, as for a new question.\n        \"\"\"\n        clock = _Clock()\n        notifier, view = _notifier(clock)\n    \n        def stop(window: str):\n            return replace(\n                _for(SESSION_A, ActivityKind.LIMIT_REACHED, None, clock.moment),\n                limit=LimitHit(window, None),\n            )\n    \n        assert await notifier.deliver([stop(\"5h\")]) == 1\n        sends_after_the_first = len(view.sent)\n    \n        clock.advance(30)\n        assert await notifier.deliver([stop(\"week\")]) == 1\n    \n>       assert len(view.sent) > sends_after_the_first, \"the new window was amended in silently\"\nE       AssertionError: the new window was amended in silently\nE       assert 1 > 1\nE        +  where 1 = len([{'text': '\u26fd <b>Hit the 5-hour limit</b> \u00b7 59d\\natlas \u00b7 claude \u00b7 fresh \u00b7 #4', 'parse_mode': <ParseMode.HTML>}])\nE        +    where [{'text': '\u26fd <b>Hit the 5-hour limit</b> \u00b7 59d\\natlas \u00b7 claude \u00b7 fresh \u00b7 #4', 'parse_mode': <ParseMode.HTML>}] = <test_notifications._RecordingView object at 0x7e6984e41010>.sent\n\ntests/unit/adapters/telegram/test_notifications.py:1908: AssertionError\n------------------------------ Captured log call -------------------------------\nWARNING  remote_agents.adapters.telegram.notifications:notifications.py:1001 could not move the live view below the notifications\n=========================== short test summary info ============================\nFAILED tests/unit/application/test_notification_policy.py::test_a_new_limit_window_alerts\nFAILED tests/unit/adapters/telegram/test_notifications.py::test_a_second_stop_on_a_new_limit_window_alerts_and_names_it\n2 failed, 31 passed, 131 deselected in 0.23s"
+ },
+ "schema": 2,
+ "task": "2.3",
+ "test": "uv run --locked pytest tests/unit/application/test_notification_policy.py tests/unit/adapters/telegram/test_notifications.py -q -p no:randomly -k \"limit_window or unheard\"",
+ "text": "`uv run --locked pytest tests/unit/application/test_notification_policy.py tests/unit/adapters/telegram/test_notifications.py -q -p no:randomly -k \"limit_window or unheard\"`. It goes red if the window clause is removed: the `5h`\u2192`week` case is then silent.",
+ "touched": [
+  "src/remote_agents/application/notification_policy.py"
+ ]
+}

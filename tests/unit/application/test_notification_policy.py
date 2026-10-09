@@ -488,3 +488,38 @@ def test_only_a_rollover_that_failed_is_told(state: RolloverState) -> None:
     told = notification_policy.rollover_told(state)
 
     assert told is (state in (RolloverState.FAILED, RolloverState.STOP_FAILED))
+
+
+# A limit stop on a new window is news (BL-110) ------------------------------------------------
+
+
+def _stop(window: str | None, *, minute: int = 0) -> AgentActivity:
+    from dataclasses import replace
+
+    from remote_agents.ports.agent_activity import LimitHit
+
+    return replace(
+        _observed(SESSION_A, ActivityKind.LIMIT_REACHED, minute=minute),
+        limit=LimitHit(window, None),
+    )
+
+
+def test_a_new_limit_window_alerts() -> None:
+    """The message says the 5-hour window stopped the session; the week stopping it is news."""
+    from remote_agents.application.notification_policy import unheard
+
+    assert unheard((_stop("5h"),), (_stop("week", minute=5),)) == (ActivityKind.LIMIT_REACHED,)
+
+
+def test_the_same_limit_window_is_silent() -> None:
+    from remote_agents.application.notification_policy import unheard
+
+    assert unheard((_stop("5h"),), (_stop("5h", minute=5),)) == ()
+
+
+@pytest.mark.parametrize(("standing", "shown"), [(None, "5h"), ("5h", None), (None, None)], ids=str)
+def test_an_unknown_limit_window_is_silent(standing: str | None, shown: str | None) -> None:
+    """An unnamed window matches any: a legacy `LimitHit(None, None)` row never alerts."""
+    from remote_agents.application.notification_policy import unheard
+
+    assert unheard((_stop(standing),), (_stop(shown, minute=5),)) == ()

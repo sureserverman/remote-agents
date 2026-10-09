@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -1881,6 +1882,31 @@ def test_the_same_ask_and_detail_repeated_is_a_silent_amendment() -> None:
     again = _activity(ActivityKind.NEEDS_ANSWER, ask="Bash", detail="$ rm -rf build/")
 
     assert unheard((asked,), (again,)) == ()
+
+
+async def test_a_second_stop_on_a_new_limit_window_alerts_and_names_it() -> None:
+    """BL-110: a session stopped by its 5-hour window, then by its weekly one, is told twice.
+
+    The second wait is a different length, so it is news; the kind alone would have amended it
+    in silently. `len(view.sent)` is the reached-the-phone assertion, as for a new question.
+    """
+    clock = _Clock()
+    notifier, view = _notifier(clock)
+
+    def stop(window: str):
+        return replace(
+            _for(SESSION_A, ActivityKind.LIMIT_REACHED, None, clock.moment),
+            limit=LimitHit(window, None),
+        )
+
+    assert await notifier.deliver([stop("5h")]) == 1
+    sends_after_the_first = len(view.sent)
+
+    clock.advance(30)
+    assert await notifier.deliver([stop("week")]) == 1
+
+    assert len(view.sent) > sends_after_the_first, "the new window was amended in silently"
+    assert "Hit the weekly limit" in _showing(view)
 
 
 def _local(month: int, day: int, hour: int, minute: int = 0) -> datetime:
