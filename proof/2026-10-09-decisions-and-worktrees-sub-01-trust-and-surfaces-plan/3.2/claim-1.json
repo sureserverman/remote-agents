@@ -1,0 +1,28 @@
+{
+ "baseline": {
+  "elapsed_s": 35.2,
+  "exit": 0,
+  "tail": "........................................................................ [ 35%]\n........................................................................ [ 71%]\n.........................................................                [100%]\n201 passed in 33.32s"
+ },
+ "break_patch": "--- a/src/remote_agents/adapters/tui/rows.py\n+++ b/src/remote_agents/adapters/tui/rows.py\n@@ -1005,7 +1005,7 @@\n     elif ask_words:\n         body = body + Content.assemble((f\" ({ask_words})\", body_style or DIM))\n     cells: list[tuple[Content, int | None]] = [\n-        (text(KIND_GLYPH[kind] + (\"~\" if inferred else \" \"), kind_style), 2),\n+        (text(KIND_GLYPH[kind] + \" \", kind_style), 2),\n         (text(kind_word, kind_style), kind_width),\n         (body, None),\n         # Right-aligned: the column is wider than most ages, and an age is read at the edge.\n",
+ "build": null,
+ "created": "2026-10-09T20:45:00+00:00",
+ "fingerprint": "ca15efc3a52c040134e0fb4898ef7612ee6c77120d43f6f132feb6927a67dac2",
+ "index": 1,
+ "kind": "claim",
+ "named_break": null,
+ "no_build_reason": "python; no build",
+ "plan": "/mnt/vault/Portfolio/infra/remote-agents/plans/2026-10-09-decisions-and-worktrees-sub-01-trust-and-surfaces-plan.md",
+ "red": {
+  "elapsed_s": 35.6,
+  "exit": 1,
+  "tail": "        # forces the cursor visible, so a screen with a focused input renders identically\n        # whether the capture lands 10ms or 10s after focus.\n        for entry in app.screen.query(Input):\n            entry.cursor_blink = False\n        # A fixed title rather than the app's own: the title is hashed into the SVG's element\n        # ids and rendered into its header, so deriving it from app state would couple every\n        # baseline to the header's contents.\n        svg = app.export_screenshot(title=name)\n        path = _SNAPSHOTS / f\"{name}.svg\"\n        if _UPDATE:\n            path.parent.mkdir(parents=True, exist_ok=True)\n            path.write_text(svg, encoding=\"utf-8\")\n            return\n        if not path.exists():\n            raise AssertionError(\n                f\"no baseline for {name!r}. Generate it with \"\n                f\"REMOTE_AGENTS_SNAPSHOT_UPDATE=1 and review the SVG before committing.\"\n            )\n        if path.read_text(encoding=\"utf-8\") != svg:\n>           raise AssertionError(\n                f\"{name} no longer renders as its baseline. If the change is intended, \"\n                f\"regenerate with REMOTE_AGENTS_SNAPSHOT_UPDATE=1 and review the diff.\"\n            )\nE           AssertionError: FEED_EXPANDED no longer renders as its baseline. If the change is intended, regenerate with REMOTE_AGENTS_SNAPSHOT_UPDATE=1 and review the diff.\n\ntests/unit/adapters/tui/test_tui_snapshots.py:650: AssertionError\n=========================== short test summary info ============================\nFAILED tests/unit/adapters/tui/test_feed_pane.py::test_an_inferred_row_carries_the_tilde[ActivityKind.NEEDS_ANSWER]\nFAILED tests/unit/adapters/tui/test_feed_pane.py::test_an_inferred_row_carries_the_tilde[ActivityKind.LIMIT_REACHED]\nFAILED tests/unit/adapters/tui/test_feed_pane.py::test_the_tilde_survives_no_color\nFAILED tests/unit/adapters/tui/test_tui_snapshots.py::test_every_wizard_position_matches_its_baseline[DASHBOARD]\nFAILED tests/unit/adapters/tui/test_tui_snapshots.py::test_every_wizard_position_matches_its_baseline[FEED]\nFAILED tests/unit/adapters/tui/test_tui_snapshots.py::test_the_dashboard_matches_its_baseline_in_both_themes[DASHBOARD_relay-night_100x30]\nFAILED tests/unit/adapters/tui/test_tui_snapshots.py::test_the_dashboard_matches_its_baseline_in_both_themes[DASHBOARD_relay-night_120x40]\nFAILED tests/unit/adapters/tui/test_tui_snapshots.py::test_the_dashboard_matches_its_baseline_in_both_themes[DASHBOARD_relay-night_200x50]\nFAILED tests/unit/adapters/tui/test_tui_snapshots.py::test_the_dashboard_matches_its_baseline_in_both_themes[DASHBOARD_relay-day_100x30]\nFAILED tests/unit/adapters/tui/test_tui_snapshots.py::test_the_dashboard_matches_its_baseline_in_both_themes[DASHBOARD_relay-day_120x40]\nFAILED tests/unit/adapters/tui/test_tui_snapshots.py::test_the_dashboard_matches_its_baseline_in_both_themes[DASHBOARD_relay-day_200x50]\nFAILED tests/unit/adapters/tui/test_tui_snapshots.py::test_every_named_state_matches_its_baseline[FEED_EXPANDED]\n12 failed, 189 passed in 33.63s"
+ },
+ "schema": 2,
+ "task": "3.2",
+ "test": "uv run --locked pytest tests/unit/adapters/tui/test_feed_pane.py tests/unit/adapters/tui/test_tui_snapshots.py -q -p no:randomly",
+ "text": "`uv run --locked pytest tests/unit/adapters/tui/test_feed_pane.py tests/unit/adapters/tui/test_tui_snapshots.py -q -p no:randomly`. It goes red if the cell is drawn from the style instead of the text: `test_the_tilde_survives_no_color` fails.",
+ "touched": [
+  "src/remote_agents/adapters/tui/rows.py"
+ ]
+}

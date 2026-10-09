@@ -1862,3 +1862,57 @@ async def test_limit_window_is_what_the_status_flash_says(surface) -> None:
         await pilot.pause()
 
     assert flashes == ["week limit"]
+
+
+# --- An inferred row carries `~` (BL-035, DEC-010) ----------------------------------------------
+
+
+def _inferred(kind: ActivityKind) -> AgentActivity:
+    base = _activity(kind, minutes_ago=1)
+    return AgentActivity(
+        base.session_id, base.kind, None, base.observed_at, ActivityConfidence.INFERRED
+    )
+
+
+@pytest.mark.parametrize("kind", [ActivityKind.NEEDS_ANSWER, ActivityKind.LIMIT_REACHED])
+def test_an_inferred_row_carries_the_tilde(kind: ActivityKind) -> None:
+    """Both inferred claims -- a title-guessed ask (DEC-063), a screen-read stop (DEC-107)."""
+    from remote_agents.adapters.tui.rows import KIND_GLYPH
+    from remote_agents.adapters.tui.screens.feed import feed_rows
+
+    row = feed_rows((_inferred(kind),), width=80)[0][1].plain
+
+    assert row.startswith(f"{KIND_GLYPH[kind]}~ "), row
+
+
+def test_a_reported_row_carries_no_tilde() -> None:
+    from remote_agents.adapters.tui.rows import KIND_GLYPH
+    from remote_agents.adapters.tui.screens.feed import feed_rows
+
+    row = feed_rows((_activity(ActivityKind.NEEDS_ANSWER, minutes_ago=1),), width=80)[0][1].plain
+
+    assert row.startswith(f"{KIND_GLYPH[ActivityKind.NEEDS_ANSWER]}  "), row
+    assert "~" not in row
+
+
+def test_the_tilde_survives_no_color() -> None:
+    """The mark is a character, not a style: a colourless terminal still reads `~` (DEC-010)."""
+    from remote_agents.adapters.tui.screens.feed import feed_rows
+
+    row = feed_rows((_inferred(ActivityKind.NEEDS_ANSWER),), width=80)[0][1]
+
+    # `plain` is the row with every style stripped: what NO_COLOR leaves on screen.
+    assert row.plain[1] == "~"
+
+
+def test_the_feed_title_explains_the_tilde() -> None:
+    from remote_agents.adapters.tui.screens.feed import FEED_TITLE
+
+    assert "~ guessed, not reported" in FEED_TITLE
+
+
+async def test_an_inferred_flash_carries_the_tilde() -> None:
+    from remote_agents.adapters.tui.screens.feed import flash_words
+
+    assert flash_words(_inferred(ActivityKind.NEEDS_ANSWER)).startswith("~ ")
+    assert not flash_words(_activity(ActivityKind.NEEDS_ANSWER, minutes_ago=1)).startswith("~")

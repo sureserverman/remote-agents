@@ -959,8 +959,14 @@ def feed_row_content(
     kind_width: int,
     age_width: int,
     ask_words: str | None = None,
+    inferred: bool = False,
 ) -> Content:
-    """`glyph kind  identity #n — detail  age`, the identity and detail taking the slack.
+    """`glyph~ kind  identity #n — detail  age`, the identity and detail taking the slack.
+
+    **The cell after the glyph is the hedge**: `~` when the observation was inferred rather than
+    reported -- a title-guessed ask (DEC-063) or a screen-read limit stop (DEC-107) -- and a
+    space otherwise, so every row's columns line up. A character, not a style, so it survives
+    `NO_COLOR` (DEC-010); the feed's border title says what it means.
 
     A row older than `FEED_HISTORY_AGE` is muted whole. The detail is an agent's own words and
     arrives as literal text: `Content(detail)`, never markup.
@@ -999,13 +1005,13 @@ def feed_row_content(
     elif ask_words:
         body = body + Content.assemble((f" ({ask_words})", body_style or DIM))
     cells: list[tuple[Content, int | None]] = [
-        (text(KIND_GLYPH[kind], kind_style), 1),
+        (text(KIND_GLYPH[kind] + ("~" if inferred else " "), kind_style), 2),
         (text(kind_word, kind_style), kind_width),
         (body, None),
         # Right-aligned: the column is wider than most ages, and an age is read at the edge.
         (text(age_text.rjust(age_width), MUTED), age_width),
     ]
-    if width is not None and width - (1 + kind_width + age_width + 3) < FEED_NARROW_ROOM:
+    if width is not None and width - (2 + kind_width + age_width + 3) < FEED_NARROW_ROOM:
         # The glyph alone carries the kind where the word would take the identity's room --
         # the dashboard's feed region is a third of a column, and the row exists to say which
         # session an event belongs to before it says anything else.

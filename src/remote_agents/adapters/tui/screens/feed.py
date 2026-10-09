@@ -140,6 +140,12 @@ def kind_words(activity: AgentActivity) -> str:
     return KIND_WORDS.get(activity.kind, activity.kind.value)
 
 
+def flash_words(activity: AgentActivity) -> str:
+    """The status flash for a new observation: its kind words, hedged with `~` as its row is."""
+    words = kind_words(activity)
+    return f"~ {words}" if activity.confidence is ActivityConfidence.INFERRED else words
+
+
 FEED_AGE_WIDTH = 3
 """The age column's width: `age_short`'s widest ordinary output (`59m`, `23h`, `99d`).
 
@@ -159,7 +165,7 @@ _EMPTY_FEED_ROW = "notification:none"
 #: new handler, and specifically no app-level one (`screens/base.py:952` says why).
 NOTIFICATION_PREFIX = "notification:"
 
-FEED_TITLE = "Feed[$text-muted] · newest first · enter expands[/]"
+FEED_TITLE = "Feed[$text-muted] · newest first · ~ guessed, not reported · enter expands[/]"
 """The pane's border title: the name, and the one key that means something here, muted.
 
 Markup, deliberately, on the one string in this module that carries no agent's words -- the
@@ -325,6 +331,7 @@ def feed_rows(
                     kind_width=FEED_KIND_WIDTH,
                     age_width=FEED_AGE_WIDTH,
                     ask_words=ask_words,
+                    inferred=activity.confidence is ActivityConfidence.INFERRED,
                 ),
                 False,
             )
@@ -649,7 +656,7 @@ class FeedRegion:
         flash = self.services.console_flash
         if newest is not None and flash is not None:
             try:
-                await flash(kind_words(newest))
+                await flash(flash_words(newest))
             except Exception:
                 _LOG.exception("the status flash failed; the feed row is the record")
 
