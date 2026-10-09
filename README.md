@@ -443,9 +443,10 @@ with `remote-agents install-agent-hooks --provider codex`. For Claude and Codex,
 leaves a per-session marker, a turn started, that the same agent's `Stop` removes (DEC-104). The prompt
 relay reads it, because Claude draws nothing busy while it streams an answer. **Upgrading to
 0.49.0 or later, re-run both installs**, then relaunch sessions to pick the hook up; without it
-the relay reads the screen alone, as before. Native code-mode escalations currently do
-not call `PermissionRequest`; for those, the managed tmux pane's content-free `Action Required`
-title produces one inferred `needs_answer` notification until it clears. Neither path exposes a
+the relay reads the screen alone, as before. Codex 0.154.0 and later call `PermissionRequest`
+for every escalation; for an approval that hook does not reach, the managed tmux pane's
+content-free `Action Required` title (either frame of its animated marker) produces one inferred
+`needs_answer` notification until it clears. Neither path exposes a
 remote approval action or retains the command, prompt, path, or transcript. A completed Codex
 turn does carry the agent's own last line, bounded as Claude's is; an approval carries no words at
 all — it names the class of thing being waited on, "about a shell command", and never the command.
@@ -497,7 +498,9 @@ uv run --locked remote-agents
 With no arguments, `remote-agents` enters the **console**: a tmux session named
 `ra-console` on the project's own server, whose single window is **four panes** — the projects
 surface on the left at about 60% of the width, and on the right the running sessions, the agent
-limits under them, and the notifications feed under those. Each pane is its own process (`remote-agents pane
+limits under them, and the notifications feed under those. A feed row the service guessed rather
+than was told — a title-read approval, a screen-read limit stop — carries `~` beside its kind
+glyph, and the feed's title says so. Each pane is its own process (`remote-agents pane
 projects|sessions|feed`), because a terminal app owns a whole terminal and cannot span panes.
 Run from inside the console it says so instead of nesting; run from inside somebody else's
 tmux it prints the attach command instead.
