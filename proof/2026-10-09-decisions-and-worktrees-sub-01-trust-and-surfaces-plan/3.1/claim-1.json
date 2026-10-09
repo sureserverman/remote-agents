@@ -1,0 +1,28 @@
+{
+ "baseline": {
+  "elapsed_s": 0.3,
+  "exit": 0,
+  "tail": "........                                                                 [100%]\n8 passed, 40 deselected in 0.04s"
+ },
+ "break_patch": "--- a/src/remote_agents/application/activity.py\n+++ b/src/remote_agents/application/activity.py\n@@ -417,7 +417,7 @@\n     behind it, and the surfaces say the unqualified sentence they said before, under the hedge\n     `ActivityConfidence.INFERRED` already earns it.\n     \"\"\"\n-    action_required = _CODEX_ACTION_REQUIRED.match(title) is not None\n+    action_required = title.startswith(\"[ ! ] Action Required | \")\n     if not action_required or was_action_required:\n         return action_required, None\n     return True, AgentActivity(\n",
+ "build": null,
+ "created": "2026-10-09T20:40:27+00:00",
+ "fingerprint": "dc24dd3f7cb62c9e714481938c52261ebf0b4301f72d972fb15fd762f3fe06c2",
+ "index": 1,
+ "kind": "claim",
+ "named_break": null,
+ "no_build_reason": "python; no build",
+ "plan": "/mnt/vault/Portfolio/infra/remote-agents/plans/2026-10-09-decisions-and-worktrees-sub-01-trust-and-surfaces-plan.md",
+ "red": {
+  "elapsed_s": 0.3,
+  "exit": 1,
+  "tail": ".F......                                                                 [100%]\n=================================== FAILURES ===================================\n_______________ test_either_action_required_frame_is_the_marker ________________\n\n    def test_either_action_required_frame_is_the_marker() -> None:\n        \"\"\"Codex animates the bracket (`[ ! ]` / `[ . ]`), so a poll can land on either frame (BL-034).\n    \n        A `[ . ]` poll between two `[ ! ]` polls is the same approval and emits nothing more; an\n        approval opened and answered across two `[ . ]` polls is still one approval seen.\n        \"\"\"\n        moment = datetime(2026, 10, 9, tzinfo=UTC)\n    \n        def observe(was: bool, title: str):\n            return observe_codex_action_required(\n                was, session_id=\"codex-title-session\", title=title, now=moment\n            )\n    \n        active, first = observe(False, \"[ ! ] Action Required | multitor\")\n        still, between = observe(active, \"[ . ] Action Required | multitor\")\n        again, last = observe(still, \"[ ! ] Action Required | multitor\")\n        seen, only_dots = observe(False, \"[ . ] Action Required | multitor\")\n    \n>       assert first is not None and between is None and last is None\nE       AssertionError: assert (AgentActivity(session_id='codex-title-session', kind=<ActivityKind.NEEDS_ANSWER: 'needs_answer'>, detail=None, observe...10, 9, 0, 0, tzinfo=datetime.timezone.utc), confidence=<ActivityConfidence.INFERRED: 'inferred'>, ask=None, limit=None) is not None and None is None and AgentActivity(session_id='codex-title-session', kind=<ActivityKind.NEEDS_ANSWER: 'needs_answer'>, detail=None, observe...10, 9, 0, 0, tzinfo=datetime.timezone.utc), confidence=<ActivityConfidence.INFERRED: 'inferred'>, ask=None, limit=None) is None)\n\ntests/unit/application/test_activity_source_policy.py:126: AssertionError\n=========================== short test summary info ============================\nFAILED tests/unit/application/test_activity_source_policy.py::test_either_action_required_frame_is_the_marker\n1 failed, 7 passed, 40 deselected in 0.05s"
+ },
+ "schema": 2,
+ "task": "3.1",
+ "test": "uv run --locked pytest tests/unit/application/test_activity_source_policy.py tests/unit/application/test_activity.py -q -p no:randomly -k \"action_required\"",
+ "text": "`uv run --locked pytest tests/unit/application/test_activity_source_policy.py tests/unit/application/test_activity.py -q -p no:randomly -k \"action_required\"`. It goes red if the literal `[ ! ]` prefix is restored: the `[ . ]` case then duplicates.",
+ "touched": [
+  "src/remote_agents/application/activity.py"
+ ]
+}

@@ -86,11 +86,13 @@ MAXIMUM_RECORD_BYTES = 65_536
 #: happens is the kind of thing a reader trusts and a maintainer copies.
 _TITLE_TIMEOUT_SECONDS = 15.0
 
-# Observed in the managed Codex TUI while a native local approval is open.  The project name
-# after the separator varies, so the predicate admits that suffix while refusing ordinary pane
-# titles.  This is terminal metadata, not an upstream hook contract: it may become unavailable
-# in a later Codex release, in which case it safely yields no inferred activity.
-_CODEX_ACTION_REQUIRED_TITLE = "[ ! ] Action Required | "
+# Observed in the managed Codex TUI while a native local approval is open.  Codex animates the
+# bracket (`[ ! ]` and `[ . ]` alternate), so one non-space glyph is admitted there; the project
+# name after the separator varies, so that suffix is admitted too.  Anchored at the start, so a
+# project named like the marker cannot forge it (BL-034, DEC-063).  This is terminal metadata,
+# not an upstream hook contract: it may become unavailable in a later Codex release, in which
+# case it safely yields no inferred activity.
+_CODEX_ACTION_REQUIRED = re.compile(r"^\[ \S \] Action Required \| ")
 
 # Only the reasons that answer "why did it stop". Every other value these fields can take --
 # authentication_failed, auth_success, elicitation_*, and whatever upstream adds next -- is
@@ -400,10 +402,12 @@ def observe_codex_action_required(
 ) -> tuple[bool, AgentActivity | None]:
     """Fold one content-free Codex pane-title observation into its edge state.
 
-    Codex's native command escalation currently bypasses its ``PermissionRequest`` hook.
-    Its terminal title nevertheless changes to the fixed marker above, which tmux exposes
-    separately from pane capture.  Retaining the title would be terminal-content retention;
-    retaining one boolean answers the whole question this observation can safely support.
+    Since Codex 0.154 its ``PermissionRequest`` hook reports a native command escalation, and
+    that report is the primary signal; this title is the fallback for an approval the hook does
+    not reach.  The terminal title changes to the marker above -- either frame of its animated
+    bracket -- which tmux exposes separately from pane capture.  Retaining the title would be
+    terminal-content retention; retaining one boolean answers the whole question this
+    observation can safely support.
 
     **It carries no `ask` either, and that is DEC-063 rather than an omission.** The hook path
     gained one on 2026-09-06 because a `PermissionRequest` payload *names* the tool being asked
@@ -414,7 +418,7 @@ def observe_codex_action_required(
     behind it, and the surfaces say the unqualified sentence they said before, under the hedge
     `ActivityConfidence.INFERRED` already earns it.
     """
-    action_required = title.startswith(_CODEX_ACTION_REQUIRED_TITLE)
+    action_required = _CODEX_ACTION_REQUIRED.match(title) is not None
     if not action_required or was_action_required:
         return action_required, None
     return True, AgentActivity(

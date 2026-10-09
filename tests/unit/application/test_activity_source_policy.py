@@ -105,6 +105,48 @@ def test_codex_action_required_is_a_rising_edge_not_pane_text() -> None:
     assert after_clear is None
 
 
+def test_either_action_required_frame_is_the_marker() -> None:
+    """Codex animates the bracket (`[ ! ]` / `[ . ]`), so a poll can land on either frame (BL-034).
+
+    A `[ . ]` poll between two `[ ! ]` polls is the same approval and emits nothing more; an
+    approval opened and answered across two `[ . ]` polls is still one approval seen.
+    """
+    moment = datetime(2026, 10, 9, tzinfo=UTC)
+
+    def observe(was: bool, title: str):
+        return observe_codex_action_required(
+            was, session_id="codex-title-session", title=title, now=moment
+        )
+
+    active, first = observe(False, "[ ! ] Action Required | multitor")
+    still, between = observe(active, "[ . ] Action Required | multitor")
+    again, last = observe(still, "[ ! ] Action Required | multitor")
+    seen, only_dots = observe(False, "[ . ] Action Required | multitor")
+
+    assert first is not None and between is None and last is None
+    assert active and still and again
+    assert seen is True
+    assert only_dots is not None and only_dots.kind is ActivityKind.NEEDS_ANSWER
+
+
+@pytest.mark.parametrize(
+    "title",
+    [
+        "proj [ ! ] Action Required | x",
+        "[ ! ] Action Required",
+        "[  ] Action Required | x",
+        "[ !! ] Action Required | x",
+    ],
+)
+def test_a_project_named_like_the_action_required_marker_does_not_forge_it(title: str) -> None:
+    active, observation = observe_codex_action_required(
+        False, session_id="codex-title-session", title=title, now=datetime(2026, 10, 9, tzinfo=UTC)
+    )
+
+    assert active is False
+    assert observation is None
+
+
 async def test_only_codex_titles_can_infer_an_action_required_notification() -> None:
     codex = _running_record("codex")
     other = _running_record("opencode")
