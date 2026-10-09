@@ -492,3 +492,19 @@ def test_a_transcript_line_that_mentions_the_gear_is_not_a_band() -> None:
     lines.insert(box, "⚙ settings were changed by the agent")
 
     assert turn_ended("\n".join(lines) + "\n", _descriptor("claude")) is False
+
+
+def _busy_captures() -> list[tuple[str, str]]:
+    return [(agent, name) for agent, name in _captures() if name.startswith("busy")]
+
+
+@pytest.mark.parametrize(("agent", "name"), _busy_captures())
+def test_a_busy_screen_holds_no_draft(agent: str, name: str) -> None:
+    """Right after Enter the composer is empty and the agent is working, which is how a submit is
+    confirmed. Cursor draws `ctrl+c to stop` right-aligned on the composer line itself
+    (2026.09.18 and 2026.10.01), and that hint is not text anyone typed: read as a draft, every
+    message relayed into Cursor came back "Typed, but not confirmed" (found by the Stage 2 live
+    drill, 2026-10-09; `cursor/busy_after_submit.txt` is that screen)."""
+    screen = (_PANES / agent / f"{name}.txt").read_text(encoding="utf-8")
+
+    assert composer_draft(screen, _descriptor(agent)) in ("", None)

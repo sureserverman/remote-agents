@@ -1,0 +1,40 @@
+
+
+  Cursor Agent
+  v2026.10.01-e373342
+  Tip: Try Cursor Grok 4.7 via /model, frontier intelligence at a fraction of the cost.
+
+                                                                                                                                                               
+  Run the shell command `sleep 30` in the foreground, not in the background, then reply with exactly one word: slept.                                          
+                                                                                                                                                               
+
+  I’ll run sleep 30 in the foreground and wait for it to finish, then I’ll reply with the single word you requested.
+
+  $ sleep 30 24s
+    ctrl+b twice to send to background
+
+ ⠰⠰ Running  82 tokens
+    Tip: Hit shift+tab to enable Plan Mode for large or complex changes.
+
+                                                                                                                                                               
+  → Add a follow-up                                                                                                                             ctrl+c to stop 
+                                                                                                                                                               
+
+  1 task
+  GPT-5.2 Medium · allowlist · /tmp/drill-ws · HEAD*
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

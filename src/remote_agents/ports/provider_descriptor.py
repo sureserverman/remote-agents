@@ -133,8 +133,9 @@ class ComposerScreen:
     `command_menu` matches and this does; None keeps every `/` command behind a readable
     menu."""
     draft_line: str = r"^\s*"
-    """What is stripped from the start of each draft line before the lines are compared
-    (OpenCode draws its composer inside a `┃` box)."""
+    """What is stripped from each draft line before the lines are compared: its margin
+    (OpenCode draws its composer inside a `┃` box), and any hint the agent draws on the composer
+    line itself (Cursor's right-aligned `ctrl+c to stop`)."""
     shell: str | None = None
     """A pattern (multiline) that matches, at the very end of the capture, the composer in shell
     mode (`!`), where whatever is submitted runs as a shell command. None when the agent has no

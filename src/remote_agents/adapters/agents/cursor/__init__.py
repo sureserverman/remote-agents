@@ -88,6 +88,10 @@ def descriptor(
                 r"\n(?:  (?! )[^\n]*\n){0,3}  (?! )[^\n]*·[^\n]*\Z"
             ),
             placeholders=(r"Plan, search, build anything", r"Add a follow-up"),
+            # While a turn runs, `ctrl+c to stop` is drawn right-aligned on the composer line
+            # itself (`busy*.txt`, 2026.09.18 and 2026.10.01). It is not a draft: read as one,
+            # the submit a relay just made was never seen to clear.
+            draft_line=r"^\s*|\s{2,}ctrl\+c to stop\s*$",
             # Shell mode puts `!` where `→` was (`stop_sequence/cursor_shell_mode_*.txt`).
             shell=(
                 r"^  ! [^\n]*(?:\n    [^\n]*)*?"
