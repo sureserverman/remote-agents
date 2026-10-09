@@ -68,6 +68,8 @@ from remote_agents.ports.terminal import (
     NOT_IDLE,
     OWNERSHIP_LOST,
     UNKNOWN_SESSION,
+    RemoteControlRefusal,
+    RemoteControlRefused,
     TerminalObservation,
 )
 
@@ -383,6 +385,28 @@ table now — Codex's host toggle still offers a direction per press (DEC-071 ke
 sibling of this one, not a generalisation), so the two vocabularies stopped agreeing and an
 alias would have forced one of them to be spelled wrong.
 """
+
+
+#: What each refused Remote Control press tells the owner (BL-109). Beside the stop failures
+#: below and for their reason (DEC-091, DEC-043): both surfaces print this line, so it is
+#: written once.
+_REMOTE_CONTROL_REFUSALS: dict[RemoteControlRefusal, str] = {
+    RemoteControlRefusal.BUSY: "the agent is working — try when it is idle",
+    RemoteControlRefusal.ASKING: "the agent is asking you something",
+    RemoteControlRefusal.COMPOSING: "the composer holds text",
+    RemoteControlRefusal.KEYS_BUSY: "another key is being sent",
+    RemoteControlRefusal.UNRECOGNISED: "the agent is showing something other than its prompt",
+}
+
+
+def remote_control_refusal(refused: RemoteControlRefused) -> str:
+    """The line a surface shows for a refused press: nothing changed, and why.
+
+    "Not changed" is the claim a refusal can make: nothing was typed that reached Remote
+    Control, so the session is in whatever state it was before, and the record keeps the
+    reading it had (DEC-084).
+    """
+    return f"Remote Control: not changed — {_REMOTE_CONTROL_REFUSALS[refused.reason]}."
 
 
 def decline_trust_available(record: _RemoteControllable) -> bool:

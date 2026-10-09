@@ -1,0 +1,28 @@
+{
+ "baseline": {
+  "elapsed_s": 12.3,
+  "exit": 0,
+  "tail": "..........................................................               [100%]\n58 passed in 10.92s"
+ },
+ "break_patch": "diff --git a/src/remote_agents/application/services.py b/src/remote_agents/application/services.py\nindex 566e15de..54c25af2 100644\n--- a/src/remote_agents/application/services.py\n+++ b/src/remote_agents/application/services.py\n@@ -430,9 +430,15 @@ class SessionService:\n                 raise ValueError(\"remote control is available only for Claude\")\n             if not await self._store.claim_idempotency_key(command.idempotency_key):\n                 raise DuplicateCommandError(\"remote control callback was already handled\")\n-            observed = await self._terminal.remote_control(\n-                command.session_id, command.desired_state\n-            )\n+            try:\n+                observed = await self._terminal.remote_control(\n+                    command.session_id, command.desired_state\n+                )\n+            except Exception:\n+                await self._store.set_remote_control_state(\n+                    command.session_id, RemoteControlState.UNKNOWN\n+                )\n+                raise\n             # Persisted so a surface can hide the action that would do nothing. Inside the\n             # session lock, after the pane has answered, and never before: recording the\n             # *desired* state would claim an outcome the terminal had not reported yet, and\n",
+ "build": null,
+ "created": "2026-10-09T20:17:07+00:00",
+ "fingerprint": "31564ab04e0cfd2203e367495f65fe9ead3b8830421ee7f179383ce18409a88f",
+ "index": 1,
+ "kind": "claim",
+ "named_break": null,
+ "no_build_reason": "python; no build",
+ "plan": "/mnt/vault/Portfolio/infra/remote-agents/plans/2026-10-09-decisions-and-worktrees-sub-01-trust-and-surfaces-plan.md",
+ "red": {
+  "elapsed_s": 11.8,
+  "exit": 1,
+  "tail": "=================================== FAILURES ===================================\n___________________ test_a_refusal_keeps_the_stored_reading ____________________\n\n    async def test_a_refusal_keeps_the_stored_reading():\n        \"\"\"BL-109: a refused press left the pane as it was, so the record keeps what it said.\n    \n        Recording UNKNOWN here is what used to clear a stored ACTIVE on a press that typed nothing.\n        The refusal reaches the caller with its reason instead, for the surface to say why.\n        \"\"\"\n        from dataclasses import replace\n    \n        from remote_agents.ports.terminal import RemoteControlRefusal, RemoteControlRefused\n    \n        record = SessionRecord(\n            SessionId.new(),\n            ProjectId(\"opaque-editor\"),\n            ProfileId(\"claude\"),\n            SessionDisplayIdentity(\"opaque-editor\", \"claude\", \"regular\", 1),\n            SessionState.RUNNING,\n            datetime.now(UTC),\n        )\n        store = Store(replace(record, remote_control_state=RemoteControlState.ACTIVE))\n        terminal = FakeTerminal()\n        terminal.remote_control_refusal = RemoteControlRefusal.BUSY\n        service = SessionService(store, terminal)\n        command = RemoteControlCommand(record.session_id, RemoteControlState.INACTIVE, \"remote-1\")\n    \n        with pytest.raises(RemoteControlRefused) as refused:\n            await service.set_remote_control(command)\n    \n        assert refused.value.reason is RemoteControlRefusal.BUSY\n>       assert not hasattr(store, \"observed\"), \"set_remote_control_state was called on a refusal\"\nE       AssertionError: set_remote_control_state was called on a refusal\nE       assert not True\nE        +  where True = hasattr(<test_remote_control_command.Store object at 0x7e5479d443e0>, 'observed')\n\ntests/unit/application/test_remote_control_command.py:124: AssertionError\n=========================== short test summary info ============================\nFAILED tests/unit/application/test_remote_control_command.py::test_a_refusal_keeps_the_stored_reading\n1 failed, 57 passed in 10.36s"
+ },
+ "schema": 2,
+ "task": "2.2",
+ "test": "uv run --locked pytest tests/unit/application/test_remote_control_command.py tests/contract/adapters/telegram/test_remote_control_actions.py tests/unit/adapters/tui/test_tui_remote_control.py tests/integration/sqlite/test_remote_control_state.py tests/e2e/test_telegram_remote_control_fake_backend.py -q -p no:randomly -k \"refusal or remote_control\"",
+ "text": "`uv run --locked pytest tests/unit/application/test_remote_control_command.py tests/contract/adapters/telegram/test_remote_control_actions.py tests/unit/adapters/tui/test_tui_remote_control.py tests/integration/sqlite/test_remote_control_state.py tests/e2e/test_telegram_remote_control_fake_backend.py -q -p no:randomly -k \"refusal or remote_control\"`. It goes red if `set_remote_control_state` is called on a refusal.",
+ "touched": [
+  "src/remote_agents/application/services.py"
+ ]
+}

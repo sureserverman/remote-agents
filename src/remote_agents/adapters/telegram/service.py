@@ -146,6 +146,7 @@ from remote_agents.application.session_actions import (
     remote_control_available,
     remote_control_directions,
     remote_control_reading,
+    remote_control_refusal,
     remote_control_target,
     state_word,
     trust_available,
@@ -208,7 +209,11 @@ from remote_agents.ports.message_relay import (
 )
 from remote_agents.ports.schedules import Weekday
 from remote_agents.ports.standing_notification import StandingNotificationPort
-from remote_agents.ports.terminal import PromptReason, TerminalTargetMissing
+from remote_agents.ports.terminal import (
+    PromptReason,
+    RemoteControlRefused,
+    TerminalTargetMissing,
+)
 
 __all__ = [
     "PrivateBotBoundary",
@@ -3332,9 +3337,12 @@ class PrivateBotBoundary:
         ):
             return _reply_arguments(self._message("That action has already run."))
         state = RemoteControlState(state_value)
-        result = await self.backend.sessions.set_remote_control(
-            RemoteControlCommand(SessionId.parse(session_value), state, token)
-        )
+        try:
+            result = await self.backend.sessions.set_remote_control(
+                RemoteControlCommand(SessionId.parse(session_value), state, token)
+            )
+        except RemoteControlRefused as refused:
+            return _reply_arguments(self._message(remote_control_refusal(refused)))
         # Just the resulting state. Distinguishing "was already active" from "is now active"
         # is not knowable here: `remote_control` returns the desired state both when it had
         # to send keys and when it found the pane already there, so a message claiming the

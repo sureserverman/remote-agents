@@ -367,3 +367,27 @@ async def test_a_failed_toggle_does_not_leave_the_cursor_on_the_button_that_fail
     assert keys == [_BACK], f"a failed toggle left the detail offering {keys}"
     assert resting == _BACK, "the cursor must be moved off every row that acts"
     assert len(launcher.issued) == 1, "a repeated enter re-issued the toggle"
+
+
+async def test_a_refusal_says_why_on_the_status_line_and_is_not_an_error() -> None:
+    """BL-109: a refused press left the pane as it was, so it is reported, not alarmed."""
+    from remote_agents.ports.terminal import RemoteControlRefusal, RemoteControlRefused
+
+    record = _record()
+    launcher = _RecordingLauncher(
+        (record,), error=RemoteControlRefused(RemoteControlRefusal.ASKING)
+    )
+    app = RemoteAgentsTui(_context(launcher))
+
+    async with app.run_test() as pilot:
+        await app.show_detail(str(record.session_id))
+        await pilot.pause()
+        asking = await _open_the_confirm(app, pilot)
+        await _confirm(pilot)
+        await asyncio.wait_for(asking, timeout=5)
+        await pilot.pause()
+        status = _status(app)
+        errors = announcements(app, severity="error")
+
+    assert "Remote Control: not changed — the agent is asking you something." in status
+    assert errors == []

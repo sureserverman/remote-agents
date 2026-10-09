@@ -171,3 +171,27 @@ async def test_claude_remote_control_requires_confirmation_and_uses_opaque_callb
 
     assert "Remote Control: active" in result["text"]
     assert launcher.commands[0].desired_state is RemoteControlState.ACTIVE
+
+
+async def test_a_refusal_says_why_and_that_nothing_changed() -> None:
+    """BL-109: a press refused at a busy pane names the reason instead of a bare `unknown`."""
+    from remote_agents.ports.terminal import RemoteControlRefusal, RemoteControlRefused
+
+    class Refusing(Launcher):
+        async def set_remote_control(self, command):
+            self.commands.append(command)
+            raise RemoteControlRefused(RemoteControlRefusal.BUSY)
+
+    launcher = Refusing(_record(), RemoteControlState.INACTIVE)
+    boundary = build_private_bot(7, 11, backend=backend_for(sessions=launcher))
+
+    confirmation, entity_id = await _confirm_for(boundary, launcher)
+    boundary.callbacks.bind_pending(11, 1)
+    result = await boundary._remote_control_reply(
+        entity_id, confirmation.keyboard[0][0].callback_data, 1
+    )
+
+    assert (
+        "Remote Control: not changed — the agent is working — try when it is idle."
+        in result["text"]
+    )

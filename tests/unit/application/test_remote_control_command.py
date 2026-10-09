@@ -91,3 +91,35 @@ async def test_an_unarmed_pane_reads_unknown_rather_than_inventing_a_direction()
     service = SessionService(Store(record), FakeTerminal())
 
     assert await service.remote_control_state(record.session_id) is RemoteControlState.UNKNOWN
+
+
+async def test_a_refusal_keeps_the_stored_reading():
+    """BL-109: a refused press left the pane as it was, so the record keeps what it said.
+
+    Recording UNKNOWN here is what used to clear a stored ACTIVE on a press that typed nothing.
+    The refusal reaches the caller with its reason instead, for the surface to say why.
+    """
+    from dataclasses import replace
+
+    from remote_agents.ports.terminal import RemoteControlRefusal, RemoteControlRefused
+
+    record = SessionRecord(
+        SessionId.new(),
+        ProjectId("opaque-editor"),
+        ProfileId("claude"),
+        SessionDisplayIdentity("opaque-editor", "claude", "regular", 1),
+        SessionState.RUNNING,
+        datetime.now(UTC),
+    )
+    store = Store(replace(record, remote_control_state=RemoteControlState.ACTIVE))
+    terminal = FakeTerminal()
+    terminal.remote_control_refusal = RemoteControlRefusal.BUSY
+    service = SessionService(store, terminal)
+    command = RemoteControlCommand(record.session_id, RemoteControlState.INACTIVE, "remote-1")
+
+    with pytest.raises(RemoteControlRefused) as refused:
+        await service.set_remote_control(command)
+
+    assert refused.value.reason is RemoteControlRefusal.BUSY
+    assert not hasattr(store, "observed"), "set_remote_control_state was called on a refusal"
+    assert store.record.remote_control_state is RemoteControlState.ACTIVE

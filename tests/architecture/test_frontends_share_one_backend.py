@@ -610,8 +610,10 @@ def test_the_shared_use_case_set_is_read_from_its_modules() -> None:
     # availability (DEC-099), is a shared rule like `trust_available`.
     # 23 -> 25 on 2026-10-05: `session_actions.rollover_actions` and `rollover_outcome`, the
     # Rollover now / Cancel rollover availability and their outcome words (DEC-046, DEC-115).
-    assert len(names) == 25, (
-        f"the shared use-case modules now define {len(names)} public names, not 25. Adding one "
+    # 25 -> 26 on 2026-10-09: `session_actions.remote_control_refusal`, the line both surfaces
+    # show for a refused Remote Control press (BL-109, DEC-091).
+    assert len(names) == 26, (
+        f"the shared use-case modules now define {len(names)} public names, not 26. Adding one "
         "is ordinary; this assertion exists so that adding one is *noticed*, because every "
         "name here is a name no adapter may define."
     )

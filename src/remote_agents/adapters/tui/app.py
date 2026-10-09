@@ -100,6 +100,7 @@ from remote_agents.application.session_actions import (
     FORCE,
     explain_state,
     remote_control_available,
+    remote_control_refusal,
 )
 from remote_agents.application.session_views import (
     CATALOGUE_GAP_RETRY_SECONDS,
@@ -125,6 +126,7 @@ from remote_agents.domain.remote_control import RemoteControlState
 from remote_agents.ports.agent_usage import ContextWindow
 from remote_agents.ports.console import StatusBarPalette
 from remote_agents.ports.state_events import StoreChanged, Unsubscribe
+from remote_agents.ports.terminal import RemoteControlRefused
 
 _LOG = logging.getLogger(__name__)
 
@@ -1921,6 +1923,12 @@ class RemoteAgentsTui(App[AttachRequest | None]):
                 state = await self._services.backend.sessions.set_remote_control(
                     RemoteControlCommand(record.session_id, desired, _idempotency_key())
                 )
+        except RemoteControlRefused as refused:
+            # Not a failure: the pane was left as it was and says why (BL-109). Re-read first,
+            # as on success, so the line is not overwritten by the detail's own status.
+            await screen.after_command()
+            screen.set_status(remote_control_refusal(refused))
+            return
         except Exception as error:
             _LOG.exception("remote control failed")
             # Same reason as the failed stop: do not leave the cursor resting on the
