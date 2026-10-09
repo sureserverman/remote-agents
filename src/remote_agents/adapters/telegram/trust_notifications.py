@@ -32,6 +32,7 @@ from remote_agents.adapters.telegram.presenters import (
     _validate_callback,
     render_message,
 )
+from remote_agents.application.notification_policy import REFUSALS_BEFORE_ABANDONING
 from remote_agents.application.session_actions import state_word
 from remote_agents.application.session_views import listed_in_sessions
 from remote_agents.domain.models import SessionRecord, SessionState
@@ -48,9 +49,6 @@ OPEN_LABEL = "Open session"
 _HEADLINE = "🔒 <b>Waiting to be trusted</b>"
 
 _LOG = logging.getLogger(__name__)
-
-#: DEC-049's three-strike rule, the same bound the activity notifier uses.
-_REFUSALS_BEFORE_ABANDONING = 3
 
 #: What one `_ask` did, so `pass_once` can apply DEC-049's rule over the whole pass.
 _REFUSED = "refused"
@@ -143,7 +141,7 @@ class TrustNotifier:
     restarted. So it reads the records, and the durable row is what stops it asking twice —
     which is also what makes it correct across a restart, the case the row exists for.
 
-    Three properties, each answering a way this could be wrong:
+    Four properties, each answering a way this could be wrong:
 
     - **One message per session.** A standing row that is not settled means the question is
       already on the owner's phone, whatever this process remembers.
@@ -153,6 +151,10 @@ class TrustNotifier:
       will not take the message is not hammered forever, and the drop goes to the journal
       rather than to the chat that just refused — telling the owner there would mean sending a
       message about a message that could not be sent.
+    - **Three consecutive raising settles stop settling it** (DEC-049's rule and bound, its own
+      count). A deletion or amendment that keeps raising is not retried every pass for as long
+      as the record lives; the row stays unsettled, so a restart tries again. A strike counts
+      only when something else got through in the same pass, as for the ask.
 
     Delivery is **send, then mint, then attach the keyboard**, copied from `ActivityNotifier`
     for its reason and not for symmetry: `bind_pending` adopts every unbound token in the chat,
@@ -191,6 +193,11 @@ class TrustNotifier:
         #: Sessions already given up on, so the journal line is written once rather than on
         #: every pass for as long as the record survives.
         self._abandoned: set[str] = set()
+        #: Consecutive raising settles per session, and the sessions given up on. Their own
+        #: count rather than `_refusals`: a streak left over from asking must not shorten the
+        #: budget for settling, which is a different message failing for a different reason.
+        self._settle_raises: dict[str, int] = {}
+        self._settle_abandoned: set[str] = set()
         #: Sessions whose message exists but whose bookkeeping did not finish -- the durable
         #: row, the keyboard, or both. **The owner already has this message**, so the session
         #: must not be sent another; what is owed is the rest of the delivery, and the next
@@ -263,8 +270,13 @@ class TrustNotifier:
                 "an outage rather than as evidence about any one session",
                 len(refused),
             )
+        raised: list[str] = []
+        settled = 0
         for standing in await self._store.unsettled():
-            record = records.get(str(standing.session_id))
+            key = str(standing.session_id)
+            record = records.get(key)
+            if key in self._settle_abandoned:
+                continue
             if record is None or record.state is SessionState.UNTRUSTED:
                 # Still asking, or gone from the listing entirely. Neither is an answer, and
                 # amending on the second would rewrite a message about a session this service
@@ -278,17 +290,38 @@ class TrustNotifier:
                 _LOG.exception(
                     "could not settle the folder-trust question for session %s", standing.session_id
                 )
+                raised.append(key)
+            else:
+                self._settle_raises.pop(key, None)
+                settled += 1
+        # The same clause as the ask's: a raise is a strike only when something else got
+        # through this pass, so an outage spends nothing (DEC-049).
+        if delivered or settled:
+            for key in raised:
+                self._strike_settle(key)
+
+    def _strike_settle(self, key: str) -> None:
+        """Record one raising settle, and stop settling at the bound (DEC-049, BL-054)."""
+        self._settle_raises[key] = self._settle_raises.get(key, 0) + 1
+        if self._settle_raises[key] >= REFUSALS_BEFORE_ABANDONING:
+            self._settle_abandoned.add(key)
+            _LOG.warning(
+                "giving up on settling the folder-trust question for session %s after %d "
+                "raising attempts; its row stays unsettled, so a restart tries again",
+                key,
+                REFUSALS_BEFORE_ABANDONING,
+            )
 
     def _strike(self, key: str) -> None:
         """Record one refusal against a session, and give up at the bound (DEC-049)."""
         self._refusals[key] = self._refusals.get(key, 0) + 1
-        if self._refusals[key] >= _REFUSALS_BEFORE_ABANDONING:
+        if self._refusals[key] >= REFUSALS_BEFORE_ABANDONING:
             self._abandoned.add(key)
             _LOG.warning(
                 "giving up on the folder-trust question for session %s after %d refusals; "
                 "it can still be answered from the session's own screen",
                 key,
-                _REFUSALS_BEFORE_ABANDONING,
+                REFUSALS_BEFORE_ABANDONING,
             )
 
     async def _ask(self, key: str, record: SessionRecord) -> str | None:

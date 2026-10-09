@@ -34,6 +34,7 @@ from telegram.constants import ParseMode
 
 from remote_agents.adapters.telegram.flood import FloodGate
 from remote_agents.application.limit_resets import EarlyReset, detect
+from remote_agents.application.notification_policy import REFUSALS_BEFORE_ABANDONING
 from remote_agents.application.session_views import whole_percent
 from remote_agents.ports.agent_usage import AgentLimits
 
@@ -60,12 +61,6 @@ def limit_reset_message(provider: str, resets: tuple[EarlyReset, ...]) -> str:
         for reset in resets
     )
     return f"{escape(provider)} limits were reset early — {moved}"
-
-
-#: Consecutive refusals before a message is given up on, matching the trust and activity passes.
-#: Consecutive rather than cumulative: an outage that ends must not have spent the budget
-#: (DEC-049, DEC-034).
-_REFUSALS_BEFORE_ABANDONING = 3
 
 
 class LimitResetNotifier:
@@ -234,12 +229,12 @@ class LimitResetNotifier:
             return
         for key in refused:
             self._refusals[key] = self._refusals.get(key, 0) + 1
-            if self._refusals[key] >= _REFUSALS_BEFORE_ABANDONING:
+            if self._refusals[key] >= REFUSALS_BEFORE_ABANDONING:
                 self._abandoned.add(key)
                 self._pending.pop(key, None)
                 _LOG.warning(
                     "giving up on the early-limits-reset message for %s after %d refusals; "
                     "the figures themselves are on the limits screen",
                     key,
-                    _REFUSALS_BEFORE_ABANDONING,
+                    REFUSALS_BEFORE_ABANDONING,
                 )

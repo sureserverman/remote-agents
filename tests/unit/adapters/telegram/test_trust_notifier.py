@@ -97,6 +97,7 @@ class _View:
         self.amended: list[tuple[int, dict]] = []
         #: Message ids actually taken out of the chat.
         self.discarded: list[int] = []
+        self.discard_attempts: list[int] = []
         self._refuse = refuse
         #: Per-send refusal flags, for the tests that need an outage to *end* and then a
         #: later, separate one to begin. A bare count cannot express that.
@@ -139,6 +140,11 @@ class _View:
     #: ordinary failure case. What genuinely escapes is a transport error.
     raise_discards: int = 0
 
+    #: Message ids whose deletion raises on *every* attempt, and each attempt made at all.
+    #: A transport error that never clears is the case DEC-049's bound exists for (BL-054);
+    #: a count would let the next pass succeed and hide the retry loop.
+    explode_discards_of: frozenset[int] = frozenset()
+
     async def amend_apart(self, bot, message_id, arguments):
         del bot
         if self.refuse_amends:
@@ -149,6 +155,9 @@ class _View:
 
     async def discard(self, bot, message_id: int) -> bool:
         del bot
+        self.discard_attempts.append(message_id)
+        if message_id in self.explode_discards_of:
+            raise TelegramError("connection reset")
         if self.raise_discards:
             self.raise_discards -= 1
             raise TelegramError("connection reset")
@@ -615,3 +624,103 @@ async def test_a_refused_deletion_is_not_retried_forever() -> None:
     await notifier.pass_once()
 
     assert len(view.settlements) == 1, "the fallback amendment was rewritten on later passes"
+
+
+def _another(n: int) -> SessionRecord:
+    """A separate untrusted session, so a pass has something else to deliver."""
+    record = _record()
+    object.__setattr__(record, "session_id", SessionId.new())
+    object.__setattr__(record, "display", SessionDisplayIdentity(f"ok{n}", "claude", "regular", n))
+    return record
+
+
+class _Traffic:
+    """The session under test, plus a fresh untrusted one every pass.
+
+    DEC-049 counts a strike only when another send succeeded in the same pass, so a bound can
+    only be reached on a chat that is demonstrably reachable each time. A new session each
+    pass is what supplies that delivery: a trust question is sent once per session ever.
+    """
+
+    def __init__(self, record: SessionRecord) -> None:
+        self.record = record
+        self.others: list[SessionRecord] = []
+
+    async def list_sessions(self):
+        self.others.append(_another(len(self.others) + 1))
+        return (self.record, *self.others)
+
+
+def _settle_warnings(caplog) -> list[str]:
+    return [
+        record.getMessage()
+        for record in caplog.records
+        if record.levelname == "WARNING" and "settl" in record.getMessage()
+    ]
+
+
+async def test_a_settle_that_keeps_raising_is_abandoned_after_three_strikes_with_one_warning(
+    caplog,
+) -> None:
+    """BL-054: `_settle` had no bound, so a transport error that never clears was retried
+    every five seconds, with a traceback each time, for as long as the record lived."""
+    traffic, store, view = _Traffic(_record()), _Store(), _View()
+    notifier = _notifier(traffic, store, view)
+    await notifier.pass_once()
+    message_id = store.rows[str(_SESSION)]["message_id"]
+    view.explode_discards_of = frozenset({message_id})
+    traffic.record = replace(traffic.record, state=SessionState.RUNNING)
+
+    with caplog.at_level("WARNING"):
+        for _ in range(6):
+            await notifier.pass_once()
+
+    assert view.discard_attempts.count(message_id) == 3, "a fourth settle was attempted"
+    warnings = _settle_warnings(caplog)
+    assert len(warnings) == 1, warnings
+    assert str(_SESSION) in warnings[0] and "3" in warnings[0]
+    assert store.rows[str(_SESSION)]["settled"] is False, "the row stays, so a restart retries"
+
+
+async def test_a_raising_settle_spends_no_budget_during_an_outage(caplog) -> None:
+    """Nothing else got through in any of these passes, so none of them is a strike."""
+    sessions, store, view = _Sessions(_record()), _Store(), _View()
+    notifier = _notifier(sessions, store, view)
+    await notifier.pass_once()
+    message_id = store.rows[str(_SESSION)]["message_id"]
+    view.explode_discards_of = frozenset({message_id})
+    sessions.record = replace(sessions.record, state=SessionState.RUNNING)
+
+    with caplog.at_level("WARNING"):
+        for _ in range(5):
+            await notifier.pass_once()
+
+    assert view.discard_attempts.count(message_id) == 5, "an outage spent the settle budget"
+    assert _settle_warnings(caplog) == []
+
+
+async def test_a_successful_settle_resets_the_settle_streak() -> None:
+    """Consecutive, not cumulative: two raises, a success, then a fresh question's settle
+    gets its own three attempts. A cumulative count would abandon it after one."""
+    traffic, store, view = _Traffic(_record()), _Store(), _View()
+    notifier = _notifier(traffic, store, view)
+    await notifier.pass_once()
+    first = store.rows[str(_SESSION)]["message_id"]
+    view.explode_discards_of = frozenset({first})
+    traffic.record = replace(traffic.record, state=SessionState.RUNNING)
+    await notifier.pass_once()  # strike 1
+    await notifier.pass_once()  # strike 2
+    view.explode_discards_of = frozenset()
+    await notifier.pass_once()  # settles; the streak is cleared
+    assert store.rows[str(_SESSION)]["settled"] is True
+
+    traffic.record = replace(traffic.record, state=SessionState.UNTRUSTED)
+    await notifier.pass_once()  # asked again, as a new message
+    second = store.rows[str(_SESSION)]["message_id"]
+    assert second != first
+    view.explode_discards_of = frozenset({second})
+    traffic.record = replace(traffic.record, state=SessionState.RUNNING)
+    for _ in range(5):
+        await notifier.pass_once()
+
+    assert view.discard_attempts.count(second) == 3
