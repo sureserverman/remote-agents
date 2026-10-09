@@ -168,9 +168,9 @@ def _event_for_recheck(
     single fact.
 
     Total over `SessionState`, though `refresh_readiness` only ever hands it the two members
-    of `_READINESS_REREAD`. The STARTING and RUNNING arms are therefore unreachable today and
-    are kept rather than dropped: they are what makes the answer correct if that set widens,
-    and a partial function here would fail by returning the wrong event rather than by
+    of `_READINESS_REREAD`. Its answers for every other state are therefore unreachable today
+    and are kept rather than narrowed: they are what makes the answer correct if that set
+    widens, and a partial function here would fail by returning the wrong event rather than by
     raising.
     """
     if observation.awaiting_trust:

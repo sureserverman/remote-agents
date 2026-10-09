@@ -478,16 +478,21 @@ class TmuxTerminal:
         *pre-trust* screen, so a pane resting on the question itself matches no blocker at
         all.
         """
-        # **A blocker alone decides this, and since DEC-081 that is safe.** codex's declared
-        # blocker is a phrase this repository's own files carry, so an agent displaying one of
-        # them satisfies this line. That used to matter: two pane re-reads wrote the record from
-        # it and could hand a working session DEC-078's unconfirmed kill. They no longer can --
-        # a pane read may clear `untrusted` and may no longer set it. So the only place this
-        # line can *mark* a session is a launch or resume settle, where the agent has drawn
-        # nothing but its own startup. Its other readers (`confirm_ready`, the decline guard in
-        # `decline_trust`) act only on a record that settle already marked UNTRUSTED; there a
-        # misreading can keep the record UNTRUSTED, but cannot reach a session the settle did
-        # not mark.
+        # **A blocker alone decides this, and since DEC-081 its reach is bounded.** codex's
+        # declared blocker is a phrase this repository's own files carry, so an agent
+        # displaying one of them satisfies this line. Two pane re-reads used to write the
+        # record from it and could hand a working session DEC-078's unconfirmed kill. They no
+        # longer can: a pane read may clear `untrusted` and may no longer set it. What a
+        # misreading can still do:
+        #
+        # - **mark a session, but only in a launch or resume settle.** A launch has drawn only
+        #   its own startup. A *resume* redraws its old conversation, and one about this repo
+        #   can carry the words -- that resume is then recorded UNTRUSTED (DEC-081's residual).
+        # - **withhold a promotion** (`confirm_ready`, read by the reconciler and the list-open
+        #   re-read): a STARTING or FAILED record is not promoted, and an UNTRUSTED one stays
+        #   UNTRUSTED, while the words are on screen.
+        # - **pass the decline guard** (`decline_trust`), but only for a record that is
+        #   already UNTRUSTED.
         #
         # **Requiring the dialog wherever one is declared is still not the fix.** claude's
         # blocker is its *pre-trust screen*, a different screen from its dialog, so requiring

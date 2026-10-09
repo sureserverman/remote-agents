@@ -583,9 +583,9 @@ async def test_a_long_running_session_is_not_re_labelled_from_what_its_screen_sh
     wrong, one press would have destroyed a working session, and the pane re-read that guards
     it would have agreed, because the pane really did carry the words.
 
-    So the RUNNING origin is bounded by the window the race actually lives in. STARTING and
-    FAILED are not: those are launches that never became ready, where a late reading is the
-    ordinary case rather than the suspicious one.
+    The first fix bounded the correction to a five-minute window. DEC-081 removed it: no pane
+    read sets `untrusted` now, so the race is the launch settle's to catch, and this session
+    keeps its record whatever its screen shows.
     """
     aged = replace(record(SessionState.RUNNING), created_at=datetime.now(UTC) - timedelta(hours=3))
     store = InMemoryStore((aged,))
@@ -618,10 +618,9 @@ async def test_no_origin_is_re_labelled_from_an_aged_screen_including_the_failed
 
     So a FAILED session with a live pane can hold real work, and leaving its correction
     unbounded left the DEC-080 hazard open through a second door: an aged screen carrying the
-    dialog's words moves it to `untrusted`, which carries DEC-078's *unconfirmed* kill. The
-    window is the same for all three origins now, and the argument is the same for all three:
-    the race is sub-second, the first pass that can notice it is 60 s away, and anything hours
-    later is likelier to be a screen than a question.
+    dialog's words moves it to `untrusted`, which carries DEC-078's *unconfirmed* kill. That
+    led to one window for all three origins; DEC-081 then removed the correction itself, so no
+    origin is re-labelled at any age.
     """
     for state in (SessionState.STARTING, SessionState.FAILED, SessionState.RUNNING):
         aged = replace(record(state), created_at=datetime.now(UTC) - timedelta(hours=3))

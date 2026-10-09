@@ -110,15 +110,18 @@ async def test_codex_trust_settle_catches_the_dialog_on_every_launch(
             + ("-x", "160", "-y", "40", ";", "set-option", "-g", "default-size", "160x40"),
             check=True,
         )
-        gateway = TmuxGateway(socket, AsyncTmuxRunner(), intent_directory=tmp_path / "intents")
-        terminal = TmuxTerminal(
-            gateway, {project_id: project}, {definition.profile_id: profile}, startup_timeout=20
-        )
+        sampler: asyncio.Task[tuple[float | None, float | None]] | None = None
         try:
+            gateway = TmuxGateway(socket, AsyncTmuxRunner(), intent_directory=tmp_path / "intents")
+            terminal = TmuxTerminal(
+                gateway, {project_id: project}, {definition.profile_id: profile}, startup_timeout=20
+            )
             sampler = asyncio.create_task(_sample(gateway, session_id))
             launched = await terminal.launch(session_id, project_id, definition.profile_id)
             banner, dialog = await sampler
         finally:
+            if sampler is not None and not sampler.done():
+                sampler.cancel()
             subprocess.run(("tmux", "-L", socket, "kill-server"), check=False)
         gap = None if banner is None or dialog is None else round(dialog - banner, 3)
         rows.append(

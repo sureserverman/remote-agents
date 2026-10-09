@@ -74,7 +74,9 @@ _READINESS_BLOCKERS = {
 #: **0.162.0 widened it again, past 0.3 s**: 0.262-0.460 s over 30 launches into fresh git
 #: repos (2026-10-09), and 13 of them returned ready over a pane that then drew the dialog.
 #: 0.75 s is the owner's ruling, about 1.6x the worst gap measured, and was re-measured
-#: against the same drill (`docs/acceptance-2026-10-09-codex-trust-settle.md`).
+#: against the same drill (`docs/acceptance-2026-10-09-codex-trust-settle.md`). **Launches
+#: only:** a resume has no readiness marker, so its window opens at the first live pane rather
+#: than at a banner, and no resume was measured.
 #:
 #: `claude` is 0.0 because ten launches produced **no dialog at all** on this host, which makes
 #: its gap *undefined* rather than zero. The number is a floor chosen in the absence of the

@@ -135,7 +135,8 @@ async def test_a_list_open_does_not_relabel_an_aged_failed_session(tmp_path: Pat
     A FAILED record holding a live, working agent is not hypothetical: every opencode launch was
     one, for months, because a readiness marker was three ASCII dots where the agent draws an
     ellipsis. `untrusted` carries DEC-078's unconfirmed kill, so this is a one-press loss of
-    real work.
+    real work. The fix was a five-minute bound; since DEC-081 no list open sets `untrusted` at
+    any age.
     """
     store = _store(tmp_path)
     aged = replace(

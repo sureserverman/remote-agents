@@ -61,3 +61,11 @@ Codex's banner-to-dialog gap over many launches rather than five. This is that m
 - **30 of 30** launches returned `awaiting_trust`.
 - Across both runs, 60 launches, the worst gap was 0.460 s: 0.29 s under the new settle.
 - Cost: a clean Codex launch returns 0.75 s after its banner instead of 0.3 s.
+- The control run was a one-off script, not kept in the repo. Its result lives only here.
+
+## What this does not cover: resume
+
+Every launch here is a fresh launch. A resume profile has no readiness marker, so its settle
+window opens at the first live pane, not at a banner, and must cover the agent's start as well
+as the gap. No resume was measured. A resumed conversation exists only in a folder its first
+session already trusted, so a resume raises the dialog only if that trust was later revoked.

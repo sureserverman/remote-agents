@@ -4099,8 +4099,10 @@ class PrivateBotBoundary:
         may no longer **set** it: the reconciler and the list-open re-read return no event for
         a pane showing the dialog, and the state machine has no TRUST_REQUIRED edge from
         anything but STARTING. So the state half of this gate can no longer be conjured by an
-        agent *displaying* the dialog's words -- only a launch or resume settle, reading a pane
-        that has drawn nothing but its own startup, puts a record where this gate looks.
+        agent *displaying* the dialog's words mid-session -- only a launch or resume settle
+        puts a record where this gate looks. One residual is left: a *resume* redraws its old
+        conversation during its settle, and one about this repo can carry the words, so that
+        resume is recorded UNTRUSTED (DEC-081).
         """
         if record.state is not SessionState.UNTRUSTED:
             return False

@@ -92,7 +92,8 @@ _REPAIR_LOCK_TIMEOUT_SECONDS = 1.0
 
 #: The states whose pane showing a trust dialog leaves the record exactly where it is.
 #: These are the three that used to be corrected down to UNTRUSTED, before DEC-081 made the
-#: launch settle the only thing that records it.
+#: launch settle the only thing that records it. RUNNING is defensive: `_event_for` no longer
+#: reads a RUNNING pane at all, because the pure policy has no event for it.
 _READS_THE_DIALOG = frozenset({SessionState.STARTING, SessionState.RUNNING, SessionState.FAILED})
 
 
