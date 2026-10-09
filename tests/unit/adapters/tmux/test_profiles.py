@@ -94,7 +94,9 @@ def test_the_settle_each_agent_gets_is_the_one_that_was_measured_for_it() -> Non
 
     Codex earns it on the measurement rather than on caution: its banner *is* its readiness
     marker and its dialog follows 0.081-0.084 s later, five launches out of five, so a capture
-    landing in that window reports a ready agent that is about to stop.
+    landing in that window reports a ready agent that is about to stop. The gap has grown with
+    each redraw since: 0.247-0.263 s on 0.158, and 0.262-0.460 s on 0.162 over 30 launches
+    (`docs/acceptance-2026-10-09-codex-trust-settle.md`), hence 0.75 s.
 
     `claude` is 0.0 because ten launches raised no dialog on this host -- an *undefined* gap,
     not a zero one. On a host that does ask, this is the first thing to re-measure. (The same
@@ -115,7 +117,7 @@ def test_the_settle_each_agent_gets_is_the_one_that_was_measured_for_it() -> Non
             ("claude", "--remote-control", "{managed_name}"),
             0.0,
         ),
-        ("codex", "codex", ("codex",), ("/exit", "Enter", "Enter"), None, 0.3),
+        ("codex", "codex", ("codex",), ("/exit", "Enter", "Enter"), None, 0.75),
     ):
         definition = ProfileDefinition(
             ProfileId(profile_id), executable, argv, ("--version",), graceful, variant
@@ -162,7 +164,7 @@ def test_the_settle_is_read_from_one_table_by_both_constructions() -> None:
         dict(_CURATED),
     )
 
-    assert launched.trust_settle_seconds == 0.3
+    assert launched.trust_settle_seconds == 0.75
     assert resumed.trust_settle_seconds == launched.trust_settle_seconds
 
 

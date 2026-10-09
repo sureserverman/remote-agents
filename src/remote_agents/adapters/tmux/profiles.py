@@ -71,6 +71,10 @@ _READINESS_BLOCKERS = {
 #: question. 0.1 s is the measured maximum plus one poll interval (0.01 s), rounded up.
 #: **0.158.0 widened the gap to 0.247-0.263 s** (five launches, 2026-09-28): its banner is now
 #: a placeholder composer ("Ask Codex to do anything") drawn before the dialog, so 0.3 s.
+#: **0.162.0 widened it again, past 0.3 s**: 0.262-0.460 s over 30 launches into fresh git
+#: repos (2026-10-09), and 13 of them returned ready over a pane that then drew the dialog.
+#: 0.75 s is the owner's ruling, about 1.6x the worst gap measured, and was re-measured
+#: against the same drill (`docs/acceptance-2026-10-09-codex-trust-settle.md`).
 #:
 #: `claude` is 0.0 because ten launches produced **no dialog at all** on this host, which makes
 #: its gap *undefined* rather than zero. The number is a floor chosen in the absence of the
@@ -83,7 +87,7 @@ _READINESS_BLOCKERS = {
 #: belongs.
 _TRUST_SETTLE_SECONDS = {
     "claude": 0.0,
-    "codex": 0.3,
+    "codex": 0.75,
 }
 
 

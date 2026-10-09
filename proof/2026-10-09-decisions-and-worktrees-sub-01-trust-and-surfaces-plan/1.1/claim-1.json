@@ -1,0 +1,28 @@
+{
+ "baseline": {
+  "elapsed_s": 19.8,
+  "exit": 0,
+  "tail": ".                                                                        [100%]\n1 passed in 19.58s"
+ },
+ "break_patch": "--- a/src/remote_agents/adapters/tmux/profiles.py\n+++ b/src/remote_agents/adapters/tmux/profiles.py\n@@ -89,3 +89,3 @@\n     \"claude\": 0.0,\n-    \"codex\": 0.75,\n+    \"codex\": 0.0,\n }\n",
+ "build": null,
+ "created": "2026-10-09T19:41:23+00:00",
+ "fingerprint": "ae49aa11f4e1259447b0d70171e00790aabb93ecb1668fb2a6d54077a91874f9",
+ "index": 1,
+ "kind": "claim",
+ "named_break": null,
+ "no_build_reason": "pure Python, no build",
+ "plan": "/mnt/vault/Portfolio/infra/remote-agents/plans/2026-10-09-decisions-and-worktrees-sub-01-trust-and-surfaces-plan.md",
+ "red": {
+  "elapsed_s": 19.7,
+  "exit": 1,
+  "tail": "            )\n            gateway = TmuxGateway(socket, AsyncTmuxRunner(), intent_directory=tmp_path / \"intents\")\n            terminal = TmuxTerminal(\n                gateway, {project_id: project}, {definition.profile_id: profile}, startup_timeout=20\n            )\n            try:\n                sampler = asyncio.create_task(_sample(gateway, session_id))\n                launched = await terminal.launch(session_id, project_id, definition.profile_id)\n                banner, dialog = await sampler\n            finally:\n                subprocess.run((\"tmux\", \"-L\", socket, \"kill-server\"), check=False)\n            gap = None if banner is None or dialog is None else round(dialog - banner, 3)\n            rows.append(\n                {\n                    \"launch\": index + 1,\n                    \"awaiting_trust\": launched.awaiting_trust,\n                    \"live\": launched.live,\n                    \"gap_seconds\": gap,\n                }\n            )\n        settle = profile.trust_settle_seconds\n        gaps = [float(row[\"gap_seconds\"]) for row in rows if row[\"gap_seconds\"] is not None]\n        report = os.environ.get(\"REMOTE_AGENTS_SETTLE_REPORT\")\n        if report:\n            Path(report).write_text(\n                json.dumps(\n                    {\"codex_version\": version, \"settle_seconds\": settle, \"launches\": rows},\n                    indent=2,\n                )\n                + \"\\n\"\n            )\n>       assert all(row[\"awaiting_trust\"] is True for row in rows), rows\nE       AssertionError: [{'launch': 1, 'awaiting_trust': False, 'live': True, 'gap_seconds': 0.31}, {'launch': 2, 'awaiting_trust': False, 'li..., 'live': True, 'gap_seconds': 0.298}, {'launch': 6, 'awaiting_trust': False, 'live': True, 'gap_seconds': 0.341}, ...]\nE       assert False\nE        +  where False = all(<generator object test_codex_trust_settle_catches_the_dialog_on_every_launch.<locals>.<genexpr> at 0x7b5973980a00>)\n\ntests/live/test_codex_trust_settle.py:143: AssertionError\n=========================== short test summary info ============================\nFAILED tests/live/test_codex_trust_settle.py::test_codex_trust_settle_catches_the_dialog_on_every_launch\n1 failed in 19.49s"
+ },
+ "schema": 2,
+ "task": "1.1",
+ "test": "uv run --locked pytest tests/live/test_codex_trust_settle.py -q -p no:randomly --profile codex",
+ "text": "`uv run --locked pytest tests/live/test_codex_trust_settle.py -q -p no:randomly --profile codex` reports `1 passed` (not skipped), and `grep -cE '^\\| *[0-9]+ *\\|' docs/acceptance-2026-10-09-codex-trust-settle.md` prints 30. It goes red if `_TRUST_SETTLE_SECONDS[\"codex\"]` is set to `0.0`: the 0.153 drill missed at 0.1 s. Break it that way once and record that it went red.",
+ "touched": [
+  "src/remote_agents/adapters/tmux/profiles.py"
+ ]
+}
