@@ -419,7 +419,12 @@ def test_queue_behind_a_real_turn_and_deliver_after_its_stop(agent: str, tmp_pat
 
         asyncio.run(
             _retry_waiting_messages(
-                SimpleNamespace(prompt_relay=relay, relay_announcer=announce, relay_rechecks={}),
+                SimpleNamespace(
+                    prompt_relay=relay,
+                    relay_announcer=announce,
+                    relay_rechecks={},
+                    relay_notice_flush=None,
+                ),
                 activities,
             )
         )
@@ -522,7 +527,11 @@ def test_a_streaming_answer_queues_the_message_until_its_stop(agent: str, tmp_pa
         terminal = _terminal(socket, tmp_path / "locks", spool=spool)
         relay = _relay(agent, session_id, terminal, connection)
         composition = SimpleNamespace(
-            prompt_relay=relay, relay_announcer=announce, turn_markers=markers, relay_rechecks={}
+            prompt_relay=relay,
+            relay_announcer=announce,
+            turn_markers=markers,
+            relay_rechecks={},
+            relay_notice_flush=None,
         )
         drain_activity(spool)
 
@@ -602,7 +611,11 @@ def test_an_interrupted_turn_releases_its_queued_message(agent: str, tmp_path: P
         terminal = _terminal(socket, tmp_path / "locks", spool=spool)
         relay = _relay(agent, session_id, terminal, connection)
         composition = SimpleNamespace(
-            prompt_relay=relay, relay_announcer=announce, turn_markers=markers, relay_rechecks={}
+            prompt_relay=relay,
+            relay_announcer=announce,
+            turn_markers=markers,
+            relay_rechecks={},
+            relay_notice_flush=None,
         )
 
         started = asyncio.run(terminal.send_prompt(session_id, _STREAMING_TURN))

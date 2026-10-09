@@ -3235,7 +3235,10 @@ async def test_relay_queue_then_finished_sends(tmp_path) -> None:
         )
         await _retry_waiting_messages(
             SimpleNamespace(
-                prompt_relay=relay, relay_announcer=boundary.announce_relayed, relay_rechecks={}
+                prompt_relay=relay,
+                relay_announcer=boundary.announce_relayed,
+                relay_rechecks={},
+                relay_notice_flush=None,
             ),
             [finished],
         )
