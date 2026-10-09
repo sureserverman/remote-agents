@@ -1258,9 +1258,9 @@ Sent-then-deleted rather than edited in place, deliberately: an edit is silent a
 it was, so an updated message you are never told about is most of the value gone. The cost is
 that every update notifies, and what keeps that from buzzing ninety-six times overnight is
 **what was said**, not a clock: a kind the standing message already carries is amended into it
-**silently**, and only something the owner has not been alerted to arrives. A `needs_answer`
-is the exception that proves the rule — a question whose text matches none of the standing
-ones is a *different* question, and the owner cannot answer what they were never shown, so it
+**silently**, and only something the owner has not been alerted to arrives. Two kinds carry a
+second fact the kind does not. A `needs_answer` whose text matches none of the standing ones
+is a *different* question, and the owner cannot answer what they were never shown, so it
 arrives (DEC-048). A `limit_reached` on a window the standing message does not already name
 arrives too: a 5-hour stop and then a weekly one are two different waits (DEC-034, narrowed).
 
@@ -1409,7 +1409,7 @@ into that message **silently**; a kind the message does not carry has been told 
 earns a message that arrives. The first alert of a kind is therefore as prompt as it ever was,
 and what is taken away is the second and later copies of it.
 
-`needs_answer` is the exception, and it is the reason a timed window could go. A second
+`needs_answer` is the first exception, and it is the reason a timed window could go. A second
 question is not the first one asked again — it is the agent blocked on something else — so a
 `needs_answer` whose **text** matches none of the standing ones counts as unheard and arrives.
 Since 2026-09-19 that text is the real command or question (see the approval section above),

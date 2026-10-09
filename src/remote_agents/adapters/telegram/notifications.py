@@ -1079,7 +1079,9 @@ class ActivityNotifier:
         A second question is not the first one asked again -- it is the agent blocked on
         something else, and the owner cannot answer what they were never shown. So a
         `needs_answer` whose text matches none of the standing ones counts as unheard and
-        arrives; every other kind keeps the kind-only rule above.
+        arrives. A `limit_reached` on a window the standing message does not already name is
+        the second exception (BL-110): a 5-hour stop and then a weekly one are two different
+        waits. Every other kind keeps the kind-only rule above.
 
         """
         # What later news made obsolete is gone before anything is shown or owed: a question

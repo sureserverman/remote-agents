@@ -990,15 +990,13 @@ class TmuxTerminal:
         ends in `Enter` -- and a refusal raises `RemoteControlRefused` naming what refused it,
         another sender holding the pane's keys (BL-056) included (BL-109). UNKNOWN is left for
         a pane that cannot be read.
+
+        A refusal is only ever raised from the first guarded send, while Remote Control cannot
+        have changed. Once `/remote-control` + `Enter` are in, a held lock or an interrupted
+        sequence answers with what the pane was last read to say: a reading, never "not
+        changed".
         """
-        try:
-            return await self._remote_control(session_id, desired_state)
-        except KeysBusy as error:
-            raise RemoteControlRefused(RemoteControlRefusal.KEYS_BUSY) from error
-        except KeysInterrupted as error:
-            # A dialog came up between `/remote-control` and its `Enter`, which was then not sent:
-            # the command sits in the composer, and Remote Control did not change.
-            raise RemoteControlRefused(RemoteControlRefusal.COMPOSING) from error
+        return await self._remote_control(session_id, desired_state)
 
     async def _remote_control(
         self, session_id: SessionId, desired_state: RemoteControlState
@@ -1025,6 +1023,14 @@ class TmuxTerminal:
             judged.append(self._judged(session_id, capture, descriptor, ""))
             return judged[-1] is PaneState.IDLE
 
+        def unsent(error: KeysBusy | KeysInterrupted) -> RemoteControlRefused:
+            # Only for the first guarded send, where nothing has changed Remote Control: a held
+            # lock typed nothing, and a dialog raised between `/remote-control` and its `Enter`
+            # stopped the `Enter`, leaving the command unsubmitted in the composer.
+            if isinstance(error, KeysBusy):
+                return RemoteControlRefused(RemoteControlRefusal.KEYS_BUSY)
+            return RemoteControlRefused(RemoteControlRefusal.COMPOSING)
+
         def refusal() -> RemoteControlRefused:
             # The state the keys were refused on -- marker included -- as the relay keeps it, not
             # a second reading of the capture, which could end a marker the first one kept.
@@ -1042,14 +1048,18 @@ class TmuxTerminal:
             # under the key lock (BL-055): on an approval dialog the `Enter` takes its resting yes
             # option, an approval nobody gave (DEC-063's never-approve clause); into a running turn
             # it queues a command.
-            refused = await self._gateway.send_keys_when(
-                session_id,
-                REMOTE_CONTROL_ENABLE_KEYS,
-                lambda capture: (
-                    _remote_control_state(_plain(capture)) is not desired_state and idle(capture)
-                ),
-                between=unasked,
-            )
+            try:
+                refused = await self._gateway.send_keys_when(
+                    session_id,
+                    REMOTE_CONTROL_ENABLE_KEYS,
+                    lambda capture: (
+                        _remote_control_state(_plain(capture)) is not desired_state
+                        and idle(capture)
+                    ),
+                    between=unasked,
+                )
+            except (KeysBusy, KeysInterrupted) as error:
+                raise unsent(error) from error
             if refused is not None:
                 current = _remote_control_state(_plain(refused))
                 if current is desired_state:
@@ -1069,13 +1079,19 @@ class TmuxTerminal:
             # resting `Continue` instead of exiting. Reading the banner's absence needs no
             # second marker to go stale, and `Escape` costs nothing at a prompt.
             if not remote_control_was_enabled(capture):
-                await self._gateway.send_keys(session_id, REMOTE_CONTROL_DISMISS_MENU_KEYS)
-                # Settle before answering. Without this the method returns while the pane is
-                # still painting the menu away, and the *caller's* next read captures a menu
-                # that is already gone -- which is how a surface ends up sending menu keys at
-                # a prompt. Measured: three consecutive captures after an un-waited Escape all
-                # still showed the menu.
-                await asyncio.sleep(self._waits.remote_control_menu)
+                try:
+                    await self._gateway.send_keys(session_id, REMOTE_CONTROL_DISMISS_MENU_KEYS)
+                except KeysBusy:
+                    # The keys are in, so this is no refusal: answer the reading below and
+                    # leave the menu to whoever holds the pane's keys.
+                    _LOG.warning("could not put away %s's Remote Control menu", session_id)
+                else:
+                    # Settle before answering. Without this the method returns while the pane
+                    # is still painting the menu away, and the *caller's* next read captures a
+                    # menu that is already gone -- which is how a surface ends up sending menu
+                    # keys at a prompt. Measured: three consecutive captures after an un-waited
+                    # Escape all still showed the menu.
+                    await asyncio.sleep(self._waits.remote_control_menu)
             # Classified from the capture taken *before* the dismiss, which is the evidence of
             # what the keys did: a menu row means the pane was already connected, the banner
             # means it just was, and neither means we cannot say.
@@ -1094,16 +1110,19 @@ class TmuxTerminal:
         # arrows only from a capture that proves a menu is there. No proof, no keys.
         # The open-menu keys are the enable keys, so they take the enable path's guard: only onto
         # an idle composer (BL-055). A menu already up is not idle, and needs no keys.
-        refused = await self._gateway.send_keys_when(
-            session_id,
-            REMOTE_CONTROL_OPEN_MENU_KEYS,
-            lambda capture: (
-                not remote_control_menu_is_open(_plain(capture))
-                and _remote_control_state(_plain(capture)) is not desired_state
-                and idle(capture)
-            ),
-            between=unasked,
-        )
+        try:
+            refused = await self._gateway.send_keys_when(
+                session_id,
+                REMOTE_CONTROL_OPEN_MENU_KEYS,
+                lambda capture: (
+                    not remote_control_menu_is_open(_plain(capture))
+                    and _remote_control_state(_plain(capture)) is not desired_state
+                    and idle(capture)
+                ),
+                between=unasked,
+            )
+        except (KeysBusy, KeysInterrupted) as error:
+            raise unsent(error) from error
         if refused is not None:
             plain = _plain(refused)
             if _remote_control_state(plain) is desired_state:
@@ -1134,9 +1153,14 @@ class TmuxTerminal:
                 # failed to recognise -- sitting over the owner's work, and the next thing
                 # this project sends that pane is a graceful stop's `/exit` + `Enter`, which
                 # an open menu swallows: it selects the resting `Continue`, the stop reports
-                # success, and the agent is still running.
-                await self._gateway.send_keys(session_id, REMOTE_CONTROL_DISMISS_MENU_KEYS)
-                await asyncio.sleep(self._waits.remote_control_menu)
+                # success, and the agent is still running. A held lock here is no refusal --
+                # the open-menu keys are in -- so the reading below answers either way.
+                try:
+                    await self._gateway.send_keys(session_id, REMOTE_CONTROL_DISMISS_MENU_KEYS)
+                except KeysBusy:
+                    _LOG.warning("could not put away %s's Remote Control menu", session_id)
+                else:
+                    await asyncio.sleep(self._waits.remote_control_menu)
             # **Report what the pane says, not a flat UNKNOWN.** The open-menu keys *are* the
             # enable keys -- `/remote-control` is one command whose meaning depends on the
             # pane -- so a disable aimed at a session that was genuinely disconnected has just
@@ -1159,9 +1183,18 @@ class TmuxTerminal:
         def menu_up(capture: str) -> bool:
             return remote_control_menu_is_open(_plain(capture))
 
-        refused = await self._gateway.send_keys_when(
-            session_id, REMOTE_CONTROL_DISCONNECT_KEYS, menu_up, between=menu_up
-        )
+        try:
+            refused = await self._gateway.send_keys_when(
+                session_id, REMOTE_CONTROL_DISCONNECT_KEYS, menu_up, between=menu_up
+            )
+        except KeysBusy:
+            # The open-menu keys are in and the menu is up, which only a connected pane shows.
+            # Another sender holds the keys: answer that reading, and leave the menu to them.
+            return _remote_control_state(capture)
+        except KeysInterrupted as interrupted:
+            # The menu went after an arrow had gone in, so there is no menu left to put away.
+            # Answer what the pane said when the sequence stopped.
+            return _remote_control_state(_plain(interrupted.capture))
         if refused is not None:
             return _remote_control_state(_plain(refused))
         await asyncio.sleep(self._waits.remote_control_disable)

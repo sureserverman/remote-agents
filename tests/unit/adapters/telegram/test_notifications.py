@@ -1264,13 +1264,14 @@ async def test_the_same_question_asked_again_never_reaches_the_phone() -> None:
 
 
 async def test_a_fresher_completion_is_still_amended_in_silently() -> None:
-    """The exemption is `needs_answer` alone, and this is what it is scoped against.
+    """The exemptions are `needs_answer` and a new limit window, and this is what they are scoped
+    against.
 
     `completed` says the session stopped and says it once, however its last reply is worded --
     so a fresher one carrying different text is the same news in newer words and must not
     buzz. Comparing the observations for *every* kind is what would make every repeat an alert
     again, which is the shape the owner asked to be rid of; this is the other side of that line
-    and the reason `unheard` is text-aware for one kind rather than for all of them.
+    and the reason `unheard` looks past the kind for two kinds rather than for all of them.
     """
     clock = _Clock()
     notifier, view = _notifier(clock)

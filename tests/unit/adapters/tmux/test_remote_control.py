@@ -783,3 +783,78 @@ async def test_nothing_is_typed_into_a_marked_turn_still_streaming() -> None:
 
     assert refused.value.reason is RemoteControlRefusal.BUSY
     assert runner.keys_typed == ()
+
+
+# --- A key step after keys reached the pane is a read, never a refusal (Stage 2 gate) ----------
+#
+# "Not changed" is true only while nothing has been typed. Once `/remote-control` + `Enter` went
+# in, Remote Control may have changed, so a held lock or an interrupted sequence after that point
+# answers with what the pane was last read to say -- a reading -- and never with a refusal.
+
+
+def _lock_held_from(monkeypatch, acquisition: int) -> None:
+    """The pane's key lock is free for the first `acquisition - 1` holds, then held elsewhere."""
+    from remote_agents.adapters.tmux import gateway as gateway_module
+    from remote_agents.adapters.tmux.key_lock import KeysBusy
+
+    count = 0
+
+    class Lock:
+        async def __aenter__(self):
+            nonlocal count
+            count += 1
+            if count >= acquisition:
+                raise KeysBusy("another sender holds this pane's keys")
+
+        async def __aexit__(self, *_):
+            return None
+
+    monkeypatch.setattr(gateway_module.TmuxGateway, "_keys_for", lambda self, session: Lock())
+
+
+async def test_a_held_lock_at_the_enable_tidy_up_answers_a_reading_not_a_refusal(
+    monkeypatch,
+) -> None:
+    """The enable keys went in; the banner was not seen; the dismiss met a held lock."""
+    _lock_held_from(monkeypatch, 2)
+    runner = _ScriptedRunner(_pane(), [_claude("idle_remote_control_disconnected"), _NO_MENU])
+
+    result = await _terminal(runner).remote_control(_SESSION, DomainRemoteControlState.ACTIVE)
+
+    assert result is DomainRemoteControlState.UNKNOWN
+    assert runner.keys_typed == REMOTE_CONTROL_ENABLE_KEYS
+
+
+async def test_a_held_lock_at_the_disable_tidy_up_answers_a_reading_not_a_refusal(
+    monkeypatch,
+) -> None:
+    """The open-menu keys -- the enable keys -- went in, no menu came, the dismiss met a lock."""
+    _lock_held_from(monkeypatch, 2)
+    runner = _ScriptedRunner(_pane(), [_NO_MENU, _NO_MENU])
+
+    result = await _terminal(runner).remote_control(_SESSION, DomainRemoteControlState.INACTIVE)
+
+    assert result is DomainRemoteControlState.UNKNOWN
+    assert runner.keys_typed == REMOTE_CONTROL_OPEN_MENU_KEYS
+
+
+async def test_a_held_lock_at_the_arrows_answers_the_menu_s_reading(monkeypatch) -> None:
+    """Two reads proved the menu; the arrows' hold met another sender. The menu says connected."""
+    _lock_held_from(monkeypatch, 2)
+    runner = _ScriptedRunner(_pane(), [_NO_MENU, _MENU, _MENU])
+
+    result = await _terminal(runner).remote_control(_SESSION, DomainRemoteControlState.INACTIVE)
+
+    assert result is DomainRemoteControlState.ACTIVE
+    assert runner.keys_typed == REMOTE_CONTROL_OPEN_MENU_KEYS
+
+
+async def test_a_menu_gone_after_the_first_arrow_answers_a_reading() -> None:
+    """The first `Up` went, then the menu was gone: a reading, not "the composer holds text"."""
+    # Guard and pre-`Enter` reads, two settle reads, the arrows' guard, then the re-check.
+    runner = _ScriptedRunner(_pane(), [_NO_MENU, _NO_MENU, _MENU, _MENU, _MENU, _NO_MENU])
+
+    result = await _terminal(runner).remote_control(_SESSION, DomainRemoteControlState.INACTIVE)
+
+    assert result is DomainRemoteControlState.UNKNOWN
+    assert runner.keys_typed == REMOTE_CONTROL_OPEN_MENU_KEYS + REMOTE_CONTROL_DISCONNECT_KEYS[:1]
