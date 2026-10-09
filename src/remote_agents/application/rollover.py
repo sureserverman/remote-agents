@@ -34,6 +34,8 @@ code it is recorded under:
 - `FAILED: request-unwritten` -- the owner's request could not be written for the workflow
 - `FAILED: request-lost` -- the written request is gone, or names another session, before the
   workflow answered it; it is never written again (DEC-004)
+- `FAILED: request-unanswered` -- no `ready` answered the owner's request within
+  `REQUEST_PATIENCE` of asking (DEC-119)
 - `STOP_FAILED` -- the graceful stop was not sent or did not verify; its typed cause is the
   code: `predecessor-not-idle` when the pane was not idle under the stop's own key lock or for
   `NOT_IDLE_PATIENCE` before it, `stop-unconfirmed` when a restart found the stop in flight.
@@ -47,7 +49,9 @@ naming it is withdrawn, so the directory does not fill and a later plan in the s
 not hand off at its first gate.
 
 `request.json` is one file per checkout, so at most one owner's request per checkout is out at
-a time: the oldest open owner-asked rollover holds it until it ends, and later ones wait.
+a time: the oldest open owner-asked rollover holds it until it ends, and later ones wait. A
+request waits at most `REQUEST_PATIENCE`, so a plan that never reaches another gate does not hold
+the checkout for ever.
 """
 
 from __future__ import annotations
@@ -96,6 +100,15 @@ NOT_IDLE_PATIENCE = timedelta(minutes=10)
 
 ADOPTION_PATIENCE = timedelta(minutes=30)
 
+REQUEST_PATIENCE = timedelta(hours=24)
+"""How long an owner's request waits for the workflow's `ready`, counted from the asking (DEC-119).
+
+A request is answered at the plan's next stage gate, which can be hours away, so the wait is long.
+It is bounded because a plan that closes out, or is abandoned, never answers: unbounded, the row
+would hold the checkout's one `request.json` for ever. Quiet cancel at the last gate would need a
+"plan finished" signal this service cannot see; until the workflow writes one, this is the bound.
+"""
+
 READY_FRESHNESS = timedelta(minutes=5)
 """How old a `ready` may be when first seen and still be acted on. The pass looks every 30 s,
 so a `ready` first seen older than this was written while nobody was watching -- the switch
@@ -115,6 +128,7 @@ NOT_ROLLABLE = "not-rollable"
 NO_HANDOFF_ROOT = "no-handoff-root"
 REQUEST_UNWRITTEN = "request-unwritten"
 REQUEST_LOST = "request-lost"
+REQUEST_UNANSWERED = "request-unanswered"
 
 #: What a booting agent shows on its way to an idle composer, so the template waits it out.
 _BOOTING = frozenset(
@@ -349,6 +363,10 @@ class RolloverPass:
         if root is None:
             await self._fail(rollover, seen, NO_HANDOFF_ROOT)
             return
+        if self._now() - rollover.requested_at > REQUEST_PATIENCE:
+            # Given up, which frees the checkout's slot; `_finish` withdraws the request.
+            await self._fail(rollover, seen, REQUEST_UNANSWERED)
+            return
         holder = await self._request_slot_holder(root, seen)
         if holder is not None and holder.id != rollover.id:
             await self._note_waiting(rollover, holder)
@@ -373,7 +391,7 @@ class RolloverPass:
 
     async def _note_waiting(self, rollover: Rollover, holder: Rollover) -> None:
         """Say once, on the waiting row, whose request it waits behind -- a wait nothing else
-        would show, since a request has no patience of its own."""
+        would show until `REQUEST_PATIENCE`, 24 hours from the asking, gives the request up."""
         detail = f"waiting: {holder.predecessor_session_id}'s request holds this checkout"
         if any(event.detail == detail for event in await self._store.events(rollover.id)):
             return

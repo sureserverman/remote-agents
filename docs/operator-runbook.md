@@ -703,7 +703,8 @@ Each is recorded on the rollover as `FAILED: <code>`. None of them touches the o
 plan reads a request only at a gate. So press **Rollover now**, then tell the old session to
 carry on with its plan. At its next gate it hands off again, and the pending rollover picks up
 that new handoff. Until then the row reads *rollover pending · waiting for workflow boundary*,
-with no time limit. At the plan's last gate a request does not hand off, because the plan
+for up to 24 hours from when you asked; after that the request is given up as
+`request-unanswered`. At the plan's last gate a request does not hand off, because the plan
 closes out instead, so cancel the pending rollover then.
 
 - **`predecessor-not-idle`** — the old session was not idle for 10 minutes, so nothing was
@@ -739,6 +740,9 @@ closes out instead, so cancel the pending rollover then.
   at the checkout's top level is writable, then ask again.
 - **`request-lost`** — the written request was gone, or named another session, before the
   workflow answered. It is never written again. Ask again.
+- **`request-unanswered`** — no handoff answered the request within 24 hours of asking, so it
+  was given up and the checkout is free for another request. The old session is untouched. If
+  its plan is still running, ask again and tell it to carry on.
 
 **`STOP_FAILED`** means the successor accepted and holds the work, and the graceful stop of the
 old session was not sent or did not verify. Stop the old session when it is done, or force stop

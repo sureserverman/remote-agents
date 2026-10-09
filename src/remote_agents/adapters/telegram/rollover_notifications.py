@@ -33,6 +33,7 @@ from remote_agents.application.notification_policy import rollover_told
 from remote_agents.application.rollover import (
     ADOPTION_PATIENCE,
     NOT_IDLE_PATIENCE,
+    REQUEST_PATIENCE,
     RolloverReport,
 )
 from remote_agents.domain.rollover import RolloverState
@@ -44,6 +45,7 @@ _GIVE_UP_AFTER = timedelta(minutes=10)
 
 _MINUTES_IDLE = int(NOT_IDLE_PATIENCE.total_seconds() // 60)
 _MINUTES_ADOPT = int(ADOPTION_PATIENCE.total_seconds() // 60)
+_HOURS_ASKED = int(REQUEST_PATIENCE.total_seconds() // 3600)
 
 #: Why a rollover failed, in words. A code missing here is shown as itself.
 _WHY = {
@@ -64,6 +66,7 @@ _WHY = {
     "no-handoff-root": "the project is not in a git checkout",
     "request-unwritten": "the request could not be handed to the workflow",
     "request-lost": "the request was gone before the workflow answered it",
+    "request-unanswered": f"the workflow did not answer the request within {_HOURS_ASKED} hours",
 }
 
 #: Why the stop of a rollover's predecessor did not go through. No duration: the not-idle

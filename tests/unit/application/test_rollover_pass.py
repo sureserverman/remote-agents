@@ -859,3 +859,41 @@ async def test_a_ready_written_moments_ago_is_acted_on(rig: Rig) -> None:
     await rig.run()
 
     assert len(rig.launches) == 1
+
+
+async def test_a_request_unanswered_for_24_hours_fails_and_frees_the_checkout(rig: Rig) -> None:
+    """A plan that never reaches another gate never answers; the slot is not held for ever."""
+    other = SessionId.new()
+    rig.sessions[other] = _record(other)
+    first = await rig.store.request(rig.predecessor, project_id=PROJECT, profile_id=CLAUDE, at=NOW)
+    second = await rig.store.request(
+        other, project_id=PROJECT, profile_id=CLAUDE, at=NOW + timedelta(hours=1)
+    )
+    assert first is not None and second is not None
+    await rig.run()
+    assert rig.envelopes.request == str(rig.predecessor)
+
+    rig.later(timedelta(hours=24, seconds=1))
+    await rig.run()
+
+    ended = next(r for r in rig.store._select("1 = 1", ()) if r.id == first.id)
+    assert (ended.state, ended.failure_code) == (RolloverState.FAILED, "request-unanswered")
+    assert rig.envelopes.requests == [str(rig.predecessor), str(other)]
+    assert rig.envelopes.request == str(other), "the second request in the checkout proceeds"
+    assert [(r.rollover.id, r.rollover.failure_code) for r in rig.reports] == [
+        (first.id, "request-unanswered")
+    ], "exactly one FAILED notice, naming the code"
+    assert rig.launches == [] and rig.stops == []
+
+
+async def test_a_request_23_hours_59_minutes_old_keeps_waiting(rig: Rig) -> None:
+    await rig.store.request(rig.predecessor, project_id=PROJECT, profile_id=CLAUDE, at=NOW)
+    await rig.run()
+
+    rig.later(timedelta(hours=23, minutes=59))
+    await rig.run()
+
+    rollover = await rig.rollover()
+    assert rollover.state is RolloverState.REQUESTED
+    assert rig.envelopes.request == str(rig.predecessor)
+    assert rig.reports == []
