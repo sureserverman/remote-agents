@@ -309,7 +309,10 @@ MIGRATIONS: tuple[tuple[int, str], ...] = (
     # never reads it and still starts on a migrated store (`apply_migrations` skips what it has
     # already passed), but its `doctor` reports the store not ready at a version it does not
     # know, and `restore_database` will not restore backwards over the newer schema -- going
-    # back to its pre-migration backup drops every schedule. The CHECK admits exactly the two
+    # back to its pre-migration backup drops every schedule. The build that adds this
+    # migration restores that one-behind backup by migrating it forward (BL-129), so the
+    # schedules are lost there too but the store comes back; later builds refuse it as two
+    # or more behind. The CHECK admits exactly the two
     # shapes `when` has, so no row can be one `_when` cannot read.
     (
         17,

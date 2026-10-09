@@ -347,3 +347,174 @@ def test_a_ui_store_is_never_restored_over_the_domain_store(tmp_path: Path) -> N
     with pytest.raises(ValueError):
         restore_database(domain, ui_copy)
     assert domain.read_bytes() == b"not a SQLite database"
+
+
+def _store_and_list(directory: Path, kind: str) -> tuple[Path, tuple[tuple[int, str], ...]]:
+    """The store path `restore_database` judges by name, and the migration list it uses."""
+    from remote_agents.adapters.sqlite.database import ui_database_path
+    from remote_agents.adapters.sqlite.migrations import UI_MIGRATIONS
+
+    domain = directory / "sessions.sqlite3"
+    if kind == "ui":
+        return ui_database_path(domain), UI_MIGRATIONS
+    return domain, MIGRATIONS
+
+
+def _upgraded_with_a_marker(path: Path, migrations: tuple[tuple[int, str], ...]) -> None:
+    """The production sequence: a store one release old, then the upgrade that wrote `.bak`.
+
+    The marker row is written before the upgrade, so it is in the `.bak` the upgrade left --
+    a restored store carrying it is the backup's content, not a fresh empty store.
+    """
+    older = open_database(path, migrations=migrations[:-1])
+    older.execute("CREATE TABLE restore_marker (value TEXT NOT NULL)")
+    older.execute("INSERT INTO restore_marker(value) VALUES ('from-the-backup')")
+    older.commit()
+    older.close()
+    open_database(path, migrations=migrations).close()
+
+
+@pytest.mark.parametrize("kind", ["domain", "ui"])
+def test_a_backup_one_schema_behind_is_restored_and_migrated(tmp_path: Path, kind: str) -> None:
+    """BL-129: the `.bak` an upgrade writes is one schema behind, and is the default source."""
+    path, migrations = _store_and_list(tmp_path, kind)
+    _upgraded_with_a_marker(path, migrations)
+    head = migrations[-1][0]
+    assert current_version(sqlite3.connect(backup_path(path))) == head - 1, "the premise"
+    path.write_bytes(b"not a SQLite database")
+
+    restore_database(path)
+
+    assert database_is_ready(path, migrations)
+    restored = sqlite3.connect(path)
+    try:
+        assert current_version(restored) == head
+        assert restored.execute("SELECT value FROM restore_marker").fetchone() == (
+            "from-the-backup",
+        )
+    finally:
+        restored.close()
+    assert path.with_suffix(".sqlite3.corrupt").read_bytes() == b"not a SQLite database"
+    assert not path.with_suffix(".sqlite3.tmp").exists()
+
+
+@pytest.mark.parametrize("kind", ["domain", "ui"])
+def test_a_backup_two_schemas_behind_is_refused_by_name(tmp_path: Path, kind: str) -> None:
+    path, migrations = _store_and_list(tmp_path, kind)
+    head = migrations[-1][0]
+    old = tmp_path / "old.sqlite3"
+    if head - 2 > 0:
+        open_database(old, migrations=migrations[: head - 2]).close()
+        version = head - 2
+    else:
+        # The UI head is 2, so "two behind" is a file carrying no UI migration at all.
+        old.write_bytes(b"")
+        version = 0
+    path.write_bytes(b"not a SQLite database")
+
+    with pytest.raises(ValueError) as refused:
+        restore_database(path, old)
+
+    if version > 0:
+        assert str(refused.value) == (
+            f"database backup is two or more schema versions behind "
+            f"(v{version}; this release is v{head})"
+        )
+    else:
+        # The UI head is 2, so its "two behind" carries no UI schema at all: that is the
+        # unreadable refusal, and the two messages must stay distinct.
+        assert str(refused.value) == "database backup is not a readable current schema"
+    assert path.read_bytes() == b"not a SQLite database"
+    assert not path.with_suffix(".sqlite3.corrupt").exists()
+
+
+def test_a_failed_forward_migration_leaves_the_target_and_corrupt_copy_untouched(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The copy is migrated in its temporary file before anything is moved or published.
+
+    Migrating after preserving would leave no store at all; after publishing, a half-migrated
+    one. The head migration here raises, and the refusal must be that error -- not the
+    readiness refusal a one-behind backup used to meet, which never reached a migration.
+    """
+    path = tmp_path / "sessions.sqlite3"
+    open_database(path, migrations=MIGRATIONS[:-1]).close()
+    path.replace(backup_path(path))
+    path.write_bytes(b"not a SQLite database")
+    Path(f"{path}-wal").write_bytes(b"WAL evidence")
+    head = MIGRATIONS[-1][0]
+    monkeypatch.setattr(
+        database_module, "MIGRATIONS", (*MIGRATIONS[:-1], (head, "CREATE TABLE sessions (x);"))
+    )
+
+    with pytest.raises(sqlite3.OperationalError, match="already exists"):
+        restore_database(path)
+
+    assert path.read_bytes() == b"not a SQLite database"
+    assert Path(f"{path}-wal").read_bytes() == b"WAL evidence"
+    assert not path.with_suffix(".sqlite3.corrupt").exists()
+    assert not path.with_suffix(".sqlite3.tmp").exists()
+    assert current_version(sqlite3.connect(backup_path(path))) == head - 1, "source untouched"
+
+
+@pytest.mark.parametrize("kind", ["domain", "ui"])
+def test_a_restored_store_is_never_world_readable(tmp_path: Path, kind: str) -> None:
+    """Every copy `_backup_connection` publishes is owner-only, whatever the umask.
+
+    The UI store holds live callback tokens. Its restored file and the `.bak` each upgrade
+    writes used to be published at the process umask -- 0644 here -- until the next open
+    narrowed the live file, and nothing ever narrowed the `.bak`.
+    """
+    path, migrations = _store_and_list(tmp_path, kind)
+    previous = os.umask(0o022)
+    try:
+        _upgraded_with_a_marker(path, migrations)
+        assert backup_path(path).stat().st_mode & 0o077 == 0, "the upgrade's .bak"
+        path.write_bytes(b"not a SQLite database")
+        restore_database(path)
+    finally:
+        os.umask(previous)
+
+    assert path.stat().st_mode & 0o077 == 0, "the restored store"
+
+
+def test_the_forward_migration_never_crosses_the_store_split(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Migration 14 drops the UI tables and may only run after `split_stores` copied them.
+
+    Pinned through `restore_database` itself, not by re-deriving its window: a one-behind
+    restore runs the head migration alone, and a backup from before the split is refused
+    before any migration runs. Widening the window would fail one half or the other.
+    """
+    assert "DROP TABLE IF EXISTS callback_states" in dict(MIGRATIONS)[14], (
+        "migration 14 is no longer the split; re-derive which migration this guards"
+    )
+    ran: list[int] = []
+    real = database_module.apply_migrations
+
+    def recording(connection, migrations=MIGRATIONS):
+        before = current_version(connection)
+        real(connection, migrations)
+        ran.extend(version for version, _ in migrations if version > before)
+
+    head = MIGRATIONS[-1][0]
+    path = tmp_path / "sessions.sqlite3"
+    open_database(path, migrations=MIGRATIONS[:-1]).close()
+    path.replace(backup_path(path))
+    path.write_bytes(b"not a SQLite database")
+    pre_split = tmp_path / "pre-split.sqlite3"
+    open_database(pre_split, migrations=MIGRATIONS[:13]).close()
+    damaged = tmp_path / "other" / "sessions.sqlite3"
+    damaged.parent.mkdir()
+    damaged.write_bytes(b"not a SQLite database")
+    # Installed after the setup, whose own `open_database` calls migrate through it too.
+    monkeypatch.setattr(database_module, "apply_migrations", recording)
+
+    restore_database(path)
+    assert ran == [head]
+
+    ran.clear()
+    with pytest.raises(ValueError, match="two or more schema versions behind"):
+        restore_database(damaged, pre_split)
+    assert ran == [], "a pre-split backup reached a migration"

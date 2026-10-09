@@ -1,0 +1,28 @@
+{
+ "baseline": {
+  "elapsed_s": 1.1,
+  "exit": 0,
+  "tail": ".....................                                                    [100%]\n21 passed in 0.79s"
+ },
+ "break_patch": "--- a/src/remote_agents/adapters/sqlite/database.py\t2026-10-09 22:17:28.766603147 +0100\n+++ b/src/remote_agents/adapters/sqlite/database.py\t2026-10-09 22:17:28.774882304 +0100\n@@ -281,6 +281,8 @@\n     # failing migration raises with the target and its sidecars exactly where they were;\n     # preserving first would leave no store at all, publishing first a half-migrated one.\n     # Never through `open_database`, which would write `.bak` again over the source.\n+    if path.exists():\n+        _preserve_corrupt_database(path)\n     source_connection = _read_only_connection(source)\n     try:\n         temporary = _private_copy(source_connection, path)\n@@ -293,8 +295,6 @@\n             apply_migrations(copy, migrations)\n         finally:\n             copy.close()\n-        if path.exists():\n-            _preserve_corrupt_database(path)\n     except BaseException:\n         temporary.unlink(missing_ok=True)\n         raise\n",
+ "build": null,
+ "created": "2026-10-09T21:20:30+00:00",
+ "fingerprint": "126eae199d28f9364fa1918eca491882b467f8380a18c694c1a42178cc735baa",
+ "index": 1,
+ "kind": "claim",
+ "named_break": null,
+ "no_build_reason": "pure Python, no build",
+ "plan": "/mnt/vault/Portfolio/infra/remote-agents/plans/2026-10-09-decisions-and-worktrees-sub-02-robustness-plan.md",
+ "red": {
+  "elapsed_s": 1.1,
+  "exit": 1,
+  "tail": "        path.replace(backup_path(path))\n        path.write_bytes(b\"not a SQLite database\")\n        Path(f\"{path}-wal\").write_bytes(b\"WAL evidence\")\n        head = MIGRATIONS[-1][0]\n        monkeypatch.setattr(\n            database_module, \"MIGRATIONS\", (*MIGRATIONS[:-1], (head, \"CREATE TABLE sessions (x);\"))\n        )\n    \n        with pytest.raises(sqlite3.OperationalError, match=\"already exists\"):\n            restore_database(path)\n    \n>       assert path.read_bytes() == b\"not a SQLite database\"\n               ^^^^^^^^^^^^^^^^^\n\ntests/integration/sqlite/test_recovery.py:453: \n_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ \n../../../.local/share/uv/python/cpython-3.14.4-linux-x86_64-gnu/lib/python3.14/pathlib/__init__.py:777: in read_bytes\n    with self.open(mode='rb', buffering=0) as f:\n         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ \n\nself = PosixPath('/tmp/pytest-of-user/pytest-931/test_a_failed_forward_migratio0/sessions.sqlite3')\nmode = 'rb', buffering = 0, encoding = None, errors = None, newline = None\n\n    def open(self, mode='r', buffering=-1, encoding=None,\n             errors=None, newline=None):\n        \"\"\"\n        Open the file pointed to by this path and return a file object, as\n        the built-in open() function does.\n        \"\"\"\n        if \"b\" not in mode:\n            encoding = io.text_encoding(encoding)\n>       return io.open(self, mode, buffering, encoding, errors, newline)\n               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nE       FileNotFoundError: [Errno 2] No such file or directory: '/tmp/pytest-of-user/pytest-931/test_a_failed_forward_migratio0/sessions.sqlite3'\n\n../../../.local/share/uv/python/cpython-3.14.4-linux-x86_64-gnu/lib/python3.14/pathlib/__init__.py:771: FileNotFoundError\n=========================== short test summary info ============================\nFAILED tests/integration/sqlite/test_recovery.py::test_a_failed_forward_migration_leaves_the_target_and_corrupt_copy_untouched\n1 failed, 20 passed in 0.77s"
+ },
+ "schema": 2,
+ "task": "1.1",
+ "test": "uv run --locked pytest tests/integration/sqlite/test_recovery.py -q -p no:randomly && ! grep -n 'refuses it\\|refused by the release that wrote it' docs/database-recovery.md",
+ "text": "`uv run --locked pytest tests/integration/sqlite/test_recovery.py -q -p no:randomly && ! grep -n 'refuses it\\|refused by the release that wrote it' docs/database-recovery.md`. The failed-migration case goes red if migration runs after preservation: inject a raising migration and assert the target bytes are unchanged and no `.corrupt` file appeared.",
+ "touched": [
+  "src/remote_agents/adapters/sqlite/database.py"
+ ]
+}

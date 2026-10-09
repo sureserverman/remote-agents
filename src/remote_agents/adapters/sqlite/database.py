@@ -250,7 +250,19 @@ def restore_database(path: Path, backup: Path | None = None) -> None:
     # such choice: it compares the file with its own backup, two stores of the same kind.
     surface = path.name == ui_database_path(path).name
     migrations = UI_MIGRATIONS if surface else MIGRATIONS
-    if not database_is_ready(source, migrations):
+    head = migrations[-1][0]
+    # One schema behind is accepted and migrated forward (BL-129): the default `.bak` is the
+    # snapshot `open_database` took just before a migration, so on the release that wrote it
+    # it is exactly one behind. Two behind is refused rather than walked further, because a
+    # long walk could run domain migration 14, which drops the UI tables and is only safe
+    # after `split_stores` copied them out.
+    version = _schema_version(source)
+    if 0 < version < head - 1:
+        raise ValueError(
+            f"database backup is two or more schema versions behind "
+            f"(v{version}; this release is v{head})"
+        )
+    if version not in (head - 1, head):
         raise ValueError("database backup is not a readable current schema")
     # A version number alone does not say which store a file is: an old domain store at
     # version 2 reads as a current UI store. Every domain store has `sessions` (migration 1)
@@ -265,25 +277,61 @@ def restore_database(path: Path, backup: Path | None = None) -> None:
             "refusing to replace a database at a newer schema than the backup: run the "
             "build that created it, rather than restoring over it"
         )
-    if path.exists():
-        _preserve_corrupt_database(path)
+    # The order is the safety argument. The copy is migrated in its temporary file first, so a
+    # failing migration raises with the target and its sidecars exactly where they were;
+    # preserving first would leave no store at all, publishing first a half-migrated one.
+    # Never through `open_database`, which would write `.bak` again over the source.
     source_connection = _read_only_connection(source)
     try:
-        _backup_connection(source_connection, path)
+        temporary = _private_copy(source_connection, path)
     finally:
         source_connection.close()
+    try:
+        copy = sqlite3.connect(temporary)
+        try:
+            copy.execute("PRAGMA foreign_keys = ON")
+            apply_migrations(copy, migrations)
+        finally:
+            copy.close()
+        if path.exists():
+            _preserve_corrupt_database(path)
+    except BaseException:
+        temporary.unlink(missing_ok=True)
+        raise
+    # A failure here leaves the migrated `.tmp` and no store, never a half-migrated one. A
+    # re-run recovers: with `path` absent there is nothing to preserve, and the copy is rebuilt.
+    os.replace(temporary, path)
 
 
 def _backup_connection(source: sqlite3.Connection, destination: Path) -> None:
     """Use SQLite's online backup API and atomically publish only a complete snapshot."""
+    os.replace(_private_copy(source, destination), destination)
+
+
+def _private_copy(source: sqlite3.Connection, destination: Path) -> Path:
+    """Copy `source` into an owner-only temporary file beside `destination`, and return it.
+
+    Created 0600 before SQLite opens it, not narrowed afterwards: the UI store holds live
+    callback tokens, and both its restored file and the `.bak` each upgrade writes used to be
+    published at the process umask (0644 measured), world-readable until something else
+    narrowed them -- and nothing ever narrowed the `.bak`.
+    """
     temporary = destination.with_suffix(destination.suffix + ".tmp")
-    temporary.unlink(missing_ok=True)
-    target = sqlite3.connect(temporary)
+    # Sidecars too: a journal left by a run killed mid-migration would read as hot to SQLite
+    # and be replayed into the fresh copy.
+    for leftover in (temporary, *(Path(f"{temporary}{s}") for s in ("-journal", "-wal", "-shm"))):
+        leftover.unlink(missing_ok=True)
+    os.close(os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600))
     try:
-        source.backup(target)
-    finally:
-        target.close()
-    os.replace(temporary, destination)
+        target = sqlite3.connect(temporary)
+        try:
+            source.backup(target)
+        finally:
+            target.close()
+    except BaseException:
+        temporary.unlink(missing_ok=True)
+        raise
+    return temporary
 
 
 def _preserve_corrupt_database(path: Path) -> None:

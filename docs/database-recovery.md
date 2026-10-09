@@ -9,8 +9,8 @@ tmux -L remote-agents list-panes -a
 ```
 
 Stop the user service before restoring. The command refuses to overwrite a healthy database,
-preserves unreadable `sessions.sqlite3` evidence as `sessions.sqlite3.corrupt`, and restores only
-from a readable current-schema backup.
+preserves unreadable `sessions.sqlite3` evidence as `sessions.sqlite3.corrupt`, and restores
+from a readable backup at the current schema or one behind it.
 
 ```bash
 systemctl --user stop remote-agents.service
@@ -24,9 +24,12 @@ only when restoring a separately retained verified backup. Do not delete either 
 `.bak` file until the restored service has passed its health check.
 
 **The default `.bak` is usually one schema behind.** It is the snapshot taken just before a
-migration ran, so it sits at the schema of the release before the one that wrote it, and that
-release's own `restore-database` refuses it as "not a readable current schema". It restores on that
-earlier release; on the current one, pass a current-schema backup with `--backup`.
+migration ran, so it sits at the schema of the release before the one that wrote it. The command
+migrates it forward in a private temporary copy first. Only then does it move the damaged file
+aside and publish the copy. A migration that fails leaves the damaged file, its sidecars and the
+backup exactly where they were. A backup two or more schemas behind is refused, naming its
+version and this release's, for example "two or more schema versions behind (v16; this release is
+v18)". Restore that one on a release whose schema is at most one ahead of it.
 
 The surface store, `ui.sqlite3` beside it, restores the same way. It holds the bot's button tokens
 and standing messages, and `remote-agents doctor` reports it as its own `ui_store` component. Its
@@ -41,8 +44,8 @@ systemctl --user start remote-agents.service
 ```
 
 Its default backup is `ui.sqlite3.bak`, written just before a UI migration runs on an existing
-file, so like the domain `.bak` it is usually one UI schema behind and refused by the release that
-wrote it. The same refusals hold: a healthy `ui.sqlite3` is not replaced, one at a newer schema
+file, so like the domain `.bak` it is usually one UI schema behind and is migrated forward the
+same way. The same refusals hold: a healthy `ui.sqlite3` is not replaced, one at a newer schema
 than its backup is not rolled back, and a backup of the other store is refused even when its
 version number matches. The target must be named `ui.sqlite3` for the UI counter to apply.
 
@@ -177,4 +180,7 @@ surface lost state while session history is fine — is exactly a healthy one. I
 stop. That refusal is correct: reaching for a pre-split snapshot then would trade intact session
 history for surface rows you can get back with the restore above. Use it only when
 `sessions.sqlite3` is itself damaged, and note the version rule the procedure at the top of this
-file already carries: a snapshot predating a migration reads as *not ready* to a newer build.
+file carries: a restore migrates a backup forward by one schema at most. A pre-split snapshot sits
+before migration 14, several schemas back, so this release names its version and refuses the
+snapshot. It never walks a snapshot across migration 14, which drops the surface tables
+`split_stores` copies out first.
