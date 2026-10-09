@@ -1302,7 +1302,7 @@ _TITLED_PANES = {
     "projects": ("ProjectsPane", "#choices", "Projects 2 · recent first"),
     "sessions": ("SessionsPane", "#choices", "Sessions 1 · ● 1 running"),
     "limits": ("LimitsPane", "#limits-pane", "Plan limits · account-wide"),
-    "feed": ("FeedPane", "#feed-pane", "Feed · newest first · enter expands"),
+    "feed": ("FeedPane", "#feed-pane", "Feed · ~ guessed · newest first · enter expands"),
 }
 
 

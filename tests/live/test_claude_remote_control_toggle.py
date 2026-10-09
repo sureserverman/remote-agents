@@ -9,6 +9,7 @@ taken out, which is what makes it drillable here at all.
 
 from __future__ import annotations
 
+import asyncio
 import os
 import shutil
 from pathlib import Path
@@ -16,6 +17,7 @@ from pathlib import Path
 import pytest
 
 from remote_agents.adapters.agents.registry import profile_composers
+from remote_agents.adapters.tmux.composer import PaneState, classify
 from remote_agents.adapters.tmux.gateway import TmuxGateway
 from remote_agents.adapters.tmux.profiles import build_launch_profile
 from remote_agents.adapters.tmux.runtime import AsyncTmuxRunner, TmuxTerminal
@@ -224,13 +226,24 @@ async def test_a_press_is_refused_mid_turn_with_its_reason(tmp_path: Path) -> No
         launched = await terminal.launch(session_id, project_id, definition.profile_id)
         assert launched.live, launched.detail
 
-        # As Claude's `UserPromptSubmit` hook does in production: the turn is marked started.
-        markers.start(str(session_id))
         sent = await terminal.send_prompt(
             session_id, "Write one paragraph of about 150 words on why terminals multiplex."
         )
         assert sent.outcome is PromptOutcome.SENT, sent
+        # After the submit, as Claude's `UserPromptSubmit` hook marks it in production. Before it,
+        # a marker this young reads BUSY and the relay would refuse its own prompt.
+        markers.start(str(session_id))
+
+        # The refusal must be the pane's, not only the marker's: wait until the screen alone --
+        # no marker -- reads a running turn, then press at once.
+        descriptor = profile_composers()[str(definition.profile_id)]
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + 30
         before = await gateway.capture(session_id)
+        while classify(before, descriptor) is not PaneState.BUSY:
+            assert loop.time() < deadline, f"the real pane never read busy:\n{before}"
+            await asyncio.sleep(0.1)
+            before = await gateway.capture(session_id)
 
         with pytest.raises(RemoteControlRefused) as refused:
             await service.set_remote_control(
@@ -241,7 +254,7 @@ async def test_a_press_is_refused_mid_turn_with_its_reason(tmp_path: Path) -> No
         assert store.writes == [], "a refused press wrote a reading over the stored ACTIVE"
         assert store.record.remote_control_state is RemoteControlState.ACTIVE
         after = await gateway.capture(session_id)
-        assert "/remote-control" not in after or "/remote-control" in before, (
+        assert after.count("/remote-control") == before.count("/remote-control"), (
             "the press typed into a running turn"
         )
     finally:

@@ -1327,11 +1327,12 @@ reporting the wrong reason an agent stopped is worse than reporting nothing.
 
 Codex is the exception to the table's Claude-hook source wording: `Stop` is reported, while a
 supported Codex `PermissionRequest` is reported only when the provider actually emits it, which
-codex-cli 0.154.0 and later do for every escalation (above). For an approval the hook does not
-reach — an older build — the managed pane's title marker, `Action Required | <project>` behind a
+codex-cli 0.154.0 was measured doing for every escalation (above). For an approval the hook does
+not reach — an older build — the managed pane's title marker, `Action Required | <project>` behind a
 bracket Codex animates between two frames, is observed through tmux metadata only and becomes one
 inferred `needs_answer` on the transition into that state. It is matched from the start of the
-title with either frame admitted, so a project named like the marker cannot forge it (DEC-063). The title is never retained, and it must
+title with either frame admitted, so a title that merely contains the marker does not match
+(DEC-063). The title is never retained, and it must
 clear before another such notification can be sent. If tmux title metadata is temporarily
 unavailable, the marker is cleared rather than left standing — nothing is emitted while it cannot
 be read, and the next readable active title re-arms one generic inferred notice rather than risking
@@ -1386,8 +1387,7 @@ An **inferred** observation appends one further sentence, "This is a guess, not 
 reported." Two signals are inferred: the Codex `Action Required` title edge described above, and
 a limit stop read off the pane rather than reported by a hook (DEC-107). Nothing said either, so
 each is worth telling the owner and not worth telling them as a fact. The terminal feed marks the
-same rows with `~` beside the kind glyph, explained in the feed's title as "guessed, not
-reported"; it is a character rather than a colour, so it survives `NO_COLOR` (DEC-010). The hedge is appended on the
+same rows with `~` beside the kind glyph, explained first in the feed's title as "~ guessed"; it is a character rather than a colour, so it survives `NO_COLOR` (DEC-010). The hedge is appended on the
 observation's *confidence* rather than on its kind, which is why it has now outlived two of its own
 subjects: an upstream idle timer this service no longer maps, and the pane-digest report retired
 on 2026-08-30. A future inferred signal is hedged by that rule rather than by whoever writes its

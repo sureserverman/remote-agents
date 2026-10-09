@@ -443,8 +443,8 @@ with `remote-agents install-agent-hooks --provider codex`. For Claude and Codex,
 leaves a per-session marker, a turn started, that the same agent's `Stop` removes (DEC-104). The prompt
 relay reads it, because Claude draws nothing busy while it streams an answer. **Upgrading to
 0.49.0 or later, re-run both installs**, then relaunch sessions to pick the hook up; without it
-the relay reads the screen alone, as before. Codex 0.154.0 and later call `PermissionRequest`
-for every escalation; for an approval that hook does not reach, the managed tmux pane's
+the relay reads the screen alone, as before. Codex 0.154.0 calls `PermissionRequest` for every
+escalation (measured on that build); for an approval that hook does not reach, the managed tmux pane's
 content-free `Action Required` title (either frame of its animated marker) produces one inferred
 `needs_answer` notification until it clears. Neither path exposes a
 remote approval action or retains the command, prompt, path, or transcript. A completed Codex

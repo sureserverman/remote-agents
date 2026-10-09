@@ -89,7 +89,8 @@ _TITLE_TIMEOUT_SECONDS = 15.0
 # Observed in the managed Codex TUI while a native local approval is open.  Codex animates the
 # bracket (`[ ! ]` and `[ . ]` alternate), so one non-space glyph is admitted there; the project
 # name after the separator varies, so that suffix is admitted too.  Anchored at the start, so a
-# project named like the marker cannot forge it (BL-034, DEC-063).  This is terminal metadata,
+# title that merely contains the marker does not match (BL-034, DEC-063); a project directory
+# named exactly like the marker still would, as it did before.  This is terminal metadata,
 # not an upstream hook contract: it may become unavailable in a later Codex release, in which
 # case it safely yields no inferred activity.
 _CODEX_ACTION_REQUIRED = re.compile(r"^\[ \S \] Action Required \| ")
@@ -431,7 +432,7 @@ def observe_codex_action_required(
 
 
 class CodexApprovalWatcher:
-    """Watch Codex panes for the one approval its own hook never reports.
+    """Watch Codex panes for an approval its own hook may not report (builds before 0.154).
 
     Application-layer under DEC-001: the terminal is reached through a callable the caller
     supplies, so nothing here knows what tmux is, and the driver adapter never reaches a pane.
@@ -443,7 +444,7 @@ class CodexApprovalWatcher:
     ever touched pane content. The second is the whole of DEC-063 and is unchanged.
 
     So this now reads titles and nothing else, for `ActivitySource.HYBRID` sessions and nothing
-    else. It holds one boolean per session -- whether the exact marker was present last pass --
+    else. It holds one boolean per session -- whether the anchored marker was present last pass --
     and never a title, a capture, a command, a prompt, a path or a provider identifier.
     """
 
@@ -458,7 +459,7 @@ class CodexApprovalWatcher:
         self._title = title
         self._title_timeout = _TITLE_TIMEOUT_SECONDS
         self._now = now
-        # A title is never stored: only whether the exact native Codex marker was present on
+        # A title is never stored: only whether the anchored native Codex marker was present on
         # the last successful pass. A separate boolean presence set tells a first title read from
         # a known-title recovery without retaining title content.
         self._action_required: dict[str, bool] = {}

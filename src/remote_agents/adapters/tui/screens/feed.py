@@ -165,7 +165,7 @@ _EMPTY_FEED_ROW = "notification:none"
 #: new handler, and specifically no app-level one (`screens/base.py:952` says why).
 NOTIFICATION_PREFIX = "notification:"
 
-FEED_TITLE = "Feed[$text-muted] · newest first · ~ guessed, not reported · enter expands[/]"
+FEED_TITLE = "Feed[$text-muted] · ~ guessed · newest first · enter expands[/]"
 """The pane's border title: the name, and the one key that means something here, muted.
 
 Markup, deliberately, on the one string in this module that carries no agent's words -- the

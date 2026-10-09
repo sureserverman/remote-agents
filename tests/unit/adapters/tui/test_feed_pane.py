@@ -1908,7 +1908,9 @@ def test_the_tilde_survives_no_color() -> None:
 def test_the_feed_title_explains_the_tilde() -> None:
     from remote_agents.adapters.tui.screens.feed import FEED_TITLE
 
-    assert "~ guessed, not reported" in FEED_TITLE
+    # First after the name: the dashboard's feed region cuts the title from the right at 80
+    # columns, and the legend has to survive where the `~` rows are drawn.
+    assert FEED_TITLE.startswith("Feed[$text-muted] · ~ guessed · ")
 
 
 async def test_an_inferred_flash_carries_the_tilde() -> None:
