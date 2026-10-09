@@ -308,8 +308,8 @@ _CAPTURE_TIMEOUT_SECONDS = 5.0
 class LimitScreenWatcher:
     """Find the limit stop an agent draws on its pane when it reports no limit event of its own.
 
-    Codex fires no hook on a failed turn and Cursor Agent has no hooks at all, so the only
-    place either says a usage limit stopped it is its screen. This watches exactly the running
+    Codex fires no hook on a failed turn and Cursor Agent's one installed hook, `stop`, says only
+    that a turn completed, so the only place either says a usage limit stopped it is its screen. This watches exactly the running
     sessions whose provider declares a `limit_screen` and does **not** report `LIMIT_REACHED`
     itself -- Claude's `StopFailure` is the better evidence for Claude, and a second, inferred
     copy of it would be the redundancy DEC-066 retired `quiet` for.

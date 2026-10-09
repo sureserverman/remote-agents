@@ -92,6 +92,21 @@ class _HookProvider:
     machinery names no provider (the instances live with the installer).
     """
 
+    flat: bool = False
+    """Whether each event lists hook entries directly, `{"command": ...}`, rather than groups.
+
+    Claude's and Codex's files nest a `hooks` list inside each group; Cursor's puts the entry
+    itself under the event. Everything else -- which entry is ours, the round trip, the refusals
+    -- is the same rule applied one container in.
+    """
+
+    fresh: tuple[tuple[str, Any], ...] = ()
+    """The keys a file created from nothing starts with, before our hooks are added.
+
+    Cursor's file carries `"version": 1`. Treated as what a missing file holds, so removal
+    lands back on it and the round-trip check compares like with like.
+    """
+
 
 @dataclass(frozen=True, slots=True)
 class _SettingsStyle:
@@ -150,9 +165,11 @@ def _read_settings(path: Path, provider: _HookProvider | None) -> _Settings:
                 "install into; refusing to create one"
             ) from None
         # A settings file is the agent's, and creating one holding only our own hooks is both
-        # valid and what a fresh machine needs. Removal later empties it back to `{}` rather
-        # than deleting it, because by then the file may hold settings we never saw.
-        return _Settings(path, None, {}, _DEFAULT_STYLE, 0o600)
+        # valid and what a fresh machine needs. Removal later empties it back to `{}` (or the
+        # provider's `fresh` keys) rather than deleting it, because by then the file may hold
+        # settings we never saw.
+        document = {} if provider is None else dict(provider.fresh)
+        return _Settings(path, None, document, _DEFAULT_STYLE, 0o600)
     except OSError as error:
         raise HookInstallError(f"cannot read {path}: {error}") from error
     try:
@@ -353,7 +370,11 @@ def _with_our_groups(
     command = ours
     hooks = dict(document.get("hooks") or {})
     for event in provider.installed_events:
-        group = {"hooks": [{"type": "command", "command": command}]}
+        group = (
+            {"command": command}
+            if provider.flat
+            else {"hooks": [{"type": "command", "command": command}]}
+        )
         # `or ()` rather than a `.get` default, because an explicit JSON null defeats the
         # default and unpacking it raised out through the CLI as a traceback. Reading null as
         # "no groups" is what the validator above already decided; the round-trip check then
@@ -487,7 +508,7 @@ def _mentions_our_subcommand(group: Any, provider: _HookProvider) -> bool:
     """Report a group running our subcommand that `_is_our_group` will not claim."""
     if _is_our_group(group, provider) or not isinstance(group, dict):
         return False
-    entries = group.get("hooks")
+    entries = [group] if provider.flat else group.get("hooks")
     if not isinstance(entries, list):
         return False
     for entry in entries:
@@ -522,6 +543,15 @@ def _is_our_group(group: Any, provider: _HookProvider) -> bool:
     narrowing on removal, or silently dropped it on reinstall, which is the same
     unrecoverable outcome the paragraph above exists to prevent.
     """
+    if provider.flat:
+        # The entry is the group: ours carries `command` and nothing else, so one holding a
+        # `timeout`, a `matcher` or a `type` is the operator's, whatever it runs.
+        return (
+            isinstance(group, dict)
+            and set(group) == {"command"}
+            and isinstance(group["command"], str)
+            and _runs_our_command(group["command"], provider)
+        )
     if not isinstance(group, dict) or set(group) != {"hooks"}:
         return False
     entries = group.get("hooks")

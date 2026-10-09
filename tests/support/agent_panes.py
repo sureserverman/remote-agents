@@ -65,6 +65,23 @@ def CODEX_READY(text: str) -> bool:  # noqa: N802 -- read beside CLAUDE_READY, a
     return classify(text, _codex()) is PaneState.IDLE
 
 
+@cache
+def _cursor():
+    from remote_agents.adapters.agents.cursor import descriptor
+
+    return descriptor()
+
+
+def CURSOR_READY(text: str) -> bool:  # noqa: N802 -- read beside CODEX_READY
+    """Cursor's composer, read as the relay reads it: IDLE.
+
+    The drill launches with `--trust`, so no trust box is raised and there is nothing to answer.
+    """
+    from remote_agents.adapters.tmux.composer import PaneState, classify
+
+    return classify(text, _cursor()) is PaneState.IDLE
+
+
 CLAUDE_OPENING = (
     # Raised only for a folder claude has not been told about. The option words are the
     # 2.1.280 bundle's own ("Yes, I trust this folder" / "No, exit").

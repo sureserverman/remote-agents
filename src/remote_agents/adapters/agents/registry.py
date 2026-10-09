@@ -89,6 +89,7 @@ from remote_agents.adapters.agents.claude.usage import ClaudeUsageReader
 from remote_agents.adapters.agents.claude.usage_api import USAGE_API_DESCRIPTION
 from remote_agents.adapters.agents.codex.account_limits import CodexAccountLimitsReader
 from remote_agents.adapters.agents.codex.hooks import PROVIDER as _CODEX
+from remote_agents.adapters.agents.cursor.hooks import PROVIDER as _CURSOR
 from remote_agents.adapters.agents.cursor.usage import CursorUsageReader
 from remote_agents.adapters.agents.cursor.usage_api import (
     USAGE_API_DESCRIPTION as _CURSOR_USAGE_API_DESCRIPTION,
@@ -659,7 +660,7 @@ see ``activity_spool._DISCRIMINATING_FIELDS`` for what that cost.
 """
 
 
-_PROVIDERS = {provider.name: provider for provider in (_CLAUDE, _CODEX, _OPENCODE)}
+_PROVIDERS = {provider.name: provider for provider in (_CLAUDE, _CODEX, _OPENCODE, _CURSOR)}
 
 
 def _provider(name: str) -> _HookProvider:

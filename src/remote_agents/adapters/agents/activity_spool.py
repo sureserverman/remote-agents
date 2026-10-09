@@ -349,6 +349,8 @@ def _observed(
     """Keep only the fields a notification is built from."""
     if provider == "opencode":
         return _observed_opencode_event(document, session_id, moment)
+    if provider == "cursor":
+        return _observed_cursor_event(document, session_id, moment)
     event = _plain_token(document.get("hook_event_name"))
     if event is None:
         return None
@@ -534,6 +536,29 @@ def _observed_opencode_event(
         detail=_first(document, _OPENCODE_DETAIL_FIELDS.get(event, ()), bounded_detail_line),
         observed_at=moment.astimezone(UTC),
         ask=_first(document, _OPENCODE_ASK_FIELDS.get(event, ()), _plain_token),
+    )
+
+
+def _observed_cursor_event(
+    document: Mapping[str, object], session_id: str, moment: datetime
+) -> ObservedAgentEvent | None:
+    """Read a Cursor hook payload, admitting one event, a completed `stop`, and no field of it.
+
+    Its own branch because an unknown provider would fall into Claude's, which admits any plain
+    event name. Cursor's `stop` carries `user_email` -- and its hook's environment carries it
+    again as `CURSOR_USER_EMAIL` -- plus `transcript_path` and `workspace_roots`
+    (`docs/acceptance-2026-10-08-cursor-user-stop-hook.md`). None of them is read: the record is
+    the event, the session and the time, which is all the relay's "finished" needs (DEC-013,
+    DEC-037). An `aborted` or `error` stop is not a turn that finished, so it records nothing.
+    """
+    if document.get("hook_event_name") != "stop" or document.get("status") != "completed":
+        return None
+    return ObservedAgentEvent(
+        session_id=session_id,
+        event="stop",
+        reason=None,
+        detail=None,
+        observed_at=moment.astimezone(UTC),
     )
 
 

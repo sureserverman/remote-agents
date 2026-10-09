@@ -3,8 +3,8 @@
 Captured live on 2026.09.28-64d2043 (`tests/provider_contract/fixtures/cursor/limit_screen.txt`,
 `docs/acceptance-2026-09-28-limit-screens.md`): `Error: Increase limits for faster responses`
 then `You're out of usage. Switch to Auto, or ask your admin to increase your limit to
-continue.`, with the unsent prompt left in the composer above. Cursor has no hooks, so the
-limit-screen watch reads this off the pane.
+continue.`, with the unsent prompt left in the composer above. Cursor's one installed hook,
+`stop`, reports only a completed turn, so the limit-screen watch reads this off the pane.
 
 **The window is the plan's month.** Cursor's included usage is monthly (`GetPlanInfo`:
 `INCLUDED_USAGE_PERIOD_MONTHLY`) and the sentence names no instant, so the hint names the window

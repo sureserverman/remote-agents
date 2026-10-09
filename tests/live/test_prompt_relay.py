@@ -37,6 +37,7 @@ from agent_panes import (
     CLAUDE_READY,
     CODEX_OPENING,
     CODEX_READY,
+    CURSOR_READY,
     Interstitial,
     open_to_composer,
 )
@@ -121,6 +122,8 @@ def _requirements(agent: str) -> None:
         pytest.skip("BLOCKED: claude is not logged in")
     if agent == "codex" and not (Path.home() / ".codex" / "auth.json").is_file():
         pytest.skip("BLOCKED: codex is not logged in with ChatGPT")
+    if agent == "cursor-agent" and not (Path.home() / ".config/cursor/auth.json").is_file():
+        pytest.skip("BLOCKED: cursor-agent is not logged in")
 
 
 #: The Codex homes this module's panes were given, retired after each test (`codex_home.py`).
@@ -140,11 +143,19 @@ def _open_pane(
     """A real agent pane on the scratch server, marked as a managed session, at its composer.
 
     With `spool`, the agent's real "finished" hook is installed for this pane only -- Claude's
-    through a `--settings` file, Codex's into its disposable home -- writing to that spool, and
-    the pane carries the managed-session variable the hook reads.
+    through a `--settings` file, Codex's into its disposable home, Cursor's into the scratch
+    workspace's project-level `.cursor/hooks.json`, which it reads beside the user-level one
+    (`docs/acceptance-2026-10-08-cursor-user-stop-hook.md`) -- writing to that spool, and the
+    pane carries the managed-session variable the hook reads.
     """
     session_id = SessionId.new()
-    command = ["claude", "--model", "sonnet"] if agent == "claude" else ["codex"]
+    command = {
+        "claude": ["claude", "--model", "sonnet"],
+        "codex": ["codex"],
+        # `--trust` skips the folder-trust box for the scratch folder, and `--force` lets the
+        # drill's own `sleep` run without an approval dialog, which the relay rightly refuses.
+        "cursor-agent": ["cursor-agent", "--trust", "--force"],
+    }[agent]
     environment: list[str] = []
     if spool is not None:
         environment = ["-e", f"{SESSION_ID_VARIABLE}={session_id}"]
@@ -179,6 +190,14 @@ def _open_pane(
                 provider="codex",
             )
         environment += ["-e", f"CODEX_HOME={codex_home}"]
+    if agent == "cursor-agent" and spool is not None:
+        (workspace / ".cursor").mkdir()
+        install_agent_hooks(
+            workspace / ".cursor" / "hooks.json",
+            executable=Path(sys.executable),
+            activity_directory=spool,
+            provider="cursor",
+        )
     subprocess.run(["git", "init", "-q"], cwd=workspace, check=False, timeout=30)
     _tmux(
         socket, "new-session", "-d", "-s", f"ra-{session_id}", "-x", "160", "-y", "40",
@@ -193,9 +212,11 @@ def _open_pane(
         ("@remote_agents_profile", agent),
     ):
         _tmux(socket, "set-option", "-p", "-t", pane, option, value)
-    ready, opening = (
-        (CLAUDE_READY, CLAUDE_OPENING) if agent == "claude" else (CODEX_READY, CODEX_OPENING)
-    )
+    ready, opening = {
+        "claude": (CLAUDE_READY, CLAUDE_OPENING),
+        "codex": (CODEX_READY, CODEX_OPENING),
+        "cursor-agent": (CURSOR_READY, ()),
+    }[agent]
     _answer(socket, pane, agent, ready, opening)
     return session_id, [pane]
 
@@ -372,7 +393,7 @@ def _wait_for_finished(spool: Path, session_id: SessionId, seconds: float = 240.
     pytest.fail(f"no finished event was spooled for the turn: {drained}")
 
 
-@pytest.mark.parametrize("agent", ["claude", "codex"])
+@pytest.mark.parametrize("agent", ["claude", "codex", "cursor-agent"])
 def test_queue_behind_a_real_turn_and_deliver_after_its_stop(agent: str, tmp_path: Path) -> None:
     """Busy pane: the message queues; the real Stop hook's record delivers it, exactly once."""
     _requirements(agent)

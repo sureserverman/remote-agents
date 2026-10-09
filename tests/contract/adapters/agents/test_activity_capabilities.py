@@ -57,15 +57,14 @@ def test_opencode_reports_through_its_own_plugin() -> None:
     assert ActivityKind.OUTPUT_LIMIT not in reported_activity_kinds_for("opencode")
 
 
-def test_cursor_is_observed_by_nothing() -> None:
-    """Retiring the pane-digest watch left this profile with no activity source at all.
+def test_cursor_reports_a_finished_turn_and_nothing_else() -> None:
+    """Observed by nothing from 2026-08-30, when the pane-digest watch retired, until 2026-10-09.
 
-    Accepted on 2026-08-30 rather than worked around: `cursor-agent` publishes no hooks and
-    carries no title marker, so the only signal it ever had was a guess about a pane that had
-    stopped changing. Reporting nothing about it is the honest state, and this contract is where
-    it is stated rather than discovered. It sits on exactly the footing OpenCode's did until
-    somebody measured: nobody has looked. Saying instead that no measurement *could* close it
-    would re-make the claim DEC-076 exists to retract.
+    That state was accepted on the footing OpenCode's had until somebody measured: nobody had
+    looked. Then somebody did (`docs/acceptance-2026-10-08-cursor-user-stop-hook.md`): the
+    user-level `stop` hook fires once per finished turn, so Cursor is hook-exclusive like
+    OpenCode. It claims COMPLETED alone -- its approvals and its limit screen fire no hook this
+    project installs, and the limit-screen watch reads the limit off the pane.
     """
-    assert activity_source_for("cursor-agent") is ActivitySource.UNOBSERVED
-    assert reported_activity_kinds_for("cursor-agent") == frozenset()
+    assert activity_source_for("cursor-agent") is ActivitySource.HOOK_EXCLUSIVE
+    assert reported_activity_kinds_for("cursor-agent") == frozenset({ActivityKind.COMPLETED})

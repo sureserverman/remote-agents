@@ -1063,3 +1063,66 @@ def test_a_stop_whose_payload_names_no_agent_leaves_an_owned_marker(tmp_path: Pa
     _run(_stream(anonymous), directory)
 
     assert _marker(directory).is_file()
+
+
+# --- Cursor: one event, `stop`, and only a completed one ----------------------------------
+
+#: The payload cursor-agent 2026.10.01-e373342 sent its user-level `stop` hook, captured in
+#: `docs/acceptance-2026-10-08-cursor-user-stop-hook.md` with `user_email` redacted there and
+#: given a recognisable stand-in here, so its absence from the spool is a byte search.
+_CURSOR_EMAIL = "owner@example.invalid"
+_CURSOR_STOP: dict[str, Any] = {
+    "cache_read_tokens": 0,
+    "cache_write_tokens": 0,
+    "conversation_id": "c2c8d296-52d3-431b-9e33-aa8ccddbc551",
+    "cursor_version": "2026.10.01-e373342",
+    "generation_id": "9589d451-26d8-47e3-aa91-4a6a86f94d3c",
+    "hook_event_name": "stop",
+    "input_tokens": 17720,
+    "loop_count": 0,
+    "model": "gpt-5.2",
+    "output_tokens": 18,
+    "session_id": "c2c8d296-52d3-431b-9e33-aa8ccddbc551",
+    "status": "completed",
+    "transcript_path": "/home/user/.cursor/projects/x/agent-transcripts/c2c8/c2c8.jsonl",
+    "user_email": _CURSOR_EMAIL,
+    "workspace_roots": ["/tmp/scratch/proj"],
+}
+
+
+def test_a_cursor_stop_spools_one_record_and_never_the_owners_email(tmp_path: Path) -> None:
+    directory = _spool(tmp_path)
+
+    assert _run(_stream(_CURSOR_STOP), directory, provider="cursor") == 0
+
+    record = _record(directory)
+    assert record["event"] == "stop"
+    assert record["session_id"] == "s-42"
+    assert record["detail"] is None and record["reason"] is None and record["ask"] is None
+    spooled = b"".join(path.read_bytes() for path in directory.rglob("*") if path.is_file())
+    assert _CURSOR_EMAIL.encode() not in spooled
+    assert b"user_email" not in spooled
+    assert b"transcript_path" not in spooled and b"workspace_roots" not in spooled
+
+
+@pytest.mark.parametrize("status", ["aborted", "error", None])
+def test_a_cursor_stop_that_did_not_complete_spools_nothing(
+    status: str | None, tmp_path: Path
+) -> None:
+    directory = _spool(tmp_path)
+    payload = {**_CURSOR_STOP, "status": status}
+
+    assert _run(_stream(payload), directory, provider="cursor") == 0
+
+    assert list(directory.iterdir()) == []
+
+
+@pytest.mark.parametrize("event", ["beforeShellExecution", "Stop", "subagentStop", "sessionEnd"])
+def test_cursor_admits_no_event_but_stop(event: str, tmp_path: Path) -> None:
+    directory = _spool(tmp_path)
+
+    assert (
+        _run(_stream({**_CURSOR_STOP, "hook_event_name": event}), directory, provider="cursor") == 0
+    )
+
+    assert list(directory.iterdir()) == []

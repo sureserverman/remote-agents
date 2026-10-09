@@ -14,6 +14,7 @@ from pathlib import Path
 
 import pytest
 
+from remote_agents.adapters.agents.registry import profiles_with_finished_events
 from remote_agents.adapters.sqlite.database import open_database, open_ui_database
 from remote_agents.adapters.sqlite.migrations import MIGRATIONS
 from remote_agents.adapters.sqlite.queued_prompt_store import SQLiteQueuedPromptStore
@@ -135,7 +136,7 @@ def test_a_refusal_waiting_cannot_fix_is_refused_not_queued(world, reason) -> No
 
 
 def test_a_provider_with_no_finished_event_refuses_instead_of_queueing(world) -> None:
-    session = world.session(profile="cursor-agent")
+    session = world.session(profile="some-custom-agent")
     world.arm(_BUSY)
 
     result = asyncio.run(world.relay.submit(session, "hello"))
@@ -352,3 +353,29 @@ def test_the_sweep_ends_the_turn_markers_of_sessions_that_are_not_running(world)
 
 def test_the_sweep_without_markers_is_unchanged(world) -> None:
     asyncio.run(world.relay.sweep())
+
+
+def test_every_curated_profile_now_has_a_finished_event_cursor_included() -> None:
+    """Cursor's `stop` hook joined on 2026-10-09 (BL-106); an uncurated profile still has none."""
+    finishing = profiles_with_finished_events()
+
+    assert "cursor-agent" in finishing
+    assert "some-custom-agent" not in finishing
+
+
+def test_a_busy_cursor_session_queues_the_message(world) -> None:
+    """With the registry's own answer, not this file's `_QUEUES`: Cursor queues like Claude."""
+    finishing = profiles_with_finished_events()
+    world.relay = PromptRelay(
+        world.terminal,
+        world.queue,
+        world.sessions,
+        queues_for=lambda profile: str(profile) in finishing,
+    )
+    session = world.session(profile="cursor-agent")
+    world.arm(_BUSY)
+
+    result = asyncio.run(world.relay.submit(session, "hello"))
+
+    assert result.outcome is RelayOutcome.QUEUED
+    assert world.relay.pending(session) is not None

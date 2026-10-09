@@ -32,7 +32,7 @@ def test_the_registry_covers_the_curated_provider_set_exactly() -> None:
 
 
 def test_capability_absence_is_declared_not_invented() -> None:
-    """Cursor publishes no hook mechanism at all — a declared None (DEC-061).
+    """Cursor declares its `stop` hook since 2026-10-09 and no remote control (DEC-061).
 
     Cursor's `usage` is deliberately NOT None: its reader answers "I publish nothing",
     which renders as "not reported by this agent" — the permanent, honest sentence.
@@ -43,7 +43,7 @@ def test_capability_absence_is_declared_not_invented() -> None:
     by_id = {str(descriptor.profile_id): descriptor for descriptor in provider_descriptors()}
 
     assert by_id["cursor-agent"].usage is not None
-    assert by_id["cursor-agent"].hooks is None
+    assert by_id["cursor-agent"].hooks == "cursor"
     assert by_id["cursor-agent"].remote_control is None
     assert by_id["claude"].usage is not None
     assert by_id["codex"].usage is not None

@@ -54,7 +54,7 @@ if TYPE_CHECKING:
     from remote_agents.adapters.tui.context import TuiContext
     from remote_agents.adapters.tui.model import AttachRequest
 from remote_agents.adapters.sqlite.store_split import split_stores
-from remote_agents.agent_event import spool_from_stdin
+from remote_agents.agent_event import HOOK_PROVIDERS, spool_from_stdin
 from remote_agents.application.console import CloseOutcome
 from remote_agents.application.doctor import (
     credential_file_report,
@@ -169,9 +169,7 @@ def main(
     subcommands.add_parser("upgrade-sessions")
     agent_event_parser = subcommands.add_parser("agent-event")
     agent_event_parser.add_argument("--activity-dir", type=Path)
-    agent_event_parser.add_argument(
-        "--provider", choices=("claude", "codex", "opencode"), default="claude"
-    )
+    agent_event_parser.add_argument("--provider", choices=HOOK_PROVIDERS, default="claude")
     # The wrapper around the owner's status-line command; `--then` is that command.
     statusline_parser = subcommands.add_parser("statusline")
     statusline_parser.add_argument("--then", default=None)
@@ -215,9 +213,7 @@ def main(
     upgrade_parser.add_argument("--repository", type=str, default=DEFAULT_REPOSITORY)
     upgrade_parser.add_argument("--check", action="store_true")
     install_hooks_parser = subcommands.add_parser("install-agent-hooks")
-    install_hooks_parser.add_argument(
-        "--provider", choices=("claude", "codex", "opencode"), default="claude"
-    )
+    install_hooks_parser.add_argument("--provider", choices=HOOK_PROVIDERS, default="claude")
     install_hooks_parser.add_argument("--settings", type=Path)
     install_hooks_parser.add_argument("--activity-dir", type=Path)
     install_hooks_parser.add_argument("--remove", action="store_true")

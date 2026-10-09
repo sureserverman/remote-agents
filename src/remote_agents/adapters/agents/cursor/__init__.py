@@ -40,7 +40,9 @@ def descriptor(
 ) -> ProviderDescriptor:
     """This provider's declared capability set (ARCH-04).
 
-    Hooks and `remote_control` both stay a declared None. `usage` is deliberately NOT None:
+    `hooks` names the user-level `stop` hook (`hooks.py`, measured 2026-10-09), which is what
+    lets the prompt relay queue for Cursor (DEC-099). `remote_control` stays a declared None.
+    `usage` is deliberately NOT None:
     a session read answers "I publish nothing", which renders as "not reported by this
     agent"; a None here
     would render "no conversation matched yet" forever (DEC-061 — the two must never
@@ -56,6 +58,7 @@ def descriptor(
         name="Cursor Agent",
         sessions=_sessions,
         usage=_usage(limits_switch, home),
+        hooks="cursor",
         # Measured 2026-09-09 on 2026.09.08-6caf4ff: up 0.66 s after launch, cursor on the
         # **affirmative**, and drawn **inside a box** -- so the `▶` is not the first character
         # of its row (`│` is) and the directory path wraps across two rows. The parser looks

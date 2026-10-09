@@ -94,7 +94,10 @@ DECLARATIONS: dict[str, dict[str, tuple[Requirement, str]]] = {
     "cursor-agent": {
         "sessions": (SUPPORTED, "constant catalogue; workspace-blind by design"),
         "usage": (SUPPORTED, "constant-empty answer: publishes nothing, honestly (DEC-061)"),
-        "hooks": (UNSUPPORTED, "cursor takes no hooks; the registry declares None"),
+        "hooks": (
+            SUPPORTED,
+            "user-level hooks.json stop entry (cursor, flagged), measured 2026-10-09",
+        ),
         "remote_control": (
             UNSUPPORTED,
             "cursor has no remote control; the registry declares None",

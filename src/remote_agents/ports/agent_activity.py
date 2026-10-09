@@ -252,11 +252,11 @@ class ActivitySource(Enum):
     rather than "it has none" -- so the example moved as soon as somebody did
     (`docs/acceptance-2026-09-06-opencode-activity.md`).
 
-    `cursor-agent` stays, on **exactly the same footing opencode had**: nobody has measured what
-    it publishes. A first draft of this paragraph said it stays "for the stronger reason: it
-    publishes nothing to measure", and a close-out evaluator pointed out that this is the very
-    claim DEC-076 was recorded to retract, re-made about the one provider left. There is no
-    `docs/acceptance-*cursor*` in this repository and nothing anywhere cites a measurement.
+    **`cursor-agent` left it on 2026-10-09**, on exactly the footing opencode had: somebody
+    measured its user-level `stop` hook (`docs/acceptance-2026-10-08-cursor-user-stop-hook.md`).
+    A first draft of this paragraph once said it stayed "for the stronger reason: it publishes
+    nothing to measure", and a close-out evaluator pointed out that this was the very claim
+    DEC-076 was recorded to retract. The measurement is what moved it, as it moved opencode.
     """
 
     HOOK_EXCLUSIVE = "hook_exclusive"
@@ -264,7 +264,7 @@ class ActivitySource(Enum):
     UNOBSERVED = "unobserved"
 
 
-_HOOK_EXCLUSIVE_PROFILES = frozenset({"claude", "opencode"})
+_HOOK_EXCLUSIVE_PROFILES = frozenset({"claude", "opencode", "cursor-agent"})
 _HYBRID_PROFILES = frozenset({"codex"})
 _REPORTED_KINDS_BY_PROFILE: dict[str, frozenset[ActivityKind]] = {
     "claude": frozenset(
@@ -288,6 +288,10 @@ _REPORTED_KINDS_BY_PROFILE: dict[str, frozenset[ActivityKind]] = {
     # (`docs/acceptance-2026-09-06-opencode-activity.md`). That is a property of the event, not
     # a parser this project can widen later.
     "opencode": frozenset({ActivityKind.COMPLETED, ActivityKind.NEEDS_ANSWER}),
+    # Cursor's one installed hook is `stop`, admitted only when it `completed`. Its approvals and
+    # its limit screen fire no hook this project installs, so neither kind is claimed; a limit
+    # stop is read off its pane by the limit-screen watch, as Codex's is.
+    "cursor-agent": frozenset({ActivityKind.COMPLETED}),
 }
 
 

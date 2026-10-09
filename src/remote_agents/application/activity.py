@@ -359,6 +359,10 @@ def _kind(event: object, reason: object) -> tuple[ActivityKind, ActivityConfiden
     # infers an agent behind it. Nothing here is inferred.
     if event == "session.idle":
         return ActivityKind.COMPLETED, ActivityConfidence.REPORTED
+    # Cursor's own lowercase name, from its user-level `stop` hook; the spool admits it only
+    # when Cursor said the turn `completed`.
+    if event == "stop":
+        return ActivityKind.COMPLETED, ActivityConfidence.REPORTED
     if event == "permission.asked":
         return ActivityKind.NEEDS_ANSWER, ActivityConfidence.REPORTED
     if event == "StopFailure":

@@ -703,3 +703,14 @@ def test_a_claude_needs_input_notification_still_becomes_a_needs_answer(tmp_path
     (activity,) = drain_activity(tmp_path)
     assert activity.kind is ActivityKind.NEEDS_ANSWER
     assert activity.detail == "Waiting on you", "it keeps its message"
+
+
+def test_a_cursor_stop_is_a_completion_the_agent_reported(tmp_path: Path) -> None:
+    """Cursor's own lowercase name for a finished turn, kept as the provider spells it."""
+    _spool(tmp_path, event="stop")
+
+    (activity,) = drain_activity(tmp_path)
+
+    assert activity.kind is ActivityKind.COMPLETED
+    assert activity.confidence is ActivityConfidence.REPORTED
+    assert activity.detail is None

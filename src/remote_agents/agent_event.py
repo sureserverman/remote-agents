@@ -21,6 +21,14 @@ from pathlib import Path
 
 from remote_agents.ports.argv_text import NonEchoingArgumentParser
 
+HOOK_PROVIDERS = ("claude", "codex", "opencode", "cursor")
+"""The `--provider` names `agent-event` and `install-agent-hooks` accept: one per hook installer.
+
+Spelled here, not read off the registry, because this module must stay importable without the
+adapters (see the module docstring). `bootstrap` asks this tuple for both of its parsers, and a
+test holds it equal to the registry's installers, so the three cannot drift apart.
+"""
+
 
 def spool_from_stdin(activity_directory: Path | None, *, provider: str = "claude") -> int:
     """Read one hook payload from stdin and record it, reporting success whatever happens.
@@ -59,6 +67,6 @@ def run_agent_event(argv: list[str] | None = None) -> int:
     # drove `bootstrap.main`, which is not the path the console script takes.
     parser = NonEchoingArgumentParser(prog="remote-agents agent-event")
     parser.add_argument("--activity-dir", type=Path)
-    parser.add_argument("--provider", choices=("claude", "codex", "opencode"), default="claude")
+    parser.add_argument("--provider", choices=HOOK_PROVIDERS, default="claude")
     arguments = parser.parse_args(argv)
     return spool_from_stdin(arguments.activity_dir, provider=arguments.provider)
