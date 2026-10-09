@@ -1423,8 +1423,10 @@ owner was never shown it.
 
 `limit_reached` is the second exception, since 2026-10-09. A stop whose window is named — `5h`,
 `week` — arrives when the standing message names at least one window and not that one, because
-the second wait is a different length. A window nothing could name matches any, so a stop with
-no window, or a message written before windows were recorded, never alerts on that account. The
+the second wait is a different length. A stop with no window never alerts on that account, and
+neither does any stop while the message names no window, as one written before windows were
+recorded does. The message carries one limit line, its newest, so the comparison is always one
+window against one. The
 accepted cost: a session stopped `5h`, then `week`, then `5h` again arrives each time.
 
 An identical re-render is not sent at all — it would say exactly what the message already says.

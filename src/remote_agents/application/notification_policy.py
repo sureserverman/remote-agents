@@ -300,9 +300,11 @@ def unheard(
     Two exceptions, each a second fact the kind does not carry. A new question is news
     (DEC-048). So is a limit stop on a window the message does not already name (BL-110): a
     session stopped by its 5-hour window and then by its weekly one is told twice, because the
-    second wait is a different length. Only a window both sides name counts -- an unnamed one
-    matches any, so a legacy `LimitHit(None, None)` row never alerts -- and the cost is that a
-    5h -> week -> 5h sequence alerts on each change.
+    second wait is a different length. Only a window both sides name counts -- a stop with no
+    window never alerts, and neither does any stop while the message names no window, so a
+    legacy `LimitHit(None, None)` row never does. The message carries one limit line, its newest
+    (`merged`), so this is always one window against one. The cost is that a 5h -> week -> 5h
+    sequence alerts on each change.
     """
     known = {activity.kind for activity in standing}
     heard_questions = {
