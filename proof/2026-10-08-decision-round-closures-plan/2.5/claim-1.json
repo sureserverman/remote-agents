@@ -1,0 +1,28 @@
+{
+ "baseline": {
+  "elapsed_s": 17.5,
+  "exit": 0,
+  "tail": "bringing up nodes...\nbringing up nodes...\n\n........................................................................ [ 12%]\n........................................................................ [ 24%]\n........................................................................ [ 36%]\n........................................................................ [ 48%]\n..........................................sssssssssssssss............... [ 60%]\n........................................................................ [ 72%]\n.............................................................sss........ [ 85%]\n.....................................s.................................. [ 97%]\n................                                                         [100%]\n=========================== short test summary info ============================\nSKIPPED [15] tests/contract/test_handoff_envelope_compat.py:121: RA_CODER_PLUGINS is unset: no coder-plugins checkout to run against\nSKIPPED [1] tests/contract/test_handoff_envelope_compat.py:145: RA_CODER_PLUGINS is unset: no coder-plugins checkout to run against\nSKIPPED [1] tests/contract/test_handoff_envelope_compat.py:157: RA_CODER_PLUGINS is unset: no coder-plugins checkout to run against\nSKIPPED [1] tests/contract/test_handoff_envelope_compat.py:86: RA_CODER_PLUGINS is unset: no coder-plugins checkout to run against\nSKIPPED [1] tests/contract/test_session_row_parity.py:123: ORPHANED is the one state that does not use its own value\n573 passed, 19 skipped in 17.24s"
+ },
+ "break_patch": "diff --git a/docs/operator-runbook.md b/docs/operator-runbook.md\nindex 85f4a1b9..6e64403a 100644\n--- a/docs/operator-runbook.md\n+++ b/docs/operator-runbook.md\n@@ -985,7 +985,7 @@ field, and every path is inside a `try` so nothing it does can fail the session\n unmanaged session therefore costs one module load and a comparison per event, and spools\n nothing. `--remove` takes it back out.\n \n-`install-agent-hooks --provider cursor` adds one `stop` entry to the user-level\n+The Cursor installer adds one `stop` entry to the user-level\n `~/.cursor/hooks.json`, in Cursor's own shape (`{\"version\": 1, \"hooks\": {\"stop\": [{\"command\":\n \u2026}]}}`), beside whatever entries are already there; `--remove` takes out only that entry and\n leaves the file. cursor-agent was measured reading that file, and its hook inheriting the\n@@ -1006,7 +1006,6 @@ Install them once per host:\n uv run --locked remote-agents install-agent-hooks\n uv run --locked remote-agents install-agent-hooks --provider codex\n uv run --locked remote-agents install-agent-hooks --provider opencode\n-uv run --locked remote-agents install-agent-hooks --provider cursor\n ```\n \n > **Upgrading to 0.45.0 or later: re-run the `claude` line.** Claude gained a\n",
+ "build": null,
+ "created": "2026-10-09T05:41:45+00:00",
+ "fingerprint": "f9ebb18551a29a86f7d1b9b767b073a08f3191006e9cecc11cb2f609a6e53df8",
+ "index": 1,
+ "kind": "claim",
+ "named_break": null,
+ "no_build_reason": "docs only; nothing to build",
+ "plan": "/mnt/vault/Portfolio/infra/remote-agents/plans/2026-10-08-decision-round-closures-plan.md",
+ "red": {
+  "elapsed_s": 0.0,
+  "exit": 1,
+  "tail": ""
+ },
+ "schema": 2,
+ "task": "2.5",
+ "test": "! grep -rniE 'cursor[^.]*(refus|no finished event|nobody has measured|contributes none)' README.md docs/operator-runbook.md && grep -q 'install-agent-hooks --provider cursor' docs/operator-runbook.md && uv run --locked pytest tests/contract -q -p no:randomly -n 3",
+ "text": "`! grep -rniE 'cursor[^.]*(refus|no finished event|nobody has measured|contributes none)' README.md docs/operator-runbook.md && grep -q 'install-agent-hooks --provider cursor' docs/operator-runbook.md && uv run --locked pytest tests/contract -q -p no:randomly -n 3`",
+ "touched": [
+  "docs/operator-runbook.md"
+ ]
+}

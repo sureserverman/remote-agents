@@ -377,8 +377,9 @@ it is never retried. A Cancel that lands while a waiting message is already bein
 stop it, and the bot says so. The bot never types into
 a dialog and never presses `Enter` on one. A message starting with `!` is refused, because
 Claude and Codex would run it as a shell command. A `/` command is sent only to an agent whose
-command menu the project can read (Claude). An agent with no "finished" event (Cursor Agent)
-refuses a busy send rather than queueing it, because nothing would ever deliver it.
+command menu the project can read (Claude). An agent with no "finished" event refuses a busy
+send rather than queueing it, because nothing would ever deliver it; Claude, Codex, OpenCode and
+Cursor Agent each have one once their hooks are installed (Cursor's since 2026-10-09).
 
 Resume uses a server-resolved catalogue selection. It may show a bounded provider-generated title
 or provider resume description (Claude's stored last prompt and Codex's thread preview when no
@@ -405,9 +406,9 @@ The service also speaks first when a managed agent stops working: it has
 finished, it hit a usage limit, one reply hit its output length limit, or it is waiting for an
 answer. Those four are everything an agent reports about a session. The service's own messages —
 a scheduled run, a failed rollover, a provider resetting its limits early — are separate, and the
-operator runbook's *What each notification means* lists them. `cursor-agent` contributes none of the four — nobody has
-measured what, if anything, it publishes, so nothing observes it — while
-`claude`, `codex` and `opencode` each report for themselves. OpenCode joined
+operator runbook's *What each notification means* lists them. `claude`, `codex`, `opencode` and
+`cursor-agent` each report for themselves. Cursor Agent joined on 2026-10-09 and reports one of
+the four, through its `stop` hook: it has finished. OpenCode joined
 on 2026-09-06 through a generated plugin rather than a hook command, and reports two of the
 four: it has finished, and it is waiting for an answer. Its completion carries no closing
 sentence, permanently — the event it comes from has no field that could hold one. It speaks
@@ -451,6 +452,12 @@ the plugin file as well as its `opencode.json` entry. It reports `completed` and
 claims neither limit kind for the same reason Codex does not, and its `completed` carries no
 closing sentence — the event has no field that could hold one, so that is permanent rather than
 pending.
+Cursor Agent installs a `stop` entry into its user-level `~/.cursor/hooks.json` with
+`remote-agents install-agent-hooks --provider cursor`, beside any hooks already there; `--remove`
+takes out only that entry. It reports a finished turn, which is what lets the prompt relay queue a
+message for a busy Cursor session, and nothing else: no closing sentence, no approvals, and no
+limits (its limit screen is still read off the pane). The hook's payload carries the account's
+email address, and the hook keeps none of it.
 
 Two things the service says unprompted are not about a live session. One is a scheduled run
 that did not start (see **Scheduled sessions**, DEC-114). The other: when a provider clears a

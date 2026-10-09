@@ -564,8 +564,11 @@ screen. Send Cancel or Back instead to leave the step without sending.
   empty, it starts with `!`, the agent has no readable composer, a `/` command went to an agent
   whose command menu cannot be read, the input already holds a half-typed draft, the screen was
   not recognised, or another sender was typing into the pane. Those last three can sit on an idle
-  agent indefinitely, so a message queued behind one would fire hours later, out of context. An agent with no "finished" event (Cursor Agent; BL-106)
-  refuses a busy send rather than queueing it, because nothing would deliver it.
+  agent indefinitely, so a message queued behind one would fire hours later, out of context. An
+  agent this service has no "finished" event for refuses a busy send rather than queueing it,
+  because nothing would deliver it. Claude, Codex, OpenCode and Cursor Agent all have one once
+  their hooks are installed (Cursor's since 2026-10-09, BL-106); without the install, nothing
+  arrives to deliver a queued message.
 - **Unconfirmed.** The text was pasted but the composer was not seen to take it or clear. The
   reply says *Typed, but not confirmed*: the text may still be in the agent's input, where the
   next `Enter` at the desk would submit it. Check the session before sending again; it is never
@@ -982,11 +985,16 @@ field, and every path is inside a `try` so nothing it does can fail the session 
 unmanaged session therefore costs one module load and a comparison per event, and spools
 nothing. `--remove` takes it back out.
 
-`cursor-agent` reports nothing at all: no hook mechanism or plugin API of its own has been
-measured, it sets no title marker, and the pane-digest fallback that was its only signal was
-retired on 2026-08-30 for telling the owner nothing they could act on. **That is an absence of
-evidence and it is written that way on purpose** — the identical sentence stood for `opencode`
-for six weeks and turned out to mean "nobody has looked" (DEC-076).
+`install-agent-hooks --provider cursor` adds one `stop` entry to the user-level
+`~/.cursor/hooks.json`, in Cursor's own shape (`{"version": 1, "hooks": {"stop": [{"command":
+…}]}}`), beside whatever entries are already there; `--remove` takes out only that entry and
+leaves the file. cursor-agent was measured reading that file, and its hook inheriting the
+session identifier, on 2026-10-09 (`docs/acceptance-2026-10-08-cursor-user-stop-hook.md`). Like
+Claude's hook it fires in every Cursor session on the host and spools nothing unless the
+environment carries the session identifier. It records a finished turn only when Cursor says the
+turn `completed`, and keeps no field of the payload — which carries the account's email address.
+Cursor reported nothing at all before that measurement; the sentence saying so stood for
+`opencode` too, and in both cases turned out to mean "nobody has looked" (DEC-076).
 
 None of these are installed by the unit, by `serve`, by `doctor`, or by `scripts/install.sh`.
 Onboarding's offer of the Claude status-line hop also reaches this installer without the command
@@ -998,6 +1006,7 @@ Install them once per host:
 uv run --locked remote-agents install-agent-hooks
 uv run --locked remote-agents install-agent-hooks --provider codex
 uv run --locked remote-agents install-agent-hooks --provider opencode
+uv run --locked remote-agents install-agent-hooks --provider cursor
 ```
 
 > **Upgrading to 0.45.0 or later: re-run the `claude` line.** Claude gained a
