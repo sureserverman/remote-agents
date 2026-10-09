@@ -397,3 +397,52 @@ def test_a_live_drop_does_not_lift_a_cursor_stop_while_the_reading_is_stale() ->
     assert (
         lifted(LimitHit("month", _CYCLE), _STOP, reading, now=_EARLY + timedelta(hours=1)) is False
     )
+
+
+# --- the early-lift margin: a live reading lifts early only below 95% (DEC-118) -------------
+
+
+def _claude(percent: float, *, at: datetime, live: bool = True) -> AgentLimits:
+    """Claude's two windows, the five-hour one in the stop's own period."""
+    windows = (UsageWindow("5h", percent, _RESET), UsageWindow("week", 40, _WEEK))
+    return AgentLimits("claude", windows, observed_at=at, live=live)
+
+
+@pytest.mark.parametrize(
+    ("hit", "reading", "expected"),
+    [
+        pytest.param(
+            LimitHit("month", _CYCLE), _cursor(96, 60, 20, at=_EARLY), False, id="cursor-at-96"
+        ),
+        pytest.param(
+            LimitHit("month", _CYCLE), _cursor(94, 60, 20, at=_EARLY), True, id="cursor-at-94"
+        ),
+        pytest.param(
+            LimitHit("month", _CYCLE),
+            _cursor(60, 96, 20, at=_EARLY),
+            False,
+            id="cursor-with-its-own-pool-at-96",
+        ),
+        pytest.param(
+            LimitHit("month", _CYCLE),
+            _cursor(94.9, 94.9, 94.9, at=_EARLY),
+            True,
+            id="cursor-everything-just-below-95",
+        ),
+        pytest.param(
+            LimitHit("month", _CYCLE), _cursor(95, 60, 20, at=_EARLY), False, id="cursor-at-95"
+        ),
+        pytest.param(LimitHit("5h", _RESET), _claude(94, at=_EARLY), True, id="claude-live-at-94"),
+        pytest.param(LimitHit("5h", _RESET), _claude(96, at=_EARLY), False, id="claude-live-at-96"),
+        pytest.param(
+            LimitHit("5h", _RESET),
+            _claude(10, at=_EARLY, live=False),
+            False,
+            id="claude-from-the-status-line-never-lifts-early",
+        ),
+    ],
+)
+def test_a_live_reading_lifts_early_only_below_the_margin(
+    hit: LimitHit, reading: AgentLimits, expected: bool
+) -> None:
+    assert lifted(hit, _STOP, reading, now=_EARLY_NOW) is expected

@@ -359,3 +359,42 @@ async def test_a_cursor_stop_naming_a_window_the_reading_lacks_is_not_held() -> 
 
     (stop,) = await classifier.classified([_stop(ActivityConfidence.INFERRED)])
     assert stop.limit == other
+
+
+# --- Claude's usage API: a live reading, under DEC-107's hold since DEC-118 -----------------
+
+
+class _ClaudeStore:
+    async def get(self, session_id):
+        return _Record(session_id, "claude")
+
+
+def _claude_live(five_hour: float) -> AgentLimits:
+    return AgentLimits(
+        "claude",
+        (UsageWindow("5h", five_hour, _IN_2H), _WEEK_LOW),
+        observed_at=_NOW,
+        stale_source="usage API",
+        live=True,
+    )
+
+
+async def test_an_undated_claude_stop_is_held_for_the_live_reading_that_dates_it() -> None:
+    """The screen named the five-hour window and nothing dated it; the live reading publishes it."""
+    readings = [_claude_live(97), _claude_live(100)]
+
+    async def limits():
+        return (readings.pop(0) if len(readings) > 1 else readings[0],)
+
+    screen = LimitScreen(markers=(".",), hint=lambda text, now: LimitHit("5h", None))
+    classifier = LimitStopClassifier(_ClaudeStore(), limits, {"claude": screen}, now=lambda: _NOW)
+
+    assert await classifier.classified([_stop(ActivityConfidence.INFERRED)]) == []
+    (released,) = await classifier.classified([])
+    assert released.limit == LimitHit("5h", _IN_2H)
+
+
+def test_the_classifier_still_records_a_claude_stop_at_99_5() -> None:
+    """The early-lift margin is the lift's own threshold; "full" is unchanged at 99.5."""
+    assert classify(_claude_live(99.5), None, now=_NOW) == LimitHit("5h", _IN_2H)
+    assert classify(_claude_live(99.4), None, now=_NOW) == LimitHit(None, None)

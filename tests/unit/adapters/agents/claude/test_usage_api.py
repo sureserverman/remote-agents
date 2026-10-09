@@ -191,7 +191,7 @@ def test_a_200_answers_both_windows_stamped_and_dated_now(tmp_path: Path) -> Non
     opener = ok_opener()
     answer = reader(tmp_path, opener).limits()
     assert answer == AgentLimits(
-        ProfileId("claude"), (FIVE_HOUR, WEEK), observed_at=NOW, stale_source=STAMP
+        ProfileId("claude"), (FIVE_HOUR, WEEK), observed_at=NOW, stale_source=STAMP, live=True
     )
     assert answer.absence is None
     assert len(opener.calls) == 1
@@ -326,6 +326,7 @@ def test_a_200_with_no_usable_window_is_no_reading_stamped(tmp_path: Path) -> No
     assert answer == AgentLimits(
         ProfileId("claude"), absence=LimitsAbsence.NO_READING, stale_source=STAMP
     )
+    assert answer.live is False, "no window was read, so nothing is live (DEC-118)"
 
 
 # --- every failure answers with the fallback's own reading --------------------------------
@@ -365,6 +366,7 @@ def test_a_transport_or_body_fault_answers_the_fallbacks_reading_unchanged(
     answer = reader(tmp_path, opener_for(scripted), fallback=fallback).limits()
     assert answer is HOP_READING, "the fallback's reading, not a copy and not re-stamped"
     assert fallback.calls == 1
+    assert answer.live is False, "a status-line recording is never live (DEC-118)"
 
 
 def credential_faults() -> list[tuple[str, object]]:

@@ -269,7 +269,10 @@ class ClaudeUsageApiReader:
             return AgentLimits(
                 self.limits_profile, absence=LimitsAbsence.NO_READING, stale_source=_STAMP
             )
-        return AgentLimits(self.limits_profile, windows, observed_at=asked_at, stale_source=_STAMP)
+        # Asked of the server at `asked_at`, so its figures are as new as its stamp (DEC-118).
+        return AgentLimits(
+            self.limits_profile, windows, observed_at=asked_at, stale_source=_STAMP, live=True
+        )
 
 
 def _header_safe(token: str) -> bool:

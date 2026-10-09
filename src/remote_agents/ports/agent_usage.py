@@ -284,13 +284,12 @@ class AgentLimits:
     """Whether a rule may treat these figures as measured at `observed_at`.
 
     True only where the provider was asked at that instant *and* a decision admits the reading
-    as evidence -- Cursor's usage API, under DEC-110. False for a figure read out of a
-    recording, whose stamp says when the recording was written and not when its figures were
-    true: Claude's status line is redrawn with the limits a session cached from its last
-    response. False, too, for Claude's usage API: it is asked live, and no decision has admitted
-    it. A rule that needs "this was so at that instant" -- a limit stop lifting because its
-    window fell below full -- may take a live reading's word for it and no other's. Defaulted to
-    the answer that claims nothing.
+    as evidence -- Cursor's usage API and Claude's, under DEC-118. False for a figure read out
+    of a recording, whose stamp says when the recording was written and not when its figures
+    were true: Claude's status line is redrawn with the limits a session cached from its last
+    response, so the usage API's fallback to it is never live. A rule that needs "this was so at
+    that instant" -- a limit stop lifting because its window fell clearly below full -- may take
+    a live reading's word for it and no other's. Defaulted to the answer that claims nothing.
     """
 
 

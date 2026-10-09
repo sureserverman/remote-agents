@@ -1,0 +1,28 @@
+{
+ "baseline": {
+  "elapsed_s": 0.6,
+  "exit": 0,
+  "tail": "........................................................................ [ 35%]\n........................................................................ [ 70%]\n.............................................................            [100%]\n205 passed in 0.27s"
+ },
+ "break_patch": "diff --git a/src/remote_agents/application/limit_lifts.py b/src/remote_agents/application/limit_lifts.py\nindex c243c4f4..e39b8078 100644\n--- a/src/remote_agents/application/limit_lifts.py\n+++ b/src/remote_agents/application/limit_lifts.py\n@@ -172,8 +172,7 @@ def _reopened(window: UsageWindow, *, period_end: datetime) -> bool:\n     live reading; the caller asks that.\n     \"\"\"\n     return (\n-        window.used_percent < EARLY_LIFT_BELOW\n-        and all(part.used_percent < EARLY_LIFT_BELOW for part in window.parts)\n+        not is_full(window)\n         and _zoned(window.resets_at)\n         and window.resets_at is not None\n         and abs(window.resets_at - period_end) <= NEW_PERIOD_MARGIN\n",
+ "build": null,
+ "created": "2026-10-09T05:22:34+00:00",
+ "fingerprint": "933d8280e68c3a56a6c175809cb26495f18665aaa877e58a18ab8a80e5fe5ec8",
+ "index": 1,
+ "kind": "claim",
+ "named_break": null,
+ "no_build_reason": "pure Python; nothing to build",
+ "plan": "/mnt/vault/Portfolio/infra/remote-agents/plans/2026-10-08-decision-round-closures-plan.md",
+ "red": {
+  "elapsed_s": 0.6,
+  "exit": 1,
+  "tail": "                LimitHit(\"month\", _CYCLE),\n                _cursor(60, 96, 20, at=_EARLY),\n                False,\n                id=\"cursor-with-its-own-pool-at-96\",\n            ),\n            pytest.param(\n                LimitHit(\"month\", _CYCLE),\n                _cursor(94.9, 94.9, 94.9, at=_EARLY),\n                True,\n                id=\"cursor-everything-just-below-95\",\n            ),\n            pytest.param(\n                LimitHit(\"month\", _CYCLE), _cursor(95, 60, 20, at=_EARLY), False, id=\"cursor-at-95\"\n            ),\n            pytest.param(LimitHit(\"5h\", _RESET), _claude(94, at=_EARLY), True, id=\"claude-live-at-94\"),\n            pytest.param(\n                LimitHit(\"5h\", _RESET), _claude(96, at=_EARLY), False, id=\"claude-live-at-96\"\n            ),\n            pytest.param(\n                LimitHit(\"5h\", _RESET),\n                _claude(10, at=_EARLY, live=False),\n                False,\n                id=\"claude-from-the-status-line-never-lifts-early\",\n            ),\n        ],\n    )\n    def test_a_live_reading_lifts_early_only_below_the_margin(\n        hit: LimitHit, reading: AgentLimits, expected: bool\n    ) -> None:\n>       assert lifted(hit, _STOP, reading, now=_EARLY_NOW) is expected\nE       AssertionError: assert True is False\nE        +  where True = lifted(LimitHit(window='5h', resets_at=datetime.datetime(2026, 9, 29, 12, 0, tzinfo=datetime.timezone.utc)), datetime.datetime(2026, 9, 29, 10, 0, tzinfo=datetime.timezone.utc), AgentLimits(profile_id='claude', windows=(UsageWindow(label='5h', used_percent=96, resets_at=datetime.datetime(2026, 9...ime.datetime(2026, 9, 29, 10, 10, tzinfo=datetime.timezone.utc), absence=None, stale_source=None, note=None, live=True), now=datetime.datetime(2026, 9, 29, 10, 11, tzinfo=datetime.timezone.utc))\n\ntests/unit/application/test_limit_lifts.py:450: AssertionError\n=========================== short test summary info ============================\nFAILED tests/unit/application/test_limit_lifts.py::test_a_live_reading_lifts_early_only_below_the_margin[cursor-at-96]\nFAILED tests/unit/application/test_limit_lifts.py::test_a_live_reading_lifts_early_only_below_the_margin[cursor-with-its-own-pool-at-96]\nFAILED tests/unit/application/test_limit_lifts.py::test_a_live_reading_lifts_early_only_below_the_margin[cursor-at-95]\nFAILED tests/unit/application/test_limit_lifts.py::test_a_live_reading_lifts_early_only_below_the_margin[claude-live-at-96]\n4 failed, 201 passed in 0.31s"
+ },
+ "schema": 2,
+ "task": "2.1",
+ "test": "uv run --locked pytest tests/unit/application/test_limit_lifts.py tests/unit/adapters/agents/claude tests/unit/application/test_limit_stops.py -q -p no:randomly && grep -q '^## DEC-118' /mnt/vault/Portfolio/infra/remote-agents/decisions.md",
+ "text": "`uv run --locked pytest tests/unit/application/test_limit_lifts.py tests/unit/adapters/agents/claude tests/unit/application/test_limit_stops.py -q -p no:randomly && grep -q '^## DEC-118' /mnt/vault/Portfolio/infra/remote-agents/decisions.md`. New cases:",
+ "touched": [
+  "src/remote_agents/application/limit_lifts.py"
+ ]
+}

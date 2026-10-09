@@ -5,7 +5,8 @@ that instant, plus a minute of grace, has passed. **A new period:** a reading ta
 stop shows the stop's own window rolled over -- its reset now later than the one the stop was
 recorded against -- and below full, which is how a window reopened ahead of its schedule is seen.
 **A live drop:** a reading the provider was asked for well after the stop shows the stop's own
-window below full inside the stop's own period. Only a live reading is a witness to that.
+window clearly below full (`EARLY_LIFT_BELOW`) inside the stop's own period. Only a live reading
+is a witness to that.
 
 **It fails toward "not yet".** A false lift retires the owner's limit line while the agent is
 still stopped and, with the resume switch on, types the nudge into it; a late lift costs a few
@@ -25,12 +26,14 @@ evidence, and the gate review of 2026-09-29 is why "positive" is the word:
 - **A stop whose window is unknown never lifts from a reading**, only on a published schedule:
   "nothing is full" is exactly the condition that left it unnamed. Nor does a named window with no
   published reset (Cursor's month as its screen names it), which has no period to roll past.
-- **A live reading is the one exception to the first rule** (`AgentLimits.live`, DEC-110).
-  Cursor's month is asked of Cursor's server when it is read, so its figures are as new as its
-  stamp, and a stop's own window seen below full in the stop's own period has reopened. Only for
-  a stop that carries that period's end, which it has from a reading that showed the window
-  full: a stop the screen alone named was never measured full, so "below full" says nothing new
-  about it.
+- **A live reading is the one exception to the first rule** (`AgentLimits.live`, DEC-118, which
+  supersedes DEC-110 in part). Cursor's month and Claude's usage-API windows are asked of the
+  provider's server when they are read, so their figures are as new as their stamp, and a stop's
+  own window seen *clearly* below full in the stop's own period has reopened: below
+  `EARLY_LIFT_BELOW`, the window and every pool in it, not merely below full. Only for a stop
+  that carries that period's end, which it has from a reading that showed the window full: a
+  stop the screen alone named was never measured full, so "below full" says nothing new about
+  it.
 - A Claude model week (`opus week`, ...) is a label no reading publishes, so it lifts on its own
   reset only.
 
@@ -78,6 +81,15 @@ hour before the provider's true one. A cached reading carrying that true reset w
 like a new period. An hour covers the coarsest text measured, and costs nothing real: a window
 that genuinely rolled over resets a whole window length later, and every window here is an hour
 or longer. A wipe whose new reset lands within the hour waits for the schedule instead.
+"""
+
+EARLY_LIFT_BELOW = 95.0
+"""How far a live reading's window must fall, in percent, before it lifts a stop early (DEC-118).
+
+A separate threshold from `limit_stops.is_full` on purpose: the stop classifier shares that one,
+and a window at 97% has not reopened in any sense the owner would act on. A false early lift
+types "carry on" into an agent that is still stopped (DEC-109), so the window and each of its
+pools must sit clearly below full. The schedule and a new period are untouched by it.
 """
 
 READ_TIMEOUT_SECONDS = 8.0
@@ -153,13 +165,15 @@ def _new_period(window: UsageWindow, *, after: datetime) -> bool:
 
 
 def _reopened(window: UsageWindow, *, period_end: datetime) -> bool:
-    """Whether `window` is below full in the period that ends at `period_end`, the stop's own.
+    """Whether `window` is clearly below full in the period ending at `period_end`, the stop's own.
 
-    The same period by `NEW_PERIOD_MARGIN`, the line `_new_period` draws from the other side.
-    Evidence only from a live reading; the caller asks that.
+    "Clearly" is `EARLY_LIFT_BELOW`, for the window and every pool in it. The same period by
+    `NEW_PERIOD_MARGIN`, the line `_new_period` draws from the other side. Evidence only from a
+    live reading; the caller asks that.
     """
     return (
-        not is_full(window)
+        window.used_percent < EARLY_LIFT_BELOW
+        and all(part.used_percent < EARLY_LIFT_BELOW for part in window.parts)
         and _zoned(window.resets_at)
         and window.resets_at is not None
         and abs(window.resets_at - period_end) <= NEW_PERIOD_MARGIN
