@@ -14,13 +14,20 @@ from __future__ import annotations
 import asyncio
 from pathlib import Path
 
+import pytest
+
 from remote_agents.adapters.agents.registry import provider_descriptors
 from remote_agents.adapters.tmux.gateway import TmuxGateway
 from remote_agents.adapters.tmux.key_lock import KeysBusy
 from remote_agents.adapters.tmux.runtime import LaunchProfile, TerminalWaits, TmuxTerminal
 from remote_agents.domain.models import ProfileId
 from remote_agents.domain.remote_control import RemoteControlState
-from remote_agents.ports.terminal import COMPOSER_HOLDS_TEXT, KEYS_BUSY
+from remote_agents.ports.terminal import (
+    COMPOSER_HOLDS_TEXT,
+    KEYS_BUSY,
+    RemoteControlRefusal,
+    RemoteControlRefused,
+)
 
 from .test_send_prompt import PromptPane
 
@@ -70,9 +77,10 @@ def test_a_graceful_stop_still_goes_to_an_idle_or_busy_pane() -> None:
 def test_remote_control_does_not_type_into_a_composer_holding_text() -> None:
     pane = PromptPane([_screen("composed")])
 
-    state = asyncio.run(_terminal(pane).remote_control(pane.session_id, RemoteControlState.ACTIVE))
+    with pytest.raises(RemoteControlRefused) as refused:
+        asyncio.run(_terminal(pane).remote_control(pane.session_id, RemoteControlState.ACTIVE))
 
-    assert state is RemoteControlState.UNKNOWN
+    assert refused.value.reason is RemoteControlRefusal.COMPOSING
     assert pane.keys == []
 
 
@@ -98,13 +106,15 @@ def test_a_held_lock_makes_a_stop_never_sent_not_a_crash(monkeypatch) -> None:
     assert observation.detail == KEYS_BUSY and observation.live
 
 
-def test_a_held_lock_makes_remote_control_unknown_not_a_crash(monkeypatch) -> None:
+def test_a_held_lock_refuses_remote_control_as_keys_busy_not_a_crash(monkeypatch) -> None:
     _held(monkeypatch)
     pane = PromptPane([_screen("idle")])
 
-    state = asyncio.run(_terminal(pane).remote_control(pane.session_id, RemoteControlState.ACTIVE))
+    with pytest.raises(RemoteControlRefused) as refused:
+        asyncio.run(_terminal(pane).remote_control(pane.session_id, RemoteControlState.ACTIVE))
 
-    assert state is RemoteControlState.UNKNOWN
+    assert refused.value.reason is RemoteControlRefusal.KEYS_BUSY
+    assert pane.keys == []
 
 
 def test_both_new_stop_details_record_a_stop_that_was_never_sent() -> None:

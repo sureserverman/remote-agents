@@ -23,6 +23,34 @@ class TerminalTargetMissing(RuntimeError):
     """
 
 
+class RemoteControlRefusal(StrEnum):
+    """Why a Remote Control press typed nothing that changed the pane (BL-109)."""
+
+    BUSY = "busy"
+    """A turn is running."""
+    ASKING = "asking"
+    """A dialog is up."""
+    COMPOSING = "composing"
+    """The composer holds text -- the owner's draft, or a command typed before a dialog rose."""
+    KEYS_BUSY = "keys_busy"
+    """Another sender held the pane's keys."""
+    UNRECOGNISED = "unrecognised"
+    """The screen is not recognisably the agent's prompt."""
+
+
+class RemoteControlRefused(RuntimeError):
+    """A Remote Control press refused, with the reason read off the screen that refused it.
+
+    Raised rather than answered as UNKNOWN, because UNKNOWN is a *reading* and the record clears
+    on one. A refusal left the pane as it was, so the stored reading is no staler than before the
+    press, and the owner is told why instead of shown a bare value (DEC-084).
+    """
+
+    def __init__(self, reason: RemoteControlRefusal) -> None:
+        super().__init__(f"Remote Control press refused: {reason.value}")
+        self.reason = reason
+
+
 @dataclass(frozen=True, slots=True)
 class TrustAnswer:
     """What answering the folder-trust question actually did, as distinct from what the pane shows.
@@ -204,7 +232,15 @@ class TerminalPort(Protocol):
     async def copy_attach(self, session_id: SessionId) -> str | None: ...
     async def remote_control(
         self, session_id: SessionId, desired_state: RemoteControlState
-    ) -> RemoteControlState: ...
+    ) -> RemoteControlState:
+        """Press Remote Control toward `desired_state` and report what the pane then says.
+
+        A press the pane refuses raises `RemoteControlRefused` with its reason. A pane that
+        cannot be read -- gone, not Claude, or unrecognisable after the keys -- still returns
+        UNKNOWN, which is a reading.
+        """
+        ...
+
     async def remote_control_state(self, session_id: SessionId) -> RemoteControlState: ...
     async def trust_state(self, session_id: SessionId) -> TrustState: ...
     async def answer_trust(self, session_id: SessionId) -> TrustAnswer: ...

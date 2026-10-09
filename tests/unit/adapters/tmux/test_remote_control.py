@@ -22,6 +22,7 @@ from remote_agents.adapters.tmux.remote_control import (
 from remote_agents.adapters.tmux.runtime import LaunchProfile, TmuxTerminal, _plain
 from remote_agents.domain.models import ProfileId, ProjectId, SessionId
 from remote_agents.domain.remote_control import RemoteControlState as DomainRemoteControlState
+from remote_agents.ports.terminal import RemoteControlRefusal, RemoteControlRefused
 
 # Two enums spell these three words, and a test that mixes them fails on `is` while printing
 # two values that look identical. `classify_remote_control_capture` above answers in the tmux
@@ -583,19 +584,60 @@ def test_the_enable_banner_is_read_from_the_tail_not_from_anywhere_on_screen() -
 # suggestion is no draft.
 
 
-@pytest.mark.parametrize("screen", ["dialog_approval", "busy", "busy_plan_status"])
+@pytest.mark.parametrize(
+    ("screen", "reason"),
+    [
+        ("dialog_approval", RemoteControlRefusal.ASKING),
+        ("busy", RemoteControlRefusal.BUSY),
+        ("busy_plan_status", RemoteControlRefusal.BUSY),
+        ("composed", RemoteControlRefusal.COMPOSING),
+    ],
+)
 @pytest.mark.parametrize(
     "desired", [DomainRemoteControlState.ACTIVE, DomainRemoteControlState.INACTIVE]
 )
-async def test_nothing_is_typed_at_a_dialog_or_busy_pane(
-    screen: str, desired: DomainRemoteControlState
+async def test_a_refusal_at_a_dialog_busy_or_drafting_pane_says_why_and_types_nothing(
+    screen: str, reason: RemoteControlRefusal, desired: DomainRemoteControlState
 ) -> None:
+    """BL-109: the refused capture is in hand, so the refusal names what it saw.
+
+    A bare UNKNOWN here told the owner nothing and cleared the stored reading, though the pane
+    was left exactly as it was.
+    """
     runner = _ScriptedRunner(_pane(), [_claude(screen)])
 
-    result = await _terminal(runner).remote_control(_SESSION, desired)
+    with pytest.raises(RemoteControlRefused) as refused:
+        await _terminal(runner).remote_control(_SESSION, desired)
 
-    assert result is DomainRemoteControlState.UNKNOWN
+    assert refused.value.reason is reason
     assert runner.keys_typed == (), f"keys reached a pane showing {screen}"
+
+
+@pytest.mark.parametrize(
+    "desired", [DomainRemoteControlState.ACTIVE, DomainRemoteControlState.INACTIVE]
+)
+async def test_a_refusal_at_an_unrecognised_screen_says_so_and_types_nothing(
+    desired: DomainRemoteControlState,
+) -> None:
+    runner = _ScriptedRunner(_pane(), ["something we have never seen\n"])
+
+    with pytest.raises(RemoteControlRefused) as refused:
+        await _terminal(runner).remote_control(_SESSION, desired)
+
+    assert refused.value.reason is RemoteControlRefusal.UNRECOGNISED
+    assert runner.keys_typed == ()
+
+
+async def test_a_dialog_raised_mid_sequence_refuses_as_composing_and_sends_no_enter() -> None:
+    """`/remote-control` went in, then a dialog came up before its `Enter`: the composer now
+    holds the command, and Remote Control did not change."""
+    runner = _ScriptedRunner(_pane(), [_NO_MENU, _claude("dialog_approval")])
+
+    with pytest.raises(RemoteControlRefused) as refused:
+        await _terminal(runner).remote_control(_SESSION, DomainRemoteControlState.ACTIVE)
+
+    assert refused.value.reason is RemoteControlRefusal.COMPOSING
+    assert runner.keys_typed == REMOTE_CONTROL_ENABLE_KEYS[:1], "the Enter followed the dialog"
 
 
 @pytest.mark.parametrize("screen", ["idle_suggestion", "idle_multiline_status"])
@@ -736,7 +778,8 @@ async def test_nothing_is_typed_into_a_marked_turn_still_streaming() -> None:
         turn_markers=_OldMarker(),
     )
 
-    result = await terminal.remote_control(_SESSION, DomainRemoteControlState.ACTIVE)
+    with pytest.raises(RemoteControlRefused) as refused:
+        await terminal.remote_control(_SESSION, DomainRemoteControlState.ACTIVE)
 
-    assert result is DomainRemoteControlState.UNKNOWN
+    assert refused.value.reason is RemoteControlRefusal.BUSY
     assert runner.keys_typed == ()

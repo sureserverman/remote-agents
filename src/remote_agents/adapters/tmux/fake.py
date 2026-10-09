@@ -11,6 +11,8 @@ from remote_agents.ports.terminal import (
     PromptDelivery,
     PromptOutcome,
     PromptReason,
+    RemoteControlRefusal,
+    RemoteControlRefused,
     TerminalObservation,
     TrustAnswer,
 )
@@ -29,6 +31,8 @@ class FakeTerminal:
         #: same reason: a confirmation naming a direction is only testable against a pane
         #: whose reading the test chose.
         self.remote_control_states: list[RemoteControlState] = []
+        #: When set, the next `remote_control` press is refused with this reason (BL-109).
+        self.remote_control_refusal: RemoteControlRefusal | None = None
         self.trust_states: list[TrustState] = []
         self.trust_answers = 0
         self.trust_declines = 0
@@ -120,6 +124,9 @@ class FakeTerminal:
     async def remote_control(
         self, session_id: SessionId, desired_state: RemoteControlState
     ) -> RemoteControlState:
+        if self.remote_control_refusal is not None:
+            reason, self.remote_control_refusal = self.remote_control_refusal, None
+            raise RemoteControlRefused(reason)
         return (
             desired_state
             if await self.inspect(session_id) is not None

@@ -69,6 +69,8 @@ from remote_agents.ports.terminal import (
     PromptDelivery,
     PromptOutcome,
     PromptReason,
+    RemoteControlRefusal,
+    RemoteControlRefused,
     TerminalObservation,
     TerminalTargetMissing,
     TrustAnswer,
@@ -80,6 +82,13 @@ _LOG = logging.getLogger(__name__)
 _REMOTE_CONTROL_ENABLE_WAIT_SECONDS = 3
 _REMOTE_CONTROL_MENU_WAIT_SECONDS = 1
 _REMOTE_CONTROL_DISABLE_WAIT_SECONDS = 2
+# What a refused Remote Control press tells the owner, by the screen that refused it (BL-109).
+# IDLE never refuses; anything unlisted is a screen this adapter does not recognise.
+_REMOTE_CONTROL_REFUSAL_FOR: dict[PaneState, RemoteControlRefusal] = {
+    PaneState.BUSY: RemoteControlRefusal.BUSY,
+    PaneState.DIALOG: RemoteControlRefusal.ASKING,
+    PaneState.COMPOSING: RemoteControlRefusal.COMPOSING,
+}
 # The dialog clears in one redraw; this is the pump's time to repaint, not the agent's time
 # to think. Shorter than every remote-control wait above because nothing is being started --
 # a keypress is being acknowledged.
@@ -976,16 +985,20 @@ class TmuxTerminal:
     ) -> RemoteControlState:
         """Run only the qualified Claude key sequences against one idle exact managed pane.
 
-        UNKNOWN, with nothing typed, unless a styled capture taken under the pane's key lock reads
-        an idle composer (BL-055) -- a draft, a running turn and a dialog all refuse, because the
-        sequence ends in `Enter` -- or when another sender holds the pane's keys (BL-056).
+        Nothing is typed unless a styled capture taken under the pane's key lock reads an idle
+        composer (BL-055) -- a draft, a running turn and a dialog all refuse, because the sequence
+        ends in `Enter` -- and a refusal raises `RemoteControlRefused` naming what refused it,
+        another sender holding the pane's keys (BL-056) included (BL-109). UNKNOWN is left for
+        a pane that cannot be read.
         """
         try:
             return await self._remote_control(session_id, desired_state)
-        except (KeysBusy, KeysInterrupted):
-            # Another sender held the keys, or a dialog came up between `/remote-control` and its
-            # `Enter`, which was then not sent.
-            return RemoteControlState.UNKNOWN
+        except KeysBusy as error:
+            raise RemoteControlRefused(RemoteControlRefusal.KEYS_BUSY) from error
+        except KeysInterrupted as error:
+            # A dialog came up between `/remote-control` and its `Enter`, which was then not sent:
+            # the command sits in the composer, and Remote Control did not change.
+            raise RemoteControlRefused(RemoteControlRefusal.COMPOSING) from error
 
     async def _remote_control(
         self, session_id: SessionId, desired_state: RemoteControlState
@@ -1003,11 +1016,22 @@ class TmuxTerminal:
             # licenses the `Enter` these sequences end in (BL-055).
             return RemoteControlState.UNKNOWN
 
+        judged: list[PaneState] = []
+
         def idle(capture: str) -> bool:
             # No title: Claude, the one agent this toggles, marks nothing there. Its turn marker
             # does (BL-108, DEC-104), and is read here under this hold as the relay reads it: the
             # screen alone reads a streaming answer as idle.
-            return self._judged(session_id, capture, descriptor, "") is PaneState.IDLE
+            judged.append(self._judged(session_id, capture, descriptor, ""))
+            return judged[-1] is PaneState.IDLE
+
+        def refusal() -> RemoteControlRefused:
+            # The state the keys were refused on -- marker included -- as the relay keeps it, not
+            # a second reading of the capture, which could end a marker the first one kept.
+            state = judged[-1] if judged else PaneState.UNKNOWN
+            return RemoteControlRefused(
+                _REMOTE_CONTROL_REFUSAL_FOR.get(state, RemoteControlRefusal.UNRECOGNISED)
+            )
 
         def unasked(capture: str) -> bool:
             # Before the `Enter` after `/remote-control`: never onto a dialog raised meanwhile.
@@ -1028,7 +1052,9 @@ class TmuxTerminal:
             )
             if refused is not None:
                 current = _remote_control_state(_plain(refused))
-                return current if current is desired_state else RemoteControlState.UNKNOWN
+                if current is desired_state:
+                    return current
+                raise refusal()
             await asyncio.sleep(self._waits.remote_control_enable)
             capture = await self._gateway.capture(session_id)
             # `/remote-control` enables a disconnected pane and **opens the status menu** on a
@@ -1083,7 +1109,7 @@ class TmuxTerminal:
             if _remote_control_state(plain) is desired_state:
                 return desired_state
             if not remote_control_menu_is_open(plain):
-                return RemoteControlState.UNKNOWN
+                raise refusal()
         # Settle and re-read in **both** branches, including the one that already saw a menu.
         # A capture is a picture of a pane mid-repaint as readily as of a settled one, so a
         # menu seen in the capture above may be one that has just been dismissed -- and the
