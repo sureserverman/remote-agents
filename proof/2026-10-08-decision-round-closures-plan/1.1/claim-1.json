@@ -1,6 +1,6 @@
 {
- "created": "2026-10-08T19:43:13+00:00",
- "fingerprint": "a6c7dfb5aa3eda015cc51a0959547bc642ef807f876c6fa1970c3da58dc14ac4",
+ "created": "2026-10-09T06:02:19+00:00",
+ "fingerprint": "1fb0be904768222a0b244b3ff0eb6e475e95337d856b6b28349a52843bf2aee8",
  "index": 1,
  "kind": "claim-deviation",
  "plan": "/mnt/vault/Portfolio/infra/remote-agents/plans/2026-10-08-decision-round-closures-plan.md",
