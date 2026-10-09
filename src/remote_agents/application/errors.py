@@ -1,6 +1,14 @@
 """Typed errors exposed by the sealed application use-case surface."""
 
 
+class MutationsDraining(RuntimeError):
+    """Shutdown has closed the mutation gate (`SessionLocks.drain`); nothing new starts.
+
+    Its own type so a caller that records failures can tell "not now" from "failed": a
+    schedule refused here was never launched and stays due for the next start.
+    """
+
+
 class DuplicateCommandError(ValueError):
     """A replayed idempotent command performed no new side effect."""
 

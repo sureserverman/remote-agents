@@ -8,6 +8,7 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
+from remote_agents.application.errors import MutationsDraining
 from remote_agents.domain.conversations import ProviderConversationId
 from remote_agents.domain.models import (
     OrphanProvenance,
@@ -487,7 +488,7 @@ class SessionLocks:
     async def operation(self):
         """Track a mutation so shutdown can finish it without admitting new work."""
         if not self._accepting_operations:
-            raise RuntimeError("mutations are draining")
+            raise MutationsDraining("mutations are draining")
         self._active_operations += 1
         self._drained.clear()
         try:

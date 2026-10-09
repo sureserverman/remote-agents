@@ -53,6 +53,12 @@ from remote_agents.ports.agent_usage import AgentLimits, AgentUsage
 #: cannot drift apart: a close that hangs must not keep a pane or `systemctl stop` waiting.
 CLOSE_TIMEOUT_SECONDS = 5.0
 
+#: How long `serve` waits on its way out for operations already in flight to finish
+#: (`SessionLocks.drain`, BL-130) before it cancels its passes. With the two closes after it,
+#: the whole budget stays inside the supervisor's 30 s stop timeout, pinned by
+#: `test_the_shutdown_budget_fits_the_stop_timeout`.
+DRAIN_TIMEOUT_SECONDS = 10.0
+
 
 @dataclass(frozen=True, slots=True)
 class Backend:

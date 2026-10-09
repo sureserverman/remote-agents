@@ -11,7 +11,7 @@ import pytest
 from schedule_fakes import MemoryScheduleStore
 
 from remote_agents.application.commands import LaunchCommand
-from remote_agents.application.errors import DuplicateCommandError
+from remote_agents.application.errors import DuplicateCommandError, MutationsDraining
 from remote_agents.application.schedules import (
     MISSED_GRACE,
     STARTUP_PATIENCE,
@@ -205,6 +205,23 @@ async def test_a_launch_that_raises_is_reported_with_its_error() -> None:
 
     assert report.outcome is FireOutcome.LAUNCH_FAILED
     assert rig.sends == []
+
+
+async def test_a_fire_refused_by_the_shutdown_drain_stays_due() -> None:
+    """BL-130: a launch refused at the shut gate never started, so it is not a failed fire.
+
+    Recorded as LAUNCH_FAILED it would be told to the owner and never retried, spending a fire
+    on a shutdown. Raised instead, the schedule stays due and fires on the next start.
+    """
+    store = MemoryScheduleStore(_schedule())
+    rig = Rig(launch_error=MutationsDraining("mutations are draining"))
+
+    with pytest.raises(MutationsDraining):
+        await _run(store, rig, FIRE)
+
+    assert rig.reports == []
+    still = await store.get("s1")
+    assert still is not None and still.next_fire_at == FIRE
 
 
 async def test_a_launch_error_is_carried_to_the_report() -> None:

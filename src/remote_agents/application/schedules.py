@@ -33,7 +33,7 @@ from datetime import UTC, datetime, timedelta, tzinfo
 from enum import StrEnum
 
 from remote_agents.application.commands import LaunchCommand
-from remote_agents.application.errors import DuplicateCommandError
+from remote_agents.application.errors import DuplicateCommandError, MutationsDraining
 from remote_agents.application.prompt_delivery import DeliveryVerdict, delivery_verdict
 from remote_agents.application.schedule_times import next_fire
 from remote_agents.domain.models import ProfileId, SessionId, SessionState
@@ -146,6 +146,10 @@ class SchedulePass:
         for schedule in await self._store.due(now):
             try:
                 report = await self._fire(schedule, now)
+            except MutationsDraining:
+                # The service is stopping and the gate is shut, so every schedule after this
+                # one would meet it too. None was launched; each stays due for the next start.
+                raise
             except Exception:
                 _LOG.exception("schedule %s could not be fired; it stays due", schedule.id)
                 continue
@@ -267,6 +271,10 @@ class SchedulePass:
             return await self._record(
                 schedule, now, FireReport(schedule, FireOutcome.DUPLICATE, due_at)
             )
+        except MutationsDraining:
+            # Refused at the gate, before the launch claimed its key: nothing started, so this
+            # is not a failed fire. Recording one would spend the fire on a shutdown.
+            raise
         except Exception as error:
             # The launch may have got part-way, so this fire is over either way: recorded and
             # reported, never retried (its key is claimed already).

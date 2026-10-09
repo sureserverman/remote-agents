@@ -21,7 +21,8 @@ from remote_agents.adapters.tmux.runtime import TmuxTerminal
 from remote_agents.adapters.workflow.handoff_envelopes import FileHandoffEnvelopes
 from remote_agents.adapters.workflow.roots import handoff_root
 from remote_agents.application.activity import CodexApprovalWatcher, drain_activity
-from remote_agents.application.backend import CLOSE_TIMEOUT_SECONDS
+from remote_agents.application.backend import CLOSE_TIMEOUT_SECONDS, DRAIN_TIMEOUT_SECONDS
+from remote_agents.application.errors import MutationsDraining
 from remote_agents.application.limit_lifts import LimitLiftWatcher
 from remote_agents.application.limit_resume import prune_outcomes
 from remote_agents.application.limit_stops import LimitScreenWatcher, LimitStopClassifier
@@ -234,6 +235,11 @@ class ServiceComposition:
     relay_notice_flush: Callable[[], Awaitable[None]] | None = None
     """Sends the queued-message notices a flood hold kept, on every activity pass (BL-107)."""
 
+    drain: Callable[[], Awaitable[None]] | None = None
+    """Closes the mutation gate and waits for operations in flight: the one `SessionLocks`
+    the bot's services share (DEC-046), so the drain counts every operation. None in
+    compositions that wire no lock set, which today means tests."""
+
 
 async def _serve_with_reconciliation(
     secrets: TelegramSecrets,
@@ -335,6 +341,10 @@ async def _serve_with_reconciliation(
     finally:
         if detach is not None:
             detach()
+        # Drain first (BL-130). The passes enter the same gate, so cancelling them first would
+        # cut a launch they started off part-way, and a drain after that would find nothing
+        # left to wait for. A pass that wakes during the drain meets the shut gate instead.
+        await _drain_operations(composition)
         for task in periodic:
             task.cancel()
         await asyncio.gather(*periodic, return_exceptions=True)
@@ -386,6 +396,24 @@ async def _redraw_sessions(composition: ServiceComposition) -> None:
         await composition.boundary.redraw_schedules_if_open()
     except Exception:
         _LOG.warning("the schedules list could not be redrawn after a store change", exc_info=True)
+
+
+async def _drain_operations(composition: ServiceComposition) -> None:
+    """Let operations already in flight finish, within `DRAIN_TIMEOUT_SECONDS`.
+
+    A timeout is one warning and shutdown goes on: the gate stays shut, so nothing new starts,
+    and an operation still running is cancelled with its pass a moment later -- exactly what
+    every shutdown did before the drain existed.
+    """
+    if composition.drain is None:
+        return
+    try:
+        await asyncio.wait_for(composition.drain(), timeout=DRAIN_TIMEOUT_SECONDS)
+    except TimeoutError:
+        _LOG.warning(
+            "operations were still in flight after the %ss shutdown drain; stopping anyway",
+            DRAIN_TIMEOUT_SECONDS,
+        )
 
 
 async def _close_host_remote_control(composition: ServiceComposition) -> None:
@@ -516,6 +544,9 @@ async def _fire_schedules_periodically(composition: ServiceComposition, interval
         await asyncio.sleep(interval)
         try:
             await composition.schedule_pass.run()
+        except MutationsDraining:
+            # Shutdown's drain shut the gate; the schedules it met stay due.
+            _LOG.debug("the schedule pass met the shutdown drain")
         except Exception:
             # One pass, logged. A schedule a pass could not reach stays due and is fired, or
             # reported missed, on a later one.
@@ -533,6 +564,8 @@ async def _roll_over_periodically(composition: ServiceComposition, interval: flo
         await asyncio.sleep(interval)
         try:
             await composition.rollover_pass.run_once()
+        except MutationsDraining:
+            _LOG.debug("the rollover pass met the shutdown drain")
         except Exception:
             # One pass, logged. Each state was persisted before its action, so the next pass
             # takes up exactly where this one stopped.

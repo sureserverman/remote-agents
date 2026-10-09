@@ -73,3 +73,29 @@ def test_the_executable_the_unit_starts_actually_runs() -> None:
     assert completed.returncode == 0, completed.stderr
     assert "agent-event" in completed.stdout
     assert "Traceback" not in completed.stderr
+
+
+def test_the_shutdown_budget_fits_the_stop_timeout() -> None:
+    """BL-130: `serve` drains in-flight operations, then closes two helpers, each bounded.
+
+    The sum must stay inside the supervisor's stop timeout on both platforms. Past it the
+    supervisor kills the main process, and the helper children it was closing are orphaned.
+    """
+    import plistlib
+    import re
+
+    from remote_agents.adapters.supervisor.launchd import LaunchdSupervisor
+    from remote_agents.application.backend import CLOSE_TIMEOUT_SECONDS, DRAIN_TIMEOUT_SECONDS
+
+    budget = DRAIN_TIMEOUT_SECONDS + 2 * CLOSE_TIMEOUT_SECONDS
+    stop = re.search(r"^TimeoutStopSec=(\d+)s$", UNIT.read_text(encoding="utf-8"), re.MULTILINE)
+    assert stop is not None
+    assert budget < int(stop.group(1))
+
+    (artifact,) = LaunchdSupervisor(
+        interpreter=Path("/opt/ra/bin/python3"),
+        home=Path("/Users/tester"),
+        uid=501,
+        homebrew_prefix=lambda: Path("/opt/homebrew"),
+    ).artifacts()
+    assert budget < plistlib.loads(artifact.content.encode("utf-8"))["ExitTimeOut"]

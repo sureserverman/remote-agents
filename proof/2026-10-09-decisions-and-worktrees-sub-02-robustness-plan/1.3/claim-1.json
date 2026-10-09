@@ -1,0 +1,28 @@
+{
+ "baseline": {
+  "elapsed_s": 17.3,
+  "exit": 0,
+  "tail": "...........................................................              [100%]\n59 passed in 16.85s"
+ },
+ "break_patch": "--- a/src/remote_agents/composition/service.py\t2026-10-09 22:25:27.670779625 +0100\n+++ b/src/remote_agents/composition/service.py\t2026-10-09 22:25:27.678870840 +0100\n@@ -344,10 +344,10 @@\n         # Drain first (BL-130). The passes enter the same gate, so cancelling them first would\n         # cut a launch they started off part-way, and a drain after that would find nothing\n         # left to wait for. A pass that wakes during the drain meets the shut gate instead.\n-        await _drain_operations(composition)\n         for task in periodic:\n             task.cancel()\n         await asyncio.gather(*periodic, return_exceptions=True)\n+        await _drain_operations(composition)\n         await _close_host_remote_control(composition)\n         await _close_usage_readers(composition)\n \n",
+ "build": null,
+ "created": "2026-10-09T21:26:01+00:00",
+ "fingerprint": "78baa960bca28d3a0ba1288ba64fa69e2b24eeaacecd160bbb44e5876a5888ba",
+ "index": 1,
+ "kind": "claim",
+ "named_break": null,
+ "no_build_reason": "pure Python, no build",
+ "plan": "/mnt/vault/Portfolio/infra/remote-agents/plans/2026-10-09-decisions-and-worktrees-sub-02-robustness-plan.md",
+ "red": {
+  "elapsed_s": 16.7,
+  "exit": 1,
+  "tail": "        \"\"\"The drain is bounded: an operation that never finishes costs `DRAIN_TIMEOUT_SECONDS`\n        and one warning, then shutdown goes on as before -- `systemctl stop` must not hang.\"\"\"\n        from remote_agents.adapters.sqlite.database import open_database\n        from remote_agents.adapters.sqlite.session_store import SQLiteSessionStore\n        from remote_agents.application.reconcile import SessionLocks\n        from remote_agents.composition import service as service_module\n        from remote_agents.composition.service import _serve_with_reconciliation\n        from remote_agents.config import TelegramSecrets\n    \n        monkeypatch.setattr(service_module, \"_SCHEDULE_POLL_SECONDS\", 0.0)\n        monkeypatch.setattr(service_module, \"DRAIN_TIMEOUT_SECONDS\", 0.05)\n        held, started = asyncio.Event(), asyncio.Event()  # never released\n        connection = open_database(tmp_path / \"sessions.sqlite3\")\n        try:\n            store = SQLiteSessionStore(connection)\n            composition, schedule_pass = _held_launch_composition(store, SessionLocks(), held, started)\n    \n            async def poll(secrets, boundary) -> None:\n                await started.wait()\n    \n            with caplog.at_level(\"WARNING\", logger=service_module.__name__):\n                await asyncio.wait_for(\n                    _serve_with_reconciliation(\n                        TelegramSecrets(\"token\", 7, 11), composition, poll, 3600\n                    ),\n                    timeout=5,\n                )\n    \n            assert schedule_pass.outcomes == [], \"the wedged launch cannot have finished\"\n            warnings = [r.getMessage() for r in caplog.records if r.levelname == \"WARNING\"]\n>           assert any(\"0.05\" in w and \"drain\" in w for w in warnings), warnings\nE           AssertionError: []\nE           assert False\nE            +  where False = any(<generator object test_shutdown_abandons_a_wedged_operation_after_the_drain_bound.<locals>.<genexpr> at 0x71bab5018040>)\n\ntests/integration/test_composition_lifecycle.py:1253: AssertionError\n=========================== short test summary info ============================\nFAILED tests/integration/test_composition_lifecycle.py::test_shutdown_finishes_an_operation_in_flight_before_cancelling_the_passes\nFAILED tests/integration/test_composition_lifecycle.py::test_shutdown_abandons_a_wedged_operation_after_the_drain_bound\n2 failed, 57 passed in 16.18s"
+ },
+ "schema": 2,
+ "task": "1.3",
+ "test": "uv run --locked pytest tests/integration/test_composition_lifecycle.py tests/integration/test_serve_reconciliation.py tests/contract/systemd/test_remote_agents_unit.py -q -p no:randomly",
+ "text": "`uv run --locked pytest tests/integration/test_composition_lifecycle.py tests/integration/test_serve_reconciliation.py tests/contract/systemd/test_remote_agents_unit.py -q -p no:randomly`. The first new test goes red if the drain runs after `task.cancel()`: the held launch is then cancelled, not finished.",
+ "touched": [
+  "src/remote_agents/composition/service.py"
+ ]
+}

@@ -150,11 +150,11 @@ class HostRemoteControlService:
 
     `operation()` is still entered, and earns its place for the other reason: an enable in
     flight is a network round trip that enrols this machine, and shutdown should finish it
-    rather than abandon it half-done. **Stated honestly: nothing on the shipped `serve` path
-    calls `SessionLocks.drain()` today** -- its only caller is `RuntimeCoordinator`, which
-    `bootstrap` does not construct -- so entering `operation()` records the intent and buys
-    the guarantee only once that gap is closed. It is a pre-existing gap that `SessionService`
-    shares; it is named here rather than left implied by the word "drain".
+    rather than abandon it half-done. `serve` drains the one lock set this shares with
+    `SessionService` before it cancels its passes (BL-130), so an enable in flight at a stop
+    is waited on for up to `DRAIN_TIMEOUT_SECONDS`, and one that outlasts that bound is cut
+    off as every shutdown did before. The local TUI drains nothing on exit, so an enable it
+    started is still abandoned when its window closes.
     """
 
     def __init__(

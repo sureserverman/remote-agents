@@ -1122,3 +1122,134 @@ async def test_a_composition_predating_the_limits_watch_still_constructs(tmp_pat
         assert composition.trust_notifier is None
     finally:
         connection.close()
+
+
+def _held_launch_composition(store, locks, held: asyncio.Event, started: asyncio.Event):
+    """A `serve` composition whose schedule pass launches through a terminal held open.
+
+    The launch runs *inside* a periodic task, which is the shape that matters: cancelling the
+    passes before draining would cancel it mid-launch, and only the drain order lets it finish.
+    The real `SessionLocks` and `SessionService` carry the gate; only the terminal is faked.
+    """
+    from backends import backend_for
+
+    from remote_agents.adapters.telegram.service import build_private_bot
+    from remote_agents.adapters.tmux.fake import FakeTerminal
+    from remote_agents.application.commands import LaunchCommand
+    from remote_agents.application.reconcile import ReconciliationService
+    from remote_agents.application.services import SessionService
+    from remote_agents.composition.service import ServiceComposition
+    from remote_agents.domain.models import ProfileId, ProjectId
+
+    class _HeldTerminal(FakeTerminal):
+        async def launch(self, *arguments, **keywords):
+            started.set()
+            await held.wait()
+            return await super().launch(*arguments, **keywords)
+
+        async def managed_observations(self) -> tuple:
+            return ()
+
+    terminal = _HeldTerminal()
+    sessions = SessionService(store, terminal, locks=locks)
+
+    class _SchedulePass:
+        def __init__(self) -> None:
+            self.fired = 0
+            self.outcomes: list[object] = []
+
+        async def run(self):
+            self.fired += 1
+            command = LaunchCommand(ProjectId("p"), ProfileId("claude"), f"sched-{self.fired}")
+            self.outcomes.append(await sessions.launch(command))
+            return ()
+
+    schedule_pass = _SchedulePass()
+    boundary = build_private_bot(7, 11, backend=backend_for())
+    composition = ServiceComposition(
+        boundary,
+        terminal,
+        ReconciliationService(store),
+        schedule_pass=schedule_pass,
+        drain=locks.drain,
+    )
+    return composition, schedule_pass
+
+
+async def test_shutdown_finishes_an_operation_in_flight_before_cancelling_the_passes(
+    tmp_path: Path, monkeypatch, caplog
+) -> None:
+    """BL-130: `serve` used to cancel its passes first, so a launch a pass had started was cut
+    off part-way. The drain now runs first, closes the gate and waits for it to finish."""
+    from remote_agents.adapters.sqlite.database import open_database
+    from remote_agents.adapters.sqlite.session_store import SQLiteSessionStore
+    from remote_agents.application.reconcile import SessionLocks
+    from remote_agents.composition import service as service_module
+    from remote_agents.composition.service import _serve_with_reconciliation
+    from remote_agents.config import TelegramSecrets
+    from remote_agents.domain.models import SessionState
+
+    monkeypatch.setattr(service_module, "_SCHEDULE_POLL_SECONDS", 0.0)
+    held, started = asyncio.Event(), asyncio.Event()
+    connection = open_database(tmp_path / "sessions.sqlite3")
+    try:
+        store = SQLiteSessionStore(connection)
+        composition, schedule_pass = _held_launch_composition(store, SessionLocks(), held, started)
+
+        async def poll(secrets, boundary) -> None:
+            await started.wait()
+            asyncio.get_running_loop().call_later(0.1, held.set)
+
+        with caplog.at_level("DEBUG", logger=service_module.__name__):
+            await asyncio.wait_for(
+                _serve_with_reconciliation(
+                    TelegramSecrets("token", 7, 11), composition, poll, 3600
+                ),
+                timeout=5,
+            )
+
+        assert len(schedule_pass.outcomes) == 1, "the held launch was cancelled, not finished"
+        (record,) = await store.list()
+        assert record.state is SessionState.RUNNING
+        # Passes that ran during the drain met the closed gate: told quietly, not as failures.
+        assert not [r for r in caplog.records if r.levelname == "ERROR"], caplog.text
+    finally:
+        connection.close()
+
+
+async def test_shutdown_abandons_a_wedged_operation_after_the_drain_bound(
+    tmp_path: Path, monkeypatch, caplog
+) -> None:
+    """The drain is bounded: an operation that never finishes costs `DRAIN_TIMEOUT_SECONDS`
+    and one warning, then shutdown goes on as before -- `systemctl stop` must not hang."""
+    from remote_agents.adapters.sqlite.database import open_database
+    from remote_agents.adapters.sqlite.session_store import SQLiteSessionStore
+    from remote_agents.application.reconcile import SessionLocks
+    from remote_agents.composition import service as service_module
+    from remote_agents.composition.service import _serve_with_reconciliation
+    from remote_agents.config import TelegramSecrets
+
+    monkeypatch.setattr(service_module, "_SCHEDULE_POLL_SECONDS", 0.0)
+    monkeypatch.setattr(service_module, "DRAIN_TIMEOUT_SECONDS", 0.05)
+    held, started = asyncio.Event(), asyncio.Event()  # never released
+    connection = open_database(tmp_path / "sessions.sqlite3")
+    try:
+        store = SQLiteSessionStore(connection)
+        composition, schedule_pass = _held_launch_composition(store, SessionLocks(), held, started)
+
+        async def poll(secrets, boundary) -> None:
+            await started.wait()
+
+        with caplog.at_level("WARNING", logger=service_module.__name__):
+            await asyncio.wait_for(
+                _serve_with_reconciliation(
+                    TelegramSecrets("token", 7, 11), composition, poll, 3600
+                ),
+                timeout=5,
+            )
+
+        assert schedule_pass.outcomes == [], "the wedged launch cannot have finished"
+        warnings = [r.getMessage() for r in caplog.records if r.levelname == "WARNING"]
+        assert any("0.05" in w and "drain" in w for w in warnings), warnings
+    finally:
+        connection.close()
