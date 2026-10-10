@@ -94,6 +94,19 @@ DEFAULT_RESUME_AFTER_LIMIT = True
 DEFAULT_AUTO_ROLLOVER = False
 """Off until the owner switches it on: a rollover launches and stops sessions alone (DEC-115)."""
 
+DEFAULT_WORKTREE_COPY: tuple[str, ...] = (
+    "CLAUDE.md",
+    "AGENTS.md",
+    ".claude/settings.local.json",
+    ".claude/vault-context.md",
+)
+"""What a fresh session worktree gets copied from the main checkout, when present and untracked.
+
+A worktree holds only tracked files, and projects commonly ignore their agent instructions and
+the agent's local permission allowlist (this repository ignores `.claude/` and `CLAUDE.md`), so
+an agent started in a bare worktree would work without either.
+"""
+
 
 @dataclass(frozen=True, slots=True)
 class AppConfig:
@@ -180,6 +193,13 @@ class AppConfig:
     this field, so a flip lands without a restart.
     """
 
+    worktree_copy: tuple[str, ...] = DEFAULT_WORKTREE_COPY
+    """`[worktrees] copy`: the repo-relative files a new session worktree copies (BL-116)."""
+
+    worktree_copy_by_project: Mapping[Path, tuple[str, ...]] = field(default_factory=dict)
+    """`[worktrees.projects]`: an absolute project path mapped to the list replacing
+    `worktree_copy` for that project only."""
+
     path: Path | None = None
     """The file this configuration was loaded from, or `None` for one built in memory.
 
@@ -189,9 +209,27 @@ class AppConfig:
     path on every account read, which is what lets a Settings flip land without a restart.
     """
 
+    def worktree_copy_for(self, project_path: Path) -> tuple[str, ...]:
+        """The copy list for a project: its own `[worktrees.projects]` entry, else the default.
 
-_TOP_LEVEL_KEYS = {"paths", "limits", "rollover"}
-_OPTIONAL_TOP_LEVEL_KEYS = frozenset({"rollover"})
+        Matched on the path as written, then on both sides resolved, so a project registered
+        through a symlink still finds the entry its owner wrote."""
+        own = self.worktree_copy_by_project.get(project_path)
+        if own is None:
+            resolved = project_path.resolve()
+            own = next(
+                (
+                    entries
+                    for key, entries in self.worktree_copy_by_project.items()
+                    if key.resolve() == resolved
+                ),
+                None,
+            )
+        return self.worktree_copy if own is None else own
+
+
+_TOP_LEVEL_KEYS = {"paths", "limits", "rollover", "worktrees"}
+_OPTIONAL_TOP_LEVEL_KEYS = frozenset({"rollover", "worktrees"})
 """Tables the schema accepts but does not require: a host written before one existed lacks it.
 
 DEC-058 for a whole table rather than a key. `[rollover]` holds only optional keys, so a file
@@ -252,6 +290,14 @@ written for -- and DEC-058 says a config lacking a new key is not drift.
 _ROLLOVER_KEYS = {"auto_rollover"}
 _OPTIONAL_ROLLOVER_KEYS = frozenset({"auto_rollover"})
 """Every `[rollover]` key is optional: the switch is off until the owner writes it (DEC-058)."""
+
+_WORKTREE_KEYS = {"copy", "projects"}
+_OPTIONAL_WORKTREE_KEYS = frozenset({"copy", "projects"})
+"""Every `[worktrees]` key is optional: a file without the table copies the defaults."""
+
+_NEVER_COPIED = re.compile(r"^(\.env(\..*)?|\.venv|\.git)$")
+"""Path components a copy list may never name: secrets (`.env`, `.env.*`), an environment that
+belongs to one checkout (`.venv`), and git's own state (`.git`)."""
 
 _CLAUDE_CONTEXT_BOUNDS = (1_000, 20_000_000)
 """How far a stated ceiling may stray before it is refused rather than clamped.
@@ -390,6 +436,7 @@ def _schema_sections(
             _OPTIONAL_LIMIT_KEYS | _RETIRED_LIMIT_KEYS,
         ),
         ("rollover", _ROLLOVER_KEYS, _OPTIONAL_ROLLOVER_KEYS),
+        ("worktrees", _WORKTREE_KEYS, _OPTIONAL_WORKTREE_KEYS),
     ):
         section = raw.get(name)
         if isinstance(section, dict):
@@ -420,6 +467,8 @@ def load_config(path: Path) -> AppConfig:
     limits = _mapping(raw["limits"], "limits")
     rollover = _mapping(raw.get("rollover", {}), "rollover")
     _require_exact_keys(rollover, _ROLLOVER_KEYS, "rollover", _OPTIONAL_ROLLOVER_KEYS)
+    worktrees = _mapping(raw.get("worktrees", {}), "worktrees")
+    _require_exact_keys(worktrees, _WORKTREE_KEYS, "worktrees", _OPTIONAL_WORKTREE_KEYS)
     _require_exact_keys(paths, _PATH_KEYS, "paths")
     _require_exact_keys(
         limits,
@@ -427,7 +476,10 @@ def load_config(path: Path) -> AppConfig:
         "limits",
         _OPTIONAL_LIMIT_KEYS | _RETIRED_LIMIT_KEYS,
     )
-    if any("token" in key.lower() or "secret" in key.lower() for key in _walk_keys(raw)):
+    # `[worktrees.projects]` is keyed by project paths, not setting names: a project called
+    # `token-bucket` names no secret, so those keys are left out of the walk.
+    named = {**raw, "worktrees": {key: None for key in worktrees}} if worktrees else raw
+    if any("token" in key.lower() or "secret" in key.lower() for key in _walk_keys(named)):
         raise ConfigError("TOML must not contain tokens or secrets")
     dev_root = _absolute_directory(paths["dev_root"], "paths.dev_root")
     registry_path = _absolute_path(paths["registry_path"], "paths.registry_path")
@@ -469,6 +521,12 @@ def load_config(path: Path) -> AppConfig:
     auto_rollover = _flag(
         rollover.get("auto_rollover", DEFAULT_AUTO_ROLLOVER), "rollover.auto_rollover"
     )
+    worktree_copy = (
+        _copy_list(worktrees["copy"], "worktrees.copy")
+        if "copy" in worktrees
+        else DEFAULT_WORKTREE_COPY
+    )
+    worktree_copy_by_project = _copy_lists_by_project(worktrees.get("projects", {}))
     return AppConfig(
         dev_root,
         registry_path,
@@ -483,6 +541,8 @@ def load_config(path: Path) -> AppConfig:
         cursor_limits_source=cursor_limits_source,
         resume_after_limit=resume_after_limit,
         auto_rollover=auto_rollover,
+        worktree_copy=worktree_copy,
+        worktree_copy_by_project=worktree_copy_by_project,
     )
 
 
@@ -515,6 +575,34 @@ def load_secrets(
         return TelegramSecrets(values[names[0]], int(values[names[1]]), int(values[names[2]]))
     except ValueError as error:
         raise ConfigError("owner identifiers must be integers") from error
+
+
+def _copy_list(value: object, name: str) -> tuple[str, ...]:
+    """A list of repo-relative paths a worktree may copy, refused whole on one bad entry."""
+    if not isinstance(value, list):
+        raise ConfigError(f"{name} must be a list of repo-relative paths")
+    entries = []
+    for entry in value:
+        if not isinstance(entry, str) or not entry.strip():
+            raise ConfigError(f"{name} entries must be non-empty strings")
+        parts = Path(entry).parts
+        if Path(entry).is_absolute() or ".." in parts:
+            raise ConfigError(f"{name} entries must stay inside the checkout: {entry!r}")
+        if any(_NEVER_COPIED.match(part) for part in parts):
+            raise ConfigError(f"{name} may not copy .env, .venv or anything under .git: {entry!r}")
+        entries.append(entry)
+    return tuple(entries)
+
+
+def _copy_lists_by_project(value: object) -> dict[Path, tuple[str, ...]]:
+    projects = _mapping(value, "worktrees.projects")
+    lists = {}
+    for key, entries in projects.items():
+        project = Path(key).expanduser()
+        if not project.is_absolute():
+            raise ConfigError(f"worktrees.projects keys must be absolute project paths: {key!r}")
+        lists[project] = _copy_list(entries, f"worktrees.projects.{key!r}")
+    return lists
 
 
 def _mapping(value: object, name: str) -> dict[str, object]:

@@ -130,6 +130,16 @@ class ProductionPaths:
         """
         return self.state_directory / "preferences.json"
 
+    @property
+    def worktree_directory(self) -> Path:
+        """Where session worktrees live, one folder per session under `<project>/` (BL-116).
+
+        Under `state_directory`, so it sits outside `dev_root` and project discovery never
+        lists a worktree as a project. Private, because a worktree holds copies of files the
+        owner kept out of git -- agent instructions and a local permission allowlist.
+        """
+        return self.state_directory / "worktrees"
+
     def ensure_directories(self, *, include_unit_directory: bool = True) -> None:
         """Create only declared directories and repair their private modes.
 
@@ -149,6 +159,7 @@ class ProductionPaths:
             self.state_directory,
             self.intent_directory,
             self.activity_directory,
+            self.worktree_directory,
         ]
         if include_unit_directory:
             directories.append(self.unit_directory)

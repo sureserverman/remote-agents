@@ -33,8 +33,14 @@ def test_production_paths_create_only_private_declared_directories_and_database(
         Path(".local/state/remote-agents/activity"),
         Path(".local/state/remote-agents/intents"),
         Path(".local/state/remote-agents/sessions.sqlite3"),
+        Path(".local/state/remote-agents/worktrees"),
     }
-    for directory in (paths.config_directory, paths.state_directory, paths.unit_directory):
+    for directory in (
+        paths.config_directory,
+        paths.state_directory,
+        paths.unit_directory,
+        paths.worktree_directory,
+    ):
         assert stat.S_IMODE(directory.stat().st_mode) == 0o700
     assert stat.S_IMODE(paths.database_path.stat().st_mode) == 0o600
 
