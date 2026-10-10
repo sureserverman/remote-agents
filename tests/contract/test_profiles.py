@@ -4,7 +4,10 @@ from pathlib import Path
 
 import pytest
 
+from remote_agents.adapters.agents.registry import profile_readiness_blockers
 from remote_agents.adapters.tmux.profiles import build_launch_profile, probe_profiles
+from remote_agents.composition.tui import _profile_factory, _resume_profile_factory
+from remote_agents.domain.conversations import ProviderConversationId
 from remote_agents.domain.models import ProfileId, SessionId
 from remote_agents.domain.profiles import (
     ProfileDefinition,
@@ -109,22 +112,80 @@ def test_a_remote_control_launch_substitutes_only_the_generated_managed_name() -
 @pytest.mark.parametrize(
     ("profile_id", "expected_blockers"),
     (
-        ("codex", ("Trust this folder?",)),
+        ("claude", ("Accessing workspace:", "Quick safety check")),
+        ("codex", ("Folder access",)),
         ("cursor-agent", ("Workspace Trust Required",)),
+        ("opencode", ()),
     ),
 )
 def test_profile_readiness_rejects_a_workspace_trust_dialogue(
     profile_id: str, expected_blockers: tuple[str, ...]
 ) -> None:
+    """The composed launch and resume profiles carry each vertical's declared dialog heading.
+
+    Built through the composition's own factories and the registry's derived map, which is
+    the path production takes (BL-052): the tmux adapter spells only claude's pre-trust
+    screen, and every dialog heading arrives from the vertical that declares it. opencode
+    declares no dialog and gets nothing.
+    """
     definition = next(
         profile for profile in closed_profiles() if str(profile.profile_id) == profile_id
     )
+    blockers = profile_readiness_blockers().get(profile_id, ())
+    executable = Path(f"/tools/{profile_id}")
 
-    runtime = build_launch_profile(
-        definition, Path(f"/tools/{profile_id}"), SessionId.new(), {"PATH": "/tools"}
+    launched = _profile_factory(definition, executable, {"PATH": "/tools"}, blockers)(
+        SessionId.new(), False
+    )
+    assert launched.readiness_blockers == expected_blockers
+    if profile_id != "cursor-agent":  # cursor-agent has no curated resume
+        resumed = _resume_profile_factory(definition, executable, {"PATH": "/tools"}, blockers)(
+            SessionId.new(), ProviderConversationId("conversation-1")
+        )
+        assert resumed.readiness_blockers == expected_blockers
+
+
+def test_the_production_terminal_carries_each_dialog_heading_as_a_blocker(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The factories the composed terminal holds, not ones this file builds (BL-052).
+
+    `_local_runtime` is where the derived map is handed to the factories, and a test that
+    calls the factories itself cannot see a composition that forgets to. So this runs the real
+    composition with only the host-dependent parts replaced: the version probe and the
+    executable lookup, which would otherwise make the result depend on the agents installed
+    here. The terminal's own factories are then asked for codex's launch and resume profiles.
+    """
+    import remote_agents.composition.tui as composition
+    from remote_agents.adapters.agents.registry import provider_descriptors
+    from remote_agents.domain.profiles import ProfileCompatibility
+    from remote_agents.production import ProductionPaths
+
+    monkeypatch.setattr(
+        composition,
+        "probe_profiles",
+        lambda definitions, resolve: tuple(
+            ProfileCompatibility(definition.profile_id, True, "1.0", "available", None)
+            for definition in definitions
+        ),
+    )
+    monkeypatch.setattr(
+        composition,
+        "_resolve_profile_executable",
+        lambda executable, home: Path(f"/tools/{executable}"),
     )
 
-    assert runtime.readiness_blockers == expected_blockers
+    runtime = composition._local_runtime(
+        None, ProductionPaths.for_home(tmp_path), {}, provider_descriptors()
+    )
+    codex = ProfileId("codex")
+    launched = runtime.terminal._profile_factories[codex](SessionId.new(), False)
+    resumed = runtime.terminal._resume_profile_factories[codex](
+        SessionId.new(), ProviderConversationId("conversation-1")
+    )
+
+    assert launched.readiness_blockers == ("Folder access",)
+    assert resumed.readiness_blockers == ("Folder access",)
 
 
 def test_profile_availability_is_not_version_pinned() -> None:

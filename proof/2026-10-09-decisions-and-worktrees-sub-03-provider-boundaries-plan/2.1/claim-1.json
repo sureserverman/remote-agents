@@ -1,0 +1,28 @@
+{
+ "baseline": {
+  "elapsed_s": 13.5,
+  "exit": 0,
+  "tail": "........................................................................ [ 56%]\n.......................................................                  [100%]\n127 passed in 13.26s"
+ },
+ "break_patch": "--- a/src/remote_agents/composition/tui.py\n+++ b/src/remote_agents/composition/tui.py\n@@ -136,7 +136,7 @@\n         executable = executables[result.profile_id]\n         if result.available and executable is not None:\n             definition = definitions_by_id[result.profile_id]\n-            blockers = readiness_blockers.get(str(result.profile_id), ())\n+            blockers = ()\n             profile_factories[result.profile_id] = _profile_factory(\n                 definition, executable, allowed_environment, blockers\n             )\n",
+ "build": null,
+ "created": "2026-10-10T12:18:51+00:00",
+ "fingerprint": "bb232a03a1be6f35d374b2948ef415e6c580699f37cdaca55fc8b62ae9d421a0",
+ "index": 1,
+ "kind": "claim",
+ "named_break": null,
+ "no_build_reason": "pure Python, no build",
+ "plan": "/mnt/vault/Portfolio/infra/remote-agents/plans/2026-10-09-decisions-and-worktrees-sub-03-provider-boundaries-plan.md",
+ "red": {
+  "elapsed_s": 13.5,
+  "exit": 1,
+  "tail": "        here. The terminal's own factories are then asked for codex's launch and resume profiles.\n        \"\"\"\n        import remote_agents.composition.tui as composition\n        from remote_agents.adapters.agents.registry import provider_descriptors\n        from remote_agents.domain.profiles import ProfileCompatibility\n        from remote_agents.production import ProductionPaths\n    \n        monkeypatch.setattr(\n            composition,\n            \"probe_profiles\",\n            lambda definitions, resolve: tuple(\n                ProfileCompatibility(definition.profile_id, True, \"1.0\", \"available\", None)\n                for definition in definitions\n            ),\n        )\n        monkeypatch.setattr(\n            composition,\n            \"_resolve_profile_executable\",\n            lambda executable, home: Path(f\"/tools/{executable}\"),\n        )\n    \n        runtime = composition._local_runtime(\n            None, ProductionPaths.for_home(tmp_path), {}, provider_descriptors()\n        )\n        codex = ProfileId(\"codex\")\n        launched = runtime.terminal._profile_factories[codex](SessionId.new(), False)\n        resumed = runtime.terminal._resume_profile_factories[codex](\n            SessionId.new(), ProviderConversationId(\"conversation-1\")\n        )\n    \n>       assert launched.readiness_blockers == (\"Folder access\",)\nE       AssertionError: assert () == ('Folder access',)\nE         \nE         Right contains one more item: 'Folder access'\nE         Use -v to get more diff\n\ntests/contract/test_profiles.py:187: AssertionError\n=========================== short test summary info ============================\nFAILED tests/contract/test_profiles.py::test_the_production_terminal_carries_each_dialog_heading_as_a_blocker\n1 failed, 126 passed in 13.24s"
+ },
+ "schema": 2,
+ "task": "2.1",
+ "test": "uv run --locked pytest tests/contract/test_profiles.py tests/e2e/test_terminal_launch.py tests/contract/adapters/tmux/test_resume_readiness.py tests/unit/application/test_reconcile.py tests/integration/sqlite/test_trust_through_the_real_service.py -q -p no:randomly",
+ "text": "`uv run --locked pytest tests/contract/test_profiles.py tests/e2e/test_terminal_launch.py tests/contract/adapters/tmux/test_resume_readiness.py tests/unit/application/test_reconcile.py tests/integration/sqlite/test_trust_through_the_real_service.py -q -p no:randomly`. `test_profiles.py`'s parametrised expectations become `codex \u2192 (\"Folder access\",)` and `cursor-agent \u2192 (\"Workspace Trust Required\",)`, built through the derived map; claude stays `(\"Accessing workspace:\", \"Quick safety check\")`. Sub-plan 1's trust tests stay green. Red if a factory is wired without the derived map (codex expects `Folder access` and gets `()`).",
+ "touched": [
+  "src/remote_agents/composition/tui.py"
+ ]
+}

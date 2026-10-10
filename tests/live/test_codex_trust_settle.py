@@ -24,6 +24,7 @@ from pathlib import Path
 
 import pytest
 
+from remote_agents.adapters.agents.registry import profile_readiness_blockers
 from remote_agents.adapters.tmux.gateway import TmuxGateway
 from remote_agents.adapters.tmux.profiles import build_launch_profile
 from remote_agents.adapters.tmux.runtime import AsyncTmuxRunner, TmuxTerminal
@@ -102,7 +103,13 @@ async def test_codex_trust_settle_catches_the_dialog_on_every_launch(
         session_id = SessionId.new()
         project_id = ProjectId("settle")
         project = _fresh_repo(tmp_path / f"repo-{index:02d}")
-        profile = build_launch_profile(definition, Path(executable), session_id, environment)
+        profile = build_launch_profile(
+            definition,
+            Path(executable),
+            session_id,
+            environment,
+            trust_blockers=profile_readiness_blockers().get("codex", ()),
+        )
         socket = f"remote-agents-test-{session_id.value.hex}"
         # A held 160x40 session sizes the server's later sessions, as in the 0.158 drill.
         subprocess.run(
