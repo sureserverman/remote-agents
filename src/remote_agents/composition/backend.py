@@ -44,6 +44,7 @@ from remote_agents.application.schedule_book import ScheduleBook
 from remote_agents.application.schedule_times import host_zone
 from remote_agents.application.services import SessionService
 from remote_agents.application.session_folders import SessionFolders
+from remote_agents.application.session_views import SessionGit
 from remote_agents.application.store_watch import StoreWatch
 from remote_agents.application.worktrees import WorktreeService
 from remote_agents.composition.limits_source import (
@@ -221,6 +222,47 @@ def _usage_reader(
             return None
         query = UsageQuery(record.profile_id, workspace, record.created_at, record.resume_source_id)
         return await asyncio.to_thread(readers.read, query)
+
+    return read
+
+
+_GIT_SUMMARY_SECONDS = 2.0
+"""The whole read's bound: a render waits no longer for its git line than this."""
+
+
+def _git_summary_reader(
+    store: SQLiteSessionStore,
+    folders: SessionFolders,
+    worktrees: WorktreeStore,
+    git: GitCheckout,
+    *,
+    budget: float = _GIT_SUMMARY_SECONDS,
+) -> Callable[[SessionId], Awaitable[SessionGit | None]]:
+    """Bind the git boundary to what only the root knows: a session's folder and its base.
+
+    A session bound to a worktree is measured against the commit the worktree was cut from, so
+    the line is that session's own work; any other is its shared folder against `HEAD` -- the
+    whole checkout, every session's edits in it. Read-only: git's read verbs and two store
+    reads, nothing written (DEC-090). Any failure, or the budget running out, answers None.
+    """
+
+    async def measure(session_id: SessionId) -> SessionGit | None:
+        record = await store.get(session_id)
+        if record is None:
+            return None
+        worktree = await worktrees.folder_for(session_id)
+        folder = await folders.folder_for(session_id, record.project_id)
+        if folder is None:
+            return None
+        if worktree is not None:
+            return SessionGit(await git.diff_summary(folder, worktree.base_commit), shared=False)
+        return SessionGit(await git.diff_summary(folder, "HEAD"), shared=True)
+
+    async def read(session_id: SessionId) -> SessionGit | None:
+        try:
+            return await asyncio.wait_for(measure(session_id), budget)
+        except Exception:
+            return None
 
     return read
 
@@ -434,6 +476,11 @@ def compose_backend(
         capture=runtime.terminal.capture,
         activity_feed=activity_feed,
         usage=_usage_reader(backend_store, folders.folder_for, provider_usage),
+        git_summary=(
+            None
+            if worktrees is None
+            else _git_summary_reader(backend_store, folders, worktrees.store, worktrees.git)
+        ),
         limits=_limits_reader(provider_usage),
         close_usage_readers=provider_usage.aclose,
         # Over the same connection as the session store: schedules are domain rows, so a change

@@ -1,0 +1,28 @@
+{
+ "baseline": {
+  "elapsed_s": 0.9,
+  "exit": 0,
+  "tail": ".............                                                            [100%]\n13 passed in 0.69s"
+ },
+ "break_patch": "diff --git a/src/remote_agents/composition/backend.py b/src/remote_agents/composition/backend.py\nindex fd571df1..7344244b 100644\n--- a/src/remote_agents/composition/backend.py\n+++ b/src/remote_agents/composition/backend.py\n@@ -250,6 +250,7 @@ def _git_summary_reader(\n         record = await store.get(session_id)\n         if record is None:\n             return None\n+        await store.set_label(session_id, record.label)\n         worktree = await worktrees.folder_for(session_id)\n         folder = await folders.folder_for(session_id, record.project_id)\n         if folder is None:\n",
+ "build": null,
+ "created": "2026-10-10T22:20:07+00:00",
+ "fingerprint": "4122c61f350d6d1f1bee246cc55c1b1041944dea8bc1a448ab9822dc3c5151d4",
+ "index": 1,
+ "kind": "claim",
+ "named_break": null,
+ "no_build_reason": "pure Python, no build",
+ "plan": "/mnt/vault/Portfolio/infra/remote-agents/plans/2026-10-09-decisions-and-worktrees-sub-04-session-worktrees-plan.md",
+ "red": {
+  "elapsed_s": 0.7,
+  "exit": 1,
+  "tail": "    ) -> None:\n        harness = _Harness(tmp_path, repo)\n        session = await harness.session()\n        worktree = await harness.service.create(session, PROJECT)\n        for name in (\"one\", \"two\"):\n            (worktree.path / f\"{name}.txt\").write_text(f\"{name}\\n\")\n            _git(worktree.path, \"add\", f\"{name}.txt\")\n            _git(worktree.path, \"commit\", \"-q\", \"-m\", name)\n        # A change in the main checkout is not this session's.\n        (repo / \"f0.txt\").write_text(\"elsewhere\\n\")\n    \n        read = await harness.reader()(session)\n    \n>       assert read is not None and not read.shared\nE       assert (None is not None)\n\ntests/integration/test_git_summary_reader.py:152: AssertionError\n___________________ test_reading_writes_nothing_to_any_store ___________________\n\ntmp_path = PosixPath('/tmp/pytest-of-user/pytest-1395/test_reading_writes_nothing_to0')\nrepo = PosixPath('/tmp/pytest-of-user/pytest-1395/test_reading_writes_nothing_to0/repo')\n\n    async def test_reading_writes_nothing_to_any_store(tmp_path: Path, repo: Path) -> None:\n        harness = _Harness(tmp_path, repo)\n        shared = await harness.session()\n        owned = await harness.session()\n        await harness.service.create(owned, PROJECT)\n        _plant(repo)\n        before = harness.snapshot()\n    \n        for session in (shared, owned, shared):\n>           assert await harness.reader()(session) is not None\nE           assert None is not None\n\ntests/integration/test_git_summary_reader.py:194: AssertionError\n=========================== short test summary info ============================\nFAILED tests/integration/test_git_summary_reader.py::test_a_shared_folder_reads_its_whole_checkout_against_head\nFAILED tests/integration/test_git_summary_reader.py::test_a_worktree_reads_its_own_changes_against_its_base\nFAILED tests/integration/test_git_summary_reader.py::test_reading_writes_nothing_to_any_store\n3 failed, 10 passed in 0.47s"
+ },
+ "schema": 2,
+ "task": "5.1",
+ "test": "uv run --locked pytest tests/unit/application/test_git_summary_views.py tests/integration/test_git_summary_reader.py -q -p no:randomly",
+ "text": "`uv run --locked pytest tests/unit/application/test_git_summary_views.py tests/integration/test_git_summary_reader.py -q -p no:randomly`.",
+ "touched": [
+  "src/remote_agents/composition/backend.py"
+ ]
+}

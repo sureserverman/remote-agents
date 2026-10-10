@@ -47,6 +47,7 @@ from remote_agents.ports.agent_usage import (
     LimitsNote,
     UsageWindow,
 )
+from remote_agents.ports.git_checkout import GitSummary
 from remote_agents.ports.rollover_store import REQUEST_WRITTEN, Rollover, RolloverEvent
 from remote_agents.ports.schedules import Once, Repeat, Schedule, When
 
@@ -1264,3 +1265,41 @@ def schedule_lines(
             first = first[: SCHEDULE_PREVIEW_WIDTH - 1] + "…"
         lines.append(ScheduleLine(schedule.id, facts, first, bool(schedule.paused)))
     return tuple(lines)
+
+
+@dataclass(frozen=True, slots=True)
+class SessionGit:
+    """What `Backend.git_summary` reads for one session: the summary, and whether it is of a
+    shared folder (the whole checkout) or of the session's own worktree (its changes against
+    the commit it was cut from). Read live on each render and never stored (DEC-090)."""
+
+    summary: GitSummary
+    shared: bool
+
+
+def git_line(summary: GitSummary, shared: bool) -> str:
+    """The detail's git fact, the same on both surfaces (DEC-091), e.g.
+    `ra/3f2a1b2c · 6 files +182 −74 · 2 ahead · dirty`; prefixed `checkout:` for a shared folder,
+    whose figures are every session's in that checkout, not this one's. A part with nothing to
+    say is left out; with nothing at all the line says `clean`."""
+    parts = [summary.branch or "detached"]
+    if summary.files:
+        noun = "file" if summary.files == 1 else "files"
+        parts.append(f"{summary.files} {noun} +{summary.added} −{summary.removed}")
+    if summary.ahead:
+        parts.append(f"{summary.ahead} ahead")
+    if summary.dirty:
+        parts.append("dirty")
+    if len(parts) == 1:
+        parts.append("clean")
+    line = " · ".join(parts)
+    return f"checkout: {line}" if shared else line
+
+
+def git_token(summary: GitSummary) -> str:
+    """The row's short git mark: `±6` for six changed tracked files, a bare `±` when only
+    untracked files changed, empty when nothing did. The first thing dropped from a row at its
+    narrow width."""
+    if summary.files:
+        return f"±{summary.files}"
+    return "±" if summary.dirty else ""

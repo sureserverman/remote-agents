@@ -44,6 +44,7 @@ from dataclasses import dataclass
 
 from remote_agents.application.profiles import ProfileAvailability
 from remote_agents.application.project_catalog import CatalogProject
+from remote_agents.application.session_views import SessionGit
 from remote_agents.domain.models import MAX_LABEL_LENGTH, SessionId
 from remote_agents.ports.agent_activity import AgentActivity
 from remote_agents.ports.agent_usage import AgentLimits, AgentUsage
@@ -158,6 +159,14 @@ class Backend:
     means this session's conversation could not be matched — that is an answer, and the bot
     renders it as one.
     """
+
+    git_summary: Callable[[SessionId], Awaitable[SessionGit | None]] | None = None
+    """Read one session's git state live, for its detail line and row token (BL-117).
+
+    Bound like `usage`, and for its reason: which folder a session works in -- its worktree, or
+    the project's shared checkout -- and which base a worktree is measured against are
+    composition-time knowledge. Bounded at two seconds, and `None` on any failure, a folder
+    outside git included: the surfaces then render no line. Never stored (DEC-090)."""
 
     limits: Callable[[], Awaitable[tuple[AgentLimits, ...]]] | None = None
     """Read every installed agent's account-wide rate-limit windows. Takes no session.
