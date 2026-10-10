@@ -3,8 +3,10 @@
 The hook runs inside every agent turn on the machine, so it must not pay for what it does not
 use. `registry` imports all four verticals at its top level -- 279 modules measured on
 2026-10-10 against a budget of 300 -- and constructing a descriptor would also build usage
-readers. So this module imports exactly one vertical's `hooks` module, the one the hook was
-installed for, and reads the `HOOK_LICENCE` value that vertical's descriptor also points at.
+readers. So this module imports one vertical's `hooks` module, the one the hook was installed
+for, and reads the `HOOK_LICENCE` value that vertical's descriptor also points at. Importing
+`<vertical>.hooks` runs the vertical package's `__init__` too, so that one vertical loads whole
+(208-232 modules in a managed session); the other three do not.
 
 It is the second module allowed to import a vertical (`IMPORT_ALLOWLIST`), widened as a
 deliberate, recorded act in the spirit of DEC-070's accepted cost 3 (which speaks of the package

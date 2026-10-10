@@ -131,14 +131,14 @@ def spool_agent_event(
     `licence` is a lookup, not a value, and required. It is called only past the session gate,
     because finding a licence imports a whole vertical: done earlier, every turn of every
     session on the machine paid for it -- 144 modules became 214-232 on the "not mine" path --
-    and a broken vertical raised into the agent before this frame could swallow it. Required,
-    so a caller cannot forget it and get silence by default.
+    and a broken vertical raised into the agent before this frame could swallow it. It is also
+    never called before a finished turn ends its marker, which needs no licence. Required, so a
+    caller cannot forget it and get silence by default.
     """
     try:
         session_id = safe_session_id(environment.get(SESSION_ID_VARIABLE))
         if session_id is None:
             return 0
-        found = licence()
         raw = payload.read(MAXIMUM_PAYLOAD_BYTES + 1)
         document = _document(raw)
         if document is not None:
@@ -155,7 +155,11 @@ def spool_agent_event(
         # pane inherits the pane's id, and only this tells its hooks from its parent's.
         owner = fields.get("session_id")
         turns = FileTurnMarkers(activity_directory) if markers is None else markers
-        if event == TURN_STARTED and found is not None and found.starts_turn_marker:
+        # Looked up where it is needed and no earlier: a submit asks whether it marks a turn,
+        # and a record asks what it may keep. Ending a marker needs neither, so a vertical that
+        # fails to load still lets a finished turn end the one it started.
+        found = licence() if event == TURN_STARTED else None
+        if found is not None and found.starts_turn_marker:
             turns.start(session_id, owner=owner if isinstance(owner, str) else None)
             return 0
         # Ungated, unlike the start: ending a marker that was never started is a no-op. Guarded
@@ -167,6 +171,8 @@ def spool_agent_event(
                 pass
         if document is None:
             return 0
+        if event != TURN_STARTED:
+            found = licence()
         observed = _observed(document, session_id, now(), found)
         if observed is not None:
             _write_privately(observed, activity_directory)

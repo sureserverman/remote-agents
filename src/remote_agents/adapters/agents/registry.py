@@ -523,8 +523,8 @@ def activity_source_of(
     or anything uncurated -- which is the safe direction to fall: nothing waits on hook reports
     no launch can produce.
 
-    A one-profile lookup for a caller holding one id; composition hands the watchers the folds
-    below instead, built once over the descriptors it already has.
+    Today only tests call it, to pin each profile's answer; composition hands the watchers the
+    folds below instead, built once over the descriptors it already has.
     """
     licence = _profile_licences(descriptors).get(profile_id)
     return ActivitySource.UNOBSERVED if licence is None else licence.source

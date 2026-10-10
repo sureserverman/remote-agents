@@ -88,7 +88,9 @@ words of a prompt is recorded for the owner, not decided here.
 
 ## What stays unexplained
 
-The 19 historical detail-less `agent_needs_input` rows. This capture always carries `message`,
+The 19 historical detail-less Claude `needs_answer` rows. They were attributed to
+`agent_needs_input` by elimination, since the drain discards the notification type; that was
+never measured. This capture always carries `message`,
 so those rows came from a path not reproduced here.
 
 ## Isolation

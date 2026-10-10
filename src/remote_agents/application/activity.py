@@ -129,8 +129,9 @@ idle session: the 2026-09-19 drill idled 90 s for it and got `idle_prompt`, whic
 It comes from the `claude agents` view, which fires it when a background session it lists
 changes to blocked, and it carries `message`, `"<label> needs your input: <needs>"`, which
 becomes the record's detail (`docs/acceptance-2026-10-09-claude-agent-needs-input.md`, pinned in
-`tests/provider_contract/per_provider/test_claude_quirks.py`). It arrives only when the view runs in
-a managed pane, and is recorded as that pane's session, not the blocked agent's (BL-132).
+`tests/provider_contract/per_provider/test_claude_quirks.py`). By the spool's code, though not yet
+observed end to end, it arrives only when the view runs in a managed pane and is recorded as that
+pane's session, not the blocked agent's (BL-132).
 """
 
 _ASK_TOKEN = re.compile(r"[A-Za-z0-9_-]{1,64}")
@@ -483,11 +484,11 @@ class CodexApprovalWatcher:
         self._reported_needs_answer_session_ids = frozenset()
         records = await self._store.list((SessionState.RUNNING,))
         watched = [record for record in records if str(record.profile_id) in self._watched_profiles]
-        # `is HYBRID`, not `is not HOOK_EXCLUSIVE`. The old predicate also swept in every
-        # `UNOBSERVED` profile, which was right while a pane digest was the fallback for
-        # exactly those profiles and is wrong now that the only thing read here is a Codex
-        # marker: an `opencode` session under the old test would cost a tmux round trip per
-        # pass to read a title that can never carry it.
+        # Only the profiles whose licence declares `HYBRID`, handed in by composition -- never
+        # "every profile that is not hook-exclusive". That wider test was right while a pane
+        # digest was the fallback for the unobserved profiles, and is wrong now that the only
+        # thing read here is a Codex marker: an `opencode` session under it would cost a tmux
+        # round trip per pass to read a title that can never carry it.
         # Sessions that have gone away keep no state. Without this the maps grow for the life
         # of the service, one entry per session ever launched.
         live = {str(record.session_id) for record in watched}

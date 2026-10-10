@@ -1,5 +1,5 @@
 {
-  "_provenance": "Field vocabulary from activity_spool's claude branch (_DISCRIMINATING_FIELDS/_DETAIL_FIELDS, measured against the installed claude bundle 2.1.227 per that table's own record) and its unit suite; values are synthetic per GDEC-SEC-001, chosen so any leak is recognisable in an assertion, and the payload is deliberately over-filled with the dangerous fields.",
+  "_provenance": "Field vocabulary from Claude's hook licence (claude/hooks.py `_RECORD`, formerly activity_spool's _DISCRIMINATING_FIELDS/_DETAIL_FIELDS; measured against the installed claude bundle 2.1.227 per that comment's own record) and its unit suite; values are synthetic per GDEC-SEC-001, chosen so any leak is recognisable in an assertion, and the payload is deliberately over-filled with the dangerous fields.",
   "session_id": "provider-session-not-ours",
   "transcript_path": "/home/owner/.claude/projects/secret-project/rollout-secret.jsonl",
   "cwd": "/home/owner/secret-project",

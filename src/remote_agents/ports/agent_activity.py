@@ -243,9 +243,10 @@ class ActivitySource(Enum):
     `UNOBSERVED` replaced `QUIET_ONLY` on 2026-08-30, when the pane-digest watch was retired
     with the `quiet` kind. The old member described profiles this service watched by hashing
     their pane; there is no such watch now, so the honest name for `cursor-agent` and anything
-    else uncurated is that nothing observes them. It is a member rather than an absence because
-    the watcher has to be able to *skip* them by name: a profile that reaches the polling loop
-    costs a tmux capture per pass for an observation that can never be made.
+    else uncurated is that nothing observes them. It is a member rather than an absence so that
+    "nothing observes this profile" is an answer a reader can name, not a missing entry: the
+    registry's `activity_source_of` returns it for any profile with no licence, and the title
+    watch, which reads only `HYBRID` profiles, never polls one.
 
     Each vertical declares its own member in its hook licence (`HookLicence.source`, BL-050), and
     composition hands the title watch the profiles that declare `HYBRID`; a profile that declares

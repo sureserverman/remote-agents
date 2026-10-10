@@ -1042,6 +1042,26 @@ def test_only_claude_and_codex_start_a_marker(provider: str, tmp_path: Path) -> 
     assert list(directory.iterdir()) == []
 
 
+def test_a_licence_that_cannot_load_still_lets_a_finished_turn_end_its_marker(
+    tmp_path: Path,
+) -> None:
+    """Ending a marker never needed a licence, so a failed lookup must not cost it.
+
+    Found by the close-out second pass: the lookup once ran before the end step, so a vertical
+    that failed to import left a started turn open until the screen read closed it.
+    """
+    directory = _spool(tmp_path)
+    _run(_stream(_SUBMIT_PAYLOAD), directory)
+    assert _marker(directory).is_file()
+
+    def broken() -> None:
+        raise ImportError("half installed")
+
+    assert _run(_stream(_STOP_PAYLOAD), directory, licence=broken) == 0
+
+    assert not _marker(directory).exists()
+
+
 @pytest.mark.parametrize(
     "payload",
     [
