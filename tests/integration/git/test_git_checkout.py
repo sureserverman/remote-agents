@@ -353,3 +353,121 @@ async def test_with_reflogs_off_orig_head_still_counts_a_commit_reset_away(
     _git(tree, "reset", "-q", "--hard", "HEAD~1")
 
     assert await cli.unmerged_history(repo, tree, "ra/abcd1234", "main") == 1
+
+
+@pytest.mark.parametrize(
+    "holder",
+    [
+        "refs/worktree/save",
+        "refs/bisect/bad",
+        "refs/rewritten/onto",
+        "ORIG_HEAD",
+        "MERGE_HEAD",
+        "CHERRY_PICK_HEAD",
+        "REVERT_HEAD",
+        "REBASE_HEAD",
+        "BISECT_HEAD",
+        "AUTO_MERGE",
+        "rebase-merge/orig-head",
+        "rebase-apply/orig-head",
+    ],
+)
+async def test_every_per_worktree_holder_of_a_commit_is_read(
+    repo: Path, tmp_path: Path, holder: str
+) -> None:
+    """Each holder alone, naming a commit no reflog and no branch reaches."""
+    cli = GitCli()
+    tree = tmp_path / "wt"
+    await cli.add_worktree(repo, tree, "ra/abcd1234", _git(repo, "rev-parse", "HEAD"))
+    orphan = _git(tree, "commit-tree", "HEAD^{tree}", "-p", "HEAD", "-m", "held once")
+    if holder.startswith("refs/"):
+        _git(tree, "update-ref", holder, orphan)
+    else:
+        admin = Path(_git(tree, "rev-parse", "--absolute-git-dir"))
+        (admin / holder).parent.mkdir(parents=True, exist_ok=True)
+        (admin / holder).write_text(orphan + "\n", encoding="ascii")
+
+    assert await cli.unmerged_history(repo, tree, "ra/abcd1234", "main") == 1
+
+
+async def test_a_worktree_reached_through_a_symlinked_parent_is_still_found(
+    repo: Path, tmp_path: Path
+) -> None:
+    """git records the real path; the folder is asked by the linked one."""
+    (tmp_path / "real").mkdir()
+    (tmp_path / "link").symlink_to(tmp_path / "real")
+    cli = GitCli()
+    tree = tmp_path / "link" / "wt"
+    await cli.add_worktree(repo, tree, "ra/abcd1234", _git(repo, "rev-parse", "HEAD"))
+    orphan = _git(tree, "commit-tree", "HEAD^{tree}", "-p", "HEAD", "-m", "ref only")
+    _git(tree, "update-ref", "refs/worktree/save", orphan)
+
+    assert await cli.unmerged_history(repo, tree, "ra/abcd1234", "main") == 1
+
+
+async def test_an_entry_whose_admin_folder_cannot_be_placed_is_no_answer(
+    repo: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from remote_agents.adapters.git import checkout
+
+    cli = GitCli()
+    tree = tmp_path / "wt"
+    await cli.add_worktree(repo, tree, "ra/abcd1234", _git(repo, "rev-parse", "HEAD"))
+    monkeypatch.setattr(checkout, "_admin_for", lambda common, path: None)
+
+    with pytest.raises(GitRefused):
+        await cli.unmerged_history(repo, tree, "ra/abcd1234", "main")
+
+
+async def test_a_reflog_git_cannot_read_for_an_existing_ref_is_no_answer(
+    repo: Path, tmp_path: Path
+) -> None:
+    cli = GitCli()
+    tree = tmp_path / "wt"
+    await cli.add_worktree(repo, tree, "ra/abcd1234", _git(repo, "rev-parse", "HEAD"))
+    admin = Path(_git(tree, "rev-parse", "--absolute-git-dir"))
+    (admin / "HEAD").write_text("not a ref at all\n", encoding="ascii")
+
+    with pytest.raises(GitRefused):
+        await cli.unmerged_history(repo, tree, "ra/abcd1234", "main")
+
+
+async def test_a_folder_the_walk_cannot_read_is_no_answer(repo: Path, tmp_path: Path) -> None:
+    cli = GitCli()
+    tree = tmp_path / "wt"
+    await cli.add_worktree(repo, tree, "ra/abcd1234", _git(repo, "rev-parse", "HEAD"))
+    locked = tree / "locked"
+    (locked / "inner").mkdir(parents=True)
+    locked.chmod(0o000)
+    try:
+        with pytest.raises(GitRefused):
+            await cli.status_lines(tree)
+    finally:
+        locked.chmod(0o700)
+
+
+async def test_a_relative_gitdir_is_placed_against_its_admin_folder(
+    repo: Path, tmp_path: Path
+) -> None:
+    """git 2.48's `worktree.useRelativePaths` records `gitdir` relative to the admin folder;
+    2.43 cannot write one, so the file is rewritten the way 2.48 would."""
+    cli = GitCli()
+    tree = tmp_path / "wt"
+    await cli.add_worktree(repo, tree, "ra/abcd1234", _git(repo, "rev-parse", "HEAD"))
+    admin = Path(_git(tree, "rev-parse", "--absolute-git-dir"))
+    (admin / "gitdir").write_text(os.path.relpath(tree / ".git", admin) + "\n", encoding="utf-8")
+    orphan = _git(tree, "commit-tree", "HEAD^{tree}", "-p", "HEAD", "-m", "ref only")
+    _git(tree, "update-ref", "refs/worktree/save", orphan)
+
+    assert await cli.unmerged_history(repo, tree, "ra/abcd1234", "main") == 1
+
+
+def test_a_failed_reflog_read_is_no_answer_for_a_ref_that_exists() -> None:
+    """git 2.43 exits 0 for a ref with no reflog and skips an entry whose commit is gone; it
+    fails only for a missing ref. A failure for one that exists is therefore never "none"."""
+    from remote_agents.adapters.git.checkout import GitResult, _reflog
+
+    failed = GitResult(128, b"", b"fatal: unreadable reflog\n")
+    assert _reflog(failed, exists=False) == set()
+    with pytest.raises(GitRefused):
+        _reflog(failed, exists=True)

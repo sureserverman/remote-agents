@@ -306,12 +306,19 @@ class GitCli:
         hidden = tuple(f"{entry[0]}? {entry[2:]}" for entry in _entries(flagged))
         # git skips an entry named `.git` it cannot open as a repository, so `status` never
         # names it; `worktree remove` deletes it anyway. Walked here, links never followed.
-        nested = await asyncio.to_thread(_nested_git_entries, path)
+        try:
+            nested = await asyncio.to_thread(_nested_git_entries, path)
+        except OSError as error:
+            raise GitRefused(f"a folder in {path} could not be read: {error}") from None
         return _entries(raw) + hidden + tuple(f"G? {entry}" for entry in nested)
 
     async def unmerged_history(self, repo: Path, path: Path, branch: str, base: str) -> int:
         tips: set[str] = set()
         admin = await self._admin_directory(repo, path)
+        if admin is None and await self.worktree_head(repo, path) is not None:
+            # git holds an entry this lookup cannot place: its refs and reflogs are unread, so
+            # this is no answer -- never "nothing only it holds".
+            raise GitRefused(f"git holds an entry for {path} but no admin folder matched it")
         if admin is not None:
             # As that worktree sees itself: its own refs, and every commit its HEAD has been.
             git_dir = f"--git-dir={admin}"
@@ -324,14 +331,14 @@ class GitCli:
             )
             tips.update(_text(refs).split())
             head_log = await self._read(repo, git_dir, "log", "-g", "--format=%H", "HEAD", "--")
-            tips.update(_reflog(head_log))
+            tips.update(_reflog(head_log, exists=True))
             # And what its pseudo-refs name: with reflogs off, `ORIG_HEAD` alone holds a
             # commit `reset --hard` left behind.
             tips.update(await asyncio.to_thread(_pseudo_tips, admin))
         branch_log = await self._read(
             repo, "log", "-g", "--format=%H", _ref(f"refs/heads/{_ref(branch)}"), "--"
         )
-        tips.update(_reflog(branch_log))
+        tips.update(_reflog(branch_log, exists=await self.has_branch(repo, branch)))
         if not tips:
             return 0
         counted = await self._read_ok(
@@ -395,10 +402,14 @@ _WORKTREE_REFS = ("refs/worktree", "refs/bisect", "refs/rewritten")
 _GITDIR_MAX_BYTES = 4096
 
 
-def _reflog(result: GitResult) -> set[str]:
-    """The commits a `log -g` listed. A ref with no reflog, or no ref at all, lists none; a
-    reflog too long to read is not an answer."""
+def _reflog(result: GitResult, *, exists: bool) -> set[str]:
+    """The commits a `log -g` listed. git exits 0 for a ref with no reflog, and skips an entry
+    whose commit is gone (measured on git 2.43.0); it fails for a ref that does not exist.
+    So a failure for a ref that `exists` is no answer, and neither is a reflog too long to
+    read -- each raises, and the folder is kept."""
     if result.returncode != 0:
+        if exists:
+            raise GitRefused(_reason(result))
         return set()
     if result.truncated:
         raise GitRefused(f"a reflog longer than {OUTPUT_CAP_BYTES} bytes; not read")
@@ -437,8 +448,9 @@ def _pseudo_tips(admin: Path) -> set[str]:
 
 
 def _admin_for(common: Path, path: Path) -> Path | None:
-    """Which `<common>/worktrees/<name>` names `path` in its `gitdir` file."""
-    wanted = os.path.normpath(path / ".git")
+    """Which `<common>/worktrees/<name>` names `path` in its `gitdir` file. git records the
+    real path, and may record it relative to the admin folder; both sides are resolved."""
+    wanted = (path / ".git").resolve()
     try:
         candidates = sorted((common / "worktrees").iterdir())
     except FileNotFoundError:
@@ -449,16 +461,21 @@ def _admin_for(common: Path, path: Path) -> Path | None:
                 recorded = handle.read(_GITDIR_MAX_BYTES).decode("utf-8", "surrogateescape")
         except OSError:
             continue
-        if os.path.normpath(recorded.strip()) == wanted:
+        named = Path(recorded.strip())
+        if (named if named.is_absolute() else admin / named).resolve() == wanted:
             return admin
     return None
+
+
+def _raise(error: OSError) -> None:
+    raise error
 
 
 def _nested_git_entries(top: Path) -> tuple[str, ...]:
     """Every entry named `.git` (any case) below `top`, relative, never through a link. The
     top's own `.git` file is the worktree's and is not listed."""
     found = []
-    for folder, folders, files in os.walk(top, followlinks=False):
+    for folder, folders, files in os.walk(top, followlinks=False, onerror=_raise):
         relative = Path(folder).relative_to(top)
         for name in (*folders, *files):
             if name.lower() == ".git" and (relative != Path(".") or name != ".git"):

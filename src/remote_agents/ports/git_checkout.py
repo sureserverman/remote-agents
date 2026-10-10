@@ -116,7 +116,13 @@ class GitCheckout(Protocol):
         `refs/rewritten/*`) and its HEAD reflog, and `branch -d` deletes the branch's reflog.
         A commit made and then reset away, or made on a detached HEAD and left, is reachable
         only from those -- so the branch tip alone saying "merged" is not enough. Asked of the
-        repository, so it answers for a folder already gone."""
+        repository, so it answers for a folder already gone.
+
+        Raises `GitRefused` rather than answer from part of that set: an entry git holds whose
+        admin folder cannot be placed, a reflog that cannot be read or is longer than the
+        adapter reads, a ref naming an object git no longer has. With reflogs off, only the
+        last commit reset away is named (by `ORIG_HEAD`); an earlier one was already reachable
+        from nothing."""
         ...
 
     async def status_lines(self, path: Path) -> tuple[str, ...]:

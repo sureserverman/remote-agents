@@ -22,6 +22,20 @@ from remote_agents.adapters.git.checkout import GitCli, GitResult
 from remote_agents.ports.git_checkout import GitCheckout, GitError, GitRefused, GitTimeout
 
 _READ_ENV = {"GIT_OPTIONAL_LOCKS": "0", "GIT_TERMINAL_PROMPT": "0"}
+
+
+@pytest.fixture(autouse=True)
+def _no_walk_of_a_folder_that_is_not_there(request: pytest.FixtureRequest) -> None:
+    """The sweep's paths are argv only, never folders: `status_lines`' walk for `.git` entries
+    runs no git and is tested against real folders in `tests/integration/git`."""
+    from remote_agents.adapters.git import checkout
+
+    if "tmp_path" not in request.fixturenames:
+        request.getfixturevalue("monkeypatch").setattr(
+            checkout, "_nested_git_entries", lambda top: ()
+        )
+
+
 _WRITE_SHAPES = {
     ("worktree", "add", "-b"),
     ("worktree", "remove"),
