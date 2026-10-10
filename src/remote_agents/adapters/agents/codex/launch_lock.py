@@ -21,6 +21,13 @@ cost a named refusal and not a hang; and a composition with nowhere to put the f
 in-process half. Unlike the key lock, the bound is the caller's: an owner's launch waits two
 seconds, a change waits for the launches to finish starting.
 
+**Two trade-offs, both bounded.** A change waiting for the file holds the in-process half alone
+first, so a launch in that same process waits behind it even when the launch it waits for is in
+the other process; that launch is refused as "Remote Control is changing", which by then is
+true. And a waiting change does not stop new launches from sharing, so launches overlapping for
+the change's whole 30 s would refuse it. Taking the file before the in-process half would
+deadlock a launch holding the in-process half against a change holding the file.
+
 **A launch from outside remote-agents still races.** Only the two surfaces' own launches take
 this lock; a `codex` typed into a terminal does not. That residual is the owner's accepted one
 (BL-037's ruling).

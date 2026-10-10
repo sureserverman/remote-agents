@@ -497,3 +497,25 @@ RESULT arm=control state=prompt rep=2: PANE_SURVIVED (codex pid 2493105 -> 24931
 {"mode": "trust", "rep": 1, "dialog_s": 0.83, "footer_before_trust": false, "stopped": true, "pane_lost": true, "error": "Error: config/read failed in TUI"}
 {"mode": "trust", "rep": 2, "dialog_s": 0.78, "footer_before_trust": false, "stopped": true, "pane_lost": true, "error": "Error: config/read failed in TUI"}
 {"mode": "trust", "rep": 3, "dialog_s": 0.76, "footer_before_trust": false, "stopped": true, "pane_lost": true, "error": "Error: config/read failed in TUI"}
+
+# docs/evidence/2026-10-10-codex-plain-launch-drill.py 0.75 8; 0.2 6; 0.4 6 (non-git folder)
+{"delay_after_marker": 0.75, "rep": 1, "marker_s": 0.32, "fired_s": 1.07, "footer_drawn_when_fired": true, "stopped": true, "pane_lost": false, "error": null}
+{"delay_after_marker": 0.75, "rep": 2, "marker_s": 0.34, "fired_s": 1.09, "footer_drawn_when_fired": true, "stopped": true, "pane_lost": false, "error": null}
+{"delay_after_marker": 0.75, "rep": 3, "marker_s": 0.33, "fired_s": 1.08, "footer_drawn_when_fired": true, "stopped": true, "pane_lost": false, "error": null}
+{"delay_after_marker": 0.75, "rep": 4, "marker_s": 0.33, "fired_s": 1.08, "footer_drawn_when_fired": true, "stopped": true, "pane_lost": false, "error": null}
+{"delay_after_marker": 0.75, "rep": 5, "marker_s": 0.33, "fired_s": 1.08, "footer_drawn_when_fired": true, "stopped": true, "pane_lost": false, "error": null}
+{"delay_after_marker": 0.75, "rep": 6, "marker_s": 0.34, "fired_s": 1.09, "footer_drawn_when_fired": true, "stopped": true, "pane_lost": false, "error": null}
+{"delay_after_marker": 0.75, "rep": 7, "marker_s": 0.33, "fired_s": 1.08, "footer_drawn_when_fired": true, "stopped": true, "pane_lost": false, "error": null}
+{"delay_after_marker": 0.75, "rep": 8, "marker_s": 0.34, "fired_s": 1.09, "footer_drawn_when_fired": true, "stopped": true, "pane_lost": false, "error": null}
+{"delay_after_marker": 0.2, "rep": 1, "marker_s": 0.34, "fired_s": 0.54, "footer_drawn_when_fired": false, "stopped": true, "pane_lost": false, "error": null}
+{"delay_after_marker": 0.2, "rep": 2, "marker_s": 0.32, "fired_s": 0.52, "footer_drawn_when_fired": false, "stopped": true, "pane_lost": false, "error": null}
+{"delay_after_marker": 0.2, "rep": 3, "marker_s": 0.34, "fired_s": 0.54, "footer_drawn_when_fired": false, "stopped": true, "pane_lost": false, "error": null}
+{"delay_after_marker": 0.2, "rep": 4, "marker_s": 0.34, "fired_s": 0.54, "footer_drawn_when_fired": false, "stopped": true, "pane_lost": false, "error": null}
+{"delay_after_marker": 0.2, "rep": 5, "marker_s": 0.33, "fired_s": 0.53, "footer_drawn_when_fired": false, "stopped": true, "pane_lost": false, "error": null}
+{"delay_after_marker": 0.2, "rep": 6, "marker_s": 0.33, "fired_s": 0.53, "footer_drawn_when_fired": false, "stopped": true, "pane_lost": false, "error": null}
+{"delay_after_marker": 0.4, "rep": 1, "marker_s": 0.34, "fired_s": 0.74, "footer_drawn_when_fired": false, "stopped": true, "pane_lost": true, "error": "Error: config/read failed while checking remote project trust"}
+{"delay_after_marker": 0.4, "rep": 2, "marker_s": 0.34, "fired_s": 0.74, "footer_drawn_when_fired": false, "stopped": true, "pane_lost": true, "error": "Error: failed to connect to remote app server: failed to connect to remote app server at `"}
+{"delay_after_marker": 0.4, "rep": 3, "marker_s": 0.33, "fired_s": 0.73, "footer_drawn_when_fired": false, "stopped": true, "pane_lost": true, "error": "Error: account/read failed during TUI bootstrap: account/read transport error: remote app-"}
+{"delay_after_marker": 0.4, "rep": 4, "marker_s": 0.33, "fired_s": 0.73, "footer_drawn_when_fired": false, "stopped": true, "pane_lost": true, "error": "Error: failed to connect to remote app server: failed to connect to remote app server at `"}
+{"delay_after_marker": 0.4, "rep": 5, "marker_s": 0.33, "fired_s": 0.73, "footer_drawn_when_fired": false, "stopped": true, "pane_lost": true, "error": "Error: failed to connect to remote app server: failed to connect to remote app server at `"}
+{"delay_after_marker": 0.4, "rep": 6, "marker_s": 0.33, "fired_s": 0.73, "footer_drawn_when_fired": false, "stopped": true, "pane_lost": true, "error": "Error: account/read failed during TUI bootstrap: account/read transport error: remote app-"}

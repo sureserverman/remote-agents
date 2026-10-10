@@ -7,10 +7,11 @@ rather than a session-shaped argument nobody could supply (DEC-070: one capabili
 package, one descriptor field).
 
 The port declares three verbs and deliberately not a fourth. Turning Remote Control off
-flips a preference; it does not tear the daemon down, because every pane attached to that
-daemon exits when it goes. A port that could express the destructive verb would invite an
-adapter to implement it, so the port cannot say it -- and the CLI spellings that could are
-adapter knowledge, named in exactly one module below this layer.
+flips a preference and leaves a daemon running; it never stops the daemon and leaves it
+down, because every pane attached to that daemon exits when it goes. A port that could
+express the destructive verb would invite an adapter to implement it, so the port cannot say
+it -- and the CLI spellings that could are adapter knowledge, named in exactly one module below
+this layer.
 
 **Flipping the preference still restarts the daemon, and that is what `DaemonGuard` is for.**
 Measured on codex-cli 0.162.1 (`docs/acceptance-2026-10-codex-enable-race.md`): every verb that

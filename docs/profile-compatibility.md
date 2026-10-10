@@ -115,10 +115,11 @@ on codex-cli 0.162.1 (`docs/acceptance-2026-10-codex-enable-race.md`): `remote-c
 running daemon whenever they change the preference. A pane past its daemon handshake reconnects
 as above. A pane still inside it exits with `transport failed`. That is its first second or so
 after a launch or resume, and the second after its trust question is answered. remote-agents
-holds one lock across its own Codex launches, resumes and trust answers until the handshake is
-drawn, and across every toggle. A toggle waits up to 30 s for a starting session. A launch
-waits 2 s for a toggle, then says "launch again in a moment" with nothing started. A `codex`
-started outside remote-agents takes no lock and can still be caught.
+holds one lock across its own Codex launches, resumes and Trust-button answers until the
+handshake is drawn, and across every toggle. A toggle waits up to 30 s for a starting session.
+A launch waits 2 s for a toggle, then says "launch again in a moment" with nothing started. Two
+things take no lock and can still be caught: a `codex` started outside remote-agents, and a
+trust question answered by pressing Enter in the pane, in the second after the answer.
 
 There is no gentler verb to switch to. An earlier version of this section proposed the daemon's
 own `remoteControl/disable` RPC; no such client request exists in the app-server protocol (the

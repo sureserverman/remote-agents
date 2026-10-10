@@ -411,11 +411,12 @@ class CodexRemoteControl:
         **Neither branch is safe for a pane still starting, and the guard is what covers it**
         (BL-037, `docs/acceptance-2026-10-codex-enable-race.md`). A `codex` launch starts the
         daemon itself, so one landing between the probe and the start brings up a backend
-        that the start then stops (10 of 10 measured), and any preference change restarts the
+        that the start then stops (16 of 16 measured), and any preference change restarts the
         daemon under a TUI still in its handshake, which exits. `HostRemoteControlService`
         holds the `DaemonGuard` around this call, and remote-agents' own Codex launches,
-        resumes and trust answers hold it until their handshake is drawn. A `codex` started
-        outside remote-agents takes no guard and still races; that residual is accepted.
+        resumes and Trust-button answers hold it until their handshake is drawn. A `codex`
+        started outside remote-agents, or a trust question answered at the keyboard, takes no
+        guard and still races; those residuals are accepted.
 
         Then report what the daemon says rather than what the CLI guessed.
 

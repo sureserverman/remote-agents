@@ -500,7 +500,8 @@ lands where `/sessions` lands.
     answer, exits on a restart. Verify the guard: launch a Codex session and press the toggle
     at once. The toggle waits until the session's footer (`<model> <effort> · <path>`) is
     drawn, and the pane survives. A launch pressed while a toggle is running answers "launch
-    again in a moment" with nothing started. A `codex` started by hand takes no part in this.
+    again in a moment" with nothing started. A `codex` started by hand takes no part in this, and
+    neither does a trust question answered in the pane rather than with the bot's Trust button.
 
     **Every Codex launch is daemon-backed.** Codex 0.162 starts the daemon itself when none is
     running. Whether a session that reconnected across an enable is visible to the phone has

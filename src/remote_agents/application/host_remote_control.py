@@ -232,7 +232,10 @@ class HostRemoteControlService:
             if self._guard is None
             else self._guard.hold(TOGGLE_WAIT_SECONDS, alone=True)
         )
-        async with self._locks.operation(), self._host_lock, guard:
+        # The guard first, holding nothing else, as `SessionService.launch` takes it: a toggle
+        # waiting out a starting launch is not yet an operation, so a shutdown does not wait
+        # for it.
+        async with guard, self._locks.operation(), self._host_lock:
             if not await self._store.claim_idempotency_key(command.idempotency_key):
                 raise DuplicateCommandError("host remote control callback was already handled")
             try:

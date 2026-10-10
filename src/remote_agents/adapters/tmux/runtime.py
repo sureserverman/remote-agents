@@ -485,6 +485,13 @@ class TmuxTerminal:
             if self._is_awaiting_trust(profile, profile_id, capture):
                 return replace(observation, awaiting_trust=True)
             await asyncio.sleep(_HANDSHAKE_POLL_SECONDS)
+        # Not a failure, but not silent either: a footer this never matches costs every launch
+        # the whole bound, with the daemon guard held (a narrow pane, a changed footer).
+        _LOG.info(
+            "%s drew no handshake marker within %ss; reporting it ready",
+            profile_id,
+            self._waits.handshake,
+        )
         return ready
 
     async def _settle_readiness(
