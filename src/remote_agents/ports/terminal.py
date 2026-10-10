@@ -121,6 +121,10 @@ agent quit at its own trust dialog waiting for a promotion that could never arri
 """
 
 
+INVALID_INTENT = "invalid_intent"
+"""The terminal could not resolve what to start (profile, folder, intent file) and started
+nothing: no intent was written for a pane and no pane exists."""
+
 WORKTREE_REMOVED = "worktree_removed"
 """A launch or resume was refused because the session is bound to a worktree that is gone.
 

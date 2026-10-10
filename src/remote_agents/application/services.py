@@ -53,6 +53,7 @@ from remote_agents.ports.session_store import ProjectUsage, SessionStore
 from remote_agents.ports.terminal import (
     AGENT_ASKING,
     COMPOSER_HOLDS_TEXT,
+    INVALID_INTENT,
     KEYS_BUSY,
     NOT_AWAITING_TRUST,
     NOT_IDLE,
@@ -97,6 +98,11 @@ _STOP_EVENTS: dict[str, LifecycleEvent] = {
     NOT_IDLE: LifecycleEvent.GRACEFUL_STOP_NEVER_SENT,
     GRACEFUL_TIMEOUT: LifecycleEvent.GRACEFUL_STOP_TIMED_OUT,
 }
+
+
+#: The terminal's answers that mean it started nothing: no pane exists (adapters/tmux/runtime.py
+#: returns both only before `gateway.launch`).
+_BEFORE_ANY_PANE = frozenset({INVALID_INTENT, WORKTREE_REMOVED})
 
 
 class _Bound(Enum):
@@ -451,8 +457,14 @@ class SessionService:
                 command.profile_id,
                 command.conversation.provider_conversation_id,
             )
+            record = await self._store.record_event(session_id, _event_for_launch(observation))
+            if observation.detail in _BEFORE_ANY_PANE:
+                # Refused before a pane existed, as the bind refusal above is: let go of the
+                # conversation, or every later press hands back this record. Not after the
+                # terminal started anything -- a pane may be there to recover.
+                record = await self._store.release_resume_source(session_id)
             return ResumeOutcome(
-                await self._store.record_event(session_id, _event_for_launch(observation)),
+                record,
                 created=True,
                 worktree_removed=observation.detail == WORKTREE_REMOVED,
             )

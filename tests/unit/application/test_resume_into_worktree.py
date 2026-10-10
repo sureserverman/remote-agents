@@ -305,3 +305,35 @@ async def test_a_successor_whose_lookup_fails_is_failed_not_left_starting(tmp_pa
 
     assert outcome.record.state is SessionState.FAILED
     assert harness.gateway.launched == 0
+
+
+@pytest.mark.asyncio
+async def test_a_resume_the_terminal_refused_before_any_pane_does_not_hold_it(tmp_path) -> None:
+    """The row is live but its folder was deleted by hand: the bind succeeds, the terminal
+    refuses (`worktree_removed`) before any pane exists. The next press is a real attempt."""
+    import shutil
+
+    harness = _Harness(tmp_path)
+    worktree = await harness.worktree(tmp_path / "worktrees" / "one")
+    shutil.rmtree(worktree)
+
+    first = await harness.resume(worktree, "12")
+    again = await harness.resume(worktree, "13", conversation_of="12")
+
+    assert first.worktree_removed
+    assert again.created
+    assert again.record.session_id != first.record.session_id
+
+
+@pytest.mark.asyncio
+async def test_a_folder_deleted_by_hand_is_not_offered_for_resume(tmp_path) -> None:
+    """The list and the lookup apply one rule: a worktree that is not a folder is gone."""
+    import shutil
+
+    harness = _Harness(tmp_path)
+    kept = await harness.worktree(tmp_path / "worktrees" / "kept")
+    deleted = await harness.worktree(tmp_path / "worktrees" / "deleted")
+    shutil.rmtree(deleted)
+    folders = SessionFolders({_PROJECT: harness.project}, harness.worktrees)
+
+    assert await folders.worktree_folders(_PROJECT) == (kept,)

@@ -213,8 +213,13 @@ async def test_a_worktree_folder_is_asked_for_by_its_resolved_path(tmp_path) -> 
     alias = tmp_path / "state-link"
     alias.symlink_to(live.parent, target_is_directory=True)
     threads = _Threads({project: "thread-main", live.resolve(): "thread-live"})
+    stored = alias / "live"
     catalogue = CodexSessionCatalogue(
-        {_PROJECT: project}, threads, worktree_folders=_Folders({_PROJECT: (alias / "live",)})
+        {_PROJECT: project}, threads, worktree_folders=_Folders({_PROJECT: (stored,)})
     )
 
-    assert "thread-live" in await _listed(catalogue)
+    listed = await _listed(catalogue)
+
+    # Asked by the resolved path, but tagged with the path as stored: the tag is what a resume
+    # binds by, and the store matches it exactly.
+    assert listed.get("thread-live") == stored

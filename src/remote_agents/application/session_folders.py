@@ -63,4 +63,5 @@ class SessionFolders:
         (`ProjectWorktreeFolders`). None of them with no store."""
         if self._store is None:
             return ()
-        return tuple(worktree.path for worktree in await self._store.live_for_project(project_id))
+        live = (live_folder(w) for w in await self._store.live_for_project(project_id))
+        return tuple(folder for folder in live if folder is not None)

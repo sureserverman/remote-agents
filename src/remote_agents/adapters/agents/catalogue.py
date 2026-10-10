@@ -63,8 +63,9 @@ async def project_folders(
     worktree_folders: ProjectWorktreeFolders | None,
 ) -> tuple[tuple[ProjectId, Path, Path | None], ...]:
     """Every folder a project's conversations can be filed under: its own, then each live
-    session worktree (BL-116). The third item is the worktree, None for the project's own
-    folder, and is what a conversation found there carries into its resume."""
+    session worktree (BL-116). The second item is the folder to look in (resolved for a
+    worktree); the third is the worktree as stored, None for the project's own folder, and is
+    what a conversation found there carries into its resume."""
     folders: list[tuple[ProjectId, Path, Path | None]] = []
     for project_id, path in projects:
         folders.append((project_id, path, None))
@@ -78,11 +79,11 @@ async def project_folders(
             # project's own or another provider's.
             _LOG.exception("worktree folders of %s could not be read; listed without", project_id)
             continue
-        # Resolved, as the pane's cwd is: that is the folder the agent records its
-        # conversations under, and a provider that filters by exact cwd misses any other
-        # spelling of it.
+        # Asked for by the resolved path, as the pane's cwd is: that is the folder the agent
+        # records its conversations under, and a provider that filters by exact cwd misses any
+        # other spelling. Tagged with the path as stored, which is what a resume binds by and
+        # what the store matches exactly.
         folders.extend(
-            (project_id, worktree.resolve(strict=False), worktree.resolve(strict=False))
-            for worktree in worktrees
+            (project_id, worktree.resolve(strict=False), worktree) for worktree in worktrees
         )
     return tuple(folders)
