@@ -13,7 +13,8 @@ branch deleted -- each through git's own unforced verbs. A branch that already e
 refused before anything is made, so the undo can never delete a branch this project did not
 create. A launch the terminal then refuses before any pane exists discards the worktree the
 same way (`discard`); one whose pane started keeps it, since the agent may have worked there,
-and the cleanup pass removes it once its session has ended and its branch is merged.
+and the cleanup pass removes it once its session has ended and its branch is merged into the
+base branch it was cut from (one cut from a detached HEAD is listed, never removed).
 
 **Copies are untracked files only, never followed through a link.** A fresh worktree holds
 every tracked file at the base commit, so a listed file already present there is tracked and
@@ -67,7 +68,9 @@ _CONTENDING = frozenset(
 )
 """The states of a session with an agent at work in its folder: what makes a launch contended.
 Not FAILED (a pane that recovers is re-read to RUNNING), PRESERVED (its pane has exited) or
-ORPHANED; an offer kept up by a record with no agent behind it would be no contention at all."""
+ORPHANED; an offer kept up by a record with no agent behind it would be no contention at all.
+A slow agent recorded FAILED while its pane still comes up is missed until the next listing
+re-reads it to RUNNING; in that window the launch is a plain one, which is today's behaviour."""
 
 
 class WorktreeCreateFailed(Exception):
@@ -188,7 +191,7 @@ class WorktreeService:
         """Undo a creation's steps, latest first. Answers what could not be undone, or ''."""
         leftover = []
         for relative in reversed(made.written):
-            with contextlib.suppress(FileNotFoundError):
+            with contextlib.suppress(FileNotFoundError, NotADirectoryError):
                 os.unlink(path.joinpath(*PurePosixPath(relative).parts))
         if made.worktree and os.path.lexists(path):
             try:
@@ -218,16 +221,20 @@ class WorktreeService:
     async def discard(self, session_id: SessionId) -> str:
         """Remove the worktree a launch made when the terminal refused before any pane
         existed: nothing ran there, so the copies are unchanged and the branch is at its base.
-        Marked removed once the folder is gone. Answers what could not be undone, or ''."""
+        Marked removed only once nothing of it is left: a branch git would not delete keeps
+        the row live, so the cleanup pass still finds it when the session has ended. Touches
+        only a folder this session alone is bound to. Answers what was left, or ''."""
         worktree = await self._store.folder_for(session_id)
         if worktree is None or worktree.removed_at is not None:
             return ""
+        if await self._store.bound_sessions(worktree.path) != (session_id,):
+            return f"folder {worktree.path} (another session is bound to it)"
         repo = await self._repository(worktree.project_id)
         if repo is None:
             return f"folder {worktree.path}"
         made = _Made(worktree=True, written=list(worktree.copied))
         leftover = await asyncio.shield(self._undo(repo, worktree.path, worktree.branch, made))
-        if not os.path.lexists(worktree.path):
+        if not leftover and not os.path.lexists(worktree.path):
             await self._store.mark_removed(worktree.path, at=datetime.now(UTC))
         return leftover
 

@@ -9,7 +9,9 @@ deletes a branch it did not make.
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
+import shutil
 import subprocess
 from collections.abc import Sequence
 from datetime import UTC, datetime
@@ -37,7 +39,7 @@ from remote_agents.domain.models import (
     SessionState,
 )
 from remote_agents.ports.git_checkout import GitRefused
-from remote_agents.ports.terminal import INVALID_INTENT, TerminalObservation
+from remote_agents.ports.terminal import INVALID_INTENT, WORKTREE_REMOVED, TerminalObservation
 from remote_agents.ports.worktree_store import Worktree
 
 PROJECT = ProjectId("editor")
@@ -442,7 +444,14 @@ class _Terminal:
         self.launched: list[tuple[SessionId, Worktree | None]] = []
 
     async def launch(self, session_id, project_id, profile_id, *, remote_control):  # type: ignore[no-untyped-def]
-        self.launched.append((session_id, await self.folders.folder_for(session_id)))
+        folder = await self.folders.folder_for(session_id)
+        self.launched.append((session_id, folder))
+        if self.refuse == WORKTREE_REMOVED and folder is not None:
+            # Gone by hand between creation and the pane, as the terminal then finds it.
+            shutil.rmtree(folder.path)
+        if self.refuse == "launch_failed":
+            # A pane was asked for and did not come up: the agent may have run there.
+            return TerminalObservation(session_id, False, False, detail=self.refuse)
         if self.refuse:
             return TerminalObservation(session_id, False, False, detail=self.refuse)
         return TerminalObservation(session_id, True, False)
@@ -516,6 +525,68 @@ async def test_a_launch_refused_before_any_pane_takes_its_worktree_with_it(
     assert not folder.path.exists()
     gone = await harness.store.folder_for(launched)
     assert gone is not None and gone.removed_at is not None
+
+
+async def _refused_launch(
+    tmp_path: Path, repo: Path, refuse: str, caplog: pytest.LogCaptureFixture
+) -> tuple[_Harness, SessionId, Worktree]:
+    harness = _Harness(tmp_path, repo)
+    terminal = _Terminal(harness.store, refuse=refuse)
+    service = SessionService(
+        harness.sessions,
+        terminal,  # type: ignore[arg-type]
+        worktrees=harness.store,
+        worktree_service=harness.service,
+    )
+    with caplog.at_level(logging.WARNING):
+        outcome = await service.launch(LaunchCommand(PROJECT, CODEX, "k1", mode="worktree"))
+    assert outcome.record.state is SessionState.FAILED
+    ((launched, folder),) = terminal.launched
+    assert folder is not None
+    return harness, launched, folder
+
+
+async def test_a_branch_git_will_not_delete_keeps_the_row_live_and_is_logged(
+    tmp_path: Path, repo: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """The folder went before the pane: git still holds the worktree entry, so `branch -d`
+    refuses (measured, git 2.43.0). The row stays live for the cleanup pass, and the owner's
+    log says what was left."""
+    harness, launched, folder = await _refused_launch(tmp_path, repo, WORKTREE_REMOVED, caplog)
+
+    assert folder.branch in _branches(repo)
+    row = await harness.store.folder_for(launched)
+    assert row is not None and row.removed_at is None
+    assert f"left behind: branch {folder.branch}" in caplog.text
+
+
+async def test_a_launch_whose_pane_was_asked_for_keeps_its_worktree(
+    tmp_path: Path, repo: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Only a refusal before any pane discards: past that point the agent may have worked in
+    the folder, and nothing of it is touched."""
+    harness, launched, folder = await _refused_launch(tmp_path, repo, "launch_failed", caplog)
+
+    assert folder.path.is_dir()
+    assert folder.branch in _branches(repo)
+    row = await harness.store.folder_for(launched)
+    assert row is not None and row.removed_at is None
+
+
+async def test_discard_never_touches_a_folder_another_session_is_bound_to(
+    tmp_path: Path, repo: Path
+) -> None:
+    harness = _Harness(tmp_path, repo)
+    first = await harness.session()
+    worktree = await harness.service.create(first, PROJECT)
+    second = await harness.session()
+    await harness.store.bind(second, worktree.path)
+
+    left = await harness.service.discard(first)
+
+    assert "another session is bound" in left
+    assert worktree.path.is_dir()
+    assert worktree.branch in _branches(repo)
 
 
 def test_a_successor_never_creates_a_worktree() -> None:

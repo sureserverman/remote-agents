@@ -414,9 +414,12 @@ class SessionService:
                 ):
                     # Nothing ran in the worktree it made, so it goes with the refusal (BL-116).
                     try:
-                        await self._worktree_service.discard(session_id)
+                        left = await self._worktree_service.discard(session_id)
                     except Exception:
                         _LOG.exception("worktree of refused launch %s not discarded", session_id)
+                    else:
+                        if left:
+                            _LOG.warning("refused launch %s left behind: %s", session_id, left)
                 return LaunchOutcome(
                     await self._store.record_event(session_id, _event_for_launch(observation)),
                     remote_control,
