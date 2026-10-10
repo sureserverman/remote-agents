@@ -55,6 +55,7 @@ from remote_agents.adapters.tui.screens.settings import SETTINGS_ROWS
 from remote_agents.application.commands import ForceStopCommand, LaunchCommand
 from remote_agents.application.project_catalog import CatalogProject
 from remote_agents.application.services import SessionService
+from remote_agents.application.session_folders import SessionFolders
 from remote_agents.application.session_views import with_project_names
 from remote_agents.composition.backend import ProjectCatalogueProvider
 from remote_agents.composition.tui import _local_runtime, local_context
@@ -169,7 +170,9 @@ def _harness(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> _Harness:
         pytest.skip(f"BLOCKED: {profile} is not available on this host")
     provider = ProjectCatalogueProvider(config.registry_path, config.dev_root)
     provider.refresh()
-    runtime = _local_runtime(config, paths, provider.paths)
+    runtime = _local_runtime(
+        config, paths, provider.paths, folder_for=SessionFolders(provider.paths, None).folder_for
+    )
     return _Harness(
         RemoteAgentsTui(context),
         SessionService(SQLiteSessionStore(writer_connection), runtime.terminal),

@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 
 from remote_agents.adapters.tmux.profiles import build_launch_profile, probe_profiles
+from remote_agents.application.session_folders import SessionFolders
 from remote_agents.composition.tui import _profile_factory, _resume_profile_factory
 from remote_agents.domain.conversations import ProviderConversationId
 from remote_agents.domain.models import ProfileId, SessionId
@@ -357,7 +358,13 @@ def _production_terminal(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, descri
         lambda executable, home: Path(f"/tools/{executable}"),
     )
     built = provider_descriptors() if descriptors is None else descriptors
-    return composition._local_runtime(None, ProductionPaths.for_home(tmp_path), {}, built).terminal
+    return composition._local_runtime(
+        None,
+        ProductionPaths.for_home(tmp_path),
+        {},
+        built,
+        folder_for=SessionFolders({}, None).folder_for,
+    ).terminal
 
 
 def _awaiting(terminal, profile_id: str, capture: str) -> bool:

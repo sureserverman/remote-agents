@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from enum import StrEnum
 
@@ -19,6 +19,7 @@ from remote_agents.application.commands import ResumeCommand
 from remote_agents.application.profiles import ProfileAvailability
 from remote_agents.application.project_catalog import CatalogProject
 from remote_agents.application.services import ResumeOutcome
+from remote_agents.application.session_folders import WORKTREE_REMOVED_SENTENCE
 from remote_agents.domain.conversations import (
     ConversationCataloguePage,
     ConversationReference,
@@ -584,3 +585,37 @@ async def _reenter_during(app) -> None:
 
     await asyncio.sleep(0.005)
     await app.action_resume()
+
+
+@dataclass(slots=True)
+class _RemovedWorktreeLauncher(_Launcher):
+    """A resume the terminal refused because the session's worktree is gone."""
+
+    async def resume(self, command: ResumeCommand) -> ResumeOutcome:
+        self.resumed.append(command)
+        failed = replace(self.record, state=SessionState.FAILED)
+        return ResumeOutcome(failed, created=True, worktree_removed=True)
+
+
+async def test_a_resume_refused_for_a_removed_worktree_says_so() -> None:
+    """No pane was made, so an attach command for one would send the owner nowhere."""
+    conversations = _Conversations({1: (_summary(1),)}, caps=_capable("claude"))
+    launcher = _RemovedWorktreeLauncher()
+    app = RemoteAgentsTui(_context(conversations, launcher))
+
+    async with app.run_test() as pilot:
+        await app.action_resume()
+        await pilot.pause()
+        await app.screen.choose("opaque-existing")
+        await pilot.pause()
+        await app.screen.choose("claude")
+        await pilot.pause()
+        await app.screen.choose(str(_summary(1).reference))
+        await pilot.pause()
+        said = " ".join(announcements(app))
+        line = str(_status(app))
+
+    assert len(launcher.resumed) == 1
+    assert WORKTREE_REMOVED_SENTENCE in said, said
+    assert "Attach with" not in line, line
+    assert app.return_value is None

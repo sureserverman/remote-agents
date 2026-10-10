@@ -26,6 +26,7 @@ from remote_agents.application.notification_policy import SessionGroup
 from remote_agents.application.profiles import ProfileAvailability
 from remote_agents.application.project_catalog import CatalogProject
 from remote_agents.application.services import LaunchOutcome, ResumeOutcome
+from remote_agents.application.session_folders import WORKTREE_REMOVED_SENTENCE
 from remote_agents.domain.conversations import (
     ConversationCataloguePage,
     ConversationReference,
@@ -1313,3 +1314,59 @@ async def test_the_force_confirmation_survives_a_notification_arriving_while_it_
     assert "Force stop" in rendered.text
     labels = [button.text for row in rendered.keyboard for button in row]
     assert "Force stop" in labels and "Cancel" in labels
+
+
+class _RemovedWorktreeLauncher(_Launcher):
+    """A launch and a resume the terminal refused because the session's worktree is gone."""
+
+    def __init__(self, record: SessionRecord) -> None:
+        self.record = record
+
+    async def list_sessions(self):
+        return []
+
+    async def launch(self, _command):
+        return LaunchOutcome(self.record, False, worktree_removed=True)
+
+    async def resume(self, _command):
+        return ResumeOutcome(self.record, created=True, worktree_removed=True)
+
+
+def _removed_worktree_boundary() -> PrivateBotBoundary:
+    return build_private_bot(
+        OWNER,
+        CHAT,
+        backend=backend_for(
+            catalogue=(PROJECT,),
+            sessions=_RemovedWorktreeLauncher(replace(_record(), state=SessionState.FAILED)),
+            conversations=ConversationService(_Catalogue(_resolved())),
+        ),
+        profiles=(ProfileAvailability("claude", True, None),),
+        names=profile_names(),
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_launch_refused_for_a_removed_worktree_says_so() -> None:
+    """No pane was made, so "its pane may still exist" would send the owner looking for one."""
+    boundary = _removed_worktree_boundary()
+    launch_id = f"{PROJECT.opaque_id}|claude"
+    token = boundary._callback("launch.profile", launch_id, mutation=True)
+    boundary.callbacks.bind_pending(CHAT, 1)
+
+    text = str((await boundary._launch_reply(launch_id, token, 1))["text"])
+
+    assert WORKTREE_REMOVED_SENTENCE in text
+    assert "pane may still exist" not in text
+
+
+@pytest.mark.asyncio
+async def test_a_resume_refused_for_a_removed_worktree_says_so() -> None:
+    boundary = _removed_worktree_boundary()
+    token = boundary._callback("resume.confirm", "c-0123456789abcdef", mutation=True)
+    boundary.callbacks.bind_pending(CHAT, 1)
+
+    text = str((await boundary._resume_reply("c-0123456789abcdef", token, 1))["text"])
+
+    assert WORKTREE_REMOVED_SENTENCE in text
+    assert "after local attention" not in text

@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from enum import StrEnum
+from pathlib import Path
 from typing import Protocol
 
 from remote_agents.domain.conversations import ProviderConversationId
@@ -116,6 +118,22 @@ or quiet is one a later pass can still promote, and a pane that is gone is not. 
 adapter can tell them apart, and until this was named the application could only see that
 `live` was False and had to treat both as "come back later" -- which left a session whose
 agent quit at its own trust dialog waiting for a promotion that could never arrive.
+"""
+
+
+WORKTREE_REMOVED = "worktree_removed"
+"""A launch or resume was refused because the session is bound to a worktree that is gone.
+
+Removed by the cleanup pass, or deleted by hand. Never answered by launching in the project's
+main checkout instead: the session was given its own folder to keep its work apart from that
+one, and an agent landing there would carry on in the folder it was meant to stay out of.
+"""
+
+SessionFolderLookup = Callable[[SessionId, ProjectId], Awaitable[Path | None]]
+"""The folder a session works in: its worktree when bound, else its project's folder.
+
+None means bound to a worktree that is gone (`WORKTREE_REMOVED`). An unknown project raises
+`KeyError`, as a read of the project mapping does.
 """
 
 

@@ -21,6 +21,7 @@ from remote_agents.adapters.tui.screens.sessions import SessionsScreen
 from remote_agents.application.profiles import ProfileAvailability
 from remote_agents.application.project_catalog import CatalogProject
 from remote_agents.application.services import LaunchOutcome
+from remote_agents.application.session_folders import WORKTREE_REMOVED_SENTENCE
 from remote_agents.domain.models import (
     ProfileId,
     ProjectId,
@@ -1201,3 +1202,32 @@ async def test_the_local_surface_names_remote_control_only_when_the_launch_carri
         "the local surface must name the flag when the launch carried it and stay silent "
         "when it did not"
     )
+
+
+class _RemovedWorktreeLauncher(_TrustBlockedLauncher):
+    """A launch the terminal refused because the session's worktree is gone."""
+
+    async def launch(self, _command):
+        self.launched += 1
+        return LaunchOutcome(_record(SessionState.FAILED), False, worktree_removed=True)
+
+
+async def test_a_launch_refused_for_a_removed_worktree_says_so() -> None:
+    """No pane was made, so the attach command and "its pane may still exist" would mislead."""
+    launcher = _RemovedWorktreeLauncher((_record(SessionState.FAILED),))
+    app = RemoteAgentsTui(_context(launcher))
+
+    async with app.run_test() as pilot:
+        app.selection = dataclasses.replace(
+            app.selection,
+            project=_EXISTING,
+            profile=ProfileAvailability("claude", True),
+        )
+        failure = await app.launch()
+        await pilot.pause()
+
+    assert launcher.launched == 1, "the launch never reached the backend; the assert is vacuous"
+    assert failure is not None
+    assert WORKTREE_REMOVED_SENTENCE in failure.explanation
+    assert "Attach with" not in failure.status
+    assert "pane may still exist" not in failure.explanation

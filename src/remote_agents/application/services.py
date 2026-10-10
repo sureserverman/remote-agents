@@ -55,6 +55,7 @@ from remote_agents.ports.terminal import (
     NOT_AWAITING_TRUST,
     NOT_IDLE,
     TERMINAL_NOT_LIVE,
+    WORKTREE_REMOVED,
     TerminalObservation,
     TerminalPort,
     TrustAnswer,
@@ -111,6 +112,10 @@ class ResumeOutcome:
 
     record: SessionRecord
     created: bool
+    worktree_removed: bool = False
+    """The terminal refused before any pane existed: the session's worktree is gone
+    (`WORKTREE_REMOVED`). The record is FAILED either way, and a surface that read only the
+    record would point the owner at a pane that was never made."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -131,6 +136,8 @@ class LaunchOutcome:
 
     record: SessionRecord
     remote_control: bool
+    worktree_removed: bool = False
+    """As `ResumeOutcome.worktree_removed`."""
 
 
 #: The states a fresh capture of the pane can still change the answer for, and **only** those.
@@ -295,6 +302,7 @@ class SessionService:
                 return LaunchOutcome(
                     await self._store.record_event(session_id, _event_for_launch(observation)),
                     remote_control,
+                    worktree_removed=observation.detail == WORKTREE_REMOVED,
                 )
 
     async def _remote_control_at_launch(self, profile_id: ProfileId) -> bool:
@@ -374,6 +382,7 @@ class SessionService:
             return ResumeOutcome(
                 await self._store.record_event(session_id, _event_for_launch(observation)),
                 created=True,
+                worktree_removed=observation.detail == WORKTREE_REMOVED,
             )
 
     async def list_sessions(self) -> tuple[SessionRecord, ...]:

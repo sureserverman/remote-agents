@@ -103,6 +103,7 @@ from remote_agents.application.session_actions import (
     remote_control_available,
     remote_control_refusal,
 )
+from remote_agents.application.session_folders import WORKTREE_REMOVED_SENTENCE
 from remote_agents.application.session_views import (
     CATALOGUE_GAP_RETRY_SECONDS,
     RolloverMark,
@@ -1873,6 +1874,7 @@ class RemoteAgentsTui(App[AttachRequest | None]):
             # had not touched was the defect. Recorded here so the asymmetry reads as a
             # decision the next person can check rather than as one surface being behind.
             record = outcome.record
+            worktree_removed = outcome.created and outcome.worktree_removed
         except CodexRemoteControlBusy:
             # Refused before anything was recorded (BL-037); the conversation is untouched.
             await screen.redraw_after_failure()
@@ -1886,6 +1888,12 @@ class RemoteAgentsTui(App[AttachRequest | None]):
             screen.announce(f"The conversation was not resumed: {error}")
             return
         else:
+            if record.state is SessionState.FAILED and worktree_removed:
+                # Refused before any pane existed: no attach command, nothing to reach (BL-116).
+                await screen.redraw_after_failure()
+                screen.set_status("Nothing was started. Go back and try again.")
+                screen.announce(WORKTREE_REMOVED_SENTENCE)
+                return
             if record.state is SessionState.FAILED:
                 # The command stays in the status line and the explanation goes to the toast,
                 # which is the split this whole task turns on applied to its hardest case: the
@@ -2664,6 +2672,13 @@ class RemoteAgentsTui(App[AttachRequest | None]):
         finally:
             self._busy = False
         record = outcome.record
+        if record.state is SessionState.FAILED and outcome.worktree_removed:
+            # Refused before any pane existed, so there is no attach command to hand over and
+            # no pane that "may still exist" (BL-116).
+            return LaunchFailure(
+                status="Nothing was started. Launch again, or go back to change the selection.",
+                explanation=WORKTREE_REMOVED_SENTENCE,
+            )
         if record.state is SessionState.FAILED:
             return LaunchFailure(
                 status=(

@@ -29,6 +29,7 @@ from remote_agents.adapters.tmux.profiles import (
 from remote_agents.adapters.tmux.runtime import AsyncTmuxRunner, TmuxTerminal
 from remote_agents.adapters.tui import FRONTEND
 from remote_agents.application.console import CONSOLE_BINDINGS, RecoveryReport
+from remote_agents.application.session_folders import SessionFolders
 from remote_agents.application.store_watch import StoreWatch
 from remote_agents.composition.backend import (
     ProjectCatalogueProvider,
@@ -105,8 +106,14 @@ def _curated_environment(source: Mapping[str, str]) -> dict[str, str]:
     return environment
 
 
-def _local_runtime(config, paths: ProductionPaths, project_paths, descriptors=None) -> LocalRuntime:
-    """Compose the one tmux terminal and profile probe that every surface shares."""
+def _local_runtime(
+    config, paths: ProductionPaths, project_paths, descriptors=None, *, folder_for
+) -> LocalRuntime:
+    """Compose the one tmux terminal and profile probe that every surface shares.
+
+    `folder_for` has no default on purpose: it is where every pane starts, and a production
+    runtime composed without it would start a worktree session in the main checkout (BL-116).
+    """
     definitions = closed_profiles()
     compatibility = probe_profiles(
         definitions,
@@ -178,6 +185,8 @@ def _local_runtime(config, paths: ProductionPaths, project_paths, descriptors=No
         # What each managed agent's own hook said about a turn it started (BL-108, DEC-104),
         # over the spool the hook writes into -- read by the relay with the capture it judges.
         turn_markers=FileTurnMarkers(paths.activity_directory),
+        # Where each pane starts: the session's worktree when it has one (BL-116).
+        folder_for=folder_for,
     )
     return LocalRuntime(terminal, compatibility, gateway)
 
@@ -382,7 +391,16 @@ def local_context(config, connection, paths: ProductionPaths):
         cursor_limits_switch=partial(read_cursor_limits_source, config.path or paths.config_path),
         cursor_home=paths.home,
     )
-    runtime = _local_runtime(config, paths, projects.paths, descriptors)
+    # One git boundary and one set of worktree rows for this process (DEC-046). Built before
+    # the runtime because the terminal asks it where each pane starts.
+    worktrees = worktree_parts(connection)
+    runtime = _local_runtime(
+        config,
+        paths,
+        projects.paths,
+        descriptors,
+        folder_for=SessionFolders(projects.paths, worktrees.store).folder_for,
+    )
 
     open_in_console = None
     console_sync = None
@@ -501,7 +519,7 @@ def local_context(config, connection, paths: ProductionPaths):
             runtime=runtime,
             hide_in_console=hide_in_console,
             activity_feed=lambda: SQLiteActivityStore(connection).recent(limit=FEED_LIMIT),
-            worktrees=worktree_parts(connection),
+            worktrees=worktrees,
         ),
     )
     return TuiContext(

@@ -1,5 +1,6 @@
 """A resumed agent proves itself by its pane, because it reprints no banner."""
 
+import json
 from pathlib import Path
 
 import pytest
@@ -8,9 +9,15 @@ from remote_agents.adapters.agents.registry import profile_trust_dialogs
 from remote_agents.adapters.tmux.codec import ManagedPane
 from remote_agents.adapters.tmux.gateway import TmuxInventory
 from remote_agents.adapters.tmux.runtime import LaunchProfile, TerminalWaits, TmuxTerminal
+from remote_agents.domain.conversations import ProviderConversationId
 from remote_agents.domain.models import ProfileId, ProjectId, SessionId
 from remote_agents.domain.trust import TrustState
-from remote_agents.ports.terminal import NOT_AWAITING_TRUST, OWNERSHIP_LOST, TerminalTargetMissing
+from remote_agents.ports.terminal import (
+    NOT_AWAITING_TRUST,
+    OWNERSHIP_LOST,
+    WORKTREE_REMOVED,
+    TerminalTargetMissing,
+)
 
 _EXECUTABLE = "/usr/bin/claude"
 
@@ -728,3 +735,103 @@ async def test_a_pane_gone_before_the_first_read_reports_that_nothing_was_sent(t
     assert gateway.sent == [], "there was no pane to send anything to"
     assert not answered.pressed
     assert answered.observed is TrustState.UNKNOWN
+
+
+class _CountingGateway(Gateway):
+    """Counts pane creations, so a refused launch can be shown to have made none."""
+
+    def __init__(self, session_id: SessionId, intent_directory: Path) -> None:
+        super().__init__(session_id, "Claude Code\n", intent_directory)
+        self.launched = 0
+
+    async def launch(self, *_args: object) -> None:
+        self.launched += 1
+
+
+def _folder_terminal(gateway: Gateway, folder_for) -> TmuxTerminal:
+    return TmuxTerminal(
+        gateway,
+        # A mapping that names a real folder, so a terminal that read it instead of the lookup
+        # would launch there -- the fall-back this file exists to refuse.
+        {ProjectId("opaque-editor"): gateway.intent_directory},
+        {ProfileId("claude"): _profile("Claude Code")},
+        startup_timeout=0.2,
+        folder_for=folder_for,
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_session_with_no_folder_is_refused_as_worktree_removed(tmp_path) -> None:
+    """The lookup said the session's worktree is gone: no intent, no pane, a named refusal."""
+    session_id = SessionId.new()
+    gateway = _CountingGateway(session_id, tmp_path)
+
+    async def no_folder(_session: SessionId, _project: ProjectId) -> Path | None:
+        return None
+
+    terminal = _folder_terminal(gateway, no_folder)
+    observation = await terminal.launch(session_id, ProjectId("opaque-editor"), ProfileId("claude"))
+
+    assert not observation.live
+    assert observation.detail == WORKTREE_REMOVED
+    assert gateway.launched == 0
+    assert not (tmp_path / f"{session_id}.json").exists()
+
+
+@pytest.mark.asyncio
+async def test_a_resume_with_no_folder_is_refused_the_same_way(tmp_path) -> None:
+    session_id = SessionId.new()
+    gateway = _CountingGateway(session_id, tmp_path)
+
+    async def no_folder(_session: SessionId, _project: ProjectId) -> Path | None:
+        return None
+
+    terminal = TmuxTerminal(
+        gateway,
+        {ProjectId("opaque-editor"): tmp_path},
+        {},
+        startup_timeout=0.2,
+        resume_profile_factories={ProfileId("claude"): lambda _s, _c: _profile(None)},
+        folder_for=no_folder,
+    )
+    observation = await terminal.resume(
+        session_id, ProjectId("opaque-editor"), ProfileId("claude"), ProviderConversationId("c")
+    )
+
+    assert observation.detail == WORKTREE_REMOVED
+    assert gateway.launched == 0
+
+
+@pytest.mark.asyncio
+async def test_the_intent_cwd_is_the_folder_the_lookup_answers(tmp_path) -> None:
+    session_id = SessionId.new()
+    worktree = tmp_path / "worktree"
+    worktree.mkdir()
+    gateway = _CountingGateway(session_id, tmp_path)
+    asked: list[tuple[SessionId, ProjectId]] = []
+
+    async def bound(session: SessionId, project: ProjectId) -> Path | None:
+        asked.append((session, project))
+        return worktree
+
+    terminal = _folder_terminal(gateway, bound)
+    await terminal.launch(session_id, ProjectId("opaque-editor"), ProfileId("claude"))
+
+    intent = json.loads((tmp_path / f"{session_id}.json").read_text(encoding="utf-8"))
+    assert intent["cwd"] == str(worktree.resolve())
+    assert asked == [(session_id, ProjectId("opaque-editor"))]
+
+
+@pytest.mark.asyncio
+async def test_an_unknown_project_from_the_lookup_is_still_an_invalid_intent(tmp_path) -> None:
+    session_id = SessionId.new()
+    gateway = _CountingGateway(session_id, tmp_path)
+
+    async def unknown(_session: SessionId, project: ProjectId) -> Path | None:
+        raise KeyError(project)
+
+    terminal = _folder_terminal(gateway, unknown)
+    observation = await terminal.launch(session_id, ProjectId("opaque-editor"), ProfileId("claude"))
+
+    assert observation.detail == "invalid_intent"
+    assert gateway.launched == 0

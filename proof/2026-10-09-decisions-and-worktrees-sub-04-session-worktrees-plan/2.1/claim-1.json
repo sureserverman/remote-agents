@@ -1,0 +1,28 @@
+{
+ "baseline": {
+  "elapsed_s": 12.8,
+  "exit": 0,
+  "tail": ".....................................................                    [100%]\n53 passed in 12.59s"
+ },
+ "break_patch": "--- a/src/remote_agents/application/session_folders.py\n+++ b/src/remote_agents/application/session_folders.py\n@@ -46,5 +46,5 @@\n         if worktree is None:\n             return self._project_paths[project_id]\n         if worktree.removed_at is not None or not worktree.path.is_dir():\n-            return None\n+            return self._project_paths[project_id]\n         return worktree.path\n",
+ "build": null,
+ "created": "2026-10-10T19:33:33+00:00",
+ "fingerprint": "e526e59f9c3d9bec8c8f1d54ed37bedf0276edfe4a07bfad26aedfe6f6c08a1c",
+ "index": 1,
+ "kind": "claim",
+ "named_break": null,
+ "no_build_reason": "pure Python, no build",
+ "plan": "/mnt/vault/Portfolio/infra/remote-agents/plans/2026-10-09-decisions-and-worktrees-sub-04-session-worktrees-plan.md",
+ "red": {
+  "elapsed_s": 13.0,
+  "exit": 1,
+  "tail": "\ntests/unit/application/test_session_folders.py:77: AssertionError\n______________ test_a_bound_worktree_marked_removed_has_no_folder ______________\n\ntmp_path = PosixPath('/tmp/pytest-of-user/pytest-1186/test_a_bound_worktree_marked_r0')\n\n    @pytest.mark.asyncio\n    async def test_a_bound_worktree_marked_removed_has_no_folder(tmp_path) -> None:\n        \"\"\"Marked removed is gone even if a folder of that name has since reappeared.\"\"\"\n        session = SessionId.new()\n        worktree = tmp_path / \"worktrees\" / \"reused-name\"\n        worktree.mkdir(parents=True)\n        folders = SessionFolders(\n            {_PROJECT: tmp_path}, _Store({session: _worktree(worktree, removed=True)})\n        )\n    \n>       assert await folders.folder_for(session, _PROJECT) is None\nE       AssertionError: assert PosixPath('/tmp/pytest-of-user/pytest-1186/test_a_bound_worktree_marked_r0') is None\n\ntests/unit/application/test_session_folders.py:90: AssertionError\n______________ test_a_worktree_path_that_is_a_file_has_no_folder _______________\n\ntmp_path = PosixPath('/tmp/pytest-of-user/pytest-1186/test_a_worktree_path_that_is_a0')\n\n    @pytest.mark.asyncio\n    async def test_a_worktree_path_that_is_a_file_has_no_folder(tmp_path) -> None:\n        session = SessionId.new()\n        planted = tmp_path / \"not-a-folder\"\n        planted.write_text(\"x\", encoding=\"utf-8\")\n        folders = SessionFolders({_PROJECT: tmp_path}, _Store({session: _worktree(planted)}))\n    \n>       assert await folders.folder_for(session, _PROJECT) is None\nE       AssertionError: assert PosixPath('/tmp/pytest-of-user/pytest-1186/test_a_worktree_path_that_is_a0') is None\n\ntests/unit/application/test_session_folders.py:100: AssertionError\n=========================== short test summary info ============================\nFAILED tests/unit/application/test_session_folders.py::test_a_bound_worktree_deleted_on_disk_has_no_folder\nFAILED tests/unit/application/test_session_folders.py::test_a_bound_worktree_marked_removed_has_no_folder\nFAILED tests/unit/application/test_session_folders.py::test_a_worktree_path_that_is_a_file_has_no_folder\n3 failed, 50 passed in 12.72s"
+ },
+ "schema": 2,
+ "task": "2.1",
+ "test": "uv run --locked pytest tests/unit/application/test_session_folders.py tests/contract/adapters/tmux/test_resume_readiness.py tests/e2e/test_terminal_launch.py -q -p no:randomly",
+ "text": "`uv run --locked pytest tests/unit/application/test_session_folders.py tests/contract/adapters/tmux/test_resume_readiness.py tests/e2e/test_terminal_launch.py -q -p no:randomly`.",
+ "touched": [
+  "src/remote_agents/application/session_folders.py"
+ ]
+}

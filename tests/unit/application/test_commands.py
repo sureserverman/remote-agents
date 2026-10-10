@@ -35,7 +35,7 @@ from remote_agents.domain.models import (
 )
 from remote_agents.domain.remote_control import RemoteControlDefault
 from remote_agents.domain.state_machine import LifecycleEvent, transition
-from remote_agents.ports.terminal import TERMINAL_NOT_LIVE, TerminalObservation
+from remote_agents.ports.terminal import TERMINAL_NOT_LIVE, WORKTREE_REMOVED, TerminalObservation
 
 
 class FakeStore:
@@ -189,6 +189,28 @@ async def test_launch_uses_only_typed_ids_and_terminal_evidence_for_liveness() -
     assert terminal.launches[0][1:] == (ProjectId("opaque-editor"), ProfileId("claude"))
     assert record.state is SessionState.FAILED
     assert store.events == [LifecycleEvent.STARTUP_ERROR]
+
+
+class _RemovedWorktreeTerminal(FakeTerminal):
+    """Refuses every launch the way the tmux terminal does for a gone worktree."""
+
+    async def launch(self, session_id, project_id, profile_id, *, remote_control=False):
+        self.launches.append((session_id, project_id, profile_id))
+        return TerminalObservation(session_id, live=False, preserved=False, detail=WORKTREE_REMOVED)
+
+
+async def test_a_launch_refused_for_a_removed_worktree_says_so_in_its_outcome() -> None:
+    """The record is FAILED either way; only the outcome can say no pane was ever made."""
+    refused = await SessionService(FakeStore(), _RemovedWorktreeTerminal(live=False)).launch(
+        LaunchCommand(ProjectId("opaque-editor"), ProfileId("claude"), "key-removed")
+    )
+    failed = await SessionService(FakeStore(), FakeTerminal(live=False)).launch(
+        LaunchCommand(ProjectId("opaque-editor"), ProfileId("claude"), "key-failed")
+    )
+
+    assert refused.record.state is SessionState.FAILED
+    assert refused.worktree_removed
+    assert not failed.worktree_removed
 
 
 async def test_duplicate_launch_does_not_repeat_terminal_side_effect() -> None:

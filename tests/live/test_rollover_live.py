@@ -114,6 +114,7 @@ from remote_agents.application.prompt_delivery import DeliveryVerdict, delivery_
 from remote_agents.application.reconcile import ReconciliationService, SessionLocks
 from remote_agents.application.rollover import RolloverReport
 from remote_agents.application.session_actions import ROLLOVER, rollover_outcome
+from remote_agents.application.session_folders import SessionFolders
 from remote_agents.application.session_views import rollover_marks, rollover_note
 from remote_agents.bootstrap import _RECONCILE_INTERVAL_SECONDS
 from remote_agents.composition.backend import ProjectCatalogueProvider, compose_backend
@@ -414,7 +415,13 @@ def _compose(config, connection, paths: ProductionPaths) -> _Harness:
         cursor_home=paths.home,
     )
     projects.refresh()
-    runtime = _local_runtime(config, paths, projects.paths, descriptors)
+    runtime = _local_runtime(
+        config,
+        paths,
+        projects.paths,
+        descriptors,
+        folder_for=SessionFolders(projects.paths, None).folder_for,
+    )
     store = SQLiteSessionStore(connection)
     locks = SessionLocks()
     backend = compose_backend(

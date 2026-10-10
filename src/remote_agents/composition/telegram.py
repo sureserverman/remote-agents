@@ -42,6 +42,7 @@ from remote_agents.application.prompt_relay import PromptRelay
 from remote_agents.application.reconcile import ReconciliationService, SessionLocks
 from remote_agents.application.schedule_times import host_zone
 from remote_agents.application.schedules import SchedulePass, limit_stopped_in, still_working_in
+from remote_agents.application.session_folders import SessionFolders
 from remote_agents.composition.backend import (
     ProjectCatalogueProvider,
     compose_backend,
@@ -109,12 +110,19 @@ def _private_boundary(
         cursor_limits_switch=partial(read_cursor_limits_source, config.path or paths.config_path),
         cursor_home=paths.home,
     )
-    runtime = _local_runtime(config, paths, projects.paths, descriptors)
-    terminal = runtime.terminal
-    store = SQLiteSessionStore(connection)
     # One git boundary and one set of worktree rows for this process (DEC-046), handed to
     # `compose_backend` so every later reader in this process gets this pair, not its own.
+    # Built before the runtime because the terminal asks it where each pane starts.
     worktrees = worktree_parts(connection)
+    runtime = _local_runtime(
+        config,
+        paths,
+        projects.paths,
+        descriptors,
+        folder_for=SessionFolders(projects.paths, worktrees.store).folder_for,
+    )
+    terminal = runtime.terminal
+    store = SQLiteSessionStore(connection)
     # One lock map, shared by the two objects that write session state. See the note on the
     # ReconciliationService below: this single binding is the fix, and two instances here
     # would look identical and repair nothing.

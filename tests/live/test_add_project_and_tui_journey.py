@@ -25,6 +25,7 @@ from remote_agents.adapters.tmux.codec import attach_argv
 from remote_agents.application.commands import GracefulStopCommand, LaunchCommand
 from remote_agents.application.project_admin import CreateProjectCommand, ProjectCreationService
 from remote_agents.application.services import SessionService
+from remote_agents.application.session_folders import SessionFolders
 from remote_agents.composition.backend import ProjectCatalogueProvider
 from remote_agents.composition.tui import _local_runtime, local_context
 from remote_agents.config import load_config
@@ -116,8 +117,9 @@ async def test_a_terminal_launch_attaches_and_stops_from_a_second_connection() -
 
         assert context.attach_argv(str(record.session_id)) == attach_argv(record.session_id)
 
+        service_paths = ProjectCatalogueProvider(config.registry_path, config.dev_root).paths
         service_runtime = _local_runtime(
-            config, paths, ProjectCatalogueProvider(config.registry_path, config.dev_root).paths
+            config, paths, service_paths, folder_for=SessionFolders(service_paths, None).folder_for
         )
         service = SessionService(SQLiteSessionStore(service_connection), service_runtime.terminal)
         assert record.session_id in {item.session_id for item in await service.list_sessions()}

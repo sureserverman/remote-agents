@@ -43,6 +43,7 @@ from remote_agents.application.rollover_book import RolloverBook
 from remote_agents.application.schedule_book import ScheduleBook
 from remote_agents.application.schedule_times import host_zone
 from remote_agents.application.services import SessionService
+from remote_agents.application.session_folders import SessionFolders
 from remote_agents.application.store_watch import StoreWatch
 from remote_agents.composition.limits_source import (
     ConfigCursorLimitsSource,
@@ -324,7 +325,15 @@ def compose_backend(
         cursor_limits_switch=partial(read_cursor_limits_source, config.path or paths.config_path),
         cursor_home=paths.home,
     )
-    runtime = runtime or _local_runtime(config, paths, projects.paths, descriptors)
+    runtime = runtime or _local_runtime(
+        config,
+        paths,
+        projects.paths,
+        descriptors,
+        folder_for=SessionFolders(
+            projects.paths, worktrees.store if worktrees is not None else None
+        ).folder_for,
+    )
     registered = {str(descriptor.profile_id) for descriptor in descriptors}
     curated = {definition.executable for definition in closed_profiles()}
     if registered != curated:

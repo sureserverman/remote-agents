@@ -67,11 +67,13 @@ from remote_agents.ports.terminal import (
     OWNERSHIP_LOST,
     TERMINAL_NOT_LIVE,
     UNKNOWN_SESSION,
+    WORKTREE_REMOVED,
     PromptDelivery,
     PromptOutcome,
     PromptReason,
     RemoteControlRefusal,
     RemoteControlRefused,
+    SessionFolderLookup,
     TerminalObservation,
     TerminalTargetMissing,
     TrustAnswer,
@@ -257,6 +259,15 @@ times a second: long enough that a stalled stream is not mistaken for an ended o
 that a message queued after an Esc and a `/clear` is not held until the next turn."""
 
 
+def _project_folder(project_paths: Mapping[ProjectId, Path]) -> SessionFolderLookup:
+    """The lookup for a terminal composed without one: every session is regular."""
+
+    async def folder_for(_session_id: SessionId, project_id: ProjectId) -> Path | None:
+        return project_paths[project_id]
+
+    return folder_for
+
+
 class TmuxTerminal:
     """Resolve typed IDs locally, then report tmux observation rather than database liveness."""
 
@@ -277,6 +288,7 @@ class TmuxTerminal:
         waits: TerminalWaits | None = None,
         turn_markers: TurnMarkers | None = None,
         clock: Callable[[], float] = time.monotonic,
+        folder_for: SessionFolderLookup | None = None,
     ) -> None:
         # Which profiles can be asked the folder-trust question, and the dialog to read each
         # one with. **Injected, not imported**: this is an adapter, the answer is a provider
@@ -304,7 +316,11 @@ class TmuxTerminal:
         self._still: dict[str, tuple[str, float]] = {}
         self._waits = waits or _DEFAULT_WAITS
         self._gateway = gateway
-        self._project_paths = project_paths
+        # Where each session's pane starts: the application's session-folder lookup, which
+        # answers a worktree for a bound session (BL-116). Production always passes it. A
+        # terminal composed without one (the tests, which keep no worktree rows) has only
+        # regular sessions, whose folder is the project's.
+        self._folder_for = folder_for or _project_folder(project_paths)
         self._profiles = profiles
         #: Called with the session being started and whether to use the agent's
         #: remote-control argv, so the second argv is resolved where the first one is.
@@ -365,8 +381,20 @@ class TmuxTerminal:
     ) -> TerminalObservation:
         """Persist and execute one already-curated profile through the fixed tmux runner."""
         try:
-            cwd = self._project_paths[project_id].resolve(strict=True)
-        except (KeyError, OSError):
+            folder = await self._folder_for(session_id, project_id)
+        except KeyError:
+            return TerminalObservation(
+                session_id, live=False, preserved=False, detail="invalid_intent"
+            )
+        if folder is None:
+            # Bound to a worktree that is gone. Refused before any intent or pane exists, and
+            # never retried in the project folder (`WORKTREE_REMOVED`).
+            return TerminalObservation(
+                session_id, live=False, preserved=False, detail=WORKTREE_REMOVED
+            )
+        try:
+            cwd = folder.resolve(strict=True)
+        except OSError:
             return TerminalObservation(
                 session_id, live=False, preserved=False, detail="invalid_intent"
             )

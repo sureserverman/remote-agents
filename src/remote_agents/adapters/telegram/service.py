@@ -151,6 +151,7 @@ from remote_agents.application.session_actions import (
     state_word,
     trust_available,
 )
+from remote_agents.application.session_folders import WORKTREE_REMOVED_SENTENCE
 from remote_agents.application.session_views import (
     CATALOGUE_GAP_RETRY_SECONDS,
     SCHEDULE_PREVIEW_WIDTH,
@@ -1931,6 +1932,23 @@ class PrivateBotBoundary:
         if outcome is None:
             return _reply_arguments(self._message("Session launch requested."))
         record = outcome.record
+        if record.state is SessionState.FAILED and outcome.worktree_removed:
+            # Refused before any pane existed, so "its pane may still exist" would send the
+            # owner looking for one (BL-116).
+            return _reply_arguments(
+                self._message(
+                    f"<b>Session did not start</b>\n{escape(record.display.rendered)}\n"
+                    f"{WORKTREE_REMOVED_SENTENCE}",
+                    (
+                        (
+                            Button(
+                                "Details",
+                                self._callback("session.detail", str(record.session_id)),
+                            ),
+                        ),
+                    ),
+                )
+            )
         if record.state is SessionState.FAILED:
             return _reply_arguments(
                 self._message(
@@ -2062,6 +2080,11 @@ class PrivateBotBoundary:
                 )
             )
         record = outcome.record
+        if outcome.created and record.state is SessionState.FAILED and outcome.worktree_removed:
+            # Refused before any pane existed: there is nothing to attend to locally (BL-116).
+            return _reply_arguments(
+                self._message(f"<b>Resume did not start</b>\n{WORKTREE_REMOVED_SENTENCE}")
+            )
         if outcome.created and record.state is SessionState.FAILED:
             # A resume this press really did create, whose pane did not come up. Stage 3's
             # deliberate decision (`bb23946`, repaired in `4f2cf88`) that FAILED keeps its own
