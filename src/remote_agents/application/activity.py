@@ -124,9 +124,12 @@ constant `Claude needs your permission`, which is what the ask class says better
 It is dropped here rather than deduplicated downstream because this is where the project
 decides what an event MEANS, and what this one now means is "something already reported".
 
-`agent_needs_input` stays, and stays a deduction: it has never been observed. The 2026-09-19
-drill idled 90 s trying and got `idle_prompt`, which `_kind` drops. See
-`tests/provider_contract/per_provider/test_claude_quirks.py`.
+`agent_needs_input` stays, and since 2026-10-10 it is measured (BL-048). It does not come from an
+idle session: the 2026-09-19 drill idled 90 s for it and got `idle_prompt`, which `_kind` drops.
+It comes from the `claude agents` view, which fires it when a background session it lists
+changes to blocked, and it carries `message`, `"<label> needs your input: <needs>"`, which
+becomes the record's detail (`docs/acceptance-2026-10-09-claude-agent-needs-input.md`, pinned in
+`tests/provider_contract/per_provider/test_claude_quirks.py`).
 """
 
 _ASK_TOKEN = re.compile(r"[A-Za-z0-9_-]{1,64}")

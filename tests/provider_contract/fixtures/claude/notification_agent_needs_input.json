@@ -1,9 +1,11 @@
 {
-  "_provenance": "SYNTHETIC AND UNMEASURED. Unlike its sibling `notification.json`, no real `agent_needs_input` payload has been captured — see BL-048. The shape here is `notification.json`'s with the type changed and `message` ABSENT, which is the hypothesis this fixture exists to make executable, not a record of an observed payload. Values are synthetic per GDEC-SEC-001, chosen so any leak is recognisable in an assertion.",
-  "_measured": false,
+  "_provenance": "MEASURED field set, synthetic values. Claude Code 2.1.296, captured 2026-10-10 from the `claude agents` view's own Notification hook when a listed `--bg` session changed to blocked; recorded in docs/acceptance-2026-10-09-claude-agent-needs-input.md (BL-048). The keys and their order are the capture's, with no `title` and no `prompt_id`. Every value is synthetic per GDEC-SEC-001 and chosen so any leak is recognisable in an assertion; `message` keeps the measured shape `<label> needs your input: <needs>`.",
+  "_measured": true,
   "session_id": "provider-session-not-ours",
   "transcript_path": "/home/owner/.claude/projects/secret-project/rollout-secret.jsonl",
   "cwd": "/home/owner/secret-project",
+  "scratchpad_dir": "/home/owner/.claude/scratchpad/secret-project",
   "hook_event_name": "Notification",
+  "message": "Rename the… needs your input: approve Bash: echo synthetic-needs-input",
   "notification_type": "agent_needs_input"
 }

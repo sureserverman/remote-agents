@@ -1,6 +1,8 @@
 """Claude's discriminating behavior, driven from the requirement-built fixtures.
 
-Unlike Codex's, these fixtures were *not* rebuilt from a capture document: the field
+Unlike Codex's, most of these fixtures were *not* rebuilt from a capture document; the
+exception is `notification_agent_needs_input.json`, whose field set was captured on 2.1.296
+(`docs/acceptance-2026-10-09-claude-agent-needs-input.md`, BL-048). For the rest, the field
 vocabulary is the one Claude's hook licence declares -- `_RECORD`'s discriminating and detail
 fields and `HOOK_LICENCE` in `src/remote_agents/adapters/agents/claude/hooks.py`, whose own
 comment records the
@@ -138,8 +140,15 @@ def test_no_claude_payload_field_naming_a_path_prompt_or_foreign_id_reaches_disk
         "/home/owner/.claude/projects/secret-project/rollout-secret.jsonl",
         "provider-session-not-ours",
         "prompt-not-ours",
+        "/home/owner/.claude/scratchpad/secret-project",
     )
-    for name in ("stop.json", "stop_failure.json", "notification.json", "session_end.json"):
+    for name in (
+        "stop.json",
+        "stop_failure.json",
+        "notification.json",
+        "notification_agent_needs_input.json",
+        "session_end.json",
+    ):
         payload = _fixture(name)
         observed = _claude(payload)
         assert observed is not None
@@ -173,32 +182,38 @@ def test_a_permission_prompt_carries_the_message_claude_sends_with_it() -> None:
     assert observed.detail == "Claude needs your permission to use Bash"
 
 
-def test_a_needs_input_notification_without_a_message_is_still_a_needs_answer() -> None:
-    """The UNMEASURED half, pinned as a shape rather than asserted as a fact.
+def test_a_needs_input_notification_carries_the_message_claude_sends_with_it() -> None:
+    """MEASURED on 2026-10-10 (`docs/acceptance-2026-10-09-claude-agent-needs-input.md`, 2.1.296).
 
-    19 of the owner's 78 Claude `needs_answer` rows carry no detail, and the investigation of
-    2026-09-06 narrowed the cause to this type by elimination without confirming it:
-
-    * not longstanding — 2 rows on 2026-08-20 and 17 on 2026-09-06, with every day between at
-      100% detail;
-    * not a build artifact — one long-running session produced rows *with* detail on 09-03 and
-      *without* on 09-06, same process;
-    * not `idle_prompt` — measured live that day: it carries "Claude is waiting for your input"
-      **and** is dropped at `_kind` before it can become a row at all;
-    * `permission_prompt` carries its message — measured live the same day, four times.
-
-    That leaves `agent_needs_input`, the only other type `_NOTIFICATIONS` maps, as the
-    deduction. **It is a deduction and not a measurement**, which is why the fixture says so in
-    its own `_provenance` and carries `"_measured": false`. What this test pins is the
-    behaviour either way: a mapped notification with no `message` still produces a
-    `needs_answer` rather than being dropped, and produces it with `detail=None` rather than
-    with an invented one.
-
-    The reason the question could not be answered from the owner's own records is worth as much
-    as the answer: `_activity` uses `reason` to pick a kind and then **discards it**, so no
-    stored row can say which notification type produced it. Filed as BL-048.
+    The `claude agents` view fires this when a background session it lists changes to blocked,
+    and the payload carries `message`: `"<label> needs your input: <needs>"`. So the record's
+    detail is that line. This test used to pin `detail is None`, on a deduction from 19
+    detail-less rows that the capture did not bear out for this build (BL-048).
     """
-    observed = _claude(_fixture("notification_agent_needs_input.json"))
+    payload = _fixture("notification_agent_needs_input.json")
+
+    observed = _claude(payload)
+
+    assert observed is not None
+    assert observed.reason == "agent_needs_input"
+    assert observed.detail == payload["message"]
+    assert observed.ask is None
+
+
+def test_a_mapped_notification_without_a_message_is_still_a_needs_answer() -> None:
+    """The shape the old fixture pinned, kept as a shape and no longer claimed as what Claude sends.
+
+    The 19 detail-less `needs_answer` rows of 2026-08-20 and 2026-09-06 stay unexplained: the
+    measured `agent_needs_input` carries a message. Whatever produced them, a mapped notification
+    with no `message` still becomes a record, with `detail=None` rather than invented words.
+    """
+    payload = {
+        key: value
+        for key, value in _fixture("notification_agent_needs_input.json").items()
+        if key != "message"
+    }
+
+    observed = _claude(payload)
 
     assert observed is not None
     assert observed.reason == "agent_needs_input"

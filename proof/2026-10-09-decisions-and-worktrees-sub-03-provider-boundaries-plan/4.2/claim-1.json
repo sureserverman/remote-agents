@@ -1,0 +1,28 @@
+{
+ "baseline": {
+  "elapsed_s": 1.5,
+  "exit": 0,
+  "tail": "........................................................................ [ 36%]\n........................................................................ [ 72%]\n........................................................                 [100%]\n200 passed in 1.03s"
+ },
+ "break_patch": "--- a/src/remote_agents/adapters/agents/claude/hooks.py\n+++ b/src/remote_agents/adapters/agents/claude/hooks.py\n@@ -97,7 +97,7 @@\n #: correctly on the way to being dropped.\n _RECORD = EventLicence(\n     discriminating_fields=(\"error\", \"notification_type\", \"reason\"),\n-    detail_fields=(\"message\", \"last_assistant_message\"),\n+    detail_fields=(\"last_assistant_message\",),\n )\n \n HOOK_LICENCE = HookLicence(\n",
+ "build": null,
+ "created": "2026-10-10T18:19:45+00:00",
+ "fingerprint": "6e4505b1082d5a264fca63c1e37ba927a8e975a0214b22896452d074b39b31b3",
+ "index": 1,
+ "kind": "claim",
+ "named_break": null,
+ "no_build_reason": "pure python, no build",
+ "plan": "/mnt/vault/Portfolio/infra/remote-agents/plans/2026-10-09-decisions-and-worktrees-sub-03-provider-boundaries-plan.md",
+ "red": {
+  "elapsed_s": 1.9,
+  "exit": 1,
+  "tail": "    \n        `permission_prompt`'s `message` was captured live on 2026-09-06 from this project's own\n        spool \u2014 \"Claude needs your permission to use Bash\" \u2014 four times in one session.\n        \"\"\"\n        observed = _claude(_fixture(\"notification.json\"))\n    \n        assert observed is not None\n        assert observed.reason == \"permission_prompt\"\n>       assert observed.detail == \"Claude needs your permission to use Bash\"\nE       AssertionError: assert None == 'Claude needs your permission to use Bash'\nE        +  where None = ObservedAgentEvent(session_id='session', event='Notification', reason='permission_prompt', detail=None, observed_at=datetime.datetime(2026, 10, 10, 18, 19, 44, 72746, tzinfo=datetime.timezone.utc), ask=None).detail\n\ntests/provider_contract/per_provider/test_claude_quirks.py:182: AssertionError\n___ test_a_needs_input_notification_carries_the_message_claude_sends_with_it ___\n\n    def test_a_needs_input_notification_carries_the_message_claude_sends_with_it() -> None:\n        \"\"\"MEASURED on 2026-10-10 (`docs/acceptance-2026-10-09-claude-agent-needs-input.md`, 2.1.296).\n    \n        The `claude agents` view fires this when a background session it lists changes to blocked,\n        and the payload carries `message`: `\"<label> needs your input: <needs>\"`. So the record's\n        detail is that line. This test used to pin `detail is None`, on a deduction from 19\n        detail-less rows that the capture did not bear out for this build (BL-048).\n        \"\"\"\n        payload = _fixture(\"notification_agent_needs_input.json\")\n    \n        observed = _claude(payload)\n    \n        assert observed is not None\n        assert observed.reason == \"agent_needs_input\"\n>       assert observed.detail == payload[\"message\"]\nE       AssertionError: assert None == 'Rename the\u2026 needs your input: approve Bash: echo synthetic-needs-input'\nE        +  where None = ObservedAgentEvent(session_id='session', event='Notification', reason='agent_needs_input', detail=None, observed_at=datetime.datetime(2026, 10, 10, 18, 19, 44, 74626, tzinfo=datetime.timezone.utc), ask=None).detail\n\ntests/provider_contract/per_provider/test_claude_quirks.py:199: AssertionError\n=========================== short test summary info ============================\nFAILED tests/provider_contract/per_provider/test_claude_quirks.py::test_each_claude_event_discriminates_on_its_own_field[notification.json-Notification-permission_prompt-Claude needs your permission to use Bash]\nFAILED tests/provider_contract/per_provider/test_claude_quirks.py::test_message_outranks_last_assistant_message_when_both_arrive\nFAILED tests/provider_contract/per_provider/test_claude_quirks.py::test_a_permission_prompt_carries_the_message_claude_sends_with_it\nFAILED tests/provider_contract/per_provider/test_claude_quirks.py::test_a_needs_input_notification_carries_the_message_claude_sends_with_it\n4 failed, 196 passed in 1.42s"
+ },
+ "schema": 2,
+ "task": "4.2",
+ "test": "grep -q '\"_measured\": true' tests/provider_contract/fixtures/claude/notification_agent_needs_input.json && ! grep -n 'SYNTHETIC AND UNMEASURED\\|never been observed' tests/provider_contract/fixtures/claude/notification_agent_needs_input.json src/remote_agents/application/activity.py && uv run --locked pytest tests/provider_contract/per_provider/test_claude_quirks.py tests/security -q -p no:randomly",
+ "text": "`grep -q '\"_measured\": true' tests/provider_contract/fixtures/claude/notification_agent_needs_input.json && ! grep -n 'SYNTHETIC AND UNMEASURED\\|never been observed' tests/provider_contract/fixtures/claude/notification_agent_needs_input.json src/remote_agents/application/activity.py && uv run --locked pytest tests/provider_contract/per_provider/test_claude_quirks.py tests/security -q -p no:randomly`. Red if the fixture still claims to be unmeasured, or if the detail assertion disagrees with the measured payload.",
+ "touched": [
+  "src/remote_agents/adapters/agents/claude/hooks.py"
+ ]
+}
