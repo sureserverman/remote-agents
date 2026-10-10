@@ -94,6 +94,10 @@ class _FakeLauncher:
             raise self.error
         return LaunchOutcome(_FakeRecord(SessionId.new(), self.state), False)
 
+    async def worktree_offered(self, project_id: object) -> bool:
+        """No other session live on the project: the agent press launches at once."""
+        return False
+
 
 class _FakeCreator:
     def available_areas(self) -> tuple[str, ...]:

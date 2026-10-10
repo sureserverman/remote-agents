@@ -10,7 +10,7 @@ import logging
 from collections.abc import Callable, Iterable
 from datetime import UTC, datetime
 from time import monotonic
-from typing import TypeVar
+from typing import Literal, TypeVar
 
 from textual import events, work
 from textual.app import App, ScreenStackError
@@ -2612,8 +2612,10 @@ class RemoteAgentsTui(App[AttachRequest | None]):
         await self.refresh_rollover_marks(records)
         return records
 
-    async def launch(self) -> LaunchFailure | None:
-        """Issue the gathered launch, and return what to say if it did not take.
+    async def launch(
+        self, mode: Literal["regular", "worktree"] = "regular"
+    ) -> LaunchFailure | None:
+        """Issue the gathered launch in `mode`, and return what to say if it did not take.
 
         Returning the message rather than rendering it keeps the screen that issued the launch
         in charge of its own rows: a failure has to leave the cursor somewhere deliberate, and
@@ -2655,6 +2657,7 @@ class RemoteAgentsTui(App[AttachRequest | None]):
                         # session happens on the session, from the detail's Rename row, at the
                         # moment the owner can see what they are naming.
                         None,
+                        mode=mode,
                     )
                 )
         except CodexRemoteControlBusy:
@@ -2672,6 +2675,12 @@ class RemoteAgentsTui(App[AttachRequest | None]):
         finally:
             self._busy = False
         record = outcome.record
+        if record.state is SessionState.FAILED and outcome.worktree_failed is not None:
+            # Refused before any pane existed, as below; git's own reason says why.
+            return LaunchFailure(
+                status="Nothing was started. Launch again, or go back to change the selection.",
+                explanation=f"Its worktree could not be made: {outcome.worktree_failed}",
+            )
         if record.state is SessionState.FAILED and outcome.worktree_removed:
             # Refused before any pane existed, so there is no attach command to hand over and
             # no pane that "may still exist" (BL-116).

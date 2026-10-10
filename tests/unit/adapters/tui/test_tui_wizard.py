@@ -56,6 +56,10 @@ class FakeLauncher:
         self.commands.append(command)
         return LaunchOutcome(FakeRecord(SessionId.new(), self.state), False)
 
+    async def worktree_offered(self, project_id: object) -> bool:
+        """No other session live on the project: the agent press launches at once."""
+        return False
+
 
 class FakeCreator:
     def __init__(

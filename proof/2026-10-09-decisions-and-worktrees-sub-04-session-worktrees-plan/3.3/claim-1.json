@@ -1,0 +1,28 @@
+{
+ "baseline": {
+  "elapsed_s": 3.2,
+  "exit": 0,
+  "tail": ".....                                                                    [100%]\n5 passed in 2.58s"
+ },
+ "break_patch": "--- a/src/remote_agents/adapters/tui/screens/launch.py\n+++ b/src/remote_agents/adapters/tui/screens/launch.py\n@@ -590,7 +590,7 @@\n             return\n         self.tui.selection = replace(self.tui.selection, profile=profile)\n         project = self.tui.selection.project\n-        if project is not None and await self.services.backend.sessions.worktree_offered(\n+        if False and await self.services.backend.sessions.worktree_offered(\n             ProjectId(project.opaque_id)\n         ):\n             # Another session is live on this project: ask where this one works before\n",
+ "build": null,
+ "created": "2026-10-10T20:46:25+00:00",
+ "fingerprint": "0f5a49dd2886581d1fbc4fdf4e154666b23ad79d3b7c083bddb0ea01bb017f49",
+ "index": 1,
+ "kind": "claim",
+ "named_break": null,
+ "no_build_reason": "pure Python, no build",
+ "plan": "/mnt/vault/Portfolio/infra/remote-agents/plans/2026-10-09-decisions-and-worktrees-sub-04-session-worktrees-plan.md",
+ "red": {
+  "elapsed_s": 2.7,
+  "exit": 1,
+  "tail": "    records = await listed_sessions(self._services.backend.sessions)\n              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/user/dev/infra/remote-agents/src/remote_agents/application/session_views.py\", line 611, in listed_sessions\n    await sessions.refresh_readiness()\n          ^^^^^^^^^^^^^^^^^^^^^^^^^^\nAttributeError: '_Launcher' object has no attribute 'refresh_readiness'\n___ test_a_worktree_that_could_not_be_made_is_reported_and_nothing_attaches ____\n\n    async def test_a_worktree_that_could_not_be_made_is_reported_and_nothing_attaches() -> None:\n        launcher = _Launcher(offered=True, state=SessionState.FAILED, failed=\"fatal: bad ref\")\n        app = _app(launcher)\n        async with app.run_test() as pilot:\n            await _to_profiles(app, pilot)\n            await _choose(app, pilot, \"claude\")\n            await _choose(app, pilot, \"worktree\")\n>           assert position(app) == \"MODE\"\nE           AssertionError: assert 'PROFILES' == 'MODE'\nE             \nE             - MODE\nE             + PROFILES\n\ntests/unit/adapters/tui/test_launch_mode.py:150: AssertionError\n------------------------------ Captured log call -------------------------------\nERROR    remote_agents.adapters.tui.screens.dashboard:dashboard.py:1533 the dashboard sessions pane could not be reloaded\nTraceback (most recent call last):\n  File \"/home/user/dev/infra/remote-agents/src/remote_agents/adapters/tui/screens/dashboard.py\", line 1531, in _reload_sessions_pane\n    records = await self.tui.load_sessions()\n              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/user/dev/infra/remote-agents/src/remote_agents/adapters/tui/app.py\", line 2581, in load_sessions\n    records = await listed_sessions(self._services.backend.sessions)\n              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/user/dev/infra/remote-agents/src/remote_agents/application/session_views.py\", line 611, in listed_sessions\n    await sessions.refresh_readiness()\n          ^^^^^^^^^^^^^^^^^^^^^^^^^^\nAttributeError: '_Launcher' object has no attribute 'refresh_readiness'\n=========================== short test summary info ============================\nFAILED tests/unit/adapters/tui/test_launch_mode.py::test_with_contention_a_choice_comes_first_and_own_worktree_launches_one\nFAILED tests/unit/adapters/tui/test_launch_mode.py::test_escape_from_the_choice_returns_to_the_agents_and_launches_nothing\nFAILED tests/unit/adapters/tui/test_launch_mode.py::test_a_worktree_that_could_not_be_made_is_reported_and_nothing_attaches\n3 failed, 2 passed in 2.21s"
+ },
+ "schema": 2,
+ "task": "3.3",
+ "test": "uv run --locked pytest tests/unit/adapters/tui/test_launch_mode.py -q -p no:randomly",
+ "text": "`uv run --locked pytest tests/unit/adapters/tui/test_launch_mode.py -q -p no:randomly`.",
+ "touched": [
+  "src/remote_agents/adapters/tui/screens/launch.py"
+ ]
+}

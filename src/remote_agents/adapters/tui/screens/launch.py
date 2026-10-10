@@ -64,6 +64,7 @@ from remote_agents.application.project_catalog import (
     CatalogProject,
     search_catalogue,
 )
+from remote_agents.domain.models import ProjectId
 
 #: What the status line says about each order, on the positions that describe the list in
 #: their status (the dashboard puts the sessions' counts there instead). The sentence names the
@@ -588,6 +589,14 @@ class ProfilesScreen(ChoiceScreen):
             self.announce(f"That agent cannot be launched here: {reason}", severity="warning")
             return
         self.tui.selection = replace(self.tui.selection, profile=profile)
+        project = self.tui.selection.project
+        if project is not None and await self.services.backend.sessions.worktree_offered(
+            ProjectId(project.opaque_id)
+        ):
+            # Another session is live on this project: ask where this one works before
+            # launching it (BL-116). A lone launch stays this one keypress.
+            await self.advance_to(LaunchModeScreen())
+            return
         failure = await self.tui.launch()
         if failure is None:
             return
@@ -617,5 +626,54 @@ class ProfilesScreen(ChoiceScreen):
         # *why* already goes to a toast under the region split, and colouring a string whose
         # content varies would mean the same region is sometimes an explanation and sometimes
         # an instruction, in the same colour.
+        self.set_status(failure.status)
+        self.announce(failure.explanation)
+
+
+class LaunchModeScreen(ChoiceScreen):
+    """Another session is working in this project: share its folder, or work in a worktree
+    and branch of its own (BL-116). Pushed by `ProfilesScreen` only on contention.
+
+    **The launch's commit position when it is shown**, so it takes `ProfilesScreen`'s two
+    guards with it: the list rests on Back, so a queued enter from the agent list commits
+    nothing, and after a failure it rests on nothing and refuses a selection made there.
+    """
+
+    empty_state = NEVER_EMPTY
+
+    position = "MODE"
+    crumb = "Mode"
+    status = (
+        "Another session is working in this project. Share its folder, or give this one "
+        "its own worktree and branch?"
+    )
+
+    async def populate(self) -> None:
+        self.hide_entry()
+        self.render_modes()
+
+    def render_modes(self, *, resting: bool = True) -> None:
+        """Draw the two modes, resting on Back on arrival and on nothing after a failure."""
+        entries = (("regular", "Shared folder"), ("worktree", "Own worktree"))
+        self.show_choices(
+            entries,
+            highlight=len(entries) if resting else None,
+            trailing=((_BACK, "Back"),),
+        )
+
+    async def choose(self, key: str) -> None:
+        if key == _BACK:
+            await self.tui.go_back()
+            return
+        choices = self.query("#choices")
+        if choices and cast(OptionList, choices.first()).highlighted is None:
+            # A queued enter after a failure, as `ProfilesScreen.choose` refuses one.
+            return
+        if key not in ("regular", "worktree"):
+            return
+        failure = await self.tui.launch(mode=key)
+        if failure is None:
+            return
+        self.render_modes(resting=False)
         self.set_status(failure.status)
         self.announce(failure.explanation)
