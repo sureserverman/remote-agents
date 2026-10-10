@@ -10,6 +10,7 @@ from pathlib import Path
 from types import MappingProxyType
 
 from remote_agents.adapters.agents.hook_settings import _HookProvider
+from remote_agents.ports.agent_activity import ActivityKind, ActivitySource
 from remote_agents.ports.provider_descriptor import EventLicence, HookLicence
 
 #: `UserPromptSubmit` joined 2026-09-24 (BL-108, DEC-104) to start the turn marker. Codex 0.155.1
@@ -194,6 +195,13 @@ HOOK_LICENCE = HookLicence(
         }
     ),
     starts_turn_marker=True,
+    # Hooks plus a pane-title watch: Codex escalates natively past its hook (DEC-063).
+    source=ActivitySource.HYBRID,
+    # Stop and PermissionRequest only. Codex has no StopFailure equivalent, so neither limit kind
+    # is *reported*: a limit stop is read off its pane by `application.limit_stops`'s
+    # `LimitScreenWatcher` and arrives INFERRED -- an inference with a measured marker behind
+    # it, not a claim this licence makes about the hook.
+    reports=frozenset({ActivityKind.COMPLETED, ActivityKind.NEEDS_ANSWER}),
     admits=_the_owner_answers,
 )
 """What Codex's activity hook may record (BL-050); the descriptor's `activity` is this value."""

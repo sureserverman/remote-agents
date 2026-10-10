@@ -15,6 +15,7 @@ from pathlib import Path
 from types import MappingProxyType
 
 from remote_agents.adapters.agents.hook_settings import _HookProvider
+from remote_agents.ports.agent_activity import ActivityKind, ActivitySource
 from remote_agents.ports.provider_descriptor import EventLicence, HookLicence
 
 PROVIDER = _HookProvider(
@@ -33,6 +34,10 @@ HOOK_LICENCE = HookLicence(
     # DEC-037; `docs/acceptance-2026-10-08-cursor-user-stop-hook.md`).
     events=MappingProxyType({"stop": EventLicence()}),
     starts_turn_marker=False,
+    source=ActivitySource.HOOK_EXCLUSIVE,
+    # Its approvals and its limit screen fire no hook this project installs, so neither kind is
+    # claimed; a limit stop is read off its pane by the limit-screen watch, as Codex's is.
+    reports=frozenset({ActivityKind.COMPLETED}),
     admits=_completed,
 )
 """What Cursor's activity hook may record (BL-050); the descriptor's `activity` is this value."""

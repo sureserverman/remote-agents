@@ -11,6 +11,11 @@ from types import SimpleNamespace
 
 import pytest
 
+from remote_agents.adapters.agents.registry import (
+    activity_source_of,
+    profile_reported_kinds,
+    profiles_watched_by_title,
+)
 from remote_agents.adapters.sqlite.database import open_database
 from remote_agents.adapters.sqlite.session_store import SQLiteSessionStore
 from remote_agents.adapters.telegram.service import PrivateBotBoundary, build_private_bot
@@ -30,11 +35,18 @@ from remote_agents.domain.models import (
 )
 from remote_agents.domain.state_machine import LifecycleEvent
 from remote_agents.ports.agent_activity import (
-    HOOK_SOURCED_PROFILES,
     ActivityConfidence,
     ActivityKind,
+    ActivitySource,
 )
 from remote_agents.ports.terminal import TerminalObservation
+
+#: The profiles whose licence says they report alone, derived from the verticals (BL-050).
+HOOK_SOURCED_PROFILES = frozenset(
+    name
+    for name in profile_reported_kinds()
+    if activity_source_of(name) is ActivitySource.HOOK_EXCLUSIVE
+)
 
 _SECRETS = TelegramSecrets("token", 7, 11)
 
@@ -339,7 +351,9 @@ async def test_activity_watching_skips_the_profiles_that_report_for_themselves(
         hooked = {profile: str(await _running(store, profile)) for profile in HOOK_SOURCED_PROFILES}
         watched = await _running(store, "codex")
         terminal = CapturingTerminal()
-        watcher = CodexApprovalWatcher(store, terminal.pane_title)
+        watcher = CodexApprovalWatcher(
+            store, terminal.pane_title, watched_profiles=profiles_watched_by_title()
+        )
 
         await watcher.poll()
 
@@ -357,7 +371,7 @@ async def test_activity_watching_survives_a_capture_that_raises(tmp_path: Path) 
         async def refuse(session_id: SessionId) -> str:
             raise RuntimeError("tmux command failed")
 
-        watcher = CodexApprovalWatcher(store, refuse)
+        watcher = CodexApprovalWatcher(store, refuse, watched_profiles=profiles_watched_by_title())
 
         assert await watcher.poll() == ()
         assert await watcher.poll() == ()
@@ -384,7 +398,9 @@ async def test_activity_watching_reports_a_codex_pane_that_opened_an_approval(
                 ]
             }
         )
-        watcher = CodexApprovalWatcher(store, terminal.pane_title)
+        watcher = CodexApprovalWatcher(
+            store, terminal.pane_title, watched_profiles=profiles_watched_by_title()
+        )
 
         assert await watcher.poll() == ()
         (activity,) = await watcher.poll()
@@ -403,7 +419,9 @@ async def test_activity_watching_forgets_a_session_that_is_no_longer_running(
         store = SQLiteSessionStore(connection)
         session_id = await _running(store, "codex")
         terminal = CapturingTerminal()
-        watcher = CodexApprovalWatcher(store, terminal.pane_title)
+        watcher = CodexApprovalWatcher(
+            store, terminal.pane_title, watched_profiles=profiles_watched_by_title()
+        )
         await watcher.poll()
         assert watcher._action_required
         assert watcher._title_observed
@@ -429,7 +447,9 @@ async def test_activity_watching_runs_beside_the_poll_and_stops_with_it(tmp_path
         # Reconciliation runs first and ends any record whose pane the terminal does not
         # report, so a stub with no observations would delete the very session under watch.
         terminal.observations = (TerminalObservation(session_id, live=True, preserved=False),)
-        watcher = CodexApprovalWatcher(store, terminal.pane_title)
+        watcher = CodexApprovalWatcher(
+            store, terminal.pane_title, watched_profiles=profiles_watched_by_title()
+        )
         composition = ServiceComposition(
             build_private_bot(7, 11), terminal, ReconciliationService(store), watcher
         )
@@ -464,7 +484,9 @@ async def test_activity_watching_never_takes_the_service_down(tmp_path: Path) ->
             build_private_bot(7, 11),
             terminal,
             ReconciliationService(store),
-            ExplodingWatcher(store, terminal.pane_title),
+            ExplodingWatcher(
+                store, terminal.pane_title, watched_profiles=profiles_watched_by_title()
+            ),
         )
 
         async def poll_briefly(secrets: TelegramSecrets, boundary: PrivateBotBoundary) -> None:
@@ -495,7 +517,9 @@ async def test_activity_watching_gives_up_on_a_capture_that_never_returns(
             await asyncio.sleep(3600)
             raise AssertionError("unreachable")
 
-        watcher = CodexApprovalWatcher(store, never_returns)
+        watcher = CodexApprovalWatcher(
+            store, never_returns, watched_profiles=profiles_watched_by_title()
+        )
         watcher._title_timeout = 0.05
 
         assert await asyncio.wait_for(watcher.poll(), timeout=5) == ()

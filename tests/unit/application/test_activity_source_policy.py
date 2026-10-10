@@ -6,6 +6,7 @@ from datetime import UTC, datetime
 
 import pytest
 
+from remote_agents.adapters.agents.registry import profiles_watched_by_title
 from remote_agents.application.activity import (
     CodexApprovalWatcher,
     observe_codex_action_required,
@@ -65,7 +66,9 @@ async def test_only_the_hybrid_profile_costs_a_pane_read(
         reads += 1
         return "waiting"
 
-    watcher = CodexApprovalWatcher(_RunningStore(record), title)
+    watcher = CodexApprovalWatcher(
+        _RunningStore(record), title, watched_profiles=profiles_watched_by_title()
+    )
 
     assert await watcher.poll() == ()
     assert reads == expected_title_reads
@@ -161,7 +164,9 @@ async def test_only_codex_titles_can_infer_an_action_required_notification() -> 
             assert states == (SessionState.RUNNING,)
             return (codex, other)
 
-    watcher = CodexApprovalWatcher(_TwoSessionStore(), action_required)
+    watcher = CodexApprovalWatcher(
+        _TwoSessionStore(), action_required, watched_profiles=profiles_watched_by_title()
+    )
 
     assert await watcher.poll() == ()
     (activity,) = await watcher.poll()
@@ -177,8 +182,12 @@ async def test_existing_action_required_title_is_a_restart_baseline_not_a_duplic
     async def action_required(session_id: SessionId) -> str:
         return "[ ! ] Action Required | multitor"
 
-    first = CodexApprovalWatcher(_RunningStore(record), action_required)
-    restarted = CodexApprovalWatcher(_RunningStore(record), action_required)
+    first = CodexApprovalWatcher(
+        _RunningStore(record), action_required, watched_profiles=profiles_watched_by_title()
+    )
+    restarted = CodexApprovalWatcher(
+        _RunningStore(record), action_required, watched_profiles=profiles_watched_by_title()
+    )
 
     assert await first.poll() == ()
     assert await restarted.poll() == ()
@@ -197,7 +206,9 @@ async def test_first_title_read_failure_keeps_recovered_marker_as_restart_baseli
             raise title
         return title
 
-    watcher = CodexApprovalWatcher(_RunningStore(record), action_required)
+    watcher = CodexApprovalWatcher(
+        _RunningStore(record), action_required, watched_profiles=profiles_watched_by_title()
+    )
 
     assert await watcher.poll() == ()
     assert await watcher.poll() == ()
@@ -227,7 +238,9 @@ async def test_title_read_failure_clears_the_marker_without_reemitting_the_open_
             raise title
         return title
 
-    watcher = CodexApprovalWatcher(_RunningStore(record), action_required)
+    watcher = CodexApprovalWatcher(
+        _RunningStore(record), action_required, watched_profiles=profiles_watched_by_title()
+    )
 
     assert await watcher.poll() == ()
     (needs_answer,) = await watcher.poll()
@@ -251,7 +264,9 @@ async def test_title_recovery_rearms_the_generic_notice_after_an_unavailable_per
             raise title
         return title
 
-    watcher = CodexApprovalWatcher(_RunningStore(record), action_required)
+    watcher = CodexApprovalWatcher(
+        _RunningStore(record), action_required, watched_profiles=profiles_watched_by_title()
+    )
 
     assert await watcher.poll() == ()
     assert (await watcher.poll())[0].kind is ActivityKind.NEEDS_ANSWER
@@ -273,7 +288,9 @@ async def test_reported_permission_wins_over_the_same_title_edge() -> None:
     async def action_required(session_id: SessionId) -> str:
         return next(titles)
 
-    watcher = CodexApprovalWatcher(_RunningStore(record), action_required)
+    watcher = CodexApprovalWatcher(
+        _RunningStore(record), action_required, watched_profiles=profiles_watched_by_title()
+    )
     watcher.mark_needs_answer_reported((str(record.session_id),))
 
     assert await watcher.poll() == ()

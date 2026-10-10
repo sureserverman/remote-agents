@@ -52,7 +52,6 @@ from remote_agents.ports.agent_activity import (
     AgentActivity,
     LimitHit,
     bounded_detail_line,
-    reported_activity_kinds_for,
 )
 from remote_agents.ports.agent_usage import AgentLimits, UsageWindow
 from remote_agents.ports.limit_screen import LimitScreen
@@ -335,14 +334,17 @@ class LimitScreenWatcher:
         capture: Callable[[SessionId], Awaitable[str]],
         screens: Mapping[str, LimitScreen],
         *,
+        reported: Mapping[str, frozenset[ActivityKind]],
         now: Callable[[], datetime] = lambda: datetime.now(UTC),
     ) -> None:
         self._store = store
         self._capture = capture
+        # `reported` is each profile's hook licence (BL-050): a profile whose hook reports its
+        # own limit stop is never read off its pane, and one absent from it reports nothing.
         self._watched = {
             profile: screen
             for profile, screen in screens.items()
-            if ActivityKind.LIMIT_REACHED not in reported_activity_kinds_for(profile)
+            if ActivityKind.LIMIT_REACHED not in reported.get(profile, frozenset())
         }
         self._now = now
         #: How many stop sentences each session's tail showed last pass. A count rather than a

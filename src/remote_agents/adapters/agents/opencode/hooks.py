@@ -12,8 +12,8 @@ provider *field* may be admitted and has nothing to say about settings-file shap
 evaluator caught it. The decision this file's existence rests on is DEC-076.
 
 `INSTALLED_EVENTS` is therefore documentation of what the generated plugin subscribes to rather
-than a set of keys anything writes. It is still the honest place for the list, and
-`reported_activity_kinds_for` is derived from the same two events.
+than a set of keys anything writes. It is still the honest place for the list, and the
+licence's `reports` claims only what those two events can carry.
 """
 
 from __future__ import annotations
@@ -27,6 +27,7 @@ from remote_agents.adapters.agents.opencode.plugin import (
     PLUGIN_RELATIVE_PATH,
     plugin_source,
 )
+from remote_agents.ports.agent_activity import ActivityKind, ActivitySource
 from remote_agents.ports.provider_descriptor import EventLicence, HookLicence
 
 INSTALLED_EVENTS = ("session.idle", "permission.asked")
@@ -99,6 +100,10 @@ HOOK_LICENCE = HookLicence(
     # Its plugin forwards only these two events, and "finished" is `session.idle`, which ends
     # no marker: a marker started here would never end (DEC-104).
     starts_turn_marker=False,
+    source=ActivitySource.HOOK_EXCLUSIVE,
+    # The same limit reasoning as Codex's, for the same reason: nothing in this stream tells a
+    # rate limit from an ordinary finish, so neither limit kind is claimed.
+    reports=frozenset({ActivityKind.COMPLETED, ActivityKind.NEEDS_ANSWER}),
 )
 """What OpenCode's activity plugin may record (BL-050); the descriptor's `activity` is this
 value. The event names are dotted, which is why a licence lists events as exact names rather

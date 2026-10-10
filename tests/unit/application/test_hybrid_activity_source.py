@@ -2,12 +2,8 @@
 
 from __future__ import annotations
 
-from remote_agents.ports.agent_activity import (
-    ActivityKind,
-    ActivitySource,
-    activity_source_for,
-    reported_activity_kinds_for,
-)
+from remote_agents.adapters.agents.registry import activity_source_of, reported_kinds_of
+from remote_agents.ports.agent_activity import ActivityKind, ActivitySource
 
 
 def test_the_vocabulary_no_longer_carries_a_quiet_kind() -> None:
@@ -22,8 +18,8 @@ def test_the_vocabulary_no_longer_carries_a_quiet_kind() -> None:
 
 
 def test_hooked_providers_keep_the_sources_that_describe_them() -> None:
-    assert activity_source_for("claude") is ActivitySource.HOOK_EXCLUSIVE
-    assert activity_source_for("codex") is ActivitySource.HYBRID
+    assert activity_source_of("claude") is ActivitySource.HOOK_EXCLUSIVE
+    assert activity_source_of("codex") is ActivitySource.HYBRID
 
 
 def test_a_provider_with_neither_hooks_nor_a_title_watch_contributes_nothing() -> None:
@@ -39,10 +35,10 @@ def test_a_provider_with_neither_hooks_nor_a_title_watch_contributes_nothing() -
     assertions moved rather than being deleted: what the member describes is a provider nothing
     can watch, and a provider stops belonging to it the day something can.
     """
-    assert activity_source_for("something-nobody-curated") is ActivitySource.UNOBSERVED
-    assert activity_source_for("opencode") is ActivitySource.HOOK_EXCLUSIVE
-    assert activity_source_for("cursor-agent") is ActivitySource.HOOK_EXCLUSIVE
-    assert reported_activity_kinds_for("cursor-agent") == frozenset({ActivityKind.COMPLETED})
+    assert activity_source_of("something-nobody-curated") is ActivitySource.UNOBSERVED
+    assert activity_source_of("opencode") is ActivitySource.HOOK_EXCLUSIVE
+    assert activity_source_of("cursor-agent") is ActivitySource.HOOK_EXCLUSIVE
+    assert reported_kinds_of("cursor-agent") == frozenset({ActivityKind.COMPLETED})
 
 
 def test_no_source_still_describes_a_pane_digest_watch() -> None:

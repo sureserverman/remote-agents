@@ -12,9 +12,11 @@ from remote_agents.adapters.agents.registry import (
     profile_glyphs,
     profile_limit_screens,
     profile_names,
+    profile_reported_kinds,
     profile_trust_dialogs,
     profiles_keeping_a_draft,
     profiles_that_roll_over,
+    profiles_watched_by_title,
     profiles_with_finished_events,
     provider_descriptors,
 )
@@ -242,7 +244,10 @@ def _private_boundary(
         # overwrite the state of a session whose graceful stop is between its own two writes.
         # Constructing two SessionLocks here would type-check, run, and fix nothing.
         ReconciliationService(store, confirm_ready=terminal.confirm_ready, locks=locks),
-        CodexApprovalWatcher(store, terminal.pane_title),
+        # The profiles whose licence declares a pane-title watch beside the hook (DEC-063).
+        CodexApprovalWatcher(
+            store, terminal.pane_title, watched_profiles=profiles_watched_by_title(descriptors)
+        ),
         paths.activity_directory,
         SQLiteActivityStore(connection),
         trust_notifier=boundary.trust_notifier,
@@ -261,7 +266,10 @@ def _private_boundary(
         ),
         # Codex and Cursor Agent report no limit event, so their stop is read off the pane.
         limit_screen_watcher=LimitScreenWatcher(
-            store, terminal.capture, profile_limit_screens(descriptors)
+            store,
+            terminal.capture,
+            profile_limit_screens(descriptors),
+            reported=profile_reported_kinds(descriptors),
         ),
         # A stop whose limit lifted has its line retired from the bot's message, once. The same
         # shared limits read as the classifier; without one, stops lift on their schedule only.

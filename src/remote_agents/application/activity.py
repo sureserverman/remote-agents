@@ -51,9 +51,7 @@ from remote_agents.domain.models import SessionId, SessionState
 from remote_agents.ports.agent_activity import (
     ActivityConfidence,
     ActivityKind,
-    ActivitySource,
     AgentActivity,
-    activity_source_for,
     bounded_detail_line,
 )
 from remote_agents.ports.session_identity import safe_session_id
@@ -453,10 +451,15 @@ class CodexApprovalWatcher:
         store: SessionStore,
         title: Callable[[SessionId], Awaitable[str]],
         *,
+        watched_profiles: Collection[str],
         now: Callable[[], datetime] = lambda: datetime.now(UTC),
     ) -> None:
         self._store = store
         self._title = title
+        # The `HYBRID` profiles, from each vertical's licence through composition: this module
+        # names no provider (BL-050). Required, because an empty default would watch nothing
+        # and fail silent on exactly the asks the hook cannot see.
+        self._watched_profiles = frozenset(watched_profiles)
         self._title_timeout = _TITLE_TIMEOUT_SECONDS
         self._now = now
         # A title is never stored: only whether the anchored native Codex marker was present on
@@ -475,11 +478,7 @@ class CodexApprovalWatcher:
         reported_needs_answer_session_ids = self._reported_needs_answer_session_ids
         self._reported_needs_answer_session_ids = frozenset()
         records = await self._store.list((SessionState.RUNNING,))
-        watched = [
-            record
-            for record in records
-            if activity_source_for(str(record.profile_id)) is ActivitySource.HYBRID
-        ]
+        watched = [record for record in records if str(record.profile_id) in self._watched_profiles]
         # `is HYBRID`, not `is not HOOK_EXCLUSIVE`. The old predicate also swept in every
         # `UNOBSERVED` profile, which was right while a pane digest was the fallback for
         # exactly those profiles and is wrong now that the only thing read here is a Codex

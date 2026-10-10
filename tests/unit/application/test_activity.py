@@ -9,6 +9,7 @@ from pathlib import Path
 
 import pytest
 
+from remote_agents.adapters.agents.registry import profiles_watched_by_title
 from remote_agents.application import activity as activity_module
 from remote_agents.application.activity import (
     MAXIMUM_DRAIN,
@@ -575,7 +576,9 @@ async def test_the_narrowed_watcher_keeps_no_state_but_the_marker_edge() -> None
     async def title(session_id: SessionId) -> str:
         return next(titles)
 
-    watcher = CodexApprovalWatcher(_TitleStore(record), title)
+    watcher = CodexApprovalWatcher(
+        _TitleStore(record), title, watched_profiles=profiles_watched_by_title()
+    )
     for _ in range(4):
         await watcher.poll()
 

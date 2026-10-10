@@ -247,6 +247,10 @@ class ActivitySource(Enum):
     the watcher has to be able to *skip* them by name: a profile that reaches the polling loop
     costs a tmux capture per pass for an observation that can never be made.
 
+    Each vertical declares its own member in its hook licence (`HookLicence.source`, BL-050), and
+    composition hands the title watch the profiles that declare `HYBRID`; a profile that declares
+    no licence is `UNOBSERVED` by absence.
+
     **`opencode` left this member on 2026-09-06** and is hook-exclusive now. It was named here
     as an example for six weeks, and the reason was always "nobody has measured its surface"
     rather than "it has none" -- so the example moved as soon as somebody did
@@ -262,57 +266,6 @@ class ActivitySource(Enum):
     HOOK_EXCLUSIVE = "hook_exclusive"
     HYBRID = "hybrid"
     UNOBSERVED = "unobserved"
-
-
-_HOOK_EXCLUSIVE_PROFILES = frozenset({"claude", "opencode", "cursor-agent"})
-_HYBRID_PROFILES = frozenset({"codex"})
-_REPORTED_KINDS_BY_PROFILE: dict[str, frozenset[ActivityKind]] = {
-    "claude": frozenset(
-        {
-            ActivityKind.COMPLETED,
-            ActivityKind.LIMIT_REACHED,
-            ActivityKind.OUTPUT_LIMIT,
-            ActivityKind.NEEDS_ANSWER,
-        }
-    ),
-    # Codex exposes Stop and PermissionRequest hooks. It does not expose a StopFailure
-    # equivalent, so neither limit kind is *reported*. A limit stop is instead read off its pane
-    # by `application.limit_stops.LimitScreenWatcher` and arrives INFERRED -- an inference with a
-    # measured marker behind it, not a claim this table makes about the hook.
-    "codex": frozenset({ActivityKind.COMPLETED, ActivityKind.NEEDS_ANSWER}),
-    # OpenCode's plugin acts on two measured `event` types -- `session.idle` and
-    # `permission.asked` -- and the same limit reasoning applies for the same reason: nothing
-    # in that stream distinguishes a rate limit from an ordinary finish, so neither limit kind
-    # is claimed. Its `completed` also carries no detail and never will from this source:
-    # `session.idle`'s payload is one field, and that field is OpenCode's own session id
-    # (`docs/acceptance-2026-09-06-opencode-activity.md`). That is a property of the event, not
-    # a parser this project can widen later.
-    "opencode": frozenset({ActivityKind.COMPLETED, ActivityKind.NEEDS_ANSWER}),
-    # Cursor's one installed hook is `stop`, admitted only when it `completed`. Its approvals and
-    # its limit screen fire no hook this project installs, so neither kind is claimed; a limit
-    # stop is read off its pane by the limit-screen watch, as Codex's is.
-    "cursor-agent": frozenset({ActivityKind.COMPLETED}),
-}
-
-
-def activity_source_for(profile_id: str) -> ActivitySource:
-    """Return the evidence policy for one curated provider profile."""
-    if profile_id in _HOOK_EXCLUSIVE_PROFILES:
-        return ActivitySource.HOOK_EXCLUSIVE
-    if profile_id in _HYBRID_PROFILES:
-        return ActivitySource.HYBRID
-    return ActivitySource.UNOBSERVED
-
-
-def reported_activity_kinds_for(profile_id: str) -> frozenset[ActivityKind]:
-    """Return the activity kinds a provider can report without inference.
-
-    This capability boundary deliberately says nothing about spool payload parsing. The parser
-    is shared by the existing Claude hooks; the provider installer decides which upstream event
-    names can reach it. Keeping the two facts separate prevents Codex from inheriting a Claude
-    StopFailure claim merely because both use the same private spool.
-    """
-    return _REPORTED_KINDS_BY_PROFILE.get(profile_id, frozenset())
 
 
 @dataclass(frozen=True, slots=True)
@@ -355,18 +308,3 @@ class AgentActivity:
     one recorded before the window was kept, or one nothing could classify -- so a reader never
     has to tell "not a limit stop" from "a stop with nothing known" by this field alone.
     """
-
-
-HOOK_SOURCED_PROFILES = _HOOK_EXCLUSIVE_PROFILES
-"""The profiles whose own hooks report what they are doing.
-
-Codex is intentionally not in this compatibility constant yet: it is a hybrid source, whose
-hook may be absent, disabled, or awaiting the owner's trust review. `activity_source_for` is the
-complete provider contract; the application layer uses its hybrid branch to watch Codex panes
-for the native approval marker its own hook never sends.
-
-`opencode` joined on 2026-09-06 by joining `_HOOK_EXCLUSIVE_PROFILES`, which is what this alias
-tracks. Its "hook" is a generated plugin rather than a hook command, and the distinction does
-not reach here: what this constant is asked is whether the provider reports its own activity
-and is watched no other way, and the answer is yes on both counts.
-"""

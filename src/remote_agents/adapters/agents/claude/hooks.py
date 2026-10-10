@@ -7,6 +7,7 @@ from pathlib import Path
 from types import MappingProxyType
 
 from remote_agents.adapters.agents.hook_settings import _HookProvider
+from remote_agents.ports.agent_activity import ActivityKind, ActivitySource
 from remote_agents.ports.provider_descriptor import EventLicence, HookLicence
 
 INSTALLED_EVENTS = ("Stop", "StopFailure", "Notification", "PermissionRequest", "UserPromptSubmit")
@@ -115,6 +116,15 @@ HOOK_LICENCE = HookLicence(
         }
     ),
     starts_turn_marker=True,
+    source=ActivitySource.HOOK_EXCLUSIVE,
+    reports=frozenset(
+        {
+            ActivityKind.COMPLETED,
+            ActivityKind.LIMIT_REACHED,
+            ActivityKind.OUTPUT_LIMIT,
+            ActivityKind.NEEDS_ANSWER,
+        }
+    ),
     # Any other plain event keeps its record, so an event added upstream is not silently lost
     # and the drain decides what to interpret; the retired `SessionEnd` (DEC-051) is read here.
     unlisted_events=_RECORD,

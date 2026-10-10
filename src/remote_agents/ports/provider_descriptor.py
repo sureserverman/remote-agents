@@ -15,8 +15,9 @@ actually rides in them today: `sessions` a factory taking the live project-path 
 returning the provider's conversation catalogue, `usage` a reader shaped like
 `adapters.agents.<provider>.usage`'s (a `read(UsageQuery)` / `limits()` object), `hooks`
 the provider name the hook-install surface in `adapters.agents.registry` accepts (each
-vertical's `hooks.py` holds the configuration value), `activity` a declared placeholder —
-`None` for all four providers until a vertical wires one — and `remote_control` the
+vertical's `hooks.py` holds the configuration value), `activity` the `HookLicence` the
+same `hooks.py` declares — what its hook may record, which turn it marks, how it is observed
+and which kinds it reports, wired by all four since BL-050 — and `remote_control` the
 host-level Remote Control object, wired only by Codex because only Codex has a toggle
 whose subject is the machine rather than a pane.
 
@@ -31,6 +32,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import MISSING, dataclass, fields
 
 from remote_agents.domain.models import ProfileId
+from remote_agents.ports.agent_activity import ActivityKind, ActivitySource
 from remote_agents.ports.limit_screen import LimitScreen
 
 
@@ -215,6 +217,19 @@ class HookLicence:
 
     starts_turn_marker: bool
     """Whether `UserPromptSubmit` starts this session's turn marker (DEC-104)."""
+
+    source: ActivitySource
+    """How this provider's activity is observed: by its hook alone, or by its hook plus a pane
+    title watch for asks the hook cannot see (`ActivitySource.HYBRID`, Codex's, DEC-063)."""
+
+    reports: frozenset[ActivityKind]
+    """The activity kinds this hook reports without inference.
+
+    A capability boundary, not a parse: it says nothing about which fields the spool reads.
+    Kept apart from `events` so a provider does not inherit another's claim merely because both
+    hooks share the spool -- Codex fires nothing on a failed turn, so it claims no limit kind,
+    and a limit stop is read off its pane instead (`application.limit_stops`).
+    """
 
     unlisted_events: EventLicence | None = None
     """What any other event spelled as a plain token may keep, or None to admit no other.

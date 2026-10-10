@@ -9,9 +9,9 @@ composition consumes the table and nothing below it (ARCH-02).
 `sessions` is a factory taking the live project-path mapping, because a conversation
 catalogue is scoped to the workspaces a host currently offers while the registry itself is
 not. `hooks` carries the provider name this module's install surface accepts — the values
-themselves live in each vertical's `hooks.py`. `activity` is declaredly `None` for all four:
-the codex approval watch is composed at the service boundary (it needs the store and the
-terminal), and the hook spool is not per-provider wiring.
+themselves live in each vertical's `hooks.py`. `activity` is the `HookLicence` the same
+`hooks.py` declares (BL-050); the hook reaches it through `hook_licences` without building a
+descriptor, and composition folds it here into what the title and limit-screen watches need.
 
 Each vertical builds its own descriptor (`<provider>.descriptor()`); this module also
 carries the two cross-provider surfaces the retired flat modules held: the usage dispatch
@@ -117,6 +117,7 @@ from remote_agents.adapters.agents.opencode.hooks import PROVIDER as _OPENCODE
 from remote_agents.adapters.agents.opencode.usage import OpenCodeUsageReader
 from remote_agents.domain.models import ProfileId, ProjectId
 from remote_agents.domain.profiles import closed_profiles
+from remote_agents.ports.agent_activity import ActivityKind, ActivitySource
 from remote_agents.ports.agent_usage import (
     AgentLimits,
     AgentUsage,
@@ -124,7 +125,7 @@ from remote_agents.ports.agent_usage import (
     UsageQuery,
 )
 from remote_agents.ports.limit_screen import LimitScreen
-from remote_agents.ports.provider_descriptor import ProviderDescriptor, TrustDialog
+from remote_agents.ports.provider_descriptor import HookLicence, ProviderDescriptor, TrustDialog
 from remote_agents.ports.provider_errors import ProviderUnavailable
 
 ProjectPaths = Mapping[ProjectId, Path]
@@ -497,6 +498,69 @@ def profiles_with_finished_events(
     return frozenset(finishing)
 
 
+def _profile_licences(
+    descriptors: tuple[ProviderDescriptor, ...] | None,
+) -> dict[str, HookLicence]:
+    """Every curated profile whose vertical declares a hook licence, folded like the others."""
+    built = provider_descriptors() if descriptors is None else descriptors
+    by_provider = {str(descriptor.profile_id): descriptor for descriptor in built}
+    executables = {str(profile.profile_id): profile.executable for profile in closed_profiles()}
+    licences = {}
+    for profile in closed_profiles():
+        name = str(profile.profile_id)
+        descriptor = by_provider.get(name) or by_provider.get(executables.get(name, ""))
+        if descriptor is not None and descriptor.activity is not None:
+            licences[name] = descriptor.activity
+    return licences
+
+
+def activity_source_of(
+    profile_id: str, descriptors: tuple[ProviderDescriptor, ...] | None = None
+) -> ActivitySource:
+    """How this profile's activity is observed, as its vertical's licence declares it.
+
+    `UNOBSERVED` for a profile with no licence -- a retired id a stored session can still name,
+    or anything uncurated -- which is the safe direction to fall: nothing waits on hook reports
+    no launch can produce.
+    """
+    licence = _profile_licences(descriptors).get(profile_id)
+    return ActivitySource.UNOBSERVED if licence is None else licence.source
+
+
+def reported_kinds_of(
+    profile_id: str, descriptors: tuple[ProviderDescriptor, ...] | None = None
+) -> frozenset[ActivityKind]:
+    """The kinds this profile's hook reports without inference; empty for one with no licence."""
+    licence = _profile_licences(descriptors).get(profile_id)
+    return frozenset() if licence is None else licence.reports
+
+
+def profiles_watched_by_title(
+    descriptors: tuple[ProviderDescriptor, ...] | None = None,
+) -> frozenset[str]:
+    """The curated profiles whose hook needs a pane-title watch beside it (`HYBRID`, DEC-063).
+
+    What `CodexApprovalWatcher` reads titles for and nothing else: a profile outside this set
+    costs no tmux round trip, because its title can never carry the marker.
+    """
+    return frozenset(
+        name
+        for name, licence in _profile_licences(descriptors).items()
+        if licence.source is ActivitySource.HYBRID
+    )
+
+
+def profile_reported_kinds(
+    descriptors: tuple[ProviderDescriptor, ...] | None = None,
+) -> dict[str, frozenset[ActivityKind]]:
+    """The activity kinds each curated profile's hook reports without inference.
+
+    A profile absent here reports nothing: the limit-screen watch reads its pane for any stop
+    its hook does not report.
+    """
+    return {name: licence.reports for name, licence in _profile_licences(descriptors).items()}
+
+
 def profiles_that_roll_over() -> frozenset[ProfileId]:
     """The profiles whose sessions may be rolled over (DEC-115): those whose agent runs the
     planning plugin's plan executor, the one writer of handoff envelopes.
@@ -657,7 +721,7 @@ an event happens to carry, so filtering in the settings file would only add a se
 keep in step with upstream, and a value added there would go silently unreported. Every
 instance is received and the application layer decides. Two of those three names were wrong
 here until the Stage 3 gate compared them with the agent rather than with our own fixtures;
-see ``activity_spool._DISCRIMINATING_FIELDS`` for what that cost.
+see the comment on Claude's licence (``claude/hooks.py`` ``_RECORD``) for what that cost.
 """
 
 

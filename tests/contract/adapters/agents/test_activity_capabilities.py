@@ -1,15 +1,17 @@
 """The provider-level activity contract the notification pipeline may rely on."""
 
-from remote_agents.ports.agent_activity import (
-    ActivityKind,
-    ActivitySource,
-    activity_source_for,
-    reported_activity_kinds_for,
+from remote_agents.adapters.agents.registry import (
+    activity_source_of,
+    profile_reported_kinds,
+    profiles_watched_by_title,
+    reported_kinds_of,
 )
+from remote_agents.domain.profiles import closed_profiles
+from remote_agents.ports.agent_activity import ActivityKind, ActivitySource
 
 
 def test_claude_is_hook_exclusive() -> None:
-    assert activity_source_for("claude") is ActivitySource.HOOK_EXCLUSIVE
+    assert activity_source_of("claude") is ActivitySource.HOOK_EXCLUSIVE
 
 
 def test_the_retired_second_claude_spelling_is_unobserved_rather_than_hook_exclusive() -> None:
@@ -22,18 +24,18 @@ def test_the_retired_second_claude_spelling_is_unobserved_rather_than_hook_exclu
     hook-exclusive would mean the pipeline waited for hook reports about an agent no launch
     can produce, instead of falling back to observing the pane.
     """
-    assert activity_source_for("claude-remote") is ActivitySource.UNOBSERVED
-    assert reported_activity_kinds_for("claude-remote") == set()
+    assert activity_source_of("claude-remote") is ActivitySource.UNOBSERVED
+    assert reported_kinds_of("claude-remote") == set()
 
 
 def test_codex_is_hybrid_until_its_hook_reports() -> None:
-    assert activity_source_for("codex") is ActivitySource.HYBRID
-    assert reported_activity_kinds_for("codex") == {
+    assert activity_source_of("codex") is ActivitySource.HYBRID
+    assert reported_kinds_of("codex") == {
         ActivityKind.COMPLETED,
         ActivityKind.NEEDS_ANSWER,
     }
-    assert ActivityKind.LIMIT_REACHED not in reported_activity_kinds_for("codex")
-    assert ActivityKind.OUTPUT_LIMIT not in reported_activity_kinds_for("codex")
+    assert ActivityKind.LIMIT_REACHED not in reported_kinds_of("codex")
+    assert ActivityKind.OUTPUT_LIMIT not in reported_kinds_of("codex")
 
 
 def test_opencode_reports_through_its_own_plugin() -> None:
@@ -48,13 +50,13 @@ def test_opencode_reports_through_its_own_plugin() -> None:
     Neither limit kind is claimed. That part of the old reasoning survives unchanged: OpenCode
     has no `StopFailure` equivalent, and a rate limit is not something to guess from a pane.
     """
-    assert activity_source_for("opencode") is ActivitySource.HOOK_EXCLUSIVE
-    assert reported_activity_kinds_for("opencode") == {
+    assert activity_source_of("opencode") is ActivitySource.HOOK_EXCLUSIVE
+    assert reported_kinds_of("opencode") == {
         ActivityKind.COMPLETED,
         ActivityKind.NEEDS_ANSWER,
     }
-    assert ActivityKind.LIMIT_REACHED not in reported_activity_kinds_for("opencode")
-    assert ActivityKind.OUTPUT_LIMIT not in reported_activity_kinds_for("opencode")
+    assert ActivityKind.LIMIT_REACHED not in reported_kinds_of("opencode")
+    assert ActivityKind.OUTPUT_LIMIT not in reported_kinds_of("opencode")
 
 
 def test_cursor_reports_a_finished_turn_and_nothing_else() -> None:
@@ -66,5 +68,24 @@ def test_cursor_reports_a_finished_turn_and_nothing_else() -> None:
     OpenCode. It claims COMPLETED alone -- its approvals and its limit screen fire no hook this
     project installs, and the limit-screen watch reads the limit off the pane.
     """
-    assert activity_source_for("cursor-agent") is ActivitySource.HOOK_EXCLUSIVE
-    assert reported_activity_kinds_for("cursor-agent") == frozenset({ActivityKind.COMPLETED})
+    assert activity_source_of("cursor-agent") is ActivitySource.HOOK_EXCLUSIVE
+    assert reported_kinds_of("cursor-agent") == frozenset({ActivityKind.COMPLETED})
+
+
+def test_the_title_watch_is_handed_exactly_the_hybrid_profiles() -> None:
+    """What composition gives `CodexApprovalWatcher`: Codex, and no profile that reports alone.
+
+    The watcher used to ask the port's table itself; since BL-050 it is handed this set, so a
+    fold that lost Codex would silence its native approvals and one that gained a hook-exclusive
+    profile would cost a tmux round trip per pass for a marker that profile never draws.
+    """
+    assert profiles_watched_by_title() == {"codex"}
+
+
+def test_the_limit_watch_is_handed_each_profile_s_own_reported_kinds() -> None:
+    """What composition gives `LimitScreenWatcher`, agreeing with each profile's licence."""
+    folded = profile_reported_kinds()
+    for profile in closed_profiles():
+        name = str(profile.profile_id)
+        assert folded.get(name, frozenset()) == reported_kinds_of(name), name
+    assert set(folded) == {str(profile.profile_id) for profile in closed_profiles()}

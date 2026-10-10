@@ -1,0 +1,28 @@
+{
+ "baseline": {
+  "elapsed_s": 0.6,
+  "exit": 0,
+  "tail": ".....                                                                    [100%]\n5 passed in 0.39s"
+ },
+ "break_patch": "--- a/src/remote_agents/ports/agent_activity.py\n+++ b/src/remote_agents/ports/agent_activity.py\n@@ -268,6 +268,9 @@\n     UNOBSERVED = \"unobserved\"\n \n \n+_HOOK_EXCLUSIVE_PROFILES = frozenset({\"claude\", \"opencode\", \"cursor-agent\"})\n+\n+\n @dataclass(frozen=True, slots=True)\n class LimitHit:\n     \"\"\"Which usage window stopped a session, and when its provider said it lifts.\n",
+ "build": null,
+ "created": "2026-10-10T17:50:28+00:00",
+ "fingerprint": "2c680fa2f00ea7e81f5f0c8dc81da41103fca2a49b3f3f79ff442fc76899952e",
+ "index": 1,
+ "kind": "claim",
+ "named_break": null,
+ "no_build_reason": "pure python, no build",
+ "plan": "/mnt/vault/Portfolio/infra/remote-agents/plans/2026-10-09-decisions-and-worktrees-sub-03-provider-boundaries-plan.md",
+ "red": {
+  "elapsed_s": 0.6,
+  "exit": 1,
+  "tail": "F....                                                                    [100%]\n=================================== FAILURES ===================================\n____________ test_no_shared_module_compares_or_lists_provider_names ____________\n\n    def test_no_shared_module_compares_or_lists_provider_names() -> None:\n>       assert provider_name_branches(_SOURCE, _provider_names()) == []\nE       assert [\"ports/agent...rsor-agent']\"] == []\nE         \nE         Left contains one more item: \"ports/agent_activity.py:271: lists ['claude', 'opencode', 'cursor-agent']\"\nE         Use -v to get more diff\n\ntests/architecture/test_shared_modules_name_no_provider.py:103: AssertionError\n=========================== short test summary info ============================\nFAILED tests/architecture/test_shared_modules_name_no_provider.py::test_no_shared_module_compares_or_lists_provider_names\n1 failed, 4 passed in 0.39s"
+ },
+ "schema": 2,
+ "task": "3.4",
+ "test": "uv run --locked pytest tests/architecture/test_shared_modules_name_no_provider.py -q -p no:randomly && ! grep -rn 'declaredly None for all four\\|_DISCRIMINATING_FIELDS' src/remote_agents/ports src/remote_agents/adapters/agents/registry.py src/remote_agents/adapters/agents/opencode/plugin.py",
+ "text": "`uv run --locked pytest tests/architecture/test_shared_modules_name_no_provider.py -q -p no:randomly && ! grep -rn 'declaredly None for all four\\|_DISCRIMINATING_FIELDS' src/remote_agents/ports src/remote_agents/adapters/agents/registry.py src/remote_agents/adapters/agents/opencode/plugin.py`. Pasting `if provider == \"codex\": pass` into any shared module (scratch, reverted) turns the new test red.",
+ "touched": [
+  "src/remote_agents/ports/agent_activity.py"
+ ]
+}

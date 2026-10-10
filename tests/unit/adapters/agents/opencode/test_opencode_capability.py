@@ -4,7 +4,7 @@ Until 2026-09-06 this provider was `UNOBSERVED`: the owner was told nothing abou
 session, ever. What changed is a measured plugin surface
 (`docs/acceptance-2026-09-06-opencode-activity.md`), and what did not change is that a provider
 publishing no equivalent of Claude's `StopFailure` cannot report a limit — the same line
-`_REPORTED_KINDS_BY_PROFILE` already draws for Codex, drawn again rather than inherited.
+Codex's licence already draws, drawn again rather than inherited.
 
 The kinds are asserted *against the declared events* rather than restated, so an event added to
 `INSTALLED_EVENTS` without a kind, or a kind claimed without an event to report it, fails here.
@@ -14,12 +14,18 @@ from __future__ import annotations
 
 from remote_agents.adapters.agents.opencode import descriptor
 from remote_agents.adapters.agents.opencode.hooks import INSTALLED_EVENTS, RETIRED_EVENTS
-from remote_agents.ports.agent_activity import (
-    HOOK_SOURCED_PROFILES,
-    ActivityKind,
-    ActivitySource,
-    activity_source_for,
-    reported_activity_kinds_for,
+from remote_agents.adapters.agents.registry import (
+    activity_source_of,
+    profile_reported_kinds,
+    reported_kinds_of,
+)
+from remote_agents.ports.agent_activity import ActivityKind, ActivitySource
+
+#: The profiles whose licence says they report alone, derived from the verticals (BL-050).
+HOOK_SOURCED_PROFILES = frozenset(
+    name
+    for name in profile_reported_kinds()
+    if activity_source_of(name) is ActivitySource.HOOK_EXCLUSIVE
 )
 
 #: Which activity kind each measured event becomes. The plugin's whole vocabulary.
@@ -31,20 +37,18 @@ _KIND_BY_EVENT = {
 
 def test_opencode_is_watched_through_its_own_plugin_and_nothing_else() -> None:
     """Hook-exclusive, not hybrid: there is no pane marker to infer anything from."""
-    assert activity_source_for("opencode") is ActivitySource.HOOK_EXCLUSIVE
+    assert activity_source_of("opencode") is ActivitySource.HOOK_EXCLUSIVE
     assert "opencode" in HOOK_SOURCED_PROFILES
 
 
 def test_the_reported_kinds_are_exactly_what_the_declared_events_can_carry() -> None:
     """Derived from `INSTALLED_EVENTS`, so the two lists cannot drift apart silently."""
-    assert reported_activity_kinds_for("opencode") == {
-        _KIND_BY_EVENT[event] for event in INSTALLED_EVENTS
-    }
+    assert reported_kinds_of("opencode") == {_KIND_BY_EVENT[event] for event in INSTALLED_EVENTS}
 
 
 def test_opencode_claims_neither_limit_kind() -> None:
     """No `StopFailure` equivalent exists, so a limit is not something to guess from a pane."""
-    kinds = reported_activity_kinds_for("opencode")
+    kinds = reported_kinds_of("opencode")
     assert ActivityKind.LIMIT_REACHED not in kinds
     assert ActivityKind.OUTPUT_LIMIT not in kinds
 

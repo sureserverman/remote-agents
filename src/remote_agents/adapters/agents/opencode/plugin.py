@@ -27,8 +27,9 @@ JavaScript** (`docs/acceptance-2026-09-06-opencode-activity.md`, measured agains
 of them hold the literal command the owner was asked to approve, which is the string this whole
 boundary exists to keep out of a phone notification.
 
-The spool refuses these fields again on the Python side (`activity_spool._observed_event`).
-That is deliberate duplication and not a redundancy: this file lives in the operator's config
+The spool refuses these fields again on the Python side, admitting only what OpenCode's
+`HOOK_LICENCE` (`opencode/hooks.py`) lists. That is deliberate duplication and not a
+redundancy: this file lives in the operator's config
 directory where a hand-edit is possible, and the far end of the spool is a different process
 that trusts nothing it reads.
 """

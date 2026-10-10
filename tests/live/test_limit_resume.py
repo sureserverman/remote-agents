@@ -36,6 +36,7 @@ import pytest
 from remote_agents.adapters.agents.registry import (
     profile_composers,
     profile_limit_screens,
+    profile_reported_kinds,
     provider_descriptors,
 )
 from remote_agents.adapters.sqlite.activity_store import SQLiteActivityStore
@@ -237,7 +238,9 @@ async def _drill(tmp_path: Path) -> None:
             None,
             SQLiteActivityStore(connection),
             limit_classifier=LimitStopClassifier(store, limits, screens),
-            limit_screen_watcher=LimitScreenWatcher(store, terminal.capture, screens),
+            limit_screen_watcher=LimitScreenWatcher(
+                store, terminal.capture, screens, reported=profile_reported_kinds()
+            ),
             limit_lift_watcher=LimitLiftWatcher(
                 store,
                 SQLiteLimitStopStore(connection),

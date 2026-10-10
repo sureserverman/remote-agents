@@ -16,6 +16,7 @@ import pytest
 
 from remote_agents.adapters.agents.codex.limit_screen import LIMIT_SCREEN as CODEX
 from remote_agents.adapters.agents.cursor.limit_screen import LIMIT_SCREEN as CURSOR
+from remote_agents.adapters.agents.registry import profile_reported_kinds
 from remote_agents.application.limit_stops import LimitScreenWatcher
 from remote_agents.domain.models import ProfileId, SessionId, SessionState
 from remote_agents.ports.agent_activity import ActivityConfidence, ActivityKind, LimitHit
@@ -77,6 +78,7 @@ def _watcher(panes: _Panes, sessions: dict[str, str]) -> LimitScreenWatcher:
         panes.capture,
         {"codex": CODEX, "cursor-agent": CURSOR, "claude": SimpleNamespace(markers=(".",))},
         now=lambda: _NOW,
+        reported=profile_reported_kinds(),
     )
 
 
