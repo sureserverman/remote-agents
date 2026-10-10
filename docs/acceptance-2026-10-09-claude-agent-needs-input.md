@@ -24,7 +24,7 @@ session variable, not on the payload. So the notice reaches this service only wh
 `claude agents` itself runs in a managed pane, and it is recorded as *that* pane's
 `needs_answer`, not the blocked background agent's. Background agents with no managed view
 open notify nothing here. This was not observed end to end, because the drill stripped the
-variable; it follows from the spool's code. BL-130 holds the owner's decision.
+variable; it follows from the spool's code. BL-132 holds the owner's decision.
 
 ## Method
 
