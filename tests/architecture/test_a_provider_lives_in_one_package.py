@@ -24,7 +24,7 @@ _SOURCE_ROOT = Path(__file__).resolve().parents[2] / "src"
 PROVIDERS = ("claude", "codex", "opencode", "cursor")
 
 #: Modules outside a provider's package that may import it. The registry, by design, and one
-#: recorded widening (DEC-070's accepted cost 3, "a deliberate, recorded act"):
+#: recorded widening (DEC-122, extending DEC-070's accepted cost 3 by analogy):
 #: `hook_licences.py`, added 2026-10-10 for BL-050, because the activity hook must reach one
 #: vertical's licence without importing the registry -- which loads all four, 279 modules of
 #: the hook's 300 -- and it imports only the one its hook was installed for.

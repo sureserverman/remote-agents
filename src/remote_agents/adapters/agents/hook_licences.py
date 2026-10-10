@@ -6,9 +6,10 @@ use. `registry` imports all four verticals at its top level -- 279 modules measu
 readers. So this module imports exactly one vertical's `hooks` module, the one the hook was
 installed for, and reads the `HOOK_LICENCE` value that vertical's descriptor also points at.
 
-It is the second module allowed to import a vertical (`IMPORT_ALLOWLIST`), which DEC-070's
-accepted cost 3 calls a deliberate, recorded act: the registry stays the composer of the
-closed table, and this is the one lookup the hook can afford.
+It is the second module allowed to import a vertical (`IMPORT_ALLOWLIST`), widened as a
+deliberate, recorded act in the spirit of DEC-070's accepted cost 3 (which speaks of the package
+pin, not this list; DEC-122 records the extension): the registry stays the composer of the closed
+table, and this is the one lookup the hook can afford.
 """
 
 from __future__ import annotations

@@ -129,7 +129,8 @@ idle session: the 2026-09-19 drill idled 90 s for it and got `idle_prompt`, whic
 It comes from the `claude agents` view, which fires it when a background session it lists
 changes to blocked, and it carries `message`, `"<label> needs your input: <needs>"`, which
 becomes the record's detail (`docs/acceptance-2026-10-09-claude-agent-needs-input.md`, pinned in
-`tests/provider_contract/per_provider/test_claude_quirks.py`).
+`tests/provider_contract/per_provider/test_claude_quirks.py`). It arrives only when the view runs in
+a managed pane, and is recorded as that pane's session, not the blocked agent's (BL-130).
 """
 
 _ASK_TOKEN = re.compile(r"[A-Za-z0-9_-]{1,64}")

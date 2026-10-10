@@ -19,6 +19,13 @@ The view's own `Notification` hook then fires. A string read of the binary found
 - A `blocked` session whose `needs` is `send a prompt to start` is skipped.
 - `needs` is cut to 120 characters.
 
+**What this means for this service.** The hook's spool keys a record on the managed pane's
+session variable, not on the payload. So the notice reaches this service only when
+`claude agents` itself runs in a managed pane, and it is recorded as *that* pane's
+`needs_answer`, not the blocked background agent's. Background agents with no managed view
+open notify nothing here. This was not observed end to end, because the drill stripped the
+variable; it follows from the spool's code. BL-130 holds the owner's decision.
+
 ## Method
 
 Following `docs/acceptance-2026-09-19-ask-payloads.md`:
@@ -54,7 +61,7 @@ Keys, in the order sent: `session_id`, `transcript_path`, `cwd`, `scratchpad_dir
 
 | Field | Shape |
 |---|---|
-| `session_id` | `str`, a UUID. It is the **agents view's** session, not the blocked agent's. |
+| `session_id` | `str`, a UUID. It is the **agents view's** session, not the blocked agent's: it matched neither agent's own `permission_prompt` dump, and its transcript sat in a different directory from theirs. |
 | `transcript_path` | `str`, absolute path ending `.jsonl` (the view's transcript) |
 | `cwd` | `str`, absolute path |
 | `scratchpad_dir` | `str`, absolute path |
@@ -86,11 +93,11 @@ so those rows came from a path not reproduced here.
 
 ## Isolation
 
-- `~/.claude/settings.json` was not modified: sha256 prefix `74762556f7db62f8` before and
-  after.
+- `~/.claude/settings.json` was not modified: its sha256 was the same before and after.
 - The drill never carried the service's session variable. The production spool
   (`~/.local/state/remote-agents/activity`) gained no record; it holds only its `turns`
   directory, last touched before the drill began.
 - One trust entry for the deleted scratch path was written to the owner's Claude config by the
-  TUI's own prompt.
+  TUI's own prompt. It was left in place: the path no longer exists, and editing that file while
+  Claude runs risks a lost write.
 - The raw dumps and the workspace were deleted after this record was written.
