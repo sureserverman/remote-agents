@@ -565,8 +565,8 @@ ever touched. The costs:
 - The next entry by the new release puts those keys back.
 - Unbinding a prefix key does not restore tmux's own default for it.
 
-**Don't rename the `ra-console` session.** Every console key, F1–F12 and prefix `h`, looks for
-it by name, so a renamed console stops answering them. `remote-agents doctor`
+**Don't rename the `ra-console` session.** Every console key (F1–F10, F12 and prefix `h`) looks
+for it by name, so a renamed console stops answering them. `remote-agents doctor`
 names a renamed console under `console.unexpected_sessions`. Rename it back, before entering
 again, with `tmux -L remote-agents rename-session -t <its name> ra-console`. Don't kill it:
 an agent displayed in it at the time would go with it.

@@ -2043,20 +2043,21 @@ left slot for a client already attached too. If the move fails, entry goes ahead
 If the console cannot be prepared at all, the bare command says so and exits non-zero.
 `remote-agents doctor` reports whether this host's tmux supports what the console needs, under
 `console.panes_splittable`, and two lists read off the running server, both empty when all is
-well and both absent when the server could not be read (a timeout, or no `tmux`). `console.unexpected_sessions` names any session other than `ra-console` or a managed
-`ra-<uuid>` holding a console pane: a console renamed by hand, whose F-keys, F2 and prefix `h`
-go inert. `console.duplicate_slots` names any console slot marked on more than one pane,
-which is what entering after a rename leaves, and the F-key scripts then deliver nothing.
-Neither moves the verdict (BL-043). The first field read `console.window_linkable` until the console stopped
+well and both absent when the server could not be read (a timeout, or no `tmux`).
+`console.unexpected_sessions` names any session other than `ra-console` or a managed `ra-<uuid>`
+holding a console pane: a console renamed by hand, whose F-keys, F2 and prefix `h` go inert.
+`console.duplicate_slots` names any console slot marked on more than one pane, which is what
+entering after a rename leaves, and the F-key scripts then deliver nothing. Neither moves the
+verdict (BL-043). The first field read `console.window_linkable` until the console stopped
 linking windows, and the probe behind it round-trips a pane split, a pane id read back from
 tmux, and a pane-scoped option, which is what the console actually does. A key that will not
 install costs you that key and not the console: the panes are built first, and a failed
 `bind-key` is logged rather than fatal. Each entry then unbinds every key tagged
-`remote-agents:` that this release no longer installs, and logs `unbound the retired console key`
-for each (BL-096). Verify with `tmux -L remote-agents list-keys -N -T root`: every console key is
-listed with its note, and a key you bound yourself is not listed. `remote-agents tui` still runs the combined dashboard
-directly in the current terminal, where opening a session falls back to the exec-attach
-handoff.
+`remote-agents:` that this release no longer installs, and logs `unbound the retired console
+key` for each (BL-096). Verify with `tmux -L remote-agents list-keys -N -T root`: every console
+key is listed with its note, and a key you bound yourself is not listed. `remote-agents tui`
+still runs the combined dashboard directly in the current terminal, where opening a session
+falls back to the exec-attach handoff.
 
 **Recovery reports reach you on screen, not in a log.** What the start-time repair moved is
 announced in the projects pane; what it could not put right stands in that pane's status line

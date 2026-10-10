@@ -161,9 +161,11 @@ takes before any migration:
 ls ~/.local/state/remote-agents/sessions.sqlite3.bak
 ```
 
-Restore it with `--backup` as below, then start the service; the split runs on the next open and
-carries the rows across properly. Do not simply re-run the rollback: it copies *from*
-`ui.sqlite3`, which in this state has nothing in it.
+Keep that file, but this release cannot restore it. It was taken before migration 14, at schema
+version 13, and a restore migrates a backup forward by one schema at most, so `restore-database`
+names both versions and refuses it. Its surface rows can only be recovered by the release that
+wrote it, and this document does not script that. Do not simply re-run the rollback: it copies
+*from* `ui.sqlite3`, which in this state has nothing in it.
 
 **If that is not enough**, the split wrote a full snapshot of the domain store before it moved
 anything. Restoring one needs `--backup`, because the default path is `sessions.sqlite3.bak` and
