@@ -34,6 +34,7 @@ from remote_agents.composition.backend import (
     ProjectCatalogueProvider,
     compose_backend,
     require_frontend_capabilities,
+    worktree_parts,
 )
 from remote_agents.config import read_claude_limits_source, read_cursor_limits_source
 from remote_agents.domain.models import SessionId
@@ -500,6 +501,7 @@ def local_context(config, connection, paths: ProductionPaths):
             runtime=runtime,
             hide_in_console=hide_in_console,
             activity_feed=lambda: SQLiteActivityStore(connection).recent(limit=FEED_LIMIT),
+            worktrees=worktree_parts(connection),
         ),
     )
     return TuiContext(

@@ -1,0 +1,28 @@
+{
+ "baseline": {
+  "elapsed_s": 37.9,
+  "exit": 0,
+  "tail": "........................................................................ [ 24%]\n........................................................................ [ 49%]\n........................................................................ [ 74%]\n........................................................................ [ 99%]\n..                                                                       [100%]\n290 passed in 35.62s"
+ },
+ "break_patch": "--- a/src/remote_agents/application/backend.py\n+++ b/src/remote_agents/application/backend.py\n@@ -43,6 +43,7 @@\n from dataclasses import dataclass\n \n from remote_agents.application.profiles import ProfileAvailability\n+from remote_agents.adapters.git.checkout import GitCli  # noqa: F401\n from remote_agents.application.project_catalog import CatalogProject\n from remote_agents.domain.models import MAX_LABEL_LENGTH, SessionId\n from remote_agents.ports.agent_activity import AgentActivity\n",
+ "build": null,
+ "created": "2026-10-10T19:00:29+00:00",
+ "fingerprint": "28783780eb520b92db2ceea273310abfbbd637b187aab2aff4e763b89603f30e",
+ "index": 1,
+ "kind": "claim",
+ "named_break": null,
+ "no_build_reason": "pure Python, no build",
+ "plan": "/mnt/vault/Portfolio/infra/remote-agents/plans/2026-10-09-decisions-and-worktrees-sub-04-session-worktrees-plan.md",
+ "red": {
+  "elapsed_s": 38.6,
+  "exit": 1,
+  "tail": "        Every layer rule the checker encodes is enforced here or nowhere: `domain` imports only\n        `domain`, `application` only inward, `ports` only `domain`/`ports`, an adapter only its\n        own family plus `domain`/`ports` (a driver adapter also `application`/`config`), and the\n        composition roots are the enumerated exception (DEC-001, DEC-015).\n        \"\"\"\n        violations = find_violations(_SOURCE_ROOT)\n    \n>       assert violations == [], \"\\n\".join(\n            [\"the source tree crosses a forbidden boundary:\", *(v.render() for v in violations)]\n        )\nE       AssertionError: the source tree crosses a forbidden boundary:\nE         /home/user/dev/infra/remote-agents/src/remote_agents/application/backend.py:46: remote_agents.adapters.git.checkout: forbidden from application\nE       assert [Violation(pa...application')] == []\nE         \nE         Left contains one more item: Violation(path=PosixPath('/home/user/dev/infra/remote-agents/src/remote_agents/application/backend.py'), line=46, imported='remote_agents.adapters.git.checkout', reason='forbidden from application')\nE         Use -v to get more diff\n\ntests/architecture/test_check_imports.py:29: AssertionError\n__________ test_only_the_composition_package_imports_the_git_adapter ___________\n\n    def test_only_the_composition_package_imports_the_git_adapter() -> None:\n        importers = _importers(_SOURCE)\n        outside = {\n            module: lines\n            for module, lines in importers.items()\n            if not module.startswith((\"composition/\", \"adapters/git/\"))\n        }\n>       assert outside == {}, f\"the git adapter is imported outside composition/: {outside}\"\nE       AssertionError: the git adapter is imported outside composition/: {'application/backend.py': [46]}\nE       assert {'application...end.py': [46]} == {}\nE         \nE         Left contains 1 more item:\nE         {'application/backend.py': [46]}\nE         Use -v to get more diff\n\ntests/architecture/test_the_git_adapter_is_composed_only.py:40: AssertionError\n=========================== short test summary info ============================\nFAILED tests/architecture/test_check_imports.py::test_the_real_source_tree_observes_its_own_boundaries\nFAILED tests/architecture/test_the_git_adapter_is_composed_only.py::test_only_the_composition_package_imports_the_git_adapter\n2 failed, 288 passed in 36.26s"
+ },
+ "schema": 2,
+ "task": "1.4",
+ "test": "uv run --locked pytest tests/architecture -q -p no:randomly",
+ "text": "`uv run --locked pytest tests/architecture -q -p no:randomly`. The import and composition-root sweeps stay green with the new package. A new case asserts `remote_agents.adapters.git` is imported only from `composition/`.",
+ "touched": [
+  "src/remote_agents/application/backend.py"
+ ]
+}

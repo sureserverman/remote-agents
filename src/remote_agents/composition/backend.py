@@ -22,6 +22,7 @@ from remote_agents.adapters.agents.registry import (
     provider_descriptors,
     usage_readers,
 )
+from remote_agents.adapters.git.checkout import GitCli
 from remote_agents.adapters.projects.discovery import discover_projects
 from remote_agents.adapters.projects.registry import load_registry
 from remote_agents.adapters.projects.registry_writer import RegistryProjectRecorder
@@ -30,6 +31,7 @@ from remote_agents.adapters.sqlite.database import watched_paths
 from remote_agents.adapters.sqlite.rollover_store import SQLiteRolloverStore
 from remote_agents.adapters.sqlite.schedule_store import SQLiteScheduleStore
 from remote_agents.adapters.sqlite.session_store import SQLiteSessionStore
+from remote_agents.adapters.sqlite.worktree_store import SQLiteWorktreeStore
 from remote_agents.application.backend import Backend
 from remote_agents.application.conversations import ConversationService
 from remote_agents.application.host_remote_control import HostRemoteControlService
@@ -53,6 +55,8 @@ from remote_agents.domain.models import ProjectId, SessionId
 from remote_agents.domain.profiles import ProfileCompatibility, closed_profiles
 from remote_agents.ports.agent_activity import AgentActivity
 from remote_agents.ports.agent_usage import AgentLimits, AgentUsage, UsageQuery
+from remote_agents.ports.git_checkout import GitCheckout
+from remote_agents.ports.worktree_store import WorktreeStore
 from remote_agents.production import ProductionPaths
 
 if TYPE_CHECKING:
@@ -125,6 +129,25 @@ class ProjectCatalogueProvider:
         self._paths.update(resolved)
         for stale in [key for key in self._paths if key not in resolved]:
             del self._paths[stale]
+
+
+@dataclass(frozen=True, slots=True)
+class WorktreeParts:
+    """The git boundary and the worktree rows session worktrees are built from (BL-116).
+
+    Parts, not a use case: no frontend drives them, so they stay off `Backend` (ARCH-B3), the
+    way `store` and `locks` do. A composition root builds one pair per process (DEC-046) and
+    threads the same pair to every consumer -- the session-folder lookup the terminal reads,
+    worktree creation, the cleanup pass in `serve`, the git line.
+    """
+
+    git: GitCheckout
+    store: WorktreeStore
+
+
+def worktree_parts(connection) -> WorktreeParts:
+    """One pair over the domain connection, so a worktree row moves the store watcher (DEC-090)."""
+    return WorktreeParts(git=GitCli(), store=SQLiteWorktreeStore(connection))
 
 
 def _resolved_project_path(path: Path) -> Path | None:
@@ -231,6 +254,7 @@ def compose_backend(
     locks: SessionLocks | None = None,
     hide_in_console: Callable[[SessionId], Awaitable[None]] | None = None,
     activity_feed: Callable[[], Awaitable[tuple[AgentActivity, ...]]] | None = None,
+    worktrees: WorktreeParts | None = None,
 ) -> Backend:
     """Build the one backend a process hands to its frontend (ARCH-B1, ARCH-B2).
 
@@ -262,6 +286,10 @@ def compose_backend(
     **`store` is a parameter for the same reason**: the service composition already builds
     one for its reconciler and approval watcher, and all three consumers are meant to be looking
     at the same store.
+
+    **`worktrees` is a parameter for `store`'s reason**: the composition root builds one pair
+    (`worktree_parts`) for the whole process, and the terminal's folder lookup, worktree
+    creation and the `serve` cleanup pass must all see the same one.
 
     **`activity_feed` is a parameter for a narrower reason:** the reader is bounded by
     `FEED_LIMIT`, which lives in the terminal package, and importing it here would make the

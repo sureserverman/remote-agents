@@ -759,6 +759,7 @@ def test_the_sweep_reads_every_adapter_module() -> None:
     packages = {module.split("/")[0] for module, _ in modules if "/" in module}
     assert packages == {
         "agents",
+        "git",
         "projects",
         "sqlite",
         "supervisor",

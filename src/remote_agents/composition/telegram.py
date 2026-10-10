@@ -46,6 +46,7 @@ from remote_agents.composition.backend import (
     ProjectCatalogueProvider,
     compose_backend,
     require_frontend_capabilities,
+    worktree_parts,
 )
 from remote_agents.composition.service import ServiceComposition, build_rollover_pass
 from remote_agents.composition.tui import _console_composer, _local_runtime
@@ -111,6 +112,9 @@ def _private_boundary(
     runtime = _local_runtime(config, paths, projects.paths, descriptors)
     terminal = runtime.terminal
     store = SQLiteSessionStore(connection)
+    # One git boundary and one set of worktree rows for this process (DEC-046), threaded to
+    # the backend and to the passes this composition runs beside it.
+    worktrees = worktree_parts(connection)
     # One lock map, shared by the two objects that write session state. See the note on the
     # ReconciliationService below: this single binding is the fix, and two instances here
     # would look identical and repair nothing.
@@ -147,6 +151,7 @@ def _private_boundary(
             store=store,
             locks=locks,
             hide_in_console=console.hide,
+            worktrees=worktrees,
         ),
     )
     # Named rather than inlined, because the serve loop needs the pass the factory built: the
