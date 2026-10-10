@@ -6,7 +6,7 @@ import asyncio
 import io
 import logging
 import signal
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from html import escape
@@ -51,6 +51,7 @@ from remote_agents.adapters.telegram.notifications import (
     StandingNotificationStore,
 )
 from remote_agents.adapters.telegram.presenters import (
+    UNIFORM_ROW_WIDTH,
     Button,
     RenderedMessage,
     render_message,
@@ -155,9 +156,12 @@ from remote_agents.application.session_folders import WORKTREE_REMOVED_SENTENCE
 from remote_agents.application.session_views import (
     CATALOGUE_GAP_RETRY_SECONDS,
     SCHEDULE_PREVIEW_WIDTH,
+    RolloverMark,
     ScheduleLine,
+    SessionGit,
     StateGroup,
     fire_words,
+    git_line,
     group_counts,
     group_emoji,
     limit_rows,
@@ -176,6 +180,7 @@ from remote_agents.application.session_views import (
     unnamed_projects,
     usage_lines,
     with_project_names,
+    with_token,
 )
 from remote_agents.application.stops import execute_stop
 from remote_agents.config import TelegramSecrets
@@ -2604,6 +2609,7 @@ class PrivateBotBoundary:
         except Exception:
             _LOG.debug("the session rollover marks could not be read", exc_info=True)
             rollovers = {}
+        gits = await self._git_reads(shown)
         for group in StateGroup:
             members = [record for record in shown if session_row_parts(record).group is group]
             if not members:
@@ -2612,8 +2618,9 @@ class PrivateBotBoundary:
             for record in members:
                 context = await self._context_for(record)
                 rolled = rollovers.get(str(record.session_id))
-                parts = session_row_parts(record, context, rolled)
-                _first, second = session_lines(record, context, rolled)
+                read = gits.get(str(record.session_id))
+                parts = session_row_parts(record, context, rolled, read and read.summary)
+                second = session_state_line(record, context, rolled, parts.git)
                 # The sequence sits *outside* the bold, so the eye lands on the name and
                 # finds the number beside it, and the state line is monospace so the gauges
                 # of neighbouring rows line up.
@@ -3028,6 +3035,7 @@ class PrivateBotBoundary:
         facts: list[tuple[str, str]] = []
         for value in await self._usage_lines(record):
             facts.append(("context", value))
+        facts.extend(git_facts(await self._git_read(record)))
         if remote_control_available(record):
             facts.append(
                 (
@@ -3307,6 +3315,31 @@ class PrivateBotBoundary:
         except Exception:
             logging.getLogger(__name__).debug("usage read failed", exc_info=True)
             return ()
+
+    async def _git_read(self, record: SessionRecord) -> SessionGit | None:
+        """One session's git summary, or nothing -- never a screen lost to a git read.
+
+        `_usage_lines`'s trade made again: the line is a decoration on a screen whose real
+        content is the session's state and its stop actions. The read is bounded at the root
+        (two seconds) and answers None itself on any failure; this `except` is the seam's own
+        guarantee, so a reader that broke its promise still costs only the line."""
+        if self.backend.git_summary is None:
+            return None
+        try:
+            return await self.backend.git_summary(record.session_id)
+        except Exception:
+            logging.getLogger(__name__).debug("git summary read failed", exc_info=True)
+            return None
+
+    async def _git_reads(self, records: Sequence[SessionRecord]) -> dict[str, SessionGit]:
+        """Every shown row's git summary, read side by side: a page of eight sequential reads
+        could cost eight budgets on a slow disk, side by side it costs one."""
+        reads = await asyncio.gather(*(self._git_read(record) for record in records))
+        return {
+            str(record.session_id): read
+            for record, read in zip(records, reads, strict=True)
+            if read is not None
+        }
 
     async def _attach_reply(self, session_value: str) -> RenderedMessage:
         record = await self._record(session_value)
@@ -5880,3 +5913,25 @@ def _first_line(text: str) -> str:
 def _state_explanation(state: SessionState, orphan_provenance: OrphanProvenance | None) -> str:
     """Defer to the shared mapping so both surfaces describe a state identically."""
     return explain_state(state, orphan_provenance)
+
+
+def git_facts(read: SessionGit | None) -> tuple[tuple[str, str], ...]:
+    """The detail's `git` fact, or none: the shared `git_line`, labelled at `_FACT_LABEL_WIDTH`
+    like every other fact (DEC-091). No summary -- no reader, a folder outside git, a read that
+    failed or ran out of time -- draws no line rather than one saying so."""
+    if read is None:
+        return ()
+    return (("git", git_line(read.summary, shared=read.shared)),)
+
+
+def session_state_line(
+    record: SessionRecord,
+    context: ContextWindow | None,
+    rollover: RolloverMark | None,
+    token: str,
+) -> str:
+    """A row's monospace second line, `state · age[ · gauge][ · note]`, with the git token after
+    it when the whole fits `UNIFORM_ROW_WIDTH`. The identity has a line of its own above, so
+    the token can never push it out; at the narrow width the token goes first, whole."""
+    _first, second = session_lines(record, context, rollover)
+    return with_token(second, token, UNIFORM_ROW_WIDTH)

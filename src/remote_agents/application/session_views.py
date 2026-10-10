@@ -346,12 +346,16 @@ class SessionRowParts:
     age: str
     gauge: str | None
     note: str | None
+    git: str = ""
+    """`git_token` of the session's git summary, or empty: drawn after the identity and the
+    note, and the first thing a row drops at its narrow width (`with_token`)."""
 
 
 def session_row_parts(
     record: SessionRecord,
     context: ContextWindow | None = None,
     rollover: RolloverMark | None = None,
+    git: GitSummary | None = None,
 ) -> SessionRowParts:
     """Take one listed record apart for a two-line or columned row.
 
@@ -397,6 +401,7 @@ def session_row_parts(
         age=age_short(record.created_at),
         gauge=gauge,
         note=note,
+        git="" if git is None else git_token(git),
     )
 
 
@@ -1294,6 +1299,15 @@ def git_line(summary: GitSummary, shared: bool) -> str:
         parts.append("clean")
     line = " · ".join(parts)
     return f"checkout: {line}" if shared else line
+
+
+def with_token(line: str, token: str, width: int) -> str:
+    """`line · token` when it fits in `width` cells, else `line` alone: the token is the first
+    thing a row gives up, whole, never a cut-off `±` beside a cut-off name."""
+    if not token:
+        return line
+    joined = f"{line} · {token}"
+    return joined if len(joined) <= width else line
 
 
 def git_token(summary: GitSummary) -> str:

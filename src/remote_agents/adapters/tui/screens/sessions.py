@@ -60,6 +60,7 @@ from remote_agents.application.session_actions import (
     remote_control_target,
     rollover_outcome,
 )
+from remote_agents.application.session_views import SessionGit, git_line
 from remote_agents.domain.models import SessionId, SessionRecord
 from remote_agents.ports.state_events import StoreChanged, Unsubscribe
 
@@ -821,7 +822,8 @@ class SessionsScreen(_SessionActionKeys, ChoiceScreen):
         `_auto_reload`'s "never over work in flight" is weaker than it reads, and the flag is
         shared, so widening it is not this method's to do.
         """
-        if self.tui.services.backend.usage is None:
+        backend = self.tui.services.backend
+        if backend.usage is None and backend.git_summary is None:
             return
         visiting = self._visit
         filled = self._resting_generation
@@ -1993,6 +1995,7 @@ class SessionDetailScreen(ChoiceScreen):
             self.set_status("That session is no longer available.")
             return
         rollover = await self._rollover_offer(record)
+        git = await self._git_read(record)
         if not self.showing:
             return
         # The name goes to the header and the state's meaning to the status line. They were
@@ -2004,7 +2007,22 @@ class SessionDetailScreen(ChoiceScreen):
         self.set_status(
             f"State: {record.state.value}. {explain_state(record.state, record.orphan_provenance)}"
         )
-        self.show_choices(self.detail_entries(record, rollover))
+        self.show_choices(self.detail_entries(record, rollover, git))
+
+    async def _git_read(self, record: SessionRecord) -> SessionGit | None:
+        """The session's git summary through `Backend.git_summary`, or nothing (BL-117).
+
+        Total, like the rollover offer: the reader is bounded at the root and answers None on
+        failure, and this `except` is the screen's own guarantee on top -- a git read never
+        costs the detail."""
+        reader = self.services.backend.git_summary
+        if reader is None:
+            return None
+        try:
+            return await reader(record.session_id)
+        except Exception:
+            _LOG.debug("the session git summary could not be read", exc_info=True)
+            return None
 
     async def _rollover_offer(self, record: SessionRecord) -> tuple[str, ...]:
         """The rollover actions this session offers, through `Backend.rollovers` (DEC-046).
@@ -2021,7 +2039,10 @@ class SessionDetailScreen(ChoiceScreen):
             return ()
 
     def detail_entries(
-        self, record: SessionRecord, rollover: tuple[str, ...] = ()
+        self,
+        record: SessionRecord,
+        rollover: tuple[str, ...] = (),
+        git: SessionGit | None = None,
     ) -> tuple[tuple[str, str], ...]:
         """The actions this session offers, taken from the policy and not decided here.
 
@@ -2039,7 +2060,10 @@ class SessionDetailScreen(ChoiceScreen):
         # deliberate and is enumerated in full at `adapters/telegram/service.py:
         # _detail_reply`, where the sibling set is built. Everything after them is shared
         # policy, so this is the only part of the screen a merge would have to touch.
-        entries: list[tuple[str, str]] = [("attach", "Copy attach")]
+        # The git line first: a fact, not an action -- choosing it does nothing -- and the
+        # bot's `git` fact in the same words (`session_views.git_line`, DEC-091).
+        entries: list[tuple[str, str]] = list(git_entries(git))
+        entries.append(("attach", "Copy attach"))
         if self.services.backend.capture is not None:
             entries.append(("inspect", "Inspect output"))
         # Grouped with the read-only rows above rather than with the stops below, and the bot's
@@ -2690,3 +2714,15 @@ def capture_for_pane(captured: str, redactions: tuple[str, ...]) -> str:
         # rendering text, and printing it to a terminal can corrupt the display.
         return "This session's output is binary and cannot be displayed."
     return rendered.text
+
+
+GIT_ENTRY = "\x00git"
+"""The detail's git row: a fact, not an action, so a sentinel id the row keys refuse."""
+
+
+def git_entries(read: SessionGit | None) -> tuple[tuple[str, str], ...]:
+    """The detail's `git` row, or none: `git  <git_line>`, the label padded the way the bot pads
+    its facts. No summary draws no row."""
+    if read is None:
+        return ()
+    return ((GIT_ENTRY, f"git      {git_line(read.summary, shared=read.shared)}"),)

@@ -107,6 +107,7 @@ from remote_agents.application.session_folders import WORKTREE_REMOVED_SENTENCE
 from remote_agents.application.session_views import (
     CATALOGUE_GAP_RETRY_SECONDS,
     RolloverMark,
+    SessionGit,
     SessionRowParts,
     listed_sessions,
     only_listed,
@@ -564,6 +565,10 @@ class RemoteAgentsTui(App[AttachRequest | None]):
         dashboard's pane and the sessions list), and a cache per screen would read the same
         files twice and let the two disagree about one session.
         """
+        #: Each listed session's git summary, read on the context cache's schedule and never on
+        #: a repaint, for the same reason (BL-117): a git read per row per tick would be a
+        #: `git status` per session behind a timer.
+        self._git_reads: dict[str, SessionGit] = {}
         #: Each listed session's rollover mark, re-read with every list read
         #: (`refresh_rollover_marks`) and drawn by every screen that draws session rows, so the
         #: rows themselves stay pure functions of what they are handed (DEC-091).
@@ -2463,7 +2468,8 @@ class RemoteAgentsTui(App[AttachRequest | None]):
         pane, the dedicated sessions list and the console's sessions pane without any of them
         knowing about the others -- and without a provider read on any repaint path.
         """
-        if self.busy or self._services.backend.usage is None:
+        backend = self._services.backend
+        if self.busy or (backend.usage is None and backend.git_summary is None):
             return
         screen = self.screen if self.is_screen_installed_check() else None
         if not getattr(screen, "draws_session_rows", False):
@@ -2508,10 +2514,12 @@ class RemoteAgentsTui(App[AttachRequest | None]):
         """One listed row as every screen here draws it: the shared renderer, handed this
         surface's cached context reading and rollover mark (DEC-091). One place, so a screen
         cannot draw the row with one of them and another screen without it."""
+        read = self._git_reads.get(str(record.session_id))
         return session_row_parts(
             record,
             self.context_window_for(record.session_id),
             self._rollover_marks.get(str(record.session_id)),
+            None if read is None else read.summary,
         )
 
     async def refresh_rollover_marks(self, records: Iterable[SessionRecord]) -> None:
@@ -2542,6 +2550,8 @@ class RemoteAgentsTui(App[AttachRequest | None]):
         but the same rule applies for the same reason: what is drawn should be something that
         was read, not something that was read once.
         """
+        records = tuple(records)
+        await self._refresh_git_reads(records)
         reader = self._services.backend.usage
         if reader is None:
             return
@@ -2555,6 +2565,31 @@ class RemoteAgentsTui(App[AttachRequest | None]):
             if usage is not None and usage.context is not None:
                 fresh[str(record.session_id)] = usage.context
         self._context_windows = fresh
+
+    async def _refresh_git_reads(self, records: tuple[SessionRecord, ...]) -> None:
+        """Re-read every listed session's git summary, side by side, off the repaint path.
+
+        Rides the context refresh's schedule rather than adding a third timer. Total: a read
+        that fails, or a host with no git reader, costs the row tokens and never the list.
+        Rebuilt rather than updated, so a token is something that was read this time."""
+        reader = self._services.backend.git_summary
+        if reader is None:
+            self._git_reads = {}
+            return
+
+        async def one(record: SessionRecord) -> SessionGit | None:
+            try:
+                return await reader(record.session_id)
+            except Exception:
+                _LOG.debug("a session git read failed", exc_info=True)
+                return None
+
+        reads = await asyncio.gather(*(one(record) for record in records))
+        self._git_reads = {
+            str(record.session_id): read
+            for record, read in zip(records, reads, strict=True)
+            if read is not None
+        }
 
     async def load_sessions(self) -> tuple[SessionRecord, ...]:
         """Refresh readiness, then return the sessions worth showing.

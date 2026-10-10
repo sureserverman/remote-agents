@@ -69,6 +69,7 @@ def backend_for(
     activity_feed: Callable[[], Awaitable[tuple[AgentActivity, ...]]] | None = _UNSET,  # type: ignore[assignment]
     usage: Callable[[SessionId], Awaitable[AgentUsage | None]] | None = _UNSET,  # type: ignore[assignment]
     limits: Callable[[], Awaitable[tuple[AgentLimits, ...]]] | None = _UNSET,  # type: ignore[assignment]
+    git_summary: Callable[[SessionId], Awaitable[object | None]] | None = _UNSET,  # type: ignore[assignment]
     host_remote_control: object | None = _UNSET,
     claude_remote_control_default: object | None = _UNSET,
     claude_limits_source: object | None = _UNSET,
@@ -114,6 +115,7 @@ def backend_for(
         "auto_rollover": auto_rollover,
         "state_events": state_events,
         "limits": limits,
+        "git_summary": git_summary,
         "close_usage_readers": close_usage_readers,
         "schedules": schedules,
         "rollovers": rollovers,

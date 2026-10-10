@@ -140,15 +140,8 @@ def columns(
     and their gutters. With no usable width the cells are simply joined, which is what a pane
     reports before its first layout.
     """
-    if width is None or width <= 0:
-        return _join(cell for cell, _width in cells)
-    fixed = sum(
-        (cell.cell_length if column is None else column)
-        for index, (cell, column) in enumerate(cells)
-        if index != flexible
-    )
-    room = width - fixed - _GUTTER * (len(cells) - 1)
-    if room < 4:
+    room = flexible_room(cells, width, flexible=flexible)
+    if room is None:
         return _join(cell for cell, _width in cells)
     placed: list[Content] = []
     for index, (cell, column) in enumerate(cells):
@@ -158,6 +151,22 @@ def columns(
         target = cell.cell_length if column is None else column
         placed.append(cell.truncate(target, ellipsis=True, pad=True))
     return _join(placed)
+
+
+def flexible_room(
+    cells: Sequence[tuple[Content, int | None]], width: int | None, *, flexible: int
+) -> int | None:
+    """How many cells `columns` gives its flexible cell, or None when it lays nothing out to a
+    width -- no usable width yet, or too little room to be worth truncating into."""
+    if width is None or width <= 0:
+        return None
+    fixed = sum(
+        (cell.cell_length if column is None else column)
+        for index, (cell, column) in enumerate(cells)
+        if index != flexible
+    )
+    room = width - fixed - _GUTTER * (len(cells) - 1)
+    return None if room < 4 else room
 
 
 def _join(cells) -> Content:
@@ -233,10 +242,18 @@ def session_content(
         (text(parts.age, MUTED), age_width),
         (gauge_content(parts.gauge), gauge_width),
     ]
-    if active is None:
-        return columns(cells, width, flexible=1)
-    marker = text(ACTIVE_MARKER, ACTIVE_STYLE) if active else Content(" ")
-    return columns([(marker, 1), *cells], width, flexible=2)
+    if active is not None:
+        marker = text(ACTIVE_MARKER, ACTIVE_STYLE) if active else Content(" ")
+        cells = [(marker, 1), *cells]
+    flexible = 1 if active is None else 2
+    if parts.git:
+        # The git token goes after the identity and its note, and only whole: at the narrow
+        # width it is dropped before a single cell of the name is (`with_token`'s rule).
+        room = flexible_room(cells, width, flexible=flexible)
+        token = f" · {parts.git}"
+        if room is None or cells[flexible][0].cell_length + len(token) <= room:
+            cells[flexible] = (cells[flexible][0] + Content.assemble((token, MUTED)), None)
+    return columns(cells, width, flexible=flexible)
 
 
 def session_contents(

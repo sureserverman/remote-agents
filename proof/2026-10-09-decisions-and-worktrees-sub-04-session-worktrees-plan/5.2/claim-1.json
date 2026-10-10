@@ -1,0 +1,28 @@
+{
+ "baseline": {
+  "elapsed_s": 21.0,
+  "exit": 0,
+  "tail": "....................................................................     [100%]\n68 passed in 19.35s"
+ },
+ "break_patch": "diff --git a/src/remote_agents/adapters/tui/rows.py b/src/remote_agents/adapters/tui/rows.py\nindex 2848c99d..e825acf6 100644\n--- a/src/remote_agents/adapters/tui/rows.py\n+++ b/src/remote_agents/adapters/tui/rows.py\n@@ -252,7 +252,7 @@ def session_content(\n         room = flexible_room(cells, width, flexible=flexible)\n         token = f\" \u00b7 {parts.git}\"\n         if room is None or cells[flexible][0].cell_length + len(token) <= room:\n-            cells[flexible] = (cells[flexible][0] + Content.assemble((token, MUTED)), None)\n+            cells[flexible] = (Content.assemble((parts.git + \" \u00b7 \", MUTED)) + cells[flexible][0], None)\n     return columns(cells, width, flexible=flexible)\n \n \n",
+ "build": null,
+ "created": "2026-10-10T22:33:35+00:00",
+ "fingerprint": "ac978192fab7c57f2f53e22406e0203b46d283804e81584de018ce33d56b3b64",
+ "index": 1,
+ "kind": "claim",
+ "named_break": null,
+ "no_build_reason": "pure Python, no build",
+ "plan": "/mnt/vault/Portfolio/infra/remote-agents/plans/2026-10-09-decisions-and-worktrees-sub-04-session-worktrees-plan.md",
+ "red": {
+  "elapsed_s": 21.4,
+  "exit": 1,
+  "tail": "..........F.........................................................     [100%]\n=================================== FAILURES ===================================\n_________ test_the_local_row_never_cuts_the_identity_for_the_token[80] _________\n\nwidth = 80\n\n    @pytest.mark.parametrize(\"width\", [36, 44, 80])\n    def test_the_local_row_never_cuts_the_identity_for_the_token(width: int) -> None:\n        record = _record(\"a-rather-long-project-slug\")\n        plain = session_row_parts(record)\n        tokened = session_row_parts(record, git=READ.summary)\n        assert tokened.git == \"\u00b16\"\n    \n        without = session_content(plain, width=width, state_width=7, age_width=3, gauge_width=4).plain\n        with_token = session_content(\n            tokened, width=width, state_width=7, age_width=3, gauge_width=4\n        ).plain\n    \n        identity = plain.identity\n        # Whatever of the identity fitted without the token still fits with it.\n        shown = without.split(\"  \")[0].strip()\n>       assert shown in with_token\nE       AssertionError: assert '\u25cf a-rather-long-project-slug \u00b7 claude #1' in '\u25cf \u00b16 \u00b7 a-rather-long-project-slug \u00b7 claude #1                   running 0m  \u2014   '\n\ntests/frontend_contract/test_git_summary_surfaces.py:191: AssertionError\n=========================== short test summary info ============================\nFAILED tests/frontend_contract/test_git_summary_surfaces.py::test_the_local_row_never_cuts_the_identity_for_the_token[80]\n1 failed, 67 passed in 19.65s"
+ },
+ "schema": 2,
+ "task": "5.2",
+ "test": "uv run --locked pytest tests/frontend_contract/test_git_summary_surfaces.py tests/unit/adapters/tui/test_tui_snapshots.py -q -p no:randomly",
+ "text": "`uv run --locked pytest tests/frontend_contract/test_git_summary_surfaces.py tests/unit/adapters/tui/test_tui_snapshots.py -q -p no:randomly`.",
+ "touched": [
+  "src/remote_agents/adapters/tui/rows.py"
+ ]
+}
