@@ -391,6 +391,30 @@ MIGRATIONS: tuple[tuple[int, str], ...] = (
         END;
         """,
     ),
+    (
+        19,
+        # Session worktrees (BL-116). Their own tables, never fields on `sessions` (DEC-115's
+        # reason: a session row is rebuilt by position). Keyed by path, because a resume and a
+        # rollover successor are new sessions reusing one folder; `session_worktrees` binds
+        # each of them to it. `copied` is JSON {relative path: sha256}.
+        """
+        CREATE TABLE worktrees (
+            path TEXT PRIMARY KEY,
+            project_id TEXT NOT NULL,
+            branch TEXT NOT NULL,
+            base_branch TEXT,
+            base_commit TEXT NOT NULL,
+            copied TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            removed_at TEXT
+        );
+        CREATE TABLE session_worktrees (
+            session_id TEXT PRIMARY KEY REFERENCES sessions(session_id),
+            worktree_path TEXT NOT NULL REFERENCES worktrees(path)
+        );
+        CREATE INDEX session_worktrees_by_path ON session_worktrees(worktree_path);
+        """,
+    ),
 )
 """Migration 14 takes the surface's bookkeeping out of the watched store.
 
