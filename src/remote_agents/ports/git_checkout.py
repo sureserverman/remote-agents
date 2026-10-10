@@ -14,6 +14,7 @@ name.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
@@ -44,7 +45,8 @@ class GitSummary:
     """A checkout's changes against a base, counted the way `git diff --numstat` counts them.
 
     `files`, `added` and `removed` cover tracked files, working tree against `base`. `ahead`
-    is how many commits HEAD has that `base` does not. `dirty` is whether `git status` lists
+    is how many commits HEAD has that `base` does not. `dirty` is whether `git status` (ignored
+    files not asked for) lists
     anything at all, untracked files included.
     """
 
@@ -138,6 +140,15 @@ class GitCheckout(Protocol):
         return one missing its tail."""
         ...
 
-    async def diff_summary(self, path: Path, base: str) -> GitSummary:
-        """The checkout at `path` measured against `base`."""
+    async def merge_base(self, path: Path, one: str, other: str) -> str | None:
+        """The best common ancestor of two revisions, or None when they share none."""
+        ...
+
+    async def diff_summary(
+        self, path: Path, base: str, copies: Mapping[str, str] | None = None
+    ) -> GitSummary:
+        """The checkout at `path` measured against `base`. The counts are `diff --shortstat`'s,
+        so they are read whatever the size of the change. An untracked file named in `copies`
+        whose sha256 is still the one recorded is not counted as dirty: it is a file the
+        worktree was given, not one the session wrote."""
         ...

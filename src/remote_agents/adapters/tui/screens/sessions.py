@@ -2007,7 +2007,10 @@ class SessionDetailScreen(ChoiceScreen):
         self.set_status(
             f"State: {record.state.value}. {explain_state(record.state, record.orphan_provenance)}"
         )
-        self.show_choices(self.detail_entries(record, rollover, git))
+        entries = self.detail_entries(record, rollover, git)
+        # The git row is a fact: the cursor rests on the first row that does something, so
+        # enter on a fresh detail copies the attach command as it always did.
+        self.show_choices(entries, highlight=1 if entries and entries[0][0] == GIT_ENTRY else 0)
 
     async def _git_read(self, record: SessionRecord) -> SessionGit | None:
         """The session's git summary through `Backend.git_summary`, or nothing (BL-117).

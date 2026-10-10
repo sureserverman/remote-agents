@@ -73,10 +73,18 @@ def test_the_readme_names_the_default_copy_list_and_the_branch() -> None:
 
 
 def test_every_kept_reason_doctor_can_print_is_documented() -> None:
-    for reason in (UNMERGED, MOVED, DIRTY, IN_USE, DETACHED_BASE):
+    for reason in (UNMERGED, MOVED, DIRTY, IN_USE, DETACHED_BASE, REMOVABLE):
         assert f"`{reason}`" in WORKTREES, reason
         assert f"`{reason}`" in RUNBOOK_WORKTREES, reason
-    assert f"`{REMOVABLE}`" in RUNBOOK_WORKTREES
+    for prefix in ("git:", "fault:"):
+        assert f"`{prefix}" in WORKTREES and f"`{prefix}" in RUNBOOK_WORKTREES, prefix
+
+
+def test_the_manual_removal_warns_that_ignored_files_go_without_asking() -> None:
+    for text in (WORKTREES, RUNBOOK_WORKTREES):
+        flat = " ".join(text.replace("**", "").split())
+        assert "deletes ignored" in flat
+        assert "status --ignored" in flat
 
 
 def test_the_runbook_links_the_trust_measurement_that_exists() -> None:

@@ -297,6 +297,10 @@ def test_no_further_capability_leaked_into_the_context() -> None:
         # one, and the distinction is the point: `capture` sat here before both surfaces drew
         # on it too.
         "usage",
+        # One session's git summary (BL-117), shared for `usage`'s reason: a fact about a
+        # session, the same whichever surface asks, and both render it -- the bot as a detail
+        # fact and a row mark, the terminal as a detail row and a row mark.
+        "git_summary",
         # The account-wide sibling of `usage`, and shared for the same reason with one
         # difference that is the whole point of it existing: it names no session. Both
         # providers that publish a rate-limit window publish it for the *plan*, so the fact is

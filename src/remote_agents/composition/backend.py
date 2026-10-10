@@ -58,9 +58,9 @@ from remote_agents.domain.models import ProjectId, SessionId
 from remote_agents.domain.profiles import ProfileCompatibility, closed_profiles
 from remote_agents.ports.agent_activity import AgentActivity
 from remote_agents.ports.agent_usage import AgentLimits, AgentUsage, UsageQuery
-from remote_agents.ports.git_checkout import GitCheckout
+from remote_agents.ports.git_checkout import GitCheckout, GitSummary
 from remote_agents.ports.terminal import SessionFolderLookup
-from remote_agents.ports.worktree_store import WorktreeStore
+from remote_agents.ports.worktree_store import Worktree, WorktreeStore
 from remote_agents.production import ProductionPaths
 
 if TYPE_CHECKING:
@@ -240,29 +240,65 @@ def _git_summary_reader(
 ) -> Callable[[SessionId], Awaitable[SessionGit | None]]:
     """Bind the git boundary to what only the root knows: a session's folder and its base.
 
-    A session bound to a worktree is measured against the commit the worktree was cut from, so
-    the line is that session's own work; any other is its shared folder against `HEAD` -- the
-    whole checkout, every session's edits in it. Read-only: git's read verbs and two store
-    reads, nothing written (DEC-090). Any failure, or the budget running out, answers None.
-    """
+    A session bound to a worktree is measured from where its branch and its base branch last
+    met (`merge-base`), so a rebase or merge of the base into the worktree does not count the
+    base's commits as the session's; with no base branch, from the commit it was cut from. Its
+    unchanged copies are not dirt. Any other session is its shared folder against `HEAD` -- the
+    whole checkout, every session's edits in it.
 
-    async def measure(session_id: SessionId) -> SessionGit | None:
+    **Bounded without waiting on git.** Each read waits at most `budget` and then answers None;
+    the git calls it started are never cancelled from here, so a git the kernel cannot kill
+    yet (a hung mount) costs this read nothing past the budget -- the adapter's own bounds end
+    it. **One read per folder at a time:** sessions sharing a checkout, read side by side,
+    share one measurement rather than each starting the same five git processes.
+
+    Read-only: git's read verbs and three store reads, nothing written (DEC-090).
+    """
+    measuring: dict[tuple[Path, str], asyncio.Task[GitSummary]] = {}
+
+    async def locate(session_id: SessionId) -> tuple[Path, Worktree | None] | None:
         record = await store.get(session_id)
         if record is None:
             return None
         worktree = await worktrees.folder_for(session_id)
         folder = await folders.folder_for(session_id, record.project_id)
-        if folder is None:
-            return None
-        if worktree is not None:
-            return SessionGit(await git.diff_summary(folder, worktree.base_commit), shared=False)
-        return SessionGit(await git.diff_summary(folder, "HEAD"), shared=True)
+        return None if folder is None else (folder, worktree)
+
+    async def summarise(folder: Path, worktree: Worktree | None) -> GitSummary:
+        if worktree is None:
+            return await git.diff_summary(folder, "HEAD")
+        base = worktree.base_commit
+        if worktree.base_branch is not None:
+            met = await git.merge_base(folder, "HEAD", f"refs/heads/{worktree.base_branch}")
+            base = met or base
+        return await git.diff_summary(folder, base, worktree.copied)
+
+    def finished(key: tuple[Path, str], task: asyncio.Task[GitSummary]) -> None:
+        if measuring.get(key) is task:
+            del measuring[key]
+        if not task.cancelled():
+            task.exception()  # retrieved: a failure is an answer of None, never a warning
 
     async def read(session_id: SessionId) -> SessionGit | None:
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + budget
         try:
-            return await asyncio.wait_for(measure(session_id), budget)
+            located = await asyncio.wait_for(locate(session_id), budget)
         except Exception:
             return None
+        if located is None:
+            return None
+        folder, worktree = located
+        key = (folder, "HEAD" if worktree is None else str(worktree.path))
+        task = measuring.get(key)
+        if task is None:
+            task = asyncio.ensure_future(summarise(folder, worktree))
+            measuring[key] = task
+            task.add_done_callback(partial(finished, key))
+        done, _pending = await asyncio.wait({task}, timeout=max(0.0, deadline - loop.time()))
+        if not done or task.cancelled() or task.exception() is not None:
+            return None
+        return SessionGit(task.result(), shared=worktree is None)
 
     return read
 

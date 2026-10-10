@@ -155,8 +155,15 @@ async def test_a_worktree_reads_its_own_changes_against_its_base(
 
 async def test_a_hung_git_answers_none_within_the_budget(tmp_path: Path, repo: Path) -> None:
     class _Hung(GitCli):
-        async def diff_summary(self, path, base):
-            await asyncio.sleep(3600)
+        """A git the kernel cannot kill yet: it ignores its cancel for a while, as a process
+        in uninterruptible I/O does, so a reader that waited on its reap would wait too."""
+
+        async def diff_summary(self, path, base, copies=None):
+            try:
+                await asyncio.sleep(1.2)
+            except asyncio.CancelledError:
+                await asyncio.sleep(1.2)
+                raise
 
     harness = _Harness(tmp_path, repo)
     session = await harness.session()
@@ -165,7 +172,8 @@ async def test_a_hung_git_answers_none_within_the_budget(tmp_path: Path, repo: P
     read = await harness.reader(git=_Hung(), budget=0.2)(session)
 
     assert read is None
-    assert time.monotonic() - started < 1.0
+    assert time.monotonic() - started < 0.6
+    await asyncio.sleep(1.4)  # let the stand-in finish before the loop closes
 
 
 async def test_a_folder_outside_git_or_an_unknown_session_answers_none(
@@ -194,3 +202,87 @@ async def test_reading_writes_nothing_to_any_store(tmp_path: Path, repo: Path) -
         assert await harness.reader()(session) is not None
 
     assert harness.snapshot() == before
+
+
+async def test_an_untouched_copy_is_not_dirt_and_an_edited_one_is(
+    tmp_path: Path, repo: Path
+) -> None:
+    (repo / "CLAUDE.md").write_text("instructions\n")  # untracked, not ignored
+    harness = _Harness(tmp_path, repo)
+    harness.service._copy_for = lambda _path: ("CLAUDE.md",)
+    session = await harness.session()
+    worktree = await harness.service.create(session, PROJECT)
+    assert "CLAUDE.md" in worktree.copied
+
+    fresh = await harness.reader()(session)
+    (worktree.path / "CLAUDE.md").write_text("edited by the agent\n")
+    edited = await harness.reader()(session)
+
+    assert fresh is not None and fresh.summary.dirty is False
+    assert git_line(fresh.summary, shared=False) == f"{worktree.branch} · clean"
+    assert edited is not None and edited.summary.dirty is True
+
+
+async def test_a_base_merged_into_the_worktree_is_not_counted_as_its_work(
+    tmp_path: Path, repo: Path
+) -> None:
+    harness = _Harness(tmp_path, repo)
+    session = await harness.session()
+    worktree = await harness.service.create(session, PROJECT)
+    (worktree.path / "own.txt").write_text("own\n")
+    _git(worktree.path, "add", "own.txt")
+    _git(worktree.path, "commit", "-q", "-m", "own")
+    for index in range(3):
+        (repo / f"main{index}.txt").write_text("".join(f"{n}\n" for n in range(50)))
+        _git(repo, "add", f"main{index}.txt")
+        _git(repo, "commit", "-q", "-m", f"main {index}")
+    _git(worktree.path, "rebase", "-q", "main")
+
+    read = await harness.reader()(session)
+
+    assert read is not None
+    assert git_line(read.summary, shared=False) == f"{worktree.branch} · 1 file +1 −0 · 1 ahead"
+
+
+async def test_a_change_too_large_for_a_numstat_still_has_a_line(
+    tmp_path: Path, repo: Path
+) -> None:
+    harness = _Harness(tmp_path, repo)
+    session = await harness.session()
+    folder = repo / ("a-deliberately-long-directory-name-" * 2)
+    folder.mkdir()
+    names = [folder / f"file-with-a-long-name-{index:05d}.txt" for index in range(1200)]
+    for name in names:
+        name.write_text("one\n")
+    _git(repo, "add", ".")
+    _git(repo, "commit", "-q", "-m", "many")
+    for name in names:
+        name.write_text("two\n")
+
+    read = await harness.reader()(session)
+
+    assert read is not None
+    assert (read.summary.files, read.summary.added, read.summary.removed) == (1200, 1200, 1200)
+
+
+async def test_sessions_sharing_a_checkout_share_one_measurement(
+    tmp_path: Path, repo: Path
+) -> None:
+    class _Counting(GitCli):
+        calls = 0
+
+        async def diff_summary(self, path, base, copies=None):
+            _Counting.calls += 1
+            await asyncio.sleep(0.05)
+            return await super().diff_summary(path, base, copies)
+
+    harness = _Harness(tmp_path, repo)
+    sessions = [await harness.session() for _ in range(4)]
+    read = harness.reader(git=_Counting())
+
+    reads = await asyncio.gather(*(read(session) for session in sessions))
+
+    assert all(r is not None and r.shared for r in reads)
+    assert _Counting.calls == 1
+    await read(sessions[0])
+    assert _Counting.calls == 2, "a later read measures again; only concurrent ones share"

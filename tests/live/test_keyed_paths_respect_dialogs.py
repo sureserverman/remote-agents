@@ -37,7 +37,7 @@ from remote_agents.adapters.tmux.runtime import (
 from remote_agents.domain.models import ProfileId, SessionId
 from remote_agents.domain.profiles import closed_profiles
 from remote_agents.domain.remote_control import RemoteControlState
-from remote_agents.ports.terminal import AGENT_ASKING
+from remote_agents.ports.terminal import AGENT_ASKING, RemoteControlRefusal, RemoteControlRefused
 
 _MARKER = "keyed-drill-approved.txt"
 _ASK = f"Run the shell command `touch {_MARKER}` in this directory, then reply: done."
@@ -138,9 +138,12 @@ def test_a_real_dialog_refuses_both_and_an_idle_pane_takes_the_stop(tmp_path: Pa
         _wait_for_state(socket, pane_id, PaneState.DIALOG, 120.0)
 
         # 2. Neither key sequence reaches it.
-        toggled = asyncio.run(terminal.remote_control(session_id, RemoteControlState.ACTIVE))
+        # A refused press raises its reason (BL-109, DEC-084) rather than answering UNKNOWN,
+        # which is a reading the record would clear on.
+        with pytest.raises(RemoteControlRefused) as refused:
+            asyncio.run(terminal.remote_control(session_id, RemoteControlState.ACTIVE))
+        assert refused.value.reason is RemoteControlRefusal.ASKING
         stopped = asyncio.run(terminal.graceful_stop(session_id, _CLAUDE))
-        assert toggled is RemoteControlState.UNKNOWN, toggled
         assert (stopped.detail, stopped.live) == (AGENT_ASKING, True), stopped
         time.sleep(2.0)
         screen = _screen(socket, pane_id)

@@ -165,7 +165,9 @@ async def test_the_feed_holds_still_an_arrival_takes_the_cursor_and_limits_keep_
 
         async def drawn() -> bool:
             text = "\n".join(await _capture(socket))
-            return "Plan limits" in text and "✓ finished" in text
+            # The glyph cell is two wide: the kind glyph, then `~` for an inferred row or a
+            # space (sub-plan 3, Task 3.2), so a reported row reads `✓  finished`.
+            return "Plan limits" in text and re.search(r"✓[ ~] +finished", text) is not None
 
         assert await _until(drawn, 40.0), "\n".join(await _capture(socket))
         # Let the mount-time reloads (limits, feed, sessions) all land before the still pair.

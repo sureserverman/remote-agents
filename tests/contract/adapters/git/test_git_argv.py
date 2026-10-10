@@ -100,6 +100,8 @@ async def _sweep() -> tuple[_Recorder, set[str]]:
     called.add("status_lines")
     await cli.diff_summary(tree, "a" * 40)
     called.add("diff_summary")
+    await cli.merge_base(tree, "HEAD", "refs/heads/main")
+    called.add("merge_base")
     return recorder, called
 
 

@@ -251,7 +251,8 @@ def session_content(
         # width it is dropped before a single cell of the name is (`with_token`'s rule).
         room = flexible_room(cells, width, flexible=flexible)
         token = f" · {parts.git}"
-        if room is None or cells[flexible][0].cell_length + len(token) <= room:
+        unlaid = width is None or width <= 0
+        if unlaid or (room is not None and cells[flexible][0].cell_length + len(token) <= room):
             cells[flexible] = (cells[flexible][0] + Content.assemble((token, MUTED)), None)
     return columns(cells, width, flexible=flexible)
 

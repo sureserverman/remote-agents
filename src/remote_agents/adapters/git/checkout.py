@@ -36,8 +36,11 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import hashlib
 import os
+import re
 import signal
+import stat
 import tempfile
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -362,38 +365,103 @@ class GitCli:
         ).strip()
         return await asyncio.to_thread(_admin_for, Path(common), Path(_absolute(path)))
 
-    async def diff_summary(self, path: Path, base: str) -> GitSummary:
+    async def merge_base(self, path: Path, one: str, other: str) -> str | None:
+        result = await self._read(path, "merge-base", _ref(one), _ref(other), "--")
+        if result.returncode == 1:
+            return None
+        if result.returncode != 0:
+            raise GitRefused(_reason(result))
+        return _text(result.stdout).strip() or None
+
+    async def diff_summary(
+        self, path: Path, base: str, copies: Mapping[str, str] | None = None
+    ) -> GitSummary:
         base = _ref(base)
         # `--` ends the revisions: a base named like a top-level folder (`dev`, `docs`) is
-        # otherwise ambiguous and git refuses the whole call.
-        numstat = await self._read_ok(
-            path, "diff", *_DIFF_GUARDS, "--no-renames", "--numstat", "-z", base, "--"
+        # otherwise ambiguous and git refuses the whole call. `--shortstat` is one line however
+        # large the change, where a numstat of a few thousand files passed the output cap and
+        # cost the line exactly when it had the most to say. A binary file is a changed file
+        # with no lines in both. `--no-relative`: `diff.relative` would otherwise narrow the
+        # counts to a subfolder while `status` below stays whole.
+        shortstat = await self._read_ok(
+            path, "diff", *_DIFF_GUARDS, "--no-renames", "--no-relative", "--shortstat", base, "--"
         )
-        files = added = removed = 0
-        for entry in numstat.split(b"\0"):
-            fields = entry.split(b"\t")
-            if len(fields) < 2:
-                continue
-            files += 1
-            # A binary file reports `-` for both counts; it is a changed file with no lines.
-            added += int(fields[0]) if fields[0].isdigit() else 0
-            removed += int(fields[1]) if fields[1].isdigit() else 0
+        files, added, removed = _shortstat(_text(shortstat))
         ahead_raw = await self._read_ok(path, "rev-list", "--count", f"{base}..HEAD", "--")
         ahead_text = _text(ahead_raw).strip()
         head = await self.head(path)
         # Dirty in the summary's sense: anything `git status` reports without being asked
-        # for ignored files. A status too long to read is certainly not empty.
+        # for ignored files, but an untouched copy the worktree was given. A status too long
+        # to read is certainly not empty.
         status = await self._read(path, *_STATUS)
         if status.returncode != 0:
             raise GitRefused(_reason(status))
+        given = copies or {}
         return GitSummary(
             branch=head.branch,
             files=files,
             added=added,
             removed=removed,
             ahead=int(ahead_text) if ahead_text.isdigit() else 0,
-            dirty=status.truncated or bool(_entries(status.stdout)),
+            dirty=status.truncated
+            or any(not _untouched_copy(path, entry, given) for entry in _entries(status.stdout)),
         )
+
+
+_SHORTSTAT = re.compile(
+    r"(?P<files>\d+) files? changed"
+    r"(?:, (?P<added>\d+) insertions?\(\+\))?"
+    r"(?:, (?P<removed>\d+) deletions?\(-\))?"
+)
+
+
+def _shortstat(text: str) -> tuple[int, int, int]:
+    """`files, added, removed` from `diff --shortstat`; an empty line is no change."""
+    match = _SHORTSTAT.search(text)
+    if match is None:
+        if text.strip():
+            raise GitRefused(f"git diff --shortstat answered {text.strip()[:60]!r}")
+        return 0, 0, 0
+    return (
+        int(match["files"]),
+        int(match["added"] or 0),
+        int(match["removed"] or 0),
+    )
+
+
+_COPY_MAX_BYTES = 1024 * 1024
+"""The copier's own cap (`application/worktrees.py`): a larger file is never a copy."""
+
+
+def _untouched_copy(top: Path, entry: str, copies: Mapping[str, str]) -> bool:
+    """Whether a status entry is an untracked file the worktree was given, unchanged: its
+    recorded sha256 still matches, read without following a link. Spelled beside the cleanup
+    pass's own check (`application/worktree_cleanup._sha256`), which this layer cannot import."""
+    code, relative = entry[:2], entry[3:]
+    recorded = copies.get(relative)
+    if code != "??" or recorded is None:
+        return False
+    current = top
+    parts = Path(relative).parts
+    for part in parts[:-1]:
+        current = current / part
+        try:
+            if not stat.S_ISDIR(os.lstat(current).st_mode):
+                return False
+        except OSError:
+            return False
+    try:
+        descriptor = os.open(top.joinpath(*parts), os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    except OSError:
+        return False
+    try:
+        if not stat.S_ISREG(os.fstat(descriptor).st_mode):
+            return False
+        with os.fdopen(descriptor, "rb", closefd=False) as handle:
+            data = handle.read(_COPY_MAX_BYTES + 1)
+    finally:
+        os.close(descriptor)
+    return len(data) <= _COPY_MAX_BYTES and hashlib.sha256(data).hexdigest() == recorded
 
 
 _WORKTREE_REFS = ("refs/worktree", "refs/bisect", "refs/rewritten")

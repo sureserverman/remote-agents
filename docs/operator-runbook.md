@@ -787,8 +787,9 @@ A second session on a git project can run in its own worktree (BL-116). The READ
   `untrusted`, `running` or `stop requested`, and only for a project folder that is the top of
   its repository. A press while nothing contends launches as before. Schedules never ask and
   always launch in the shared folder (DEC-114).
-- **Where folders live.** `~/.local/state/remote-agents/worktrees/<project>/<session id>/`
-  (mode 0700), on branch `ra/<first 8 of the session id>`. The rows are `worktrees` and
+- **Where folders live.** `~/.local/state/remote-agents/worktrees/<project>/<session id>/`,
+  behind a `<project>/` folder made mode 0700 (git creates the session folder under your
+  umask), on branch `ra/<first 8 of the session id>`. The rows are `worktrees` and
   `session_worktrees` in `sessions.sqlite3` (migration 19).
 - **The copy list.** `[worktrees] copy` and `[worktrees.projects]` in `config.toml`, both
   optional; a missing table is not drift. A listed path that is absolute, contains `..`, or names
@@ -811,14 +812,22 @@ A second session on a git project can run in its own worktree (BL-116). The READ
   `removable` (the next pass takes it), or `git: …` / `fault: …`. It never moves `healthy`. An
   absent list means the store could not be read at this build's schema or the listing ran past
   its 30-second bound.
-- **Removing a kept worktree by hand.** Look first, then from the main checkout:
-  `git -C <project> worktree remove <path>` and `git -C <project> branch -d ra/<id>`. Use
-  `--force` / `-D` only once you know what you are discarding. The row stays recorded; the next
+- **Removing a kept worktree by hand.** Look first — `git -C <path> status --ignored` and
+  `git -C <project> log <base>..ra/<id>` — because unforced `worktree remove` refuses modified
+  and untracked files but **deletes ignored ones without asking**, and `branch -d` judges
+  "merged" against the main checkout's current branch, not the recorded base. Then, from the
+  main checkout: `git -C <project> worktree remove <path>` and
+  `git -C <project> branch -d ra/<id>`. Use `--force` / `-D` only once you know what you are
+  discarding. The row stays recorded; the next
   pass sees the folder, entry and branch gone and marks it removed.
-- **The git line.** Read live per render through `Backend.git_summary`, bounded at two seconds,
-  never stored. A worktree is measured against the commit it was cut from; a shared folder
-  against `HEAD`, prefixed `checkout:`. No line means no git, a read past its bound, or a folder
-  that is gone.
+- **The git line.** Read per render through `Backend.git_summary` (the terminal's row marks on its
+  one-minute context refresh), bounded at two seconds without waiting on git, one read per
+  folder at a time, never stored. A worktree is measured from the `merge-base` of its branch and
+  its base branch (the commit it was cut from when it has no base branch), with its unchanged
+  copies not counted as dirty; a shared folder against `HEAD`, prefixed `checkout:` — the whole
+  repository for a project that is a subfolder of one. Counts are `diff --shortstat`'s, so a
+  change of any size still has a line. No line means no git, a repository with no commit yet, a
+  read past its bound, a git refusal, or a folder that is gone.
 
 ## Telegram credential denial and recovery drill
 

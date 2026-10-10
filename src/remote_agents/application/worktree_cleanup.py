@@ -259,7 +259,15 @@ class WorktreeCleanupPass:
         return True
 
     async def _remove(self, worktree: Worktree) -> str | None:
-        """Claim, guard, remove. Answers the reason kept, or None once removed."""
+        """Guard, claim, guard again, remove. Answers the reason kept, or None once removed.
+
+        Judged once before the claim, read-only: a kept folder -- most of them, most passes --
+        is then never claimed and released, which would write the domain store twice a minute
+        per folder and wake every surface's store watcher for nothing. The judgment is asked
+        again under the claim, which is the one that decides."""
+        early = await self._judge(worktree)
+        if early.reason is not None:
+            return early.reason
         if not await self._store.claim_for_removal(worktree.path, at=self._clock()):
             return IN_USE
         try:

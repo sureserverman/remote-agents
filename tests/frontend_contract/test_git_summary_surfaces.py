@@ -209,3 +209,47 @@ def test_at_every_width_the_local_row_shows_the_whole_token_or_exactly_the_row_w
             tokened, width=width, state_width=7, age_width=3, gauge_width=4
         )
         assert "±6" in with_token.plain or with_token.plain == without.plain, width
+
+
+def test_a_row_too_narrow_to_lay_out_drops_the_token() -> None:
+    tokened = session_row_parts(_record("editor"), git=READ.summary)
+    narrow = session_content(tokened, width=12, state_width=7, age_width=3, gauge_width=4)
+    unlaid = session_content(tokened, width=None, state_width=7, age_width=3, gauge_width=4)
+
+    assert "±6" not in narrow.plain
+    assert "±6" in unlaid.plain
+
+
+async def test_the_local_detail_rests_on_its_first_action_not_on_the_git_fact() -> None:
+    from remote_agents.adapters.tui.app import RemoteAgentsTui
+    from remote_agents.adapters.tui.context import TuiContext
+    from remote_agents.application.profiles import ProfileAvailability
+
+    record = _record()
+
+    class _Launcher(_Sessions):
+        async def refresh_readiness(self):
+            return (self.record,)
+
+        async def copy_attach(self, _session_id):
+            return None
+
+    app = RemoteAgentsTui(
+        TuiContext(
+            backend=backend_for(
+                sessions=_Launcher(record),  # type: ignore[arg-type]
+                projects=object(),  # type: ignore[arg-type]
+                refresh_catalogue=tuple,
+                git_summary=_reader(READ),
+            ),
+            profiles=(ProfileAvailability("claude", True),),
+            attach_argv=lambda session_id: ("tmux", "attach-session", "-t", f"={session_id}"),
+        )
+    )
+    async with app.run_test() as pilot:
+        await app.show_detail(str(record.session_id))
+        await pilot.pause()
+        choices = app.screen.query_one("#choices", OptionList)
+        highlighted = choices.get_option_at_index(choices.highlighted)
+
+    assert str(highlighted.prompt) == "Copy attach"

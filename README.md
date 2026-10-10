@@ -1103,9 +1103,9 @@ branch, only when all of these hold:
 - `git status` lists nothing in it except the copied files, each byte-for-byte as copied.
 
 It never forces: git's own unforced `worktree remove` and `branch -d` do the work, and a
-refusal leaves the folder. Anything else is kept, and `remote-agents doctor` lists every kept
-worktree as `path · branch · reason` (`unmerged`, `not on its branch`, `dirty`, `in use`,
-`detached base`, or a `git:` reason).
+refusal leaves the folder. Anything else is kept, and `remote-agents doctor` lists every
+worktree not yet removed as `path · branch · reason` (`unmerged`, `not on its branch`, `dirty`,
+`in use`, `detached base`, `removable` — the next pass takes it — or a `git:` / `fault:` reason).
 
 **Removing a kept worktree by hand.** Merge or keep what is in it first, then from the main
 checkout:
@@ -1115,14 +1115,23 @@ git -C <project> worktree remove <worktree path>
 git -C <project> branch -d ra/<id>
 ```
 
-Both refuse to lose work; `--force` and `-D` are yours to choose after you have looked.
+Neither is safe by itself: `worktree remove` refuses modified or untracked files but **deletes
+ignored files without asking** (`.env`, `.venv`, build output, the copied `CLAUDE.md`), and
+`branch -d` judges "merged" against the main checkout's current branch. Look with
+`git -C <worktree path> status --ignored` and `git log <base>..ra/<id>` first. `--force` and `-D`
+are yours to choose after that.
 
 **The git line.** Every session's detail shows a `git` line — for a worktree, its branch and its
-own changes against the commit it was cut from (`ra/3f2a1b2c · 6 files +182 −74 · 2 ahead ·
-dirty`); for a shared folder, the whole checkout, prefixed `checkout:`, since every session there
-shares it. Each row in the session list carries a short `±6` when files changed, dropped first
-when the row is narrow. The line is read live, bounded at two seconds, and never stored; a folder
-outside git shows no line.
+own changes since its branch and its base branch last met, so merging or rebasing the base in
+does not count the base's commits as its own (`ra/3f2a1b2c · 6 files +182 −74 · 2 ahead ·
+dirty`); its unchanged copies are not dirt. For a shared folder it is the whole checkout,
+prefixed `checkout:`, since every session there shares it — for a project that is a subfolder
+of its repository, the whole repository. Each row in the session list carries a short `±6` when
+tracked files changed, or a bare `±` when only untracked ones did; on a shared folder that mark
+is the checkout's, not the session's own. It is dropped first when the row is narrow. The line
+is read on each render (the terminal's row marks every minute), bounded at two seconds, and
+never stored. No line means no git, a repository with no commit yet, a read past its bound, or a
+folder that is gone.
 
 ## Creating a project
 

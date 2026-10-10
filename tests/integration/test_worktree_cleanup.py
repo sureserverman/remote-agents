@@ -848,3 +848,15 @@ async def test_only_the_first_pass_gives_back_claims_a_dead_run_left(
 
     assert await harness.cleanup.pass_once() == CleanupReport(removed=(), kept={})
     await _kept(harness, worktree)
+
+
+async def test_a_kept_folder_costs_the_store_no_write_on_a_pass(tmp_path: Path, repo: Path) -> None:
+    harness = _Harness(tmp_path, repo)
+    session, worktree = await harness.worktree()
+    _commit_in(worktree.path)
+    harness.end(session)
+    await harness.cleanup.pass_once()  # the first pass gives back stale claims: a write
+    before = harness.connection.total_changes
+
+    assert (await harness.cleanup.pass_once()).kept == {worktree.path: UNMERGED}
+    assert harness.connection.total_changes == before

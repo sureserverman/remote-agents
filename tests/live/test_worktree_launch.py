@@ -106,7 +106,6 @@ async def test_a_worktree_launch_inherits_or_asks_for_trust_as_measured(
     branch = f"ra/{str(session_id)[:8]}"
     worktree = (tmp_path / "worktrees" / str(session_id)).resolve()
     worktree.parent.mkdir(parents=True)
-    _git(repository, "worktree", "add", "-q", "-b", branch, str(worktree), "HEAD")
     environment = {
         key: os.environ[key]
         for key in ("HOME", "LANG", "LC_ALL", "PATH", "TERM")
@@ -115,17 +114,18 @@ async def test_a_worktree_launch_inherits_or_asks_for_trust_as_measured(
     profile = build_launch_profile(definition, Path(executable), session_id, environment)
     project_id = ProjectId("trusted")
     socket = f"remote-agents-test-{session_id.value.hex}"
-    subprocess.run(
-        ("tmux", "-L", socket, "-f", "/dev/null", "new-session", "-d", "-s", "hold")
-        + ("-x", "160", "-y", "40", ";", "set-option", "-g", "default-size", "160x40"),
-        check=True,
-    )
 
     async def folder_for(_session: SessionId, _project: ProjectId) -> Path:
         return worktree
 
     screen = ""
     try:
+        _git(repository, "worktree", "add", "-q", "-b", branch, str(worktree), "HEAD")
+        subprocess.run(
+            ("tmux", "-L", socket, "-f", "/dev/null", "new-session", "-d", "-s", "hold")
+            + ("-x", "160", "-y", "40", ";", "set-option", "-g", "default-size", "160x40"),
+            check=True,
+        )
         gateway = TmuxGateway(socket, AsyncTmuxRunner(), intent_directory=tmp_path / "intents")
         terminal = TmuxTerminal(
             gateway,
@@ -147,6 +147,13 @@ async def test_a_worktree_launch_inherits_or_asks_for_trust_as_measured(
         deleted = subprocess.run(
             ("git", "-C", str(repository), "branch", "-d", branch), capture_output=True, text=True
         )
+        if removed.returncode or deleted.returncode:
+            # Said even when an earlier failure is propagating, so a leftover in an owner's
+            # repository is never silent.
+            print(
+                f"LEFTOVER in {repository}: worktree remove -> {removed.stderr.strip()!r}; "
+                f"branch -d {branch} -> {deleted.stderr.strip()!r}"
+            )
 
     report = os.environ.get("REMOTE_AGENTS_WORKTREE_REPORT")
     if report:

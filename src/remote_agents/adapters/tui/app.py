@@ -135,6 +135,9 @@ from remote_agents.ports.terminal import RemoteControlRefused
 _LOG = logging.getLogger(__name__)
 
 CONTEXT_AUTO_REFRESH = 60.0
+#: How many session git reads the row-mark refresh runs at once: each is several git processes,
+#: and the reader already shares one measurement between sessions of one checkout (BL-117).
+_GIT_READS_AT_ONCE = 4
 """How often the per-row context gauges are re-read from the providers, in seconds.
 
 Six times slower than the sessions repaint, and the gap is the whole performance argument: a
@@ -2551,7 +2554,10 @@ class RemoteAgentsTui(App[AttachRequest | None]):
         was read, not something that was read once.
         """
         records = tuple(records)
-        await self._refresh_git_reads(records)
+        # Side by side: a slow git read must not hold the gauges back, nor the reverse.
+        await asyncio.gather(self._refresh_git_reads(records), self._refresh_usage(records))
+
+    async def _refresh_usage(self, records: tuple[SessionRecord, ...]) -> None:
         reader = self._services.backend.usage
         if reader is None:
             return
@@ -2577,12 +2583,17 @@ class RemoteAgentsTui(App[AttachRequest | None]):
             self._git_reads = {}
             return
 
+        # At most a few at once: each read is several git processes, and a listing of thirty
+        # sessions must not start a hundred and fifty at the same moment.
+        gate = asyncio.Semaphore(_GIT_READS_AT_ONCE)
+
         async def one(record: SessionRecord) -> SessionGit | None:
-            try:
-                return await reader(record.session_id)
-            except Exception:
-                _LOG.debug("a session git read failed", exc_info=True)
-                return None
+            async with gate:
+                try:
+                    return await reader(record.session_id)
+                except Exception:
+                    _LOG.debug("a session git read failed", exc_info=True)
+                    return None
 
         reads = await asyncio.gather(*(one(record) for record in records))
         self._git_reads = {

@@ -471,3 +471,32 @@ def test_a_failed_reflog_read_is_no_answer_for_a_ref_that_exists() -> None:
     assert _reflog(failed, exists=False) == set()
     with pytest.raises(GitRefused):
         _reflog(failed, exists=True)
+
+
+async def test_merge_base_names_where_two_branches_met_or_none(repo: Path, tmp_path: Path) -> None:
+    cli = GitCli()
+    base = _git(repo, "rev-parse", "HEAD")
+    _git(repo, "checkout", "-q", "-b", "side")
+    _git(repo, "commit", "-q", "--allow-empty", "-m", "side")
+    _git(repo, "checkout", "-q", "main")
+    _git(repo, "commit", "-q", "--allow-empty", "-m", "main")
+    assert await cli.merge_base(repo, "main", "side") == base
+    _git(repo, "checkout", "-q", "--orphan", "lonely")
+    _git(repo, "commit", "-q", "--allow-empty", "-m", "unrelated")
+    assert await cli.merge_base(repo, "lonely", "main") is None
+
+
+@pytest.mark.parametrize(
+    ("text", "counts"),
+    [
+        ("", (0, 0, 0)),
+        (" 1 file changed, 3 insertions(+), 1 deletion(-)\n", (1, 3, 1)),
+        (" 2 files changed, 5 insertions(+)\n", (2, 5, 0)),
+        (" 1 file changed, 2 deletions(-)\n", (1, 0, 2)),
+        (" 1 file changed, 0 insertions(+), 0 deletions(-)\n", (1, 0, 0)),
+    ],
+)
+def test_shortstat_reads_every_shape_git_prints(text: str, counts: tuple[int, int, int]) -> None:
+    from remote_agents.adapters.git.checkout import _shortstat
+
+    assert _shortstat(text) == counts
