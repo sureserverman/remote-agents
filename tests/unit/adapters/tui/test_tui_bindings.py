@@ -420,6 +420,40 @@ async def test_selected_session_on_a_sessions_position_answers_from_its_own_curs
         assert console.reads == 0, "a position with its own cursor read the console anyway"
 
 
+async def test_selected_session_on_the_dashboard_answers_from_its_own_cursor() -> None:
+    """The dashboard is refused the session keys but still resolves from its cursor (BL-044).
+
+    `PositionKind.CURSOR`'s second half. `d` reaches `highlighted_session` directly, so only
+    `selected_session` shows that the resolver, not just the screen, answers from the
+    dashboard's sessions pane. Classifying the dashboard as a position with no cursor would
+    send it to the console's published selection instead, a session the owner is not looking
+    at.
+    """
+    console = SelectionConsole(selected=SessionId.new())
+    records = (_record(ordinal=1), _record(ordinal=2))
+    app = RemoteAgentsTui(
+        replace(
+            _context(_Listing(records)),
+            console_read_selection=console.read,
+            console_holds_slot=console.holds_console_slot,
+        )
+    )
+
+    async with app.run_test(size=(120, 30)) as pilot:
+        await pilot.pause()
+        pane = app.screen.query_one("#sessions-pane", OptionList)
+        pane.highlighted = 1
+        highlighted = app.screen.highlighted_session()
+        before = console.reads
+        selected = await app.selected_session()
+        reads = console.reads - before
+
+    assert highlighted is not None, "the dashboard's sessions pane listed nothing to point at"
+    assert selected == highlighted, "the dashboard resolved a session other than its cursor's"
+    assert selected != str(console.selected)
+    assert reads == 0, "the dashboard read the console's selection although it owns a cursor"
+
+
 async def test_selected_session_elsewhere_answers_from_the_published_selection() -> None:
     """The projects pane has no sessions list, so the answer comes from the pane that does.
 

@@ -287,11 +287,11 @@ def test_the_f_key_layer_is_offered_exactly_where_the_bare_keys_are() -> None:
 def test_no_screen_declares_two_of_the_three_position_flags() -> None:
     """`carries_row_keys`, `owns_session_cursor` and `about_one_session` are disjoint answers.
 
-    The two resolvers that read them -- `_offers_session_key` and `_resolve_session` -- test
-    them in different orders, which is harmless only while no screen sets two. Nothing said so,
-    which made the orderings *accidentally* irrelevant rather than provably so: a screen setting
-    two would be offered the layer by one rule and resolved by the other, and which session F8
-    acted on would depend on which method got there first.
+    They are the input of the one classifier, `_position_kind`, that both `_offers_session_key`
+    and `_resolve_session` branch on. The classifier reads them in one fixed order, so a screen
+    setting two would be classified by whichever flag that order reaches first, silently. This
+    test keeps that order from ever mattering: every screen sets at most one flag, apart from
+    the rows-and-cursor pair the classifier names `ROWS`.
 
     The one implication that must hold is asserted with it: a screen carrying the row keys owns
     a cursor for them to act on. Without it, a screen could declare `carries_row_keys`, be
@@ -325,6 +325,48 @@ def test_no_screen_declares_two_of_the_three_position_flags() -> None:
         f"published selection while the bare letter resolves from nothing: {keys_without_cursor}"
     )
 
+
+
+def test_every_screen_has_one_position_kind_and_both_resolvers_agree_with_it() -> None:
+    """Every screen's kind follows from its flags, and neither resolver reads a flag itself.
+
+    The two cases the table exists for are named: `SessionsScreen` sets the row keys *and* a
+    cursor and is `ROWS`; `DashboardScreen` owns a cursor without the row keys and is `CURSOR`,
+    refused by `_offers_session_key` but resolved from its cursor by `_resolve_session`. A
+    resolver that read a flag on its own could disagree with the classifier again, which is the
+    drift this replaced, so the sources are checked for flag reads outside `_position_kind`.
+    """
+    from remote_agents.adapters.tui.app import PositionKind, _position_kind
+    from remote_agents.adapters.tui.screens import ALL_SCREENS
+    from remote_agents.adapters.tui.screens.dashboard import DashboardScreen
+    from remote_agents.adapters.tui.screens.sessions import SessionsScreen
+
+    def expected(screen: type) -> PositionKind:
+        if getattr(screen, "carries_row_keys", False):
+            return PositionKind.ROWS
+        if getattr(screen, "owns_session_cursor", False):
+            return PositionKind.CURSOR
+        if getattr(screen, "about_one_session", False):
+            return PositionKind.SUBJECT
+        return PositionKind.PUBLISHED
+
+    disagreeing = {
+        screen.__name__: (_position_kind(screen), expected(screen))
+        for screen in ALL_SCREENS
+        if _position_kind(screen) is not expected(screen)
+    }
+    assert not disagreeing, f"(classified, from the flags): {disagreeing}"
+    assert _position_kind(SessionsScreen) is PositionKind.ROWS
+    assert _position_kind(DashboardScreen) is PositionKind.CURSOR
+    kinds = {_position_kind(screen) for screen in ALL_SCREENS}
+    assert {PositionKind.ROWS, PositionKind.CURSOR, PositionKind.SUBJECT} <= kinds
+
+    flags = ("carries_row_keys", "owns_session_cursor", "about_one_session")
+    for resolver in (RemoteAgentsTui._offers_session_key, RemoteAgentsTui._resolve_session):
+        source = inspect.getsource(resolver)
+        assert "_position_kind(" in source, f"{resolver.__name__} does not ask the classifier"
+        read_directly = [flag for flag in flags if f'"{flag}"' in source]
+        assert not read_directly, f"{resolver.__name__} reads {read_directly} itself"
 
 def test_every_screen_can_answer_the_stop_handler_it_now_inherits() -> None:
     """A universal handler is only universal if every screen can take the calls it makes.

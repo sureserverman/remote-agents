@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import dataclasses
+import enum
 import logging
 from collections.abc import Callable, Iterable
 from datetime import UTC, datetime
@@ -186,6 +187,44 @@ QUIT_KEYS = frozenset({"ctrl+q", "f10", "q"})
 #: The bare printable keys the app binds beside the F-keys. Each is a character wherever an
 #: `Input` holds the keyboard, which `check_action` answers in one place for all of them.
 _BARE_KEY_ACTIONS = frozenset({"bare_help", "back_or_quit", "bare_palette"})
+
+
+class PositionKind(enum.Enum):
+    """Which session a position's session-shaped F-key acts on, decided once for both resolvers.
+
+    `_offers_session_key` and `_resolve_session` used to read the three position flags
+    themselves, in different orders, which was harmless only because no screen sets two of
+    them (`test_no_screen_declares_two_of_the_three_position_flags`). They now branch on this.
+    """
+
+    #: Carries the bare row keys, so it owns a cursor for them (`SessionsScreen`): offered, and
+    #: resolved from the highlighted row.
+    ROWS = "rows"
+    #: Owns a sessions cursor but carries no row keys (`DashboardScreen`): refused, because the
+    #: F-key must not make a stop the bare letter cannot make there; resolved from its cursor.
+    CURSOR = "cursor"
+    #: About one session (a detail): offered when it can name that session, resolved to it.
+    SUBJECT = "subject"
+    #: None of the three: offered under console hosting, resolved from the published selection.
+    PUBLISHED = "published"
+
+
+def _position_kind(screen: object) -> PositionKind:
+    """Classify a position by its flags, reading each of the three exactly once.
+
+    `getattr` on every flag, because not every screen is a `ChoiceScreen` (the modals in
+    `confirm.py` are `ModalScreen`s outside that hierarchy). A screen without the flags is
+    `PUBLISHED`, never an `AttributeError` out of a key handler, which this file records as the
+    class that has already killed the app once. Takes a class as readily as an instance: the
+    flags are class attributes, which is how the architecture test drives it over every screen.
+    """
+    if getattr(screen, "carries_row_keys", False):
+        return PositionKind.ROWS
+    if getattr(screen, "owns_session_cursor", False):
+        return PositionKind.CURSOR
+    if getattr(screen, "about_one_session", False):
+        return PositionKind.SUBJECT
+    return PositionKind.PUBLISHED
 
 
 class RemoteAgentsTui(App[AttachRequest | None]):
@@ -782,11 +821,12 @@ class RemoteAgentsTui(App[AttachRequest | None]):
             # absent key rather than an `AttributeError` out of a key handler, which this file
             # records elsewhere as the class that has already killed the app once.
             return False
-        if getattr(screen, "carries_row_keys", False):
+        kind = _position_kind(screen)
+        if kind is PositionKind.ROWS:
             return True
-        if getattr(screen, "owns_session_cursor", False):
+        if kind is PositionKind.CURSOR:
             return False
-        if getattr(screen, "about_one_session", False):
+        if kind is PositionKind.SUBJECT:
             return getattr(screen, "subject_session", lambda: None)() is not None
         return self.services.console_holds_slot is not None
 
@@ -1576,19 +1616,21 @@ class RemoteAgentsTui(App[AttachRequest | None]):
         console at all.
         """
         screen = self.screen
-        if getattr(screen, "about_one_session", False):
+        kind = _position_kind(screen)
+        if kind is PositionKind.SUBJECT:
             # A screen that is about one session acts on that one, and a screen that is about
             # one it cannot name acts on nothing. Never a fall-through to the published
             # selection: F9 on session A's detail acting on session B is the same defect
             # the gate below exists for, arriving from inside the console rather than outside.
-            # `getattr` on both, consistently: the flag is read defensively because not every
-            # screen is a `ChoiceScreen` (the modals in `confirm.py` are `ModalScreen`s outside
-            # that hierarchy), and a screen that sets the flag without the method would
-            # otherwise raise `AttributeError` straight out of a key handler — the class this
-            # file records as having already killed the app once.
+            # `getattr` on the method too, for the reason `_position_kind` reads the flags
+            # that way: a screen that sets the flag without the method would otherwise raise
+            # `AttributeError` straight out of a key handler.
             subject = getattr(screen, "subject_session", lambda: None)()
             return subject, "This screen names no session."
-        if getattr(screen, "owns_session_cursor", False):
+        if kind in (PositionKind.ROWS, PositionKind.CURSOR):
+            # A screen carrying the row keys owns a cursor for them to act on
+            # (`test_no_screen_declares_two_of_the_three_position_flags` pins that), so both
+            # kinds answer from the row the cursor rests on.
             return screen.highlighted_session(), _NOTHING_SELECTED
         if not await self._holds_console_slot():
             return None, "Session keys act on the console's own panes."
