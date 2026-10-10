@@ -96,7 +96,9 @@ class GitCheckout(Protocol):
 
     async def status_lines(self, path: Path) -> tuple[str, ...]:
         """Every `git status --porcelain` entry at `path`, each `XY <path>`: modified, untracked
-        (`??`) and ignored (`!!`), every untracked and ignored *file* listed on its own.
+        (`??`) and ignored (`!!`), every untracked and ignored *file* listed on its own. A tracked
+        file marked `assume-unchanged` or `skip-worktree` is listed too, as `h? <path>` /
+        `S? <path>` (its `ls-files -v` tag), since `status` hides its edits.
 
         Raises `GitRefused` when the listing is longer than the adapter will read, rather than
         return one missing its tail."""

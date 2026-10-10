@@ -222,3 +222,21 @@ async def test_a_base_named_like_a_folder_or_shadowed_by_a_tag_still_resolves(
     assert (await cli.head(repo)).branch == "main"
     head = _git(repo, "rev-parse", "HEAD")
     assert await cli.is_ancestor(repo, head, "refs/heads/main") is True
+
+
+async def test_an_edit_git_was_told_to_hide_is_still_listed(repo: Path, tmp_path: Path) -> None:
+    """The same class as an ignored file: `assume-unchanged` and `skip-worktree` hide an edit
+    from `status`, and `worktree remove` deletes it without asking (git 2.43.0)."""
+    (repo / "g.txt").write_text("g\n", encoding="utf-8")
+    _git(repo, "add", "g.txt")
+    _git(repo, "commit", "-q", "-m", "g")
+    cli = GitCli()
+    tree = tmp_path / "wt"
+    await cli.add_worktree(repo, tree, "ra/abcd1234", _git(repo, "rev-parse", "HEAD"))
+    _git(tree, "update-index", "--assume-unchanged", "f.txt")
+    _git(tree, "update-index", "--skip-worktree", "g.txt")
+    (tree / "f.txt").write_text("hidden edit\n", encoding="utf-8")
+    (tree / "g.txt").write_text("hidden edit\n", encoding="utf-8")
+    assert _git(tree, "status", "--porcelain") == ""
+
+    assert set(await cli.status_lines(tree)) == {"h? f.txt", "S? g.txt"}

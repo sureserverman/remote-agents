@@ -23,8 +23,9 @@ and writes into unlinked temporary files, not pipes. A hook, filter or fsmonitor
 starts inherits those, and with pipes it held them open: asyncio's `wait()` does not return
 until every holder closes them, so a backgrounded hook made a finished `worktree add` read as
 a timeout, and a hung one made the bound no bound at all. With files, the call ends when git
-does. The whole group is then killed -- on success, timeout or cancellation alike -- so nothing
-this call started keeps writing into a worktree after it returns.
+does. git's process group is then killed -- on success, timeout or cancellation alike -- so
+nothing git started keeps writing into a worktree after it returns, short of a hook that
+deliberately left the group (`setsid`), which no group kill can reach.
 
 **Output is capped, and a capped answer is not an answer.** At most `OUTPUT_CAP_BYTES` is
 read. A read whose output was longer raises `GitRefused` rather than return a list missing its
@@ -77,10 +78,19 @@ class GitResult:
 
 
 class GitRunner(Protocol):
-    """Argument-vector subprocess boundary, bounded by an explicit timeout."""
+    """Argument-vector subprocess boundary, bounded by an explicit timeout.
+
+    `keep`, when given, is the set of first bytes a NUL-separated stdout entry must start
+    with to be kept: only kept entries are returned, and only they count toward the cap.
+    """
 
     async def run(
-        self, argv: tuple[str, ...], *, env: Mapping[str, str], timeout: float
+        self,
+        argv: tuple[str, ...],
+        *,
+        env: Mapping[str, str],
+        timeout: float,
+        keep: frozenset[int] | None = None,
     ) -> GitResult: ...
 
 
@@ -88,7 +98,12 @@ class ProcessGitRunner:
     """Run one git argv without a shell, `stdin` closed, in its own process group."""
 
     async def run(
-        self, argv: tuple[str, ...], *, env: Mapping[str, str], timeout: float
+        self,
+        argv: tuple[str, ...],
+        *,
+        env: Mapping[str, str],
+        timeout: float,
+        keep: frozenset[int] | None = None,
     ) -> GitResult:
         with tempfile.TemporaryFile() as stdout, tempfile.TemporaryFile() as stderr:
             try:
@@ -113,7 +128,10 @@ class ProcessGitRunner:
                 if process.returncode is None:
                     with contextlib.suppress(TimeoutError):
                         await asyncio.wait_for(process.wait(), timeout=_REAP_SECONDS)
-            out, truncated = _read_back(stdout, OUTPUT_CAP_BYTES)
+            if keep is None:
+                out, truncated = _read_back(stdout, OUTPUT_CAP_BYTES)
+            else:
+                out, truncated = _read_entries(stdout, keep, OUTPUT_CAP_BYTES)
             err, _ = _read_back(stderr, _STDERR_CAP_BYTES)
         return GitResult(process.returncode or 0, out, err, truncated)
 
@@ -133,6 +151,23 @@ def _read_back(file: IO[bytes], cap: int) -> tuple[bytes, bool]:
     file.seek(0)
     data = file.read(cap + 1)
     return data[:cap], len(data) > cap
+
+
+def _read_entries(file: IO[bytes], keep: frozenset[int], cap: int) -> tuple[bytes, bool]:
+    """The NUL-separated entries starting with a byte in `keep`, read a chunk at a time."""
+    file.seek(0)
+    kept = bytearray()
+    pending = b""
+    while chunk := file.read(65536):
+        *whole, pending = (pending + chunk).split(b"\0")
+        for entry in whole:
+            if entry and entry[0] in keep:
+                if len(kept) + len(entry) + 1 > cap:
+                    return bytes(kept), True
+                kept += entry + b"\0"
+    if pending and pending[0] in keep:
+        kept += pending
+    return bytes(kept), False
 
 
 def _verb_of(argv: tuple[str, ...]) -> str:
@@ -180,12 +215,14 @@ class GitCli:
         self._read_timeout = read_timeout
         self._write_timeout = write_timeout
 
-    async def _read(self, path: Path, *args: str) -> GitResult:
+    async def _read(self, path: Path, *args: str, keep: frozenset[int] | None = None) -> GitResult:
         argv = (*_READ_PREFIX, "-C", str(path), *args)
-        return await self._runner.run(argv, env=_READ_ENV, timeout=self._read_timeout)
+        if keep is None:
+            return await self._runner.run(argv, env=_READ_ENV, timeout=self._read_timeout)
+        return await self._runner.run(argv, env=_READ_ENV, timeout=self._read_timeout, keep=keep)
 
-    async def _read_ok(self, path: Path, *args: str) -> bytes:
-        result = await self._read(path, *args)
+    async def _read_ok(self, path: Path, *args: str, keep: frozenset[int] | None = None) -> bytes:
+        result = await self._read(path, *args, keep=keep)
         if result.returncode != 0:
             raise GitRefused(_reason(result))
         if result.truncated:
@@ -236,7 +273,13 @@ class GitCli:
         # entry each: `worktree remove` refuses modified and untracked files but deletes ignored
         # ones without asking, and the files a worktree copies in are usually ignored ones.
         raw = await self._read_ok(path, *_STATUS, "--ignored=traditional")
-        return _entries(raw)
+        # `assume-unchanged` and `skip-worktree` hide a tracked file's edit from `status`, and
+        # `worktree remove` deletes that edit too. `ls-files -v` tags such a file with a
+        # lowercase letter or `S`; each is listed as `<tag>? <path>`, edited or not, because
+        # git will not say which.
+        flagged = await self._read_ok(path, "ls-files", "-v", "-z", keep=_HIDDEN_TAGS)
+        hidden = tuple(f"{entry[0]}? {entry[2:]}" for entry in _entries(flagged))
+        return _entries(raw) + hidden
 
     async def diff_summary(self, path: Path, base: str) -> GitSummary:
         base = _ref(base)
@@ -271,6 +314,9 @@ class GitCli:
             dirty=status.truncated or bool(_entries(status.stdout)),
         )
 
+
+_HIDDEN_TAGS = frozenset(b"abcdefghijklmnopqrstuvwxyzS")
+"""`ls-files -v` tags for a tracked file whose changes git will not report."""
 
 _STATUS = ("status", "--porcelain=v1", "-z", "--untracked-files=all", "--no-renames")
 

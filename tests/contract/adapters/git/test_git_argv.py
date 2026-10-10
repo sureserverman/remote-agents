@@ -35,7 +35,12 @@ class _Recorder:
         self.calls: list[tuple[tuple[str, ...], dict[str, str], float]] = []
 
     async def run(
-        self, argv: tuple[str, ...], *, env: Mapping[str, str], timeout: float
+        self,
+        argv: tuple[str, ...],
+        *,
+        env: Mapping[str, str],
+        timeout: float,
+        keep: frozenset[int] | None = None,
     ) -> GitResult:
         self.calls.append((argv, dict(env), timeout))
         if "--show-toplevel" in argv:
@@ -269,3 +274,17 @@ async def test_a_relative_worktree_path_is_refused_before_git_runs() -> None:
     with pytest.raises(GitError):
         await cli.remove_worktree(Path("/repo"), Path("wt"))
     assert recorder.calls == []
+
+
+async def test_a_large_tracked_tree_does_not_trip_the_cap_on_the_hidden_edit_check(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`ls-files -v` lists every tracked file. Only the flagged ones are kept, so a repository
+    with thousands of files is still readable, and its one hidden edit is still found."""
+    _fake_git(
+        tmp_path,
+        'case "$*" in *ls-files*) i=0; while [ $i -lt 20000 ]; do '
+        'printf "H src/module_%05d.py\\0" $i; i=$((i+1)); done; printf "h f.txt\\0";; esac\n',
+    )
+    monkeypatch.setenv("PATH", f"{tmp_path}{os.pathsep}{os.environ['PATH']}")
+    assert await GitCli().status_lines(tmp_path) == ("h? f.txt",)
