@@ -88,9 +88,29 @@ def test_hooks_contract(descriptor, tmp_path: Path) -> None:
 
 
 def test_activity_contract(descriptor) -> None:
-    """Placeholder capability: conditional everywhere until a vertical wires one."""
-    wired = drive_or_skip(descriptor, "activity")
-    assert wired is not None  # unreachable today; the skip carries the condition
+    """The hook licence admits exactly the events the installer subscribes the hook to.
+
+    The one installed event a licence does not list is the turn-start event of a provider whose
+    hook marks turns: the spool answers it with the marker and returns before reading a record
+    (DEC-104), so listing it would license a record no path writes. A licence listing an event
+    nobody installs admits what never fires; one missing an installed event drops every record
+    that event carries, silently, on both surfaces (BL-050).
+    """
+    licence = drive_or_skip(descriptor, "activity")
+    from remote_agents.adapters.agents.activity_spool import TURN_STARTED
+    from remote_agents.adapters.agents.registry import _provider
+    from remote_agents.ports.provider_descriptor import HookLicence
+
+    assert isinstance(licence, HookLicence)
+    assert descriptor.hooks is not None, (
+        f"{descriptor.profile_id} licenses a hook it never installs"
+    )
+    installed = set(_provider(descriptor.hooks).installed_events)
+    marker = {TURN_STARTED} if licence.starts_turn_marker else set()
+    assert set(licence.events) == installed - marker, (
+        f"{descriptor.profile_id}'s licence admits {sorted(licence.events)} but its hook is "
+        f"installed for {sorted(installed)}"
+    )
 
 
 def test_remote_control_contract(descriptor) -> None:

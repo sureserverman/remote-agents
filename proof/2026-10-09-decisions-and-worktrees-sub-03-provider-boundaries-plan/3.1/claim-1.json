@@ -1,0 +1,28 @@
+{
+ "baseline": {
+  "elapsed_s": 1.4,
+  "exit": 0,
+  "tail": "........................................................................ [ 40%]\ns.ss........................s........................................... [ 80%]\n.............s...s................                                       [100%]\n=========================== short test summary info ============================\nSKIPPED [1] tests/provider_contract/kit.py:39: unsupported by declaration: claude's toggle is a pane action, not a host one; the registry declares None [requirements.py]\nSKIPPED [1] tests/provider_contract/kit.py:39: unsupported by declaration: opencode has no remote control; the registry declares None [requirements.py]\nSKIPPED [1] tests/provider_contract/kit.py:39: unsupported by declaration: cursor has no remote control; the registry declares None [requirements.py]\nSKIPPED [1] tests/provider_contract/kit.py:39: unsupported by declaration: no limit sentence measured for opencode; the registry declares None [requirements.py]\nSKIPPED [2] tests/provider_contract/kit.py:39: unsupported by declaration: opencode raises no folder-trust dialog at all; the registry declares None [requirements.py]\n172 passed, 6 skipped in 1.09s"
+ },
+ "break_patch": "--- a/src/remote_agents/adapters/agents/codex/__init__.py\n+++ b/src/remote_agents/adapters/agents/codex/__init__.py\n@@ -39,7 +39,7 @@\n         # amended). Its `codex` child is reclaimed through `Backend.close_usage_readers`.\n         usage=CodexAccountLimitsReader(),\n         hooks=\"codex\",\n-        activity=HOOK_LICENCE,\n+\n         remote_control=CodexRemoteControl(),\n         # Measured 2026-09-28 on codex-cli 0.158.0, which redrew the dialog (acceptance\n         # 2026-09-09 \u00a7 9): \"Trust this folder?\" under a `Folder access` heading, the cursor\n",
+ "build": null,
+ "created": "2026-10-10T17:30:33+00:00",
+ "fingerprint": "480b4407d5bb5e049f4a16eb0f44c2785518de176c685c443d8bdcdd48721251",
+ "index": 1,
+ "kind": "claim",
+ "named_break": null,
+ "no_build_reason": "pure python, no build",
+ "plan": "/mnt/vault/Portfolio/infra/remote-agents/plans/2026-10-09-decisions-and-worktrees-sub-03-provider-boundaries-plan.md",
+ "red": {
+  "elapsed_s": 1.3,
+  "exit": 1,
+  "tail": "            wired = getattr(descriptor, capability)\n            if wired is None:\n                pytest.skip(f\"conditional, condition unmet: {reason} [requirements.py]\")\n            return wired\n        wired = getattr(descriptor, capability)\n>       assert wired is not None, (\n               ^^^^^^^^^^^^^^^^^\n            f\"{descriptor.profile_id}.{capability} declared supported but wired None\"\n        )\nE       AssertionError: codex.activity declared supported but wired None\n\ntests/provider_contract/kit.py:46: AssertionError\n__ test_every_capability_has_exactly_one_declared_state[codex-activity-None] ___\n\nprofile = 'codex', capability = 'activity', wired = None\n\n    @pytest.mark.parametrize((\"profile\", \"capability\", \"wired\"), list(_rows()))\n    def test_every_capability_has_exactly_one_declared_state(profile, capability, wired) -> None:\n        declared = DECLARATIONS[profile][capability]\n        assert isinstance(declared, tuple) and isinstance(declared[0], Requirement), declared\n        state, reason = declared\n        assert reason, f\"{profile}.{capability} declares no reason\"\n        if state is Requirement.SUPPORTED:\n>           assert wired is not None, (\n                f\"{profile}.{capability} is declared supported but the registry wired None \u2014 \"\n                \"the declaration invents a capability (DEC-061)\"\n            )\nE           AssertionError: codex.activity is declared supported but the registry wired None \u2014 the declaration invents a capability (DEC-061)\nE           assert None is not None\n\ntests/provider_contract/test_requirements_match_registry.py:31: AssertionError\n=========================== short test summary info ============================\nSKIPPED [1] tests/provider_contract/kit.py:39: unsupported by declaration: claude's toggle is a pane action, not a host one; the registry declares None [requirements.py]\nSKIPPED [1] tests/provider_contract/kit.py:39: unsupported by declaration: opencode has no remote control; the registry declares None [requirements.py]\nSKIPPED [1] tests/provider_contract/kit.py:39: unsupported by declaration: cursor has no remote control; the registry declares None [requirements.py]\nSKIPPED [1] tests/provider_contract/kit.py:39: unsupported by declaration: no limit sentence measured for opencode; the registry declares None [requirements.py]\nSKIPPED [2] tests/provider_contract/kit.py:39: unsupported by declaration: opencode raises no folder-trust dialog at all; the registry declares None [requirements.py]\nFAILED tests/provider_contract/test_capability_contracts.py::test_activity_contract[codex]\nFAILED tests/provider_contract/test_requirements_match_registry.py::test_every_capability_has_exactly_one_declared_state[codex-activity-None]\n2 failed, 170 passed, 6 skipped in 1.08s"
+ },
+ "schema": 2,
+ "task": "3.1",
+ "test": "uv run --locked pytest tests/provider_contract tests/architecture/test_provider_contract_kit_is_not_vacuous.py tests/architecture/test_descriptor_fields_are_pinned.py -q -p no:randomly",
+ "text": "`uv run --locked pytest tests/provider_contract tests/architecture/test_provider_contract_kit_is_not_vacuous.py tests/architecture/test_descriptor_fields_are_pinned.py -q -p no:randomly`. All pass with exactly twelve descriptor fields. `test_activity_contract` now runs for all four providers. Red if any licence's events differ from its installed events.",
+ "touched": [
+  "src/remote_agents/adapters/agents/codex/__init__.py"
+ ]
+}

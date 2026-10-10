@@ -4,8 +4,10 @@
 from __future__ import annotations
 
 from pathlib import Path
+from types import MappingProxyType
 
 from remote_agents.adapters.agents.hook_settings import _HookProvider
+from remote_agents.ports.provider_descriptor import EventLicence, HookLicence
 
 INSTALLED_EVENTS = ("Stop", "StopFailure", "Notification", "PermissionRequest", "UserPromptSubmit")
 """`PermissionRequest` joined 2026-09-19 (DEC-098).
@@ -62,3 +64,35 @@ session on the machine, that nothing ever consumed.
 PROVIDER = _HookProvider(
     "claude", Path(".claude/settings.json"), INSTALLED_EVENTS, RETIRED_EVENTS, flagless=True
 )
+
+#: What every Claude event other than an ask may keep: the field that discriminates it into a
+#: kind, and one line of the agent's own words. Measured against the installed bundle rather than
+#: assumed -- `StopFailure` carries `error`, `Notification` carries `notification_type`, and the
+#: retired `SessionEnd` carries `reason` (`activity_spool`'s history of `error_type` and
+#: `end_reason` is why "measured" is said out loud).
+_RECORD = EventLicence(
+    discriminating_fields=("error", "notification_type", "reason"),
+    detail_fields=("message", "last_assistant_message"),
+)
+
+HOOK_LICENCE = HookLicence(
+    events=MappingProxyType(
+        {
+            "Stop": _RECORD,
+            "StopFailure": _RECORD,
+            "Notification": _RECORD,
+            # DEC-098: the tool class as the ask, and the ask's own words from `tool_input`.
+            # `_RECORD`'s fields are not consulted -- an ask carries no `message` and no
+            # `last_assistant_message`, and reading fields that cannot be present would only
+            # obscure which one was expected.
+            "PermissionRequest": EventLicence(
+                ask_fields=("tool_name",), detail_from_tool_input=True
+            ),
+        }
+    ),
+    starts_turn_marker=True,
+    # Any other plain event keeps its record, so an event added upstream is not silently lost
+    # and the drain decides what to interpret; the retired `SessionEnd` (DEC-051) is read here.
+    unlisted_events=_RECORD,
+)
+"""What Claude's activity hook may record (BL-050); the descriptor's `activity` is this value."""

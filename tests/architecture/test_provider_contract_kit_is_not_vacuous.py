@@ -66,9 +66,9 @@ def test_no_capability_is_universally_absent() -> None:
         for name in CAPABILITIES
         if all(getattr(descriptor, name) is None for descriptor in descriptors)
     ]
-    # `activity` is a declared placeholder until a vertical wires one (see the registry's
-    # docstring); every other capability must have at least one live instance.
-    assert dead in ([], ["activity"]), (
+    # `activity` was a declared placeholder and the one sanctioned exception here, until every
+    # vertical that takes hooks declared its hook licence in it (BL-050).
+    assert dead == [], (
         f"capabilities {dead} have zero non-None instances; their contract rows would pass "
         "without ever exercising anything"
     )

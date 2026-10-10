@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping
 from pathlib import Path
 
+from remote_agents.adapters.agents.claude.hooks import HOOK_LICENCE
 from remote_agents.adapters.agents.claude.limit_screen import LIMIT_SCREEN
 from remote_agents.adapters.agents.claude.limits_source import ClaudeLimitsSource
 from remote_agents.adapters.agents.claude.sessions import ClaudeSessionCatalogue
@@ -71,6 +72,7 @@ def descriptor(
             home,
         ),
         hooks="claude",
+        activity=HOOK_LICENCE,
         # **Carried from 2.1.263, not measured** -- and the acceptance document
         # (`docs/acceptance-2026-09-09-trust-dialogs.md` §5) is labelled as the one section
         # that is not a measurement, because this host sets `permissions.defaultMode: "auto"`

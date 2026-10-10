@@ -45,7 +45,10 @@ def test_the_skip_count_is_fully_accounted_for() -> None:
     # 10 -> 9 on 2026-10-09: cursor-agent's `hooks` became SUPPORTED (BL-106), so one declared
     # skip became a driven contract test. The live run, re-summed that day, reported 10 SKIPPED
     # lines from these 9 declarations: opencode's one `trust_dialog` declaration skips two tests.
-    assert expected_skips() == 9, (
+    # 9 -> 5 on 2026-10-10: every vertical declared its hook licence in `activity` (BL-050), so
+    # four CONDITIONAL skips became driven contract tests. The live run, re-summed that day,
+    # reported 6 SKIPPED lines from these 5 declarations, for the same opencode reason.
+    assert expected_skips() == 5, (
         "the kit's skip budget changed; re-derive the gate's grep expectation from this "
         "number rather than editing either side alone"
     )

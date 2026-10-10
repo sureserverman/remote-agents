@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from pathlib import Path
 
+from remote_agents.adapters.agents.opencode.hooks import HOOK_LICENCE
 from remote_agents.adapters.agents.opencode.sessions import (
     OpenCodeCliRunner,
     OpenCodeSessionCatalogue,
@@ -62,6 +63,7 @@ def descriptor() -> ProviderDescriptor:
         sessions=_sessions,
         usage=OpenCodeUsageReader(),
         hooks="opencode",
+        activity=HOOK_LICENCE,
         # tmux's spelling, not Textual's: this set is handed to `tmux bind-key`/`send-keys`,
         # which knows `F2` and not `f2`.
         reserved_keys=frozenset({"F2"}),

@@ -36,12 +36,13 @@ CONDITIONAL = Requirement.CONDITIONAL
 #: unrestricted CONDITIONAL is an escape hatch from the supported/unsupported agreement
 #: (declare a wired capability conditional and it silently stops being driven-or-refused).
 #: Growing this set is a reviewed act with a reason, exactly like growing an allowlist.
-CONDITIONAL_CAPABILITIES = frozenset({"activity"})
+#:
+#: Empty since BL-050: `activity` was its one member while the field was a placeholder, and
+#: every vertical that takes hooks now declares its hook licence there, so the row is SUPPORTED
+#: wherever `hooks` is.
+CONDITIONAL_CAPABILITIES: frozenset[str] = frozenset()
 
 #: profile id -> capability -> declared state, with the reason a skip will carry.
-#: `activity` is CONDITIONAL everywhere: the registry declares it a placeholder until a
-#: vertical wires one, so the kit neither drives nor mourns it — the condition is "a
-#: vertical wired it", currently false for all four.
 DECLARATIONS: dict[str, dict[str, tuple[Requirement, str]]] = {
     "claude": {
         "sessions": (SUPPORTED, "transcript catalogue over the workspace mapping"),
@@ -51,7 +52,7 @@ DECLARATIONS: dict[str, dict[str, tuple[Requirement, str]]] = {
             UNSUPPORTED,
             "claude's toggle is a pane action, not a host one; the registry declares None",
         ),
-        "activity": (CONDITIONAL, "placeholder until the vertical wires an activity source"),
+        "activity": (SUPPORTED, "hook licence: any plain event, PermissionRequest nested"),
         "trust_dialog": (
             SUPPORTED,
             "asks about folder trust; strings carried from 2.1.263 (this host never asks)",
@@ -67,7 +68,7 @@ DECLARATIONS: dict[str, dict[str, tuple[Requirement, str]]] = {
         ),
         "hooks": (SUPPORTED, "hooks.json hook groups (codex, flagged)"),
         "remote_control": (SUPPORTED, "daemon-level toggle over the fixed argv table"),
-        "activity": (CONDITIONAL, "placeholder until the vertical wires an activity source"),
+        "activity": (SUPPORTED, "hook licence: Stop and PermissionRequest, reviewer-gated"),
         "trust_dialog": (SUPPORTED, "asks about folder trust, measured 2026-09-09 at +0.22s"),
         "composer": (SUPPORTED, "idle/busy/dialog patterns measured on 0.155.1, 2026-09-23"),
         "limit_screen": (SUPPORTED, "limit sentence read from the 0.158.0 binary, 2026-09-28"),
@@ -80,7 +81,7 @@ DECLARATIONS: dict[str, dict[str, tuple[Requirement, str]]] = {
             UNSUPPORTED,
             "opencode has no remote control; the registry declares None",
         ),
-        "activity": (CONDITIONAL, "placeholder until the vertical wires an activity source"),
+        "activity": (SUPPORTED, "hook licence: the plugin's two dotted events"),
         "trust_dialog": (
             UNSUPPORTED,
             "opencode raises no folder-trust dialog at all; the registry declares None",
@@ -102,7 +103,7 @@ DECLARATIONS: dict[str, dict[str, tuple[Requirement, str]]] = {
             UNSUPPORTED,
             "cursor has no remote control; the registry declares None",
         ),
-        "activity": (CONDITIONAL, "placeholder until the vertical wires an activity source"),
+        "activity": (SUPPORTED, "hook licence: a completed stop and no field of it"),
         "trust_dialog": (SUPPORTED, "asks about folder trust, measured 2026-09-09 at +0.66s"),
         "composer": (SUPPORTED, "idle/busy/dialog patterns measured on 2026.09.18, 2026-09-23"),
         "limit_screen": (SUPPORTED, "limit screen captured on 2026.09.28, 2026-09-28"),

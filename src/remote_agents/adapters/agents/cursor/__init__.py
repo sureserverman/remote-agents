@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping
 from pathlib import Path
 
+from remote_agents.adapters.agents.cursor.hooks import HOOK_LICENCE
 from remote_agents.adapters.agents.cursor.limit_screen import LIMIT_SCREEN
 from remote_agents.adapters.agents.cursor.limits_source import CursorLimitsSource
 from remote_agents.adapters.agents.cursor.sessions import CursorSessionCatalogue
@@ -59,6 +60,7 @@ def descriptor(
         sessions=_sessions,
         usage=_usage(limits_switch, home),
         hooks="cursor",
+        activity=HOOK_LICENCE,
         # Measured 2026-09-09 on 2026.09.08-6caf4ff: up 0.66 s after launch, cursor on the
         # **affirmative**, and drawn **inside a box** -- so the `▶` is not the first character
         # of its row (`│` is) and the directory path wraps across two rows. The parser looks

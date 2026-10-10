@@ -19,6 +19,7 @@ than a set of keys anything writes. It is still the honest place for the list, a
 from __future__ import annotations
 
 from pathlib import Path
+from types import MappingProxyType
 
 from remote_agents.adapters.agents.hook_settings import _HookProvider, _PluginEntry
 from remote_agents.adapters.agents.opencode.plugin import (
@@ -26,6 +27,7 @@ from remote_agents.adapters.agents.opencode.plugin import (
     PLUGIN_RELATIVE_PATH,
     plugin_source,
 )
+from remote_agents.ports.provider_descriptor import EventLicence, HookLicence
 
 INSTALLED_EVENTS = ("session.idle", "permission.asked")
 """The two `event` types the generated plugin acts on, measured 2026-09-06.
@@ -61,3 +63,25 @@ PROVIDER = _HookProvider(
         render=plugin_source,
     ),
 )
+
+HOOK_LICENCE = HookLicence(
+    events=MappingProxyType(
+        {
+            # DETAIL: nothing, permanently. `session.idle`'s payload is exactly one field,
+            # OpenCode's own session id (`docs/acceptance-2026-09-06-opencode-activity.md`, 2 of
+            # 2 samples). The agent's last words would mean asking the SDK for the session's
+            # messages -- a DEC-013 retention decision, not a parser widening. Not proposed.
+            "session.idle": EventLicence(),
+            # `properties.permission` only, as an ask class -- never `patterns` or
+            # `metadata.command`, which are the literal command, nor `always`, a glob over
+            # commands. One sample, one value (`bash`), so it is read as a plain token.
+            "permission.asked": EventLicence(ask_fields=("permission",)),
+        }
+    ),
+    # Its plugin forwards only these two events, and "finished" is `session.idle`, which ends
+    # no marker: a marker started here would never end (DEC-104).
+    starts_turn_marker=False,
+)
+"""What OpenCode's activity plugin may record (BL-050); the descriptor's `activity` is this
+value. The event names are dotted, which is why a licence lists events as exact names rather
+than reading them through the spool's plain-token guard."""

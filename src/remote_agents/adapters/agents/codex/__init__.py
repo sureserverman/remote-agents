@@ -6,6 +6,7 @@ from collections.abc import Mapping
 from pathlib import Path
 
 from remote_agents.adapters.agents.codex.account_limits import CodexAccountLimitsReader
+from remote_agents.adapters.agents.codex.hooks import HOOK_LICENCE
 from remote_agents.adapters.agents.codex.limit_screen import LIMIT_SCREEN
 from remote_agents.adapters.agents.codex.remote_control import CodexRemoteControl
 from remote_agents.adapters.agents.codex.sessions import (
@@ -38,6 +39,7 @@ def descriptor() -> ProviderDescriptor:
         # amended). Its `codex` child is reclaimed through `Backend.close_usage_readers`.
         usage=CodexAccountLimitsReader(),
         hooks="codex",
+        activity=HOOK_LICENCE,
         remote_control=CodexRemoteControl(),
         # Measured 2026-09-28 on codex-cli 0.158.0, which redrew the dialog (acceptance
         # 2026-09-09 § 9): "Trust this folder?" under a `Folder access` heading, the cursor

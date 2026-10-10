@@ -27,6 +27,7 @@ a declared set whose *empty* value is an answer rather than an absence. Its own 
 
 from __future__ import annotations
 
+from collections.abc import Callable, Mapping
 from dataclasses import MISSING, dataclass, fields
 
 from remote_agents.domain.models import ProfileId
@@ -169,6 +170,66 @@ class ComposerScreen:
 
 
 @dataclass(frozen=True, slots=True)
+class EventLicence:
+    """What one admitted hook event may contribute to the record the spool writes.
+
+    Each tuple is a group of payload fields read in order, the first one present winning, and
+    every name in it is a field a measurement licensed (DEC-013, DEC-037). An empty tuple is the
+    declared answer "nothing from this event", not a gap.
+    """
+
+    discriminating_fields: tuple[str, ...] = ()
+    """Where the event's `reason` comes from, read as a plain token."""
+
+    detail_fields: tuple[str, ...] = ()
+    """Where its one bounded line of the agent's own words comes from."""
+
+    ask_fields: tuple[str, ...] = ()
+    """Where the class of thing the agent waits on comes from, read as a plain token."""
+
+    detail_from_tool_input: bool = False
+    """Whether the detail is instead composed from the ask's nested `tool_input` (DEC-098).
+
+    A flag rather than a field name, because that reader descends one level and composes a
+    reason and a command into one line; the spool owns it, shared by every provider that asks
+    this way, and a licence only says that this event is read by it.
+    """
+
+
+@dataclass(frozen=True, slots=True, eq=False)
+class HookLicence:
+    """What one provider's activity hook may admit and keep, declared by its vertical (BL-050).
+
+    The spool reads this and names no provider: an event outside `events` -- unless
+    `unlisted_events` says otherwise -- writes nothing, and a provider with no licence at all
+    writes nothing (master call 10). Compared by identity (`eq=False`): it carries mappings and
+    a predicate, and each vertical holds exactly one.
+    """
+
+    events: Mapping[str, EventLicence]
+    """Each event the spool may record, and what it may keep from it.
+
+    Not the turn-start event of a provider whose hook marks turns: the spool answers that one
+    with the marker and records nothing.
+    """
+
+    starts_turn_marker: bool
+    """Whether `UserPromptSubmit` starts this session's turn marker (DEC-104)."""
+
+    unlisted_events: EventLicence | None = None
+    """What any other event spelled as a plain token may keep, or None to admit no other.
+
+    Claude's alone: an event its agent adds upstream keeps its record and the drain decides
+    what to interpret, which is how the retired `SessionEnd` still reads correctly from a host
+    that has not re-run the installer (DEC-051).
+    """
+
+    admits: Callable[[Mapping[str, object]], bool] | None = None
+    """A predicate over the whole payload, checked after the event is admitted; None admits
+    every listed event. Codex's reviewer rule (DEC-112) and Cursor's `status == "completed"`."""
+
+
+@dataclass(frozen=True, slots=True)
 class ProviderDescriptor:
     """One provider's declared capability set, keyed by its profile.
 
@@ -220,8 +281,14 @@ class ProviderDescriptor:
     configuration value lives in the vertical's `hooks.py` — or None for a provider that
     takes no hooks."""
 
-    activity: object | None = None
-    """The provider's activity source, or None when it reports no activity events."""
+    activity: HookLicence | None = None
+    """What this provider's activity hook may record (`HookLicence`), or None when it reports no
+    activity events.
+
+    The same value the vertical's `hooks.py` holds as `HOOK_LICENCE`, which is how the hook
+    reaches it without constructing a descriptor. Typed, like `trust_dialog`, because it carries
+    only strings and one predicate.
+    """
 
     trust_dialog: TrustDialog | None = None
     """How this agent asks about folder trust, or None when it never asks.
