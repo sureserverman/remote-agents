@@ -262,6 +262,20 @@ class SessionService:
             return False
         return True
 
+    async def _reuse_folder(self, session_id: SessionId, of: SessionId | None) -> bool:
+        """Bind a new session to the worktree `of` works in, if it works in one.
+
+        True when there is nothing to reuse -- no session named, no worktree rows, or `of` is a
+        regular session -- and when the binding was made. False only when `of`'s worktree is
+        gone or claimed for removal: the launch is then refused rather than started in the
+        project folder (`WORKTREE_REMOVED`)."""
+        if of is None or self._worktrees is None:
+            return True
+        worktree = await self._worktrees.folder_for(of)
+        if worktree is None:
+            return True
+        return await self._bind_worktree(session_id, worktree.path)
+
     def _daemon_guard(
         self, profile_id: ProfileId, wait: float
     ) -> contextlib.AbstractAsyncContextManager[None]:
@@ -313,6 +327,12 @@ class SessionService:
             # 4 gate review; the stop half was fixed first because that is the half production
             # actually hit, a stop being routinely slower than the window and a launch rarely.
             async with self._locks.for_session(session_id):
+                if not await self._reuse_folder(session_id, command.reuse_folder_of):
+                    return LaunchOutcome(
+                        await self._store.record_event(session_id, LifecycleEvent.STARTUP_ERROR),
+                        False,
+                        worktree_removed=True,
+                    )
                 remote_control = await self._remote_control_at_launch(command.profile_id)
                 observation = await self._terminal.launch(
                     session_id,

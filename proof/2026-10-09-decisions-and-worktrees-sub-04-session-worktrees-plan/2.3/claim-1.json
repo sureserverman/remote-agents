@@ -1,0 +1,28 @@
+{
+ "baseline": {
+  "elapsed_s": 10.7,
+  "exit": 0,
+  "tail": "................................................................         [100%]\n64 passed in 10.35s"
+ },
+ "break_patch": "--- a/src/remote_agents/application/rollover.py\n+++ b/src/remote_agents/application/rollover.py\n@@ -466,7 +466,6 @@\n                         guard_wait=UNATTENDED_LAUNCH_WAIT_SECONDS,\n                         # The successor carries on in its predecessor's folder: the same\n                         # worktree when it has one (BL-116, amending DEC-115).\n-                        reuse_folder_of=rollover.predecessor_session_id,\n                     )\n                 )\n             except DuplicateCommandError:\n",
+ "build": null,
+ "created": "2026-10-10T19:44:46+00:00",
+ "fingerprint": "f6be2c0840d00bde645412103add3b2dc91a0754fbc3068a7bd13d6a94190f2f",
+ "index": 1,
+ "kind": "claim",
+ "named_break": null,
+ "no_build_reason": "pure Python, no build",
+ "plan": "/mnt/vault/Portfolio/infra/remote-agents/plans/2026-10-09-decisions-and-worktrees-sub-04-session-worktrees-plan.md",
+ "red": {
+  "elapsed_s": 23.0,
+  "exit": 1,
+  "tail": "            bound_to=maker.session_id,\n        )\n        launched: list[SessionId] = []\n        try:\n            predecessor = (\n                await sessions.launch(\n                    LaunchCommand(PROJECT, PROFILE, \"pred\", reuse_folder_of=maker.session_id)\n                )\n            ).record\n            launched.append(predecessor.session_id)\n            await _type(terminal, predecessor.session_id, \"handoff\")\n    \n            row = None\n            for _ in range(60):\n                await rollover_pass.run_once()\n                launched.extend(\n                    record.session_id\n                    for record in await sessions.list_sessions()\n                    if record.session_id not in launched and record.session_id != maker.session_id\n                )\n                rows = rollovers._select(\"1 = 1\", ())\n                row = rows[0] if rows else None\n                if row is not None and row.state is RolloverState.COMPLETED:\n                    break\n                await asyncio.sleep(0.2)\n    \n>           assert row is not None and row.state is RolloverState.COMPLETED, (\n                None if row is None else (row.state, row.failure_code, row.failure_detail)\n            )\nE           AssertionError: (<RolloverState.ADOPTING: 'adopting'>, None, None)\nE           assert (Rollover(id='da2bbe773bf843cba65a115881f227e7', handoff_id='h-0123456789abcdef0123', predecessor_session_id=SessionId(...o=datetime.timezone.utc), updated_at=datetime.datetime(2026, 10, 10, 19, 44, 33, 802855, tzinfo=datetime.timezone.utc)) is not None and <RolloverState.ADOPTING: 'adopting'> is <RolloverState.COMPLETED: 'completed'>)\nE            +  where <RolloverState.ADOPTING: 'adopting'> = Rollover(id='da2bbe773bf843cba65a115881f227e7', handoff_id='h-0123456789abcdef0123', predecessor_session_id=SessionId(...o=datetime.timezone.utc), updated_at=datetime.datetime(2026, 10, 10, 19, 44, 33, 802855, tzinfo=datetime.timezone.utc)).state\nE            +  and   <RolloverState.COMPLETED: 'completed'> = RolloverState.COMPLETED\n\ntests/e2e/test_terminal_rollover.py:304: AssertionError\n=========================== short test summary info ============================\nFAILED tests/unit/application/test_rollover_pass.py::test_a_worktree_session_and_a_main_session_each_roll_over_from_their_own_root\nFAILED tests/unit/application/test_rollover_pass.py::test_a_successor_is_launched_to_reuse_its_predecessors_folder\nFAILED tests/e2e/test_terminal_rollover.py::test_a_worktree_sessions_successor_starts_in_the_same_worktree\n3 failed, 61 passed in 22.57s"
+ },
+ "schema": 2,
+ "task": "2.3",
+ "test": "uv run --locked pytest tests/unit/application/test_rollover_pass.py tests/e2e/test_terminal_rollover.py -q -p no:randomly",
+ "text": "`uv run --locked pytest tests/unit/application/test_rollover_pass.py tests/e2e/test_terminal_rollover.py -q -p no:randomly`.",
+ "touched": [
+  "src/remote_agents/application/rollover.py"
+ ]
+}

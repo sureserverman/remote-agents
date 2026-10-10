@@ -73,6 +73,11 @@ class WorktreeStore(Protocol):
         """The project's folders not yet removed, oldest first."""
         ...
 
+    async def bound_folders(self) -> Mapping[SessionId, Worktree]:
+        """Every binding, with its folder removed or not, in one read: what a pass over every
+        session asks instead of one `folder_for` per row (BL-126)."""
+        ...
+
     async def bound_sessions(self, path: Path) -> tuple[SessionId, ...]:
         """Every session ever bound to the folder."""
         ...

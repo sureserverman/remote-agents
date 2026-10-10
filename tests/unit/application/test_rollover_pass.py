@@ -961,3 +961,117 @@ async def test_a_predecessor_stop_met_by_the_shutdown_drain_is_not_spent(rig: Ri
 
     assert rig.stops == []
     assert (await rig.rollover()).state is RolloverState.SUCCESSOR_ACCEPTED
+
+
+# -- per-session roots (BL-116) ------------------------------------------------------------
+
+WORKTREE_ROOT = Path("/state/worktrees/remote-agents/wt")
+OTHER_HANDOFF = "h-fedcba9876543210fedc"
+
+
+@dataclass
+class RootedEnvelopes(Envelopes):
+    """Envelopes per checkout: a worktree's top level is a checkout of its own."""
+
+    by_root: dict[Path, list[HandoffEnvelope]] = field(default_factory=dict)
+    read_roots: list[Path] = field(default_factory=list)
+    requests_at: dict[Path, str] = field(default_factory=dict)
+
+    def events(self, project_dir: Path) -> tuple[HandoffEnvelope, ...]:
+        self.read_roots.append(project_dir)
+        return tuple(self.by_root.get(project_dir, ()))
+
+    def write_request(self, project_dir: Path, managed_session_id: str) -> bool:
+        self.requests_at[project_dir] = managed_session_id
+        return True
+
+    def requested(self, project_dir: Path) -> str | None:
+        return self.requests_at.get(project_dir)
+
+    def discard(self, project_dir: Path, handoff_id: str) -> None:
+        self.discarded.append(handoff_id)
+        self.by_root[project_dir] = [
+            e for e in self.by_root.get(project_dir, []) if e.handoff_id != handoff_id
+        ]
+
+
+def _rooted_pass(rig: Rig, worktree_roots) -> RolloverPass:
+    return RolloverPass(
+        rig.store,
+        rig.envelopes,
+        rollable=frozenset({CLAUDE}),
+        sessions=rig.list_sessions,
+        handoff_root=lambda project: ROOT if project == PROJECT else None,
+        worktree_roots=worktree_roots,
+        enabled=rig.enabled,
+        idle=rig.idle,
+        launch=rig.launch,
+        send=rig.send,
+        graceful_stop=rig.graceful_stop,
+        now=lambda: rig.clock[0],
+        sleep=rig.sleep,
+    )
+
+
+@pytest.fixture
+def rooted(tmp_path: Path) -> Rig:
+    return Rig(
+        SQLiteRolloverStore(open_database(tmp_path / "sessions.sqlite3")),
+        envelopes=RootedEnvelopes(),
+    )
+
+
+async def test_a_worktree_session_and_a_main_session_each_roll_over_from_their_own_root(
+    rooted: Rig,
+) -> None:
+    """One project, two checkouts: each `ready` is read under its own top level, picked up
+    for the session that wrote it, and each successor reuses its own predecessor's folder."""
+    in_worktree = SessionId.new()
+    rooted.sessions[in_worktree] = _record(in_worktree)
+    envelopes = rooted.envelopes
+    assert isinstance(envelopes, RootedEnvelopes)
+    envelopes.by_root[ROOT] = [_envelope(HandoffEvent.READY, rooted.predecessor)]
+    envelopes.by_root[WORKTREE_ROOT] = [
+        HandoffEnvelope(HandoffEvent.READY, OTHER_HANDOFF, str(in_worktree), NOW, "/p.md", None)
+    ]
+
+    async def worktree_roots():
+        return {in_worktree: WORKTREE_ROOT}
+
+    await _rooted_pass(rooted, worktree_roots).run_once()
+
+    rows = {row.predecessor_session_id: row for row in rooted.store._select("1 = 1", ())}
+    assert set(rows) == {rooted.predecessor, in_worktree}
+    assert rows[in_worktree].handoff_id == OTHER_HANDOFF
+    assert rows[rooted.predecessor].handoff_id == HANDOFF
+    assert {command.reuse_folder_of for command in rooted.launches} == {
+        rooted.predecessor,
+        in_worktree,
+    }
+
+
+async def test_a_session_whose_worktree_is_gone_is_never_rolled_over_from_the_main_checkout(
+    rooted: Rig,
+) -> None:
+    """Its root is None, not the project's: a `ready` in the main checkout naming it is
+    someone else's file, and acting on it would start its successor in the wrong folder."""
+    envelopes = rooted.envelopes
+    assert isinstance(envelopes, RootedEnvelopes)
+    envelopes.by_root[ROOT] = [_envelope(HandoffEvent.READY, rooted.predecessor)]
+
+    async def worktree_roots():
+        return {rooted.predecessor: None}
+
+    await _rooted_pass(rooted, worktree_roots).run_once()
+
+    assert rooted.store._select("1 = 1", ()) == ()
+    assert rooted.launches == []
+
+
+async def test_a_successor_is_launched_to_reuse_its_predecessors_folder(rig: Rig) -> None:
+    rig.ready()
+
+    await rig.run()
+
+    (command,) = rig.launches
+    assert command.reuse_folder_of == rig.predecessor

@@ -101,12 +101,19 @@ class SQLiteWorktreeStore:
     async def live_for_project(self, project_id: ProjectId) -> tuple[Worktree, ...]:
         return self._select("project_id = ? AND removed_at IS NULL", (str(project_id),))
 
+    async def bound_folders(self) -> dict[SessionId, Worktree]:
+        rows = self._connection.execute(
+            f"SELECT session_worktrees.session_id, {_COLUMNS} FROM session_worktrees"
+            " JOIN worktrees ON worktrees.path = session_worktrees.worktree_path"
+        ).fetchall()
+        return {SessionId.parse(row[0]): _worktree(row[1:]) for row in rows}
+
     async def bound_sessions(self, path: Path) -> tuple[SessionId, ...]:
         rows = self._connection.execute(
             "SELECT session_id FROM session_worktrees WHERE worktree_path = ? ORDER BY session_id",
             (str(path),),
         ).fetchall()
-        return tuple(SessionId(row[0]) for row in rows)
+        return tuple(SessionId.parse(row[0]) for row in rows)
 
     async def removable_candidates(self) -> tuple[Worktree, ...]:
         return self._select(_CANDIDATE, ())

@@ -37,6 +37,7 @@ from remote_agents.ports.limit_stop_outcomes import LimitStopOutcomes
 from remote_agents.ports.message_relay import MessageRelay, RelayOutcome, RelayResult
 from remote_agents.ports.state_events import StoreChanged
 from remote_agents.ports.turn_markers import TurnMarkers
+from remote_agents.ports.worktree_store import WorktreeStore
 
 _LOG = logging.getLogger(__name__)
 
@@ -587,6 +588,7 @@ def build_rollover_pass(
     rollable: frozenset[ProfileId],
     notify: Callable[[RolloverReport], Awaitable[None]] | None = None,
     operation: Callable[[], AbstractAsyncContextManager[object]] = nullcontext,
+    worktrees: WorktreeStore | None = None,
 ) -> RolloverPass:
     """The rollover pass `serve` runs, and only `serve` (DEC-115, DEC-015/070: built here,
     beside the loop that runs it, so no other composition has one to run).
@@ -596,13 +598,31 @@ def build_rollover_pass(
     typing is the terminal's guarded send (DEC-099). Envelopes are read under each project's
     git top level, where the planning plugin writes them; a project in no checkout has no root
     and is never rolled over. `project_paths` is the live routing table, read per pass.
+
+    A session bound to a worktree reads its envelopes under that worktree's top level instead
+    (BL-116): `worktrees` answers every binding in one read per pass. A worktree that is gone
+    has no root, so its sessions are not rolled over -- never read under the main checkout.
     """
+
+    async def worktree_roots() -> dict[SessionId, Path | None]:
+        if worktrees is None:
+            return {}
+        by_path: dict[Path, Path | None] = {}
+        roots: dict[SessionId, Path | None] = {}
+        for session_id, worktree in (await worktrees.bound_folders()).items():
+            if worktree.path not in by_path:
+                present = worktree.removed_at is None and worktree.path.is_dir()
+                by_path[worktree.path] = handoff_root(worktree.path) if present else None
+            roots[session_id] = by_path[worktree.path]
+        return roots
+
     return RolloverPass(
         SQLiteRolloverStore(connection),
         FileHandoffEnvelopes(),
         rollable=rollable,
         sessions=sessions.list_sessions,
         handoff_root=lambda project: handoff_root(project_paths.get(project)),
+        worktree_roots=worktree_roots,
         enabled=enabled,
         idle=terminal.pane_idle,
         launch=sessions.launch,

@@ -30,6 +30,10 @@ class LaunchCommand:
     label: str | None = None
     guard_wait: float = LAUNCH_WAIT_SECONDS
     """How long a launch whose agent shares the Codex daemon waits for its guard."""
+    reuse_folder_of: SessionId | None = None
+    """A session whose worktree this launch works in, when it has one: a rollover successor
+    names its predecessor, so it carries on in the same folder (BL-116, amending DEC-115). A
+    named session with no worktree leaves this an ordinary launch in the project folder."""
 
 
 @dataclass(frozen=True, slots=True)

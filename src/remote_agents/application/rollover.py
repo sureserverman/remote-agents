@@ -58,7 +58,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import Awaitable, Callable, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from contextlib import AbstractAsyncContextManager, nullcontext
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -160,14 +160,28 @@ class RolloverReport:
 
 @dataclass(frozen=True, slots=True)
 class _Seen:
-    """One pass's view: the sessions, and where each rollable project's envelopes live."""
+    """One pass's view: the sessions, and where each rollable session's envelopes live.
+
+    Keyed by session, not project (BL-116): a session in its own worktree writes its envelopes
+    under that worktree's top level, so two sessions of one project can have two roots. A
+    session with no root here -- no checkout, or a worktree that is gone -- is never rolled
+    over, and never read under the project's main checkout instead."""
 
     sessions: dict[SessionId, SessionRecord]
-    roots: dict[ProjectId, Path]
+    roots: dict[SessionId, Path]
 
     def running(self, session_id: SessionId | None) -> bool:
         record = None if session_id is None else self.sessions.get(session_id)
         return record is not None and record.state is SessionState.RUNNING
+
+    def root_of(self, rollover: Rollover) -> Path | None:
+        """The checkout a rollover's envelopes live in: its predecessor's, which its successor
+        shares by reusing the folder. Read off the successor once the predecessor is no longer
+        listed, so a successor's `accepted` is still found and the envelopes still cleaned."""
+        root = self.roots.get(rollover.predecessor_session_id)
+        if root is None and rollover.successor_session_id is not None:
+            root = self.roots.get(rollover.successor_session_id)
+        return root
 
     def up(self, session_id: SessionId | None) -> bool:
         """Whether a successor is still there: running, or still recorded as starting."""
@@ -186,6 +200,7 @@ class RolloverPass:
         rollable: frozenset[ProfileId],
         sessions: Callable[[], Awaitable[Sequence[SessionRecord]]],
         handoff_root: Callable[[ProjectId], Path | None],
+        worktree_roots: Callable[[], Awaitable[Mapping[SessionId, Path | None]]] | None = None,
         enabled: Callable[[], Awaitable[bool]],
         idle: Callable[[SessionId], Awaitable[bool]],
         launch: Callable[[LaunchCommand], Awaitable[object]],
@@ -201,6 +216,10 @@ class RolloverPass:
         self._rollable = rollable
         self._sessions = sessions
         self._handoff_root = handoff_root
+        #: The root of every session bound to a worktree, read once per pass (BL-126): None
+        #: for one whose worktree is gone. A session absent from it is regular and uses its
+        #: project's root.
+        self._worktree_roots = worktree_roots
         self._enabled = enabled
         self._idle = idle
         self._launch = launch
@@ -228,9 +247,9 @@ class RolloverPass:
             if not self._recovered:
                 await self._note_restart(seen)
                 self._recovered = True
-            for project_id, root in seen.roots.items():
+            for root in dict.fromkeys(seen.roots.values()):
                 try:
-                    await self._pick_up_ready(project_id, root, seen)
+                    await self._pick_up_ready(root, seen)
                 except Exception:
                     # One checkout's envelopes cost that checkout this pass, never the steps of
                     # rollovers already open -- an accepted one's stop among them.
@@ -283,19 +302,27 @@ class RolloverPass:
 
     async def _look(self) -> _Seen:
         sessions = {record.session_id: record for record in await self._sessions()}
-        roots: dict[ProjectId, Path] = {}
+        bound = {} if self._worktree_roots is None else await self._worktree_roots()
+        project_roots: dict[ProjectId, Path | None] = {}
+        roots: dict[SessionId, Path] = {}
         for record in sessions.values():
-            if record.profile_id not in self._rollable or record.project_id in roots:
+            if record.profile_id not in self._rollable:
                 continue
-            root = self._handoff_root(record.project_id)
+            if record.session_id in bound:
+                root = bound[record.session_id]
+            else:
+                if record.project_id not in project_roots:
+                    project_roots[record.project_id] = self._handoff_root(record.project_id)
+                root = project_roots[record.project_id]
             if root is not None:
-                roots[record.project_id] = root
+                roots[record.session_id] = root
         return _Seen(sessions, roots)
 
     # -- envelopes ---------------------------------------------------------------------------
 
-    async def _pick_up_ready(self, project_id: ProjectId, root: Path, seen: _Seen) -> None:
-        """Open, or find again, the rollover each of the project's `ready` envelopes names."""
+    async def _pick_up_ready(self, root: Path, seen: _Seen) -> None:
+        """Open, or find again, the rollover each `ready` in this checkout names -- for a
+        session whose own root this is, and no other."""
         held = {r.handoff_id for r in await self._store.open_rollovers() if r.handoff_id}
         for handoff_id, group in _grouped(self._envelopes.events(root)).items():
             ready = group.get(HandoffEvent.READY)
@@ -313,7 +340,7 @@ class RolloverPass:
             record = None if predecessor is None else seen.sessions.get(predecessor)
             if (
                 record is None
-                or record.project_id != project_id
+                or seen.roots.get(record.session_id) != root
                 or record.profile_id not in self._rollable
                 or record.state is not SessionState.RUNNING
             ):
@@ -321,7 +348,7 @@ class RolloverPass:
             rollover = await self._store.open_for_ready(
                 record.session_id,
                 handoff_id,
-                project_id=project_id,
+                project_id=record.project_id,
                 profile_id=record.profile_id,
                 plan=ready.plan,
                 at=self._now(),
@@ -335,7 +362,7 @@ class RolloverPass:
 
     def _adoption(self, rollover: Rollover, seen: _Seen) -> HandoffEnvelope | None:
         """The successor's own `accepted` or `failed` for this handoff, if it wrote one."""
-        root = seen.roots.get(rollover.project_id)
+        root = seen.root_of(rollover)
         if root is None or rollover.handoff_id is None or rollover.successor_session_id is None:
             return None
         group = _grouped(self._envelopes.events(root)).get(rollover.handoff_id, {})
@@ -376,7 +403,7 @@ class RolloverPass:
         if predecessor.profile_id not in self._rollable:
             await self._fail(rollover, seen, NOT_ROLLABLE)
             return
-        root = seen.roots.get(rollover.project_id)
+        root = seen.root_of(rollover)
         if root is None:
             await self._fail(rollover, seen, NO_HANDOFF_ROOT)
             return
@@ -402,7 +429,7 @@ class RolloverPass:
         checkout, and each owner-asked rollover holds it from its write until it ends, so a
         later one waits rather than overwriting it."""
         for other in await self._store.open_rollovers():
-            if other.reason == "owner" and seen.roots.get(other.project_id) == root:
+            if other.reason == "owner" and seen.root_of(other) == root:
                 return other
         return None
 
@@ -437,6 +464,9 @@ class RolloverPass:
                         rollover.profile_id,
                         f"rollover:{rollover.handoff_id}",
                         guard_wait=UNATTENDED_LAUNCH_WAIT_SECONDS,
+                        # The successor carries on in its predecessor's folder: the same
+                        # worktree when it has one (BL-116, amending DEC-115).
+                        reuse_folder_of=rollover.predecessor_session_id,
                     )
                 )
             except DuplicateCommandError:
@@ -654,7 +684,7 @@ class RolloverPass:
     async def _finish(self, rollover: Rollover, seen: _Seen) -> None:
         """A terminal rollover leaves nothing behind: its envelopes, and its predecessor's
         request -- unless another rollover of that predecessor is open and the request is its."""
-        root = seen.roots.get(rollover.project_id)
+        root = seen.root_of(rollover)
         if root is None:
             return
         if rollover.handoff_id is not None:
@@ -673,7 +703,7 @@ class RolloverPass:
         move and its clean-up -- leaves none behind."""
         open_for = {r.predecessor_session_id for r in await self._store.open_rollovers()}
         for record in seen.sessions.values():
-            root = seen.roots.get(record.project_id)
+            root = seen.roots.get(record.session_id)
             if (
                 root is not None
                 and record.profile_id in self._rollable

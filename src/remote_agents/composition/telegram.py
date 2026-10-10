@@ -339,6 +339,7 @@ def _private_boundary(
                 ),
                 # The same gate `drain` shuts (DEC-046), held across each persist-and-act.
                 operation=locks.operation,
+                worktrees=worktrees.store,
             )
         ),
         rollover_notifier=boundary.rollover_notifier,

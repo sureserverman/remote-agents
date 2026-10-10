@@ -203,3 +203,122 @@ async def test_a_ready_rolls_over_to_one_successor_and_stops_only_on_accept(
         )
         await killing.wait()
         connection.close()
+
+
+async def test_a_worktree_sessions_successor_starts_in_the_same_worktree(tmp_path: Path) -> None:
+    """BL-116: a session working in its own worktree writes its `ready` there, the pass reads
+    it there, and the successor is bound to the same worktree -- its pane starts there, never
+    in the project's main checkout."""
+    from datetime import UTC, datetime
+
+    from remote_agents.adapters.sqlite.worktree_store import SQLiteWorktreeStore
+    from remote_agents.application.session_folders import SessionFolders
+    from remote_agents.domain.models import SessionDisplayIdentity, SessionRecord
+    from remote_agents.ports.worktree_store import Worktree
+
+    project = tmp_path / "opaque-editor"
+    (project / ".git").mkdir(parents=True)
+    worktree = tmp_path / "worktrees" / "wt"
+    worktree.mkdir(parents=True)
+    # A linked worktree's top level holds a `.git` *file*, which is what makes it a root.
+    (worktree / ".git").write_text(f"gitdir: {project}/.git/worktrees/wt\n", encoding="utf-8")
+    agent, mode_file = tmp_path / "fake_agent.py", tmp_path / "mode"
+    agent.write_text(_AGENT, encoding="utf-8")
+    mode_file.write_text("accept", encoding="utf-8")
+    connection = open_database(tmp_path / "sessions.sqlite3")
+    store = SQLiteSessionStore(connection)
+    worktrees = SQLiteWorktreeStore(connection)
+    folders = SessionFolders({PROJECT: project}, worktrees)
+    socket = f"remote-agents-test-{uuid4().hex}"
+    gateway = TmuxGateway(socket, AsyncTmuxRunner(), intent_directory=tmp_path / "i")
+    terminal = TmuxTerminal(
+        gateway,
+        {PROJECT: project},
+        {},
+        startup_timeout=10.0,
+        profile_factories={
+            PROFILE: lambda session_id, _remote_control: LaunchProfile(
+                sys.executable,
+                (sys.executable, str(agent), HANDOFF, str(mode_file)),
+                {"PATH": os.environ["PATH"], SESSION_ID_VARIABLE: str(session_id)},
+                "READY",
+            )
+        },
+        composers={"fake": ProviderDescriptor(PROFILE, "F", "Fake", composer=_COMPOSER)},
+        folder_for=folders.folder_for,
+    )
+    sessions = SessionService(store, terminal, worktrees=worktrees)
+
+    async def on() -> bool:
+        return True
+
+    rollover_pass = build_rollover_pass(
+        connection=connection,
+        sessions=sessions,
+        terminal=terminal,
+        enabled=on,
+        project_paths={PROJECT: project},
+        rollable=frozenset({PROFILE}),
+        worktrees=worktrees,
+    )
+    rollovers = SQLiteRolloverStore(connection)
+    # The session that made the worktree, long ended: the predecessor reuses its folder, as a
+    # resume or an earlier successor does.
+    maker = SessionRecord(
+        SessionId.new(),
+        PROJECT,
+        PROFILE,
+        SessionDisplayIdentity("opaque-editor", "fake", "regular", 1),
+        SessionState.ENDED,
+        datetime(2026, 10, 10, tzinfo=UTC),
+    )
+    await store.save(maker)
+    await worktrees.record(
+        Worktree(worktree, PROJECT, "ra/wt", "main", "a" * 40, {}, maker.created_at, None),
+        bound_to=maker.session_id,
+    )
+    launched: list[SessionId] = []
+    try:
+        predecessor = (
+            await sessions.launch(
+                LaunchCommand(PROJECT, PROFILE, "pred", reuse_folder_of=maker.session_id)
+            )
+        ).record
+        launched.append(predecessor.session_id)
+        await _type(terminal, predecessor.session_id, "handoff")
+
+        row = None
+        for _ in range(60):
+            await rollover_pass.run_once()
+            launched.extend(
+                record.session_id
+                for record in await sessions.list_sessions()
+                if record.session_id not in launched and record.session_id != maker.session_id
+            )
+            rows = rollovers._select("1 = 1", ())
+            row = rows[0] if rows else None
+            if row is not None and row.state is RolloverState.COMPLETED:
+                break
+            await asyncio.sleep(0.2)
+
+        assert row is not None and row.state is RolloverState.COMPLETED, (
+            None if row is None else (row.state, row.failure_code, row.failure_detail)
+        )
+        successor = row.successor_session_id
+        assert successor is not None
+        bound = await worktrees.folder_for(successor)
+        assert bound is not None and bound.path == worktree
+        intent = (tmp_path / "i" / f"{successor}.json").read_text(encoding="utf-8")
+        assert f'"cwd": "{worktree.resolve()}"' in intent, intent
+        assert not (project / ".claude").exists(), "nothing was written in the main checkout"
+    finally:
+        for session_id in launched:
+            try:
+                await gateway.destroy(session_id)
+            except RuntimeError:
+                pass
+        killing = await asyncio.create_subprocess_exec(
+            "tmux", "-L", socket, "kill-server", stderr=asyncio.subprocess.DEVNULL
+        )
+        await killing.wait()
+        connection.close()
