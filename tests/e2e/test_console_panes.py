@@ -128,6 +128,32 @@ async def test_the_gateway_reads_a_real_console_window_and_moves_its_split(conso
     assert await _zoomed(runner, socket) == "0"
 
 
+async def test_an_owner_rebind_drops_our_note(console) -> None:
+    """Measured 2026-10-10 on tmux 3.4 (Sub-plan 2, Task 3.1, BL-096).
+
+    The composer will tag its bindings with a `remote-agents:` note and unbind tagged keys it
+    no longer emits. That is safe only if an owner who rebinds one of those keys *without* `-N`
+    loses our note -- otherwise our tag would mark the owner's binding as ours, and the next
+    console entry would unbind it. tmux drops the note: the rebound key is not listed by
+    `list-keys -N` at all, and the owner's command is the one bound.
+    """
+    _gateway, _runner, socket = console
+    tmux = ("tmux", "-L", socket)
+    await _run(
+        *tmux, "bind-key", "-n", "-N", "remote-agents: forward F3", "M-q", "display-message", "ours"
+    )
+    tagged = await _run(*tmux, "list-keys", "-N", "-T", "root")
+    assert ["M-q", "remote-agents: forward F3"] in [
+        line.split(None, 1) for line in tagged.splitlines()
+    ]
+
+    await _run(*tmux, "bind-key", "-n", "M-q", "display-message", "owner")
+
+    noted = await _run(*tmux, "list-keys", "-N", "-T", "root")
+    assert "M-q" not in [line.split(None, 1)[0] for line in noted.splitlines() if line.strip()]
+    assert "owner" in await _run(*tmux, "list-keys", "-T", "root", "M-q")
+
+
 async def test_a_swap_unzooms_the_window_which_is_why_the_option_exists(console) -> None:
     """The measurement the whole design rests on, asserted rather than remembered.
 

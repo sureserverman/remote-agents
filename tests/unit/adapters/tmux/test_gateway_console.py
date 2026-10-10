@@ -549,3 +549,24 @@ async def test_status_bar_install_lets_a_tmux_failure_through_for_the_composer_t
         await gateway(RecordingRunner(error=RuntimeError("tmux said no"))).install_status_bar(
             status_bar_keys(), NIGHT
         )
+
+
+_NOTES = Path(__file__).resolve().parents[3] / "fixtures/tmux/list_keys_notes_prefix_3.4.txt"
+
+
+def test_list_keys_notes_parse() -> None:
+    """`list-keys -N` prints the key, padding, then the note (tmux 3.4, captured with no config).
+
+    So the key is the first whitespace-separated token and the note is the rest, which holds for
+    every one of tmux's own noted defaults -- punctuation keys included. None of them carries
+    the `remote-agents:` prefix the composer tags its bindings with, so a reconcile that reads
+    the prefix cannot take tmux's defaults for ours (BL-096, Task 3.1).
+    """
+    lines = [line for line in _NOTES.read_text(encoding="utf-8").splitlines() if line.strip()]
+    parsed = dict(line.split(None, 1) for line in lines)
+
+    assert len(parsed) == len(lines) == 83, "a key was split into more than one token"
+    assert parsed["C-b"] == "Send the prefix key"
+    assert parsed['"'] == "Split window vertically"
+    assert parsed["PPage"].startswith("Enter copy mode")
+    assert not any(note.startswith("remote-agents:") for note in parsed.values())
