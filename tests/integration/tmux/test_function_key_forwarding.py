@@ -48,9 +48,24 @@ class _Server:
         self._clients: list[int] = []
 
     def tmux(self, *args: str, check: bool = True) -> subprocess.CompletedProcess[str]:
-        return subprocess.run(
-            ["tmux", "-L", self.socket, *args], capture_output=True, text=True, check=check
+        done = subprocess.run(
+            ["tmux", "-L", self.socket, *args], capture_output=True, text=True, check=False
         )
+        if check and done.returncode:
+            # Says what tmux said, and what was left on the server. This harness failed
+            # intermittently under the full parallel suite with a bare exit status 1 from
+            # `set-option -p -t %0`: a pane or the server was gone, and nothing said which.
+            panes = subprocess.run(
+                ["tmux", "-L", self.socket, "list-panes", "-a", "-F", "#{pane_id} #{pane_dead}"],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            raise AssertionError(
+                f"tmux {' '.join(args)} exited {done.returncode}: {done.stderr.strip()!r}; "
+                f"panes now: {panes.stdout.split()!r} ({panes.stderr.strip()!r})"
+            )
+        return done
 
     def start(self) -> None:
         # The session name is load-bearing: the script's first clause refuses any client whose
