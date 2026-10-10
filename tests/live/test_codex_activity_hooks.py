@@ -126,7 +126,7 @@ def test_a_managed_codex_turn_spools_its_own_stop_and_ends_its_marker(tmp_path: 
     # that silently truncated to the empty string would satisfy the weaker check.
     assert activity.detail is not None, (
         "a managed Codex Stop now carries the agent's last line; if this is None the spool's "
-        "codex branch has stopped reading `last_assistant_message`"
+        "codex licence has stopped admitting `last_assistant_message`"
     )
     assert "spooled" in activity.detail.casefold()
     assert len(activity.detail) <= MAXIMUM_DETAIL_CHARACTERS

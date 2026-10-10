@@ -18,8 +18,9 @@ from datetime import UTC, datetime
 from io import BytesIO
 from pathlib import Path
 
-from remote_agents.adapters.agents import activity_spool as spool
 from remote_agents.adapters.agents.activity_spool import _observed_event
+from remote_agents.adapters.agents.codex.hooks import HOOK_LICENCE
+from remote_agents.adapters.agents.hook_licences import hook_licence
 from remote_agents.ports.agent_activity import MAXIMUM_DETAIL_CHARACTERS
 
 _FIXTURES = Path(__file__).resolve().parents[1] / "fixtures" / "codex"
@@ -31,7 +32,7 @@ def _fixture(name: str) -> dict:
 
 def _codex(payload: dict) -> object:
     return _observed_event(
-        BytesIO(json.dumps(payload).encode("utf-8")), "session", datetime.now(UTC), "codex"
+        BytesIO(json.dumps(payload).encode("utf-8")), "session", datetime.now(UTC), HOOK_LICENCE
     )
 
 
@@ -173,12 +174,21 @@ def test_the_codex_field_allow_lists_are_exactly_what_the_measurement_licensed()
     on nothing these two allow-lists control. That is why both assertions below are unchanged
     by the widening: the thing they pin did not move.
     """
-    assert spool._CODEX_DETAIL_FIELDS == {"Stop": ("last_assistant_message",)}
-    assert spool._CODEX_ASK_FIELDS == {"PermissionRequest": ("tool_name",)}
-
-    licensed = {name for fields in spool._CODEX_ASK_FIELDS.values() for name in fields} | {
-        name for fields in spool._CODEX_DETAIL_FIELDS.values() for name in fields
+    events = HOOK_LICENCE.events
+    assert set(events) == {"Stop", "PermissionRequest"}
+    assert HOOK_LICENCE.unlisted_events is None
+    assert {event: f.detail_fields for event, f in events.items() if f.detail_fields} == {
+        "Stop": ("last_assistant_message",)
     }
+    assert {event: f.ask_fields for event, f in events.items() if f.ask_fields} == {
+        "PermissionRequest": ("tool_name",)
+    }
+    assert {event for event, f in events.items() if f.detail_from_tool_input} == {
+        "PermissionRequest"
+    }
+    assert all(f.discriminating_fields == () for f in events.values())
+
+    licensed = {name for f in events.values() for name in f.ask_fields + f.detail_fields}
     for refused in ("tool_input", "transcript_path", "cwd", "prompt", "model", "permission_mode"):
         assert refused not in licensed, f"{refused} is not licensed by the measurement"
 
@@ -209,7 +219,7 @@ def test_claude_parsing_is_untouched_by_the_codex_widening() -> None:
                     "hook_event_name": "Stop",
                     "last_assistant_message": "Claude's line.",
                     "error": "rate_limit",
-                    # Over-filled with the field the codex branch now reads, so the
+                    # Over-filled with the field the codex licence now reads, so the
                     # assertion below is about isolation rather than about absence.
                     "tool_name": "Bash",
                 }
@@ -217,7 +227,7 @@ def test_claude_parsing_is_untouched_by_the_codex_widening() -> None:
         ),
         "session",
         datetime.now(UTC),
-        "claude",
+        hook_licence("claude"),
     )
 
     assert observed is not None
@@ -226,8 +236,8 @@ def test_claude_parsing_is_untouched_by_the_codex_widening() -> None:
     # The field the test's own name promises to cover and did not check until a Tier-1 review
     # asked for it: `ask` is Codex's, and nothing on Claude's path may populate it. A Claude
     # payload carrying a `tool_name` would still get None here — the reader is only ever
-    # consulted inside the codex branch.
-    assert observed.ask is None, "the ask class is the codex branch's alone"
+    # consulted for an event whose licence lists it.
+    assert observed.ask is None, "the ask class is the ask events' alone"
 
 
 # --------------------------------------------------------------------------------------

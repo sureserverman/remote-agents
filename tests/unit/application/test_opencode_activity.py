@@ -3,7 +3,7 @@
 The spool admits `session.idle` and `permission.asked`; this is the other half — the mapping
 that turns a spooled record into the kind a surface renders. Without it the records land, are
 read, and are dropped as events nothing can interpret, which is the exact silent failure
-`_DISCRIMINATING_FIELDS`' comment records this project losing months to.
+the comment on Claude's `_RECORD` (`claude/hooks.py`) records this project losing months to.
 """
 
 from __future__ import annotations

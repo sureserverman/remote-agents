@@ -57,9 +57,7 @@ def spool_from_stdin(activity_directory: Path | None, *, provider: str = "claude
         return 0
     # The one vertical this hook was installed for, imported here and nowhere earlier: a
     # descriptor would cost every vertical and its usage readers (BL-050).
-    return spool_agent_event(
-        payload, activity_directory=resolved, provider=provider, licence=hook_licence(provider)
-    )
+    return spool_agent_event(payload, activity_directory=resolved, licence=hook_licence(provider))
 
 
 def run_agent_event(argv: list[str] | None = None) -> int:

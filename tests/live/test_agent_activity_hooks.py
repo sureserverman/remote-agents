@@ -111,8 +111,8 @@ _DISCRIMINATORS = {
 }
 """The field each event discriminates on, as this project believes the agent spells them.
 
-The belief `_DISCRIMINATING_FIELDS` is built on, stated once so a single test can check it
-against reality rather than against another fixture.
+The belief Claude's hook licence (`claude/hooks.py` `_RECORD`) is built on, stated once so a
+single test can check it against reality rather than against another fixture.
 """
 
 
@@ -176,7 +176,7 @@ def test_the_hook_payload_field_names_match_the_installed_agent() -> None:
 
     assert not wrong, (
         "the installed agent does not spell these discriminating fields the way "
-        f"activity_spool._DISCRIMINATING_FIELDS expects: {wrong}"
+        f"claude/hooks.py _RECORD.discriminating_fields expects: {wrong}"
     )
 
 

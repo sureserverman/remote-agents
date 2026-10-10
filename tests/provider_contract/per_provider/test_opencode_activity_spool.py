@@ -13,7 +13,8 @@ plugin in an operator's config directory is exactly the writer that would make t
 One asymmetry with Codex worth naming, because it is permanent rather than pending:
 `session.idle` carries **no agent text and no field that could carry any**, so an OpenCode
 `completed` never has a detail to expand. That is a property of the event, not a parser waiting
-to be widened, and `_OPENCODE_DETAIL_FIELDS` is empty because there is nothing to put in it.
+to be widened, and OpenCode's licence admits no detail field because there is nothing to put
+in one.
 """
 
 from __future__ import annotations
@@ -23,9 +24,9 @@ from datetime import UTC, datetime
 from io import BytesIO
 from pathlib import Path
 
-from remote_agents.adapters.agents import activity_spool as spool
 from remote_agents.adapters.agents.activity_spool import _observed_event
-from remote_agents.adapters.agents.opencode.hooks import INSTALLED_EVENTS
+from remote_agents.adapters.agents.hook_licences import hook_licence
+from remote_agents.adapters.agents.opencode.hooks import HOOK_LICENCE, INSTALLED_EVENTS
 
 _FIXTURES = Path(__file__).resolve().parents[1] / "fixtures" / "opencode"
 
@@ -52,7 +53,7 @@ def _fixture(name: str) -> dict:
 
 def _opencode(payload: dict) -> object:
     return _observed_event(
-        BytesIO(json.dumps(payload).encode("utf-8")), "session", datetime.now(UTC), "opencode"
+        BytesIO(json.dumps(payload).encode("utf-8")), "session", datetime.now(UTC), HOOK_LICENCE
     )
 
 
@@ -110,17 +111,22 @@ def test_the_opencode_field_allow_lists_are_exactly_what_the_measurement_license
     values anyway. Both are real defences and neither is the decision. The decision is what the
     measurement licensed, and a decision nothing asserts is one the next edit makes silently.
     """
-    assert spool._OPENCODE_DETAIL_FIELDS == {}
-    assert spool._OPENCODE_ASK_FIELDS == {"permission.asked": ("permission",)}
+    events = HOOK_LICENCE.events
+    assert HOOK_LICENCE.unlisted_events is None
+    assert all(f.detail_fields == () and not f.detail_from_tool_input for f in events.values())
+    assert all(f.discriminating_fields == () for f in events.values())
+    assert {event: f.ask_fields for event, f in events.items() if f.ask_fields} == {
+        "permission.asked": ("permission",)
+    }
 
-    licensed = {name for fields in spool._OPENCODE_ASK_FIELDS.values() for name in fields}
+    licensed = {name for f in events.values() for name in f.ask_fields}
     for refused in ("patterns", "metadata", "always", "tool", "id", "sessionID", "message"):
         assert refused not in licensed, f"{refused} is not licensed by the measurement"
 
 
 def test_the_admitted_events_are_exactly_the_ones_the_provider_declares() -> None:
     """The spool and the installed-event declaration are the same two names, or one is wrong."""
-    assert spool._OPENCODE_EVENTS == frozenset(INSTALLED_EVENTS)
+    assert frozenset(HOOK_LICENCE.events) == frozenset(INSTALLED_EVENTS)
 
 
 def test_every_other_event_type_is_refused_at_the_spool_too() -> None:
@@ -159,7 +165,7 @@ def test_claude_and_codex_parsing_are_untouched_by_the_opencode_branch() -> None
         BytesIO(json.dumps({"hook_event_name": "Stop", "message": "claude words"}).encode()),
         "session",
         datetime.now(UTC),
-        "claude",
+        hook_licence("claude"),
     )
     assert claude is not None and claude.detail == "claude words"
 
@@ -167,7 +173,7 @@ def test_claude_and_codex_parsing_are_untouched_by_the_opencode_branch() -> None
         BytesIO(json.dumps({"hook_event_name": "PermissionRequest", "tool_name": "Bash"}).encode()),
         "session",
         datetime.now(UTC),
-        "codex",
+        hook_licence("codex"),
     )
     assert codex is not None and codex.ask == "Bash"
 
@@ -177,7 +183,7 @@ def test_claude_and_codex_parsing_are_untouched_by_the_opencode_branch() -> None
             BytesIO(json.dumps({"hook_event_name": "session.idle"}).encode()),
             "session",
             datetime.now(UTC),
-            "codex",
+            hook_licence("codex"),
         )
         is None
     )

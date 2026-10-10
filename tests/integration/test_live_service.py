@@ -2419,12 +2419,13 @@ def test_a_codex_permission_request_carries_its_command_from_the_hook_to_the_mes
     matters because the spool's two ends are different processes with deliberately duplicated
     guards -- `_PLAIN_TOKEN` at the writer, `_ASK_TOKEN` at the reader -- and the way this
     project has broken that seam before is for both sides' own tests to pass while the pair
-    disagrees (`_DISCRIMINATING_FIELDS`, `error_type`/`end_reason`).
+    disagrees (Claude's discriminating fields, `error_type`/`end_reason`).
     """
     import io
     import json
 
     from remote_agents.adapters.agents.activity_spool import spool_agent_event
+    from remote_agents.adapters.agents.hook_licences import hook_licence
     from remote_agents.adapters.telegram.notifications import render_activity
     from remote_agents.application.activity import drain_activity
     from remote_agents.application.notification_policy import SessionGroup
@@ -2449,7 +2450,7 @@ def test_a_codex_permission_request_carries_its_command_from_the_hook_to_the_mes
         io.BytesIO(json.dumps(payload).encode("utf-8")),
         activity_directory=spool,
         environment={SESSION_ID_VARIABLE: session_id},
-        provider="codex",
+        licence=hook_licence("codex"),
     )
     assert exit_status == 0, "a hook never fails the session it runs inside"
 

@@ -27,6 +27,7 @@ from remote_agents.adapters.agents.activity_spool import (
     _write_privately,
     spool_agent_event,
 )
+from remote_agents.adapters.agents.hook_licences import hook_licence
 from remote_agents.application.activity import drain_activity
 
 _SENTINEL = "zq-sentinel-7c1e5b-never-persist"
@@ -59,7 +60,7 @@ def _submit(directory: Path, provider: str) -> int:
         activity_directory=directory,
         environment={SESSION_ID_VARIABLE: "s-42"},
         now=lambda: datetime(2026, 9, 24, 21, 25, tzinfo=UTC),
-        provider=provider,
+        licence=hook_licence(provider),
     )
 
 
@@ -107,7 +108,7 @@ def test_the_pre_marker_hook_keeps_nothing_of_a_submit_either(
     moment = datetime(2026, 9, 24, 21, 25, tzinfo=UTC)
 
     observed = _observed_event(
-        io.BytesIO(json.dumps(_SUBMIT).encode("utf-8")), "s-42", moment, provider
+        io.BytesIO(json.dumps(_SUBMIT).encode("utf-8")), "s-42", moment, hook_licence(provider)
     )
     if observed is not None:
         _write_privately(observed, directory)
@@ -128,7 +129,7 @@ def test_a_prompt_past_the_bound_is_kept_nowhere(provider: str, tmp_path: Path) 
         io.BytesIO(json.dumps(long_submit).encode("utf-8")),
         activity_directory=directory,
         environment={SESSION_ID_VARIABLE: "s-42"},
-        provider=provider,
+        licence=hook_licence(provider),
     )
 
     assert (directory / "turns" / "s-42").read_bytes() == str(_SUBMIT["session_id"]).encode()

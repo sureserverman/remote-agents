@@ -12,13 +12,14 @@ from typing import Any
 
 import pytest
 
-from remote_agents.adapters.agents import activity_spool
 from remote_agents.adapters.agents.activity_spool import (
     _PLAIN_TOKEN,
     MAXIMUM_PAYLOAD_BYTES,
     SESSION_ID_VARIABLE,
     spool_agent_event,
 )
+from remote_agents.adapters.agents.codex import hooks as codex_hooks
+from remote_agents.adapters.agents.hook_licences import hook_licence
 from remote_agents.ports.agent_activity import MAXIMUM_DETAIL_CHARACTERS
 
 _STOP_PAYLOAD: dict[str, Any] = {
@@ -56,9 +57,16 @@ def _record(directory: Path) -> dict[str, Any]:
     return json.loads(entries[0].read_text(encoding="utf-8"))
 
 
-def _run(stream: io.BytesIO, directory: Path, session_id: str | None = "s-42", **overrides) -> int:
+def _run(
+    stream: io.BytesIO,
+    directory: Path,
+    session_id: str | None = "s-42",
+    provider: str = "claude",
+    **overrides,
+) -> int:
+    """Run the spool as the installed hook does: the provider's licence, looked up by hook name."""
     environment = {} if session_id is None else {SESSION_ID_VARIABLE: session_id}
-    arguments = {"now": _clock()}
+    arguments = {"now": _clock(), "licence": hook_licence(provider)}
     arguments.update(overrides)
     return spool_agent_event(
         stream, activity_directory=directory, environment=environment, **arguments
@@ -568,7 +576,7 @@ def test_a_codex_permission_request_finds_a_setting_far_from_the_end(
 
     The chunk is shrunk so the setting is several chunks away and lines straddle chunk edges.
     """
-    monkeypatch.setattr(activity_spool, "_ROLLOUT_CHUNK_BYTES", 97)
+    monkeypatch.setattr(codex_hooks, "_ROLLOUT_CHUNK_BYTES", 97)
     directory = _spool(tmp_path)
     rollout = _rollout(tmp_path, _turn_context("auto_review"), filler=50)
 
@@ -647,7 +655,7 @@ def test_a_rollout_without_a_trailing_newline_is_read_to_its_last_line(tmp_path:
 def test_a_setting_longer_than_a_chunk_is_still_read(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr(activity_spool, "_ROLLOUT_CHUNK_BYTES", 97)
+    monkeypatch.setattr(codex_hooks, "_ROLLOUT_CHUNK_BYTES", 97)
     directory = _spool(tmp_path)
     context = _turn_context("auto_review")
     context["payload"]["base_instructions"] = "y" * 1000
@@ -662,8 +670,8 @@ def test_a_setting_past_the_scan_limit_is_heard(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """A rollout that names no reviewer near its end costs one bounded read, then notifies."""
-    monkeypatch.setattr(activity_spool, "_ROLLOUT_CHUNK_BYTES", 97)
-    monkeypatch.setattr(activity_spool, "_ROLLOUT_SCAN_BYTES", 1000)
+    monkeypatch.setattr(codex_hooks, "_ROLLOUT_CHUNK_BYTES", 97)
+    monkeypatch.setattr(codex_hooks, "_ROLLOUT_SCAN_BYTES", 1000)
     directory = _spool(tmp_path)
     rollout = _rollout(tmp_path, _turn_context("auto_review"), filler=50)
 
@@ -680,7 +688,7 @@ def test_a_failure_reading_the_reviewer_is_heard(
     def explode(path: Path) -> str:
         raise RecursionError
 
-    monkeypatch.setattr(activity_spool, "_newest_codex_reviewer", explode)
+    monkeypatch.setattr(codex_hooks, "_newest_reviewer", explode)
     directory = _spool(tmp_path)
     rollout = _rollout(tmp_path, _turn_context("auto_review"))
 
@@ -1023,6 +1031,30 @@ def test_only_claude_and_codex_start_a_marker(provider: str, tmp_path: Path) -> 
     assert _run(_stream(_SUBMIT_PAYLOAD), directory, provider=provider) == 0
 
     assert not (directory / "turns").exists()
+    assert list(directory.iterdir()) == []
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        _STOP_PAYLOAD,
+        {"hook_event_name": "StopFailure", "error": "rate_limit"},
+        {"hook_event_name": "SomeFutureEvent", "message": "words"},
+    ],
+)
+def test_an_undeclared_provider_writes_nothing(payload: dict[str, Any], tmp_path: Path) -> None:
+    """A hook with no licence is admitted nothing (BL-050, master call 10).
+
+    Before the licences, an unknown provider fell into Claude's branch, which admits any plain
+    event name and reads Claude's fields -- so a provider nobody had measured would have spooled
+    whatever Claude's allow-list happened to match in its payloads.
+    """
+    directory = _spool(tmp_path)
+
+    assert _run(_stream(payload), directory, provider="some-later-provider") == 0
+    assert _run(_stream(payload), directory, licence=None) == 0
+
+    assert list(directory.iterdir()) == []
 
 
 def _as(agent: str, payload: dict[str, Any]) -> io.BytesIO:

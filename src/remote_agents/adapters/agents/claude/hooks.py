@@ -66,10 +66,34 @@ PROVIDER = _HookProvider(
 )
 
 #: What every Claude event other than an ask may keep: the field that discriminates it into a
-#: kind, and one line of the agent's own words. Measured against the installed bundle rather than
-#: assumed -- `StopFailure` carries `error`, `Notification` carries `notification_type`, and the
-#: retired `SessionEnd` carries `reason` (`activity_spool`'s history of `error_type` and
-#: `end_reason` is why "measured" is said out loud).
+#: kind, and one line of the agent's own words.
+#:
+#: The field each event discriminates on, as the installed agent actually spells them.
+#:
+#: Measured against `~/.local/share/claude/versions/2.1.227`, not assumed:
+#: `StopFailure` carries `error`, `Notification` carries `notification_type`, `SessionEnd`
+#: carries `reason`. Two of these were previously `error_type` and `end_reason`, which made
+#: `limit_reached` an unreachable kind: a managed session stopping on a rate limit spooled a
+#: record whose reason was `None`, and the drain dropped it as an event it could not
+#: interpret. Silently, and for the one thing a phone notification is most wanted for.
+#:
+#: `end_reason` appears nowhere in that bundle. `error_type` appears 58 times and **never in a
+#: hook payload** -- it is a telemetry key. The distinction is kept because the first draft of
+#: this comment claimed both were absent, which was a `grep -c` on a binary file reporting
+#: nothing and being read as zero. The conclusion is unchanged; the evidence for it was
+#: overstated, and a comment that overstates its evidence is the failure this whole repair is
+#: about.
+#:
+#: Nothing caught it because both sides were tested against each other: the spool's fixture
+#: asserted `error_type` and the classifier's fixture wrote `reason="rate_limit"` directly, so
+#: the two halves agreed with each other and neither was ever compared with the agent.
+#: `tests/live/test_agent_activity_hooks.py` is where that comparison now lives. (Moved here
+#: from `activity_spool._DISCRIMINATING_FIELDS` with the values, BL-050.)
+#: `reason` is `SessionEnd`'s, and `SessionEnd` is retired (DEC-051). It stays because a host
+#: that has not re-run `install-agent-hooks` yet is still firing that hook at this spool, and a
+#: reader that stopped recognising the field would mis-parse those records rather than ignore
+#: them. The mapping drops the event either way; what this keeps is the ability to read it
+#: correctly on the way to being dropped.
 _RECORD = EventLicence(
     discriminating_fields=("error", "notification_type", "reason"),
     detail_fields=("message", "last_assistant_message"),

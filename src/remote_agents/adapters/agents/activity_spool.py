@@ -52,116 +52,7 @@ MAXIMUM_PAYLOAD_BYTES = 32_768
 #: Claude has a `StopFailure` (Codex fires nothing on a failed turn, `ports/agent_activity.py`).
 TURN_STARTED = "UserPromptSubmit"
 TURN_ENDED = frozenset({"Stop", "StopFailure"})
-#: The providers whose hook marks a turn: the two whose `Stop` also ends one. Not OpenCode: its
-#: plugin forwards only its own two events, and its "finished" is `session.idle`, which is not in
-#: `TURN_ENDED` -- a marker started there would never end. A provider added later starts none
-#: until someone decides it should.
-MARKED_PROVIDERS = frozenset({"claude", "codex"})
-
 _PLAIN_TOKEN = re.compile(r"[A-Za-z0-9_-]{1,64}")
-#: The field each event discriminates on, as the installed agent actually spells them.
-#:
-#: Measured against `~/.local/share/claude/versions/2.1.227`, not assumed:
-#: `StopFailure` carries `error`, `Notification` carries `notification_type`, `SessionEnd`
-#: carries `reason`. Two of these were previously `error_type` and `end_reason`, which made
-#: `limit_reached` an unreachable kind: a managed session stopping on a rate limit spooled a
-#: record whose reason was `None`, and the drain dropped it as an event it could not
-#: interpret. Silently, and for the one thing a phone notification is most wanted for.
-#:
-#: `end_reason` appears nowhere in that bundle. `error_type` appears 58 times and **never in a
-#: hook payload** -- it is a telemetry key. The distinction is kept because the first draft of
-#: this comment claimed both were absent, which was a `grep -c` on a binary file reporting
-#: nothing and being read as zero. The conclusion is unchanged; the evidence for it was
-#: overstated, and a comment that overstates its evidence is the failure this whole repair is
-#: about.
-#:
-#: Nothing caught it because both sides were tested against each other: the spool's fixture
-#: asserted `error_type` and the classifier's fixture wrote `reason="rate_limit"` directly, so
-#: the two halves agreed with each other and neither was ever compared with the agent.
-#: `tests/live/test_agent_activity_hooks.py` is where that comparison now lives.
-#: `reason` is `SessionEnd`'s, and `SessionEnd` is retired (DEC-051). It stays because a host
-#: that has not re-run `install-agent-hooks` yet is still firing that hook at this spool, and a
-#: reader that stopped recognising the field would mis-parse those records rather than ignore
-#: them. The mapping drops the event either way; what this keeps is the ability to read it
-#: correctly on the way to being dropped.
-_DISCRIMINATING_FIELDS = ("error", "notification_type", "reason")
-_DETAIL_FIELDS = ("message", "last_assistant_message")
-
-#: What a Codex payload may contribute, per event. **Measured, never assumed** --
-#: `docs/acceptance-2026-08-29-codex-activity-detail.md` records the field vocabulary of real
-#: payloads captured against a disposable `CODEX_HOME`, and this tuple is its licensing section
-#: written as code. Deliberately narrower than `_DETAIL_FIELDS`: `message` was never observed on
-#: a Codex payload, and a field this project has not seen is not a field it reads.
-#:
-#: `Stop` is the only key here. `PermissionRequest`'s detail is composed separately, by
-#: `_ask_detail`, because its words live one level down inside `tool_input` rather than at the
-#: top level this mapping is read with.
-#:
-#: **Not because nothing would render it.** That was the first reason given and it was wrong --
-#: it holds for `reason`, which only ever feeds `_kind`, and not for `detail`, which is
-#: provider-agnostic and renders on both surfaces with no renderer change. The Stage 2 gate
-#: evaluator checked rather than believed it.
-#:
-#: The reason that survives: `detail` means *the agent's own words*. It is what `_detail_of`
-#: guards, what the feed elides and expands, and what every consumer reads as a sentence the
-#: agent chose to write. A bare provider token is a different kind of string, and the honest
-#: version of the owner's ask is a sentence -- "waiting for an answer about a shell command" --
-#: which is wording, shared with Claude's `needs_answer`, and a decision to take deliberately
-#: rather than to inherit from a parser change. Recorded as DEC-067.
-#:
-#: **That decision was taken on 2026-09-06 and `tool_name` is now admitted** -- not here, into
-#: `detail`, but into `ask`, a field of its own (`_CODEX_ASK_FIELDS`, DEC-074). This paragraph is
-#: kept because its argument is why the two fields are separate; it is annotated because a reader
-#: hits it a hundred lines before the code that admits the field, and would otherwise leave with
-#: the wrong conclusion.
-#:
-#: **Amended 2026-09-19 by DEC-098, and this is the paragraph a reader must not stop at.** The
-#: argument above concluded that a bare provider token is not prose and so does not belong in
-#: `detail`. That conclusion stands and is why `ask` still exists. What DEC-098 reverses is the
-#: separate refusal of `tool_input`: the owner is the sole operator and the sole recipient, so
-#: their own command is not a leak, and `tool_input.description` is not a token at all -- it is
-#: the agent's own one-sentence reason, which is precisely what `detail` has always meant. The
-#: words now ride in `detail` beside the class in `ask`; neither field took the other's job.
-_CODEX_DETAIL_FIELDS: dict[str, tuple[str, ...]] = {"Stop": ("last_assistant_message",)}
-
-#: What a Codex payload may contribute as an ASK CLASS, per event. `PermissionRequest` only,
-#: and `tool_name` only -- the one field the measurement
-#: (`docs/acceptance-2026-08-29-codex-activity-detail.md`) licenses, whose own licensing
-#: section reads "`PermissionRequest` -> `tool_name` at most, and nothing else" -- a licence
-#: **amended on 2026-09-19 by DEC-098**, which additionally admits `tool_input`'s two measured
-#: keys into `detail`; this tuple, which is about `ask` alone, is unchanged by that. `Stop` admits
-#: none: an agent that has finished is not waiting on anything.
-_CODEX_ASK_FIELDS: dict[str, tuple[str, ...]] = {"PermissionRequest": ("tool_name",)}
-
-#: The two `event` types OpenCode's generated plugin acts on, and the only ones this branch
-#: admits. Read as an exact set rather than through `_plain_token`, because these names carry a
-#: dot and `_plain_token` -- correctly, for the values it guards -- does not allow one. Widening
-#: that reader to admit a dotted event name would have loosened the guard on `reason` and on
-#: every provider's `ask` at the same time, to make one branch's event names fit.
-_OPENCODE_EVENTS = frozenset({"session.idle", "permission.asked"})
-
-#: What an OpenCode payload may contribute as DETAIL: **nothing, permanently**.
-#:
-#: Empty rather than absent, and empty for a reason that will not change with a wider parser.
-#: `session.idle` -- the only event that could carry a finished agent's words -- has a payload of
-#: exactly one field, and that field is OpenCode's own session id
-#: (`docs/acceptance-2026-09-06-opencode-activity.md`, 2 of 2 samples). There is no
-#: `last_assistant_message` waiting to be admitted the way Codex's `Stop` had one; getting the
-#: agent's last words would mean asking the SDK for the session's messages, which is a different
-#: mechanism reading conversation content and therefore a DEC-013 retention decision rather than
-#: a parser widening. Not proposed, and this dict is where a future reader is told so.
-_OPENCODE_DETAIL_FIELDS: dict[str, tuple[str, ...]] = {}
-
-#: What an OpenCode payload may contribute as an ASK CLASS. `permission.asked` only, and
-#: `properties.permission` only -- the one field the measurement licenses, whose licensing
-#: section reads "`permission.asked` -> `properties.permission` at most, as an ask class". Never
-#: `patterns` or `metadata.command`, which are the literal command, nor `always`, which is a glob
-#: over commands. `session.idle` admits none: an agent that has finished is not waiting.
-#:
-#: Read through `_plain_token` exactly as Codex's `tool_name` is, and for the same measured
-#: reason: one sample, one value (`bash`), so the value space is unverified and a token carrying
-#: a space, a slash or a quote is not a tool class this project recognises.
-_OPENCODE_ASK_FIELDS: dict[str, tuple[str, ...]] = {"permission.asked": ("permission",)}
 #: How many times a colliding name is stepped over before the record is dropped in silence.
 #:
 #: A collision needs two events in the same *microsecond* for one session, so the hooks
@@ -222,14 +113,15 @@ def spool_agent_event(
     activity_directory: Path,
     environment: Mapping[str, str] = os.environ,
     now: Callable[[], datetime] = lambda: datetime.now(UTC),
-    provider: str = "claude",
     markers: TurnMarkers | None = None,
     licence: HookLicence | None = None,
 ) -> int:
     """Record one hook event privately, and always report success to the agent.
 
     A submit starts the session's turn marker and records nothing else; a finished turn ends
-    the marker and is then recorded as before.
+    the marker and is then recorded as before. What is recorded, and whether a submit marks a
+    turn at all, is the `licence` the hook's vertical declares (BL-050): this module names no
+    provider, and a hook with no licence records nothing and starts no marker.
     """
     try:
         session_id = safe_session_id(environment.get(SESSION_ID_VARIABLE))
@@ -251,7 +143,7 @@ def spool_agent_event(
         # pane inherits the pane's id, and only this tells its hooks from its parent's.
         owner = fields.get("session_id")
         turns = FileTurnMarkers(activity_directory) if markers is None else markers
-        if event == TURN_STARTED and provider in MARKED_PROVIDERS:
+        if event == TURN_STARTED and licence is not None and licence.starts_turn_marker:
             turns.start(session_id, owner=owner if isinstance(owner, str) else None)
             return 0
         # Ungated, unlike the start: ending a marker that was never started is a no-op. Guarded
@@ -263,7 +155,7 @@ def spool_agent_event(
                 pass
         if document is None:
             return 0
-        observed = _observed(document, session_id, now(), provider)
+        observed = _observed(document, session_id, now(), licence)
         if observed is not None:
             _write_privately(observed, activity_directory)
     except Exception:
@@ -277,11 +169,11 @@ def spool_agent_event(
 
 
 def _observed_event(
-    payload: IO[bytes], session_id: str, moment: datetime, provider: str = "claude"
+    payload: IO[bytes], session_id: str, moment: datetime, licence: HookLicence | None
 ) -> ObservedAgentEvent | None:
     """Read a bounded payload and keep only the fields a notification is built from."""
     document = _payload_document(payload)
-    return None if document is None else _observed(document, session_id, moment, provider)
+    return None if document is None else _observed(document, session_id, moment, licence)
 
 
 def _payload_document(payload: IO[bytes]) -> dict | None:
@@ -346,221 +238,48 @@ def _fields_in_prefix(raw: bytes, names: tuple[str, ...]) -> dict[str, object]:
 
 
 def _observed(
-    document: dict, session_id: str, moment: datetime, provider: str = "claude"
+    document: Mapping[str, object],
+    session_id: str,
+    moment: datetime,
+    licence: HookLicence | None,
 ) -> ObservedAgentEvent | None:
-    """Keep only the fields a notification is built from."""
-    if provider == "opencode":
-        return _observed_opencode_event(document, session_id, moment)
-    if provider == "cursor":
-        return _observed_cursor_event(document, session_id, moment)
-    event = _plain_token(document.get("hook_event_name"))
-    if event is None:
-        return None
-    if provider == "codex":
-        if event not in {"Stop", "PermissionRequest"}:
-            return None
-        if event == "PermissionRequest" and _codex_reviewer_decides(document):
-            return None
-        # Widened on 2026-08-30 from "every payload field discarded" to "the one measured field
-        # a notification renders" -- which supersedes nothing. DEC-013 clause (2) already allows
-        # a hook to keep "one bounded single line of detail" beside the event name, session id
-        # and time, and DEC-063 kept that clause binding while replacing only DEC-013's obsolete
-        # claim that Codex has no usable source. Codex simply was not using an allowance Claude
-        # has had since the spool was written; this brings it to parity. DEC-063's content-free
-        # claim is scoped to the pane-*title* watcher, which is untouched and still retains one
-        # boolean.
-        #
-        # `PermissionRequest` admits `tool_name` as an `ask` (DEC-074), and since 2026-09-19
-        # admits its `tool_input` words as `detail` too (DEC-098) -- two fields for two kinds of
-        # string, which is DEC-067's field-conflation reasoning still doing its job rather than
-        # being overturned by it. What DEC-098 reversed was DEC-067's separate refusal of
-        # `tool_input` as a leak; see `_ask_detail`.
-        #
-        # Read through `_plain_token`, not `bounded_detail_line`. The measurement observed
-        # `tool_name` only as `Bash` in all four samples and says so; its value space is
-        # unverified beyond that. The narrow reader is what keeps an unverified space from
-        # becoming a rendering surface: a value carrying a space, a slash or a quote is not a
-        # tool class this project recognises, and it is dropped rather than drawn under the
-        # owner's session name.
-        #
-        # What crosses here is bounded by `bounded_detail_line`, exactly as Claude's is, because
-        # the far end of the spool measures against the same budget.
-        return ObservedAgentEvent(
-            session_id=session_id,
-            event=event,
-            reason=None,
-            detail=(
-                _ask_detail(document)
-                if event == "PermissionRequest"
-                else _first(document, _CODEX_DETAIL_FIELDS.get(event, ()), bounded_detail_line)
-            ),
-            observed_at=moment.astimezone(UTC),
-            ask=_first(document, _CODEX_ASK_FIELDS.get(event, ()), _plain_token),
-        )
-    # `PermissionRequest` is Claude's since 2026-09-19 (DEC-098) and is read exactly as Codex's
-    # is: the tool class into `ask`, through the narrow token reader, and the ask's own words
-    # into `detail` through `_ask_detail`. `_DETAIL_FIELDS` is not consulted for it -- a
-    # `PermissionRequest` carries no `message` and no `last_assistant_message`, and reading a
-    # group of fields that cannot be present would only obscure which one was expected.
-    if event == "PermissionRequest":
-        return ObservedAgentEvent(
-            session_id=session_id,
-            event=event,
-            reason=None,
-            detail=_ask_detail(document),
-            observed_at=moment.astimezone(UTC),
-            ask=_plain_token(document.get("tool_name")),
-        )
-    return ObservedAgentEvent(
-        session_id=session_id,
-        event=event,
-        reason=_first(document, _DISCRIMINATING_FIELDS, _plain_token),
-        detail=_first(document, _DETAIL_FIELDS, bounded_detail_line),
-        observed_at=moment.astimezone(UTC),
-    )
+    """Keep only the fields the hook's licence admits for this event.
 
+    The event name is matched exactly against the licence's own list, not through
+    `_plain_token`: OpenCode's names carry a dot, and widening the token reader to admit one
+    would loosen the guard on `reason` and on every `ask` at the same time to make one
+    provider's vocabulary fit. An exact list is narrower than the reader rather than wider.
+    Only an event the licence does not list is read as a token, and only for a licence that
+    admits unlisted events at all.
 
-#: The rollout key naming who answers a Codex escalation. Measured 2026-10-01 on codex-cli
-#: 0.159.3: `turn_context` carries it at `payload.approvals_reviewer`, and a mid-session
-#: `/permissions` change writes `thread_settings_applied` with it at
-#: `payload.thread_settings.approvals_reviewer`. Re-measure when Codex changes either shape.
-_CODEX_REVIEWER_KEY = b'"approvals_reviewer"'
-#: The reviewers that answer without the owner: the binary's enum is `user`, `auto_review` and
-#: `guardian_subagent`, the older name for the same reviewer. An allowlist, so a value Codex
-#: adds later is heard rather than silenced.
-_CODEX_AUTOMATIC_REVIEWERS = frozenset({"auto_review", "guardian_subagent"})
-_ROLLOUT_CHUNK_BYTES = 1024 * 1024
-#: How far back the scan looks before it gives up and lets the ask through. The measured
-#: setting sat 4.6 MB from the end; a rollout that never names a reviewer must not cost every
-#: ask a read of the whole file inside Codex's hook.
-_ROLLOUT_SCAN_BYTES = 64 * 1024 * 1024
-
-
-def _codex_reviewer_decides(document: Mapping[str, object]) -> bool:
-    """Whether Codex's own reviewer, not the owner, answers this session's escalations (DEC-112).
-
-    Codex fires `PermissionRequest` for every escalation, including the ones its `auto_review`
-    reviewer then approves without showing the owner anything. On 2026-10-01 one such session
-    had produced about 340 `needs_answer` notifications in two days, none of them a question
-    the owner could see. The payload does not say who reviews -- its `permission_mode` enum has
-    no value for it -- so the session's own rollout is read for the newest setting.
-
-    The transcript path is used here and never leaves the hook's process (DEC-013 clause 2).
-    Anything unreadable answers `False`, so a missed setting costs a notification, never a
-    silent ask. The catch is broad for that reason: the caller swallows every exception and
-    spools nothing, which here would be the silent ask.
+    Every field below is read through the licence's tuples and nothing else, so a field no
+    vertical declared never reaches disk (DEC-013, DEC-037); what crosses is bounded by
+    `bounded_detail_line` or `_plain_token`, because the far end of the spool measures against
+    the same budget.
     """
-    try:
-        path = document.get("transcript_path")
-        if not isinstance(path, str) or not path or not Path(path).is_file():
-            return False
-        return _newest_codex_reviewer(Path(path)) in _CODEX_AUTOMATIC_REVIEWERS
-    except Exception:
-        return False
-
-
-def _newest_codex_reviewer(path: Path) -> str | None:
-    """Scan a rollout backwards for the newest record naming its reviewer.
-
-    Not bounded to a tail: on the measured session the newest setting sat 4.6 MB from the end,
-    nine times the tail the usage readers take, because a single long turn writes none.
-    """
-    try:
-        with path.open("rb") as handle:
-            end = handle.seek(0, os.SEEK_END)
-            floor = max(0, end - _ROLLOUT_SCAN_BYTES)
-            position = end
-            pending = b""
-            while position > floor:
-                step = min(_ROLLOUT_CHUNK_BYTES, position - floor)
-                position -= step
-                handle.seek(position)
-                pending = handle.read(step) + pending
-                # The first line is whole only at the start of the file; otherwise it waits
-                # for the next chunk to complete it.
-                start = 0 if position == 0 else pending.find(b"\n") + 1
-                if start == 0 and position > 0:
-                    continue
-                window, pending = pending[start:], pending[:start]
-                for line in reversed(window.splitlines()):
-                    if _CODEX_REVIEWER_KEY in line:
-                        reviewer = _codex_reviewer_of(line)
-                        if reviewer is not None:
-                            return reviewer
-    except OSError:
+    if licence is None:
         return None
-    return None
-
-
-def _codex_reviewer_of(line: bytes) -> str | None:
-    """The reviewer a `turn_context` or `thread_settings_applied` record names, else None."""
-    try:
-        record = json.loads(line)
-    except (UnicodeDecodeError, ValueError):
-        return None
-    if not isinstance(record, dict) or not isinstance(record.get("payload"), dict):
-        return None
-    payload = record["payload"]
-    if record.get("type") == "turn_context":
-        source = payload
-    elif record.get("type") == "event_msg" and payload.get("type") == "thread_settings_applied":
-        source = payload.get("thread_settings")
-    else:
-        return None
-    reviewer = source.get("approvals_reviewer") if isinstance(source, dict) else None
-    return reviewer if isinstance(reviewer, str) else None
-
-
-def _observed_opencode_event(
-    document: Mapping[str, object], session_id: str, moment: datetime
-) -> ObservedAgentEvent | None:
-    """Read an OpenCode plugin record, admitting the two events and the one licensed field.
-
-    Branched ahead of the shared `_plain_token` read rather than after it, which is the whole
-    reason this is a function and not three more lines in `_observed_event`. OpenCode's event
-    names are dotted; `_plain_token` allows no dot, and it is the same reader that guards
-    `reason` and every provider's `ask`. Making the dotted names fit by widening it would have
-    loosened two guards to admit one branch's vocabulary -- so the branch takes its event names
-    from a fixed set instead, which is narrower than `_plain_token` rather than wider.
-
-    The narrowing here duplicates the plugin's own, deliberately. That code lives in the
-    operator's configuration directory where a hand-edit is possible, and this end of the spool
-    reads a file a different process wrote; a boundary that trusts what it is handed because
-    something upstream was careful is not a boundary.
-    """
     event = document.get("hook_event_name")
-    if not isinstance(event, str) or event not in _OPENCODE_EVENTS:
+    if not isinstance(event, str):
+        return None
+    fields = licence.events.get(event)
+    if fields is None:
+        if licence.unlisted_events is None or _plain_token(event) is None:
+            return None
+        fields = licence.unlisted_events
+    if licence.admits is not None and not licence.admits(document):
         return None
     return ObservedAgentEvent(
         session_id=session_id,
         event=event,
-        reason=None,
-        detail=_first(document, _OPENCODE_DETAIL_FIELDS.get(event, ()), bounded_detail_line),
+        reason=_first(document, fields.discriminating_fields, _plain_token),
+        detail=(
+            _ask_detail(document)
+            if fields.detail_from_tool_input
+            else _first(document, fields.detail_fields, bounded_detail_line)
+        ),
         observed_at=moment.astimezone(UTC),
-        ask=_first(document, _OPENCODE_ASK_FIELDS.get(event, ()), _plain_token),
-    )
-
-
-def _observed_cursor_event(
-    document: Mapping[str, object], session_id: str, moment: datetime
-) -> ObservedAgentEvent | None:
-    """Read a Cursor hook payload, admitting one event, a completed `stop`, and no field of it.
-
-    Its own branch because an unknown provider would fall into Claude's, which admits any plain
-    event name. Cursor's `stop` carries `user_email` -- and its hook's environment carries it
-    again as `CURSOR_USER_EMAIL` -- plus `transcript_path` and `workspace_roots`
-    (`docs/acceptance-2026-10-08-cursor-user-stop-hook.md`). None of them is read: the record is
-    the event, the session and the time, which is all the relay's "finished" needs (DEC-013,
-    DEC-037). An `aborted` or `error` stop is not a turn that finished, so it records nothing.
-    """
-    if document.get("hook_event_name") != "stop" or document.get("status") != "completed":
-        return None
-    return ObservedAgentEvent(
-        session_id=session_id,
-        event="stop",
-        reason=None,
-        detail=None,
-        observed_at=moment.astimezone(UTC),
+        ask=_first(document, fields.ask_fields, _plain_token),
     )
 
 
@@ -572,10 +291,10 @@ def _observed_cursor_event(
 #: agents agree on these names is why one reader serves both rather than one per provider.
 #:
 #: **Read by name, one level down, and no further.** `tool_input` is the only nested object this
-#: spool descends into, and it descends exactly one level: a recursive walk would turn every
-#: future tool's payload into detail sight unseen, which is the assumption
-#: `_DISCRIMINATING_FIELDS` exists to warn about. A tool carrying neither key yields no detail
-#: and still spools its record.
+#: spool descends into, and it descends exactly one level: a recursive walk would turn every future
+#: tool's payload into detail sight unseen, which is the assumption Claude's licence
+#: (`claude/hooks.py`, its discriminating fields) exists to warn about. A tool carrying neither key
+#: yields no detail and still spools its record.
 #:
 #: Deliberately NOT admitted, and still refused after DEC-098: `transcript_path` and `cwd`, which
 #: are on this event and are filesystem layout rather than anything the owner is being asked

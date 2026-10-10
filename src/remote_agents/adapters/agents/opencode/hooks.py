@@ -64,17 +64,35 @@ PROVIDER = _HookProvider(
     ),
 )
 
+#: What an OpenCode payload may contribute as DETAIL: **nothing, permanently**.
+#:
+#: An empty `EventLicence` rather than an absent one, and empty for a reason that will not change
+#: with a wider parser. `session.idle` -- the only event that could carry a finished agent's words
+#: -- has a payload of exactly one field, and that field is OpenCode's own session id
+#: (`docs/acceptance-2026-09-06-opencode-activity.md`, 2 of 2 samples). There is no
+#: `last_assistant_message` waiting to be admitted the way Codex's `Stop` had one; getting the
+#: agent's last words would mean asking the SDK for the session's messages, which is a different
+#: mechanism reading conversation content and therefore a DEC-013 retention decision rather than a
+#: parser widening. Not proposed, and this licence is where a future reader is told so.
+#:
+#: What an OpenCode payload may contribute as an ASK CLASS. `permission.asked` only, and
+#: `properties.permission` only -- the one field the measurement licenses, whose licensing
+#: section reads "`permission.asked` -> `properties.permission` at most, as an ask class". Never
+#: `patterns` or `metadata.command`, which are the literal command, nor `always`, which is a glob
+#: over commands. `session.idle` admits none: an agent that has finished is not waiting.
+#:
+#: Read through `_plain_token` exactly as Codex's `tool_name` is, and for the same measured
+#: reason: one sample, one value (`bash`), so the value space is unverified and a token carrying
+#: a space, a slash or a quote is not a tool class this project recognises.
+#:
+#: The narrowing here duplicates the plugin's own, deliberately. That code lives in the operator's
+#: configuration directory where a hand-edit is possible, and the spool reads a file a different
+#: process wrote; a boundary that trusts what it is handed because something upstream was careful
+#: is not a boundary.
 HOOK_LICENCE = HookLicence(
     events=MappingProxyType(
         {
-            # DETAIL: nothing, permanently. `session.idle`'s payload is exactly one field,
-            # OpenCode's own session id (`docs/acceptance-2026-09-06-opencode-activity.md`, 2 of
-            # 2 samples). The agent's last words would mean asking the SDK for the session's
-            # messages -- a DEC-013 retention decision, not a parser widening. Not proposed.
             "session.idle": EventLicence(),
-            # `properties.permission` only, as an ask class -- never `patterns` or
-            # `metadata.command`, which are the literal command, nor `always`, a glob over
-            # commands. One sample, one value (`bash`), so it is read as a plain token.
             "permission.asked": EventLicence(ask_fields=("permission",)),
         }
     ),

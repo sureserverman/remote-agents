@@ -1,9 +1,9 @@
 """Claude's discriminating behavior, driven from the requirement-built fixtures.
 
 Unlike Codex's, these fixtures were *not* rebuilt from a capture document: the field
-vocabulary is the one the parser itself declares -- `_DISCRIMINATING_FIELDS`,
-`_DETAIL_FIELDS` and the claude branch of `_observed_event` in
-`src/remote_agents/adapters/agents/activity_spool.py`, whose own comment records the
+vocabulary is the one Claude's hook licence declares -- `_RECORD`'s discriminating and detail
+fields and `HOOK_LICENCE` in `src/remote_agents/adapters/agents/claude/hooks.py`, whose own
+comment records the
 measurement against the installed claude bundle 2.1.227 that corrected `error_type` and
 `end_reason` -- together with the claude cases the shared unit suite already exercises.
 Values are synthetic per GDEC-SEC-001 and every fixture is deliberately *over-filled*
@@ -28,6 +28,7 @@ from pathlib import Path
 import pytest
 
 from remote_agents.adapters.agents.activity_spool import _observed_event
+from remote_agents.adapters.agents.claude.hooks import HOOK_LICENCE
 from remote_agents.ports.agent_activity import MAXIMUM_DETAIL_CHARACTERS
 
 _FIXTURES = Path(__file__).resolve().parents[1] / "fixtures" / "claude"
@@ -39,7 +40,7 @@ def _fixture(name: str) -> dict:
 
 def _claude(payload: dict) -> object:
     return _observed_event(
-        BytesIO(json.dumps(payload).encode("utf-8")), "session", datetime.now(UTC), "claude"
+        BytesIO(json.dumps(payload).encode("utf-8")), "session", datetime.now(UTC), HOOK_LICENCE
     )
 
 
@@ -71,7 +72,7 @@ def test_each_claude_event_discriminates_on_its_own_field(
 ) -> None:
     """The corrected vocabulary: `error`, `notification_type`, `reason` -- never `error_type`
     or `end_reason`, the two assumed names that once made `limit_reached` unreachable in
-    silence (the `_DISCRIMINATING_FIELDS` comment carries the full account). `SessionEnd`
+    silence (the comment on Claude's `_RECORD` carries the full account). `SessionEnd`
     is retired (DEC-051) but its `reason` must still parse correctly on the way to being
     dropped, for hosts that have not re-run `install-agent-hooks`.
     """
@@ -94,7 +95,7 @@ def test_a_claude_detail_line_is_bounded_and_single_lined() -> None:
 
 
 def test_message_outranks_last_assistant_message_when_both_arrive() -> None:
-    """`_DETAIL_FIELDS` is an ordered group: `message` is the event's own wording and wins
+    """Claude's `detail_fields` are an ordered group: `message` is the event's own wording and wins
     over the trailing assistant line if an upstream payload ever carries both.
     """
     observed = _claude({**_fixture("notification.json"), "last_assistant_message": "trailing"})
@@ -156,7 +157,7 @@ def test_no_claude_payload_field_naming_a_path_prompt_or_foreign_id_reaches_disk
 # `permission_prompt` left `_NOTIFICATIONS` because the `PermissionRequest` event now reports
 # the same ask with words. The spool still reads both, and these cases still pin that -- a
 # record this end parses correctly on the way to being dropped is the behaviour
-# `_DISCRIMINATING_FIELDS` argues for.
+# Claude's `_RECORD` comment argues for.
 
 
 def test_a_permission_prompt_carries_the_message_claude_sends_with_it() -> None:
