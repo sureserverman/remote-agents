@@ -197,8 +197,8 @@ class PositionKind(enum.Enum):
     `SessionsScreen` and `SessionsPaneScreen` set both `carries_row_keys` and
     `owns_session_cursor`, so the row keys are tested first or the sessions pane would be
     refused its F-keys. That pair is the only overlap any screen may declare
-    (`test_no_screen_declares_two_of_the_three_position_flags`), which is what makes every
-    other order equivalent.
+    (`test_no_screen_declares_two_of_the_three_position_flags`), so any order that keeps
+    `ROWS` ahead of `CURSOR` gives the same answers.
     """
 
     #: Carries the bare row keys, so it owns a cursor for them (`SessionsScreen`): offered, and

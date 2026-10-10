@@ -11,7 +11,8 @@ a hint row, and one of them (`session_key('detail')`) carries a row key the tabl
 only declaration of.
 
 What did not move, and is carried here verbatim because it was never about the chords: the
-three position flags are disjoint, every screen that holds a session declares it, and every
+three position flags overlap only as rows-and-cursor, every screen that holds a session
+declares it, and every
 screen can answer the stop handler it inherits.
 """
 
@@ -286,13 +287,15 @@ def test_the_f_key_layer_is_offered_exactly_where_the_bare_keys_are() -> None:
 
 
 def test_no_screen_declares_two_of_the_three_position_flags() -> None:
-    """`carries_row_keys`, `owns_session_cursor` and `about_one_session` are disjoint answers.
+    """The three position flags overlap in one way only: the row keys with a cursor.
 
     They are the input of the one classifier, `_position_kind`, that both `_offers_session_key`
     and `_resolve_session` branch on. The classifier reads them in one fixed order, so a screen
-    setting two would be classified by whichever flag that order reaches first, silently. This
-    test keeps that order from ever mattering: every screen sets at most one flag, apart from
-    the rows-and-cursor pair the classifier names `ROWS`.
+    setting two would be classified by whichever flag that order reaches first, silently. For
+    the one pair allowed, `carries_row_keys` with `owns_session_cursor`, the order does matter:
+    the classifier tests the row keys first and calls the pair `ROWS`, or the sessions pane
+    would be refused its F-keys. This test keeps every other combination out, so no other
+    order choice can change an answer.
 
     The one implication that must hold is asserted with it: a screen carrying the row keys owns
     a cursor for them to act on. Without it, a screen could declare `carries_row_keys`, be
@@ -316,8 +319,8 @@ def test_no_screen_declares_two_of_the_three_position_flags() -> None:
         )
     }
     assert not overlapping, (
-        f"these screens answer 'which session' two ways, so the answer depends on which "
-        f"resolver asks first: {overlapping}"
+        f"these screens answer 'which session' two ways, so the classifier's flag order "
+        f"silently picks one: {overlapping}"
     )
 
     keys_without_cursor = [
