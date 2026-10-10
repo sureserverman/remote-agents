@@ -1,0 +1,28 @@
+{
+ "baseline": {
+  "elapsed_s": 3.4,
+  "exit": 0,
+  "tail": "...............................                                          [100%]\n31 passed in 3.04s"
+ },
+ "break_patch": "diff --git a/src/remote_agents/composition/service.py b/src/remote_agents/composition/service.py\nindex 08b9ccd4..b1c1f630 100644\n--- a/src/remote_agents/composition/service.py\n+++ b/src/remote_agents/composition/service.py\n@@ -349,7 +349,7 @@ async def _serve_with_reconciliation(\n         )\n     if composition.limit_stop_outcomes is not None:\n         periodic.append(asyncio.create_task(_prune_limit_stop_outcomes_periodically(composition)))\n-    if composition.worktree_cleanup is not None:\n+    if False:\n         # Its own task and clock, like the rollover pass: a pass that raises costs one tick.\n         periodic.append(\n             asyncio.create_task(_watch_worktrees_periodically(composition, worktree_interval))\n",
+ "build": null,
+ "created": "2026-10-10T21:33:09+00:00",
+ "fingerprint": "3de25c0446360aa4534fd8dca9e35ae73b7d4e7637a2184988327b5711e19fd9",
+ "index": 1,
+ "kind": "claim",
+ "named_break": null,
+ "no_build_reason": "pure Python, no build",
+ "plan": "/mnt/vault/Portfolio/infra/remote-agents/plans/2026-10-09-decisions-and-worktrees-sub-04-session-worktrees-plan.md",
+ "red": {
+  "elapsed_s": 13.5,
+  "exit": 1,
+  "tail": "E                   TimeoutError\n\n../../../.local/share/uv/python/cpython-3.14.4-linux-x86_64-gnu/lib/python3.14/asyncio/timeouts.py:114: TimeoutError\n______ test_the_worktree_watch_is_cancelled_with_the_other_periodic_tasks ______\n\ntmp_path = PosixPath('/tmp/pytest-of-user/pytest-1343/test_the_worktree_watch_is_can0')\n\n    async def test_the_worktree_watch_is_cancelled_with_the_other_periodic_tasks(\n        tmp_path: Path,\n    ) -> None:\n        store = _Candidates(asyncio.Event())\n        before = len(asyncio.all_tasks())\n        connection = open_database(tmp_path / \"sessions.sqlite3\")\n        try:\n            composition = ServiceComposition(\n                build_private_bot(7, 11),\n                StubTerminal(),\n                ReconciliationService(SQLiteSessionStore(connection)),\n                worktree_cleanup=_cleanup_pass(store, []),\n            )\n    \n            async def poll(secrets: TelegramSecrets, boundary: PrivateBotBoundary) -> None:\n                await asyncio.sleep(0.1)\n    \n            await _serve_with_reconciliation(_SECRETS, composition, poll, 3600, worktree_interval=0.01)\n        finally:\n            connection.close()\n    \n        await asyncio.sleep(0)\n>       assert store.reads >= 1, \"the serve loop never scheduled the worktree watch\"\nE       AssertionError: the serve loop never scheduled the worktree watch\nE       assert 0 >= 1\nE        +  where 0 = <test_serve_reconciliation._Candidates object at 0x7c9a8f48ec10>.reads\n\ntests/integration/test_serve_reconciliation.py:1072: AssertionError\n=========================== short test summary info ============================\nFAILED tests/integration/test_serve_reconciliation.py::test_the_serve_loop_runs_the_worktree_pass_once_a_tick_inside_the_operation_gate\nFAILED tests/integration/test_serve_reconciliation.py::test_a_worktree_pass_that_raises_costs_one_tick\nFAILED tests/integration/test_serve_reconciliation.py::test_the_worktree_watch_is_cancelled_with_the_other_periodic_tasks\n3 failed, 28 passed in 13.17s"
+ },
+ "schema": 2,
+ "task": "4.2",
+ "test": "uv run --locked pytest tests/integration/test_serve_reconciliation.py -q -p no:randomly",
+ "text": "`uv run --locked pytest tests/integration/test_serve_reconciliation.py -q -p no:randomly`.",
+ "touched": [
+  "src/remote_agents/composition/service.py"
+ ]
+}

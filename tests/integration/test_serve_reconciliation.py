@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
@@ -21,8 +22,9 @@ from remote_agents.adapters.sqlite.session_store import SQLiteSessionStore
 from remote_agents.adapters.telegram.service import PrivateBotBoundary, build_private_bot
 from remote_agents.adapters.tmux.codec import parse_pane
 from remote_agents.application.activity import CodexApprovalWatcher
-from remote_agents.application.reconcile import ReconciliationService
+from remote_agents.application.reconcile import ReconciliationService, SessionLocks
 from remote_agents.application.session_actions import pane_is_attachable
+from remote_agents.application.worktree_cleanup import WorktreeCleanupPass
 from remote_agents.composition.service import ServiceComposition, _serve_with_reconciliation
 from remote_agents.config import TelegramSecrets
 from remote_agents.domain.models import (
@@ -40,6 +42,7 @@ from remote_agents.ports.agent_activity import (
     ActivitySource,
 )
 from remote_agents.ports.terminal import TerminalObservation
+from remote_agents.ports.worktree_store import Worktree
 
 #: The profiles whose licence says they report alone, derived from the verticals (BL-050).
 HOOK_SOURCED_PROFILES = frozenset(
@@ -933,3 +936,194 @@ async def test_the_limit_stop_watch_is_cancelled_with_the_other_periodic_tasks(
     await asyncio.sleep(0)
     assert _Idle.passes >= 1, "the serve loop never scheduled the limit-stop watch"
     assert len(asyncio.all_tasks()) <= before, "a periodic task outlived the serving loop"
+
+
+# -- the worktree cleanup watch (BL-116) -------------------------------------------------------
+
+
+class _Candidates:
+    """Worktree rows holding one removable folder, recording what the pass asks of them."""
+
+    def __init__(self, tick: asyncio.Event) -> None:
+        self.tick = tick
+        self.hold = asyncio.Event()
+        self.fail_first = False
+        self.reads = 0
+        self.claims = 0
+        self.row = Worktree(
+            path=Path("/state/worktrees/editor/s"),
+            project_id=ProjectId("editor"),
+            branch="ra/12345678",
+            base_branch="main",
+            base_commit="a" * 40,
+            copied={},
+            created_at=datetime(2026, 10, 10, tzinfo=UTC),
+            removed_at=None,
+        )
+
+    async def release_stale_claims(self) -> int:
+        if self.reads:
+            # A later pass: wait to be let through, so a test counts exactly what it allowed.
+            self.tick.set()
+            await self.hold.wait()
+        if self.fail_first and not self.reads:
+            self.reads += 1
+            raise RuntimeError("the domain store is locked")
+        return 0
+
+    async def removable_candidates(self) -> tuple[Worktree, ...]:
+        self.reads += 1
+        return (self.row, replace(self.row, path=self.row.path.with_name("t")))
+
+    async def claim_for_removal(self, path: Path, *, at: datetime) -> bool:
+        # Lost to a resume: the pass stops there, having touched nothing.
+        self.claims += 1
+        return False
+
+
+def _cleanup_pass(store: _Candidates, gate: list[str]) -> WorktreeCleanupPass:
+    @contextlib.asynccontextmanager
+    async def operation():
+        gate.append("enter")
+        yield
+        gate.append("exit")
+
+    return WorktreeCleanupPass(
+        git=None,  # type: ignore[arg-type]
+        store=store,  # type: ignore[arg-type]
+        sessions=None,  # type: ignore[arg-type]
+        rollovers=None,  # type: ignore[arg-type]
+        repository=None,  # type: ignore[arg-type]
+        operation=operation,
+    )
+
+
+async def test_the_serve_loop_runs_the_worktree_pass_once_a_tick_inside_the_operation_gate(
+    tmp_path: Path,
+) -> None:
+    tick = asyncio.Event()
+    store, gate = _Candidates(tick), []
+    connection = open_database(tmp_path / "sessions.sqlite3")
+    try:
+        composition = ServiceComposition(
+            build_private_bot(7, 11),
+            StubTerminal(),
+            ReconciliationService(SQLiteSessionStore(connection)),
+            worktree_cleanup=_cleanup_pass(store, gate),
+        )
+
+        async def poll(secrets: TelegramSecrets, boundary: PrivateBotBoundary) -> None:
+            await asyncio.wait_for(tick.wait(), timeout=5)
+
+        await _serve_with_reconciliation(_SECRETS, composition, poll, 3600, worktree_interval=0)
+    finally:
+        connection.close()
+
+    assert store.reads == 1, "one tick reads the candidates once"
+    assert store.claims == 2, "one tick claims each candidate once"
+    assert gate == ["enter", "exit"] * 2, "a removal did not run inside the operation gate"
+
+
+async def test_a_worktree_pass_that_raises_costs_one_tick(tmp_path: Path) -> None:
+    tick = asyncio.Event()
+    store = _Candidates(tick)
+    store.fail_first = True
+    connection = open_database(tmp_path / "sessions.sqlite3")
+    try:
+        composition = ServiceComposition(
+            build_private_bot(7, 11),
+            StubTerminal(),
+            ReconciliationService(SQLiteSessionStore(connection)),
+            worktree_cleanup=_cleanup_pass(store, []),
+        )
+
+        async def poll(secrets: TelegramSecrets, boundary: PrivateBotBoundary) -> None:
+            await asyncio.wait_for(tick.wait(), timeout=5)
+
+        await _serve_with_reconciliation(_SECRETS, composition, poll, 3600, worktree_interval=0)
+    finally:
+        connection.close()
+
+    assert store.reads == 1 and tick.is_set(), "the watch stopped after its first failure"
+
+
+async def test_the_worktree_watch_is_cancelled_with_the_other_periodic_tasks(
+    tmp_path: Path,
+) -> None:
+    store = _Candidates(asyncio.Event())
+    before = len(asyncio.all_tasks())
+    connection = open_database(tmp_path / "sessions.sqlite3")
+    try:
+        composition = ServiceComposition(
+            build_private_bot(7, 11),
+            StubTerminal(),
+            ReconciliationService(SQLiteSessionStore(connection)),
+            worktree_cleanup=_cleanup_pass(store, []),
+        )
+
+        async def poll(secrets: TelegramSecrets, boundary: PrivateBotBoundary) -> None:
+            await asyncio.sleep(0.1)
+
+        await _serve_with_reconciliation(_SECRETS, composition, poll, 3600, worktree_interval=0.01)
+    finally:
+        connection.close()
+
+    await asyncio.sleep(0)
+    assert store.reads >= 1, "the serve loop never scheduled the worktree watch"
+    assert len(asyncio.all_tasks()) <= before, "a periodic task outlived the serving loop"
+
+
+async def test_a_worktree_pass_that_wakes_after_the_drain_shut_the_gate_removes_nothing() -> None:
+    store = _Candidates(asyncio.Event())
+    locks = SessionLocks()
+    cleanup = WorktreeCleanupPass(
+        git=None,  # type: ignore[arg-type]
+        store=store,  # type: ignore[arg-type]
+        sessions=None,  # type: ignore[arg-type]
+        rollovers=None,  # type: ignore[arg-type]
+        repository=None,  # type: ignore[arg-type]
+        operation=locks.operation,
+    )
+    await locks.drain()
+
+    report = await cleanup.pass_once()
+
+    assert store.claims == 0 and report.removed == () and report.kept == {}
+    assert store.reads == 1, "the pass went on asking after the gate shut"
+
+
+def test_the_bot_composition_wires_the_worktree_pass_through_the_shared_locks(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from test_composition_store_wiring import _composition
+
+    composition, _paths, connection, ui = _composition(tmp_path, monkeypatch)
+    try:
+        cleanup = composition.worktree_cleanup
+        assert isinstance(cleanup, WorktreeCleanupPass)
+        # The same `SessionLocks` the drain shuts (DEC-046), so shutdown counts a removal.
+        assert cleanup._operation.__self__ is composition.drain.__self__
+    finally:
+        connection.close()
+        ui.close()
+
+
+def test_only_the_bot_composition_builds_or_runs_the_worktree_pass() -> None:
+    """The TUI never removes folders: one process per host does, and gives back its claims."""
+    src = Path(__file__).resolve().parents[2] / "src" / "remote_agents"
+    allowed = {
+        "WorktreeCleanupPass(": {"composition/service.py"},
+        "build_worktree_cleanup": {"composition/service.py", "composition/telegram.py"},
+        "worktree_cleanup=": {"composition/telegram.py"},
+        "_watch_worktrees_periodically": {"composition/service.py"},
+    }
+    found: dict[str, set[str]] = {name: set() for name in allowed}
+    for path in src.rglob("*.py"):
+        text = path.read_text(encoding="utf-8")
+        for name in allowed:
+            if name in text:
+                found[name].add(str(path.relative_to(src)))
+    found["WorktreeCleanupPass("].discard("application/worktree_cleanup.py")
+    assert found["worktree_cleanup="], "the sweep found nothing to mean anything"
+    for name, modules in found.items():
+        assert modules <= allowed[name], (name, modules - allowed[name])

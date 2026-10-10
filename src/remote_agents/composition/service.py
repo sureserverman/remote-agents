@@ -9,6 +9,7 @@ from collections.abc import Awaitable, Callable, Mapping
 from contextlib import AbstractAsyncContextManager, nullcontext
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from functools import partial
 from pathlib import Path
 
 from remote_agents.adapters.sqlite.activity_store import SQLiteActivityStore
@@ -31,11 +32,15 @@ from remote_agents.application.rollover import RolloverPass, RolloverReport
 from remote_agents.application.schedules import SchedulePass
 from remote_agents.application.services import SessionService
 from remote_agents.application.session_folders import live_folder
+from remote_agents.application.worktree_cleanup import WorktreeCleanupPass
+from remote_agents.application.worktrees import main_checkout
 from remote_agents.config import TelegramSecrets
 from remote_agents.domain.models import ProfileId, ProjectId, SessionId
 from remote_agents.ports.agent_activity import ActivityConfidence, ActivityKind, AgentActivity
+from remote_agents.ports.git_checkout import GitCheckout
 from remote_agents.ports.limit_stop_outcomes import LimitStopOutcomes
 from remote_agents.ports.message_relay import MessageRelay, RelayOutcome, RelayResult
+from remote_agents.ports.session_store import SessionStore
 from remote_agents.ports.state_events import StoreChanged
 from remote_agents.ports.turn_markers import TurnMarkers
 from remote_agents.ports.worktree_store import WorktreeStore
@@ -84,6 +89,9 @@ _PRUNE_FIRST_DELAY_SECONDS = 60.0
 #: is acted on within half a minute of the gate that wrote it, and every patience the pass
 #: counts (ten minutes for an idle pane, thirty for an adoption) is many ticks long.
 _ROLLOVER_POLL_SECONDS = 30.0
+#: How often `serve` looks for a session worktree it may remove (BL-116). Nothing waits on a
+#: removal: a merged, ended folder that stays a minute longer costs disk, never work.
+_WORKTREE_POLL_SECONDS = 60.0
 #: Bounds one limit-stop pass (a limits read, the session and outcome reads, a Telegram edit or
 #: delete per lifted stop), so one wedged call costs a pass rather than every later lift.
 _LIMIT_STOP_PASS_TIMEOUT_SECONDS = 20.0
@@ -231,6 +239,13 @@ class ServiceComposition:
     rollover_notifier: RolloverNotifier | None = None
     """Where the pass's failure notices go, retried each tick while one is held, or None."""
 
+    worktree_cleanup: WorktreeCleanupPass | None = None
+    """The pass that removes a merged, ended, unreferenced session worktree (BL-116), or None.
+
+    The bot's composition only, as `rollover_pass` is: the TUI never runs it, so one process
+    per host removes folders, and its claims are given back by that process alone.
+    """
+
     limit_stop_outcomes: LimitStopOutcomes | None = None
     """What became of each limit stop, pruned once a day after `OUTCOME_RETENTION`, or None."""
 
@@ -252,6 +267,7 @@ async def _serve_with_reconciliation(
     trust_interval: float = _TRUST_POLL_SECONDS,
     limits_interval: float = _LIMITS_POLL_SECONDS,
     limit_stop_interval: float = _LIMIT_STOP_POLL_SECONDS,
+    worktree_interval: float = _WORKTREE_POLL_SECONDS,
 ) -> None:
     """Poll Telegram while keeping durable records agreeing with observed panes.
 
@@ -333,6 +349,11 @@ async def _serve_with_reconciliation(
         )
     if composition.limit_stop_outcomes is not None:
         periodic.append(asyncio.create_task(_prune_limit_stop_outcomes_periodically(composition)))
+    if composition.worktree_cleanup is not None:
+        # Its own task and clock, like the rollover pass: a pass that raises costs one tick.
+        periodic.append(
+            asyncio.create_task(_watch_worktrees_periodically(composition, worktree_interval))
+        )
     # Not another periodic task, and the difference is the point: the loops above each poll
     # something on a clock of their own, while this *subscribes* to a watcher that already
     # polls. Subscribing is what starts it (`StoreWatch.subscribe`), so there is no task to
@@ -577,6 +598,44 @@ async def _roll_over_periodically(composition: ServiceComposition, interval: flo
                 await composition.rollover_notifier.pass_once()
             except Exception:
                 _LOG.exception("a held rollover notice could not be resent")
+
+
+async def _watch_worktrees_periodically(composition: ServiceComposition, interval: float) -> None:
+    """Remove the session worktrees every guard lets go, on a clock of their own -- never raising.
+
+    Each removal runs inside the shared operation gate the pass was built with, so the drain at
+    shutdown waits for one under way, and a pass that wakes after the gate shut stops there."""
+    while True:
+        await asyncio.sleep(interval)
+        try:
+            await composition.worktree_cleanup.pass_once()
+        except Exception:
+            # One pass, logged. Every guard is asked afresh on the next one.
+            _LOG.exception("the worktree cleanup pass failed; it will be retried")
+
+
+def build_worktree_cleanup(
+    *,
+    connection,
+    git: GitCheckout,
+    worktrees: WorktreeStore,
+    sessions: SessionStore,
+    project_paths: Mapping[ProjectId, Path],
+    operation: Callable[[], AbstractAsyncContextManager[object]],
+) -> WorktreeCleanupPass:
+    """The worktree cleanup pass `serve` runs, and only `serve` (BL-116; built here, beside the
+    loop that runs it, as the rollover pass is). It asks the same git boundary and rows the
+    launches use (DEC-046), reads open rollovers from the domain store, and removes each folder
+    inside `operation` -- the shared gate the drain shuts. `project_paths` is the live routing
+    table, read per removal, so a project moved since its worktree was cut is asked afresh."""
+    return WorktreeCleanupPass(
+        git=git,
+        store=worktrees,
+        sessions=sessions,
+        rollovers=SQLiteRolloverStore(connection),
+        repository=partial(main_checkout, git, project_paths),
+        operation=operation,
+    )
 
 
 def build_rollover_pass(

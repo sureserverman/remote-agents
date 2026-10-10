@@ -131,12 +131,7 @@ class WorktreeService:
 
     async def _repository(self, project_id: ProjectId) -> Path | None:
         """The project's repository when the project folder is its top level, else None."""
-        project = self._project_paths.get(project_id)
-        if project is None:
-            return None
-        resolved = project.resolve()
-        top = await self._git.top_level(resolved)
-        return top if top is not None and top.resolve() == resolved else None
+        return await main_checkout(self._git, self._project_paths, project_id)
 
     async def create(self, session_id: SessionId, project_id: ProjectId) -> Worktree:
         """Make, copy into, record and bind the session's worktree, or raise
@@ -242,6 +237,19 @@ class WorktreeService:
         if not leftover and not os.path.lexists(worktree.path):
             await self._store.mark_removed(worktree.path, at=datetime.now(UTC))
         return leftover
+
+
+async def main_checkout(
+    git: GitCheckout, project_paths: Mapping[ProjectId, Path], project_id: ProjectId
+) -> Path | None:
+    """The project's repository when the project folder is its top level, else None: where a
+    session worktree is cut from and removed through, asked of the live catalogue each time."""
+    project = project_paths.get(project_id)
+    if project is None:
+        return None
+    resolved = project.resolve()
+    top = await git.top_level(resolved)
+    return top if top is not None and top.resolve() == resolved else None
 
 
 def _one_line(error: BaseException) -> str:

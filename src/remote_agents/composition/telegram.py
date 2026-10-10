@@ -49,7 +49,11 @@ from remote_agents.composition.backend import (
     require_frontend_capabilities,
     worktree_parts,
 )
-from remote_agents.composition.service import ServiceComposition, build_rollover_pass
+from remote_agents.composition.service import (
+    ServiceComposition,
+    build_rollover_pass,
+    build_worktree_cleanup,
+)
 from remote_agents.composition.tui import _console_composer, _local_runtime
 from remote_agents.config import (
     TelegramSecrets,
@@ -343,6 +347,17 @@ def _private_boundary(
             )
         ),
         rollover_notifier=boundary.rollover_notifier,
+        # The worktree cleanup (BL-116), here and nowhere else: `serve` alone removes folders,
+        # through the same git boundary and rows the launches use, inside the gate `drain`
+        # shuts (DEC-046).
+        worktree_cleanup=build_worktree_cleanup(
+            connection=connection,
+            git=worktrees.git,
+            worktrees=worktrees.store,
+            sessions=store,
+            project_paths=projects.paths,
+            operation=locks.operation,
+        ),
     )
 
 

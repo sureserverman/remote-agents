@@ -28,6 +28,11 @@ entry (measured on git 2.43.0), after which `branch -d` can run. Once the folder
 row is marked removed whatever `branch -d` says, and a branch git kept is logged with the
 command that deletes it by hand; git's `-d` judges against the main checkout's HEAD, not the
 recorded base, so it may refuse a branch (b) already proved merged.
+
+**A removal cut off part-way stays.** A shutdown whose drain times out cancels a `worktree
+remove` mid-delete; the folder left behind lists deleted tracked files, so every later pass
+reads it dirty and keeps it, and `doctor` lists it for the owner to remove by hand. That fails
+toward keeping: what was deleted had already passed every guard.
 """
 
 from __future__ import annotations
@@ -43,6 +48,7 @@ from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
 from typing import Protocol
 
+from remote_agents.application.errors import MutationsDraining
 from remote_agents.domain.models import ProjectId, SessionId, SessionRecord, SessionState
 from remote_agents.domain.state_machine import TERMINAL_STATES
 from remote_agents.ports.git_checkout import GitCheckout, GitError
@@ -135,6 +141,10 @@ class WorktreeCleanupPass:
             try:
                 async with self._operation():
                     reason = await self._remove(worktree)
+            except MutationsDraining:
+                # Shutdown shut the gate before this folder was claimed: nothing was touched,
+                # and the next start asks again.
+                break
             except Exception as error:
                 # Whatever failed, the folder stays and its claim was given back.
                 fault, reason = error, _fault(error)

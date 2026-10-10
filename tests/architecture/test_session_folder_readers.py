@@ -98,9 +98,12 @@ _TABLE: dict[Site, tuple[Kind, str]] = {
     ),
     Site(
         "application/worktrees.py",
-        "WorktreeService._repository",
-        "self._project_paths.get(project_id)",
-    ): (Kind.PROJECT, "the main checkout a worktree is cut from, and offered for"),
+        "main_checkout",
+        "project_paths.get(project_id)",
+    ): (
+        Kind.PROJECT,
+        "the main checkout a worktree is cut from, offered for, and removed through",
+    ),
     Site(
         "application/worktrees.py",
         "WorktreeService.create",
