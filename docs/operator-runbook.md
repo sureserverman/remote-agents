@@ -826,7 +826,10 @@ A second session on a git project can run in its own worktree (BL-116). The READ
   its base branch (the commit it was cut from when it has no base branch), with its unchanged
   copies not counted as dirty; a shared folder against `HEAD`, prefixed `checkout:` — the whole
   repository for a project that is a subfolder of one. Counts are `diff --shortstat`'s, so a
-  change of any size still has a line. No line means no git, a repository with no commit yet, a
+  change of any size still has a line; it needs git 2.28 or later (`--no-relative`; the plan's
+  Preflight pins 2.36). Reads run with `LC_ALL=C`, so the counts parse under any locale. A
+  base branch deleted since the worktree was cut measures from the commit it was cut from. No
+  line means no git, a repository with no commit yet, a
   read past its bound, a git refusal, or a folder that is gone.
 
 ## Telegram credential denial and recovery drill

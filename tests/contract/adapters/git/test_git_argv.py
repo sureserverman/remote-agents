@@ -21,7 +21,7 @@ import pytest
 from remote_agents.adapters.git.checkout import GitCli, GitResult
 from remote_agents.ports.git_checkout import GitCheckout, GitError, GitRefused, GitTimeout
 
-_READ_ENV = {"GIT_OPTIONAL_LOCKS": "0", "GIT_TERMINAL_PROMPT": "0"}
+_READ_ENV = {"GIT_OPTIONAL_LOCKS": "0", "GIT_TERMINAL_PROMPT": "0", "LC_ALL": "C"}
 
 
 @pytest.fixture(autouse=True)

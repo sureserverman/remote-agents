@@ -64,7 +64,10 @@ _REAP_SECONDS = 5.0
 """How long to wait for git to be reaped after its group was sent SIGKILL."""
 
 _READ_PREFIX = ("git", "-c", "core.fsmonitor=false")
-_READ_ENV = {"GIT_OPTIONAL_LOCKS": "0", "GIT_TERMINAL_PROMPT": "0"}
+_READ_ENV = {"GIT_OPTIONAL_LOCKS": "0", "GIT_TERMINAL_PROMPT": "0", "LC_ALL": "C"}
+"""`LC_ALL=C`: git translates `diff --shortstat`'s sentence, and a German owner's git would
+print `1 Datei geändert`, which no parser here reads. The C locale is also what makes gettext
+ignore `LANGUAGE`."""
 _WRITE_ENV = {"GIT_TERMINAL_PROMPT": "0"}
 _DIFF_GUARDS = ("--no-ext-diff", "--no-textconv")
 
@@ -404,7 +407,7 @@ class GitCli:
             removed=removed,
             ahead=int(ahead_text) if ahead_text.isdigit() else 0,
             dirty=status.truncated
-            or any(not _untouched_copy(path, entry, given) for entry in _entries(status.stdout)),
+            or await asyncio.to_thread(_dirty_beyond_copies, path, _entries(status.stdout), given),
         )
 
 
@@ -431,6 +434,12 @@ def _shortstat(text: str) -> tuple[int, int, int]:
 
 _COPY_MAX_BYTES = 1024 * 1024
 """The copier's own cap (`application/worktrees.py`): a larger file is never a copy."""
+
+
+def _dirty_beyond_copies(top: Path, entries: tuple[str, ...], copies: Mapping[str, str]) -> bool:
+    """Whether any status entry is something other than an untouched copy. Reads files, so it
+    runs on a worker thread: a hung mount stalls that thread, never the event loop."""
+    return any(not _untouched_copy(top, entry, copies) for entry in entries)
 
 
 def _untouched_copy(top: Path, entry: str, copies: Mapping[str, str]) -> bool:

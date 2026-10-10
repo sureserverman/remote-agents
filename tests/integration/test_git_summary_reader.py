@@ -286,3 +286,53 @@ async def test_sessions_sharing_a_checkout_share_one_measurement(
     assert _Counting.calls == 1
     await read(sessions[0])
     assert _Counting.calls == 2, "a later read measures again; only concurrent ones share"
+
+
+async def test_a_base_branch_deleted_since_measures_from_where_the_worktree_was_cut(
+    tmp_path: Path, repo: Path
+) -> None:
+    _git(repo, "checkout", "-q", "-b", "feature")
+    harness = _Harness(tmp_path, repo)
+    session = await harness.session()
+    worktree = await harness.service.create(session, PROJECT)
+    assert worktree.base_branch == "feature"
+    (worktree.path / "own.txt").write_text("own\n")
+    _git(worktree.path, "add", "own.txt")
+    _git(worktree.path, "commit", "-q", "-m", "own")
+    _git(repo, "checkout", "-q", "main")
+    _git(repo, "branch", "-q", "-D", "feature")
+
+    read = await harness.reader()(session)
+
+    assert read is not None
+    assert git_line(read.summary, shared=False) == f"{worktree.branch} · 1 file +1 −0 · 1 ahead"
+
+
+async def test_at_most_four_folders_are_measured_at_once_even_past_a_budget(
+    tmp_path: Path, repo: Path
+) -> None:
+    class _Slow(GitCli):
+        running = peak = 0
+
+        async def diff_summary(self, path, base, copies=None):
+            _Slow.running += 1
+            _Slow.peak = max(_Slow.peak, _Slow.running)
+            try:
+                await asyncio.sleep(0.3)
+                return await super().diff_summary(path, base, copies)
+            finally:
+                _Slow.running -= 1
+
+    harness = _Harness(tmp_path, repo)
+    sessions = []
+    for _ in range(7):
+        session = await harness.session()
+        await harness.service.create(session, PROJECT)
+        sessions.append(session)
+    read = harness.reader(git=_Slow(), budget=0.1)
+
+    # Every reader gives up at its budget; the measurements run on, four at a time.
+    assert await asyncio.gather(*(read(session) for session in sessions)) == [None] * 7
+    await asyncio.sleep(1.5)
+
+    assert _Slow.peak == 4

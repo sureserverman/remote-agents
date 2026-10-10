@@ -950,6 +950,7 @@ class _Candidates:
         self.fail_first = False
         self.reads = 0
         self.claims = 0
+        self.judged = 0
         self.row = Worktree(
             path=Path("/state/worktrees/editor/s"),
             project_id=ProjectId("editor"),
@@ -974,8 +975,13 @@ class _Candidates:
             raise RuntimeError("the domain store is locked")
         return (self.row, replace(self.row, path=self.row.path.with_name("t")))
 
+    async def bound_sessions(self, path: Path) -> tuple[SessionId, ...]:
+        # Judged before any claim (`WorktreeCleanupPass._remove`): no binding reads as in use,
+        # so the pass keeps the folder having written nothing.
+        self.judged += 1
+        return ()
+
     async def claim_for_removal(self, path: Path, *, at: datetime) -> bool:
-        # Lost to a resume: the pass stops there, having touched nothing.
         self.claims += 1
         return False
 
@@ -1019,7 +1025,8 @@ async def test_the_serve_loop_runs_the_worktree_pass_once_a_tick_inside_the_oper
         connection.close()
 
     assert store.reads == 1, "one tick reads the candidates once"
-    assert store.claims == 2, "one tick claims each candidate once"
+    assert store.judged == 2, "one tick judges each candidate once"
+    assert store.claims == 0, "a folder judged in use is never claimed"
     assert gate == ["enter", "exit"] * 2, "a removal did not run inside the operation gate"
 
 

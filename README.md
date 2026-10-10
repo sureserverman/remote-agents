@@ -1116,7 +1116,7 @@ git -C <project> branch -d ra/<id>
 ```
 
 Neither is safe by itself: `worktree remove` refuses modified or untracked files but **deletes
-ignored files without asking** (`.env`, `.venv`, build output, the copied `CLAUDE.md`), and
+ignored files without asking** (`.env`, `.venv`, build output, a gitignored copy), and
 `branch -d` judges "merged" against the main checkout's current branch. Look with
 `git -C <worktree path> status --ignored` and `git log <base>..ra/<id>` first. `--force` and `-D`
 are yours to choose after that.
@@ -1131,7 +1131,8 @@ tracked files changed, or a bare `±` when only untracked ones did; on a shared 
 is the checkout's, not the session's own. It is dropped first when the row is narrow. The line
 is read on each render (the terminal's row marks every minute), bounded at two seconds, and
 never stored. No line means no git, a repository with no commit yet, a read past its bound, or a
-folder that is gone.
+folder that is gone. Once a worktree's branch is merged into its base, the two meet at its tip,
+so a merged worktree reads clean.
 
 ## Creating a project
 

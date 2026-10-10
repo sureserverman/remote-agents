@@ -58,7 +58,7 @@ from remote_agents.domain.models import ProjectId, SessionId
 from remote_agents.domain.profiles import ProfileCompatibility, closed_profiles
 from remote_agents.ports.agent_activity import AgentActivity
 from remote_agents.ports.agent_usage import AgentLimits, AgentUsage, UsageQuery
-from remote_agents.ports.git_checkout import GitCheckout, GitSummary
+from remote_agents.ports.git_checkout import GitCheckout, GitError, GitSummary
 from remote_agents.ports.terminal import SessionFolderLookup
 from remote_agents.ports.worktree_store import Worktree, WorktreeStore
 from remote_agents.production import ProductionPaths
@@ -229,6 +229,10 @@ def _usage_reader(
 _GIT_SUMMARY_SECONDS = 2.0
 """The whole read's bound: a render waits no longer for its git line than this."""
 
+_GIT_MEASUREMENTS_AT_ONCE = 4
+"""How many folders are measured at once, process-wide. Each measurement is several git
+processes, and one that outlived its reader's budget still holds its slot until git ends."""
+
 
 def _git_summary_reader(
     store: SQLiteSessionStore,
@@ -249,12 +253,15 @@ def _git_summary_reader(
     **Bounded without waiting on git.** Each read waits at most `budget` and then answers None;
     the git calls it started are never cancelled from here, so a git the kernel cannot kill
     yet (a hung mount) costs this read nothing past the budget -- the adapter's own bounds end
-    it. **One read per folder at a time:** sessions sharing a checkout, read side by side,
-    share one measurement rather than each starting the same five git processes.
+    it -- and at most `_GIT_MEASUREMENTS_AT_ONCE` measurements run at once, a timed-out one
+    still counted until it ends. **One read per folder at a time:** sessions sharing a
+    checkout, read side by side, share one measurement rather than each starting the same five
+    git processes.
 
     Read-only: git's read verbs and three store reads, nothing written (DEC-090).
     """
     measuring: dict[tuple[Path, str], asyncio.Task[GitSummary]] = {}
+    at_once = asyncio.Semaphore(_GIT_MEASUREMENTS_AT_ONCE)
 
     async def locate(session_id: SessionId) -> tuple[Path, Worktree | None] | None:
         record = await store.get(session_id)
@@ -265,13 +272,19 @@ def _git_summary_reader(
         return None if folder is None else (folder, worktree)
 
     async def summarise(folder: Path, worktree: Worktree | None) -> GitSummary:
-        if worktree is None:
-            return await git.diff_summary(folder, "HEAD")
-        base = worktree.base_commit
-        if worktree.base_branch is not None:
-            met = await git.merge_base(folder, "HEAD", f"refs/heads/{worktree.base_branch}")
-            base = met or base
-        return await git.diff_summary(folder, base, worktree.copied)
+        # The gate is around the work, not around a caller's wait: a read that stopped waiting
+        # at its budget leaves this measurement running, and it still holds its slot.
+        async with at_once:
+            if worktree is None:
+                return await git.diff_summary(folder, "HEAD")
+            base = worktree.base_commit
+            if worktree.base_branch is not None:
+                try:
+                    met = await git.merge_base(folder, "HEAD", f"refs/heads/{worktree.base_branch}")
+                except GitError:
+                    met = None  # the base branch is gone: measure from where it was cut
+                base = met or base
+            return await git.diff_summary(folder, base, worktree.copied)
 
     def finished(key: tuple[Path, str], task: asyncio.Task[GitSummary]) -> None:
         if measuring.get(key) is task:
