@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from datetime import UTC, date, datetime, timedelta
 from hashlib import sha256
 from pathlib import Path
@@ -23,7 +24,7 @@ from remote_agents.application.project_admin import CreateProjectCommand, Projec
 from remote_agents.application.project_catalog import search_catalogue
 from remote_agents.application.services import SessionService
 from remote_agents.bootstrap import ProjectCatalogueProvider
-from remote_agents.domain.models import ProfileId, ProjectId
+from remote_agents.domain.models import ProfileId, ProjectId, SessionId
 from remote_agents.ports.session_store import ProjectUsage
 
 
@@ -103,7 +104,10 @@ def test_a_terminal_built_before_creation_resolves_the_new_project(
     provider.refresh()
 
     project_id = ProjectId(_opaque_id(created.path))
-    assert terminal._project_paths[project_id] == created.path
+    # Asked as the pane's cwd is: through the terminal's folder lookup, which reads the live
+    # mapping for a regular session.
+    folder = asyncio.run(terminal._folder_for(SessionId.new(), project_id))
+    assert folder == created.path
 
 
 class _InvariantDict(dict):
