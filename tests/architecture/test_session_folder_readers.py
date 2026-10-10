@@ -23,7 +23,14 @@ from pathlib import Path
 _SRC = Path(__file__).resolve().parents[2] / "src"
 _PACKAGE = _SRC / "remote_agents"
 _NAMES = frozenset({"project_paths", "_project_paths"})
-_ANNOTATIONS = frozenset({"Mapping[ProjectId, Path]", "ProjectPaths"})
+#: Attributes that hold the mapping wherever it is reached through an owner:
+#: `ProjectCatalogueProvider.paths` / `._paths` as well as the names above.
+_ATTRIBUTES = _NAMES | {"paths", "_paths"}
+_ANNOTATION_MARKS = ("[ProjectId, Path]", "ProjectPaths")
+#: Reads through a method rather than a subscript. `.items()` and `.values()` are reads too: a
+#: scan for one project's folder (`next(p for k, p in m.items() if k == pid)`) is the same
+#: question asked the long way.
+_READ_METHODS = frozenset({"get", "__getitem__", "items", "values"})
 
 
 class Kind(StrEnum):
@@ -66,6 +73,21 @@ _TABLE: dict[Site, tuple[Kind, str]] = {
         "self._project_paths.get(project_id)",
     ): (Kind.PROJECT, "which project a resume list is for; worktree folders are added after"),
     Site(
+        "adapters/agents/claude/sessions.py",
+        "ClaudeSessionCatalogue._projects_for",
+        "self._project_paths.items()",
+    ): (Kind.PROJECT, "every project, for a resume list asked for no project"),
+    Site(
+        "adapters/agents/codex/sessions.py",
+        "CodexSessionCatalogue._projects_for",
+        "self._project_paths.items()",
+    ): (Kind.PROJECT, "every project, for a resume list asked for no project"),
+    Site(
+        "adapters/agents/opencode/sessions.py",
+        "OpenCodeSessionCatalogue.list_conversations",
+        "self._project_paths.items()",
+    ): (Kind.PROJECT, "every project, matched against the rows' directories"),
+    Site(
         "composition/service.py",
         "build_rollover_pass.<lambda>",
         "project_paths.get(project)",
@@ -107,7 +129,8 @@ class _Reads(ast.NodeVisitor):
         annotated = {
             argument.arg
             for argument in (*arguments.posonlyargs, *arguments.args, *arguments.kwonlyargs)
-            if argument.annotation is not None and ast.unparse(argument.annotation) in _ANNOTATIONS
+            if argument.annotation is not None
+            and any(mark in ast.unparse(argument.annotation) for mark in _ANNOTATION_MARKS)
         }
         self._scope.append("<lambda>" if isinstance(node, ast.Lambda) else node.name)
         self._mapped.append(self._mapped[-1] | annotated)
@@ -124,17 +147,33 @@ class _Reads(ast.NodeVisitor):
         self.generic_visit(node)
         self._scope.pop()
 
+    def visit_Assign(self, node: ast.Assign) -> None:
+        """A local alias of the mapping (`paths = self._project_paths`) is the mapping."""
+        if self._is_mapping(node.value):
+            aliases = {target.id for target in node.targets if isinstance(target, ast.Name)}
+            self._mapped[-1] = self._mapped[-1] | aliases
+        self.generic_visit(node)
+
+    def visit_AnnAssign(self, node: ast.AnnAssign) -> None:
+        if isinstance(node.target, ast.Name) and (
+            (node.value is not None and self._is_mapping(node.value))
+            or any(mark in ast.unparse(node.annotation) for mark in _ANNOTATION_MARKS)
+        ):
+            self._mapped[-1] = self._mapped[-1] | {node.target.id}
+        self.generic_visit(node)
+
     def _is_mapping(self, node: ast.expr) -> bool:
         if isinstance(node, ast.Name):
             return node.id in _NAMES or node.id in self._mapped[-1]
-        return isinstance(node, ast.Attribute) and node.attr in _NAMES
+        return isinstance(node, ast.Attribute) and node.attr in _ATTRIBUTES
 
     def _record(self, node: ast.expr) -> None:
         site = Site(self._path, ".".join(self._scope) or "<module>", ast.unparse(node))
         self.found.append(Read(site, node.lineno))
 
     def visit_Subscript(self, node: ast.Subscript) -> None:
-        if self._is_mapping(node.value):
+        # A read only: `m[k] = v` and `del m[k]` build the mapping, they do not answer a folder.
+        if isinstance(node.ctx, ast.Load) and self._is_mapping(node.value):
             self._record(node)
         self.generic_visit(node)
 
@@ -142,7 +181,7 @@ class _Reads(ast.NodeVisitor):
         function = node.func
         if (
             isinstance(function, ast.Attribute)
-            and function.attr == "get"
+            and function.attr in _READ_METHODS
             and self._is_mapping(function.value)
         ):
             self._record(node)
@@ -222,11 +261,21 @@ def test_a_planted_read_in_a_new_function_is_unclassified(tmp_path: Path) -> Non
     module = copy / "application" / "planted.py"
     module.write_text(
         "from collections.abc import Mapping\nfrom pathlib import Path\n\n\n"
-        "def cwd(paths: Mapping[ProjectId, Path], project):\n    return paths.get(project)\n",
+        "def cwd(paths: Mapping[ProjectId, Path] | None, project):\n"
+        "    return paths.get(project)\n\n\n"
+        "def alias(self, project):\n"
+        "    mapping = self._project_paths\n"
+        "    return mapping[project]\n\n\n"
+        "def owner(projects, project):\n"
+        "    return projects.paths.__getitem__(project)\n\n\n"
+        "def scan(self, project):\n"
+        "    return next(p for k, p in self._paths.items() if k == project)\n",
         encoding="utf-8",
     )
 
     problems = violations(copy)
 
-    assert len(problems) == 1
-    assert problems[0].startswith("src/remote_agents/application/planted.py:6: unclassified")
+    # Each spelling the gate review planted: an `| None` annotation, a local alias, the
+    # provider's `.paths` read by `__getitem__`, and an `.items()` scan.
+    planted = [p.split(": ")[0] for p in problems]
+    assert planted == [f"src/remote_agents/application/planted.py:{n}" for n in (6, 11, 15, 19)]

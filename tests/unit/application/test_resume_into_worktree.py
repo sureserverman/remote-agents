@@ -8,6 +8,7 @@ writes into the intent document before it asks tmux for anything.
 from __future__ import annotations
 
 import json
+import sqlite3
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -112,7 +113,7 @@ class _Harness:
             await self.worktrees.mark_removed(path, at=datetime(2026, 10, 11, tzinfo=UTC))
         return path
 
-    async def resume(self, folder: Path | None, key: str):
+    async def resume(self, folder: Path | None, key: str, conversation_of: str | None = None):
         conversation = ResolvedConversation(
             ConversationSummary(
                 ConversationReference(f"c-{key:0>64}"[:66]),
@@ -122,7 +123,7 @@ class _Harness:
                 datetime(2026, 10, 10, tzinfo=UTC),
                 None,
             ),
-            ProviderConversationId(f"conversation-{key}"),
+            ProviderConversationId(f"conversation-{conversation_of or key}"),
             folder=folder,
         )
         return await self.service.resume(ResumeCommand(_PROJECT, _CLAUDE, conversation, key))
@@ -226,3 +227,81 @@ async def test_a_removed_worktree_sessions_usage_is_not_read_anywhere(tmp_path) 
 
     assert await read(bound.record.session_id) is None
     assert readers.workspaces == []
+
+
+@pytest.mark.asyncio
+async def test_a_refused_resume_does_not_hold_the_conversation(tmp_path) -> None:
+    """Refused before any pane existed (the folder was claimed for removal), then the claim is
+    given back: the next press is a real attempt, not the dead record of the first."""
+    harness = _Harness(tmp_path)
+    worktree = await harness.worktree(tmp_path / "worktrees" / "one")
+    assert await harness.worktrees.claim_for_removal(
+        worktree, at=datetime(2026, 10, 11, tzinfo=UTC)
+    )
+
+    refused = await harness.resume(worktree, "8")
+    await harness.worktrees.release_claim(worktree)
+    again = await harness.resume(worktree, "9", conversation_of="8")
+
+    assert refused.worktree_removed
+    assert again.created
+    assert again.record.session_id != refused.record.session_id
+    bound = await harness.worktrees.folder_for(again.record.session_id)
+    assert bound is not None and bound.path == worktree
+
+
+@pytest.mark.asyncio
+async def test_a_bind_that_fails_leaves_the_record_failed_not_starting(tmp_path) -> None:
+    harness = _Harness(tmp_path)
+    worktree = await harness.worktree(tmp_path / "worktrees" / "one")
+
+    async def locked(*_args, **_kwargs):
+        raise sqlite3.OperationalError("database is locked")
+
+    harness.worktrees.bind = locked  # type: ignore[method-assign]
+
+    outcome = await harness.resume(worktree, "10")
+
+    assert outcome.record.state is SessionState.FAILED
+    assert not outcome.worktree_removed, "a locked store is not a removed worktree"
+    assert harness.gateway.launched == 0
+
+
+@pytest.mark.asyncio
+async def test_a_successor_of_a_regular_predecessor_launches_in_the_project(tmp_path) -> None:
+    """With the worktree rows wired, as production has them."""
+    from remote_agents.application.commands import LaunchCommand
+
+    harness = _Harness(tmp_path)
+    harness.service._terminal._profile_factories[_CLAUDE] = lambda _s, _r: LaunchProfile(
+        "/usr/bin/claude", ("/usr/bin/claude",), {}, None, ("C-c",)
+    )
+    predecessor = await harness.resume(None, "11")
+
+    successor = await harness.service.launch(
+        LaunchCommand(
+            _PROJECT, _CLAUDE, "rollover:x", reuse_folder_of=predecessor.record.session_id
+        )
+    )
+
+    assert await harness.worktrees.folder_for(successor.record.session_id) is None
+    assert harness.intent_cwd(successor.record.session_id) == str(harness.project.resolve())
+
+
+@pytest.mark.asyncio
+async def test_a_successor_whose_lookup_fails_is_failed_not_left_starting(tmp_path) -> None:
+    from remote_agents.application.commands import LaunchCommand
+
+    harness = _Harness(tmp_path)
+
+    async def locked(*_args, **_kwargs):
+        raise sqlite3.OperationalError("database is locked")
+
+    harness.worktrees.folder_for = locked  # type: ignore[method-assign]
+
+    outcome = await harness.service.launch(
+        LaunchCommand(_PROJECT, _CLAUDE, "rollover:y", reuse_folder_of=SessionId.new())
+    )
+
+    assert outcome.record.state is SessionState.FAILED
+    assert harness.gateway.launched == 0

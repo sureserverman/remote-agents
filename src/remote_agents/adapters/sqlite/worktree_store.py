@@ -11,6 +11,7 @@ other across processes without a transaction held over a read (`ports/worktree_s
 from __future__ import annotations
 
 import json
+import logging
 import sqlite3
 from datetime import UTC, datetime
 from pathlib import Path
@@ -19,6 +20,7 @@ from remote_agents.domain.models import ProjectId, SessionId
 from remote_agents.domain.state_machine import TERMINAL_STATES
 from remote_agents.ports.worktree_store import Worktree, WorktreeUnavailable
 
+_LOG = logging.getLogger(__name__)
 _COLUMNS = "path, project_id, branch, base_branch, base_commit, copied, created_at, removed_at"
 _ENDED = ", ".join(f"'{state.value}'" for state in sorted(TERMINAL_STATES))
 _HELD = (
@@ -106,7 +108,17 @@ class SQLiteWorktreeStore:
             f"SELECT session_worktrees.session_id, {_COLUMNS} FROM session_worktrees"
             " JOIN worktrees ON worktrees.path = session_worktrees.worktree_path"
         ).fetchall()
-        return {SessionId.parse(row[0]): _worktree(row[1:]) for row in rows}
+        bound: dict[SessionId, Worktree] = {}
+        for row in rows:
+            try:
+                session_id = SessionId.parse(row[0])
+            except ValueError:
+                # No session record is keyed by it, so it can bind nothing a reader asks about;
+                # skipped rather than failing every binding with it.
+                _LOG.warning("skipping a worktree binding whose session id is not a UUID")
+                continue
+            bound[session_id] = _worktree(row[1:])
+        return bound
 
     async def bound_sessions(self, path: Path) -> tuple[SessionId, ...]:
         rows = self._connection.execute(

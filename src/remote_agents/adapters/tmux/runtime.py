@@ -386,6 +386,14 @@ class TmuxTerminal:
             return TerminalObservation(
                 session_id, live=False, preserved=False, detail="invalid_intent"
             )
+        except Exception:
+            # The lookup reads the worktree rows in the domain store. A locked or unreadable
+            # read refuses this launch like any other unresolvable intent, rather than escaping
+            # past a record the service has already saved STARTING.
+            _LOG.exception("the folder of %s could not be read; launch refused", session_id)
+            return TerminalObservation(
+                session_id, live=False, preserved=False, detail="invalid_intent"
+            )
         if folder is None:
             # Bound to a worktree that is gone. Refused before any intent or pane exists, and
             # never retried in the project folder (`WORKTREE_REMOVED`).

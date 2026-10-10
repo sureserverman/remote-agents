@@ -23,6 +23,15 @@ WORKTREE_REMOVED_SENTENCE = "This session's worktree has been removed."
 """How both surfaces word a launch or resume refused with `WORKTREE_REMOVED`."""
 
 
+def live_folder(worktree: Worktree) -> Path | None:
+    """The worktree's folder while it is there to work in: not marked removed, and still a
+    folder. None otherwise -- the one rule every session-meaning reader applies, so none of
+    them can disagree about whether a worktree is gone."""
+    if worktree.removed_at is not None or not worktree.path.is_dir():
+        return None
+    return worktree.path
+
+
 class _BoundFolders(Protocol):
     async def folder_for(self, session_id: SessionId) -> Worktree | None: ...
 
@@ -47,9 +56,7 @@ class SessionFolders:
         worktree = None if self._store is None else await self._store.folder_for(session_id)
         if worktree is None:
             return self._project_paths[project_id]
-        if worktree.removed_at is not None or not worktree.path.is_dir():
-            return None
-        return worktree.path
+        return live_folder(worktree)
 
     async def worktree_folders(self, project_id: ProjectId) -> tuple[Path, ...]:
         """The project's live worktree folders, which its resume lists read beside its own

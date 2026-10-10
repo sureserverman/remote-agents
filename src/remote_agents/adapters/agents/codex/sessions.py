@@ -119,17 +119,23 @@ class CodexSessionCatalogue:
     ) -> list[ResolvedConversation]:
         entries: list[ResolvedConversation] = []
         for project_id, cwd, worktree in await project_folders(projects, self._worktree_folders):
+            # The bound is per folder, then the newest are kept: a shared budget spent in the
+            # order folders are asked would let a busy main checkout crowd out a worktree's
+            # newest thread before that folder was ever asked (BL-116).
+            found: list[ResolvedConversation] = []
             cursor: str | None = None
-            while len(entries) < _MAX_CATALOGUE_ITEMS:
+            while len(found) < _MAX_CATALOGUE_ITEMS:
                 payload = await self._client.list_threads(cwd=cwd, cursor=cursor, limit=_PAGE_LIMIT)
                 threads = payload.get("data")
                 if not isinstance(threads, list):
                     raise ProtocolError("Codex thread/list returned no thread list")
-                entries.extend(_thread_entries(threads, project_id, worktree))
+                found.extend(_thread_entries(threads, project_id, worktree))
                 next_cursor = payload.get("nextCursor")
                 if not isinstance(next_cursor, str) or not next_cursor or next_cursor == cursor:
                     break
                 cursor = next_cursor
+            entries.extend(found[:_MAX_CATALOGUE_ITEMS])
+        entries.sort(key=lambda entry: entry.summary.updated_at, reverse=True)
         return entries[:_MAX_CATALOGUE_ITEMS]
 
     def _projects_for(

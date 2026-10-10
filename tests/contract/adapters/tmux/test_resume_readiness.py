@@ -835,3 +835,22 @@ async def test_an_unknown_project_from_the_lookup_is_still_an_invalid_intent(tmp
 
     assert observation.detail == "invalid_intent"
     assert gateway.launched == 0
+
+
+@pytest.mark.asyncio
+async def test_a_folder_lookup_that_fails_refuses_the_launch_with_no_pane(tmp_path) -> None:
+    """The lookup reads the domain store; a locked read refuses, never escapes past a record
+    left STARTING."""
+    import sqlite3
+
+    session_id = SessionId.new()
+    gateway = _CountingGateway(session_id, tmp_path)
+
+    async def locked(_session: SessionId, _project: ProjectId) -> Path | None:
+        raise sqlite3.OperationalError("database is locked")
+
+    terminal = _folder_terminal(gateway, locked)
+    observation = await terminal.launch(session_id, ProjectId("opaque-editor"), ProfileId("claude"))
+
+    assert observation.detail == "invalid_intent"
+    assert gateway.launched == 0

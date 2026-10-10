@@ -10,6 +10,7 @@ from pathlib import Path
 from uuid import UUID
 
 from remote_agents.adapters.agents.catalogue import project_folders
+from remote_agents.adapters.agents.claude.paths import project_directory_name
 from remote_agents.domain.conversations import (
     ConversationCataloguePage,
     ConversationReference,
@@ -114,7 +115,7 @@ class ClaudeSessionCatalogue:
 
 
 def _claude_project_directory(path: Path) -> str:
-    return str(path.resolve(strict=False)).replace("/", "-")
+    return project_directory_name(path.resolve(strict=False))
 
 
 def _uuid_filename(path: Path) -> ProviderConversationId | None:

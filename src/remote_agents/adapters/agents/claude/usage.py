@@ -11,6 +11,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 from pathlib import Path
 
+from remote_agents.adapters.agents.claude.paths import project_directory_name
 from remote_agents.domain.models import ProfileId
 from remote_agents.ports.agent_usage import (
     AgentLimits,
@@ -215,10 +216,10 @@ class ClaudeUsageReader:
 
 
 def _escaped_workspace(workspace: Path) -> str:
-    # Claude Code's own on-disk convention: `~/.claude/projects/<cwd with "/" as "-">`.
-    # Deliberately beside the claude parsers rather than in the shared support module,
-    # which knows no provider.
-    return str(_resolved(workspace)).replace("/", "-")
+    # Claude Code's own on-disk convention (`paths.project_directory_name`), shared with the
+    # catalogue so the two cannot disagree about where a conversation is. Beside the claude
+    # parsers rather than in the shared support module, which knows no provider.
+    return project_directory_name(_resolved(workspace))
 
 
 def _claude_context(

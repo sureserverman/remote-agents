@@ -197,7 +197,9 @@ def _epoch_in(**offset: int) -> int:
 
 
 def _transcript_dir(tmp_path: Path, workspace: Path) -> Path:
-    return tmp_path / "claude-projects" / str(workspace.resolve()).replace("/", "-")
+    # Claude's rule as measured (every non-alphanumeric as "-"), not the code's own spelling.
+    name = "".join(c if c.isascii() and c.isalnum() else "-" for c in str(workspace.resolve()))
+    return tmp_path / "claude-projects" / name
 
 
 def test_claude_context_is_the_sum_of_the_last_turns_four_token_classes(

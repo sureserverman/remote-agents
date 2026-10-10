@@ -8,6 +8,7 @@ import logging
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from enum import Enum
 from pathlib import Path
 
 from remote_agents.application.commands import (
@@ -96,6 +97,14 @@ _STOP_EVENTS: dict[str, LifecycleEvent] = {
     NOT_IDLE: LifecycleEvent.GRACEFUL_STOP_NEVER_SENT,
     GRACEFUL_TIMEOUT: LifecycleEvent.GRACEFUL_STOP_TIMED_OUT,
 }
+
+
+class _Bound(Enum):
+    """What binding a new session to a worktree came to."""
+
+    BOUND = "bound"
+    GONE = "gone"
+    FAULT = "fault"
 
 
 @dataclass(frozen=True, slots=True)
@@ -248,32 +257,39 @@ class SessionService:
         # reason. A profile absent from it never waits on a Remote Control change.
         self._daemon_guards = dict(daemon_guards or {})
 
-    async def _bind_worktree(self, session_id: SessionId, folder: Path) -> bool:
-        """Bind a new session to a worktree before its pane starts; False when it cannot be.
+    async def _bind_worktree(self, session_id: SessionId, folder: Path) -> _Bound:
+        """Bind a new session to a worktree before its pane starts.
 
-        False for a folder removed or claimed for removal since the conversation was listed,
-        and for a composition with no worktree rows. Never answered by starting the session in
-        the project folder instead (`WORKTREE_REMOVED`)."""
+        `GONE` for a folder removed or claimed for removal since it was chosen, and for a
+        composition with no worktree rows; `FAULT` when the store could not be read or written.
+        Neither is ever answered by starting the session in the project folder instead
+        (`WORKTREE_REMOVED`)."""
         if self._worktrees is None:
-            return False
+            return _Bound.GONE
         try:
             await self._worktrees.bind(session_id, folder)
         except WorktreeUnavailable:
-            return False
-        return True
+            return _Bound.GONE
+        except Exception:
+            _LOG.exception("session %s could not be bound to its worktree", session_id)
+            return _Bound.FAULT
+        return _Bound.BOUND
 
-    async def _reuse_folder(self, session_id: SessionId, of: SessionId | None) -> bool:
+    async def _reuse_folder(self, session_id: SessionId, of: SessionId | None) -> _Bound:
         """Bind a new session to the worktree `of` works in, if it works in one.
 
-        True when there is nothing to reuse -- no session named, no worktree rows, or `of` is a
-        regular session -- and when the binding was made. False only when `of`'s worktree is
-        gone or claimed for removal: the launch is then refused rather than started in the
-        project folder (`WORKTREE_REMOVED`)."""
+        `BOUND` when there is nothing to reuse -- no session named, no worktree rows, or `of`
+        is a regular session -- and when the binding was made; otherwise as `_bind_worktree`.
+        """
         if of is None or self._worktrees is None:
-            return True
-        worktree = await self._worktrees.folder_for(of)
+            return _Bound.BOUND
+        try:
+            worktree = await self._worktrees.folder_for(of)
+        except Exception:
+            _LOG.exception("the folder of %s could not be read for its successor", of)
+            return _Bound.FAULT
         if worktree is None:
-            return True
+            return _Bound.BOUND
         return await self._bind_worktree(session_id, worktree.path)
 
     def _daemon_guard(
@@ -327,11 +343,12 @@ class SessionService:
             # 4 gate review; the stop half was fixed first because that is the half production
             # actually hit, a stop being routinely slower than the window and a launch rarely.
             async with self._locks.for_session(session_id):
-                if not await self._reuse_folder(session_id, command.reuse_folder_of):
+                bound = await self._reuse_folder(session_id, command.reuse_folder_of)
+                if bound is not _Bound.BOUND:
                     return LaunchOutcome(
                         await self._store.record_event(session_id, LifecycleEvent.STARTUP_ERROR),
                         False,
-                        worktree_removed=True,
+                        worktree_removed=bound is _Bound.GONE,
                     )
                 remote_control = await self._remote_control_at_launch(command.profile_id)
                 observation = await self._terminal.launch(
@@ -415,11 +432,18 @@ class SessionService:
         # `ReconciliationService.session_is_busy` for its whole duration.
         async with self._locks.for_session(session_id):
             folder = command.conversation.folder
-            if folder is not None and not await self._bind_worktree(session_id, folder):
+            bound = (
+                _Bound.BOUND if folder is None else await self._bind_worktree(session_id, folder)
+            )
+            if bound is not _Bound.BOUND:
+                # Refused before any pane existed: the record stays FAILED, but lets go of the
+                # conversation, so the next press is a real attempt rather than this record
+                # handed back (`get_by_resume_source`) for good.
+                await self._store.record_event(session_id, LifecycleEvent.STARTUP_ERROR)
                 return ResumeOutcome(
-                    await self._store.record_event(session_id, LifecycleEvent.STARTUP_ERROR),
+                    await self._store.release_resume_source(session_id),
                     created=True,
-                    worktree_removed=True,
+                    worktree_removed=bound is _Bound.GONE,
                 )
             observation = await self._terminal.resume(
                 session_id,

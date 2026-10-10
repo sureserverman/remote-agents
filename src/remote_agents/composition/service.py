@@ -30,6 +30,7 @@ from remote_agents.application.reconcile import ReconciliationService
 from remote_agents.application.rollover import RolloverPass, RolloverReport
 from remote_agents.application.schedules import SchedulePass
 from remote_agents.application.services import SessionService
+from remote_agents.application.session_folders import live_folder
 from remote_agents.config import TelegramSecrets
 from remote_agents.domain.models import ProfileId, ProjectId, SessionId
 from remote_agents.ports.agent_activity import ActivityConfidence, ActivityKind, AgentActivity
@@ -611,8 +612,11 @@ def build_rollover_pass(
         roots: dict[SessionId, Path | None] = {}
         for session_id, worktree in (await worktrees.bound_folders()).items():
             if worktree.path not in by_path:
-                present = worktree.removed_at is None and worktree.path.is_dir()
-                by_path[worktree.path] = handoff_root(worktree.path) if present else None
+                folder = live_folder(worktree)
+                # The worktree's own top level, which holds its `.git` file, or none: never a
+                # walk up past it, which could reach any repository above the state folder.
+                is_checkout = folder is not None and (folder / ".git").exists()
+                by_path[worktree.path] = folder if is_checkout else None
             roots[session_id] = by_path[worktree.path]
         return roots
 

@@ -111,8 +111,11 @@ async def test_a_session_still_failed_or_preserved_keeps_its_folder(
     _session(connection, S1, state="failed")
     await store.record(_worktree(), bound_to=SessionId.parse(S1))
     assert await store.removable_candidates() == ()
-    connection.execute("UPDATE sessions SET state = 'preserved' WHERE session_id = 's1'")
+    moved = connection.execute(
+        "UPDATE sessions SET state = 'preserved' WHERE session_id = ?", (S1,)
+    ).rowcount
     connection.commit()
+    assert moved == 1, "the session was not moved, so the PRESERVED half would check nothing"
     assert await store.removable_candidates() == ()
 
 

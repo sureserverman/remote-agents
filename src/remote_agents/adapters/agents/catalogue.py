@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Mapping
 from pathlib import Path
 
@@ -14,6 +15,8 @@ from remote_agents.domain.conversations import (
 from remote_agents.domain.models import ProfileId, ProjectId
 from remote_agents.ports.conversation_catalog import ConversationCatalog
 from remote_agents.ports.worktree_store import ProjectWorktreeFolders
+
+_LOG = logging.getLogger(__name__)
 
 
 class ProfileConversationCatalogue:
@@ -65,8 +68,21 @@ async def project_folders(
     folders: list[tuple[ProjectId, Path, Path | None]] = []
     for project_id, path in projects:
         folders.append((project_id, path, None))
-        if worktree_folders is not None:
-            folders.extend(
-                (project_id, worktree, worktree) for worktree in await worktree_folders(project_id)
-            )
+        if worktree_folders is None:
+            continue
+        try:
+            worktrees = await worktree_folders(project_id)
+        except Exception:
+            # The worktree rows are the domain store, which another process writes: a locked or
+            # unreadable read costs this listing its worktree conversations, never the
+            # project's own or another provider's.
+            _LOG.exception("worktree folders of %s could not be read; listed without", project_id)
+            continue
+        # Resolved, as the pane's cwd is: that is the folder the agent records its
+        # conversations under, and a provider that filters by exact cwd misses any other
+        # spelling of it.
+        folders.extend(
+            (project_id, worktree.resolve(strict=False), worktree.resolve(strict=False))
+            for worktree in worktrees
+        )
     return tuple(folders)

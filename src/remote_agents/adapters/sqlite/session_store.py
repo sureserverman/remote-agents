@@ -265,6 +265,19 @@ class SQLiteSessionStore:
             ),
         )
 
+    async def release_resume_source(self, session_id: SessionId) -> SessionRecord:
+        with self._connection:
+            self._connection.execute(
+                # Both, as a record carries a resume identity whole or not at all.
+                "UPDATE sessions SET resume_profile_id = NULL, resume_source_id = NULL"
+                " WHERE session_id = ?",
+                (str(session_id),),
+            )
+        record = await self.get(session_id)
+        if record is None:
+            raise KeyError(f"unknown session: {session_id}")
+        return record
+
     async def set_label(self, session_id: SessionId, label: str | None) -> SessionRecord:
         """Rename a session, or clear its name, by rewriting the identity it already stores.
 

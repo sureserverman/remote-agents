@@ -198,8 +198,7 @@ def _usage_reader(
     A session is a row; a provider conversation is a file in a directory named after a
     workspace. Turning the first into the second needs the store *and* the session's folder --
     its worktree when it has one, whose conversations are filed under that folder (BL-116) --
-    and
-    neither belongs on a screen builder — which is why `Backend.usage` is a bound callable in
+    and neither belongs on a screen builder — which is why `Backend.usage` is a bound callable in
     the shape of `capture` rather than a service the frontends resolve themselves.
 
     The provider read runs on a worker thread. It is a `stat` sweep of a directory and a tail
@@ -294,9 +293,10 @@ def compose_backend(
     at the same store.
 
     **`worktrees` is a parameter for `store`'s reason**: the composition root builds one pair
-    (`worktree_parts`) for the whole process. Nothing here reads it yet. It is taken now so
-    that its readers -- the session-folder lookup, worktree creation, the cleanup pass, the
-    git line -- receive this one pair when they are wired, rather than each building one.
+    (`worktree_parts`) for the whole process, and every reader here gets that one pair rather
+    than building its own: the session-folder lookup (pane cwd, usage, the resume lists) and
+    the resume binding now; worktree creation, the cleanup pass and the git line as they are
+    wired.
 
     **`activity_feed` is a parameter for a narrower reason:** the reader is bounded by
     `FEED_LIMIT`, which lives in the terminal package, and importing it here would make the
