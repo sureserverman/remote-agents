@@ -483,3 +483,60 @@ async def test_ten_toggles_at_a_real_client_leave_every_pane_idle(console_with_s
     assert _SESSIONS_PANE_TEXT in await _capture(console_socket, sessions.pane_id), (
         "the sessions pane stopped drawing its own text; it is idle because it is stuck"
     )
+
+
+async def test_a_transient_wide_split_then_narrow_leaves_the_sessions_pane_idle(
+    console_with_surfaces,
+) -> None:
+    """BL-039's own shape, ten times: the incident pane was briefly 183x22, then 73x24.
+
+    The 2026-09-03 sessions pane looped in Textual's `Screen._refresh_layout` -> `Resize` for
+    13 hours after a console rebuild drew it full width for a moment and then narrowed it. That
+    transient is made here on the real four-surface console with a real client attached: the
+    sessions pane is broken out into a window of its own, sized 183x22, and joined back beside
+    the limits pane, where the layout narrows it. A pane caught in the loop pegs a core, which
+    is six seconds over the six-second window; one second is the instrument's floor (see
+    `test_ten_toggles_at_a_real_client_leave_every_pane_idle`).
+    """
+    gateway, console_socket, _host_socket = console_with_surfaces
+    tmux = ("tmux", "-L", console_socket)
+
+    arrangement = await gateway.pane_arrangement()
+    by_slot = {pane.console_slot: pane for pane in arrangement if pane.console_slot}
+    sessions = by_slot[ConsolePaneSlot.SESSIONS.value].pane_id
+    limits = by_slot[ConsolePaneSlot.LIMITS.value].pane_id
+    for _ in range(40):
+        if _SESSIONS_PANE_TEXT in await _capture(console_socket, sessions):
+            break
+        await asyncio.sleep(1.0)
+    else:
+        raise AssertionError("the sessions pane never drew its own text")
+    pid = (await _run(*tmux, "display-message", "-p", "-t", sessions, "#{pane_pid}")).strip()
+
+    burned: list[float] = []
+    for _ in range(10):
+        await _run(*tmux, "break-pane", "-d", "-s", sessions, "-n", "transient")
+        await _run(*tmux, "resize-window", "-t", "transient", "-x", "183", "-y", "22")
+        await asyncio.sleep(0.3)
+        assert (
+            await _run(
+                *tmux, "display-message", "-p", "-t", sessions, "#{pane_width}x#{pane_height}"
+            )
+        ).strip() == "183x22"
+        await _run(*tmux, "join-pane", "-d", "-v", "-s", sessions, "-t", limits)
+        await asyncio.sleep(2.0)
+        width = (
+            await _run(*tmux, "display-message", "-p", "-t", sessions, "#{pane_width}")
+        ).strip()
+        assert int(width) < 183, f"the pane was never narrowed: {width} columns"
+        before = await _cpu_seconds(pid)
+        await asyncio.sleep(6.0)
+        burned.append(await _cpu_seconds(pid) - before)
+
+    print(f"BL-039 transient, CPU seconds over 6 s per repetition: {burned}")
+    assert all(seconds <= 1.0 for seconds in burned), (
+        f"the sessions pane kept working after a wide-then-narrow transient: {burned}"
+    )
+    assert _SESSIONS_PANE_TEXT in await _capture(console_socket, sessions), (
+        "the sessions pane stopped drawing its own text; it is idle because it is stuck"
+    )
