@@ -438,7 +438,7 @@ async def test_a_profile_that_declares_no_dialog_has_its_pane_killed(tmp_path) -
     ends a session that never started. What differs is only how the pane goes.
 
     **A hypothetical profile, stated as one.** Since BL-052 the only readiness blocker is
-    claude's pre-trust screen, and claude declares a dialog, so no production profile reaches
+    claude's pre-trust line, and claude declares a dialog, so no production profile reaches
     `decline_trust` with no dialog to read. The branch stays as a defence, and this gives
     opencode a blocker of its own so the branch can be driven at all.
     """
@@ -511,7 +511,7 @@ async def test_a_codex_pane_that_is_no_longer_asking_is_refused_too(tmp_path) ->
     """The parity claim, asserted rather than read off a shared code path.
 
     Each profile reaches `_is_awaiting_trust` through the classifier with its own declared
-    dialog, and claude also through its pre-trust screen, so "both families are protected" is a
+    dialog, and claude also through its pre-trust line, so "both families are protected" is a
     claim about two declarations meeting the same guard. One test on claude does not establish
     it.
     """

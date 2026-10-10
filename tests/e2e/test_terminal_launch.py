@@ -56,7 +56,7 @@ READINESS_UNUSED = 0.05
 READY_DELAY = 2.0
 AGENT_LIFETIME = 30
 
-# The pre-trust screen `claude`'s profile actually lists as a blocker. Used verbatim so the
+# The pre-trust line `claude`'s profile actually lists as a blocker. Used verbatim so the
 # fake agent is stopped on the same string the real profile table is keyed on rather than on
 # a stand-in that could drift away from it.
 BLOCKER = "Accessing workspace:"

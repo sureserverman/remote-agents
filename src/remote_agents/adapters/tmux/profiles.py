@@ -41,7 +41,7 @@ _READINESS_MARKERS = {
     "opencode": "Ask anything",
     "cursor-agent": "Cursor",
 }
-#: The one readiness blocker: claude's *pre-trust* screen, spelled here as a readiness fact.
+#: The one readiness blocker: claude's *pre-trust* line, spelled here as a readiness fact.
 #:
 #: A readiness blocker is a string whose presence alone **answers** the launch: an agent that
 #: has drawn its folder-trust question has finished starting and will not start further, so the

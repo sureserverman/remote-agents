@@ -1436,12 +1436,13 @@ class TmuxTerminal:
         """Answer the folder-trust question with *no*, and make sure the pane is gone.
 
         **Two routes, and which one is taken is a property of the agent rather than of the
-        owner's press.** For a profile whose dialog this project can read, the honest decline
-        is the one the agent understands: send the keys that select its own negative option
-        and let it exit itself, which leaves the agent's own cleanup to run. For every other
-        profile -- codex, cursor-agent -- this project will not type into a dialog it does not
-        parse, so the pane is killed instead. Both are the owner's *no* having happened, which
-        is why `SessionService` records one event for them and does not branch.
+        owner's press.** For a profile whose dialog this project can read, the honest decline is the
+        one the agent understands: send the keys that select its own negative option and let it exit
+        itself, which leaves the agent's own cleanup to run. claude, codex and cursor-agent all
+        declare theirs. For a profile whose vertical declares no dialog, this project will not type
+        into a screen it does not parse, so the pane is killed instead; since BL-052 no production
+        profile reaches that route, and it stays as a defence. Both are the owner's *no* having
+        happened, which is why `SessionService` records one event for them and does not branch.
 
         **Three ways to reach the kill, and they are not the same thing.** An agent that takes
         the keys and does not exit within the bound is killed, because the owner asked for the
