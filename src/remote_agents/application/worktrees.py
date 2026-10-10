@@ -11,7 +11,9 @@ mode rather than given a folder that does not match its own.
 steps; any one failing undoes the earlier ones -- the copies deleted, the folder removed, the
 branch deleted -- each through git's own unforced verbs. A branch that already existed is
 refused before anything is made, so the undo can never delete a branch this project did not
-create.
+create. A launch the terminal then refuses before any pane exists discards the worktree the
+same way (`discard`); one whose pane started keeps it, since the agent may have worked there,
+and the cleanup pass removes it once its session has ended and its branch is merged.
 
 **Copies are untracked files only, never followed through a link.** A fresh worktree holds
 every tracked file at the base commit, so a listed file already present there is tracked and
@@ -38,7 +40,6 @@ from pathlib import Path, PurePosixPath
 from typing import Protocol
 
 from remote_agents.domain.models import ProjectId, SessionId, SessionRecord, SessionState
-from remote_agents.domain.state_machine import TERMINAL_STATES
 from remote_agents.ports.git_checkout import GitCheckout, GitError
 from remote_agents.ports.worktree_store import Worktree, WorktreeStore
 
@@ -56,7 +57,17 @@ BRANCH_PREFIX = "ra/"
 _COPY_MAX_BYTES = 1024 * 1024
 """A copied file is an instruction or settings file; anything larger is skipped, not copied."""
 
-_LIVE = frozenset(SessionState) - TERMINAL_STATES
+_CONTENDING = frozenset(
+    {
+        SessionState.STARTING,
+        SessionState.UNTRUSTED,
+        SessionState.RUNNING,
+        SessionState.STOP_REQUESTED,
+    }
+)
+"""The states of a session with an agent at work in its folder: what makes a launch contended.
+Not FAILED (a pane that recovers is re-read to RUNNING), PRESERVED (its pane has exited) or
+ORPHANED; an offer kept up by a record with no agent behind it would be no contention at all."""
 
 
 class WorktreeCreateFailed(Exception):
@@ -102,7 +113,7 @@ class WorktreeService:
         """Whether a launch on this project offers its own worktree. Never raises: a fault
         reading either answer withholds the offer, and the launch stays an ordinary one."""
         try:
-            live = await self._sessions.list(_LIVE)
+            live = await self._sessions.list(_CONTENDING)
             if not any(record.project_id == project_id for record in live):
                 return False
             return await self._repository(project_id) is not None
@@ -183,8 +194,13 @@ class WorktreeService:
             try:
                 await self._git.remove_worktree(repo, path)
             except GitError as error:
+                # Never forced here. A `worktree add` killed at its timeout leaves its folder
+                # locked, which only a doubly forced remove clears: the owner is told how.
                 _LOG.warning("half-made worktree %s not removed: %s", path, error)
-                leftover.append(f"folder {path}")
+                leftover.append(
+                    f"folder {path}; remove it with `git -C {repo} worktree remove "
+                    f"--force --force {path}`"
+                )
         if made.worktree:
             # The branch was checked absent before `worktree add`, so one present now is ours.
             try:
@@ -193,7 +209,27 @@ class WorktreeService:
             except GitError as error:
                 _LOG.warning("half-made branch %s not deleted: %s", branch, error)
                 leftover.append(f"branch {branch}")
+        if made.worktree:
+            # The per-project folder made for it, when nothing else is in it.
+            with contextlib.suppress(OSError):
+                path.parent.rmdir()
         return ", ".join(leftover)
+
+    async def discard(self, session_id: SessionId) -> str:
+        """Remove the worktree a launch made when the terminal refused before any pane
+        existed: nothing ran there, so the copies are unchanged and the branch is at its base.
+        Marked removed once the folder is gone. Answers what could not be undone, or ''."""
+        worktree = await self._store.folder_for(session_id)
+        if worktree is None or worktree.removed_at is not None:
+            return ""
+        repo = await self._repository(worktree.project_id)
+        if repo is None:
+            return f"folder {worktree.path}"
+        made = _Made(worktree=True, written=list(worktree.copied))
+        leftover = await asyncio.shield(self._undo(repo, worktree.path, worktree.branch, made))
+        if not os.path.lexists(worktree.path):
+            await self._store.mark_removed(worktree.path, at=datetime.now(UTC))
+        return leftover
 
 
 def _one_line(error: BaseException) -> str:
@@ -217,6 +253,8 @@ def _copy(repo: Path, tree: Path, entries: Sequence[str], written: list[str]) ->
         ):
             _LOG.warning("worktree copy skipped %r: not a plain path inside the checkout", entry)
             continue
+        # As git names it, so a later `status` line and this key are the same string.
+        key = PurePosixPath(*parts).as_posix()
         source = repo.joinpath(*parts)
         if not _plain_path(repo, parts, final_must_exist=True):
             continue
@@ -241,13 +279,13 @@ def _copy(repo: Path, tree: Path, entries: Sequence[str], written: list[str]) ->
             current = current / part
             if not os.path.lexists(current):
                 current.mkdir(mode=0o700)
-        written.append(entry)
+        written.append(key)
         descriptor = os.open(
             target, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, mode & 0o777
         )
         with os.fdopen(descriptor, "wb") as handle:
             handle.write(data)
-        copied[entry] = hashlib.sha256(data).hexdigest()
+        copied[key] = hashlib.sha256(data).hexdigest()
     return copied
 
 
@@ -276,9 +314,15 @@ def _read_regular(source: Path) -> tuple[bytes | None, int]:
         descriptor = os.open(source, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
     except OSError:
         return None, 0
-    with os.fdopen(descriptor, "rb") as handle:
-        info = os.fstat(handle.fileno())
-        data = handle.read(_COPY_MAX_BYTES + 1) if stat.S_ISREG(info.st_mode) else None
+    try:
+        # Typed on the raw descriptor: `fdopen` raises on a directory and keeps it open.
+        info = os.fstat(descriptor)
+        data = None
+        if stat.S_ISREG(info.st_mode):
+            with os.fdopen(descriptor, "rb", closefd=False) as handle:
+                data = handle.read(_COPY_MAX_BYTES + 1)
+    finally:
+        os.close(descriptor)
     if data is None or len(data) > _COPY_MAX_BYTES:
         _LOG.warning("worktree copy skipped %s: not a regular file under the cap", source)
         return None, 0

@@ -153,3 +153,19 @@ async def test_a_worktree_that_could_not_be_made_is_reported_and_nothing_attache
     assert len(launcher.commands) == 1
     assert "Nothing was started" in line
     assert any("Its worktree could not be made: fatal: bad ref" in toast for toast in toasts)
+
+
+async def test_a_queued_enter_after_a_failed_worktree_launch_starts_nothing_more() -> None:
+    """The guard `ProfilesScreen` has, here: `_busy` is clear again once a launch has failed,
+    so a second selection queued behind the first must be refused by the cursor resting on
+    nothing -- or it would start a second session and a second branch in the owner's repo."""
+    launcher = _Launcher(offered=True, state=SessionState.FAILED, failed="fatal: bad ref")
+    app = _app(launcher)
+    async with app.run_test() as pilot:
+        await _to_profiles(app, pilot)
+        await _choose(app, pilot, "claude")
+        await _choose(app, pilot, "worktree")
+        await _choose(app, pilot, "worktree")
+        await _choose(app, pilot, "regular")
+
+    assert len(launcher.commands) == 1

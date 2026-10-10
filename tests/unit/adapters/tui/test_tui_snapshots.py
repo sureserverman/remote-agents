@@ -198,6 +198,8 @@ _POSITIONS = (
     "SETTINGS",
     "PROJECT_CHOOSER",
     "PROFILES",
+    # Between the agent and its launch, only on contention (BL-116).
+    "MODE",
     # A project's schedules and the making of one (DEC-114), both reached from its chooser.
     "SCHEDULE",
     "SCHEDULES",
@@ -696,7 +698,7 @@ async def _drive(app: RemoteAgentsTui, pilot, step: str) -> asyncio.Task[None] |
         await app.screen.choose("schedule" if step == "SCHEDULE" else "schedules")
         await pilot.pause()
         return None
-    if step in {"PROJECT_CHOOSER", "PROFILES"}:
+    if step in {"PROJECT_CHOOSER", "PROFILES", "MODE"}:
         # Through the screens' own handlers, so the baseline captures what the navigation
         # actually builds rather than a screen assembled directly by the test.
         await app.screen.choose("opaque-existing")
@@ -705,6 +707,13 @@ async def _drive(app: RemoteAgentsTui, pilot, step: str) -> asyncio.Task[None] |
             return None
         await app.screen.choose("launch")
         await pilot.pause()
+        if step == "MODE":
+            # Pushed as `ProfilesScreen.choose` pushes it on contention; this context's
+            # launcher reports none, so the press itself would launch instead.
+            from remote_agents.adapters.tui.screens import LaunchModeScreen
+
+            await app.push_screen(LaunchModeScreen())
+            await pilot.pause()
         return None
     if step in {"AREAS", "NAME", "PROJECT_REVIEW"}:
         await app.show_areas()

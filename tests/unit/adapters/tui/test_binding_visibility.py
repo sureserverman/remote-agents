@@ -157,6 +157,7 @@ def _arrangements():
         FeedScreen,
         ForceConfirmModal,
         InspectScreen,
+        LaunchModeScreen,
         LimitsPaneScreen,
         NameScreen,
         ProfilesScreen,
@@ -186,6 +187,7 @@ def _arrangements():
     return {
         DashboardScreen: None,  # the resting position, already on the stack
         ProfilesScreen: ProfilesScreen,
+        LaunchModeScreen: LaunchModeScreen,
         ProjectChooserScreen: lambda: ProjectChooserScreen(_PROJECT),
         ScheduleScreen: lambda: ScheduleScreen(_PROJECT, "claude"),
         SchedulesScreen: lambda: SchedulesScreen(_PROJECT),

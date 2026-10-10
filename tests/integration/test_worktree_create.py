@@ -37,7 +37,7 @@ from remote_agents.domain.models import (
     SessionState,
 )
 from remote_agents.ports.git_checkout import GitRefused
-from remote_agents.ports.terminal import TerminalObservation
+from remote_agents.ports.terminal import INVALID_INTENT, TerminalObservation
 from remote_agents.ports.worktree_store import Worktree
 
 PROJECT = ProjectId("editor")
@@ -51,9 +51,15 @@ def _git(cwd: Path, *args: str) -> str:
 
 
 @pytest.fixture(autouse=True)
-def _host_git_config_is_not_read(monkeypatch: pytest.MonkeyPatch) -> None:
+def _host_git_config_is_not_read(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setenv("GIT_CONFIG_GLOBAL", "/dev/null")
     monkeypatch.setenv("GIT_CONFIG_NOSYSTEM", "1")
+    # The adapter drops every inherited `GIT_*` variable before git runs, so the two above
+    # reach only the test's own `_git`; a home of its own keeps the host's config from both.
+    home = tmp_path / "home"
+    home.mkdir(exist_ok=True)
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(home / ".config"))
 
 
 @pytest.fixture
@@ -127,10 +133,27 @@ async def test_the_offer_is_made_only_on_contention_in_a_git_project(
     harness = _Harness(tmp_path, repo)
     assert not await harness.service.offered(PROJECT)
 
-    await harness.session(SessionState.ENDED)
-    assert not await harness.service.offered(PROJECT), "an ended session is no contention"
+    for idle in (
+        SessionState.ENDED,
+        SessionState.FAILED,
+        SessionState.PRESERVED,
+        SessionState.ORPHANED,
+    ):
+        await harness.session(idle)
+    assert not await harness.service.offered(PROJECT), "no agent is at work in the folder"
 
     await harness.session(SessionState.RUNNING)
+    assert await harness.service.offered(PROJECT)
+
+
+@pytest.mark.parametrize(
+    "state", [SessionState.STARTING, SessionState.UNTRUSTED, SessionState.STOP_REQUESTED]
+)
+async def test_an_agent_still_at_work_is_contention(
+    tmp_path: Path, repo: Path, state: SessionState
+) -> None:
+    harness = _Harness(tmp_path, repo)
+    await harness.session(state)
     assert await harness.service.offered(PROJECT)
 
 
@@ -205,6 +228,32 @@ async def test_env_is_never_copied_even_when_a_hand_built_list_names_it(
     worktree = await harness.service.create(await harness.session(), PROJECT)
     assert not (worktree.path / ".env").exists()
     assert set(worktree.copied) == {"CLAUDE.md"}
+
+
+async def test_a_directory_by_a_listed_name_is_skipped_and_leaks_no_descriptor(
+    tmp_path: Path, repo: Path
+) -> None:
+    (repo / ".claude").mkdir()
+    (repo / ".claude" / "settings.local.json").write_text("{}\n", encoding="utf-8")
+    harness = _Harness(tmp_path, repo, copy=(".claude", ".claude/"))
+    before = len(os.listdir("/proc/self/fd"))
+
+    worktree = await harness.service.create(await harness.session(), PROJECT)
+
+    assert worktree.copied == {}
+    assert len(os.listdir("/proc/self/fd")) <= before
+
+
+async def test_copied_paths_are_keyed_as_git_names_them(tmp_path: Path, repo: Path) -> None:
+    """Stage 4 compares these keys with `git status` paths; `./CLAUDE.md` must not survive."""
+    (repo / "CLAUDE.md").write_text("x\n", encoding="utf-8")
+    (repo / ".claude").mkdir()
+    (repo / ".claude" / "settings.local.json").write_text("{}\n", encoding="utf-8")
+    harness = _Harness(tmp_path, repo, copy=("./CLAUDE.md", ".claude//settings.local.json"))
+
+    worktree = await harness.service.create(await harness.session(), PROJECT)
+
+    assert set(worktree.copied) == {"CLAUDE.md", ".claude/settings.local.json"}
 
 
 def test_the_copier_refuses_what_the_config_loader_refuses() -> None:
@@ -292,11 +341,34 @@ async def test_a_failed_add_leaves_no_folder_no_branch_and_no_row(
         await harness.service.create(session, PROJECT)
 
     assert _branches(repo) == {"main"}
-    assert not (harness.directory / str(PROJECT) / str(session)).exists()
+    assert not (harness.directory / str(PROJECT)).exists(), "the per-project folder too"
     assert harness.rows() == (0, 0)
     assert "worktrees" not in os.listdir(repo / ".git") or not os.listdir(
         repo / ".git" / "worktrees"
     )
+
+
+class _AddThenRefuseRemoval(_AddThenFail):
+    """As a `worktree add` killed at its timeout leaves it: a folder git will not remove."""
+
+    async def remove_worktree(self, repo: Path, path: Path) -> None:
+        raise GitRefused("fatal: cannot remove a locked working tree")
+
+
+async def test_a_folder_the_undo_cannot_remove_is_named_with_how_to_remove_it(
+    tmp_path: Path, repo: Path
+) -> None:
+    harness = _Harness(tmp_path, repo, git=_AddThenRefuseRemoval())
+    session = await harness.session()
+    path = harness.directory / str(PROJECT) / str(session)
+
+    with pytest.raises(WorktreeCreateFailed) as raised:
+        await harness.service.create(session, PROJECT)
+
+    message = str(raised.value)
+    assert f"left behind: folder {path}" in message
+    assert f"git -C {repo.resolve()} worktree remove --force --force {path}" in message
+    assert harness.rows() == (0, 0)
 
 
 async def test_a_failed_record_undoes_the_copies_the_folder_and_the_branch(
@@ -364,12 +436,15 @@ async def test_a_branch_that_already_exists_is_refused_and_kept(tmp_path: Path, 
 
 
 class _Terminal:
-    def __init__(self, folders: SQLiteWorktreeStore) -> None:
+    def __init__(self, folders: SQLiteWorktreeStore, refuse: str = "") -> None:
         self.folders = folders
+        self.refuse = refuse
         self.launched: list[tuple[SessionId, Worktree | None]] = []
 
     async def launch(self, session_id, project_id, profile_id, *, remote_control):  # type: ignore[no-untyped-def]
         self.launched.append((session_id, await self.folders.folder_for(session_id)))
+        if self.refuse:
+            return TerminalObservation(session_id, False, False, detail=self.refuse)
         return TerminalObservation(session_id, True, False)
 
 
@@ -416,6 +491,31 @@ async def test_a_failed_creation_fails_the_launch_with_git_s_reason_and_starts_n
     assert outcome.worktree_failed is not None
     assert "simulated failure" in outcome.worktree_failed
     assert terminal.launched == []
+
+
+async def test_a_launch_refused_before_any_pane_takes_its_worktree_with_it(
+    tmp_path: Path, repo: Path
+) -> None:
+    (repo / "CLAUDE.md").write_text("instructions\n", encoding="utf-8")
+    (repo / "AGENTS.md").write_text("untracked and not ignored\n", encoding="utf-8")
+    harness = _Harness(tmp_path, repo)
+    terminal = _Terminal(harness.store, refuse=INVALID_INTENT)
+    service = SessionService(
+        harness.sessions,
+        terminal,  # type: ignore[arg-type]
+        worktrees=harness.store,
+        worktree_service=harness.service,
+    )
+
+    outcome = await service.launch(LaunchCommand(PROJECT, CODEX, "k1", mode="worktree"))
+
+    assert outcome.record.state is SessionState.FAILED
+    ((launched, folder),) = terminal.launched
+    assert folder is not None, "the worktree was made and bound before the terminal ran"
+    assert _branches(repo) == {"main"}
+    assert not folder.path.exists()
+    gone = await harness.store.folder_for(launched)
+    assert gone is not None and gone.removed_at is not None
 
 
 def test_a_successor_never_creates_a_worktree() -> None:

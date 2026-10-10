@@ -37,7 +37,8 @@ class LaunchCommand:
     named session with no worktree leaves this an ordinary launch in the project folder."""
     mode: Literal["regular", "worktree"] = "regular"
     """`worktree` gives the new session its own branch and folder before its pane starts
-    (BL-116). Only the owner chooses it, when offered; a successor reuses rather than makes."""
+    (BL-116). Only the owner chooses it, when it was offered at the time they were asked; a
+    successor reuses rather than makes."""
 
     def __post_init__(self) -> None:
         if self.mode not in ("regular", "worktree"):

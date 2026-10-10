@@ -352,6 +352,59 @@ def test_compose_backend_builds_one_backend_from_the_real_helpers(composed_home,
         connection.close()
 
 
+async def test_compose_backend_wires_the_worktree_offer_through_the_real_parts(
+    composed_home, tmp_path, monkeypatch
+):
+    """BL-116: the offer reaches a surface only through this seam. Without it every surface
+    test passes against a double while a real process never offers the mode."""
+    import subprocess
+    from datetime import UTC, datetime
+
+    from remote_agents.adapters.sqlite.database import open_database
+    from remote_agents.composition.backend import compose_backend, worktree_parts
+    from remote_agents.config import load_config
+    from remote_agents.domain.models import (
+        ProfileId,
+        ProjectId,
+        SessionDisplayIdentity,
+        SessionId,
+        SessionRecord,
+        SessionState,
+    )
+    from remote_agents.production import ProductionPaths
+
+    monkeypatch.setenv("HOME", str(composed_home))
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(composed_home / ".config"))
+    project = composed_home / "dev" / "infra" / "existing"
+    subprocess.run(["git", "init", "-q", "--template=", str(project)], check=True, timeout=30)
+    paths = ProductionPaths.for_home(composed_home)
+    config = load_config(_config_file(composed_home, paths))
+    connection = open_database(tmp_path / "sessions.sqlite3")
+    try:
+        backend = compose_backend(config, connection, paths, worktrees=worktree_parts(connection))
+        bare = compose_backend(config, connection, paths)
+        project_id = ProjectId(
+            next(item.opaque_id for item in backend.catalogue if item.name == "existing")
+        )
+        assert not await backend.sessions.worktree_offered(project_id)
+
+        await backend.sessions._store.save(
+            SessionRecord(
+                SessionId.new(),
+                project_id,
+                ProfileId("codex"),
+                SessionDisplayIdentity("existing", "codex", "regular", 1),
+                SessionState.RUNNING,
+                datetime(2026, 10, 10, tzinfo=UTC),
+            )
+        )
+
+        assert await backend.sessions.worktree_offered(project_id)
+        assert not await bare.sessions.worktree_offered(project_id), "no parts, no offer"
+    finally:
+        connection.close()
+
+
 def test_compose_backend_shares_one_codex_lock_between_launches_and_toggles(
     composed_home, tmp_path
 ):

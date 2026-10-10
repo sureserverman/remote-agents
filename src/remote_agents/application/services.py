@@ -407,6 +407,16 @@ class SessionService:
                     command.profile_id,
                     remote_control=remote_control,
                 )
+                if (
+                    command.mode == "worktree"
+                    and observation.detail in _BEFORE_ANY_PANE
+                    and self._worktree_service is not None
+                ):
+                    # Nothing ran in the worktree it made, so it goes with the refusal (BL-116).
+                    try:
+                        await self._worktree_service.discard(session_id)
+                    except Exception:
+                        _LOG.exception("worktree of refused launch %s not discarded", session_id)
                 return LaunchOutcome(
                     await self._store.record_event(session_id, _event_for_launch(observation)),
                     remote_control,

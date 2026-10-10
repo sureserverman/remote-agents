@@ -26,11 +26,17 @@ def _git(cwd: Path, *args: str) -> str:
 
 
 @pytest.fixture(autouse=True)
-def _host_git_config_is_not_read(monkeypatch: pytest.MonkeyPatch) -> None:
+def _host_git_config_is_not_read(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """The host's global config may install hooks or demand signing into every new repo;
     neither the fixture's commits nor the adapter under test should depend on it."""
     monkeypatch.setenv("GIT_CONFIG_GLOBAL", "/dev/null")
     monkeypatch.setenv("GIT_CONFIG_NOSYSTEM", "1")
+    # The adapter drops every inherited `GIT_*` variable before git runs, so the two above
+    # reach only the test's own `_git`; a home of its own keeps the host's config from both.
+    home = tmp_path / "home"
+    home.mkdir(exist_ok=True)
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(home / ".config"))
 
 
 @pytest.fixture

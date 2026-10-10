@@ -635,8 +635,10 @@ class LaunchModeScreen(ChoiceScreen):
     and branch of its own (BL-116). Pushed by `ProfilesScreen` only on contention.
 
     **The launch's commit position when it is shown**, so it takes `ProfilesScreen`'s two
-    guards with it: the list rests on Back, so a queued enter from the agent list commits
-    nothing, and after a failure it rests on nothing and refuses a selection made there.
+    guards with it. On arrival the list rests on Back, so a held enter reaching this screen
+    goes back rather than launching (enters already queued on the agent list are dropped by
+    `advance_to`, which pushes only from a showing screen). After a failure it rests on
+    nothing and refuses a selection made there, since `_busy` is clear again by then.
     """
 
     empty_state = NEVER_EMPTY
