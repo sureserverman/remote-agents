@@ -14,7 +14,9 @@ event array pass unnoticed.
 
 from __future__ import annotations
 
+import io
 import json
+import os
 import shlex
 import stat
 import subprocess
@@ -25,6 +27,7 @@ import pytest
 
 from remote_agents.adapters.agents import registry as hook_install
 from remote_agents.adapters.agents.claude.hooks import INSTALLED_EVENTS, RETIRED_EVENTS
+from remote_agents.adapters.agents.hook_licences import hook_licence
 from remote_agents.adapters.agents.hook_settings import (
     HookInstallError,
     _without_our_groups,
@@ -32,9 +35,12 @@ from remote_agents.adapters.agents.hook_settings import (
 from remote_agents.adapters.agents.registry import (
     agent_event_command,
     install_agent_hooks,
+    provider_descriptors,
     remove_agent_hooks,
 )
+from remote_agents.agent_event import HOOK_PROVIDERS, spool_from_stdin
 from remote_agents.bootstrap import main
+from remote_agents.ports.session_identity import SESSION_ID_VARIABLE
 
 _LIVED_IN_SETTINGS = {
     "agentPushNotifEnabled": True,
@@ -573,7 +579,20 @@ def test_the_subcommand_reports_a_refusal_on_standard_error(
     assert capsys.readouterr().err.strip() != ""
 
 
-def test_the_installed_hook_command_does_not_load_the_composition_root(tmp_path: Path) -> None:
+#: A finished turn per hook name, so the budget probe runs the whole path -- the licence lookup
+#: and the spool write -- rather than the early return of a session that is not managed.
+_FINISHED_TURN = {
+    "claude": {"hook_event_name": "Stop"},
+    "codex": {"hook_event_name": "Stop"},
+    "opencode": {"hook_event_name": "session.idle"},
+    "cursor": {"hook_event_name": "stop", "status": "completed"},
+}
+
+
+@pytest.mark.parametrize("provider", HOOK_PROVIDERS)
+def test_the_installed_hook_command_does_not_load_the_composition_root(
+    tmp_path: Path, provider: str
+) -> None:
     """The command installed here fires in every Claude session on the machine, managed or not.
 
     `bootstrap` is the composition root: importing it pulls in the Telegram service, httpx,
@@ -588,24 +607,82 @@ def test_the_installed_hook_command_does_not_load_the_composition_root(tmp_path:
     """
     probe = (
         "import sys, runpy\n"
-        f"sys.argv = ['remote_agents', 'agent-event', '--activity-dir', {str(tmp_path)!r}]\n"
+        "sys.argv = ['remote_agents', 'agent-event', '--activity-dir', "
+        f"{str(tmp_path / 'spool')!r}, '--provider', {provider!r}]\n"
         "try:\n"
         "    runpy.run_module('remote_agents', run_name='__main__')\n"
         "except SystemExit:\n"
         "    pass\n"
         "loaded = 'remote_agents.bootstrap' in sys.modules\n"
-        "print('loaded' if loaded else 'lean', len(sys.modules))\n"
+        "verticals = sorted({name.split('.')[3] for name in sys.modules\n"
+        "    if name.startswith('remote_agents.adapters.agents.') and name.count('.') >= 3\n"
+        "    and name.split('.')[3] in ('claude', 'codex', 'opencode', 'cursor')})\n"
+        "registry = 'remote_agents.adapters.agents.registry' in sys.modules\n"
+        "print('loaded' if loaded else 'lean', len(sys.modules), registry, ','.join(verticals))\n"
     )
     completed = subprocess.run(
         [sys.executable, "-c", probe],
-        input=json.dumps({"hook_event_name": "Stop"}).encode("utf-8"),
+        input=json.dumps(_FINISHED_TURN[provider]).encode("utf-8"),
         capture_output=True,
         check=True,
+        # A managed session, so the count is the worst case: the hook reaches its licence and
+        # writes. Without this the probe measured only the "not mine" return (BL-050).
+        env={**os.environ, SESSION_ID_VARIABLE: "budget-probe-session"},
     )
 
-    verdict, modules = completed.stdout.decode("utf-8").split()
+    verdict, modules, registry, verticals = completed.stdout.decode("utf-8").split()
     assert verdict == "lean"
     assert int(modules) < 300
+    # Structural, because the count alone cannot tell: building every descriptor through the
+    # registry measured 283 modules on 2026-10-10, inside the budget. The hook reaches its
+    # licence through `hook_licences`, which loads the one vertical it was installed for.
+    assert registry == "False", "the hook imported the registry, which loads every vertical"
+    assert verticals == provider, f"the {provider} hook loaded the verticals {verticals}"
+    # The record is what proves the count includes the licence: a hook that found none would
+    # write nothing, and would be cheap for the wrong reason.
+    assert [path.name for path in (tmp_path / "spool").glob("*.json")], (
+        f"{provider}'s finished turn wrote no record"
+    )
+
+
+def test_the_hook_names_are_the_descriptors_hook_names() -> None:
+    """`agent_event` spells `HOOK_PROVIDERS` itself to stay lean; this keeps it honest."""
+    assert set(HOOK_PROVIDERS) == {
+        descriptor.hooks for descriptor in provider_descriptors() if descriptor.hooks is not None
+    }
+
+
+def test_each_hook_name_reaches_the_licence_its_descriptor_declares() -> None:
+    """The hook's lookup and the descriptor are one value, not two copies that must agree."""
+    for descriptor in provider_descriptors():
+        assert descriptor.hooks is not None
+        assert hook_licence(descriptor.hooks) is descriptor.activity, descriptor.profile_id
+
+
+@pytest.mark.parametrize("name", ["cursor-agent", "some-later-provider", "", "../claude"])
+def test_a_name_that_is_not_a_hook_name_has_no_licence(name: str) -> None:
+    assert hook_licence(name) is None
+
+
+@pytest.mark.parametrize("provider", HOOK_PROVIDERS)
+def test_the_hook_hands_the_spool_its_providers_licence(
+    provider: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from remote_agents.adapters.agents import activity_spool
+
+    received: dict[str, object] = {}
+
+    def spool(payload: object, **keywords: object) -> int:
+        received.update(keywords)
+        return 0
+
+    monkeypatch.setattr(activity_spool, "spool_agent_event", spool)
+    monkeypatch.setattr(sys, "stdin", io.TextIOWrapper(io.BytesIO(b"{}")))
+
+    assert spool_from_stdin(tmp_path, provider=provider) == 0
+
+    assert received["licence"] is hook_licence(provider)
+    assert received["licence"] is not None
 
 
 def test_a_spool_under_an_ancestor_others_can_write_is_refused_at_install_time(

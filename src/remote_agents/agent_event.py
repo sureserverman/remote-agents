@@ -25,8 +25,9 @@ HOOK_PROVIDERS = ("claude", "codex", "opencode", "cursor")
 """The `--provider` names `agent-event` and `install-agent-hooks` accept: one per hook installer.
 
 Spelled here, not read off the registry, because this module must stay importable without the
-adapters (see the module docstring). `bootstrap` asks this tuple for both of its parsers, and a
-test holds it equal to the registry's installers, so the three cannot drift apart.
+adapters (see the module docstring). `bootstrap` asks this tuple for both of its parsers, and
+tests hold it equal to the registry's installers and to the descriptors' `hooks` names, so none
+of them can drift apart.
 """
 
 
@@ -38,6 +39,7 @@ def spool_from_stdin(activity_directory: Path | None, *, provider: str = "claude
     conclusion.
     """
     from remote_agents.adapters.agents.activity_spool import spool_agent_event
+    from remote_agents.adapters.agents.hook_licences import hook_licence
     from remote_agents.config import ConfigError
     from remote_agents.production import ProductionPaths
 
@@ -53,7 +55,11 @@ def spool_from_stdin(activity_directory: Path | None, *, provider: str = "claude
         # raised into the agent's session -- the one outcome this whole path is arranged to
         # prevent, arriving before the function that promises never to raise was even called.
         return 0
-    return spool_agent_event(payload, activity_directory=resolved, provider=provider)
+    # The one vertical this hook was installed for, imported here and nowhere earlier: a
+    # descriptor would cost every vertical and its usage readers (BL-050).
+    return spool_agent_event(
+        payload, activity_directory=resolved, provider=provider, licence=hook_licence(provider)
+    )
 
 
 def run_agent_event(argv: list[str] | None = None) -> int:

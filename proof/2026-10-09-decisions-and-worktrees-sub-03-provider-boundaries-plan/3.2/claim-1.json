@@ -1,0 +1,28 @@
+{
+ "baseline": {
+  "elapsed_s": 38.5,
+  "exit": 0,
+  "tail": "........................................................................ [ 20%]\n........................................................................ [ 40%]\n........................................................................ [ 61%]\n........................................................................ [ 81%]\n..................................................................       [100%]\n354 passed in 36.14s"
+ },
+ "break_patch": "--- a/src/remote_agents/adapters/agents/hook_licences.py\n+++ b/src/remote_agents/adapters/agents/hook_licences.py\n@@ -33,5 +33,9 @@\n \n def hook_licence(hook_name: str) -> HookLicence | None:\n     \"\"\"The licence the named hook's vertical declares, or None for any other name.\"\"\"\n-    module = _LICENSING_MODULES.get(hook_name)\n-    return None if module is None else import_module(module).HOOK_LICENCE\n+    from remote_agents.adapters.agents.registry import provider_descriptors\n+\n+    for descriptor in provider_descriptors():\n+        if descriptor.hooks == hook_name:\n+            return descriptor.activity\n+    return None\n",
+ "build": null,
+ "created": "2026-10-10T17:37:31+00:00",
+ "fingerprint": "aa445a3aaa95e9b7d44e576fc06eaa138f7dccc9186591dda9645aa859785ff0",
+ "index": 1,
+ "kind": "claim",
+ "named_break": null,
+ "no_build_reason": "pure python, no build",
+ "plan": "/mnt/vault/Portfolio/infra/remote-agents/plans/2026-10-09-decisions-and-worktrees-sub-03-provider-boundaries-plan.md",
+ "red": {
+  "elapsed_s": 38.3,
+  "exit": 1,
+  "tail": "            \"    runpy.run_module('remote_agents', run_name='__main__')\\n\"\n            \"except SystemExit:\\n\"\n            \"    pass\\n\"\n            \"loaded = 'remote_agents.bootstrap' in sys.modules\\n\"\n            \"verticals = sorted({name.split('.')[3] for name in sys.modules\\n\"\n            \"    if name.startswith('remote_agents.adapters.agents.') and name.count('.') >= 3\\n\"\n            \"    and name.split('.')[3] in ('claude', 'codex', 'opencode', 'cursor')})\\n\"\n            \"registry = 'remote_agents.adapters.agents.registry' in sys.modules\\n\"\n            \"print('loaded' if loaded else 'lean', len(sys.modules), registry, ','.join(verticals))\\n\"\n        )\n        completed = subprocess.run(\n            [sys.executable, \"-c\", probe],\n            input=json.dumps(_FINISHED_TURN[provider]).encode(\"utf-8\"),\n            capture_output=True,\n            check=True,\n            # A managed session, so the count is the worst case: the hook reaches its licence and\n            # writes. Without this the probe measured only the \"not mine\" return (BL-050).\n            env={**os.environ, SESSION_ID_VARIABLE: \"budget-probe-session\"},\n        )\n    \n        verdict, modules, registry, verticals = completed.stdout.decode(\"utf-8\").split()\n        assert verdict == \"lean\"\n        assert int(modules) < 300\n        # Structural, because the count alone cannot tell: building every descriptor through the\n        # registry measured 283 modules on 2026-10-10, inside the budget. The hook reaches its\n        # licence through `hook_licences`, which loads the one vertical it was installed for.\n>       assert registry == \"False\", \"the hook imported the registry, which loads every vertical\"\nE       AssertionError: the hook imported the registry, which loads every vertical\nE       assert 'True' == 'False'\nE         \nE         - False\nE         + True\n\ntests/integration/test_agent_hook_install.py:639: AssertionError\n=========================== short test summary info ============================\nFAILED tests/integration/test_agent_hook_install.py::test_the_installed_hook_command_does_not_load_the_composition_root[claude]\nFAILED tests/integration/test_agent_hook_install.py::test_the_installed_hook_command_does_not_load_the_composition_root[codex]\nFAILED tests/integration/test_agent_hook_install.py::test_the_installed_hook_command_does_not_load_the_composition_root[opencode]\nFAILED tests/integration/test_agent_hook_install.py::test_the_installed_hook_command_does_not_load_the_composition_root[cursor]\n4 failed, 350 passed in 36.07s"
+ },
+ "schema": 2,
+ "task": "3.2",
+ "test": "uv run --locked pytest tests/integration/test_agent_hook_install.py tests/architecture -q -p no:randomly",
+ "text": "`uv run --locked pytest tests/integration/test_agent_hook_install.py tests/architecture -q -p no:randomly`. The module-budget test passes (`< 300`) for each of the four `--provider` values, so parametrise it over `HOOK_PROVIDERS` if it is not already, and the import rules pass. Red if the hook constructs a descriptor: the module count jumps past budget.",
+ "touched": [
+  "src/remote_agents/adapters/agents/hook_licences.py"
+ ]
+}

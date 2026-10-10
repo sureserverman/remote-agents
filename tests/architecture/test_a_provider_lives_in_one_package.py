@@ -23,8 +23,12 @@ _SOURCE_ROOT = Path(__file__).resolve().parents[2] / "src"
 
 PROVIDERS = ("claude", "codex", "opencode", "cursor")
 
-#: Modules outside a provider's package that may import it. One entry, by design.
-IMPORT_ALLOWLIST = frozenset({"adapters/agents/registry.py"})
+#: Modules outside a provider's package that may import it. The registry, by design, and one
+#: recorded widening (DEC-070's accepted cost 3, "a deliberate, recorded act"):
+#: `hook_licences.py`, added 2026-10-10 for BL-050, because the activity hook must reach one
+#: vertical's licence without importing the registry -- which loads all four, 279 modules of
+#: the hook's 300 -- and it imports only the one its hook was installed for.
+IMPORT_ALLOWLIST = frozenset({"adapters/agents/registry.py", "adapters/agents/hook_licences.py"})
 
 #: Modules outside a provider's package that may hold a `ProfileId("<provider>")` literal.
 #: The current set, pinned exactly: the trust vocabulary, the lifecycle/action services that
@@ -85,6 +89,10 @@ def foreign_vertical_imports(source_root: Path) -> list[str]:
                 names = [node.module]
                 if node.module == "remote_agents.adapters.agents":
                     names += [f"remote_agents.adapters.agents.{alias.name}" for alias in node.names]
+            # A vertical's dotted path spelled as a string is an import too -- `importlib`
+            # takes one -- and an AST sweep of import statements alone would never see it.
+            if isinstance(node, ast.Constant) and isinstance(node.value, str):
+                names = [node.value]
             for name in names:
                 for provider in PROVIDERS:
                     prefix = f"remote_agents.adapters.agents.{provider}"
@@ -146,6 +154,24 @@ def test_a_foreign_vertical_import_is_reported(tmp_path: Path) -> None:
 
     assert offenders == [
         "application/smuggler.py: imports remote_agents.adapters.agents.claude.usage"
+    ]
+
+
+def test_a_vertical_path_spelled_as_a_string_is_reported(tmp_path: Path) -> None:
+    """`importlib.import_module` takes a string; the sweep reads those as imports too."""
+    root = tmp_path / "src"
+    module = root / "remote_agents" / "application" / "smuggler.py"
+    module.parent.mkdir(parents=True)
+    module.write_text(
+        "from importlib import import_module\n"
+        "import_module('remote_agents.adapters.agents.codex.hooks')\n",
+        encoding="utf-8",
+    )
+
+    offenders = foreign_vertical_imports(root)
+
+    assert offenders == [
+        "application/smuggler.py: imports remote_agents.adapters.agents.codex.hooks"
     ]
 
 

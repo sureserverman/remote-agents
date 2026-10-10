@@ -39,6 +39,7 @@ from typing import IO
 from remote_agents.adapters.agents.turn_markers import FileTurnMarkers
 from remote_agents.ports.agent_activity import bounded_detail_line
 from remote_agents.ports.private_directory import open_private_directory
+from remote_agents.ports.provider_descriptor import HookLicence
 from remote_agents.ports.session_identity import SESSION_ID_VARIABLE, safe_session_id
 from remote_agents.ports.turn_markers import TurnMarkers
 
@@ -223,6 +224,7 @@ def spool_agent_event(
     now: Callable[[], datetime] = lambda: datetime.now(UTC),
     provider: str = "claude",
     markers: TurnMarkers | None = None,
+    licence: HookLicence | None = None,
 ) -> int:
     """Record one hook event privately, and always report success to the agent.
 
