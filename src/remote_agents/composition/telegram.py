@@ -112,8 +112,8 @@ def _private_boundary(
     runtime = _local_runtime(config, paths, projects.paths, descriptors)
     terminal = runtime.terminal
     store = SQLiteSessionStore(connection)
-    # One git boundary and one set of worktree rows for this process (DEC-046), threaded to
-    # the backend and to the passes this composition runs beside it.
+    # One git boundary and one set of worktree rows for this process (DEC-046), handed to
+    # `compose_backend` so every later reader in this process gets this pair, not its own.
     worktrees = worktree_parts(connection)
     # One lock map, shared by the two objects that write session state. See the note on the
     # ReconciliationService below: this single binding is the fix, and two instances here

@@ -1,0 +1,27 @@
+{
+ "baseline": {
+  "elapsed_s": 1.9,
+  "exit": 0,
+  "tail": ".....................                                                    [100%]\n21 passed in 1.69s"
+ },
+ "break_patch": "--- a/src/remote_agents/adapters/git/checkout.py\n+++ b/src/remote_agents/adapters/git/checkout.py\n@@ -109,7 +109,6 @@\n             finally:\n                 # On success too: a hook git backgrounded is still in the group, and it would\n                 # go on writing into the worktree after this call reported it finished.\n-                _kill_group(process.pid)\n                 if process.returncode is None:\n                     with contextlib.suppress(TimeoutError):\n                         await asyncio.wait_for(process.wait(), timeout=_REAP_SECONDS)\n",
+ "build": null,
+ "check": "uv run --locked pytest tests/contract/adapters/git/test_git_argv.py tests/integration/git/test_git_checkout.py -q -p no:randomly",
+ "created": "2026-10-10T19:19:06+00:00",
+ "fingerprint": "5d390a4d0f14e0cfbba98e8a16144c2074b545c434fc71eac504ba22377099ed",
+ "index": 10,
+ "kind": "req",
+ "no_build_reason": "pure Python, no build",
+ "plan": "/mnt/vault/Portfolio/infra/remote-agents/plans/2026-10-09-decisions-and-worktrees-sub-04-session-worktrees-plan.md",
+ "red": {
+  "elapsed_s": 31.8,
+  "exit": 1,
+  "tail": "repo = PosixPath('/tmp/pytest-of-user/pytest-1166/test_a_hook_that_backgrounds_a0/repo')\ntmp_path = PosixPath('/tmp/pytest-of-user/pytest-1166/test_a_hook_that_backgrounds_a0')\n\n    async def test_a_hook_that_backgrounds_a_job_does_not_turn_a_finished_add_into_a_timeout(\n        repo: Path, tmp_path: Path\n    ) -> None:\n        pid_file = tmp_path / \"hook.pid\"\n        hooks = repo / \".git\" / \"hooks\"\n        hooks.mkdir(exist_ok=True)\n        hook = hooks / \"post-checkout\"\n        hook.write_text(f'#!/bin/sh\\nsleep 30 &\\necho $! > \"{pid_file}\"\\n', encoding=\"utf-8\")\n        hook.chmod(0o755)\n        tree = tmp_path / \"wt\"\n        started = time.monotonic()\n        await GitCli(write_timeout=10).add_worktree(\n            repo, tree, \"ra/abcd1234\", _git(repo, \"rev-parse\", \"HEAD\")\n        )\n        assert time.monotonic() - started < 5\n        assert (tree / \"f.txt\").is_file()\n        pid = int(pid_file.read_text(encoding=\"utf-8\"))\n        for _ in range(50):\n            try:\n                os.kill(pid, 0)\n            except ProcessLookupError:\n                break\n            await asyncio.sleep(0.1)\n        else:\n>           pytest.fail(\"the hook's background job outlived the call\")\nE           Failed: the hook's background job outlived the call\n\ntests/integration/git/test_git_checkout.py:205: Failed\n------------------------------ Captured log call -------------------------------\nWARNING  asyncio:unix_events.py:947 Loop <_UnixSelectorEventLoop running=False closed=True debug=False> that handles pid 3362949 is closed\n=========================== short test summary info ============================\nFAILED tests/contract/adapters/git/test_git_argv.py::test_a_hung_git_is_killed_at_its_timeout\nFAILED tests/contract/adapters/git/test_git_argv.py::test_a_timeout_ends_a_child_that_holds_git_s_output\nFAILED tests/contract/adapters/git/test_git_argv.py::test_git_that_finished_is_not_reported_as_a_timeout_and_leaves_nothing_running\nFAILED tests/contract/adapters/git/test_git_argv.py::test_a_cancelled_call_ends_git_and_its_children\nFAILED tests/integration/git/test_git_checkout.py::test_a_hook_that_backgrounds_a_job_does_not_turn_a_finished_add_into_a_timeout\n5 failed, 16 passed in 31.56s"
+ },
+ "schema": 2,
+ "task": "1.1",
+ "text": "a hung fake `git` is killed at its timeout",
+ "touched": [
+  "src/remote_agents/adapters/git/checkout.py"
+ ]
+}

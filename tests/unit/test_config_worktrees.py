@@ -77,6 +77,19 @@ def test_a_per_project_list_replaces_the_default_for_that_project_only(tmp_path:
         ".git/config",
         "sub/.git/hooks/pre-commit",
         "",
+        ".",
+        "./",
+        ".ENV",
+        ".Env.local",
+        ".GIT/config",
+        ".envrc",
+        ".netrc",
+        ".npmrc",
+        ".pypirc",
+        "certs/site.pem",
+        " CLAUDE.md",
+        "CLAUDE.md\t",
+        "a\\u0007b",  # a TOML escape: the loader decodes it to BEL
     ],
 )
 def test_a_forbidden_entry_is_refused_with_its_key(tmp_path: Path, entry: str) -> None:

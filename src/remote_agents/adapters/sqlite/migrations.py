@@ -396,7 +396,9 @@ MIGRATIONS: tuple[tuple[int, str], ...] = (
         # Session worktrees (BL-116). Their own tables, never fields on `sessions` (DEC-115's
         # reason: a session row is rebuilt by position). Keyed by path, because a resume and a
         # rollover successor are new sessions reusing one folder; `session_worktrees` binds
-        # each of them to it. `copied` is JSON {relative path: sha256}.
+        # each of them to it. `copied` is JSON {relative path: sha256}. `removing_at` is the
+        # cleanup pass's claim: set in one statement only while no live session is bound, and
+        # a bind refuses a claimed folder, so a resume and a removal cannot both win.
         """
         CREATE TABLE worktrees (
             path TEXT PRIMARY KEY,
@@ -406,6 +408,7 @@ MIGRATIONS: tuple[tuple[int, str], ...] = (
             base_commit TEXT NOT NULL,
             copied TEXT NOT NULL,
             created_at TEXT NOT NULL,
+            removing_at TEXT,
             removed_at TEXT
         );
         CREATE TABLE session_worktrees (

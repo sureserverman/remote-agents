@@ -72,19 +72,34 @@ class GitCheckout(Protocol):
         ...
 
     async def remove_worktree(self, repo: Path, path: Path) -> None:
-        """Remove the worktree at `path`. git refuses one holding changes, and so does this."""
+        """Remove the worktree at `path`, never forced.
+
+        git refuses one holding modified or untracked files. **It deletes ignored files without
+        asking** (measured on git 2.43.0), so a caller deciding whether a folder may go reads
+        `status_lines`, which lists them, first."""
         ...
 
     async def delete_merged_branch(self, repo: Path, branch: str) -> None:
-        """Delete `branch` only if git calls it merged; an unmerged branch is refused."""
+        """`branch -d`: refused unless git calls `branch` merged.
+
+        git judges "merged" against the main checkout's current HEAD (or the branch's
+        upstream), not against any base this project recorded, so it is a backstop: a caller
+        decides with `is_ancestor` against the base first."""
         ...
 
     async def is_ancestor(self, repo: Path, commit: str, ref: str) -> bool:
-        """Whether `commit` is reachable from `ref`."""
+        """Whether `commit` is reachable from `ref`.
+
+        Pass branches fully qualified (`refs/heads/main`): a tag sharing a branch's short name
+        wins when git resolves the short one."""
         ...
 
     async def status_lines(self, path: Path) -> tuple[str, ...]:
-        """`git status --porcelain` entries at `path`, each `XY <path>`, untracked included."""
+        """Every `git status --porcelain` entry at `path`, each `XY <path>`: modified, untracked
+        (`??`) and ignored (`!!`), every untracked and ignored *file* listed on its own.
+
+        Raises `GitRefused` when the listing is longer than the adapter will read, rather than
+        return one missing its tail."""
         ...
 
     async def diff_summary(self, path: Path, base: str) -> GitSummary:

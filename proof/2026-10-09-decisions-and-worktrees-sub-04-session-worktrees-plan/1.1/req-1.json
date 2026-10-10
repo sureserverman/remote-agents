@@ -1,0 +1,27 @@
+{
+ "baseline": {
+  "elapsed_s": 1.8,
+  "exit": 0,
+  "tail": ".....................                                                    [100%]\n21 passed in 1.62s"
+ },
+ "break_patch": "--- a/src/remote_agents/adapters/git/checkout.py\n+++ b/src/remote_agents/adapters/git/checkout.py\n@@ -235,7 +235,7 @@\n         # `--ignored=traditional` with `--untracked-files=all` lists every ignored *file*, one\n         # entry each: `worktree remove` refuses modified and untracked files but deletes ignored\n         # ones without asking, and the files a worktree copies in are usually ignored ones.\n-        raw = await self._read_ok(path, *_STATUS, \"--ignored=traditional\")\n+        raw = await self._read_ok(path, *_STATUS)\n         return _entries(raw)\n \n     async def diff_summary(self, path: Path, base: str) -> GitSummary:\n",
+ "build": null,
+ "check": "uv run --locked pytest tests/contract/adapters/git/test_git_argv.py tests/integration/git/test_git_checkout.py -q -p no:randomly",
+ "created": "2026-10-10T19:19:02+00:00",
+ "fingerprint": "5d390a4d0f14e0cfbba98e8a16144c2074b545c434fc71eac504ba22377099ed",
+ "index": 1,
+ "kind": "req",
+ "no_build_reason": "pure Python, no build",
+ "plan": "/mnt/vault/Portfolio/infra/remote-agents/plans/2026-10-09-decisions-and-worktrees-sub-04-session-worktrees-plan.md",
+ "red": {
+  "elapsed_s": 1.9,
+  "exit": 1,
+  "tail": "            \"!! run.log\",\n        }\nE       AssertionError: assert {' M f.txt', ...ntracked.txt'} == {' M f.txt', ...nested/', ...}\nE         \nE         Extra items in the right set:\nE         '!! .claude/deep/settings.local.json'\nE         '!! run.log'\nE         '!! CLAUDE.md'\nE         '!! build/out.bin'\nE         Use -v to get more diff\n\ntests/integration/git/test_git_checkout.py:153: AssertionError\n____ test_git_removes_a_worktree_holding_only_ignored_files_without_asking _____\n\nrepo = PosixPath('/tmp/pytest-of-user/pytest-1164/test_git_removes_a_worktree_ho0/repo')\ntmp_path = PosixPath('/tmp/pytest-of-user/pytest-1164/test_git_removes_a_worktree_ho0')\n\n    async def test_git_removes_a_worktree_holding_only_ignored_files_without_asking(\n        repo: Path, tmp_path: Path\n    ) -> None:\n        \"\"\"Pins the git behaviour the listing above exists for (git 2.43.0): no `--force`, exit\n        0, and an agent's edit to an ignored file is gone.\"\"\"\n        (repo / \".gitignore\").write_text(\"CLAUDE.md\\n\", encoding=\"utf-8\")\n        _git(repo, \"add\", \".gitignore\")\n        _git(repo, \"commit\", \"-q\", \"-m\", \"ignore\")\n        cli = GitCli()\n        tree = tmp_path / \"wt\"\n        await cli.add_worktree(repo, tree, \"ra/abcd1234\", _git(repo, \"rev-parse\", \"HEAD\"))\n        (tree / \"CLAUDE.md\").write_text(\"edited by the agent\", encoding=\"utf-8\")\n>       assert await cli.status_lines(tree) == (\"!! CLAUDE.md\",)\nE       AssertionError: assert () == ('!! CLAUDE.md',)\nE         \nE         Right contains one more item: '!! CLAUDE.md'\nE         Use -v to get more diff\n\ntests/integration/git/test_git_checkout.py:176: AssertionError\n=========================== short test summary info ============================\nFAILED tests/integration/git/test_git_checkout.py::test_status_lists_every_kind_of_file_a_removal_would_touch\nFAILED tests/integration/git/test_git_checkout.py::test_git_removes_a_worktree_holding_only_ignored_files_without_asking\n2 failed, 19 passed in 1.65s"
+ },
+ "schema": 2,
+ "task": "1.1",
+ "text": "`top_level(path) -> Path | None` `head(path) -> GitHead(commit, branch | None)` `add_worktree(repo, path, branch, commit)` `remove_worktree(repo, path)` `delete_merged_branch(repo, branch)` `is_ancestor(repo, commit, ref) -> bool` `status_lines(path) -> tuple[str, ...]` `diff_summary(path, base) -> GitSummary(branch, files, added, removed, ahead, dirty)` Every call is `asyncio.create_subprocess_exec(\"git\", ...)` with `stdin=DEVNULL`, under `asyncio.wait_for` with a per-call timeout, killed and awaited on timeout",
+ "touched": [
+  "src/remote_agents/adapters/git/checkout.py"
+ ]
+}

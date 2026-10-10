@@ -7,6 +7,8 @@ than escaping the guard checks below.
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import inspect
 import os
 import stat
@@ -17,7 +19,7 @@ from pathlib import Path
 import pytest
 
 from remote_agents.adapters.git.checkout import GitCli, GitResult
-from remote_agents.ports.git_checkout import GitCheckout, GitError, GitTimeout
+from remote_agents.ports.git_checkout import GitCheckout, GitError, GitRefused, GitTimeout
 
 _READ_ENV = {"GIT_OPTIONAL_LOCKS": "0", "GIT_TERMINAL_PROMPT": "0"}
 _WRITE_SHAPES = {
@@ -162,8 +164,108 @@ async def test_a_hung_git_is_killed_at_its_timeout(
         os.kill(pid, 0)
 
 
-async def test_output_is_capped(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_a_listing_longer_than_the_cap_is_refused_not_cut(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A status cut at the cap reads as fewer changes than the folder holds."""
     _fake_git(tmp_path, "head -c 300000 /dev/zero | tr '\\0' 'x'\n")
     monkeypatch.setenv("PATH", f"{tmp_path}{os.pathsep}{os.environ['PATH']}")
-    lines = await GitCli().status_lines(tmp_path)
-    assert sum(len(line) for line in lines) <= 64 * 1024
+    with pytest.raises(GitRefused, match="more than"):
+        await GitCli().status_lines(tmp_path)
+
+
+def _alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    # A zombie still answers kill(0); it is dead for this purpose once its state says so.
+    with contextlib.suppress(OSError):
+        if Path(f"/proc/{pid}/stat").read_text().split()[2] == "Z":
+            return False
+    return True
+
+
+async def _gone(*pids: int) -> bool:
+    for _ in range(50):
+        if not any(_alive(pid) for pid in pids):
+            return True
+        await asyncio.sleep(0.1)
+    return False
+
+
+async def test_a_timeout_ends_a_child_that_holds_git_s_output(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A hook git starts inherits its output. Killing git alone left the call waiting on the
+    hook, so the bound was no bound; the whole group goes."""
+    pids = tmp_path / "pids"
+    _fake_git(tmp_path, f'sleep 30 & echo $! >> "{pids}"\necho $$ >> "{pids}"\nexec sleep 30\n')
+    monkeypatch.setenv("PATH", f"{tmp_path}{os.pathsep}{os.environ['PATH']}")
+    started = time.monotonic()
+    with pytest.raises(GitTimeout):
+        await GitCli(read_timeout=0.5).head(tmp_path)
+    assert time.monotonic() - started < 5
+    assert await _gone(*(int(line) for line in pids.read_text().split()))
+
+
+async def test_git_that_finished_is_not_reported_as_a_timeout_and_leaves_nothing_running(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A finished `worktree add` whose post-checkout hook backgrounded a job read as a
+    timeout while the folder and branch existed. Success is git's exit, and the job is ended."""
+    pids = tmp_path / "pids"
+    _fake_git(tmp_path, f'sleep 30 & echo $! >> "{pids}"\nexit 0\n')
+    monkeypatch.setenv("PATH", f"{tmp_path}{os.pathsep}{os.environ['PATH']}")
+    started = time.monotonic()
+    await GitCli(write_timeout=10).remove_worktree(Path("/repo"), Path("/state/wt"))
+    assert time.monotonic() - started < 3
+    assert await _gone(int(pids.read_text()))
+
+
+async def test_a_cancelled_call_ends_git_and_its_children(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    pids = tmp_path / "pids"
+    _fake_git(tmp_path, f'sleep 30 & echo $! >> "{pids}"\necho $$ >> "{pids}"\nexec sleep 30\n')
+    monkeypatch.setenv("PATH", f"{tmp_path}{os.pathsep}{os.environ['PATH']}")
+    call = asyncio.ensure_future(GitCli(write_timeout=60).remove_worktree(Path("/r"), Path("/w")))
+    for _ in range(50):
+        if pids.exists() and len(pids.read_text().split()) == 2:
+            break
+        await asyncio.sleep(0.05)
+    call.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await call
+    assert await _gone(*(int(line) for line in pids.read_text().split()))
+
+
+async def test_no_inherited_git_variable_reaches_git(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`GIT_DIR` and friends override `-C`: a service started from a git hook or a dotfile
+    shell would aim every write at another repository."""
+    _fake_git(tmp_path, "env | grep '^GIT_' | tr '\\n' '\\0'\n")
+    monkeypatch.setenv("PATH", f"{tmp_path}{os.pathsep}{os.environ['PATH']}")
+    for name in (
+        "GIT_DIR",
+        "GIT_WORK_TREE",
+        "GIT_INDEX_FILE",
+        "GIT_CONFIG_PARAMETERS",
+        "GIT_CONFIG_COUNT",
+        "GIT_COMMON_DIR",
+        "GIT_NAMESPACE",
+    ):
+        monkeypatch.setenv(name, "/elsewhere")
+    seen = {line.split("=", 1)[0] for line in await GitCli().status_lines(tmp_path)}
+    assert seen == {"GIT_OPTIONAL_LOCKS", "GIT_TERMINAL_PROMPT"}
+
+
+async def test_a_relative_worktree_path_is_refused_before_git_runs() -> None:
+    recorder = _Recorder()
+    cli = GitCli(recorder)
+    with pytest.raises(GitError):
+        await cli.add_worktree(Path("/repo"), Path("-f"), "ra/1", "a" * 40)
+    with pytest.raises(GitError):
+        await cli.remove_worktree(Path("/repo"), Path("wt"))
+    assert recorder.calls == []

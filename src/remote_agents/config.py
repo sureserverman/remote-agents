@@ -295,9 +295,15 @@ _WORKTREE_KEYS = {"copy", "projects"}
 _OPTIONAL_WORKTREE_KEYS = frozenset({"copy", "projects"})
 """Every `[worktrees]` key is optional: a file without the table copies the defaults."""
 
-_NEVER_COPIED = re.compile(r"^(\.env(\..*)?|\.venv|\.git)$")
-"""Path components a copy list may never name: secrets (`.env`, `.env.*`), an environment that
-belongs to one checkout (`.venv`), and git's own state (`.git`)."""
+_NEVER_COPIED = re.compile(
+    r"^(\.env(\..*)?|\.envrc|\.netrc|\.npmrc|\.pypirc|.*\.pem|\.venv|\.git)$", re.IGNORECASE
+)
+"""Path components a copy list may never name: secrets (`.env`, `.env.*`, `.envrc`, `.netrc`,
+`.npmrc`, `.pypirc`, `*.pem`), an environment that belongs to one checkout (`.venv`), and git's
+own state (`.git`). Case-insensitively, because a macOS disk opens `.ENV` as `.env`.
+
+These are names only. Whether a listed path is a symlink out of the checkout is the copier's
+to refuse when it copies, since only the tree can say."""
 
 _CLAUDE_CONTEXT_BOUNDS = (1_000, 20_000_000)
 """How far a stated ceiling may stray before it is refused rather than clamped.
@@ -585,7 +591,13 @@ def _copy_list(value: object, name: str) -> tuple[str, ...]:
     for entry in value:
         if not isinstance(entry, str) or not entry.strip():
             raise ConfigError(f"{name} entries must be non-empty strings")
+        if entry != entry.strip() or any(not character.isprintable() for character in entry):
+            raise ConfigError(f"{name} entries may not hold whitespace edges or control characters")
         parts = Path(entry).parts
+        # `"."` has no parts at all, so it would pass every check below and name the whole
+        # checkout -- `.env` and `.git` included.
+        if not parts:
+            raise ConfigError(f"{name} entries must name a path inside the checkout: {entry!r}")
         if Path(entry).is_absolute() or ".." in parts:
             raise ConfigError(f"{name} entries must stay inside the checkout: {entry!r}")
         if any(_NEVER_COPIED.match(part) for part in parts):

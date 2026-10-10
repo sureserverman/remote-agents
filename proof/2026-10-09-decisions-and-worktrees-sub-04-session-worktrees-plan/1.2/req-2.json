@@ -1,0 +1,27 @@
+{
+ "baseline": {
+  "elapsed_s": 2.9,
+  "exit": 0,
+  "tail": ".....................................................................    [100%]\n69 passed in 2.68s"
+ },
+ "break_patch": "--- a/src/remote_agents/adapters/sqlite/worktree_store.py\n+++ b/src/remote_agents/adapters/sqlite/worktree_store.py\n@@ -83,7 +83,7 @@\n             inserted = self._connection.execute(\n                 \"INSERT INTO session_worktrees(session_id, worktree_path)\"\n                 \" SELECT ?, path FROM worktrees\"\n-                \" WHERE path = ? AND removed_at IS NULL AND removing_at IS NULL\",\n+                \" WHERE path = ? AND removed_at IS NULL\",\n                 (str(session_id), str(path)),\n             ).rowcount\n         except sqlite3.IntegrityError as error:\n",
+ "build": null,
+ "check": "uv run --locked pytest tests/integration/sqlite/test_worktree_store.py tests/unit/adapters/test_agent_activity_store.py tests/integration/sqlite/test_rollover_store.py -q -p no:randomly",
+ "created": "2026-10-10T19:19:43+00:00",
+ "fingerprint": "5d390a4d0f14e0cfbba98e8a16144c2074b545c434fc71eac504ba22377099ed",
+ "index": 2,
+ "kind": "req",
+ "no_build_reason": "pure Python, no build",
+ "plan": "/mnt/vault/Portfolio/infra/remote-agents/plans/2026-10-09-decisions-and-worktrees-sub-04-session-worktrees-plan.md",
+ "red": {
+  "elapsed_s": 2.9,
+  "exit": 1,
+  "tail": ".........F...........................................................    [100%]\n=================================== FAILURES ===================================\n__________________ test_a_claim_and_a_bind_exclude_each_other __________________\n\nconnection = <sqlite3.Connection object at 0x784c3b4fe5c0>\n\n    async def test_a_claim_and_a_bind_exclude_each_other(connection: sqlite3.Connection) -> None:\n        \"\"\"The resume-during-removal race: whichever lands first wins, the other is refused.\"\"\"\n        store = SQLiteWorktreeStore(connection)\n        _session(connection, \"s1\", state=\"ended\")\n        _session(connection, \"s2\")\n        await store.record(_worktree(), bound_to=SessionId(\"s1\"))\n    \n        assert await store.claim_for_removal(FOLDER, at=NOW) is True\n        assert await store.removable_candidates() == ()\n>       with pytest.raises(WorktreeUnavailable):\n             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nE       Failed: DID NOT RAISE WorktreeUnavailable\n\ntests/integration/sqlite/test_worktree_store.py:186: Failed\n=========================== short test summary info ============================\nFAILED tests/integration/sqlite/test_worktree_store.py::test_a_claim_and_a_bind_exclude_each_other\n1 failed, 68 passed in 2.73s"
+ },
+ "schema": 2,
+ "task": "1.2",
+ "text": "bind a session",
+ "touched": [
+  "src/remote_agents/adapters/sqlite/worktree_store.py"
+ ]
+}

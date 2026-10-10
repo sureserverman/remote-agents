@@ -1,0 +1,27 @@
+{
+ "baseline": {
+  "elapsed_s": 1.8,
+  "exit": 0,
+  "tail": ".....................                                                    [100%]\n21 passed in 1.56s"
+ },
+ "break_patch": "--- a/src/remote_agents/adapters/git/checkout.py\n+++ b/src/remote_agents/adapters/git/checkout.py\n@@ -188,7 +188,7 @@\n         result = await self._read(path, *args)\n         if result.returncode != 0:\n             raise GitRefused(_reason(result))\n-        if result.truncated:\n+        if False:\n             raise GitRefused(f\"git {args[0]} wrote more than {OUTPUT_CAP_BYTES} bytes; not read\")\n         return result.stdout\n \n",
+ "build": null,
+ "check": "uv run --locked pytest tests/contract/adapters/git/test_git_argv.py tests/integration/git/test_git_checkout.py -q -p no:randomly",
+ "created": "2026-10-10T19:19:40+00:00",
+ "fingerprint": "5d390a4d0f14e0cfbba98e8a16144c2074b545c434fc71eac504ba22377099ed",
+ "index": 2,
+ "kind": "req",
+ "no_build_reason": "pure Python, no build",
+ "plan": "/mnt/vault/Portfolio/infra/remote-agents/plans/2026-10-09-decisions-and-worktrees-sub-04-session-worktrees-plan.md",
+ "red": {
+  "elapsed_s": 1.8,
+  "exit": 1,
+  "tail": "......F..............                                                    [100%]\n=================================== FAILURES ===================================\n____________ test_a_listing_longer_than_the_cap_is_refused_not_cut _____________\n\ntmp_path = PosixPath('/tmp/pytest-of-user/pytest-1168/test_a_listing_longer_than_the0')\nmonkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7c491731a120>\n\n    async def test_a_listing_longer_than_the_cap_is_refused_not_cut(\n        tmp_path: Path, monkeypatch: pytest.MonkeyPatch\n    ) -> None:\n        \"\"\"A status cut at the cap reads as fewer changes than the folder holds.\"\"\"\n        _fake_git(tmp_path, \"head -c 300000 /dev/zero | tr '\\\\0' 'x'\\n\")\n        monkeypatch.setenv(\"PATH\", f\"{tmp_path}{os.pathsep}{os.environ['PATH']}\")\n>       with pytest.raises(GitRefused, match=\"more than\"):\n             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nE       Failed: DID NOT RAISE GitRefused\n\ntests/contract/adapters/git/test_git_argv.py:173: Failed\n=========================== short test summary info ============================\nFAILED tests/contract/adapters/git/test_git_argv.py::test_a_listing_longer_than_the_cap_is_refused_not_cut\n1 failed, 20 passed in 1.58s"
+ },
+ "schema": 2,
+ "task": "1.1",
+ "text": "Output is capped at 64 KiB, as `_SETTINGS_MAX_BYTES` does, and a timeout raises a named `GitTimeout`",
+ "touched": [
+  "src/remote_agents/adapters/git/checkout.py"
+ ]
+}

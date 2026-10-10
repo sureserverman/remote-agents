@@ -7,7 +7,10 @@ branch is not deleted, and ancestry flips only once a merge lands.
 
 from __future__ import annotations
 
+import asyncio
+import os
 import subprocess
+import time
 from pathlib import Path
 
 import pytest
@@ -76,7 +79,7 @@ async def test_remove_worktree_refuses_a_folder_with_an_untracked_file(
     tree = tmp_path / "wt"
     await cli.add_worktree(repo, tree, "ra/abcd1234", _git(repo, "rev-parse", "HEAD"))
     (tree / "new.txt").write_text("x", encoding="utf-8")
-    assert await cli.status_lines(tree) == ("?? new.txt",)
+    assert "?? new.txt" in await cli.status_lines(tree)
     with pytest.raises(GitRefused):
         await cli.remove_worktree(repo, tree)
     assert (tree / "new.txt").exists()
@@ -120,3 +123,102 @@ async def test_diff_summary_counts_a_planted_change(repo: Path, tmp_path: Path) 
     summary = await cli.diff_summary(tree, base)
     assert (summary.files, summary.added, summary.removed, summary.ahead) == (1, 3, 1, 1)
     assert summary.dirty is False
+
+
+async def test_status_lists_every_kind_of_file_a_removal_would_touch(
+    repo: Path, tmp_path: Path
+) -> None:
+    """The set `worktree remove` acts on, one member of each kind, each listed on its own.
+
+    Ignored files are the members git deletes without asking, so a folder is only "clean"
+    if this listing is: one entry per ignored file, inside ignored folders too.
+    """
+    (repo / ".gitignore").write_text("CLAUDE.md\n.claude/\nbuild/\n*.log\n", encoding="utf-8")
+    _git(repo, "add", ".gitignore")
+    _git(repo, "commit", "-q", "-m", "ignore")
+    cli = GitCli()
+    tree = tmp_path / "wt"
+    await cli.add_worktree(repo, tree, "ra/abcd1234", _git(repo, "rev-parse", "HEAD"))
+    (tree / "f.txt").write_text("changed\n", encoding="utf-8")
+    (tree / "untracked.txt").write_text("u", encoding="utf-8")
+    (tree / "CLAUDE.md").write_text("edited by the agent", encoding="utf-8")
+    (tree / ".claude" / "deep").mkdir(parents=True)
+    (tree / ".claude" / "deep" / "settings.local.json").write_text("{}", encoding="utf-8")
+    (tree / "build").mkdir()
+    (tree / "build" / "out.bin").write_bytes(b"x")
+    (tree / "run.log").write_text("l", encoding="utf-8")
+    (tree / "nested").mkdir()
+    _git(tree / "nested", "init", "-q", "--template=")
+
+    assert set(await cli.status_lines(tree)) == {
+        " M f.txt",
+        "?? untracked.txt",
+        "?? nested/",
+        "!! CLAUDE.md",
+        "!! .claude/deep/settings.local.json",
+        "!! build/out.bin",
+        "!! run.log",
+    }
+
+
+async def test_git_removes_a_worktree_holding_only_ignored_files_without_asking(
+    repo: Path, tmp_path: Path
+) -> None:
+    """Pins the git behaviour the listing above exists for (git 2.43.0): no `--force`, exit
+    0, and an agent's edit to an ignored file is gone."""
+    (repo / ".gitignore").write_text("CLAUDE.md\n", encoding="utf-8")
+    _git(repo, "add", ".gitignore")
+    _git(repo, "commit", "-q", "-m", "ignore")
+    cli = GitCli()
+    tree = tmp_path / "wt"
+    await cli.add_worktree(repo, tree, "ra/abcd1234", _git(repo, "rev-parse", "HEAD"))
+    (tree / "CLAUDE.md").write_text("edited by the agent", encoding="utf-8")
+    assert await cli.status_lines(tree) == ("!! CLAUDE.md",)
+    await cli.remove_worktree(repo, tree)
+    assert not tree.exists()
+
+
+async def test_a_hook_that_backgrounds_a_job_does_not_turn_a_finished_add_into_a_timeout(
+    repo: Path, tmp_path: Path
+) -> None:
+    pid_file = tmp_path / "hook.pid"
+    hooks = repo / ".git" / "hooks"
+    hooks.mkdir(exist_ok=True)
+    hook = hooks / "post-checkout"
+    hook.write_text(f'#!/bin/sh\nsleep 30 &\necho $! > "{pid_file}"\n', encoding="utf-8")
+    hook.chmod(0o755)
+    tree = tmp_path / "wt"
+    started = time.monotonic()
+    await GitCli(write_timeout=10).add_worktree(
+        repo, tree, "ra/abcd1234", _git(repo, "rev-parse", "HEAD")
+    )
+    assert time.monotonic() - started < 5
+    assert (tree / "f.txt").is_file()
+    pid = int(pid_file.read_text(encoding="utf-8"))
+    for _ in range(50):
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            break
+        await asyncio.sleep(0.1)
+    else:
+        pytest.fail("the hook's background job outlived the call")
+
+
+async def test_a_base_named_like_a_folder_or_shadowed_by_a_tag_still_resolves(
+    repo: Path, tmp_path: Path
+) -> None:
+    cli = GitCli()
+    base = _git(repo, "rev-parse", "HEAD")
+    _git(repo, "branch", "dev")
+    (repo / "dev").mkdir()
+    (repo / "dev" / "x.txt").write_text("x\n", encoding="utf-8")
+    _git(repo, "add", "dev")
+    _git(repo, "commit", "-q", "-m", "a folder named like the branch")
+    summary = await cli.diff_summary(repo, "dev")
+    assert (summary.files, summary.added, summary.ahead) == (1, 1, 1)
+
+    _git(repo, "tag", "main", base)
+    assert (await cli.head(repo)).branch == "main"
+    head = _git(repo, "rev-parse", "HEAD")
+    assert await cli.is_ancestor(repo, head, "refs/heads/main") is True

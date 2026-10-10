@@ -11,23 +11,39 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
+from check_imports import internal_imports
+
 _SOURCE = Path(__file__).resolve().parents[2] / "src" / "remote_agents"
 _ADAPTER = "remote_agents.adapters.git"
 
 
 def _importers(source: Path) -> dict[str, list[int]]:
+    """Every module naming the adapter, relative imports resolved (`check_imports` does it)."""
     found: dict[str, list[int]] = {}
     for path in sorted(source.rglob("*.py")):
         relative = path.relative_to(source).as_posix()
+        names = list(internal_imports(path, source.parent))
+        # `from remote_agents.adapters import git` names the package by its alias, which
+        # `internal_imports` folds into its parent module.
         for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
-            names = []
-            if isinstance(node, ast.Import):
-                names = [alias.name for alias in node.names]
-            elif isinstance(node, ast.ImportFrom) and node.module and node.level == 0:
-                names = [node.module, *(f"{node.module}.{a.name}" for a in node.names)]
-            if any(name == _ADAPTER or name.startswith(_ADAPTER + ".") for name in names):
-                found.setdefault(relative, []).append(node.lineno)
-    return found
+            if isinstance(node, ast.ImportFrom) and node.module and not node.level:
+                names += [(node.lineno, f"{node.module}.{alias.name}") for alias in node.names]
+        for line, imported in names:
+            if imported == _ADAPTER or imported.startswith(_ADAPTER + "."):
+                found.setdefault(relative, []).append(line)
+    return {module: sorted(set(lines)) for module, lines in found.items()}
+
+
+def test_a_relative_import_of_the_adapter_is_seen(tmp_path: Path) -> None:
+    package = tmp_path / "remote_agents"
+    (package / "application").mkdir(parents=True)
+    (package / "application" / "sneaky.py").write_text(
+        "from ..adapters.git import checkout\n", encoding="utf-8"
+    )
+    (package / "application" / "aliased.py").write_text(
+        "from remote_agents.adapters import git\n", encoding="utf-8"
+    )
+    assert _importers(package) == {"application/sneaky.py": [1], "application/aliased.py": [1]}
 
 
 def test_only_the_composition_package_imports_the_git_adapter() -> None:

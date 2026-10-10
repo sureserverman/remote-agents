@@ -136,9 +136,8 @@ class WorktreeParts:
     """The git boundary and the worktree rows session worktrees are built from (BL-116).
 
     Parts, not a use case: no frontend drives them, so they stay off `Backend` (ARCH-B3), the
-    way `store` and `locks` do. A composition root builds one pair per process (DEC-046) and
-    threads the same pair to every consumer -- the session-folder lookup the terminal reads,
-    worktree creation, the cleanup pass in `serve`, the git line.
+    way `store` and `locks` do. Each composition root builds one pair per process (DEC-046) and
+    passes it to `compose_backend`.
     """
 
     git: GitCheckout
@@ -288,8 +287,9 @@ def compose_backend(
     at the same store.
 
     **`worktrees` is a parameter for `store`'s reason**: the composition root builds one pair
-    (`worktree_parts`) for the whole process, and the terminal's folder lookup, worktree
-    creation and the `serve` cleanup pass must all see the same one.
+    (`worktree_parts`) for the whole process. Nothing here reads it yet. It is taken now so
+    that its readers -- the session-folder lookup, worktree creation, the cleanup pass, the
+    git line -- receive this one pair when they are wired, rather than each building one.
 
     **`activity_feed` is a parameter for a narrower reason:** the reader is bounded by
     `FEED_LIMIT`, which lives in the terminal package, and importing it here would make the
