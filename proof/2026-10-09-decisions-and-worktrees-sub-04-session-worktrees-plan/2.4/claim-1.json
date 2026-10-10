@@ -1,0 +1,28 @@
+{
+ "baseline": {
+  "elapsed_s": 1.5,
+  "exit": 0,
+  "tail": "....                                                                     [100%]\n4 passed in 1.23s"
+ },
+ "break_patch": "--- a/src/remote_agents/adapters/tmux/runtime.py\n+++ b/src/remote_agents/adapters/tmux/runtime.py\n@@ -381,7 +381,7 @@\n     ) -> TerminalObservation:\n         \"\"\"Persist and execute one already-curated profile through the fixed tmux runner.\"\"\"\n         try:\n-            folder = await self._folder_for(session_id, project_id)\n+            folder = self._project_paths[project_id]\n         except KeyError:\n             return TerminalObservation(\n                 session_id, live=False, preserved=False, detail=\"invalid_intent\"\n",
+ "build": null,
+ "created": "2026-10-10T19:46:09+00:00",
+ "fingerprint": "3e19735bf5ac632833f31a421a6c20f4d930c12aa8edda7f904a939c2cc76dd9",
+ "index": 1,
+ "kind": "claim",
+ "named_break": null,
+ "no_build_reason": "pure Python, no build",
+ "plan": "/mnt/vault/Portfolio/infra/remote-agents/plans/2026-10-09-decisions-and-worktrees-sub-04-session-worktrees-plan.md",
+ "red": {
+  "elapsed_s": 1.2,
+  "exit": 1,
+  "tail": "\n    def test_a_planted_read_in_the_terminal_fails_with_its_line(tmp_path: Path) -> None:\n        \"\"\"The sweep's own mutant: a direct read put back where the pane cwd is chosen.\"\"\"\n        copy = tmp_path / \"remote_agents\"\n        shutil.copytree(_PACKAGE, copy, ignore=shutil.ignore_patterns(\"__pycache__\"))\n        runtime = copy / \"adapters\" / \"tmux\" / \"runtime.py\"\n        source = runtime.read_text(encoding=\"utf-8\")\n        anchor = \"            folder = await self._folder_for(session_id, project_id)\\n\"\n>       assert source.count(anchor) == 1\nE       assert 0 == 1\nE        +  where 0 = <built-in method count of str object at 0x24867e10>('            folder = await self._folder_for(session_id, project_id)\\n')\nE        +    where <built-in method count of str object at 0x24867e10> = '\"\"\"Concrete dedicated-socket terminal adapter with bounded startup readiness.\"\"\"\\n\\nfrom __future__ import annotation...(capture: str) -> RemoteControlState:\\n    return RemoteControlState(classify_remote_control_capture(capture).value)\\n'.count\n\ntests/architecture/test_session_folder_readers.py:203: AssertionError\n____________ test_a_planted_read_in_a_new_function_is_unclassified _____________\n\ntmp_path = PosixPath('/tmp/pytest-of-user/pytest-1206/test_a_planted_read_in_a_new_f0')\n\n    def test_a_planted_read_in_a_new_function_is_unclassified(tmp_path: Path) -> None:\n        copy = tmp_path / \"remote_agents\"\n        shutil.copytree(_PACKAGE, copy, ignore=shutil.ignore_patterns(\"__pycache__\"))\n        module = copy / \"application\" / \"planted.py\"\n        module.write_text(\n            \"from collections.abc import Mapping\\nfrom pathlib import Path\\n\\n\\n\"\n            \"def cwd(paths: Mapping[ProjectId, Path], project):\\n    return paths.get(project)\\n\",\n            encoding=\"utf-8\",\n        )\n    \n        problems = violations(copy)\n    \n>       assert len(problems) == 1\nE       assert 2 == 1\nE        +  where 2 = len([\"src/remote_agents/adapters/tmux/runtime.py:384: `self._project_paths[project_id]` means this session's folder (the p...ote_agents/application/planted.py:6: unclassified read `paths.get(project)` in cwd; add it to the table with its kind'])\n\ntests/architecture/test_session_folder_readers.py:231: AssertionError\n=========================== short test summary info ============================\nFAILED tests/architecture/test_session_folder_readers.py::test_every_project_path_reader_is_classified\nFAILED tests/architecture/test_session_folder_readers.py::test_a_planted_read_in_the_terminal_fails_with_its_line\nFAILED tests/architecture/test_session_folder_readers.py::test_a_planted_read_in_a_new_function_is_unclassified\n3 failed, 1 passed in 0.94s"
+ },
+ "schema": 2,
+ "task": "2.4",
+ "test": "uv run --locked pytest tests/architecture/test_session_folder_readers.py -q -p no:randomly",
+ "text": "`uv run --locked pytest tests/architecture/test_session_folder_readers.py -q -p no:randomly`. It goes red when a planted `project_paths[pid]` read is added to `adapters/tmux/runtime.py` in a scratch copy of the tree, and the test's own fixture case does exactly that.",
+ "touched": [
+  "src/remote_agents/adapters/tmux/runtime.py"
+ ]
+}
