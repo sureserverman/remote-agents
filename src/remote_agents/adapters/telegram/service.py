@@ -456,6 +456,7 @@ _PENDING_NOTICES = {
     # is the asymmetry rather than a decision; found by the second Tier-2 pass on this task.
     "session.trust": "Answering the folder-trust question…",
     "launch.profile": "Launching — waiting for the agent to become ready…",
+    "launch.mode": "Launching — waiting for the agent to become ready…",
     "resume.confirm": "Resuming — waiting for the agent to become ready…",
     # The slowest action in this bot, and it had no notice. Enabling probes the daemon (10 s
     # ceiling), runs the enable (30 s, a relay round trip), then re-reads the daemon -- so the
@@ -1800,6 +1801,11 @@ class PrivateBotBoundary:
             return _reply_arguments(self._profiles_reply(entity_id))
         if action == "launch.profile":
             return await self._launch_reply(entity_id, token, message_id)
+        if action == "launch.mode":
+            entity_id, _, mode = entity_id.rpartition("|")
+            return await self._launch_reply(
+                entity_id, token, message_id, mode="worktree" if mode == "w" else "regular"
+            )
         if action.startswith("schedules."):
             return await self._schedules_action_reply(action, entity_id, token, message_id)
         if action.startswith("sched."):
@@ -1879,7 +1885,11 @@ class PrivateBotBoundary:
             )
         return _reply_arguments(self._message("That action is no longer available."))
 
-    async def _launch_reply(self, entity_id: str, token: str, message_id: int) -> dict[str, object]:
+    async def _launch_reply(
+        self, entity_id: str, token: str, message_id: int, *, mode: str | None = None
+    ) -> dict[str, object]:
+        """Launch the chosen agent; `mode` is None for the agent press, which first asks for a
+        mode when the project is contended (BL-116), else the mode that press chose."""
         if self.backend.sessions is None:
             return _reply_arguments(self._message("Launching is unavailable."))
         project_id, profile_id = _split_launch(entity_id)
@@ -1893,6 +1903,10 @@ class PrivateBotBoundary:
             profile.profile_id == profile_id and profile.available for profile in self.profiles
         ):
             return _reply_arguments(self._message("That agent is unavailable."))
+        if mode is None and await self.backend.sessions.worktree_offered(ProjectId(project_id)):
+            # Asked, not launched: the agent press spends nothing, and each mode button is a
+            # fresh one-shot for the message that carries it (DEC-011).
+            return _reply_arguments(self._launch_mode_question(entity_id))
         if not self.callbacks.claim_mutation(
             token,
             owner_id=self.owner_user_id,
@@ -1909,6 +1923,7 @@ class PrivateBotBoundary:
                     # No label at launch: choosing the agent starts the session, and naming it
                     # is a later, optional act from the session's own menu (Task 2.3).
                     None,
+                    mode="worktree" if mode == "worktree" else "regular",
                 )
             )
         except CodexRemoteControlBusy:
@@ -1923,7 +1938,13 @@ class PrivateBotBoundary:
                         (
                             Button(
                                 "Launch again",
-                                self._callback("launch.profile", entity_id, mutation=True),
+                                self._callback("launch.profile", entity_id, mutation=True)
+                                if mode is None
+                                else self._callback(
+                                    "launch.mode",
+                                    f"{entity_id}|{'w' if mode == 'worktree' else 'r'}",
+                                    mutation=True,
+                                ),
                             ),
                         ),
                     ),
@@ -1932,6 +1953,22 @@ class PrivateBotBoundary:
         if outcome is None:
             return _reply_arguments(self._message("Session launch requested."))
         record = outcome.record
+        if record.state is SessionState.FAILED and outcome.worktree_failed is not None:
+            # Refused before any pane existed, as below; git's own reason says why.
+            return _reply_arguments(
+                self._message(
+                    f"<b>Session did not start</b>\n{escape(record.display.rendered)}\n"
+                    f"Its worktree could not be made: {escape(outcome.worktree_failed)}",
+                    (
+                        (
+                            Button(
+                                "Details",
+                                self._callback("session.detail", str(record.session_id)),
+                            ),
+                        ),
+                    ),
+                )
+            )
         if record.state is SessionState.FAILED and outcome.worktree_removed:
             # Refused before any pane existed, so "its pane may still exist" would send the
             # owner looking for one (BL-116).
@@ -1976,6 +2013,26 @@ class PrivateBotBoundary:
                 f"{escape(record.display.rendered)}\nState: {record.state}",
                 ((Button("Inspect", self._callback("session.detail", str(record.session_id))),),),
             )
+        )
+
+    def _launch_mode_question(self, entity_id: str) -> RenderedMessage:
+        """Another session is live on this project: work beside it, or in a worktree of its
+        own (BL-116). Only ever drawn on contention; a lone launch is one press."""
+        return self._message(
+            "<b>Another session is working in this project</b>\n"
+            "Share its folder, or give this one its own worktree and branch?",
+            (
+                (
+                    Button(
+                        "Shared folder",
+                        self._callback("launch.mode", f"{entity_id}|r", mutation=True),
+                    ),
+                    Button(
+                        "Own worktree",
+                        self._callback("launch.mode", f"{entity_id}|w", mutation=True),
+                    ),
+                ),
+            ),
         )
 
     def _trust_question(self, record: SessionRecord) -> RenderedMessage:

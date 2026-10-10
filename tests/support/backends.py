@@ -139,7 +139,8 @@ class SessionUseCaseDouble:
     once, in test support, where it is a statement about the double rather than a decision
     the product makes about itself.
 
-    The three are exactly the render-time reads. `rename` and `copy_attach` are deliberately
+    The three are exactly the render-time reads, plus `worktree_offered`, which every agent
+    press asks before it launches. `rename` and `copy_attach` are deliberately
     absent: those are asked only when the owner takes an action, so a test that drives one
     models it, and a test that does not should fail loudly rather than pass against a stub.
     """
@@ -157,6 +158,13 @@ class SessionUseCaseDouble:
     async def project_usage(self) -> tuple[()]:
         """No launch history, so the catalogue keeps the order it was built in."""
         return ()
+
+    async def worktree_offered(self, project_id: object) -> bool:
+        """No other session live on the project, so an agent press launches at once: asked
+        before every launch since BL-116, as the render-time reads above are asked on every
+        screen. A test about the offer models it."""
+        del project_id
+        return False
 
 
 #: The `TuiContext` fields that are the surface's own rather than the backend's — the attach
