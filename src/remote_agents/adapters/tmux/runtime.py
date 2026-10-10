@@ -557,23 +557,24 @@ class TmuxTerminal:
     ) -> bool:
         """Whether this capture shows an agent stopped on its own folder-trust question.
 
-        Two kinds of evidence, because the profile table and the classifier know different
-        things. A `readiness_blocker` is what the *profile* declares its agent prints while
-        blocked, and it is the only evidence available for an agent whose dialog no vertical
-        declares — `opencode` today, and it was codex and cursor-agent until they declared
-        theirs. Classifying the capture is the second, and it is gated on the same declaration
+        Two kinds of evidence, because the profile and the classifier know different things. A
+        `readiness_blocker` is what the profile says its agent prints while blocked: each
+        dialog's `identifies_by`, handed in by composition from the vertical that declares it
+        (BL-052), plus claude's pre-trust screen, the one blocker this adapter spells. An agent
+        whose vertical declares no dialog (`opencode`) has none. Classifying the capture is the
+        second, and it is gated on the same declaration
         `_trust_capture` reads, for the same reason: it is the classifier the answering path
         uses, and a pane whose dialog this holds no declaration for must not be read with
         another agent's parser. It matters because `claude`'s declared blocker is the
         *pre-trust* screen, so a pane resting on the question itself matches no blocker at
         all.
         """
-        # **A blocker alone decides this, and since DEC-081 its reach is bounded.** codex's
-        # declared blocker is a phrase this repository's own files carry, so an agent
-        # displaying one of them satisfies this line. Two pane re-reads used to write the
-        # record from it and could hand a working session DEC-078's unconfirmed kill. They no
-        # longer can: a pane read may clear `untrusted` and may no longer set it. What a
-        # misreading can still do:
+        # **A blocker alone decides this, and since DEC-081 its reach is bounded.** codex's blocker,
+        # its dialog's `Folder access` heading, is a phrase this repository's own files carry, so an
+        # agent displaying one of them satisfies this line. Two pane re-reads used to write the
+        # record from it and could hand a working session DEC-078's unconfirmed kill. They no longer
+        # can: a pane read may clear `untrusted` and may no longer set it. What a misreading can
+        # still do:
         #
         # - **mark a session, but only in a launch or resume settle.** A launch has drawn only
         #   its own startup. A *resume* redraws its old conversation, and one about this repo
@@ -588,8 +589,7 @@ class TmuxTerminal:
         # blocker is its *pre-trust screen*, a different screen from its dialog, so requiring
         # the classifier changes what a claude launch concludes: `a blocker answers the launch
         # instead of prolonging it` is deliberate (sub-plan 1, Task 1.2), and
-        # `test_a_blocker_answers_the_launch_instead_of_waiting_out_the_budget` pins it. BL-052
-        # carries where the blocker strings live.
+        # `test_a_blocker_answers_the_launch_instead_of_waiting_out_the_budget` pins it.
         if any(blocker in capture for blocker in profile.readiness_blockers):
             return True
         dialog = self._trust_dialogs.get(str(profile_id))

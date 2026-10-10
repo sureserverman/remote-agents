@@ -24,21 +24,11 @@ import pathlib
 _SOURCE = pathlib.Path(__file__).resolve().parents[2] / "src" / "remote_agents"
 _VERTICALS = "adapters/agents/"
 
-#: The one module outside the verticals that spells two of these strings, named rather than
-#: excluded silently — **BL-052**.
-#:
-#: **DEC-070 already rejected moving those tables** — *"whose move would create a tmux→agents
-#: adapter dependency"* — so this exception is not a deferred refactor waiting for someone to
-#: do it, and the next reader should not re-open that question. What BL-052 tracks is narrower:
-#: the same sentence is now spelled twice, in two places that answer to nothing in common.
-#:
-#: `_READINESS_BLOCKERS` carries codex's question and cursor-agent's `Workspace Trust Required`
-#: because a readiness blocker is a *different fact* from a dialog: it is what the agent prints
-#: while it is not working, which for `claude` is the pre-trust screen and not the dialog at
-#: all. Folding one into the other is a design question, not a move, so this check reports the
-#: duplication through the backlog rather than either failing over it or pretending it is not
-#: there. Removing this exception is what closing BL-052 looks like.
-_NAMED_EXCEPTION = "adapters/tmux/profiles.py"
+#: **No module outside the verticals is exempt.** `adapters/tmux/profiles.py` was, while its
+#: readiness blockers spelled codex's question and cursor-agent's heading. BL-052 closed that by
+#: derivation rather than by a move (DEC-070 rejected moving the table): composition hands the
+#: tmux builders each vertical's `identifies_by` (`registry.profile_readiness_blockers`), and
+#: `profiles.py` keeps only claude's pre-trust screen, which is no dialog's wording.
 
 
 def _declared_wordings() -> dict[str, set[str]]:
@@ -78,21 +68,6 @@ def _string_constants(path: pathlib.Path) -> set[str]:
     }
 
 
-def test_the_named_exception_is_still_the_only_one_and_still_earns_its_name() -> None:
-    """An exception nobody re-reads becomes a hole. This asserts it is still exactly what it says.
-
-    If `profiles.py` stops spelling these strings, BL-052 is closed and the exception must go —
-    a stale allowance is how a check quietly stops checking the thing it names.
-    """
-    constants = _string_constants(_SOURCE / "adapters" / "tmux" / "profiles.py")
-    declared = {wording for strings in _declared_wordings().values() for wording in strings}
-
-    assert constants & declared, (
-        "adapters/tmux/profiles.py no longer spells any agent's dialog wording, so BL-052 is "
-        "closed: delete `_NAMED_EXCEPTION` and this test, and let the sweep cover that file"
-    )
-
-
 def test_no_dialog_wording_is_spelled_outside_the_vertical_that_declares_it() -> None:
     wordings = _declared_wordings()
     assert wordings, "no vertical declares a dialog; this check would pass vacuously"
@@ -100,7 +75,7 @@ def test_no_dialog_wording_is_spelled_outside_the_vertical_that_declares_it() ->
     offenders = []
     for path in _SOURCE.rglob("*.py"):
         relative = str(path.relative_to(_SOURCE))
-        if relative.startswith(_VERTICALS) or relative == _NAMED_EXCEPTION:
+        if relative.startswith(_VERTICALS):
             continue
         constants = _string_constants(path)
         for profile, strings in wordings.items():

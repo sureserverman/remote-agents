@@ -43,14 +43,15 @@ class TrustDialog:
     `docs/acceptance-2026-09-09-trust-dialogs.md`; a field carried from an older version says
     so there rather than pretending to be a measurement.
 
-    **`identifies_by` exists because the question does not identify the agent.** `codex` and
-    `cursor-agent` draw *"Do you trust the contents of this directory?"* **verbatim**, and it
-    is currently codex's readiness blocker. Answering one agent's dialog with another's row
+    **`identifies_by` exists because the question does not identify the agent.** Two agents can
+    ask the same question **verbatim**: `cursor-agent` and `codex` 0.153.4-0.155.1 did. It is also
+    each dialog's readiness blocker: composition hands it to the tmux profile builders
+    (`registry.profile_readiness_blockers`, BL-052). Answering one agent's dialog with another's row
     arithmetic is not a near miss: codex rests its cursor on the affirmative and claude on the
-    negative, so the confirming keypress lands on exactly the wrong option and the owner who
-    pressed *Trust* watches the agent quit. So a dialog is recognised by a string only its own
-    agent draws, cross-checked in `tests/provider_contract` against every other agent's real
-    capture rather than against its siblings' declarations.
+    negative, so the confirming keypress lands on exactly the wrong option and the owner who pressed
+    *Trust* watches the agent quit. So a dialog is recognised by a string only its own agent draws,
+    cross-checked in `tests/provider_contract` against every other agent's real capture rather than
+    against its siblings' declarations.
 
     Short strings, deliberately. A pane capture wraps at the pane's width, so a long sentence
     can be split across two rows at a width nobody measured — and an identifier that wraps is

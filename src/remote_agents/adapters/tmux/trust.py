@@ -58,14 +58,13 @@ def classify_trust_capture(capture: str, dialog: TrustDialog) -> TrustState:
     *and* its affirmative option is what makes a false positive take a deliberate effort.
 
     **The third marker is `identifies_by`, and it is what makes the answer about one agent.**
-    `codex` and `cursor-agent` draw *"Do you trust the contents of this directory?"* word for
-    word (measured; `docs/acceptance-2026-09-09-trust-dialogs.md`), so a classifier keyed on
-    the question alone says AWAITING for the wrong agent's screen -- and `plan_trust_keys`
-    then counts rows on a layout that is not there. The two rest their cursors on the
-    affirmative and claude's rests on the negative, so that miscount does not merely miss: it
-    presses the option the owner did not choose. `identifies_by` is looked for across the whole
-    capture rather than after the question, because cursor-agent draws its identifier *above*
-    the question, inside the same box.
+    Two agents can ask the same question word for word: `cursor-agent` and `codex` 0.153.4-0.155.1
+    did (measured; `docs/acceptance-2026-09-09-trust-dialogs.md`), so a classifier keyed on the
+    question alone says AWAITING for the wrong agent's screen -- and `plan_trust_keys` then counts
+    rows on a layout that is not there. The two rest their cursors on the affirmative and claude's
+    rests on the negative, so that miscount does not merely miss: it presses the option the owner
+    did not choose. `identifies_by` is looked for across the whole capture rather than after the
+    question, because cursor-agent draws its identifier *above* the question, inside the same box.
 
     AWAITING is a claim about *now*, not about history: the answer clears the dialog, so a
     later capture of the same pane stops matching. That is why the state has no ANSWERED
