@@ -12,8 +12,11 @@ from datetime import UTC, datetime
 from functools import partial
 from pathlib import Path
 
+from remote_agents.adapters.git.checkout import GitCli
 from remote_agents.adapters.sqlite.activity_store import SQLiteActivityStore
 from remote_agents.adapters.sqlite.rollover_store import SQLiteRolloverStore
+from remote_agents.adapters.sqlite.session_store import SQLiteSessionStore
+from remote_agents.adapters.sqlite.worktree_store import SQLiteWorktreeStore
 from remote_agents.adapters.telegram.limit_reset_notifications import LimitResetNotifier
 from remote_agents.adapters.telegram.rollover_notifications import RolloverNotifier
 from remote_agents.adapters.telegram.schedule_notifications import ScheduleNotifier
@@ -636,6 +639,22 @@ def build_worktree_cleanup(
         repository=partial(main_checkout, git, project_paths),
         operation=operation,
     )
+
+
+def build_worktree_listing(
+    *, connection, project_paths: Mapping[ProjectId, Path]
+) -> Callable[[], Awaitable[tuple[tuple[str, str, str], ...]]]:
+    """`doctor`'s read of every kept session worktree and why (BL-116): the cleanup pass's own
+    guards, asked over a read-only connection, handed back as its `kept` listing alone -- so
+    the one process that may remove folders is still `serve`."""
+    git = GitCli()
+    return WorktreeCleanupPass(
+        git=git,
+        store=SQLiteWorktreeStore(connection),
+        sessions=SQLiteSessionStore(connection),
+        rollovers=SQLiteRolloverStore(connection),
+        repository=partial(main_checkout, git, project_paths),
+    ).kept
 
 
 def build_rollover_pass(

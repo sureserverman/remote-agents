@@ -115,6 +115,7 @@ def production_doctor(
     schedule_zone: str | None = None,
     ui_store_ready: bool | None = None,
     console_marks: tuple[tuple[str, str, bool], ...] | None = None,
+    worktrees: tuple[tuple[str, str, str], ...] | None = None,
 ) -> dict[str, object]:
     """Render the installed service's non-secret dependency health report.
 
@@ -272,5 +273,12 @@ def production_doctor(
         # the truth. A close-out evaluator hit it on the exact recovery path `install.sh` sends
         # a failed operator down. The field is right; only its name was doing the damage.
         report["service_liveness_meaning"] = liveness_meaning.value
+    if worktrees is not None:
+        # Every session worktree recorded and not removed, as `path · branch · reason kept`
+        # (BL-116). Reported beside `console` and for its reason: a worktree kept because its
+        # branch is unmerged or its tree holds work is the cleanup refusing to lose something,
+        # which is the owner's to act on and no ill health. Arrives as plain rows, read by the
+        # composition root (DEC-015). None -- the store or git could not be read -- omits it.
+        report["worktrees"] = [" · ".join(row) for row in worktrees]
     report.update(profile_doctor(profiles))
     return report

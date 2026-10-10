@@ -418,3 +418,41 @@ def test_the_ui_store_is_judged_against_its_own_schema_head(tmp_path) -> None:
     assert database_is_ready(current, UI_MIGRATIONS) is True
     # The domain head is a different counter: a current UI store is not a current domain store.
     assert database_is_ready(current) is False
+
+
+def test_kept_worktrees_are_listed_with_their_reasons_and_never_move_the_verdict() -> None:
+    """BL-116: an unmerged or dirty worktree is listed, not lost -- and it is no ill health."""
+    kept = (
+        ("/state/worktrees/editor/a", "ra/aaaaaaaa", "unmerged"),
+        ("/state/worktrees/editor/b", "ra/bbbbbbbb", "dirty"),
+    )
+
+    report = _healthy_doctor(worktrees=kept)
+
+    assert report["healthy"] is True
+    assert report["worktrees"] == [
+        "/state/worktrees/editor/a · ra/aaaaaaaa · unmerged",
+        "/state/worktrees/editor/b · ra/bbbbbbbb · dirty",
+    ]
+    assert "worktrees" not in report["components"]
+    unhealthy = production_doctor(
+        core_ready=True,
+        database_ready=False,
+        tmux_ready=True,
+        telegram_ready=True,
+        service_ready=True,
+        profiles=(
+            ProfileCompatibility(ProfileId("claude"), True, "claude 1.2.3", "AVAILABLE", None),
+        ),
+        registered_projects=1,
+        discovered_projects=1,
+        catalogue_projects=1,
+        worktrees=kept,
+    )
+    assert unhealthy["healthy"] is False
+    assert unhealthy["worktrees"] == report["worktrees"]
+
+
+def test_no_kept_worktree_is_an_empty_list_and_an_unreadable_one_omits_it() -> None:
+    assert _healthy_doctor(worktrees=())["worktrees"] == []
+    assert "worktrees" not in _healthy_doctor(worktrees=None)

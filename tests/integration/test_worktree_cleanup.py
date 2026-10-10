@@ -27,6 +27,7 @@ from remote_agents.application.worktree_cleanup import (
     DIRTY,
     IN_USE,
     MOVED,
+    NOT_A_REPOSITORY,
     UNMERGED,
     WorktreeCleanupPass,
 )
@@ -649,3 +650,52 @@ async def test_a_cancel_mid_removal_gives_the_claim_back(
 
     await _kept(harness, worktree)
     await _bindable(harness, worktree)
+
+
+async def test_doctor_s_listing_names_each_kept_worktree_with_its_reason(
+    tmp_path: Path, repo: Path
+) -> None:
+    harness = _Harness(tmp_path, repo)
+    unmerged_session, unmerged = await harness.worktree()
+    _commit_in(unmerged.path)
+    dirty_session, dirty = await harness.worktree()
+    (dirty.path / "notes.txt").write_text("new\n", encoding="utf-8")
+    _live, in_use = await harness.worktree()
+    gone_session, gone = await harness.worktree()
+    harness.end(unmerged_session)
+    harness.end(dirty_session)
+    harness.end(gone_session)
+    await harness.cleanup.pass_once()
+
+    assert await harness.cleanup.kept() == (
+        (str(unmerged.path), unmerged.branch, UNMERGED),
+        (str(dirty.path), dirty.branch, DIRTY),
+        (str(in_use.path), in_use.branch, IN_USE),
+    )
+    assert not gone.path.exists()
+
+
+async def test_doctor_reads_the_kept_worktrees_from_a_store_at_this_build_s_schema(
+    tmp_path: Path, repo: Path
+) -> None:
+    from types import SimpleNamespace
+
+    from remote_agents.bootstrap import _kept_worktrees
+
+    harness = _Harness(tmp_path, repo)
+    session, worktree = await harness.worktree()
+    _commit_in(worktree.path)
+    harness.end(session)
+    config = SimpleNamespace(
+        database_path=tmp_path / "sessions.sqlite3",
+        registry_path=tmp_path / "registry.toml",
+        dev_root=tmp_path / "dev",
+    )
+
+    # `doctor` runs outside any event loop; so does the listing it makes.
+    rows = await asyncio.to_thread(_kept_worktrees, config)
+
+    # No catalogue names the project here, so git cannot be asked: kept, and said why.
+    assert rows == ((str(worktree.path), worktree.branch, NOT_A_REPOSITORY),)
+    config.database_path = tmp_path / "missing.sqlite3"
+    assert await asyncio.to_thread(_kept_worktrees, config) is None

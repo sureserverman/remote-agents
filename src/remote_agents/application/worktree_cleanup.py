@@ -62,6 +62,8 @@ MOVED = "not on its branch"
 DIRTY = "dirty"
 IN_USE = "in use"
 DETACHED_BASE = "detached base"
+REMOVABLE = "removable"
+"""Every guard lets it go; the next pass removes it."""
 """The reasons a folder is kept, as `doctor` lists them. A git refusal reads `git: <reason>`,
 any other fault `fault: <kind>`."""
 
@@ -155,6 +157,22 @@ class WorktreeCleanupPass:
                 kept[worktree.path] = reason
                 self._refused(worktree.path, reason, fault)
         return CleanupReport(removed=tuple(removed), kept=kept)
+
+    async def kept(self) -> tuple[tuple[str, str, str], ...]:
+        """Every recorded worktree not yet removed, as `(path, branch, reason)`, oldest first:
+        what `doctor` lists. Read-only; a folder every guard lets go reads `removable`."""
+        rows: dict[Path, Worktree] = {}
+        for worktree in (await self._store.bound_folders()).values():
+            if worktree.removed_at is None:
+                rows.setdefault(worktree.path, worktree)
+        listed = []
+        for worktree in sorted(rows.values(), key=lambda w: (w.created_at, str(w.path))):
+            try:
+                reason = await self.verdict(worktree) or REMOVABLE
+            except Exception as error:
+                reason = _fault(error)
+            listed.append((str(worktree.path), worktree.branch, reason))
+        return tuple(listed)
 
     async def verdict(self, worktree: Worktree) -> str | None:
         """Why this folder must stay, or None when every guard lets it go.

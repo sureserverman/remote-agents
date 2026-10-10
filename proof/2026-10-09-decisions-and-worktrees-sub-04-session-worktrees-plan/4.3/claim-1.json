@@ -1,0 +1,28 @@
+{
+ "baseline": {
+  "elapsed_s": 0.3,
+  "exit": 0,
+  "tail": "......................                                                   [100%]\n22 passed in 0.12s"
+ },
+ "break_patch": "diff --git a/src/remote_agents/application/doctor.py b/src/remote_agents/application/doctor.py\nindex 0dbb315e..82732412 100644\n--- a/src/remote_agents/application/doctor.py\n+++ b/src/remote_agents/application/doctor.py\n@@ -280,5 +280,6 @@ def production_doctor(\n         # which is the owner's to act on and no ill health. Arrives as plain rows, read by the\n         # composition root (DEC-015). None -- the store or git could not be read -- omits it.\n         report[\"worktrees\"] = [\" \u00b7 \".join(row) for row in worktrees]\n+        report[\"healthy\"] = bool(report[\"healthy\"]) and not worktrees\n     report.update(profile_doctor(profiles))\n     return report\n",
+ "build": null,
+ "created": "2026-10-10T21:44:05+00:00",
+ "fingerprint": "784e76afb21be535a3fd22b127f96380873c47b972377c5f78a7e85897a5daed",
+ "index": 1,
+ "kind": "claim",
+ "named_break": null,
+ "no_build_reason": "pure Python, no build",
+ "plan": "/mnt/vault/Portfolio/infra/remote-agents/plans/2026-10-09-decisions-and-worktrees-sub-04-session-worktrees-plan.md",
+ "red": {
+  "elapsed_s": 0.3,
+  "exit": 1,
+  "tail": "....................F.                                                   [100%]\n=================================== FAILURES ===================================\n_ test_kept_worktrees_are_listed_with_their_reasons_and_never_move_the_verdict _\n\n    def test_kept_worktrees_are_listed_with_their_reasons_and_never_move_the_verdict() -> None:\n        \"\"\"BL-116: an unmerged or dirty worktree is listed, not lost -- and it is no ill health.\"\"\"\n        kept = (\n            (\"/state/worktrees/editor/a\", \"ra/aaaaaaaa\", \"unmerged\"),\n            (\"/state/worktrees/editor/b\", \"ra/bbbbbbbb\", \"dirty\"),\n        )\n    \n        report = _healthy_doctor(worktrees=kept)\n    \n>       assert report[\"healthy\"] is True\nE       assert False is True\n\ntests/unit/application/test_doctor.py:432: AssertionError\n=========================== short test summary info ============================\nFAILED tests/unit/application/test_doctor.py::test_kept_worktrees_are_listed_with_their_reasons_and_never_move_the_verdict\n1 failed, 21 passed in 0.11s"
+ },
+ "schema": 2,
+ "task": "4.3",
+ "test": "uv run --locked pytest tests/unit/application/test_doctor.py -q -p no:randomly",
+ "text": "`uv run --locked pytest tests/unit/application/test_doctor.py -q -p no:randomly`. Two kept worktrees with different reasons are listed with those reasons, and the verdict is unchanged. It goes red if a kept worktree moves `healthy`.",
+ "touched": [
+  "src/remote_agents/application/doctor.py"
+ ]
+}

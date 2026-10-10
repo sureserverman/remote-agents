@@ -7,6 +7,7 @@ import asyncio
 import json
 import logging
 import os
+import sqlite3
 import subprocess
 import sys
 from collections.abc import Awaitable, Callable, Mapping
@@ -79,6 +80,7 @@ from remote_agents.composition.onboarding import (
 )
 from remote_agents.composition.service import (
     _serve_with_reconciliation,
+    build_worktree_listing,
 )
 from remote_agents.composition.telegram import _private_boundary
 from remote_agents.composition.tui import (
@@ -775,6 +777,32 @@ def _console_marks(socket: str = "remote-agents") -> tuple[tuple[str, str, bool]
         return None
 
 
+def _kept_worktrees(config) -> tuple[tuple[str, str, str], ...] | None:
+    """Every session worktree recorded and not removed, with why it is kept, for `doctor`
+    (BL-116). Read-only: a read-only connection, git's read verbs, and nothing migrated -- a
+    store not at this build's schema answers None. Bounded overall, and a diagnostic never
+    raises: any failure answers None, and `doctor` omits the list rather than report it empty.
+    """
+    try:
+        if not database_is_ready(config.database_path):
+            return None
+        catalogue = ProjectCatalogueProvider(config.registry_path, config.dev_root)
+        catalogue.refresh()
+        connection = sqlite3.connect(f"{config.database_path.resolve().as_uri()}?mode=ro", uri=True)
+        try:
+            kept = build_worktree_listing(connection=connection, project_paths=catalogue.paths)
+            return asyncio.run(asyncio.wait_for(kept(), timeout=_KEPT_WORKTREES_TIMEOUT_SECONDS))
+        finally:
+            connection.close()
+    except Exception:  # noqa: BLE001 — a diagnostic probe reports, it never raises
+        return None
+
+
+_KEPT_WORKTREES_TIMEOUT_SECONDS = 30.0
+"""Bounds the whole listing: each git read has its own bound, and a host with many kept
+worktrees must not hold `doctor` for minutes."""
+
+
 def _command_succeeds(argv: tuple[str, ...]) -> bool:
     """Check one fixed local dependency command without a shell or captured content."""
     try:
@@ -815,6 +843,7 @@ def _doctor_report(paths: ProductionPaths, config, drift: dict[str, object]) -> 
         tmux_ready=_command_succeeds(("tmux", "-L", "remote-agents", "-V")),
         tmux_console_ready=_console_features_available(paths.home),
         console_marks=_console_marks(),
+        worktrees=_kept_worktrees(config),
         telegram_ready=_telegram_credentials_are_private(paths),
         service_ready=_command_succeeds(supervisor.liveness_command()),
         profiles=profiles,
