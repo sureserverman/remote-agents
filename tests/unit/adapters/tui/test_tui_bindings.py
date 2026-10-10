@@ -1137,6 +1137,52 @@ async def test_a_stop_key_leaves_the_projects_filter_exactly_as_the_owner_left_i
         assert entry.has_focus, "the stop moved the keyboard off the filter"
 
 
+async def test_an_aborted_force_stop_leaves_the_projects_filter_exactly_as_the_owner_left_it() -> None:
+    """The F9 twin of the stop key's case above, on the path that stops nothing (BL-045).
+
+    F9 asks first, so it reaches the filter by a different route than F8: the confirmation
+    is a pushed screen, and escaping it returns to the projects pane. A return that re-read
+    the pane would run `render_projects()`, which clears the filter `Input` and moves focus
+    off it, and nothing would have been stopped to explain it.
+
+    Captured inside the block and asserted outside it, for the reason
+    `test_f9_on_a_session_detail_asks_about_that_detail_s_own_session` gives: an assertion raised
+    while the confirmation is up leaves its worker waiting, and the suite hangs.
+    """
+    chosen = _record()
+    console = SelectionConsole(selected=chosen.session_id)
+    listing = _Listing((chosen,))
+    app = ProjectsPane(
+        replace(
+            _context(listing),
+            console_read_selection=console.read,
+            console_holds_slot=console.holds_console_slot,
+        )
+    )
+
+    async with app.run_test(size=(120, 30)) as pilot:
+        await pilot.pause()
+        await pilot.press("/")
+        await pilot.press(*"ab")
+        await settle_filter(pilot)
+        typed = app.screen.query_one("#filter", Input).value
+
+        await pilot.press("f9")
+        await pilot.pause()
+        asked = isinstance(app.screen, ForceConfirmModal)
+
+        await pilot.press("escape")
+        await pilot.pause()
+        entry = app.screen.query_one("#filter", Input)
+        value, focused = entry.value, entry.has_focus
+
+    assert typed == "ab"
+    assert asked, "F9 on the projects pane did not ask before force-stopping"
+    assert listing.issued == [], "an aborted confirmation force-stopped the session"
+    assert value == "ab", "aborting the force stop cleared the filter the owner had typed"
+    assert focused, "aborting the force stop moved the keyboard off the filter"
+
+
 async def test_a_failed_stop_leaves_a_non_sessions_pane_s_rows_alone() -> None:
     """A stop that raises must not replace the projects catalogue with a lone `Back` row.
 

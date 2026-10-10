@@ -1,0 +1,28 @@
+{
+ "baseline": {
+  "elapsed_s": 2.4,
+  "exit": 0,
+  "tail": "..                                                                       [100%]\n2 passed, 52 deselected in 2.05s"
+ },
+ "break_patch": "--- a/src/remote_agents/adapters/tui/screens/base.py\t2026-10-10 12:48:48.741787589 +0100\n+++ b/src/remote_agents/adapters/tui/screens/base.py\t2026-10-10 12:48:48.756128175 +0100\n@@ -1559,7 +1559,7 @@\n                 # opened it only to look, and the session can have moved on while it was open.\n                 # Through `after_stop`, so an abort on a pane that shows no sessions leaves that\n                 # pane exactly as the owner left it \u2014 Escape must cost them nothing.\n-                await self.after_stop()\n+                await self.on_reveal()\n                 return\n         await self.tui.stop(FORCE, session_value, self)\n \n",
+ "build": null,
+ "created": "2026-10-10T11:49:04+00:00",
+ "fingerprint": "0d122d5682737cb3fd056dca396ded8193018e0b1991c4ca5037058a7016d595",
+ "index": 1,
+ "kind": "claim",
+ "named_break": null,
+ "no_build_reason": "pure Python, no build",
+ "plan": "/mnt/vault/Portfolio/infra/remote-agents/plans/2026-10-09-decisions-and-worktrees-sub-03-provider-boundaries-plan.md",
+ "red": {
+  "elapsed_s": 2.5,
+  "exit": 1,
+  "tail": "        chosen = _record()\n        console = SelectionConsole(selected=chosen.session_id)\n        listing = _Listing((chosen,))\n        app = ProjectsPane(\n            replace(\n                _context(listing),\n                console_read_selection=console.read,\n                console_holds_slot=console.holds_console_slot,\n            )\n        )\n    \n        async with app.run_test(size=(120, 30)) as pilot:\n            await pilot.pause()\n            await pilot.press(\"/\")\n            await pilot.press(*\"ab\")\n            await settle_filter(pilot)\n            typed = app.screen.query_one(\"#filter\", Input).value\n    \n            await pilot.press(\"f9\")\n            await pilot.pause()\n            asked = isinstance(app.screen, ForceConfirmModal)\n    \n            await pilot.press(\"escape\")\n            await pilot.pause()\n            entry = app.screen.query_one(\"#filter\", Input)\n            value, focused = entry.value, entry.has_focus\n    \n        assert typed == \"ab\"\n        assert asked, \"F9 on the projects pane did not ask before force-stopping\"\n        assert listing.issued == [], \"an aborted confirmation force-stopped the session\"\n>       assert value == \"ab\", \"aborting the force stop cleared the filter the owner had typed\"\nE       AssertionError: aborting the force stop cleared the filter the owner had typed\nE       assert '' == 'ab'\nE         \nE         - ab\n\ntests/unit/adapters/tui/test_tui_bindings.py:1182: AssertionError\n=========================== short test summary info ============================\nFAILED tests/unit/adapters/tui/test_tui_bindings.py::test_an_aborted_force_stop_leaves_the_projects_filter_exactly_as_the_owner_left_it\n1 failed, 1 passed, 52 deselected in 2.18s"
+ },
+ "schema": 2,
+ "task": "1.1",
+ "test": "uv run --locked pytest tests/unit/adapters/tui/test_tui_bindings.py -q -p no:randomly -k \"projects_filter\"",
+ "text": "`uv run --locked pytest tests/unit/adapters/tui/test_tui_bindings.py -q -p no:randomly -k \"projects_filter\"`. Both the F8 template and the new F9 test pass. To prove it can fail, temporarily clear the filter in `ConfirmScreen.action_abort`'s caller: the new test must go red on `entry.value`.",
+ "touched": [
+  "src/remote_agents/adapters/tui/screens/base.py"
+ ]
+}
