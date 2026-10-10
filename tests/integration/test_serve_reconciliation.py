@@ -962,17 +962,16 @@ class _Candidates:
         )
 
     async def release_stale_claims(self) -> int:
+        return 0
+
+    async def removable_candidates(self) -> tuple[Worktree, ...]:
         if self.reads:
             # A later pass: wait to be let through, so a test counts exactly what it allowed.
             self.tick.set()
             await self.hold.wait()
-        if self.fail_first and not self.reads:
-            self.reads += 1
-            raise RuntimeError("the domain store is locked")
-        return 0
-
-    async def removable_candidates(self) -> tuple[Worktree, ...]:
         self.reads += 1
+        if self.fail_first and self.reads == 1:
+            raise RuntimeError("the domain store is locked")
         return (self.row, replace(self.row, path=self.row.path.with_name("t")))
 
     async def claim_for_removal(self, path: Path, *, at: datetime) -> bool:

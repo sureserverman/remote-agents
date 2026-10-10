@@ -29,6 +29,7 @@ from remote_agents.application.worktree_cleanup import (
     MOVED,
     NOT_A_REPOSITORY,
     UNMERGED,
+    CleanupReport,
     WorktreeCleanupPass,
 )
 from remote_agents.application.worktrees import WorktreeService
@@ -699,3 +700,151 @@ async def test_doctor_reads_the_kept_worktrees_from_a_store_at_this_build_s_sche
     assert rows == ((str(worktree.path), worktree.branch, NOT_A_REPOSITORY),)
     config.database_path = tmp_path / "missing.sqlite3"
     assert await asyncio.to_thread(_kept_worktrees, config) is None
+
+
+async def test_a_binding_whose_session_row_is_missing_keeps_the_folder(
+    tmp_path: Path, repo: Path
+) -> None:
+    harness = _Harness(tmp_path, repo)
+    first, worktree = await harness.worktree()
+    harness.end(first)
+    vanished = await harness.session(SessionState.ENDED)
+    await harness.store.bind(vanished, worktree.path)
+    # A row lost to a hand-edited or restored database; the binding outlived it.
+    harness.connection.execute("PRAGMA foreign_keys = OFF")
+    with harness.connection:
+        harness.connection.execute("DELETE FROM sessions WHERE session_id = ?", (str(vanished),))
+    harness.connection.execute("PRAGMA foreign_keys = ON")
+
+    assert await harness.cleanup.verdict(worktree) == IN_USE
+    assert await harness.cleanup.kept() == ((str(worktree.path), worktree.branch, IN_USE),)
+    await harness.cleanup.pass_once()
+    await _kept(harness, worktree)
+
+
+async def test_a_base_branch_deleted_since_keeps_the_folder(tmp_path: Path, repo: Path) -> None:
+    harness = _Harness(tmp_path, repo)
+    _git(repo, "checkout", "-q", "-b", "feature")
+    session, worktree = await harness.worktree()
+    _git(repo, "checkout", "-q", "main")
+    _git(repo, "branch", "-q", "-D", "feature")
+    harness.end(session)
+
+    (reason,) = (await harness.cleanup.pass_once()).kept.values()
+    assert reason.startswith("git: ")
+    await _kept(harness, worktree)
+
+
+async def test_a_staged_change_is_kept(tmp_path: Path, repo: Path) -> None:
+    harness = _Harness(tmp_path, repo)
+    session, worktree = await harness.worktree()
+    (worktree.path / "f.txt").write_text("staged, not committed\n", encoding="utf-8")
+    _git(worktree.path, "add", "f.txt")
+    harness.end(session)
+
+    assert (await harness.cleanup.pass_once()).kept == {worktree.path: DIRTY}
+    await _kept(harness, worktree)
+
+
+async def test_a_folder_that_left_the_candidates_is_logged_again_when_it_returns(
+    tmp_path: Path, repo: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    harness = _Harness(tmp_path, repo)
+    session, worktree = await harness.worktree()
+    _commit_in(worktree.path)
+    harness.end(session)
+    caplog.set_level(logging.INFO, logger="remote_agents.application.worktree_cleanup")
+
+    await harness.cleanup.pass_once()
+    resumed = await harness.session()
+    await harness.store.bind(resumed, worktree.path)
+    await harness.cleanup.pass_once()
+    harness.end(resumed)
+    await harness.cleanup.pass_once()
+
+    kept = [r.getMessage() for r in caplog.records if " kept: " in r.getMessage()]
+    assert kept == [f"worktree {worktree.path} kept: {UNMERGED}"] * 2
+
+
+@pytest.mark.parametrize("how", ["reset-away", "detached-then-back", "worktree-ref"])
+async def test_a_commit_only_the_worktree_s_refs_or_reflogs_reach_keeps_it(
+    tmp_path: Path, repo: Path, how: str
+) -> None:
+    harness = _Harness(tmp_path, repo)
+    session, worktree = await harness.worktree()
+    if how == "reset-away":
+        _commit_in(worktree.path)
+        _git(worktree.path, "reset", "-q", "--hard", "HEAD~1")
+    elif how == "detached-then-back":
+        _git(worktree.path, "checkout", "-q", "--detach")
+        _commit_in(worktree.path)
+        _git(worktree.path, "checkout", "-q", worktree.branch)
+    else:
+        _git(worktree.path, "checkout", "-q", "--detach")
+        held = _commit_in(worktree.path)
+        _git(worktree.path, "update-ref", "refs/worktree/save", held)
+        _git(worktree.path, "checkout", "-q", worktree.branch)
+    harness.end(session)
+
+    assert (await harness.cleanup.pass_once()).kept == {worktree.path: UNMERGED}
+    await _kept(harness, worktree)
+
+
+async def test_an_entry_named_git_below_the_top_keeps_the_folder(
+    tmp_path: Path, repo: Path
+) -> None:
+    harness = _Harness(tmp_path, repo)
+    session, worktree = await harness.worktree()
+    (worktree.path / "build").mkdir()
+    (worktree.path / "build" / ".git").write_text("work git never lists\n", encoding="utf-8")
+    harness.end(session)
+
+    assert (await harness.cleanup.pass_once()).kept == {worktree.path: DIRTY}
+    await _kept(harness, worktree)
+
+
+async def test_a_folder_replaced_by_a_symlink_is_kept(tmp_path: Path, repo: Path) -> None:
+    harness = _Harness(tmp_path, repo)
+    session, worktree = await harness.worktree()
+    moved = tmp_path / "moved"
+    worktree.path.rename(moved)
+    worktree.path.symlink_to(moved)
+    harness.end(session)
+
+    assert (await harness.cleanup.pass_once()).kept == {worktree.path: DIRTY}
+    assert moved.is_dir() and worktree.path.is_symlink()
+
+
+async def test_a_locked_entry_whose_folder_is_away_keeps_its_row(
+    tmp_path: Path, repo: Path
+) -> None:
+    harness = _Harness(tmp_path, repo)
+    session, worktree = await harness.worktree()
+    _git(repo, "worktree", "lock", "--reason", "usb", str(worktree.path))
+    away = tmp_path / "unmounted"
+    worktree.path.rename(away)
+    harness.end(session)
+
+    (reason,) = (await harness.cleanup.pass_once()).kept.values()
+
+    assert "locked" in reason
+    assert worktree.branch in _branches(repo)
+    assert (await harness.row(worktree.path)).removed_at is None
+    assert away.is_dir()
+    await _bindable(harness, worktree)
+
+
+async def test_only_the_first_pass_gives_back_claims_a_dead_run_left(
+    tmp_path: Path, repo: Path
+) -> None:
+    harness = _Harness(tmp_path, repo)
+    session, worktree = await harness.worktree()
+    harness.end(session)
+    _commit_in(worktree.path)
+    await harness.cleanup.pass_once()
+    # A claim taken after the first pass is a live one, never this pass's to give back.
+    _git(repo, "merge", "-q", "--ff-only", worktree.branch)
+    assert await harness.store.claim_for_removal(worktree.path, at=AT)
+
+    assert await harness.cleanup.pass_once() == CleanupReport(removed=(), kept={})
+    await _kept(harness, worktree)

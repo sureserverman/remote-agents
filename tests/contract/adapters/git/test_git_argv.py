@@ -53,6 +53,9 @@ class _Recorder:
             return GitResult(0, b"3\t1\tf.txt\0", b"")
         if "rev-list" in argv:
             return GitResult(0, b"2\n", b"")
+        if "-g" in argv:
+            # A reflog, so the sweep also reaches the count that reads it.
+            return GitResult(0, b"b" * 40 + b"\n", b"")
         return GitResult(0, b"", b"")
 
 
@@ -69,6 +72,8 @@ async def _sweep() -> tuple[_Recorder, set[str]]:
     called.add("has_branch")
     await cli.worktree_head(repo, tree)
     called.add("worktree_head")
+    await cli.unmerged_history(repo, tree, "ra/12345678", "main")
+    called.add("unmerged_history")
     await cli.add_worktree(repo, tree, "ra/12345678", "a" * 40)
     called.add("add_worktree")
     await cli.remove_worktree(repo, tree)

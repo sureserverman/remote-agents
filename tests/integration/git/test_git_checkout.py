@@ -185,6 +185,8 @@ async def test_status_lists_every_kind_of_file_a_removal_would_touch(
         "!! .claude/deep/settings.local.json",
         "!! build/out.bin",
         "!! run.log",
+        # git names the nested repository; the walk names its `.git` too.
+        "G? nested/.git",
     }
 
 
@@ -267,3 +269,87 @@ async def test_an_edit_git_was_told_to_hide_is_still_listed(repo: Path, tmp_path
     assert _git(tree, "status", "--porcelain") == ""
 
     assert set(await cli.status_lines(tree)) == {"h? f.txt", "S? g.txt"}
+
+
+async def test_an_entry_named_git_that_status_skips_is_still_listed(
+    repo: Path, tmp_path: Path
+) -> None:
+    """git does not list an entry named `.git` it cannot open as a repository -- a file, a
+    plain folder -- yet `worktree remove` deletes it. Measured on git 2.43.0."""
+    (repo / ".gitignore").write_text("ign/\n", encoding="utf-8")
+    _git(repo, "add", ".gitignore")
+    _git(repo, "commit", "-q", "-m", "ignore")
+    cli = GitCli()
+    tree = tmp_path / "wt"
+    await cli.add_worktree(repo, tree, "ra/abcd1234", _git(repo, "rev-parse", "HEAD"))
+    (tree / "sub").mkdir()
+    (tree / "sub" / ".git").write_text("not a gitfile\n", encoding="utf-8")
+    (tree / "sub2" / ".git").mkdir(parents=True)
+    (tree / "sub2" / ".git" / "data").write_text("work\n", encoding="utf-8")
+    (tree / "ign" / "sub3" / ".GIT").mkdir(parents=True)
+    os.symlink(tree / "sub2", tree / "link")
+
+    assert set(await cli.status_lines(tree)) == {
+        "G? sub/.git",
+        "G? sub2/.git",
+        "G? ign/sub3/.GIT",
+        "?? link",
+    }
+
+
+async def test_unmerged_history_counts_commits_only_the_worktree_s_refs_and_reflogs_reach(
+    repo: Path, tmp_path: Path
+) -> None:
+    cli = GitCli()
+    tree = tmp_path / "wt"
+    await cli.add_worktree(repo, tree, "ra/abcd1234", _git(repo, "rev-parse", "HEAD"))
+    assert await cli.unmerged_history(repo, tree, "ra/abcd1234", "main") == 0
+
+    _git(tree, "commit", "-q", "--allow-empty", "-m", "made, then reset away")
+    _git(tree, "reset", "-q", "--hard", "HEAD~1")
+    assert await cli.unmerged_history(repo, tree, "ra/abcd1234", "main") == 1
+
+    _git(tree, "commit", "-q", "--allow-empty", "-m", "kept by a per-worktree ref only")
+    kept = _git(tree, "rev-parse", "HEAD")
+    _git(tree, "update-ref", "refs/bisect/bad", kept)
+    shutil.rmtree(tree)
+    # The folder is gone; git's entry, its refs and its reflog still name both commits.
+    assert await cli.unmerged_history(repo, tree, "ra/abcd1234", "main") == 2
+
+    _git(repo, "merge", "-q", "--ff-only", kept)
+    assert await cli.unmerged_history(repo, tree, "ra/abcd1234", "main") == 1
+
+
+async def test_each_source_of_unmerged_history_is_read_on_its_own(
+    repo: Path, tmp_path: Path
+) -> None:
+    """A commit no reflog names, held by a per-worktree ref alone; and one the branch's own
+    reflog alone names, moved there and back from the main checkout."""
+    cli = GitCli()
+    tree = tmp_path / "wt"
+    base = _git(repo, "rev-parse", "HEAD")
+    await cli.add_worktree(repo, tree, "ra/abcd1234", base)
+
+    orphan = _git(tree, "commit-tree", "HEAD^{tree}", "-p", "HEAD", "-m", "ref only")
+    _git(tree, "update-ref", "refs/worktree/save", orphan)
+    assert await cli.unmerged_history(repo, tree, "ra/abcd1234", "main") == 1
+    _git(tree, "update-ref", "-d", "refs/worktree/save")
+    assert await cli.unmerged_history(repo, tree, "ra/abcd1234", "main") == 0
+
+    stray = _git(repo, "commit-tree", "HEAD^{tree}", "-p", "HEAD", "-m", "branch reflog only")
+    _git(repo, "update-ref", "-m", "moved", "refs/heads/ra/abcd1234", stray)
+    _git(repo, "update-ref", "-m", "back", "refs/heads/ra/abcd1234", base)
+    assert await cli.unmerged_history(repo, tree, "ra/abcd1234", "main") == 1
+
+
+async def test_with_reflogs_off_orig_head_still_counts_a_commit_reset_away(
+    repo: Path, tmp_path: Path
+) -> None:
+    _git(repo, "config", "core.logAllRefUpdates", "false")
+    cli = GitCli()
+    tree = tmp_path / "wt"
+    await cli.add_worktree(repo, tree, "ra/abcd1234", _git(repo, "rev-parse", "HEAD"))
+    _git(tree, "commit", "-q", "--allow-empty", "-m", "made, then reset away")
+    _git(tree, "reset", "-q", "--hard", "HEAD~1")
+
+    assert await cli.unmerged_history(repo, tree, "ra/abcd1234", "main") == 1

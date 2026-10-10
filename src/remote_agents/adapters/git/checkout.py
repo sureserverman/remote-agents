@@ -304,7 +304,56 @@ class GitCli:
         # git will not say which.
         flagged = await self._read_ok(path, "ls-files", "-v", "-z", keep=_HIDDEN_TAGS)
         hidden = tuple(f"{entry[0]}? {entry[2:]}" for entry in _entries(flagged))
-        return _entries(raw) + hidden
+        # git skips an entry named `.git` it cannot open as a repository, so `status` never
+        # names it; `worktree remove` deletes it anyway. Walked here, links never followed.
+        nested = await asyncio.to_thread(_nested_git_entries, path)
+        return _entries(raw) + hidden + tuple(f"G? {entry}" for entry in nested)
+
+    async def unmerged_history(self, repo: Path, path: Path, branch: str, base: str) -> int:
+        tips: set[str] = set()
+        admin = await self._admin_directory(repo, path)
+        if admin is not None:
+            # As that worktree sees itself: its own refs, and every commit its HEAD has been.
+            git_dir = f"--git-dir={admin}"
+            refs = await self._read_ok(
+                repo,
+                git_dir,
+                "for-each-ref",
+                "--format=%(objectname)",
+                *_WORKTREE_REFS,
+            )
+            tips.update(_text(refs).split())
+            head_log = await self._read(repo, git_dir, "log", "-g", "--format=%H", "HEAD", "--")
+            tips.update(_reflog(head_log))
+            # And what its pseudo-refs name: with reflogs off, `ORIG_HEAD` alone holds a
+            # commit `reset --hard` left behind.
+            tips.update(await asyncio.to_thread(_pseudo_tips, admin))
+        branch_log = await self._read(
+            repo, "log", "-g", "--format=%H", _ref(f"refs/heads/{_ref(branch)}"), "--"
+        )
+        tips.update(_reflog(branch_log))
+        if not tips:
+            return 0
+        counted = await self._read_ok(
+            repo,
+            "rev-list",
+            "--count",
+            *sorted(tips),
+            "--not",
+            _ref(f"refs/heads/{_ref(base)}"),
+            "--",
+        )
+        text = _text(counted).strip()
+        if not text.isdigit():
+            raise GitRefused(f"git rev-list answered {text[:40]!r}, not a count")
+        return int(text)
+
+    async def _admin_directory(self, repo: Path, path: Path) -> Path | None:
+        """The folder git keeps the worktree at `path` under, or None when it holds none."""
+        common = _text(
+            await self._read_ok(repo, "rev-parse", "--path-format=absolute", "--git-common-dir")
+        ).strip()
+        return await asyncio.to_thread(_admin_for, Path(common), Path(_absolute(path)))
 
     async def diff_summary(self, path: Path, base: str) -> GitSummary:
         base = _ref(base)
@@ -338,6 +387,85 @@ class GitCli:
             ahead=int(ahead_text) if ahead_text.isdigit() else 0,
             dirty=status.truncated or bool(_entries(status.stdout)),
         )
+
+
+_WORKTREE_REFS = ("refs/worktree", "refs/bisect", "refs/rewritten")
+"""The refs git keeps per worktree; `worktree remove` deletes them with the worktree."""
+
+_GITDIR_MAX_BYTES = 4096
+
+
+def _reflog(result: GitResult) -> set[str]:
+    """The commits a `log -g` listed. A ref with no reflog, or no ref at all, lists none; a
+    reflog too long to read is not an answer."""
+    if result.returncode != 0:
+        return set()
+    if result.truncated:
+        raise GitRefused(f"a reflog longer than {OUTPUT_CAP_BYTES} bytes; not read")
+    return set(_text(result.stdout).split())
+
+
+_PSEUDO_REFS = (
+    "ORIG_HEAD",
+    "MERGE_HEAD",
+    "CHERRY_PICK_HEAD",
+    "REVERT_HEAD",
+    "REBASE_HEAD",
+    "BISECT_HEAD",
+    "AUTO_MERGE",
+    "rebase-merge/orig-head",
+    "rebase-apply/orig-head",
+)
+"""Per-worktree files naming a commit, kept in the worktree's admin folder and deleted with it."""
+
+_OBJECT_ID = frozenset("0123456789abcdef")
+
+
+def _pseudo_tips(admin: Path) -> set[str]:
+    """The object ids the worktree's pseudo-refs name; a missing or odd file names none."""
+    tips = set()
+    for name in _PSEUDO_REFS:
+        try:
+            with open(admin / name, "rb") as handle:
+                text = handle.read(_GITDIR_MAX_BYTES).decode("ascii", "replace")
+        except OSError:
+            continue
+        words = text.split()
+        if words and len(words[0]) in (40, 64) and set(words[0]) <= _OBJECT_ID:
+            tips.add(words[0])
+    return tips
+
+
+def _admin_for(common: Path, path: Path) -> Path | None:
+    """Which `<common>/worktrees/<name>` names `path` in its `gitdir` file."""
+    wanted = os.path.normpath(path / ".git")
+    try:
+        candidates = sorted((common / "worktrees").iterdir())
+    except FileNotFoundError:
+        return None
+    for admin in candidates:
+        try:
+            with open(admin / "gitdir", "rb") as handle:
+                recorded = handle.read(_GITDIR_MAX_BYTES).decode("utf-8", "surrogateescape")
+        except OSError:
+            continue
+        if os.path.normpath(recorded.strip()) == wanted:
+            return admin
+    return None
+
+
+def _nested_git_entries(top: Path) -> tuple[str, ...]:
+    """Every entry named `.git` (any case) below `top`, relative, never through a link. The
+    top's own `.git` file is the worktree's and is not listed."""
+    found = []
+    for folder, folders, files in os.walk(top, followlinks=False):
+        relative = Path(folder).relative_to(top)
+        for name in (*folders, *files):
+            if name.lower() == ".git" and (relative != Path(".") or name != ".git"):
+                found.append((relative / name).as_posix())
+        # Never descend into a nested `.git` folder: it is listed, which is enough to keep.
+        folders[:] = [name for name in folders if name.lower() != ".git"]
+    return tuple(sorted(found))
 
 
 _HIDDEN_TAGS = frozenset(b"abcdefghijklmnopqrstuvwxyzS")

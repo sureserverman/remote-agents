@@ -108,11 +108,25 @@ class GitCheckout(Protocol):
         wins when git resolves the short one."""
         ...
 
+    async def unmerged_history(self, repo: Path, path: Path, branch: str, base: str) -> int:
+        """How many commits that only the worktree at `path` and `branch`'s reflog still reach
+        are not reachable from `refs/heads/<base>`.
+
+        Removing a worktree deletes its own refs (`refs/worktree/*`, `refs/bisect/*`,
+        `refs/rewritten/*`) and its HEAD reflog, and `branch -d` deletes the branch's reflog.
+        A commit made and then reset away, or made on a detached HEAD and left, is reachable
+        only from those -- so the branch tip alone saying "merged" is not enough. Asked of the
+        repository, so it answers for a folder already gone."""
+        ...
+
     async def status_lines(self, path: Path) -> tuple[str, ...]:
         """Every `git status --porcelain` entry at `path`, each `XY <path>`: modified, untracked
         (`??`) and ignored (`!!`), every untracked and ignored *file* listed on its own. A tracked
         file marked `assume-unchanged` or `skip-worktree` is listed too, as `h? <path>` /
-        `S? <path>` (its `ls-files -v` tag), since `status` hides its edits.
+        `S? <path>` (its `ls-files -v` tag), since `status` hides its edits. So is any entry
+        named `.git` below the top, as `G? <path>`: git skips one that is not a repository it
+        can open -- a file, a plain folder, a nested repository gone corrupt -- and `worktree
+        remove` deletes it all the same.
 
         Raises `GitRefused` when the listing is longer than the adapter will read, rather than
         return one missing its tail."""

@@ -5,13 +5,15 @@ only when every guard says it may, each asked fresh on every pass:
 
 - (a) it was cut from a branch, not a detached HEAD -- with no base branch there is nothing to
   call it merged into;
-- (b) git records the worktree as still on its own branch, and that branch is reachable from
-  the base branch, so every commit made in it survives there. The recorded branch alone is not
-  enough: an agent that detached HEAD, or switched branch, and committed has commits only the
-  worktree's HEAD reaches, and `worktree remove` deletes that HEAD and its reflog;
+- (b) git records the worktree as still on its own branch, that branch is reachable from the
+  base branch, and so is every commit the worktree's own refs and reflogs, and the branch's
+  reflog, still reach -- so every commit made in it survives there. The branch tip alone is
+  not enough: a commit made on a detached HEAD, on another branch, or reset away is reachable
+  only from what `worktree remove` and `branch -d` delete;
 - (c) `git status` lists nothing in it but the files it was given at creation, each still byte
   for byte what was copied -- `worktree remove` deletes ignored files without asking, so an
-  ignored file is no safer than an untracked one;
+  ignored file is no safer than an untracked one, and an entry named `.git` below the top,
+  which `status` never names, keeps it too; and the folder is not itself a link;
 - (d) no live session is bound to it and no open rollover names a session that was, since a
   successor reuses its predecessor's folder (DEC-123).
 
@@ -19,7 +21,11 @@ The row is claimed before git is asked, so a resume binding a session into the f
 surface's process and this pass removing it exclude each other (`WorktreeStore`). Any guard
 saying no, any git refusal and any fault give the claim back and leave the folder; a refusal is
 never retried with force -- the port has no forcing verb to retry with. The pass runs in `serve`
-alone: it gives back every claim when it starts, which is safe only with one pass per host.
+alone: its first pass gives back every claim a dead process left, safe only with one per host.
+
+"In use" means a remote-agents session or rollover. An owner's own shell or editor in the
+folder is invisible to it: git still refuses a modified or untracked file at removal, but an
+ignored file written between the guards and `worktree remove` would go with the folder.
 
 **A folder already gone** -- a launch refused before its pane discards its worktree, and git
 may keep a stale entry for it -- has nothing left in it to lose, so (c) is not asked of it; (a),
@@ -42,14 +48,14 @@ import hashlib
 import logging
 import os
 import stat
-from collections.abc import AsyncIterator, Awaitable, Callable, Collection, Mapping, Sequence
+from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
 from typing import Protocol
 
 from remote_agents.application.errors import MutationsDraining
-from remote_agents.domain.models import ProjectId, SessionId, SessionRecord, SessionState
+from remote_agents.domain.models import ProjectId, SessionId, SessionRecord
 from remote_agents.domain.state_machine import TERMINAL_STATES
 from remote_agents.ports.git_checkout import GitCheckout, GitError
 from remote_agents.ports.rollover_store import Rollover
@@ -57,6 +63,8 @@ from remote_agents.ports.worktree_store import Worktree, WorktreeStore
 
 _LOG = logging.getLogger(__name__)
 
+# The reasons a folder is kept, as `doctor` lists them. A git refusal reads `git: <reason>`,
+# any other fault `fault: <kind>`.
 UNMERGED = "unmerged"
 MOVED = "not on its branch"
 DIRTY = "dirty"
@@ -64,10 +72,8 @@ IN_USE = "in use"
 DETACHED_BASE = "detached base"
 REMOVABLE = "removable"
 """Every guard lets it go; the next pass removes it."""
-"""The reasons a folder is kept, as `doctor` lists them. A git refusal reads `git: <reason>`,
-any other fault `fault: <kind>`."""
 
-NOT_A_REPOSITORY = "git: the project folder is not the top of a git repository"
+NOT_A_REPOSITORY = "git: the project is not catalogued, or not the top of a git repository"
 
 _COPIED_STATUS = frozenset({"??", "!!"})
 """A copied file is untracked: listed as untracked, or as ignored when `.gitignore` names it."""
@@ -77,9 +83,7 @@ _HASH_MAX_BYTES = 1024 * 1024
 
 
 class _Sessions(Protocol):
-    async def list(
-        self, states: Collection[SessionState] | None = None
-    ) -> Sequence[SessionRecord]: ...
+    async def get(self, session_id: SessionId) -> SessionRecord | None: ...
 
 
 class _Rollovers(Protocol):
@@ -130,12 +134,20 @@ class WorktreeCleanupPass:
         self._operation = operation
         self._clock = clock
         self._last_refusal: dict[Path, str] = {}
+        self._claims_released = False
 
     async def pass_once(self) -> CleanupReport:
-        """One pass over the candidates. A fault on one folder keeps that folder only."""
-        released = await self._store.release_stale_claims()
-        if released:
-            _LOG.info("released %d worktree removal claim(s) left by an earlier pass", released)
+        """One pass over the candidates. A fault on one folder keeps that folder only.
+
+        The first pass gives back every claim an earlier run left behind (a pass gives back
+        its own on every exit path, so only a dead process leaves one); one host must run one
+        pass. That write runs outside the operation gate; a pass that wakes after the drain
+        shut the gate claims nothing and removes nothing."""
+        if not self._claims_released:
+            released = await self._store.release_stale_claims()
+            self._claims_released = True
+            if released:
+                _LOG.info("released %d worktree removal claim(s) left by an earlier run", released)
         removed: list[Path] = []
         kept: dict[Path, str] = {}
         for worktree in await self._store.removable_candidates():
@@ -156,6 +168,9 @@ class WorktreeCleanupPass:
             else:
                 kept[worktree.path] = reason
                 self._refused(worktree.path, reason, fault)
+        for path in set(self._last_refusal) - set(kept):
+            # Gone from the candidates (resumed into, or removed): a return is news again.
+            del self._last_refusal[path]
         return CleanupReport(removed=tuple(removed), kept=kept)
 
     async def kept(self) -> tuple[tuple[str, str, str], ...]:
@@ -197,6 +212,8 @@ class WorktreeCleanupPass:
             return _Verdict(NOT_A_REPOSITORY)
         try:
             present = _present(worktree.path)
+            if present and stat.S_ISLNK(os.lstat(worktree.path).st_mode):
+                return _Verdict(DIRTY, repo)
             head = await self._git.worktree_head(repo, worktree.path)
             if head is None and present:
                 return _Verdict("git: no worktree entry for the folder", repo)
@@ -208,7 +225,9 @@ class WorktreeCleanupPass:
             merged = await self._git.is_ancestor(
                 repo, f"refs/heads/{worktree.branch}", f"refs/heads/{worktree.base_branch}"
             )
-            if not merged:
+            if not merged or await self._git.unmerged_history(
+                repo, worktree.path, worktree.branch, worktree.base_branch
+            ):
                 return _Verdict(UNMERGED, repo, entry=head is not None)
             if present and not await self._clean(worktree):
                 return _Verdict(DIRTY, repo, entry=True)
@@ -217,11 +236,12 @@ class WorktreeCleanupPass:
         return _Verdict(None, repo, entry=head is not None)
 
     async def _in_use(self, bound: set[SessionId]) -> bool:
-        live = await self._sessions.list(
-            [state for state in SessionState if state not in TERMINAL_STATES]
-        )
-        if any(record.session_id in bound for record in live):
-            return True
+        """Whether a bound session is live, or its row is missing -- the store's own rule
+        (`_HELD`), so `doctor` never calls removable a folder the pass would not list."""
+        for session_id in bound:
+            record = await self._sessions.get(session_id)
+            if record is None or record.state not in TERMINAL_STATES:
+                return True
         return any(
             rollover.predecessor_session_id in bound or rollover.successor_session_id in bound
             for rollover in await self._rollovers.open_rollovers()
@@ -242,7 +262,6 @@ class WorktreeCleanupPass:
         """Claim, guard, remove. Answers the reason kept, or None once removed."""
         if not await self._store.claim_for_removal(worktree.path, at=self._clock()):
             return IN_USE
-        entry_refused = ""
         try:
             verdict = await self._judge(worktree)
             repo = verdict.repo
@@ -253,12 +272,12 @@ class WorktreeCleanupPass:
             try:
                 await self._git.remove_worktree(repo, worktree.path)
             except GitError as error:
-                if present or _present(worktree.path):
+                if present or verdict.entry or _present(worktree.path):
+                    # Kept: the folder is there, or git still holds its entry -- a locked one,
+                    # say, for a folder on a drive not mounted now -- and with it the branch.
                     await self._store.release_claim(worktree.path)
                     return f"git: {_one_line(error)}"
-                # The folder is gone either way; what git said about an entry it held is
-                # reported. With no entry there was nothing for git to clear.
-                entry_refused = _one_line(error) if verdict.entry else ""
+                # Folder and entry both gone: git had nothing to remove.
         except BaseException:
             # The folder is still there (a cancel inside `worktree remove` may have taken part
             # of it, and the next pass then finds it dirty or its entry stale): give the claim
@@ -266,13 +285,7 @@ class WorktreeCleanupPass:
             await self._store.release_claim(worktree.path)
             raise
         try:
-            if entry_refused:
-                _LOG.warning(
-                    "worktree %s was already gone; git did not clear its entry: %s",
-                    worktree.path,
-                    entry_refused,
-                )
-            await self._delete_branch(repo, worktree, entry_refused)
+            await self._delete_branch(repo, worktree)
         finally:
             # The folder is gone, so the row says so whatever became of the branch -- a cancel
             # included; a row left live would hold its claim until the next pass's start.
@@ -283,7 +296,7 @@ class WorktreeCleanupPass:
         _LOG.info("worktree %s and branch %s removed", worktree.path, worktree.branch)
         return None
 
-    async def _delete_branch(self, repo: Path, worktree: Worktree, entry_refused: str) -> None:
+    async def _delete_branch(self, repo: Path, worktree: Worktree) -> None:
         """`branch -d` the folder's branch; a refusal is logged with the command, never forced."""
         try:
             if not await self._git.has_branch(repo, worktree.branch):
@@ -291,12 +304,11 @@ class WorktreeCleanupPass:
             await self._git.delete_merged_branch(repo, worktree.branch)
         except Exception as error:
             _LOG.warning(
-                "worktree %s removed; its branch %s was kept (%s%s). It is merged into %s;"
+                "worktree %s removed; its branch %s was kept (%s). It is merged into %s;"
                 " delete it with `git -C %s branch -d %s` once git agrees",
                 worktree.path,
                 worktree.branch,
                 _one_line(error),
-                f"; git's entry was not cleared: {entry_refused}" if entry_refused else "",
                 worktree.base_branch,
                 repo,
                 worktree.branch,

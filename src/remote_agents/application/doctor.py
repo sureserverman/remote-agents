@@ -278,7 +278,8 @@ def production_doctor(
         # (BL-116). Reported beside `console` and for its reason: a worktree kept because its
         # branch is unmerged or its tree holds work is the cleanup refusing to lose something,
         # which is the owner's to act on and no ill health. Arrives as plain rows, read by the
-        # composition root (DEC-015). None -- the store or git could not be read -- omits it.
+        # composition root (DEC-015). A folder git could not be asked about is its own row,
+        # `git: ...`; None -- the store unreadable, or the listing past its bound -- omits it.
         report["worktrees"] = [" · ".join(row) for row in worktrees]
     report.update(profile_doctor(profiles))
     return report

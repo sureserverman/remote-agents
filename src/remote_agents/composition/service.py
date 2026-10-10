@@ -607,7 +607,7 @@ async def _watch_worktrees_periodically(composition: ServiceComposition, interva
     """Remove the session worktrees every guard lets go, on a clock of their own -- never raising.
 
     Each removal runs inside the shared operation gate the pass was built with, so the drain at
-    shutdown waits for one under way, and a pass that wakes after the gate shut stops there."""
+    shutdown waits for one under way, and a pass that wakes after the gate shut removes nothing."""
     while True:
         await asyncio.sleep(interval)
         try:
