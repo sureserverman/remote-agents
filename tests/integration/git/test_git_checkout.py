@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import shutil
 import subprocess
 import time
 from pathlib import Path
@@ -16,7 +17,7 @@ from pathlib import Path
 import pytest
 
 from remote_agents.adapters.git.checkout import GitCli
-from remote_agents.ports.git_checkout import GitRefused
+from remote_agents.ports.git_checkout import GitHead, GitRefused
 
 
 def _git(cwd: Path, *args: str) -> str:
@@ -78,6 +79,24 @@ async def test_add_worktree_creates_the_folder_and_the_branch(repo: Path, tmp_pa
     assert _git(repo, "rev-parse", "ra/abcd1234") == commit
     with pytest.raises(GitRefused):
         await cli.add_worktree(repo, tmp_path / "wt2", "ra/abcd1234", commit)
+
+
+async def test_worktree_head_reads_git_s_entry_for_a_folder_present_detached_or_gone(
+    repo: Path, tmp_path: Path
+) -> None:
+    cli = GitCli()
+    tree = tmp_path / "w t"
+    commit = _git(repo, "rev-parse", "HEAD")
+    assert await cli.worktree_head(repo, tree) is None
+    await cli.add_worktree(repo, tree, "ra/abcd1234", commit)
+    assert await cli.worktree_head(repo, tree) == GitHead(commit, "ra/abcd1234")
+    _git(tree, "checkout", "-q", "--detach")
+    _git(tree, "commit", "-q", "--allow-empty", "-m", "reachable only from this HEAD")
+    detached = _git(tree, "rev-parse", "HEAD")
+    assert await cli.worktree_head(repo, tree) == GitHead(detached, None)
+    shutil.rmtree(tree)
+    assert await cli.worktree_head(repo, tree) == GitHead(detached, None)
+    assert (await cli.worktree_head(repo, repo)).branch == "main"
 
 
 async def test_remove_worktree_refuses_a_folder_with_an_untracked_file(

@@ -67,6 +67,8 @@ async def _sweep() -> tuple[_Recorder, set[str]]:
     called.add("head")
     await cli.has_branch(repo, "ra/12345678")
     called.add("has_branch")
+    await cli.worktree_head(repo, tree)
+    called.add("worktree_head")
     await cli.add_worktree(repo, tree, "ra/12345678", "a" * 40)
     called.add("add_worktree")
     await cli.remove_worktree(repo, tree)

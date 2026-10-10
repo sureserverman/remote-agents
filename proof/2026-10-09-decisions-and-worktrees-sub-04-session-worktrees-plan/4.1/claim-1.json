@@ -1,0 +1,28 @@
+{
+ "baseline": {
+  "elapsed_s": 3.5,
+  "exit": 0,
+  "tail": "..................................                                       [100%]\n34 passed in 3.28s"
+ },
+ "break_patch": "diff --git a/src/remote_agents/application/worktree_cleanup.py b/src/remote_agents/application/worktree_cleanup.py\nindex 39de6712..e37d2d10 100644\n--- a/src/remote_agents/application/worktree_cleanup.py\n+++ b/src/remote_agents/application/worktree_cleanup.py\n@@ -180,7 +180,7 @@ class WorktreeCleanupPass:\n             merged = await self._git.is_ancestor(\n                 repo, f\"refs/heads/{worktree.branch}\", f\"refs/heads/{worktree.base_branch}\"\n             )\n-            if not merged:\n+            if False:\n                 return _Verdict(UNMERGED, repo, entry=head is not None)\n             if present and not await self._clean(worktree):\n                 return _Verdict(DIRTY, repo, entry=True)\n",
+ "build": null,
+ "created": "2026-10-10T21:25:45+00:00",
+ "fingerprint": "6466b05371dba021a709eb58146508520325e7118a5e39d626e90d443848739e",
+ "index": 1,
+ "kind": "claim",
+ "named_break": null,
+ "no_build_reason": "pure Python, no build",
+ "plan": "/mnt/vault/Portfolio/infra/remote-agents/plans/2026-10-09-decisions-and-worktrees-sub-04-session-worktrees-plan.md",
+ "red": {
+  "elapsed_s": 3.4,
+  "exit": 1,
+  "tail": "        _commit_in(worktree.path)\n        harness.end(session)\n        caplog.set_level(logging.INFO, logger=\"remote_agents.application.worktree_cleanup\")\n    \n        for _ in range(3):\n            await harness.cleanup.pass_once()\n>       (worktree.path / \"notes.txt\").write_text(\"new\\n\", encoding=\"utf-8\")\n\ntests/integration/test_worktree_cleanup.py:400: \n_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ \n../../../.local/share/uv/python/cpython-3.14.4-linux-x86_64-gnu/lib/python3.14/pathlib/__init__.py:809: in write_text\n    with self.open(mode='w', encoding=encoding, errors=errors, newline=newline) as f:\n         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ \n\nself = PosixPath('/tmp/pytest-of-user/pytest-1329/test_a_kept_folder_is_logged_o0/state/worktrees/editor/74d13814-0444-4f8c-9184-c768de58c7fe/notes.txt')\nmode = 'w', buffering = -1, encoding = 'utf-8', errors = None, newline = None\n\n    def open(self, mode='r', buffering=-1, encoding=None,\n             errors=None, newline=None):\n        \"\"\"\n        Open the file pointed to by this path and return a file object, as\n        the built-in open() function does.\n        \"\"\"\n        if \"b\" not in mode:\n            encoding = io.text_encoding(encoding)\n>       return io.open(self, mode, buffering, encoding, errors, newline)\n               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nE       FileNotFoundError: [Errno 2] No such file or directory: '/tmp/pytest-of-user/pytest-1329/test_a_kept_folder_is_logged_o0/state/worktrees/editor/74d13814-0444-4f8c-9184-c768de58c7fe/notes.txt'\n\n../../../.local/share/uv/python/cpython-3.14.4-linux-x86_64-gnu/lib/python3.14/pathlib/__init__.py:771: FileNotFoundError\n------------------------------ Captured log call -------------------------------\nWARNING  remote_agents.application.worktree_cleanup:worktree_cleanup.py:265 worktree /tmp/pytest-of-user/pytest-1329/test_a_kept_folder_is_logged_o0/state/worktrees/editor/74d13814-0444-4f8c-9184-c768de58c7fe removed; its branch ra/74d13814 was kept (error: the branch 'ra/74d13814' is not fully merged.). It is merged into main; delete it with `git -C /tmp/pytest-of-user/pytest-1329/test_a_kept_folder_is_logged_o0/repo branch -d ra/74d13814` once git agrees\nINFO     remote_agents.application.worktree_cleanup:worktree_cleanup.py:255 worktree /tmp/pytest-of-user/pytest-1329/test_a_kept_folder_is_logged_o0/state/worktrees/editor/74d13814-0444-4f8c-9184-c768de58c7fe and branch ra/74d13814 removed\n=========================== short test summary info ============================\nFAILED tests/integration/test_worktree_cleanup.py::test_a_gone_folder_whose_branch_is_unmerged_is_kept\nFAILED tests/integration/test_worktree_cleanup.py::test_an_unmerged_branch_is_kept\nFAILED tests/integration/test_worktree_cleanup.py::test_a_branch_merged_only_into_another_branch_is_kept\nFAILED tests/integration/test_worktree_cleanup.py::test_a_kept_folder_is_logged_once_per_change_of_reason\n4 failed, 30 passed in 3.13s"
+ },
+ "schema": 2,
+ "task": "4.1",
+ "test": "uv run --locked pytest tests/integration/test_worktree_cleanup.py -q -p no:randomly",
+ "text": "`uv run --locked pytest tests/integration/test_worktree_cleanup.py -q -p no:randomly`, against real repos in `tmp_path`, one case per guard, each red if that guard is removed:",
+ "touched": [
+  "src/remote_agents/application/worktree_cleanup.py"
+ ]
+}

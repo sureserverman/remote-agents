@@ -124,6 +124,11 @@ class WorktreeService:
             _LOG.exception("the worktree offer for %s could not be decided", project_id)
             return False
 
+    async def repository(self, project_id: ProjectId) -> Path | None:
+        """The main checkout a project's worktrees are cut from, or None: what the cleanup
+        pass removes a worktree and its branch through."""
+        return await self._repository(project_id)
+
     async def _repository(self, project_id: ProjectId) -> Path | None:
         """The project's repository when the project folder is its top level, else None."""
         project = self._project_paths.get(project_id)

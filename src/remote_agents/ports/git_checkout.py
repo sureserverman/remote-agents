@@ -67,6 +67,15 @@ class GitCheckout(Protocol):
         """The commit and branch checked out at `path`."""
         ...
 
+    async def worktree_head(self, repo: Path, path: Path) -> GitHead | None:
+        """What git records the worktree at `path` as having checked out, read from `repo`'s
+        own worktree list; None when git holds no entry for `path`.
+
+        Asked of the repository, not the folder, so it answers for a folder already gone: git
+        keeps a missing folder's entry, its HEAD and its reflog, until `worktree remove` or a
+        prune clears them -- and with them any commit only that HEAD reaches."""
+        ...
+
     async def has_branch(self, repo: Path, branch: str) -> bool:
         """Whether `refs/heads/<branch>` exists in `repo`: asked before a branch is made, so an
         undo deletes only a branch this project created."""
