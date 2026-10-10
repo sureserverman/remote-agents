@@ -45,6 +45,7 @@ from remote_agents.application.schedule_times import host_zone
 from remote_agents.application.services import SessionService
 from remote_agents.application.session_folders import SessionFolders
 from remote_agents.application.store_watch import StoreWatch
+from remote_agents.application.worktrees import WorktreeService
 from remote_agents.composition.limits_source import (
     ConfigCursorLimitsSource,
     ConfigLimitsSource,
@@ -386,6 +387,18 @@ def compose_backend(
             remote_control_defaults=dict.fromkeys(claude_default.profiles, claude_default),
             daemon_guards=dict.fromkeys(daemon_profiles, daemon_guard),
             worktrees=worktrees.store if worktrees is not None else None,
+            worktree_service=(
+                None
+                if worktrees is None
+                else WorktreeService(
+                    git=worktrees.git,
+                    store=worktrees.store,
+                    sessions=backend_store,
+                    project_paths=projects.paths,
+                    directory=paths.worktree_directory,
+                    copy_for=config.worktree_copy_for,
+                )
+            ),
         ),
         host_remote_control=_host_remote_control(
             descriptors, store=backend_store, locks=backend_locks, guard=daemon_guard

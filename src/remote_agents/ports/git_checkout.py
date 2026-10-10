@@ -67,6 +67,11 @@ class GitCheckout(Protocol):
         """The commit and branch checked out at `path`."""
         ...
 
+    async def has_branch(self, repo: Path, branch: str) -> bool:
+        """Whether `refs/heads/<branch>` exists in `repo`: asked before a branch is made, so an
+        undo deletes only a branch this project created."""
+        ...
+
     async def add_worktree(self, repo: Path, path: Path, branch: str, commit: str) -> None:
         """Create `path` as a worktree of `repo` on a new `branch` at `commit`."""
         ...

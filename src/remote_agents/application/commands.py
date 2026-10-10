@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Literal
 
 from remote_agents.domain.conversations import ResolvedConversation
 from remote_agents.domain.models import ProfileId, ProjectId, SessionId
@@ -34,6 +35,15 @@ class LaunchCommand:
     """A session whose worktree this launch works in, when it has one: a rollover successor
     names its predecessor, so it carries on in the same folder (BL-116, amending DEC-115). A
     named session with no worktree leaves this an ordinary launch in the project folder."""
+    mode: Literal["regular", "worktree"] = "regular"
+    """`worktree` gives the new session its own branch and folder before its pane starts
+    (BL-116). Only the owner chooses it, when offered; a successor reuses rather than makes."""
+
+    def __post_init__(self) -> None:
+        if self.mode not in ("regular", "worktree"):
+            raise ValueError(f"unknown launch mode: {self.mode!r}")
+        if self.mode == "worktree" and self.reuse_folder_of is not None:
+            raise ValueError("a launch reusing a folder cannot also make its own worktree")
 
 
 @dataclass(frozen=True, slots=True)

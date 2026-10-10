@@ -64,7 +64,9 @@ async def test_add_worktree_creates_the_folder_and_the_branch(repo: Path, tmp_pa
     cli = GitCli()
     tree = tmp_path / "wt"
     commit = _git(repo, "rev-parse", "HEAD")
+    assert not await cli.has_branch(repo, "ra/abcd1234")
     await cli.add_worktree(repo, tree, "ra/abcd1234", commit)
+    assert await cli.has_branch(repo, "ra/abcd1234")
     assert (tree / "f.txt").is_file()
     assert _git(tree, "rev-parse", "--abbrev-ref", "HEAD") == "ra/abcd1234"
     assert _git(repo, "rev-parse", "ra/abcd1234") == commit

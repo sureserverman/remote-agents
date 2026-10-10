@@ -251,6 +251,14 @@ class GitCli:
         name = ref.removeprefix("refs/heads/") if ref.startswith("refs/heads/") else ""
         return GitHead(commit=commit, branch=name or None)
 
+    async def has_branch(self, repo: Path, branch: str) -> bool:
+        result = await self._read(
+            repo, "rev-parse", "--verify", "--quiet", _ref(f"refs/heads/{_ref(branch)}")
+        )
+        if result.returncode in (0, 1):
+            return result.returncode == 0
+        raise GitRefused(_reason(result))
+
     async def add_worktree(self, repo: Path, path: Path, branch: str, commit: str) -> None:
         await self._write(
             repo, "worktree", "add", "-b", _ref(branch), _absolute(path), _ref(commit)

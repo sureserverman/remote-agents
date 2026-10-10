@@ -96,6 +96,16 @@ _TABLE: dict[Site, tuple[Kind, str]] = {
         "the project checkout's root, asked only for a session `worktree_roots` does not "
         "answer -- a worktree session, gone or not, never reaches it",
     ),
+    Site(
+        "application/worktrees.py",
+        "WorktreeService._repository",
+        "self._project_paths.get(project_id)",
+    ): (Kind.PROJECT, "the main checkout a worktree is cut from, and offered for"),
+    Site(
+        "application/worktrees.py",
+        "WorktreeService.create",
+        "self._project_paths[project_id]",
+    ): (Kind.PROJECT, "the project's own folder, as `[worktrees.projects]` keys it"),
     # Moved off the mapping by Tasks 2.1-2.3. Listed so that a read reappearing at one of them
     # fails by name rather than as an anonymous new site.
     Site(

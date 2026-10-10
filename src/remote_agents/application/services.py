@@ -37,8 +37,10 @@ from remote_agents.application.session_actions import (
     available_actions,
     pane_is_attachable,
 )
+from remote_agents.application.worktrees import WorktreeCreateFailed, WorktreeService
 from remote_agents.domain.models import (
     ProfileId,
+    ProjectId,
     SessionDisplayIdentity,
     SessionId,
     SessionRecord,
@@ -155,6 +157,9 @@ class LaunchOutcome:
     remote_control: bool
     worktree_removed: bool = False
     """As `ResumeOutcome.worktree_removed`."""
+    worktree_failed: str | None = None
+    """A worktree launch whose worktree could not be made: git's one-line reason. The session
+    is FAILED and no pane was started (BL-116)."""
 
 
 #: The states a fresh capture of the pane can still change the answer for, and **only** those.
@@ -236,8 +241,13 @@ class SessionService:
         remote_control_defaults: Mapping[ProfileId, RemoteControlDefaultPort] | None = None,
         daemon_guards: Mapping[ProfileId, DaemonGuard] | None = None,
         worktrees: WorktreeStore | None = None,
+        worktree_service: WorktreeService | None = None,
     ) -> None:
         self._store = store
+        # Makes a worktree launch's own branch and folder, and says when one is offered
+        # (BL-116). None in a composition that makes none: nothing is then offered, and a
+        # worktree launch fails by name rather than starting in the shared folder.
+        self._worktree_service = worktree_service
         # The session worktree rows: a resume of a conversation found in a worktree binds its
         # new session there before the pane starts (BL-116). None in a composition that keeps
         # no worktree rows, which can then resume nothing found in one.
@@ -298,6 +308,28 @@ class SessionService:
             return _Bound.BOUND
         return await self._bind_worktree(session_id, worktree.path)
 
+    async def worktree_offered(self, project_id: ProjectId) -> bool:
+        """Whether a launch on this project offers its own worktree: another session is live
+        on it, and it is the top of a git repository. Never raises."""
+        if self._worktree_service is None:
+            return False
+        return await self._worktree_service.offered(project_id)
+
+    async def _make_worktree(self, session_id: SessionId, project_id: ProjectId) -> str | None:
+        """Make the session's worktree; answer None when made, else the owner-facing reason."""
+        if self._worktree_service is None:
+            return "worktrees are not available here"
+        try:
+            await self._worktree_service.create(session_id, project_id)
+        except WorktreeCreateFailed as error:
+            return str(error)
+        except Exception:
+            # `create` undoes and answers by name; anything else is a bug, and must still end
+            # the launch FAILED rather than leave its record STARTING.
+            _LOG.exception("worktree for %s not created", session_id)
+            return "the worktree could not be made"
+        return None
+
     def _daemon_guard(
         self, profile_id: ProfileId, wait: float
     ) -> contextlib.AbstractAsyncContextManager[None]:
@@ -330,7 +362,7 @@ class SessionService:
                 SessionDisplayIdentity(
                     str(command.project_id),
                     str(command.profile_id),
-                    "regular",
+                    command.mode,
                     sequence,
                     command.label,
                 ),
@@ -349,6 +381,18 @@ class SessionService:
             # 4 gate review; the stop half was fixed first because that is the half production
             # actually hit, a stop being routinely slower than the window and a launch rarely.
             async with self._locks.for_session(session_id):
+                if command.mode == "worktree":
+                    # After the record, so the binding has a session to name; before the
+                    # pane, which then starts in the folder `SessionFolders` answers.
+                    failed = await self._make_worktree(session_id, command.project_id)
+                    if failed is not None:
+                        return LaunchOutcome(
+                            await self._store.record_event(
+                                session_id, LifecycleEvent.STARTUP_ERROR
+                            ),
+                            False,
+                            worktree_failed=failed,
+                        )
                 bound = await self._reuse_folder(session_id, command.reuse_folder_of)
                 if bound is not _Bound.BOUND:
                     return LaunchOutcome(

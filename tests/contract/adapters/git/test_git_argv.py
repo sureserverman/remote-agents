@@ -65,6 +65,8 @@ async def _sweep() -> tuple[_Recorder, set[str]]:
     called.add("top_level")
     await cli.head(repo)
     called.add("head")
+    await cli.has_branch(repo, "ra/12345678")
+    called.add("has_branch")
     await cli.add_worktree(repo, tree, "ra/12345678", "a" * 40)
     called.add("add_worktree")
     await cli.remove_worktree(repo, tree)
@@ -142,6 +144,8 @@ async def test_a_ref_that_reads_as_an_option_is_refused_before_git_runs() -> Non
         await cli.is_ancestor(Path("/repo"), "--force", "main")
     with pytest.raises(GitError):
         await cli.delete_merged_branch(Path("/repo"), "-D")
+    with pytest.raises(GitError):
+        await cli.has_branch(Path("/repo"), "--all")
     with pytest.raises(GitError):
         await cli.diff_summary(Path("/repo"), "--output=/tmp/x")
     assert recorder.calls == []
