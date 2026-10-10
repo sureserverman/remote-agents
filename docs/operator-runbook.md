@@ -778,6 +778,48 @@ it. The cause is recorded as the code:
 - **`unknown_session`** — its pane could not be found. The stop may have landed: check the
   session.
 
+## Session worktrees
+
+A second session on a git project can run in its own worktree (BL-116). The README's
+[Worktrees](../README.md#worktrees) section is the owner's view; this is what to check and do.
+
+- **When the choice appears.** Only with another session on the project in `starting`,
+  `untrusted`, `running` or `stop requested`, and only for a project folder that is the top of
+  its repository. A press while nothing contends launches as before. Schedules never ask and
+  always launch in the shared folder (DEC-114).
+- **Where folders live.** `~/.local/state/remote-agents/worktrees/<project>/<session id>/`
+  (mode 0700), on branch `ra/<first 8 of the session id>`. The rows are `worktrees` and
+  `session_worktrees` in `sessions.sqlite3` (migration 19).
+- **The copy list.** `[worktrees] copy` and `[worktrees.projects]` in `config.toml`, both
+  optional; a missing table is not drift. A listed path that is absolute, contains `..`, or names
+  git's state or a secret is refused at load, naming the key (`worktrees.copy` or
+  `worktrees.projects`). Only untracked regular files are copied, never through a symlink.
+- **Trust.** Nothing is pre-written (DEC-016). Codex and Claude inherit the main repository's
+  trust; Cursor shows *Workspace Trust Required* for every new worktree — answer it as usual.
+  Measured on 2026-10-09: [acceptance record](acceptance-2026-10-09-worktree-trust.md).
+- **A failed creation** leaves nothing: the launch fails with git's one-line reason, and any
+  branch, folder or copy made so far is undone with git's unforced verbs. If even that undo was
+  refused, the reason names what was left and the command that clears it.
+- **Auto-removal.** `serve` alone runs the cleanup, every 60 seconds; the terminal never does. A
+  folder goes, with its branch, only when every session bound to it has ended, no rollover for
+  them is open, it was cut from a branch that now contains its branch and every commit its own
+  refs, reflogs and pseudo-refs reach, and `git status` lists nothing in it but unchanged copies
+  (ignored files and `.git`-named entries included). It never forces. A removal cut off by a
+  shutdown stays and is listed as dirty.
+- **`doctor`'s `worktrees` list.** Every recorded, not-removed worktree, as
+  `path · branch · reason`: `unmerged`, `not on its branch`, `dirty`, `in use`, `detached base`,
+  `removable` (the next pass takes it), or `git: …` / `fault: …`. It never moves `healthy`. An
+  absent list means the store could not be read at this build's schema or the listing ran past
+  its 30-second bound.
+- **Removing a kept worktree by hand.** Look first, then from the main checkout:
+  `git -C <project> worktree remove <path>` and `git -C <project> branch -d ra/<id>`. Use
+  `--force` / `-D` only once you know what you are discarding. The row stays recorded; the next
+  pass sees the folder, entry and branch gone and marks it removed.
+- **The git line.** Read live per render through `Backend.git_summary`, bounded at two seconds,
+  never stored. A worktree is measured against the commit it was cut from; a shared folder
+  against `HEAD`, prefixed `checkout:`. No line means no git, a read past its bound, or a folder
+  that is gone.
+
 ## Telegram credential denial and recovery drill
 
 The test suite exercises a known-invalid credential against Telegram without reading or replacing

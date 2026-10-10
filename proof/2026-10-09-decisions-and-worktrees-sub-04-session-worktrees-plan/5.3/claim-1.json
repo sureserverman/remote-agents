@@ -1,0 +1,28 @@
+{
+ "baseline": {
+  "elapsed_s": 1.0,
+  "exit": 0,
+  "tail": "...................................                                      [100%]\n35 passed, 595 deselected in 0.57s"
+ },
+ "break_patch": "diff --git a/README.md b/README.md\nindex b74ac1ba..7b58a130 100644\n--- a/README.md\n+++ b/README.md\n@@ -1078,7 +1078,7 @@ project its own, in `config.toml`:\n \n ```toml\n [worktrees]\n-copy = [\"CLAUDE.md\", \"AGENTS.md\", \".claude/settings.local.json\", \".claude/vault-context.md\", \"docs/local-notes.md\"]\n+copy_files = [\"CLAUDE.md\", \"AGENTS.md\", \".claude/settings.local.json\", \".claude/vault-context.md\", \"docs/local-notes.md\"]\n \n [worktrees.projects]\n \"/home/you/dev/web\" = [\"CLAUDE.md\", \"docs/local-notes.md\"]\n",
+ "build": null,
+ "created": "2026-10-10T22:42:01+00:00",
+ "fingerprint": "4b3d2b08c3e25cdbb7ed7ae791c292d0db963f95f54279a457d5ff25b96b3ccb",
+ "index": 1,
+ "kind": "claim",
+ "named_break": null,
+ "no_build_reason": "docs and pure Python, no build",
+ "plan": "/mnt/vault/Portfolio/infra/remote-agents/plans/2026-10-09-decisions-and-worktrees-sub-04-session-worktrees-plan.md",
+ "red": {
+  "elapsed_s": 1.0,
+  "exit": 1,
+  "tail": "    database_path = \"{tmp_path}/sessions.sqlite3\"\n    \n    [limits]\n    max_label_length = 40\n    project_page_size = 10\n    activity_poll_seconds = 30\n    \n    {example}''',\n            encoding=\"utf-8\",\n        )\n    \n>       config = load_config(path)\n                 ^^^^^^^^^^^^^^^^^\n\ntests/contract/test_worktree_docs.py:59: \n_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ \nsrc/remote_agents/config.py:477: in load_config\n    _require_exact_keys(worktrees, _WORKTREE_KEYS, \"worktrees\", _OPTIONAL_WORKTREE_KEYS)\n_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ \n\nvalues = {'copy_files': ['CLAUDE.md', 'AGENTS.md', '.claude/settings.local.json', '.claude/vault-context.md', 'docs/local-notes.md'], 'projects': {'/home/you/dev/web': ['CLAUDE.md', 'docs/local-notes.md']}}\nallowed = {'copy', 'projects'}, name = 'worktrees'\noptional = frozenset({'copy', 'projects'})\n\n    def _require_exact_keys(\n        values: Mapping[str, object],\n        allowed: set[str],\n        name: str,\n        optional: frozenset[str] = frozenset(),\n    ) -> None:\n        unknown = set(values) - allowed\n        missing = allowed - set(values) - optional\n        if unknown or missing:\n>           raise ConfigError(f\"{name} has unknown or missing keys: {sorted(unknown | missing)}\")\nE           remote_agents.config.ConfigError: worktrees has unknown or missing keys: ['copy_files']\n\nsrc/remote_agents/config.py:635: ConfigError\n=========================== short test summary info ============================\nFAILED tests/contract/test_worktree_docs.py::test_the_readme_worktrees_example_loads_through_the_config_loader\n1 failed, 34 passed, 595 deselected in 0.58s"
+ },
+ "schema": 2,
+ "task": "5.3",
+ "test": "uv run --locked pytest tests/contract -q -p no:randomly -k \"doc or readme or runbook\"",
+ "text": "`uv run --locked pytest tests/contract -q -p no:randomly -k \"doc or readme or runbook\"` stays green, and `grep -c '^## DEC-' /mnt/vault/Portfolio/infra/remote-agents/decisions.md` is one more than at the stage's start. It goes red if the README names a config key `config.py` does not accept; a new contract case parses the README's `[worktrees]` example through the loader.",
+ "touched": [
+  "README.md"
+ ]
+}

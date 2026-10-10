@@ -1054,6 +1054,76 @@ session, and a failed stop leaves it for you to stop. The runbook's [session
 rollover](docs/operator-runbook.md#session-rollover) section covers what the row notes mean and
 what to do after each failure.
 
+## Worktrees
+
+A second session on a project can work in its own git worktree instead of sharing the project's
+folder. **When it is offered:** only when another session on that project is starting, running,
+untrusted or being stopped, and only when the project folder is the top of a git repository (a
+project that is a subfolder of its repository is never offered it). Then the launch asks
+*Shared folder* or *Own worktree* — two buttons on the bot, a choice screen in the terminal
+(Escape launches nothing). A lone session, a project outside git and every scheduled launch
+start in the shared folder exactly as before.
+
+**Where it lives.** *Own worktree* cuts a branch `ra/<first 8 of the session id>` at the main
+checkout's current commit and checks it out in
+`~/.local/state/remote-agents/worktrees/<project>/<session id>/`, outside your dev root so it is
+never listed as a project. The session's pane starts there; a resume of its conversation and a
+rollover successor reuse the same folder. remote-agents creates the branch and the folder and
+never merges anything: merging the branch is yours.
+
+**What it copies.** A fresh worktree holds every tracked file. Files you keep out of git are
+copied from the main checkout when present and untracked — by default `CLAUDE.md`, `AGENTS.md`,
+`.claude/settings.local.json` and `.claude/vault-context.md`. Change the list, or give one
+project its own, in `config.toml`:
+
+```toml
+[worktrees]
+copy = ["CLAUDE.md", "AGENTS.md", ".claude/settings.local.json", ".claude/vault-context.md", "docs/local-notes.md"]
+
+[worktrees.projects]
+"/home/you/dev/web" = ["CLAUDE.md", "docs/local-notes.md"]
+```
+
+A project's own list replaces the default for that project only. Absolute paths, `..`, and
+anything naming git's state or a secret (`.git`, `.env`, `.env.*`, `.envrc`, `.netrc`, `.npmrc`,
+`.pypirc`, `*.pem`, `.venv`) are refused when the file is loaded, and a symlinked file is never
+copied. Nothing is trusted on the agent's behalf (DEC-016): Codex and Claude inherit the main
+repository's folder trust in its worktree, while **Cursor asks again** — answer its
+*Workspace Trust Required* once, as for any new folder — the bot's trust row, or the dialog in
+the agent's own pane in the terminal.
+
+**When it goes away.** The bot's service looks every minute and removes a worktree, and its
+branch, only when all of these hold:
+
+- the session, and every session that resumed or took over in that folder, has ended, and no
+  rollover is still open for any of them;
+- the worktree was cut from a branch (not a detached HEAD), its branch is merged into that
+  branch, and so is every commit its own refs and reflogs still reach — a commit you reset
+  away or made on a detached HEAD keeps it;
+- `git status` lists nothing in it except the copied files, each byte-for-byte as copied.
+
+It never forces: git's own unforced `worktree remove` and `branch -d` do the work, and a
+refusal leaves the folder. Anything else is kept, and `remote-agents doctor` lists every kept
+worktree as `path · branch · reason` (`unmerged`, `not on its branch`, `dirty`, `in use`,
+`detached base`, or a `git:` reason).
+
+**Removing a kept worktree by hand.** Merge or keep what is in it first, then from the main
+checkout:
+
+```bash
+git -C <project> worktree remove <worktree path>
+git -C <project> branch -d ra/<id>
+```
+
+Both refuse to lose work; `--force` and `-D` are yours to choose after you have looked.
+
+**The git line.** Every session's detail shows a `git` line — for a worktree, its branch and its
+own changes against the commit it was cut from (`ra/3f2a1b2c · 6 files +182 −74 · 2 ahead ·
+dirty`); for a shared folder, the whole checkout, prefixed `checkout:`, since every session there
+shares it. Each row in the session list carries a short `±6` when files changed, dropped first
+when the row is narrow. The line is read live, bounded at two seconds, and never stored; a folder
+outside git shows no line.
+
 ## Creating a project
 
 A project can be created from this host, with the command below or with F7 in the local
