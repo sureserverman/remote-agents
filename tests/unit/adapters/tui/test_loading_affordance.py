@@ -421,6 +421,57 @@ async def test_the_line_the_position_had_is_put_back_when_the_command_lands() ->
     assert after == resting, "the position did not get its own line back"
 
 
+async def test_the_line_the_position_had_is_put_back_when_the_command_raises() -> None:
+    """The raising twin of the case above (BL-045 gap 2).
+
+    `test_a_command_that_raises_still_uncovers_the_rows` proves the `finally` clears the cover
+    but never reads the status line, and every flow it drives re-renders after a failure, so a
+    restore written on the success path alone would pass it. Driven through `awaiting`
+    directly for the reason its success twin gives.
+    """
+    app = RemoteAgentsTui(_context(_Launcher()))
+
+    async with app.run_test(size=(100, 30)) as pilot:
+        await pilot.pause()
+        resting = str(app.screen.query_one("#status").content)
+        with pytest.raises(RuntimeError, match="the command broke"):
+            async with app.screen.awaiting("Doing the thing…"):
+                await pilot.pause()
+                during = str(app.screen.query_one("#status").content)
+                raise RuntimeError("the command broke")
+        await pilot.pause()
+        after = str(app.screen.query_one("#status").content)
+
+    assert during == "Doing the thing…"
+    assert after == resting, "a command that raised left its working line on screen"
+
+
+async def test_a_line_written_during_the_command_is_not_overwritten_when_it_raises() -> None:
+    """The restore is conditional: a line written inside the cover is the one the owner keeps.
+
+    A refusal or a fresh render writes the status the owner should be left with. An
+    unconditional restore would replace it with the instruction from before the command ran,
+    and on the raising path that is the failure's own explanation lost.
+    """
+    app = RemoteAgentsTui(_context(_Launcher()))
+
+    async with app.run_test(size=(100, 30)) as pilot:
+        await pilot.pause()
+        resting = str(app.screen.query_one("#status").content)
+        with pytest.raises(RuntimeError, match="the command broke"):
+            async with app.screen.awaiting("Doing the thing…"):
+                await pilot.pause()
+                app.screen.set_status("The command could not finish.")
+                raise RuntimeError("the command broke")
+        await pilot.pause()
+        after = str(app.screen.query_one("#status").content)
+
+    assert resting != "The command could not finish."
+    assert after == "The command could not finish.", (
+        "the line written during the command was replaced by the one from before it"
+    )
+
+
 async def _opened(gate: _Gate, pilot, *, passes: int = 500) -> None:
     """Wait for the command to reach the gate, pumping the surface while it gets there.
 
