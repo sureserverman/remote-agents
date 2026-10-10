@@ -1597,7 +1597,9 @@ class ChoiceScreen(Screen[None]):
 
         Declared here so the pairing above is a statement every screen makes rather than one
         two screens happen to make. It is **not** reached by `selected_session`, which calls
-        the resolver only where `owns_session_cursor` is true — an earlier version of this
+        the resolver only where `_position_kind` answers `ROWS` or `CURSOR`, and a screen
+        carrying the row keys owns a cursor (the paired architecture check) — so only where
+        `owns_session_cursor` is true. An earlier version of this
         docstring said it was, and justified itself with an `AttributeError` that cannot
         happen. Left in place because a base that declares the flag and not the method invites
         the next reader to conclude the two are independent, which is the drift the paired

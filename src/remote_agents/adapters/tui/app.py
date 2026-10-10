@@ -193,8 +193,12 @@ class PositionKind(enum.Enum):
     """Which session a position's session-shaped F-key acts on, decided once for both resolvers.
 
     `_offers_session_key` and `_resolve_session` used to read the three position flags
-    themselves, in different orders, which was harmless only because no screen sets two of
-    them (`test_no_screen_declares_two_of_the_three_position_flags`). They now branch on this.
+    themselves, in different orders. They now branch on this. The order here is not free:
+    `SessionsScreen` and `SessionsPaneScreen` set both `carries_row_keys` and
+    `owns_session_cursor`, so the row keys are tested first or the sessions pane would be
+    refused its F-keys. That pair is the only overlap any screen may declare
+    (`test_no_screen_declares_two_of_the_three_position_flags`), which is what makes every
+    other order equivalent.
     """
 
     #: Carries the bare row keys, so it owns a cursor for them (`SessionsScreen`): offered, and
@@ -210,7 +214,7 @@ class PositionKind(enum.Enum):
 
 
 def _position_kind(screen: object) -> PositionKind:
-    """Classify a position by its flags, reading each of the three exactly once.
+    """Classify a position by its flags, reading each of the three at most once.
 
     `getattr` on every flag, because not every screen is a `ChoiceScreen` (the modals in
     `confirm.py` are `ModalScreen`s outside that hierarchy). A screen without the flags is
@@ -762,9 +766,9 @@ class RemoteAgentsTui(App[AttachRequest | None]):
 
         **Off a console, nothing to act on.** `console_holds_slot` is wired only under console
         hosting, so its absence is the declared absence of the whole layer (DEC-046) — except
-        on a position that owns a sessions cursor, which needs no console at all: F8 there
-        acts on the same row `s` does, and `remote-agents tui` in a bare shell is a real
-        position with a real list.
+        on a position that carries the row keys (`PositionKind.ROWS`), which needs no console
+        at all: F8 there acts on the same row `s` does, and `remote-agents tui` in a bare shell
+        is a real position with a real list.
 
         **A cursor is not what makes the layer legal — the bare keys are.** `carries_row_keys`
         rather than `owns_session_cursor`, and the two differ on exactly one position:

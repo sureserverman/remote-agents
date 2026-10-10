@@ -1171,7 +1171,9 @@ async def test_a_stop_key_leaves_the_projects_filter_exactly_as_the_owner_left_i
         assert entry.has_focus, "the stop moved the keyboard off the filter"
 
 
-async def test_an_aborted_force_stop_leaves_the_projects_filter_exactly_as_the_owner_left_it() -> None:
+async def test_an_aborted_force_stop_leaves_the_projects_filter_exactly_as_the_owner_left_it() -> (
+    None
+):
     """The F9 twin of the stop key's case above, on the path that stops nothing (BL-045).
 
     F9 asks first, so it reaches the filter by a different route than F8: the confirmation

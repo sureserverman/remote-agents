@@ -60,8 +60,8 @@ class ConsoleKeyTable(Enum):
     """
 
     ROOT = "root"
-    """`bind-key -n`, the table with no prefix. The cost of each table is argued once, at
-    `application/console.py` `ConsoleBinding.table`."""
+    """`bind-key -n`, the table with no prefix, whose budget DEC-093 sets. The cost of each
+    table is argued once, at `application/console.py` `ConsoleBinding.table`."""
 
     PREFIX = "prefix"
     """`bind-key -T prefix`, the table behind the prefix key. The cost of each table is argued
@@ -94,8 +94,9 @@ class ConsoleBindingAction(Enum):
     FORWARD_FUNCTION_KEY = "forward_function_key"
     """Deliver one function key to whichever pane should have it, decided at press time.
 
-    The console's one forwarding action: a root key with three destinations, chosen from the
-    marks on the pane the owner is actually in:
+    The console's general forwarding action (`SHOW_SETTINGS` keeps its reservation branch for
+    one key): a root key with three destinations, chosen from the marks on the pane the owner
+    is actually in:
 
     * one of the console's own panes — the surface running there owns the key;
     * an agent whose provider declares the key in `reserved_keys` — the agent binds it already,

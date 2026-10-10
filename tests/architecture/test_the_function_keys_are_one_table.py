@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import ast
 import inspect
+import textwrap
 from pathlib import Path
 
 from textual.binding import Binding
@@ -308,7 +309,11 @@ def test_no_screen_declares_two_of_the_three_position_flags() -> None:
         screen.__name__: [flag for flag in flags if getattr(screen, flag, False)]
         for screen in screens
         if sum(bool(getattr(screen, flag, False)) for flag in flags) > 1
-        and not (screen.carries_row_keys and screen.owns_session_cursor)
+        and not (
+            screen.carries_row_keys
+            and screen.owns_session_cursor
+            and not getattr(screen, "about_one_session", False)
+        )
     }
     assert not overlapping, (
         f"these screens answer 'which session' two ways, so the answer depends on which "
@@ -324,7 +329,6 @@ def test_no_screen_declares_two_of_the_three_position_flags() -> None:
         "these screens bind the row keys but own no cursor, so an F-key would resolve from the "
         f"published selection while the bare letter resolves from nothing: {keys_without_cursor}"
     )
-
 
 
 def test_every_screen_has_one_position_kind_and_both_resolvers_agree_with_it() -> None:
@@ -361,12 +365,28 @@ def test_every_screen_has_one_position_kind_and_both_resolvers_agree_with_it() -
     kinds = {_position_kind(screen) for screen in ALL_SCREENS}
     assert {PositionKind.ROWS, PositionKind.CURSOR, PositionKind.SUBJECT} <= kinds
 
-    flags = ("carries_row_keys", "owns_session_cursor", "about_one_session")
+    # Read from the AST, so a flag in a comment or docstring counts for nothing and a flag read
+    # as an attribute (`screen.owns_session_cursor`) counts as much as one read by `getattr`.
+    flags = {"carries_row_keys", "owns_session_cursor", "about_one_session"}
     for resolver in (RemoteAgentsTui._offers_session_key, RemoteAgentsTui._resolve_session):
-        source = inspect.getsource(resolver)
-        assert "_position_kind(" in source, f"{resolver.__name__} does not ask the classifier"
-        read_directly = [flag for flag in flags if f'"{flag}"' in source]
+        tree = ast.parse(textwrap.dedent(inspect.getsource(resolver)))
+        calls = {
+            node.func.id
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+        }
+        assert "_position_kind" in calls, f"{resolver.__name__} does not ask the classifier"
+        read_directly = sorted(
+            {node.attr for node in ast.walk(tree) if isinstance(node, ast.Attribute)} & flags
+            | {
+                node.value
+                for node in ast.walk(tree)
+                if isinstance(node, ast.Constant) and isinstance(node.value, str)
+            }
+            & flags
+        )
         assert not read_directly, f"{resolver.__name__} reads {read_directly} itself"
+
 
 def test_every_screen_can_answer_the_stop_handler_it_now_inherits() -> None:
     """A universal handler is only universal if every screen can take the calls it makes.
