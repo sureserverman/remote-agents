@@ -154,6 +154,35 @@ async def test_an_owner_rebind_drops_our_note(console) -> None:
     assert "owner" in await _run(*tmux, "list-keys", "-T", "root", "M-q")
 
 
+async def test_a_retired_tagged_key_is_unbound_and_an_owner_key_survives_a_console_entry(
+    console, tmp_path
+) -> None:
+    """BL-096 on a real server: a key an older release tagged and this one no longer emits is
+    unbound on the next console entry; a key the owner bound, untagged, is not; and tmux's own
+    noted defaults are not read as ours (a reconcile that read "has a note" would unbind them).
+    """
+    gateway, _runner, socket = console
+    tmux = ("tmux", "-L", socket)
+    await _run(
+        *tmux, "bind-key", "-n", "-N", "remote-agents: retired", "M-q", "display-message", "x"
+    )
+    await _run(*tmux, "bind-key", "-n", "M-w", "display-message", "owner")
+    composer = ConsoleComposer(
+        gateway, ("sleep", "600"), tmp_path, projects_command=("true",), reserved_keys={}
+    )
+
+    assert await composer.ensure() is True
+
+    root = await _run(*tmux, "list-keys", "-T", "root")
+    assert "M-q" not in [line.split()[3] for line in root.splitlines() if line.strip()]
+    assert "owner" in await _run(*tmux, "list-keys", "-T", "root", "M-w")
+    assert "send-prefix" in await _run(*tmux, "list-keys", "-T", "prefix", "C-b")
+    noted = await _run(*tmux, "list-keys", "-N", "-T", "root")
+    assert "F12" in [line.split()[0] for line in noted.splitlines() if line.strip()], (
+        "the console's own keys are tagged on install"
+    )
+
+
 async def test_a_swap_unzooms_the_window_which_is_why_the_option_exists(console) -> None:
     """The measurement the whole design rests on, asserted rather than remembered.
 

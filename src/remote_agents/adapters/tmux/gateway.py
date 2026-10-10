@@ -15,6 +15,7 @@ from remote_agents.adapters.tmux.codec import (
     ManagedPane,
     console_background_hook_args,
     console_binding_args,
+    console_bindings_listing_args,
     console_clients_args,
     console_key_args,
     console_layout_args,
@@ -25,6 +26,7 @@ from remote_agents.adapters.tmux.codec import (
     console_server_option_args,
     console_slot_mark_args,
     console_target,
+    console_unbinding_args,
     console_zoom_args,
     console_zoom_pane_args,
     decode_selection,
@@ -39,6 +41,7 @@ from remote_agents.adapters.tmux.codec import (
     pane_title_args,
     parse_arrangement,
     parse_pane,
+    parse_tagged_bindings,
     publish_selection_args,
     read_selection_args,
     rejoin_console_pane_args,
@@ -1254,6 +1257,15 @@ class TmuxGateway:
             *self._base_argv(),
             *console_binding_args(key, action, command, table, reserved_keys=reserved_keys),
         )
+
+    async def tagged_console_bindings(self, table: ConsoleKeyTable) -> frozenset[str]:
+        """The keys in one table whose binding carries the console's note prefix (BL-096)."""
+        output = await self._runner.run(*self._base_argv(), *console_bindings_listing_args(table))
+        return parse_tagged_bindings(output)
+
+    async def remove_console_binding(self, table: ConsoleKeyTable, key: str) -> None:
+        """Unbind one key from one table, on this socket only; the codec validates the key."""
+        await self._runner.run(*self._base_argv(), *console_unbinding_args(table, key))
 
     def _base_argv(self) -> tuple[str, str, str]:
         """Return the only valid tmux server selector for this adapter."""

@@ -383,6 +383,15 @@ _BINDABLE_KEY_CHARACTERS = frozenset(
     "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
 )
 
+CONSOLE_BINDING_NOTE_PREFIX = "remote-agents:"
+"""How the console marks the tmux bindings it installs, as the start of each one's `-N` note.
+
+A *prefix*, never "has a note": tmux's own default bindings carry notes (`C-b  Send the prefix
+key`), so a reconcile that read any note as ours would unbind tmux's defaults. An owner who
+rebinds one of our keys without `-N` drops the note -- measured on tmux 3.4,
+`test_an_owner_rebind_drops_our_note` -- so the owner's binding is never read as ours (BL-096).
+"""
+
 
 #: How a forwarding binding finds the sessions pane, in tmux's own language.
 #:
@@ -646,15 +655,7 @@ def console_binding_args(
     space, no `#` can survive it. **Moving or weakening that check is a shell-injection change,
     not a refactor.**
     """
-    body = key
-    for modifier in ("C-", "M-"):
-        if body.startswith(modifier):
-            body = body.removeprefix(modifier)
-            break
-    if not body or not set(body) <= _BINDABLE_KEY_CHARACTERS:
-        raise ValueError(
-            "console binding key must be alphanumeric, optionally behind one C- or M- modifier"
-        )
+    _validate_binding_key(key)
     if not isinstance(table, ConsoleKeyTable):
         # The annotation is enforced by nobody — this repo runs ruff and pytest, no type
         # checker — so a string here would otherwise reach `table.value` and raise
@@ -737,7 +738,63 @@ def console_binding_args(
     # carries the forwarding script's own `#{...}` formats through to the *inner* tmux: the outer
     # pass turns `##{pane_id}` back into `#{pane_id}`, which is what the lookup needs to see.
     placement = ("-n",) if table is ConsoleKeyTable.ROOT else ("-T", table.value)
-    return ("bind-key", *placement, key, "run-shell", shlex.join(command).replace("#", "##"))
+    note = f"{CONSOLE_BINDING_NOTE_PREFIX} {action.value}"
+    return (
+        "bind-key",
+        *placement,
+        "-N",
+        note,
+        key,
+        "run-shell",
+        shlex.join(command).replace("#", "##"),
+    )
+
+
+def _validate_binding_key(key: str) -> None:
+    """Refuse any key but `[C-|M-]?[A-Za-z0-9]+`, for binding and for unbinding alike.
+
+    A forward interpolates its key into a shell string, so this check is what keeps a key from
+    carrying a quote, `$`, a backtick, a space or `#` into it (see `console_binding_args`).
+    """
+    body = key
+    for modifier in ("C-", "M-"):
+        if body.startswith(modifier):
+            body = body.removeprefix(modifier)
+            break
+    if not body or not set(body) <= _BINDABLE_KEY_CHARACTERS:
+        raise ValueError(
+            "console binding key must be alphanumeric, optionally behind one C- or M- modifier"
+        )
+
+
+def console_bindings_listing_args(table: ConsoleKeyTable) -> tuple[str, ...]:
+    """The argv suffix that lists one key table's noted bindings: key, padding, note."""
+    if not isinstance(table, ConsoleKeyTable):
+        raise ValueError(f"a console binding's table is a ConsoleKeyTable, not {table!r}")
+    return ("list-keys", "-N", "-T", table.value)
+
+
+def parse_tagged_bindings(output: str) -> frozenset[str]:
+    """The keys in a `list-keys -N` listing whose note starts with the console's prefix.
+
+    The key is the first whitespace-separated token and the note is the rest
+    (`test_list_keys_notes_parse`, against tmux 3.4's own defaults). An untagged binding --
+    tmux's default or the owner's -- is never returned.
+    """
+    keys = set()
+    for line in output.splitlines():
+        key, _, note = line.strip().partition(" ")
+        if key and note.strip().startswith(CONSOLE_BINDING_NOTE_PREFIX):
+            keys.add(key)
+    return frozenset(keys)
+
+
+def console_unbinding_args(table: ConsoleKeyTable, key: str) -> tuple[str, ...]:
+    """The argv suffix that removes one console binding, validated as a binding's key is."""
+    _validate_binding_key(key)
+    if not isinstance(table, ConsoleKeyTable):
+        raise ValueError(f"a console binding's table is a ConsoleKeyTable, not {table!r}")
+    return ("unbind-key", "-T", table.value, key)
 
 
 def switch_client_argv(session_id: SessionId) -> tuple[str, ...]:

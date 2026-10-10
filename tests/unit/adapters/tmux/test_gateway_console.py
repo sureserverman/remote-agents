@@ -120,6 +120,8 @@ async def test_the_console_binding_is_installed_on_our_socket_with_a_validated_k
             *_BASE,
             "bind-key",
             "-n",
+            "-N",
+            "remote-agents: show_projects",
             "F12",
             "run-shell",
             "/usr/bin/python3 -m remote_agents console projects",
@@ -128,6 +130,8 @@ async def test_the_console_binding_is_installed_on_our_socket_with_a_validated_k
             *_BASE,
             "bind-key",
             "-n",
+            "-N",
+            "remote-agents: show_projects",
             "C-a",
             "run-shell",
             "/usr/bin/python3 -m remote_agents console projects",
@@ -138,6 +142,27 @@ async def test_the_console_binding_is_installed_on_our_socket_with_a_validated_k
             await gateway(runner).install_console_binding(
                 key, ConsoleBindingAction.SHOW_PROJECTS, projects
             )
+
+
+async def test_the_tagged_keys_are_read_from_one_table_on_our_socket() -> None:
+    from remote_agents.ports.console import ConsoleKeyTable
+
+    runner = RecordingRunner(
+        "C-b     Send the prefix key\nh       remote-agents: toggle_panes\nM-w     mine\n"
+    )
+    tagged = await gateway(runner).tagged_console_bindings(ConsoleKeyTable.PREFIX)
+    assert tagged == frozenset({"h"})
+    assert runner.calls == [(*_BASE, "list-keys", "-N", "-T", "prefix")]
+
+
+async def test_a_retired_key_is_unbound_on_our_socket_with_a_validated_key() -> None:
+    from remote_agents.ports.console import ConsoleKeyTable
+
+    runner = RecordingRunner()
+    await gateway(runner).remove_console_binding(ConsoleKeyTable.ROOT, "F3")
+    assert runner.calls == [(*_BASE, "unbind-key", "-T", "root", "F3")]
+    with pytest.raises(ValueError):
+        await gateway(runner).remove_console_binding(ConsoleKeyTable.ROOT, "F3;kill-server")
 
 
 async def test_a_projects_binding_with_nothing_to_run_is_refused() -> None:

@@ -494,6 +494,39 @@ class ConsoleComposer:
         # it only hides with. `None` draws nothing, which is every composer but the console's.
         self._status_bar = status_bar
 
+    async def _unbind_retired_keys(self) -> None:
+        """Unbind every key this console tagged that it no longer emits (BL-096).
+
+        A release that drops a key used to leave it bound on the owner's long-lived server until
+        tmux restarted. Each binding now carries a `remote-agents:` note, so after installing its
+        own the composer reads the tagged keys in both tables and unbinds the rest. **Only
+        tagged keys**: tmux's own defaults and anything the owner bound are untagged, and an
+        owner who rebinds one of ours without `-N` drops our note (measured on tmux 3.4). Like
+        the installs, a failure is logged and costs nothing else.
+
+        The fold key is kept whether or not this composer binds it. It is declared apart from
+        the root budget, so a composer built without it (the default) must not take it from the
+        one the composition root builds with it, on the same server.
+        """
+        keep = {(binding.table, binding.key) for binding in self._bindings}
+        fold = console_panes_binding()
+        keep.add((fold.table, fold.key))
+        for table in (ConsoleKeyTable.ROOT, ConsoleKeyTable.PREFIX):
+            try:
+                tagged = await self._console.tagged_console_bindings(table)
+            except Exception:
+                _LOG.exception("the console could not read its own %s keys", table.value)
+                continue
+            for key in sorted(tagged):
+                if (table, key) in keep:
+                    continue
+                try:
+                    await self._console.remove_console_binding(table, key)
+                except Exception:
+                    _LOG.exception("the retired console key %s could not be unbound", key)
+                else:
+                    _LOG.info("unbound the retired console key %s (%s)", key, table.value)
+
     async def ensure(self) -> bool:
         """Make the console exist, with its panes and its keys; say whether it is usable.
 
@@ -550,6 +583,7 @@ class ConsoleComposer:
                     "the console key %s could not be installed; the console stands without it",
                     binding.key,
                 )
+        await self._unbind_retired_keys()
         # The mouse, here and **outside the answer** for exactly the reason the bindings are:
         # a setting that will not apply costs the owner the mouse, it does not cost them the
         # console. Idempotent, so it reaches a console built before this existed on the next

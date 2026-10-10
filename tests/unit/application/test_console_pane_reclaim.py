@@ -92,6 +92,12 @@ class RecordingConsole:
     ) -> None:
         return None
 
+    async def tagged_console_bindings(self, table) -> frozenset[str]:
+        return frozenset()
+
+    async def remove_console_binding(self, table, key: str) -> None:
+        raise AssertionError("nothing here retires a console key")
+
     async def mark_console_slot(self, pane_id: str, slot=None) -> None:
         raise AssertionError("nothing here re-marks a pane")
 

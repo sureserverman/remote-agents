@@ -555,6 +555,13 @@ own pane if that is where you pressed it, the sessions pane otherwise — and F1
 projects surface back to the left pane, the one console operation tmux cannot perform by
 itself.
 
+**A key a release stops using is removed when you next enter the console.** Every key the
+console installs carries a `remote-agents:` note (`tmux -L remote-agents list-keys -N`), and on
+each entry it unbinds the noted keys it no longer installs. A key you bound yourself on that
+server carries no such note, and rebinding one of ours without `-N` drops the note, so neither is
+ever touched. Two costs come with it: rolling back to an older release unbinds the newer keys it
+does not know, and unbinding a prefix key does not restore tmux's own default for it.
+
 **F11 is unbound on purpose.** It is the full-screen toggle in almost every emulator, and a
 binding of ours would be a key you lose without being able to tell which side took it.
 

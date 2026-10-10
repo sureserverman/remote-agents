@@ -18,27 +18,46 @@ from __future__ import annotations
 
 import re
 import shlex
+from pathlib import Path
 
 import pytest
 
 from remote_agents.adapters.tmux.codec import (
     _PROFILE_OPTION,
+    CONSOLE_BINDING_NOTE_PREFIX,
     CONSOLE_SESSION_NAME,
     CONSOLE_SLOT_OPTION,
     SELECTED_SESSION_OPTION,
-    console_binding_args,
+    console_bindings_listing_args,
     console_layout_args,
     console_target,
+    console_unbinding_args,
     console_zoom_args,
     decode_selection,
     display_message_args,
     exact_session_target,
+    parse_tagged_bindings,
     publish_selection_args,
     read_selection_args,
     switch_client_argv,
 )
+from remote_agents.adapters.tmux.codec import console_binding_args as _tagged_binding_args
 from remote_agents.domain.models import SessionId
 from remote_agents.ports.console import ConsoleBindingAction, ConsoleKeyTable
+
+
+def console_binding_args(*arguments, **keywords) -> tuple[str, ...]:
+    """Every console binding is tagged with a `remote-agents:` note (BL-096).
+
+    These tests read the rest of the argv by position, so the tag is checked here, on every
+    binding they build, and then set aside.
+    """
+    argv = _tagged_binding_args(*arguments, **keywords)
+    index = argv.index("-N")
+    assert argv[index + 1].startswith(f"{CONSOLE_BINDING_NOTE_PREFIX} "), argv
+    assert index < argv.index("run-shell") - 1, "the note must come before the key"
+    return argv[:index] + argv[index + 2 :]
+
 
 _SESSION = SessionId.parse("01234567-89ab-cdef-0123-456789abcdef")
 _EXACT = "ra-01234567-89ab-cdef-0123-456789abcdef:"
@@ -901,3 +920,55 @@ def test_a_key_handed_to_a_pane_is_a_function_key_at_an_exact_pane() -> None:
             console_key_args("%4", key)
     with pytest.raises(ValueError):
         console_key_args("%4 ; kill-server", "F2")
+
+
+_TMUX_DEFAULTS = (
+    Path(__file__).resolve().parents[3] / "fixtures/tmux/list_keys_notes_prefix_3.4.txt"
+).read_text(encoding="utf-8")
+
+
+def test_a_binding_is_tagged_with_its_action_before_the_key() -> None:
+    """BL-096: the tag is how a later console entry knows a key is ours to unbind."""
+    argv = _tagged_binding_args(
+        "h", ConsoleBindingAction.TOGGLE_PANES, ("true",), ConsoleKeyTable.PREFIX
+    )
+    assert argv[:6] == (
+        "bind-key",
+        "-T",
+        "prefix",
+        "-N",
+        "remote-agents: toggle_panes",
+        "h",
+    )
+
+
+def test_listing_a_table_asks_for_its_notes() -> None:
+    assert console_bindings_listing_args(ConsoleKeyTable.ROOT) == ("list-keys", "-N", "-T", "root")
+    with pytest.raises(ValueError):
+        console_bindings_listing_args("root")  # type: ignore[arg-type]
+
+
+def test_only_keys_whose_note_carries_our_prefix_are_ours() -> None:
+    """tmux's own defaults carry notes too, so "has a note" would unbind them; the prefix is the
+    test. Ours are listed beside them, as they are on a real server."""
+    listing = (
+        _TMUX_DEFAULTS
+        + "F3      remote-agents: forward_function_key\n"
+        + "h       remote-agents: toggle_panes\n"
+        + "M-w     an owner's note that mentions remote-agents: later\n"
+    )
+    assert parse_tagged_bindings(listing) == frozenset({"F3", "h"})
+    assert parse_tagged_bindings(_TMUX_DEFAULTS) == frozenset()
+    assert parse_tagged_bindings("") == frozenset()
+
+
+def test_unbinding_validates_the_key_as_binding_does() -> None:
+    assert console_unbinding_args(ConsoleKeyTable.PREFIX, "h") == (
+        "unbind-key",
+        "-T",
+        "prefix",
+        "h",
+    )
+    for unsafe in ("", "a b", "F1;", "$(x)", "#{pane_id}", "C-"):
+        with pytest.raises(ValueError):
+            console_unbinding_args(ConsoleKeyTable.ROOT, unsafe)

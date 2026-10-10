@@ -75,6 +75,10 @@ class RecordingConsole:
         self.geometry: tuple[tuple[str, int], ...] = (("%0", 109), ("%1", 73), ("", 183))
         self.options: dict[str, str] = {}
         self.calls: list[tuple] = []
+        #: The keys each table lists as tagged, and every unbind, kept apart from `calls` so the
+        #: tests that read the whole call sequence of an entry are not about the reconcile.
+        self.tagged: dict[ConsoleKeyTable, frozenset[str]] = {}
+        self.unbound: list[tuple[ConsoleKeyTable, str]] = []
 
     def _raise_if_armed(self) -> None:
         if self.error is not None:
@@ -173,6 +177,12 @@ class RecordingConsole:
         # the only reason it was a red rather than a silent hole.
         self.calls.append(("install_console_binding", key, action, command, table))
         self._raise_if_armed()
+
+    async def tagged_console_bindings(self, table: ConsoleKeyTable) -> frozenset[str]:
+        return self.tagged.get(table, frozenset())
+
+    async def remove_console_binding(self, table: ConsoleKeyTable, key: str) -> None:
+        self.unbound.append((table, key))
 
     async def kill_console(self) -> None:
         self.calls.append(("kill_console",))
@@ -684,6 +694,61 @@ async def test_a_console_that_takes_the_fold_key_without_its_command_is_not_cons
             projects_command=_PROJECTS_COMMAND,
             bindings=CONSOLE_BINDINGS + (console_panes_binding(),),
         )
+
+
+async def test_a_tagged_key_the_console_no_longer_emits_is_unbound_on_entry() -> None:
+    """BL-096: a release that drops a key used to leave it bound until tmux restarted."""
+    console = RecordingConsole()
+    console.tagged = {
+        ConsoleKeyTable.ROOT: frozenset({"F2", "M-q"}),
+        ConsoleKeyTable.PREFIX: frozenset({"z"}),
+    }
+
+    await _composer(console).ensure()
+
+    assert set(console.unbound) == {(ConsoleKeyTable.ROOT, "M-q"), (ConsoleKeyTable.PREFIX, "z")}
+
+
+async def test_a_default_built_composer_never_unbinds_the_fold_key() -> None:
+    """The fold key is declared apart from the root budget, so a composer built without it must
+    not take it from the one the composition root builds with it, on the same server."""
+    console = RecordingConsole()
+    console.tagged = {ConsoleKeyTable.PREFIX: frozenset({console_panes_binding().key})}
+
+    await _composer(console).ensure()
+
+    assert console.unbound == []
+
+
+async def test_every_key_the_console_emits_is_kept() -> None:
+    console = RecordingConsole()
+    console.tagged = {
+        table: frozenset(binding.key for binding in CONSOLE_BINDINGS if binding.table is table)
+        for table in ConsoleKeyTable
+    }
+
+    await _composer(console).ensure()
+
+    assert console.unbound == []
+
+
+async def test_a_reconcile_that_fails_costs_the_console_nothing(caplog) -> None:
+    class Unreadable(RecordingConsole):
+        async def tagged_console_bindings(self, table):
+            raise RuntimeError("tmux command failed: no server")
+
+    class Unbindable(RecordingConsole):
+        async def remove_console_binding(self, table, key):
+            raise RuntimeError("tmux command failed: unknown key")
+
+    unreadable = Unreadable()
+    unbindable = Unbindable()
+    unbindable.tagged = {ConsoleKeyTable.ROOT: frozenset({"M-q"})}
+
+    assert await _composer(unreadable).ensure() is True
+    assert await _composer(unbindable).ensure() is True
+    assert "could not read its own" in caplog.text
+    assert "could not be unbound" in caplog.text
 
 
 async def test_re_ensure_does_not_stack_the_bindings() -> None:

@@ -1,0 +1,28 @@
+{
+ "baseline": {
+  "elapsed_s": 61.4,
+  "exit": 0,
+  "tail": "........................................................................ [ 16%]\n........................................................................ [ 33%]\n........................................................................ [ 50%]\n........................................................................ [ 67%]\n........................................................................ [ 84%]\n................................................................         [100%]\n424 passed in 58.90s"
+ },
+ "break_patch": "--- a/src/remote_agents/adapters/tmux/codec.py\t2026-10-10 09:39:25.982319011 +0100\n+++ b/src/remote_agents/adapters/tmux/codec.py\t2026-10-10 09:39:25.991319075 +0100\n@@ -784,7 +784,7 @@\n     keys = set()\n     for line in output.splitlines():\n         key, _, note = line.strip().partition(\" \")\n-        if key and note.strip().startswith(CONSOLE_BINDING_NOTE_PREFIX):\n+        if key and note.strip():\n             keys.add(key)\n     return frozenset(keys)\n \n",
+ "build": null,
+ "created": "2026-10-10T08:41:28+00:00",
+ "fingerprint": "c341f6b1e2143307d5884cbefff16fbbef91e6e3b42131e863973617271ff076",
+ "index": 1,
+ "kind": "claim",
+ "named_break": null,
+ "no_build_reason": "pure Python, no build",
+ "plan": "/mnt/vault/Portfolio/infra/remote-agents/plans/2026-10-09-decisions-and-worktrees-sub-02-robustness-plan.md",
+ "red": {
+  "elapsed_s": 60.7,
+  "exit": 1,
+  "tail": "        \"console binding key must be alphanumeric, optionally behind one C- or M- modifier\"\n    )\nValueError: console binding key must be alphanumeric, optionally behind one C- or M- modifier\nERROR    remote_agents.application.console:console.py:526 the retired console key ~ could not be unbound\nTraceback (most recent call last):\n  File \"/home/user/dev/infra/remote-agents/src/remote_agents/application/console.py\", line 524, in _unbind_retired_keys\n    await self._console.remove_console_binding(table, key)\n  File \"/home/user/dev/infra/remote-agents/src/remote_agents/adapters/tmux/gateway.py\", line 1268, in remove_console_binding\n    await self._runner.run(*self._base_argv(), *console_unbinding_args(table, key))\n                                                ~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^\n  File \"/home/user/dev/infra/remote-agents/src/remote_agents/adapters/tmux/codec.py\", line 794, in console_unbinding_args\n    _validate_binding_key(key)\n    ~~~~~~~~~~~~~~~~~~~~~^^^^^\n  File \"/home/user/dev/infra/remote-agents/src/remote_agents/adapters/tmux/codec.py\", line 765, in _validate_binding_key\n    raise ValueError(\n        \"console binding key must be alphanumeric, optionally behind one C- or M- modifier\"\n    )\nValueError: console binding key must be alphanumeric, optionally behind one C- or M- modifier\n__________ test_the_tagged_keys_are_read_from_one_table_on_our_socket __________\n\n    async def test_the_tagged_keys_are_read_from_one_table_on_our_socket() -> None:\n        from remote_agents.ports.console import ConsoleKeyTable\n    \n        runner = RecordingRunner(\n            \"C-b     Send the prefix key\\nh       remote-agents: toggle_panes\\nM-w     mine\\n\"\n        )\n        tagged = await gateway(runner).tagged_console_bindings(ConsoleKeyTable.PREFIX)\n>       assert tagged == frozenset({\"h\"})\nE       AssertionError: assert frozenset({'C-b', 'M-w', 'h'}) == frozenset({'h'})\nE         \nE         Extra items in the left set:\nE         'M-w'\nE         'C-b'\nE         Use -v to get more diff\n\ntests/unit/adapters/tmux/test_gateway_console.py:154: AssertionError\n=========================== short test summary info ============================\nFAILED tests/e2e/test_console_panes.py::test_a_retired_tagged_key_is_unbound_and_an_owner_key_survives_a_console_entry\nFAILED tests/unit/adapters/tmux/test_gateway_console.py::test_the_tagged_keys_are_read_from_one_table_on_our_socket\n2 failed, 422 passed in 58.16s"
+ },
+ "schema": 2,
+ "task": "3.2",
+ "test": "uv run --locked pytest tests/e2e/test_console_panes.py tests/unit/adapters/tmux/test_gateway_console.py tests/unit/application/test_console_composer.py tests/unit/application/test_console_pane_reclaim.py tests/unit/application/test_swap_recovery.py tests/architecture -q -p no:randomly",
+ "text": "`uv run --locked pytest tests/e2e/test_console_panes.py tests/unit/adapters/tmux/test_gateway_console.py tests/unit/application/test_console_composer.py tests/unit/application/test_console_pane_reclaim.py tests/unit/application/test_swap_recovery.py tests/architecture -q -p no:randomly` (real tmux; run alone). The e2e case goes red if the reconcile reads \"has a note\" instead of the prefix: tmux's own default prefix keys would then be unbound, so the test also asserts `list-keys -T prefix C-b` still exists.",
+ "touched": [
+  "src/remote_agents/adapters/tmux/codec.py"
+ ]
+}
