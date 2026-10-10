@@ -1,0 +1,28 @@
+{
+ "baseline": {
+  "elapsed_s": 0.3,
+  "exit": 0,
+  "tail": "...                                                                      [100%]\n3 passed, 23 deselected in 0.09s"
+ },
+ "break_patch": "--- a/src/remote_agents/adapters/agents/registry.py\n+++ b/src/remote_agents/adapters/agents/registry.py\n@@ -436,7 +436,7 @@\n     Takes the descriptors for `profile_trust_dialogs`' reason: building one is not free.\n     \"\"\"\n     return {\n-        name: (dialog.identifies_by,) for name, dialog in profile_trust_dialogs(descriptors).items()\n+        name: () for name, dialog in profile_trust_dialogs(descriptors).items()\n     }\n \n \n",
+ "build": null,
+ "created": "2026-10-10T12:20:03+00:00",
+ "fingerprint": "60bb0e2b0f3bb949754b08a0f55dc9d2a29f030c4379dc0a4d2899c358832f23",
+ "index": 1,
+ "kind": "claim",
+ "named_break": null,
+ "no_build_reason": "pure Python, no build",
+ "plan": "/mnt/vault/Portfolio/infra/remote-agents/plans/2026-10-09-decisions-and-worktrees-sub-03-provider-boundaries-plan.md",
+ "red": {
+  "elapsed_s": 0.3,
+  "exit": 1,
+  "tail": "tests/contract/test_profiles.py:386: AssertionError\n____________ test_a_new_vertical_needs_no_edit_to_the_tmux_profiles ____________\n\n    def test_a_new_vertical_needs_no_edit_to_the_tmux_profiles() -> None:\n        \"\"\"A dialog heading the tmux adapter has never seen becomes a blocker all the same.\n    \n        Codex's descriptor is swapped for one declaring an invented heading. Nothing in\n        `adapters/tmux/profiles.py` spells it, so a profile that carries it got it from the\n        vertical's declaration and nowhere else.\n        \"\"\"\n        from dataclasses import replace as replaced\n    \n        from remote_agents.adapters.agents.registry import provider_descriptors\n    \n        invented = \"Heading no adapter spells\"\n        descriptors = tuple(\n            replaced(\n                descriptor,\n                trust_dialog=replaced(descriptor.trust_dialog, identifies_by=invented),\n            )\n            if str(descriptor.profile_id) == \"codex\"\n            else descriptor\n            for descriptor in provider_descriptors()\n        )\n        profiles_source = Path(\"src/remote_agents/adapters/tmux/profiles.py\").read_text()\n    \n        launched, resumed = _composed(\"codex\", profile_readiness_blockers(descriptors))\n    \n        assert invented not in profiles_source\n>       assert launched.readiness_blockers == (invented,)\nE       AssertionError: assert () == ('Heading no adapter spells',)\nE         \nE         Right contains one more item: 'Heading no adapter spells'\nE         Use -v to get more diff\n\ntests/contract/test_profiles.py:415: AssertionError\n=========================== short test summary info ============================\nFAILED tests/contract/test_profiles.py::test_every_declared_trust_dialog_yields_a_readiness_blocker\nFAILED tests/contract/test_profiles.py::test_a_new_vertical_needs_no_edit_to_the_tmux_profiles\n2 failed, 1 passed, 23 deselected in 0.11s"
+ },
+ "schema": 2,
+ "task": "2.2",
+ "test": "uv run --locked pytest tests/contract/test_profiles.py -q -p no:randomly -k \"declared_trust_dialog or new_vertical or another_screen\"",
+ "text": "`uv run --locked pytest tests/contract/test_profiles.py -q -p no:randomly -k \"declared_trust_dialog or new_vertical or another_screen\"`. Three pass. Pasting `Folder access` into a copy of `tests/fixtures/panes/codex/idle.txt` (scratch, reverted) makes `another_screen` red; dropping `identifies_by` from the derivation makes `declared_trust_dialog` red.",
+ "touched": [
+  "src/remote_agents/adapters/agents/registry.py"
+ ]
+}

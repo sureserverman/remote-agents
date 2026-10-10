@@ -338,3 +338,140 @@ def test_a_profile_with_no_curated_variant_ignores_the_remote_control_flag(
 
     assert asked.argv == (f"/tools/{profile_id}",)
     assert definition.remote_control_argv is None
+
+
+def _composed(profile_id: str, blockers: dict[str, tuple[str, ...]]):
+    """A profile's launch and resume profiles, built the way composition builds them."""
+    import remote_agents.composition.tui as composition
+
+    definition = next(
+        profile for profile in closed_profiles() if str(profile.profile_id) == profile_id
+    )
+    executable = Path(f"/tools/{profile_id}")
+    entry = blockers.get(profile_id, ())
+    launched = composition._profile_factory(definition, executable, {"PATH": "/tools"}, entry)(
+        SessionId.new(), False
+    )
+    try:
+        resumed = composition._resume_profile_factory(
+            definition, executable, {"PATH": "/tools"}, entry
+        )(SessionId.new(), ProviderConversationId("conversation-1"))
+    except ProfileError:
+        resumed = None  # no curated resume (cursor-agent)
+    return launched, resumed
+
+
+def test_every_declared_trust_dialog_yields_a_readiness_blocker() -> None:
+    """Every vertical that declares a dialog has its heading answer that profile's launch.
+
+    Swept over the descriptors rather than listed, so a vertical that learns to declare its
+    dialog is covered the moment it does (BL-052).
+    """
+    from remote_agents.adapters.agents.registry import (
+        profile_trust_dialogs,
+        provider_descriptors,
+    )
+
+    descriptors = provider_descriptors()
+    blockers = profile_readiness_blockers(descriptors)
+    dialogs = profile_trust_dialogs(descriptors)
+    assert dialogs, "no vertical declares a trust dialog, so this sweep is vacuous"
+
+    missing = {}
+    for profile_id, dialog in dialogs.items():
+        launched, resumed = _composed(profile_id, blockers)
+        for name, profile in (("launch", launched), ("resume", resumed)):
+            if profile is not None and dialog.identifies_by not in profile.readiness_blockers:
+                missing[f"{profile_id} {name}"] = profile.readiness_blockers
+    assert not missing, f"these composed profiles do not stop on their own dialog: {missing}"
+
+
+def test_a_new_vertical_needs_no_edit_to_the_tmux_profiles() -> None:
+    """A dialog heading the tmux adapter has never seen becomes a blocker all the same.
+
+    Codex's descriptor is swapped for one declaring an invented heading. Nothing in
+    `adapters/tmux/profiles.py` spells it, so a profile that carries it got it from the
+    vertical's declaration and nowhere else.
+    """
+    from dataclasses import replace as replaced
+
+    from remote_agents.adapters.agents.registry import provider_descriptors
+
+    invented = "Heading no adapter spells"
+    descriptors = tuple(
+        replaced(
+            descriptor,
+            trust_dialog=replaced(descriptor.trust_dialog, identifies_by=invented),
+        )
+        if str(descriptor.profile_id) == "codex"
+        else descriptor
+        for descriptor in provider_descriptors()
+    )
+    profiles_source = Path("src/remote_agents/adapters/tmux/profiles.py").read_text()
+
+    launched, resumed = _composed("codex", profile_readiness_blockers(descriptors))
+
+    assert invented not in profiles_source
+    assert launched.readiness_blockers == (invented,)
+    assert resumed is not None and resumed.readiness_blockers == (invented,)
+
+
+#: Captures where a derived blocker legitimately appears although the screen is not that
+#: profile's dialog: cursor-agent keeps its trust box drawn above the composer after the
+#: question is answered, so `Workspace Trust Required` stays on screen while it is idle, busy
+#: and stopping. That exposure predates BL-052 (cursor's blocker string did not change) and is
+#: the history BL-053 was filed from; listed so it stays a known set rather than a growing one.
+KNOWN_DRAWN_TRUST_BOX = {
+    "Workspace Trust Required": frozenset(
+        {
+            "panes/cursor/busy.txt",
+            "panes/cursor/composed.txt",
+            "panes/cursor/idle.txt",
+            "panes/stop_sequence/cursor_after_first_enter.txt",
+            "panes/stop_sequence/cursor_after_quit_typed.txt",
+            "panes/stop_sequence/cursor_shell_mode_command.txt",
+            "panes/stop_sequence/cursor_shell_mode_empty.txt",
+        }
+    ),
+}
+
+
+def _is_own_dialog_capture(relative: str, profile_id: str) -> bool:
+    """`trust_dialogs/<profile>.txt`, or `panes/<agent>/dialog_trust.txt` for that agent."""
+    parts = relative.split("/")
+    if parts[0] == "trust_dialogs":
+        return parts[-1] == f"{profile_id}.txt"
+    return (
+        len(parts) == 3
+        and parts[0] == "panes"
+        and profile_id.startswith(parts[1])
+        and parts[2] == "dialog_trust.txt"
+    )
+
+
+def test_no_derived_blocker_matches_a_capture_of_another_screen() -> None:
+    """A derived blocker appears only on its own dialog, or where the known trust box stays.
+
+    Swept over every committed capture. Codex's blocker changed from its question to its
+    heading here, and a heading that also appeared on an ordinary screen would conclude a
+    working launch as awaiting trust.
+    """
+    fixtures = Path("tests/fixtures")
+    captures = {
+        str(path.relative_to(fixtures)): path.read_text(encoding="utf-8", errors="replace")
+        for path in sorted(fixtures.rglob("*.txt"))
+    }
+    assert len(captures) > 20, "the capture sweep found almost nothing to read"
+
+    stray = {}
+    for profile_id, blockers in profile_readiness_blockers().items():
+        for blocker in blockers:
+            allowed = KNOWN_DRAWN_TRUST_BOX.get(blocker, frozenset())
+            for relative, text in captures.items():
+                if (
+                    blocker in text
+                    and not _is_own_dialog_capture(relative, profile_id)
+                    and relative not in allowed
+                ):
+                    stray.setdefault(blocker, []).append(relative)
+    assert not stray, f"derived blockers found on screens that are not their dialog: {stray}"
