@@ -1,0 +1,499 @@
+# Captures from docs/evidence/2026-10-10-codex-enable-race-drill.sh, 2026-10-10, codex-cli 0.162.1.
+# Codex's 'could not create PATH aliases under /tmp' warning is removed from every rep.
+# Unauthenticated first pass (sign-in screen; superseded, see the acceptance doc):
+RESULT arm=disable rep=1: PANE_LOST (codex exited)
+RESULT arm=control rep=2: PANE_SURVIVED
+RESULT arm=disable rep=2: PANE_LOST (codex exited)
+RESULT arm=race rep=3: PANE_LOST (codex exited)
+RESULT arm=race rep=4: PANE_LOST (codex exited)
+RESULT arm=race rep=5: PANE_LOST (codex exited)
+RESULT arm=running rep=1: PANE_LOST (codex exited)
+RESULT arm=running rep=2: PANE_LOST (codex exited)
+RESULT arm=running rep=5: PANE_LOST (codex exited)
+RESULT arm=control rep=3: PANE_SURVIVED
+RESULT arm=disable rep=3: PANE_LOST (codex exited)
+RESULT arm=race rep=2: PANE_LOST (codex exited)
+RESULT arm=race rep=1: PANE_LOST (codex exited)
+RESULT arm=running rep=4: PANE_LOST (codex exited)
+RESULT arm=running rep=3: PANE_LOST (codex exited)
+
+== arm=race state=dialog rep=1 codex-cli 0.162.1
+07:57:52.292 probe: no daemon listening; preference=False
+07:57:52.976 the launch brought a managed daemon up (~800 ms): app-server pid 2460318 
+07:57:53.239 before: codex pid 2460055, screen:
+  |   model request. Continue only if you trust these files. Your trust decision will be saved.
+  | › 1. Trust and continue
+  |   2. Back to Agent Command Center
+  |   enter continue · esc back
+07:57:53.245 run: codex remote-control start --json
+07:57:57.839 rc=1; "event":"shutdown_requested","details":{"pid":2460318}
+07:57:57.844 after: app-server pid 2460689 ; preference=True
+07:58:03.924 after: codex pid 2460055, screen:
+  |   /tmp/cxr-w/race-dialog-1
+  |   Trust this folder? Codex can read, edit, and run files here, subject to your permission settings. Folder settings can run code automatically, even without a
+  |   model request. Continue only if you trust these files. Your trust decision will be saved.
+  | › 1. Trust and continue
+  |   2. Back to Agent Command Center
+  |   enter continue · esc back
+RESULT arm=race state=dialog rep=1: PANE_SURVIVED (codex pid 2460055 -> 2460055)
+
+== arm=race state=dialog rep=2 codex-cli 0.162.1
+07:58:04.205 probe: no daemon listening; preference=False
+07:58:04.895 the launch brought a managed daemon up (~800 ms): app-server pid 2462213 
+07:58:05.164 before: codex pid 2462081, screen:
+  |   model request. Continue only if you trust these files. Your trust decision will be saved.
+  | › 1. Trust and continue
+  |   2. Back to Agent Command Center
+  |   enter continue · esc back
+07:58:05.170 run: codex remote-control start --json
+07:58:10.454 rc=1; "event":"shutdown_requested","details":{"pid":2462213}
+07:58:10.457 after: app-server pid 2462632 ; preference=True
+07:58:16.529 after: codex pid 2462081, screen:
+  |   /tmp/cxr-w/race-dialog-2
+  |   Trust this folder? Codex can read, edit, and run files here, subject to your permission settings. Folder settings can run code automatically, even without a
+  |   model request. Continue only if you trust these files. Your trust decision will be saved.
+  | › 1. Trust and continue
+  |   2. Back to Agent Command Center
+  |   enter continue · esc back
+RESULT arm=race state=dialog rep=2: PANE_SURVIVED (codex pid 2462081 -> 2462081)
+
+== arm=race state=dialog rep=3 codex-cli 0.162.1
+07:58:16.766 probe: no daemon listening; preference=False
+07:58:17.452 the launch brought a managed daemon up (~800 ms): app-server pid 2464198 
+07:58:17.715 before: codex pid 2464067, screen:
+  |   model request. Continue only if you trust these files. Your trust decision will be saved.
+  | › 1. Trust and continue
+  |   2. Back to Agent Command Center
+  |   enter continue · esc back
+07:58:17.719 run: codex remote-control start --json
+07:58:22.123 rc=1; "event":"shutdown_requested","details":{"pid":2464198}
+07:58:22.126 after: app-server pid 2464571 ; preference=True
+07:58:28.198 after: codex pid 2464067, screen:
+  |   /tmp/cxr-w/race-dialog-3
+  |   Trust this folder? Codex can read, edit, and run files here, subject to your permission settings. Folder settings can run code automatically, even without a
+  |   model request. Continue only if you trust these files. Your trust decision will be saved.
+  | › 1. Trust and continue
+  |   2. Back to Agent Command Center
+  |   enter continue · esc back
+RESULT arm=race state=dialog rep=3: PANE_SURVIVED (codex pid 2464067 -> 2464067)
+
+== arm=race state=dialog rep=4 codex-cli 0.162.1
+07:58:28.424 probe: no daemon listening; preference=False
+07:58:29.120 the launch brought a managed daemon up (~800 ms): app-server pid 2466078 
+07:58:29.391 before: codex pid 2465947, screen:
+  |   model request. Continue only if you trust these files. Your trust decision will be saved.
+  | › 1. Trust and continue
+  |   2. Back to Agent Command Center
+  |   enter continue · esc back
+07:58:29.396 run: codex remote-control start --json
+07:58:32.912 rc=1; "event":"shutdown_requested","details":{"pid":2466078}
+07:58:32.917 after: app-server pid 2466460 ; preference=True
+07:58:38.999 after: codex pid 2465947, screen:
+  |   /tmp/cxr-w/race-dialog-4
+  |   Trust this folder? Codex can read, edit, and run files here, subject to your permission settings. Folder settings can run code automatically, even without a
+  |   model request. Continue only if you trust these files. Your trust decision will be saved.
+  | › 1. Trust and continue
+  |   2. Back to Agent Command Center
+  |   enter continue · esc back
+RESULT arm=race state=dialog rep=4: PANE_SURVIVED (codex pid 2465947 -> 2465947)
+
+== arm=race state=dialog rep=5 codex-cli 0.162.1
+07:58:39.237 probe: no daemon listening; preference=False
+07:58:39.932 the launch brought a managed daemon up (~800 ms): app-server pid 2467823 
+07:58:40.198 before: codex pid 2467689, screen:
+  |   model request. Continue only if you trust these files. Your trust decision will be saved.
+  | › 1. Trust and continue
+  |   2. Back to Agent Command Center
+  |   enter continue · esc back
+07:58:40.202 run: codex remote-control start --json
+07:58:45.004 rc=1; "event":"shutdown_requested","details":{"pid":2467823}
+07:58:45.008 after: app-server pid 2468200 ; preference=True
+07:58:51.086 after: codex pid 2467689, screen:
+  |   /tmp/cxr-w/race-dialog-5
+  |   Trust this folder? Codex can read, edit, and run files here, subject to your permission settings. Folder settings can run code automatically, even without a
+  |   model request. Continue only if you trust these files. Your trust decision will be saved.
+  | › 1. Trust and continue
+  |   2. Back to Agent Command Center
+  |   enter continue · esc back
+RESULT arm=race state=dialog rep=5: PANE_SURVIVED (codex pid 2467689 -> 2467689)
+
+== arm=race state=prompt rep=1 codex-cli 0.162.1
+07:58:51.323 probe: no daemon listening; preference=False
+07:58:52.013 the launch brought a managed daemon up (~800 ms): app-server pid 2469694 
+07:58:52.489 before: codex pid 2469563, screen:
+  |   >_ OpenAI Codex (v0.162.1)
+  |      /tmp/cxr-w/race-prompt-1
+  | › Ask Codex to do anything
+  |   ? for shortcuts
+07:58:52.493 run: codex remote-control start --json
+07:58:58.099 rc=1; "event":"shutdown_requested","details":{"pid":2469694}
+07:58:58.102 after: app-server pid 2470274 ; preference=True
+07:59:04.180 after: codex pid 2469563, screen:
+  |   >_ OpenAI Codex (v0.162.1)
+  |      /tmp/cxr-w/race-prompt-1
+  | ◦ Reconnect failed — check the endpoint, then relaunch (11s)
+  | › Ask Codex to do anything
+  |   GPT-6.1-Sol default · /tmp/cxr-w/race-prompt-1
+  |   ^c quit
+RESULT arm=race state=prompt rep=1: PANE_SURVIVED (codex pid 2469563 -> 2469563)
+
+== arm=race state=prompt rep=2 codex-cli 0.162.1
+07:59:04.463 probe: no daemon listening; preference=False
+07:59:05.157 the launch brought a managed daemon up (~800 ms): app-server pid 2471876 
+07:59:05.645 before: codex pid 2471702, screen:
+  |      /tmp/cxr-w/race-prompt-2
+  | › Ask Codex to do anything
+  |   GPT-6.1-Sol default · /tmp/cxr-w/race-prompt-2
+  |   ← for agents · ? for shortcuts
+07:59:05.649 run: codex remote-control start --json
+07:59:10.837 rc=1; "event":"shutdown_requested","details":{"pid":2471876}
+07:59:10.841 after: app-server pid 2472379 ; preference=True
+07:59:16.916 after: codex pid 2471702, screen:
+  |   >_ OpenAI Codex (v0.162.1)
+  |      /tmp/cxr-w/race-prompt-2
+  | • Reconnect failed — check the endpoint, then relaunch (11s)
+  | › Ask Codex to do anything
+  |   GPT-6.1-Sol default · /tmp/cxr-w/race-prompt-2
+  |   ^c quit
+RESULT arm=race state=prompt rep=2: PANE_SURVIVED (codex pid 2471702 -> 2471702)
+
+== arm=race state=prompt rep=3 codex-cli 0.162.1
+07:59:17.195 probe: no daemon listening; preference=False
+07:59:17.884 the launch brought a managed daemon up (~800 ms): app-server pid 2473986 
+07:59:18.356 before: codex pid 2473848, screen:
+  |   >_ OpenAI Codex (v0.162.1)
+  |      /tmp/cxr-w/race-prompt-3
+  | › Ask Codex to do anything
+  |   ? for shortcuts
+07:59:18.362 run: codex remote-control start --json
+07:59:21.572 rc=1; "event":"shutdown_requested","details":{"pid":2473986}
+07:59:21.576 after: app-server pid 2474434 ; preference=True
+07:59:27.658 after: codex pid none, screen:
+  | tmp/cxr"))
+  | Error: model/list failed during TUI bootstrap: model/list transport error: remote app server at `unix:///tmp/cxr/app-server-control/app-server-control.sock` tra
+  | nsport failed: WebSocket protocol error: Connection reset without closing handshake
+  | CODEX-EXITED rc=1
+RESULT arm=race state=prompt rep=3: PANE_LOST (codex pid 2473848 -> none)
+
+== arm=race state=prompt rep=4 codex-cli 0.162.1
+07:59:28.022 probe: no daemon listening; preference=False
+07:59:28.780 the launch brought a managed daemon up (~800 ms): app-server pid 2476682 
+07:59:29.269 before: codex pid 2476476, screen:
+  |   >_ OpenAI Codex (v0.162.1)
+  |      /tmp/cxr-w/race-prompt-4
+  | › Ask Codex to do anything
+  |   ? for shortcuts
+07:59:29.274 run: codex remote-control start --json
+07:59:34.683 rc=1; "event":"shutdown_requested","details":{"pid":2476682}
+07:59:34.687 after: app-server pid 2477175 ; preference=True
+07:59:40.770 after: codex pid 2476476, screen:
+  |   >_ OpenAI Codex (v0.162.1)
+  |      /tmp/cxr-w/race-prompt-4
+  | ◦ Reconnect failed — check the endpoint, then relaunch (11s)
+  | › Ask Codex to do anything
+  |   GPT-6.1-Sol default · /tmp/cxr-w/race-prompt-4
+  |   ^c quit
+RESULT arm=race state=prompt rep=4: PANE_SURVIVED (codex pid 2476476 -> 2476476)
+
+== arm=race state=prompt rep=5 codex-cli 0.162.1
+07:59:41.047 probe: no daemon listening; preference=False
+07:59:41.743 the launch brought a managed daemon up (~800 ms): app-server pid 2478747 
+07:59:42.226 before: codex pid 2478591, screen:
+  |   >_ OpenAI Codex (v0.162.1)
+  |      /tmp/cxr-w/race-prompt-5
+  | › Ask Codex to do anything
+  |   ? for shortcuts
+07:59:42.230 run: codex remote-control start --json
+07:59:46.989 rc=1; "event":"shutdown_requested","details":{"pid":2478747}
+07:59:46.994 after: app-server pid 2479268 ; preference=True
+07:59:53.069 after: codex pid 2478591, screen:
+  |   >_ OpenAI Codex (v0.162.1)
+  |      /tmp/cxr-w/race-prompt-5
+  | • Reconnect failed — check the endpoint, then relaunch (10s)
+  | › Ask Codex to do anything
+  |   GPT-6.1-Sol default · /tmp/cxr-w/race-prompt-5
+  |   ^c quit
+RESULT arm=race state=prompt rep=5: PANE_SURVIVED (codex pid 2478591 -> 2478591)
+
+== delay-after-ready=0.75s arm=race state=prompt rep=1 codex-cli 0.162.1
+08:01:46.372 probe: no daemon listening; preference=False
+08:01:47.062 the launch brought a managed daemon up (~800 ms): app-server pid 2497902 
+08:01:58.184 before: codex pid 2497693, screen:
+  |      /tmp/cxr-w/race-prompt-1
+  | › Ask Codex to do anything
+  |   GPT-6.1-Sol default · /tmp/cxr-w/race-prompt-1
+  |   ← for agents · ? for shortcuts
+08:01:58.187 run: codex remote-control start --json
+08:02:01.773 rc=1; "event":"shutdown_requested","details":{"pid":2497902}
+08:02:01.777 after: app-server pid 2499527 ; preference=True
+08:02:07.850 after: codex pid 2497693, screen:
+  |   >_ OpenAI Codex (v0.162.1)
+  |      /tmp/cxr-w/race-prompt-1
+  | › Ask Codex to do anything
+  |   GPT-6.1-Sol default · /tmp/cxr-w/race-prompt-1
+  |   ← for agents · ? for shortcuts
+RESULT arm=race state=prompt rep=1: PANE_SURVIVED (codex pid 2497693 -> 2497693)
+
+== delay-after-ready=0.75s arm=race state=prompt rep=2 codex-cli 0.162.1
+08:02:08.130 probe: no daemon listening; preference=False
+08:02:08.826 the launch brought a managed daemon up (~800 ms): app-server pid 2501006 
+08:02:19.893 before: codex pid 2500875, screen:
+  |      /tmp/cxr-w/race-prompt-2
+  | › Ask Codex to do anything
+  |   GPT-6.1-Sol default · /tmp/cxr-w/race-prompt-2
+  |   ← for agents · ? for shortcuts
+08:02:19.897 run: codex remote-control start --json
+08:02:22.828 rc=1; "event":"shutdown_requested","details":{"pid":2501006}
+08:02:22.832 after: app-server pid 2502744 ; preference=True
+08:02:28.899 after: codex pid 2500875, screen:
+  |   >_ OpenAI Codex (v0.162.1)
+  |      /tmp/cxr-w/race-prompt-2
+  | › Ask Codex to do anything
+  |   GPT-6.1-Sol default · /tmp/cxr-w/race-prompt-2
+  |   ← for agents · ? for shortcuts
+RESULT arm=race state=prompt rep=2: PANE_SURVIVED (codex pid 2500875 -> 2500875)
+
+== delay-after-ready=0.75s arm=race state=prompt rep=3 codex-cli 0.162.1
+08:02:29.182 probe: no daemon listening; preference=False
+08:02:29.881 the launch brought a managed daemon up (~800 ms): app-server pid 2504066 
+08:02:40.982 before: codex pid 2503925, screen:
+  |      /tmp/cxr-w/race-prompt-3
+  | › Ask Codex to do anything
+  |   GPT-6.1-Sol default · /tmp/cxr-w/race-prompt-3
+  |   ← for agents · ? for shortcuts
+08:02:40.985 run: codex remote-control start --json
+08:02:46.320 rc=1; "event":"shutdown_requested","details":{"pid":2504066}
+08:02:46.324 after: app-server pid 2505814 ; preference=True
+08:02:52.401 after: codex pid 2503925, screen:
+  |   >_ OpenAI Codex (v0.162.1)
+  |      /tmp/cxr-w/race-prompt-3
+  | › Ask Codex to do anything
+  |   GPT-6.1-Sol default · /tmp/cxr-w/race-prompt-3
+  |   ← for agents · ? for shortcuts
+RESULT arm=race state=prompt rep=3: PANE_SURVIVED (codex pid 2503925 -> 2503925)
+
+== delay-after-ready=0.75s arm=race state=prompt rep=4 codex-cli 0.162.1
+08:02:52.677 probe: no daemon listening; preference=False
+08:02:53.369 the launch brought a managed daemon up (~800 ms): app-server pid 2507437 
+08:03:04.473 before: codex pid 2507303, screen:
+  |      /tmp/cxr-w/race-prompt-4
+  | › Ask Codex to do anything
+  |   GPT-6.1-Sol default · /tmp/cxr-w/race-prompt-4
+  |   ← for agents · ? for shortcuts
+08:03:04.477 run: codex remote-control start --json
+08:03:07.436 rc=1; "event":"shutdown_requested","details":{"pid":2507437}
+08:03:07.440 after: app-server pid 2509079 ; preference=True
+08:03:13.515 after: codex pid 2507303, screen:
+  |   >_ OpenAI Codex (v0.162.1)
+  |      /tmp/cxr-w/race-prompt-4
+  | › Ask Codex to do anything
+  |   GPT-6.1-Sol default · /tmp/cxr-w/race-prompt-4
+  |   ← for agents · ? for shortcuts
+RESULT arm=race state=prompt rep=4: PANE_SURVIVED (codex pid 2507303 -> 2507303)
+
+== delay-after-ready=0.75s arm=race state=prompt rep=5 codex-cli 0.162.1
+08:03:13.791 probe: no daemon listening; preference=False
+08:03:14.473 the launch brought a managed daemon up (~800 ms): app-server pid 2510554 
+08:03:25.541 before: codex pid 2510420, screen:
+  |      /tmp/cxr-w/race-prompt-5
+  | › Ask Codex to do anything
+  |   GPT-6.1-Sol default · /tmp/cxr-w/race-prompt-5
+  |   ← for agents · ? for shortcuts
+08:03:25.545 run: codex remote-control start --json
+08:03:30.148 rc=1; "event":"shutdown_requested","details":{"pid":2510554}
+08:03:30.152 after: app-server pid 2512222 ; preference=True
+08:03:36.222 after: codex pid 2510420, screen:
+  |   >_ OpenAI Codex (v0.162.1)
+  |      /tmp/cxr-w/race-prompt-5
+  | › Ask Codex to do anything
+  |   GPT-6.1-Sol default · /tmp/cxr-w/race-prompt-5
+  |   ← for agents · ? for shortcuts
+RESULT arm=race state=prompt rep=5: PANE_SURVIVED (codex pid 2510420 -> 2510420)
+
+== delay-after-ready=0.75s arm=race state=prompt rep=6 codex-cli 0.162.1
+08:03:36.550 probe: no daemon listening; preference=False
+08:03:37.247 the launch brought a managed daemon up (~800 ms): app-server pid 2513746 
+08:03:38.478 before: codex pid 2513607, screen:
+  |      /tmp/cxr-w/race-prompt-6
+  | › Ask Codex to do anything
+  |   GPT-6.1-Sol default · /tmp/cxr-w/race-prompt-6
+  |   ← for agents · ? for shortcuts
+08:03:38.482 run: codex remote-control start --json
+08:03:43.801 rc=1; "event":"shutdown_requested","details":{"pid":2513746}
+08:03:43.804 after: app-server pid 2514348 ; preference=True
+08:03:49.881 after: codex pid 2513607, screen:
+  |   >_ OpenAI Codex (v0.162.1)
+  |      /tmp/cxr-w/race-prompt-6
+  | › Ask Codex to do anything
+  |   GPT-6.1-Sol default · /tmp/cxr-w/race-prompt-6
+  |   ← for agents · ? for shortcuts
+RESULT arm=race state=prompt rep=6: PANE_SURVIVED (codex pid 2513607 -> 2513607)
+
+== arm=running state=prompt rep=1 codex-cli 0.162.1
+08:00:07.595 probe: no daemon listening; preference=False
+08:00:08.285 the launch brought a managed daemon up (~800 ms): app-server pid 2482645 
+08:00:08.772 before: codex pid 2482412, screen:
+  |   >_ OpenAI Codex (v0.162.1)
+  |      /tmp/cxr-w/running-prompt-1
+  | › Ask Codex to do anything
+  |   ? for shortcuts
+08:00:08.776 run: codex app-server daemon enable-remote-control
+08:00:09.206 rc=0; "event":"shutdown_requested","details":{"pid":2482645}
+08:00:09.212 after: app-server pid 2483020 ; preference=True
+08:00:15.288 after: codex pid none, screen:
+  | tmp/cxr"))
+  | Error: model/list failed during TUI bootstrap: model/list transport error: remote app server at `unix:///tmp/cxr/app-server-control/app-server-control.sock` tra
+  | nsport failed: WebSocket protocol error: Connection reset without closing handshake
+  | CODEX-EXITED rc=1
+RESULT arm=running state=prompt rep=1: PANE_LOST (codex pid 2482412 -> none)
+
+== arm=running state=prompt rep=2 codex-cli 0.162.1
+08:00:15.518 probe: no daemon listening; preference=False
+08:00:16.204 the launch brought a managed daemon up (~800 ms): app-server pid 2483966 
+08:00:16.684 before: codex pid 2483835, screen:
+  |   >_ OpenAI Codex (v0.162.1)
+  |      /tmp/cxr-w/running-prompt-2
+  | › Ask Codex to do anything
+  |   ? for shortcuts
+08:00:16.689 run: codex app-server daemon enable-remote-control
+08:00:17.112 rc=0; "event":"shutdown_requested","details":{"pid":2483966}
+08:00:17.117 after: app-server pid 2484430 ; preference=True
+08:00:23.197 after: codex pid none, screen:
+  | tmp/cxr"))
+  | Error: model/list failed during TUI bootstrap: model/list transport error: remote app server at `unix:///tmp/cxr/app-server-control/app-server-control.sock` tra
+  | nsport failed: WebSocket protocol error: Connection reset without closing handshake
+  | CODEX-EXITED rc=1
+RESULT arm=running state=prompt rep=2: PANE_LOST (codex pid 2483835 -> none)
+
+== arm=running state=prompt rep=3 codex-cli 0.162.1
+08:00:23.428 probe: no daemon listening; preference=False
+08:00:24.118 the launch brought a managed daemon up (~800 ms): app-server pid 2485376 
+08:00:24.592 before: codex pid 2485245, screen:
+  |   >_ OpenAI Codex (v0.162.1)
+  |      /tmp/cxr-w/running-prompt-3
+  | › Ask Codex to do anything
+  |   ? for shortcuts
+08:00:24.596 run: codex app-server daemon enable-remote-control
+08:00:25.282 rc=0; "event":"shutdown_requested","details":{"pid":2485376}
+08:00:25.285 after: app-server pid 2485855 ; preference=True
+08:00:31.367 after: codex pid 2485245, screen:
+  |   >_ OpenAI Codex (v0.162.1)
+  |      /tmp/cxr-w/running-prompt-3
+  | ◦ Reconnect failed — check the endpoint, then relaunch (6s)
+  | › Ask Codex to do anything
+  |   GPT-6.1-Sol default · /tmp/cxr-w/running-prompt-3
+  |   ^c quit
+RESULT arm=running state=prompt rep=3: PANE_SURVIVED (codex pid 2485245 -> 2485245)
+
+== arm=disable state=prompt rep=1 codex-cli 0.162.1
+08:00:31.653 probe: no daemon listening; preference=True
+08:00:32.340 the launch brought a managed daemon up (~800 ms): app-server pid 2486946 
+08:00:32.813 before: codex pid 2486797, screen:
+  |   >_ OpenAI Codex (v0.162.1)
+  |      /tmp/cxr-w/disable-prompt-1
+  | › Ask Codex to do anything
+  |   ? for shortcuts
+08:00:32.818 run: codex app-server daemon disable-remote-control
+08:00:33.522 rc=0; "event":"shutdown_requested","details":{"pid":2486946}
+08:00:33.525 after: app-server pid 2487398 ; preference=False
+08:00:39.603 after: codex pid 2486797, screen:
+  |   >_ OpenAI Codex (v0.162.1)
+  |      /tmp/cxr-w/disable-prompt-1
+  | ◦ Reconnect failed — check the endpoint, then relaunch (6s)
+  | › Ask Codex to do anything
+  |   GPT-6.1-Sol default · /tmp/cxr-w/disable-prompt-1
+  |   ^c quit
+RESULT arm=disable state=prompt rep=1: PANE_SURVIVED (codex pid 2486797 -> 2486797)
+
+== arm=disable state=prompt rep=2 codex-cli 0.162.1
+08:00:40.197 probe: no daemon listening; preference=True
+08:00:40.893 the launch brought a managed daemon up (~800 ms): app-server pid 2488537 
+08:00:41.377 before: codex pid 2488406, screen:
+  |   >_ OpenAI Codex (v0.162.1)
+  |      /tmp/cxr-w/disable-prompt-2
+  | › Ask Codex to do anything
+  |   ? for shortcuts
+08:00:41.381 run: codex app-server daemon disable-remote-control
+08:00:42.172 rc=0; "event":"shutdown_requested","details":{"pid":2488537}
+08:00:42.177 after: app-server pid 2488959 ; preference=False
+08:00:48.248 after: codex pid none, screen:
+  | tmp/cxr"))
+  | Error: model/list failed during TUI bootstrap: model/list transport error: remote app server at `unix:///tmp/cxr/app-server-control/app-server-control.sock` tra
+  | nsport failed: WebSocket protocol error: Connection reset without closing handshake
+  | CODEX-EXITED rc=1
+RESULT arm=disable state=prompt rep=2: PANE_LOST (codex pid 2488406 -> none)
+
+== arm=disable state=prompt rep=3 codex-cli 0.162.1
+08:00:48.472 probe: no daemon listening; preference=True
+08:00:49.162 the launch brought a managed daemon up (~800 ms): app-server pid 2489945 
+08:00:49.633 before: codex pid 2489795, screen:
+  |      /tmp/cxr-w/disable-prompt-3
+  | › Ask Codex to do anything
+  |   GPT-6.1-Sol default · /tmp/cxr-w/disable-prompt-3
+  |   ← for agents · ? for shortcuts
+08:00:49.637 run: codex app-server daemon disable-remote-control
+08:00:50.370 rc=0; "event":"shutdown_requested","details":{"pid":2489945}
+08:00:50.373 after: app-server pid 2490561 ; preference=False
+08:00:56.449 after: codex pid 2489795, screen:
+  |   >_ OpenAI Codex (v0.162.1)
+  |      /tmp/cxr-w/disable-prompt-3
+  | ◦ Reconnect failed — check the endpoint, then relaunch (6s)
+  | › Ask Codex to do anything
+  |   GPT-6.1-Sol default · /tmp/cxr-w/disable-prompt-3
+  |   ^c quit
+RESULT arm=disable state=prompt rep=3: PANE_SURVIVED (codex pid 2489795 -> 2489795)
+
+== arm=control state=prompt rep=1 codex-cli 0.162.1
+08:00:56.738 probe: no daemon listening; preference=False
+08:00:57.427 the launch brought a managed daemon up (~800 ms): app-server pid 2491537 
+08:00:57.903 before: codex pid 2491406, screen:
+  |      /tmp/cxr-w/control-prompt-1
+  | › Ask Codex to do anything
+  |   GPT-6.1-Sol default · /tmp/cxr-w/control-prompt-1
+  |   ← for agents · ? for shortcuts
+08:00:57.908 run: timeout 4 tail -f /dev/null
+08:01:01.914 rc=124; 
+08:01:01.918 after: app-server pid 2491537 ; preference=False
+08:01:07.988 after: codex pid 2491406, screen:
+  |   >_ OpenAI Codex (v0.162.1)
+  |      /tmp/cxr-w/control-prompt-1
+  | › Ask Codex to do anything
+  |   GPT-6.1-Sol default · /tmp/cxr-w/control-prompt-1
+  |   ← for agents · ? for shortcuts
+RESULT arm=control state=prompt rep=1: PANE_SURVIVED (codex pid 2491406 -> 2491406)
+
+== arm=control state=prompt rep=2 codex-cli 0.162.1
+08:01:08.273 probe: no daemon listening; preference=False
+08:01:08.967 the launch brought a managed daemon up (~800 ms): app-server pid 2493236 
+08:01:09.439 before: codex pid 2493105, screen:
+  |   >_ OpenAI Codex (v0.162.1)
+  |      /tmp/cxr-w/control-prompt-2
+  | › Ask Codex to do anything
+  |   ? for shortcuts
+08:01:09.443 run: timeout 4 tail -f /dev/null
+08:01:13.447 rc=124; 
+08:01:13.452 after: app-server pid 2493236 ; preference=False
+08:01:19.533 after: codex pid 2493105, screen:
+  |   >_ OpenAI Codex (v0.162.1)
+  |      /tmp/cxr-w/control-prompt-2
+  | › Ask Codex to do anything
+  |   GPT-6.1-Sol default · /tmp/cxr-w/control-prompt-2
+  |   ← for agents · ? for shortcuts
+RESULT arm=control state=prompt rep=2: PANE_SURVIVED (codex pid 2493105 -> 2493105)
+
+# docs/evidence/2026-10-10-codex-banner-gap.py (non-git folder; seconds after spawn)
+{"rep": 1, "marker_Codex_s": 0.332, "prompt_s": 0.332, "gap_s": 0.0}
+{"rep": 2, "marker_Codex_s": 0.332, "prompt_s": 0.332, "gap_s": 0.0}
+{"rep": 3, "marker_Codex_s": 0.326, "prompt_s": 0.326, "gap_s": 0.0}
+{"rep": 4, "marker_Codex_s": 0.329, "prompt_s": 0.329, "gap_s": 0.0}
+{"rep": 5, "marker_Codex_s": 0.323, "prompt_s": 0.323, "gap_s": 0.0}
+
+# docs/evidence/2026-10-10-codex-handshake-timing.py plain 5; trust 3
+{"mode": "plain", "rep": 1, "daemon_up_s": 0.56, "footer_s": 1.06}
+{"mode": "plain", "rep": 2, "daemon_up_s": 0.55, "footer_s": 1.19}
+{"mode": "plain", "rep": 3, "daemon_up_s": 0.55, "footer_s": 1.26}
+{"mode": "plain", "rep": 4, "daemon_up_s": 0.55, "footer_s": 1.12}
+{"mode": "plain", "rep": 5, "daemon_up_s": 0.55, "footer_s": 1.15}
+{"mode": "trust", "rep": 1, "dialog_s": 0.83, "footer_before_trust": false, "stopped": true, "pane_lost": true, "error": "Error: config/read failed in TUI"}
+{"mode": "trust", "rep": 2, "dialog_s": 0.78, "footer_before_trust": false, "stopped": true, "pane_lost": true, "error": "Error: config/read failed in TUI"}
+{"mode": "trust", "rep": 3, "dialog_s": 0.76, "footer_before_trust": false, "stopped": true, "pane_lost": true, "error": "Error: config/read failed in TUI"}

@@ -1,0 +1,28 @@
+{
+ "baseline": {
+  "elapsed_s": 0.0,
+  "exit": 0,
+  "tail": ""
+ },
+ "break_patch": "--- a/docs/acceptance-2026-10-codex-enable-race.md\t2026-10-10 08:07:20.915909715 +0100\n+++ b/docs/acceptance-2026-10-codex-enable-race.md\t2026-10-10 08:07:20.917071487 +0100\n@@ -1,6 +1,6 @@\n # Acceptance 2026-10-10 \u2014 Codex enable/launch race (BL-037 premise)\n \n-Verdict: RACE_REAL\n+Verdict: pending\n \n A plain `codex` launch on a host with no daemon starts the **managed** backend. `codex\n remote-control start --json`, which `_enable` runs when its probe finds no daemon, then stops\n",
+ "build": null,
+ "created": "2026-10-10T07:07:45+00:00",
+ "fingerprint": "51c09ad53feea4734dca9a153bf10ed7a5e9f030a6e29882f6d3878b31784bce",
+ "index": 1,
+ "kind": "claim",
+ "named_break": null,
+ "no_build_reason": "documentation only, no build",
+ "plan": "/mnt/vault/Portfolio/infra/remote-agents/plans/2026-10-09-decisions-and-worktrees-sub-02-robustness-plan.md",
+ "red": {
+  "elapsed_s": 0.0,
+  "exit": 1,
+  "tail": ""
+ },
+ "schema": 2,
+ "task": "2.1",
+ "test": "grep -Eq '^Verdict: (RACE_REAL|RACE_ABSENT)$' docs/acceptance-2026-10-codex-enable-race.md && grep -q 'codex-cli 0.16' docs/acceptance-2026-10-codex-enable-race.md",
+ "text": "`grep -Eq '^Verdict: (RACE_REAL|RACE_ABSENT)$' docs/acceptance-2026-10-codex-enable-race.md && grep -q 'codex-cli 0.16' docs/acceptance-2026-10-codex-enable-race.md`. Red if the doc is missing, has no verdict, or doesn't record the version measured.",
+ "touched": [
+  "docs/acceptance-2026-10-codex-enable-race.md"
+ ]
+}
