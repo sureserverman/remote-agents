@@ -1,0 +1,28 @@
+{
+ "baseline": {
+  "elapsed_s": 3.4,
+  "exit": 0,
+  "tail": "...                                                                      [100%]\n3 passed in 3.03s"
+ },
+ "break_patch": "--- a/src/remote_agents/application/schedules.py\n+++ b/src/remote_agents/application/schedules.py\n@@ -278,7 +278,7 @@\n             guard_wait=UNATTENDED_LAUNCH_WAIT_SECONDS,\n             # Named, not defaulted (DEC-114): a worktree is the owner's choice when offered,\n             # and nobody is there to make it when a schedule fires.\n-            mode=\"regular\",\n+            mode=\"worktree\",\n         )\n         try:\n             outcome = await self._launch(command)\n",
+ "build": null,
+ "created": "2026-10-10T20:46:59+00:00",
+ "fingerprint": "67ba5a557149a22af5eee8a7ef7c9f41253d92e6226c60954e9f9559f316780a",
+ "index": 1,
+ "kind": "claim",
+ "named_break": null,
+ "no_build_reason": "pure Python, no build",
+ "plan": "/mnt/vault/Portfolio/infra/remote-agents/plans/2026-10-09-decisions-and-worktrees-sub-04-session-worktrees-plan.md",
+ "red": {
+  "elapsed_s": 3.4,
+  "exit": 1,
+  "tail": "E       AssertionError: assert [<FireOutcome...unch_failed'>] == [<FireOutcome...D: 'started'>]\nE         \nE         At index 0 diff: <FireOutcome.LAUNCH_FAILED: 'launch_failed'> != <FireOutcome.STARTED: 'started'>\nE         Use -v to get more diff\n\ntests/unit/application/test_schedules.py:78: AssertionError\n------------------------------ Captured log call -------------------------------\nERROR    remote_agents.application.services:services.py:329 worktree for ee446b70-e9a5-4b5e-b435-5dbf93c6cc27 not created\nTraceback (most recent call last):\n  File \"/home/user/dev/infra/remote-agents/src/remote_agents/application/services.py\", line 323, in _make_worktree\n    await self._worktree_service.create(session_id, project_id)\n  File \"/home/user/dev/infra/remote-agents/tests/unit/application/test_schedules.py\", line 38, in create\n    raise AssertionError(\"a schedule fire made a worktree\")\nAssertionError: a schedule fire made a worktree\n________ test_the_fire_names_its_mode_rather_than_inheriting_a_default _________\n\n    def test_the_fire_names_its_mode_rather_than_inheriting_a_default() -> None:\n        \"\"\"DEC-114 stated in the code: a later default change must not reach schedules silently.\"\"\"\n        source = textwrap.dedent(inspect.getsource(SchedulePass._launch_for))\n        calls = [\n            node\n            for node in ast.walk(ast.parse(source))\n            if isinstance(node, ast.Call) and getattr(node.func, \"id\", None) == \"LaunchCommand\"\n        ]\n        assert len(calls) == 1\n        modes = [keyword.value for keyword in calls[0].keywords if keyword.arg == \"mode\"]\n>       assert len(modes) == 1 and isinstance(modes[0], ast.Constant) and modes[0].value == \"regular\"\nE       AssertionError: assert (1 == 1 and True and 'worktree' == 'regular'\nE        +  where 1 = len([Constant(value='worktree', kind=None)])\nE        +  and   True = isinstance(Constant(value='worktree', kind=None), <class 'ast.Constant'>)\nE        +    where <class 'ast.Constant'> = ast.Constant\nE         \nE         - regular\nE         + worktree)\n\ntests/unit/application/test_schedules.py:93: AssertionError\n=========================== short test summary info ============================\nFAILED tests/unit/application/test_schedules.py::test_a_fire_on_a_contended_project_launches_regular_and_makes_no_worktree\nFAILED tests/unit/application/test_schedules.py::test_the_fire_names_its_mode_rather_than_inheriting_a_default\n2 failed, 1 passed in 3.05s"
+ },
+ "schema": 2,
+ "task": "3.4",
+ "test": "uv run --locked pytest tests/unit/application/test_schedules.py tests/e2e/test_terminal_worktree_session.py -q -p no:randomly",
+ "text": "`uv run --locked pytest tests/unit/application/test_schedules.py tests/e2e/test_terminal_worktree_session.py -q -p no:randomly`. It goes red if a schedule fire with a running sibling creates a worktree.",
+ "touched": [
+  "src/remote_agents/application/schedules.py"
+ ]
+}

@@ -276,6 +276,9 @@ class SchedulePass:
             f"sched:{schedule.id}:{due_at.astimezone(UTC).isoformat()}",
             SCHEDULED_LABEL,
             guard_wait=UNATTENDED_LAUNCH_WAIT_SECONDS,
+            # Named, not defaulted (DEC-114): a worktree is the owner's choice when offered,
+            # and nobody is there to make it when a schedule fires.
+            mode="regular",
         )
         try:
             outcome = await self._launch(command)
