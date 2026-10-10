@@ -29,6 +29,7 @@ from remote_agents.adapters.agents.activity_spool import (
 )
 from remote_agents.adapters.agents.hook_licences import hook_licence
 from remote_agents.application.activity import drain_activity
+from remote_agents.ports.provider_descriptor import HookLicence
 
 _SENTINEL = "zq-sentinel-7c1e5b-never-persist"
 
@@ -50,6 +51,14 @@ def _spool(tmp_path: Path) -> Path:
     return directory
 
 
+def _licence(provider: str) -> HookLicence:
+    """The provider's real licence, never None: with None the spool keeps nothing for any
+    payload, so every "kept nothing" assertion here would pass without testing anything."""
+    licence = hook_licence(provider)
+    assert licence is not None, f"{provider} has no hook licence"
+    return licence
+
+
 def _every_byte_under(directory: Path) -> bytes:
     return b"".join(path.read_bytes() for path in sorted(directory.rglob("*")) if path.is_file())
 
@@ -60,7 +69,7 @@ def _submit(directory: Path, provider: str) -> int:
         activity_directory=directory,
         environment={SESSION_ID_VARIABLE: "s-42"},
         now=lambda: datetime(2026, 9, 24, 21, 25, tzinfo=UTC),
-        licence=hook_licence(provider),
+        licence=lambda: _licence(provider),
     )
 
 
@@ -108,7 +117,7 @@ def test_the_pre_marker_hook_keeps_nothing_of_a_submit_either(
     moment = datetime(2026, 9, 24, 21, 25, tzinfo=UTC)
 
     observed = _observed_event(
-        io.BytesIO(json.dumps(_SUBMIT).encode("utf-8")), "s-42", moment, hook_licence(provider)
+        io.BytesIO(json.dumps(_SUBMIT).encode("utf-8")), "s-42", moment, _licence(provider)
     )
     if observed is not None:
         _write_privately(observed, directory)
@@ -129,7 +138,7 @@ def test_a_prompt_past_the_bound_is_kept_nowhere(provider: str, tmp_path: Path) 
         io.BytesIO(json.dumps(long_submit).encode("utf-8")),
         activity_directory=directory,
         environment={SESSION_ID_VARIABLE: "s-42"},
-        licence=hook_licence(provider),
+        licence=lambda: _licence(provider),
     )
 
     assert (directory / "turns" / "s-42").read_bytes() == str(_SUBMIT["session_id"]).encode()

@@ -18,8 +18,12 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from remote_agents.ports.argv_text import NonEchoingArgumentParser
+
+if TYPE_CHECKING:
+    from remote_agents.ports.provider_descriptor import HookLicence
 
 HOOK_PROVIDERS = ("claude", "codex", "opencode", "cursor")
 """The `--provider` names `agent-event` and `install-agent-hooks` accept: one per hook installer.
@@ -39,7 +43,6 @@ def spool_from_stdin(activity_directory: Path | None, *, provider: str = "claude
     conclusion.
     """
     from remote_agents.adapters.agents.activity_spool import spool_agent_event
-    from remote_agents.adapters.agents.hook_licences import hook_licence
     from remote_agents.config import ConfigError
     from remote_agents.production import ProductionPaths
 
@@ -55,9 +58,16 @@ def spool_from_stdin(activity_directory: Path | None, *, provider: str = "claude
         # raised into the agent's session -- the one outcome this whole path is arranged to
         # prevent, arriving before the function that promises never to raise was even called.
         return 0
-    # The one vertical this hook was installed for, imported here and nowhere earlier: a
-    # descriptor would cost every vertical and its usage readers (BL-050).
-    return spool_agent_event(payload, activity_directory=resolved, licence=hook_licence(provider))
+
+    # The one vertical this hook was installed for, imported only once the spool has decided
+    # the session is ours, and inside its guard: a descriptor would cost every vertical and
+    # its usage readers, and even one vertical is too much for the "not mine" path (BL-050).
+    def licence() -> HookLicence | None:
+        from remote_agents.adapters.agents.hook_licences import hook_licence
+
+        return hook_licence(provider)
+
+    return spool_agent_event(payload, activity_directory=resolved, licence=licence)
 
 
 def run_agent_event(argv: list[str] | None = None) -> int:

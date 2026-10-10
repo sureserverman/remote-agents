@@ -117,7 +117,7 @@ def foreign_profile_literals(source_root: Path) -> list[str]:
     return offenders
 
 
-def test_no_module_outside_a_vertical_imports_it_except_the_registry() -> None:
+def test_no_module_outside_a_vertical_imports_it_except_the_allowlist() -> None:
     assert foreign_vertical_imports(_SOURCE_ROOT) == []
 
 

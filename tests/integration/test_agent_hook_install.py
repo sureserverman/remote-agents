@@ -605,6 +605,74 @@ def test_the_installed_hook_command_does_not_load_the_composition_root(
     Asserting on the module *set* rather than on a wall-clock number, because the cost is the
     import graph and a timing assertion would be flaky on a loaded machine.
     """
+    verdict, modules, registry, verticals = _probe_the_hook(
+        tmp_path, provider, {SESSION_ID_VARIABLE: "budget-probe-session"}
+    )
+
+    assert verdict == "lean"
+    assert int(modules) < 300
+    # Structural, because the count alone cannot tell: building every descriptor through the
+    # registry measured 283 modules on 2026-10-10, inside the budget. The hook reaches its
+    # licence through `hook_licences`, which loads the one vertical it was installed for.
+    assert registry == "False", "the hook imported the registry, which loads every vertical"
+    assert verticals == provider, f"the {provider} hook loaded the verticals {verticals}"
+    # The record is what proves the count includes the licence: a hook that found none would
+    # write nothing, and would be cheap for the wrong reason.
+    assert [path.name for path in (tmp_path / "spool").glob("*.json")], (
+        f"{provider}'s finished turn wrote no record"
+    )
+
+
+@pytest.mark.parametrize("provider", HOOK_PROVIDERS)
+def test_a_session_that_is_not_ours_loads_no_vertical(tmp_path: Path, provider: str) -> None:
+    """The common case pays nothing for the licence: it is looked up after the "not mine" gate.
+
+    Claude's hook is global, so this path runs on every turn of every session on the machine.
+    A first version looked the licence up before the gate and took the unmanaged hook from 144
+    modules to 214-232 (measured 2026-10-10; two Stage 3 reviews found it); the managed probe
+    above could not see it, because it sets the session on purpose.
+    """
+    environment = {key: value for key, value in os.environ.items() if key != SESSION_ID_VARIABLE}
+
+    verdict, modules, registry, verticals = _probe_the_hook(
+        tmp_path, provider, environment, inherit=False
+    )
+
+    assert verdict == "lean"
+    assert registry == "False"
+    assert verticals == "-", f"an unmanaged {provider} hook loaded the verticals {verticals}"
+    # 144 before BL-050 and after it, measured 2026-10-10. The headroom is for an interpreter
+    # upgrade's own modules, not for this project's: the licence's types load only past the gate.
+    assert int(modules) <= 150, f"the unmanaged {provider} hook loaded {modules} modules"
+    assert not (tmp_path / "spool").exists()
+
+
+def test_a_licence_that_cannot_be_loaded_never_reaches_the_agent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A broken vertical costs the record, never the agent's session (the spool's first rule).
+
+    The lookup imports a whole vertical package, so anything wrong in it -- a partial install,
+    a bad dependency -- raises here; it has to raise inside the frame that swallows it.
+    """
+    from remote_agents.adapters.agents import hook_licences
+
+    def broken(name: str) -> None:
+        raise ImportError(f"{name} is half installed")
+
+    monkeypatch.setattr(hook_licences, "hook_licence", broken)
+    monkeypatch.setattr(sys, "stdin", io.TextIOWrapper(io.BytesIO(b'{"hook_event_name": "Stop"}')))
+    monkeypatch.setenv(SESSION_ID_VARIABLE, "s-42")
+
+    assert spool_from_stdin(tmp_path / "spool", provider="codex") == 0
+
+    assert not list((tmp_path / "spool").glob("*.json"))
+
+
+def _probe_the_hook(
+    tmp_path: Path, provider: str, environment: dict[str, str], *, inherit: bool = True
+) -> list[str]:
+    """Run the installed command in a fresh interpreter; report what it loaded."""
     probe = (
         "import sys, runpy\n"
         "sys.argv = ['remote_agents', 'agent-event', '--activity-dir', "
@@ -618,31 +686,17 @@ def test_the_installed_hook_command_does_not_load_the_composition_root(
         "    if name.startswith('remote_agents.adapters.agents.') and name.count('.') >= 3\n"
         "    and name.split('.')[3] in ('claude', 'codex', 'opencode', 'cursor')})\n"
         "registry = 'remote_agents.adapters.agents.registry' in sys.modules\n"
-        "print('loaded' if loaded else 'lean', len(sys.modules), registry, ','.join(verticals))\n"
+        "print('loaded' if loaded else 'lean', len(sys.modules), registry,\n"
+        "      ','.join(verticals) or '-')\n"
     )
     completed = subprocess.run(
         [sys.executable, "-c", probe],
         input=json.dumps(_FINISHED_TURN[provider]).encode("utf-8"),
         capture_output=True,
         check=True,
-        # A managed session, so the count is the worst case: the hook reaches its licence and
-        # writes. Without this the probe measured only the "not mine" return (BL-050).
-        env={**os.environ, SESSION_ID_VARIABLE: "budget-probe-session"},
+        env={**os.environ, **environment} if inherit else environment,
     )
-
-    verdict, modules, registry, verticals = completed.stdout.decode("utf-8").split()
-    assert verdict == "lean"
-    assert int(modules) < 300
-    # Structural, because the count alone cannot tell: building every descriptor through the
-    # registry measured 283 modules on 2026-10-10, inside the budget. The hook reaches its
-    # licence through `hook_licences`, which loads the one vertical it was installed for.
-    assert registry == "False", "the hook imported the registry, which loads every vertical"
-    assert verticals == provider, f"the {provider} hook loaded the verticals {verticals}"
-    # The record is what proves the count includes the licence: a hook that found none would
-    # write nothing, and would be cheap for the wrong reason.
-    assert [path.name for path in (tmp_path / "spool").glob("*.json")], (
-        f"{provider}'s finished turn wrote no record"
-    )
+    return completed.stdout.decode("utf-8").split()
 
 
 def test_the_hook_names_are_the_descriptors_hook_names() -> None:
@@ -681,8 +735,10 @@ def test_the_hook_hands_the_spool_its_providers_licence(
 
     assert spool_from_stdin(tmp_path, provider=provider) == 0
 
-    assert received["licence"] is hook_licence(provider)
-    assert received["licence"] is not None
+    lookup = received["licence"]
+    assert callable(lookup), "the hook hands the spool a lookup, resolved past the session gate"
+    assert lookup() is hook_licence(provider)
+    assert lookup() is not None
 
 
 def test_a_spool_under_an_ancestor_others_can_write_is_refused_at_install_time(

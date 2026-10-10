@@ -177,7 +177,9 @@ def test_claude_and_codex_parsing_are_untouched_by_the_opencode_branch() -> None
     )
     assert codex is not None and codex.ask == "Bash"
 
-    # And the opencode names are not admitted for the other two, which share the parser.
+    # And the opencode names are not admitted for the other two, which share the parser -- by
+    # codex's real licence, since a None one would refuse everything and prove nothing.
+    assert hook_licence("codex") is not None
     assert (
         _observed_event(
             BytesIO(json.dumps({"hook_event_name": "session.idle"}).encode()),

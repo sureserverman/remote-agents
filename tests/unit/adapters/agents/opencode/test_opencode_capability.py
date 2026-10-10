@@ -28,6 +28,12 @@ HOOK_SOURCED_PROFILES = frozenset(
     if activity_source_of(name) is ActivitySource.HOOK_EXCLUSIVE
 )
 
+
+def test_the_profiles_that_report_alone_are_these_three() -> None:
+    """Pinned as values once, so the derived set above cannot shrink without failing here."""
+    assert HOOK_SOURCED_PROFILES == {"claude", "opencode", "cursor-agent"}
+
+
 #: Which activity kind each measured event becomes. The plugin's whole vocabulary.
 _KIND_BY_EVENT = {
     "session.idle": ActivityKind.COMPLETED,

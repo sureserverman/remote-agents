@@ -6,7 +6,6 @@ from remote_agents.adapters.agents.registry import (
     profiles_watched_by_title,
     reported_kinds_of,
 )
-from remote_agents.domain.profiles import closed_profiles
 from remote_agents.ports.agent_activity import ActivityKind, ActivitySource
 
 
@@ -83,9 +82,22 @@ def test_the_title_watch_is_handed_exactly_the_hybrid_profiles() -> None:
 
 
 def test_the_limit_watch_is_handed_each_profile_s_own_reported_kinds() -> None:
-    """What composition gives `LimitScreenWatcher`, agreeing with each profile's licence."""
-    folded = profile_reported_kinds()
-    for profile in closed_profiles():
-        name = str(profile.profile_id)
-        assert folded.get(name, frozenset()) == reported_kinds_of(name), name
-    assert set(folded) == {str(profile.profile_id) for profile in closed_profiles()}
+    """What composition gives `LimitScreenWatcher`, pinned as values, not against itself.
+
+    Claude's four kinds are the ones that matter most here: `LIMIT_REACHED` among them is what
+    keeps the watch off Claude's pane, whose hook reports its own limit stops. Codex and Cursor
+    claim no limit kind, so their limit is read off the pane.
+    """
+    assert profile_reported_kinds() == {
+        "claude": frozenset(
+            {
+                ActivityKind.COMPLETED,
+                ActivityKind.LIMIT_REACHED,
+                ActivityKind.OUTPUT_LIMIT,
+                ActivityKind.NEEDS_ANSWER,
+            }
+        ),
+        "codex": frozenset({ActivityKind.COMPLETED, ActivityKind.NEEDS_ANSWER}),
+        "opencode": frozenset({ActivityKind.COMPLETED, ActivityKind.NEEDS_ANSWER}),
+        "cursor-agent": frozenset({ActivityKind.COMPLETED}),
+    }

@@ -15,8 +15,10 @@ from __future__ import annotations
 
 from importlib import import_module
 from types import MappingProxyType
+from typing import TYPE_CHECKING
 
-from remote_agents.ports.provider_descriptor import HookLicence
+if TYPE_CHECKING:
+    from remote_agents.ports.provider_descriptor import HookLicence
 
 #: Hook name -> the vertical module that declares its licence. Keyed by hook name, not profile
 #: id: Cursor's profile is `cursor-agent` and its hook is `cursor`. Spelled as module paths so

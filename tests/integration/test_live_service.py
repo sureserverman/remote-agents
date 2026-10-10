@@ -2450,7 +2450,7 @@ def test_a_codex_permission_request_carries_its_command_from_the_hook_to_the_mes
         io.BytesIO(json.dumps(payload).encode("utf-8")),
         activity_directory=spool,
         environment={SESSION_ID_VARIABLE: session_id},
-        licence=hook_licence("codex"),
+        licence=lambda: hook_licence("codex"),
     )
     assert exit_status == 0, "a hook never fails the session it runs inside"
 

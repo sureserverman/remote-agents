@@ -34,14 +34,18 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import IO
+from typing import IO, TYPE_CHECKING
 
 from remote_agents.adapters.agents.turn_markers import FileTurnMarkers
 from remote_agents.ports.agent_activity import bounded_detail_line
 from remote_agents.ports.private_directory import open_private_directory
-from remote_agents.ports.provider_descriptor import HookLicence
 from remote_agents.ports.session_identity import SESSION_ID_VARIABLE, safe_session_id
 from remote_agents.ports.turn_markers import TurnMarkers
+
+if TYPE_CHECKING:
+    # Annotations only: at run time it would load the descriptor port and the domain models
+    # on the "not mine" path, which every turn of every session on the machine takes.
+    from remote_agents.ports.provider_descriptor import HookLicence
 
 MAXIMUM_PAYLOAD_BYTES = 32_768
 
@@ -49,7 +53,8 @@ MAXIMUM_PAYLOAD_BYTES = 32_768
 #: payload's `hook_event_name`, beside the agent's own `session_id` that the marker keeps as its
 #: owner: a submit's payload also carries the owner's `prompt`, and nothing here reads it.
 #: Claude and Codex both spell `UserPromptSubmit` and `Stop` this way; only
-#: Claude has a `StopFailure` (Codex fires nothing on a failed turn, `ports/agent_activity.py`).
+#: Claude has a `StopFailure` (Codex fires nothing on a failed turn; its licence's `reports`, in
+#: `codex/hooks.py`, says so).
 TURN_STARTED = "UserPromptSubmit"
 TURN_ENDED = frozenset({"Stop", "StopFailure"})
 _PLAIN_TOKEN = re.compile(r"[A-Za-z0-9_-]{1,64}")
@@ -111,22 +116,29 @@ def spool_agent_event(
     payload: IO[bytes],
     *,
     activity_directory: Path,
+    licence: Callable[[], HookLicence | None],
     environment: Mapping[str, str] = os.environ,
     now: Callable[[], datetime] = lambda: datetime.now(UTC),
     markers: TurnMarkers | None = None,
-    licence: HookLicence | None = None,
 ) -> int:
     """Record one hook event privately, and always report success to the agent.
 
     A submit starts the session's turn marker and records nothing else; a finished turn ends
     the marker and is then recorded as before. What is recorded, and whether a submit marks a
-    turn at all, is the `licence` the hook's vertical declares (BL-050): this module names no
+    turn at all, is the licence the hook's vertical declares (BL-050): this module names no
     provider, and a hook with no licence records nothing and starts no marker.
+
+    `licence` is a lookup, not a value, and required. It is called only past the session gate,
+    because finding a licence imports a whole vertical: done earlier, every turn of every
+    session on the machine paid for it -- 144 modules became 214-232 on the "not mine" path --
+    and a broken vertical raised into the agent before this frame could swallow it. Required,
+    so a caller cannot forget it and get silence by default.
     """
     try:
         session_id = safe_session_id(environment.get(SESSION_ID_VARIABLE))
         if session_id is None:
             return 0
+        found = licence()
         raw = payload.read(MAXIMUM_PAYLOAD_BYTES + 1)
         document = _document(raw)
         if document is not None:
@@ -143,7 +155,7 @@ def spool_agent_event(
         # pane inherits the pane's id, and only this tells its hooks from its parent's.
         owner = fields.get("session_id")
         turns = FileTurnMarkers(activity_directory) if markers is None else markers
-        if event == TURN_STARTED and licence is not None and licence.starts_turn_marker:
+        if event == TURN_STARTED and found is not None and found.starts_turn_marker:
             turns.start(session_id, owner=owner if isinstance(owner, str) else None)
             return 0
         # Ungated, unlike the start: ending a marker that was never started is a no-op. Guarded
@@ -155,7 +167,7 @@ def spool_agent_event(
                 pass
         if document is None:
             return 0
-        observed = _observed(document, session_id, now(), licence)
+        observed = _observed(document, session_id, now(), found)
         if observed is not None:
             _write_privately(observed, activity_directory)
     except Exception:

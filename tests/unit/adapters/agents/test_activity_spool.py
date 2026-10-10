@@ -57,6 +57,10 @@ def _record(directory: Path) -> dict[str, Any]:
     return json.loads(entries[0].read_text(encoding="utf-8"))
 
 
+#: The one provider name these tests use on purpose to mean "no vertical declared it".
+_UNDECLARED = "some-later-provider"
+
+
 def _run(
     stream: io.BytesIO,
     directory: Path,
@@ -66,7 +70,11 @@ def _run(
 ) -> int:
     """Run the spool as the installed hook does: the provider's licence, looked up by hook name."""
     environment = {} if session_id is None else {SESSION_ID_VARIABLE: session_id}
-    arguments = {"now": _clock(), "licence": hook_licence(provider)}
+    licence = hook_licence(provider)
+    # A misspelt provider would get no licence, and every "writes nothing" test below would
+    # then pass without testing anything; only the one deliberate stranger may have none.
+    assert licence is not None or provider == _UNDECLARED, f"{provider} has no hook licence"
+    arguments = {"now": _clock(), "licence": lambda: licence}
     arguments.update(overrides)
     return spool_agent_event(
         stream, activity_directory=directory, environment=environment, **arguments
@@ -1022,7 +1030,7 @@ def test_an_event_name_quoted_inside_a_value_is_never_read_as_the_event(tmp_path
     assert _marker(directory).is_file()
 
 
-@pytest.mark.parametrize("provider", ["opencode", "some-later-provider"])
+@pytest.mark.parametrize("provider", ["opencode", "cursor", _UNDECLARED])
 def test_only_claude_and_codex_start_a_marker(provider: str, tmp_path: Path) -> None:
     """DEC-104 scopes markers to the two agents whose `Stop` ends them; a provider added later
     starts none until someone decides it should."""
@@ -1051,8 +1059,8 @@ def test_an_undeclared_provider_writes_nothing(payload: dict[str, Any], tmp_path
     """
     directory = _spool(tmp_path)
 
-    assert _run(_stream(payload), directory, provider="some-later-provider") == 0
-    assert _run(_stream(payload), directory, licence=None) == 0
+    assert _run(_stream(payload), directory, provider=_UNDECLARED) == 0
+    assert _run(_stream(payload), directory, licence=lambda: None) == 0
 
     assert list(directory.iterdir()) == []
 
