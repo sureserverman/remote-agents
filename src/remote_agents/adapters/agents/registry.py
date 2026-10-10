@@ -89,6 +89,7 @@ from remote_agents.adapters.agents.claude.usage import ClaudeUsageReader
 from remote_agents.adapters.agents.claude.usage_api import USAGE_API_DESCRIPTION
 from remote_agents.adapters.agents.codex.account_limits import CodexAccountLimitsReader
 from remote_agents.adapters.agents.codex.hooks import PROVIDER as _CODEX
+from remote_agents.adapters.agents.codex.launch_lock import CodexLaunchLock
 from remote_agents.adapters.agents.cursor.hooks import PROVIDER as _CURSOR
 from remote_agents.adapters.agents.cursor.usage import CursorUsageReader
 from remote_agents.adapters.agents.cursor.usage_api import (
@@ -677,6 +678,16 @@ class HookInstallOutcome:
     settings_path: Path
     changed: bool
     summary: str
+
+
+def codex_daemon_guard(path: Path | None) -> CodexLaunchLock:
+    """Build the lock Codex launches and Codex Remote Control changes share (BL-037).
+
+    Here for `claude_remote_control_default`'s reason: this module is the one importer of a
+    provider package. Not a descriptor field: the lock's file is a path the composition owns,
+    and the descriptor is built without one.
+    """
+    return CodexLaunchLock(path)
 
 
 def claude_remote_control_default(home: Path) -> ClaudeRemoteControlDefault:

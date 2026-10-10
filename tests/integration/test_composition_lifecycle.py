@@ -352,6 +352,32 @@ def test_compose_backend_builds_one_backend_from_the_real_helpers(composed_home,
         connection.close()
 
 
+def test_compose_backend_shares_one_codex_lock_between_launches_and_toggles(
+    composed_home, tmp_path
+):
+    """BL-037: the guard Codex's launches hold is the one its Remote Control toggles hold, on
+    the machine's one lock file, and no other agent's launches take it."""
+    from remote_agents.adapters.sqlite.database import open_database
+    from remote_agents.composition.backend import compose_backend
+    from remote_agents.config import load_config
+    from remote_agents.production import ProductionPaths
+
+    paths = ProductionPaths.for_home(composed_home)
+    config = load_config(_config_file(composed_home, paths))
+    connection = open_database(tmp_path / "sessions.sqlite3")
+    try:
+        backend = compose_backend(config, connection, paths)
+
+        guards = backend.sessions._daemon_guards
+        assert {str(profile) for profile in guards} == {"codex"}
+        assert backend.host_remote_control is not None
+        shared = backend.host_remote_control._guard
+        assert all(guard is shared for guard in guards.values())
+        assert shared._path == paths.codex_launch_lock_path
+    finally:
+        connection.close()
+
+
 def test_compose_backend_wires_the_stored_default_to_the_launches_it_governs(
     composed_home, tmp_path
 ):
@@ -1251,5 +1277,81 @@ async def test_shutdown_abandons_a_wedged_operation_after_the_drain_bound(
         assert schedule_pass.outcomes == [], "the wedged launch cannot have finished"
         warnings = [r.getMessage() for r in caplog.records if r.levelname == "WARNING"]
         assert any("0.05" in w and "drain" in w for w in warnings), warnings
+    finally:
+        connection.close()
+
+
+async def test_shutdown_abandons_an_enable_holding_the_codex_lock_after_the_drain_bound(
+    tmp_path: Path, monkeypatch, caplog
+) -> None:
+    """BL-130 meets BL-037: a Remote Control change holds the Codex lock and runs inside the
+    drained gate. One that never finishes costs the drain bound, like any wedged operation."""
+    from backends import backend_for
+
+    from remote_agents.adapters.agents.codex.launch_lock import CodexLaunchLock
+    from remote_agents.adapters.sqlite.database import open_database
+    from remote_agents.adapters.sqlite.session_store import SQLiteSessionStore
+    from remote_agents.adapters.telegram.service import build_private_bot
+    from remote_agents.adapters.tmux.fake import FakeTerminal
+    from remote_agents.application.host_remote_control import (
+        HostRemoteControlCommand,
+        HostRemoteControlService,
+    )
+    from remote_agents.application.reconcile import ReconciliationService, SessionLocks
+    from remote_agents.composition import service as service_module
+    from remote_agents.composition.service import ServiceComposition, _serve_with_reconciliation
+    from remote_agents.config import TelegramSecrets
+    from remote_agents.domain.remote_control import RemoteControlState
+
+    monkeypatch.setattr(service_module, "DRAIN_TIMEOUT_SECONDS", 0.05)
+    entered, held = asyncio.Event(), asyncio.Event()  # never released
+
+    class _WedgedControl:
+        async def set_state(self, desired):
+            entered.set()
+            await held.wait()
+
+    class _Terminal(FakeTerminal):
+        async def managed_observations(self) -> tuple:
+            return ()
+
+    connection = open_database(tmp_path / "sessions.sqlite3")
+    try:
+        store = SQLiteSessionStore(connection)
+        locks = SessionLocks()
+        lock = CodexLaunchLock(tmp_path / "codex-launch.lock")
+        toggles = HostRemoteControlService(_WedgedControl(), store, locks, guard=lock)
+        terminal = _Terminal()
+        composition = ServiceComposition(
+            build_private_bot(7, 11, backend=backend_for()),
+            terminal,
+            ReconciliationService(store),
+            drain=locks.drain,
+        )
+        enabling: list[asyncio.Task] = []
+
+        async def poll(secrets, boundary) -> None:
+            enabling.append(
+                asyncio.create_task(
+                    toggles.set_state(
+                        HostRemoteControlCommand(RemoteControlState.ACTIVE, "toggle-1")
+                    )
+                )
+            )
+            await entered.wait()
+
+        with caplog.at_level("WARNING", logger=service_module.__name__):
+            await asyncio.wait_for(
+                _serve_with_reconciliation(
+                    TelegramSecrets("token", 7, 11), composition, poll, 3600
+                ),
+                timeout=5,
+            )
+
+        assert not enabling[0].done(), "the wedged enable cannot have finished"
+        warnings = [r.getMessage() for r in caplog.records if r.levelname == "WARNING"]
+        assert any("0.05" in w and "drain" in w for w in warnings), warnings
+        enabling[0].cancel()
+        await asyncio.gather(*enabling, return_exceptions=True)
     finally:
         connection.close()

@@ -32,11 +32,12 @@ from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta, tzinfo
 from enum import StrEnum
 
-from remote_agents.application.commands import LaunchCommand
+from remote_agents.application.commands import UNATTENDED_LAUNCH_WAIT_SECONDS, LaunchCommand
 from remote_agents.application.errors import DuplicateCommandError, MutationsDraining
 from remote_agents.application.prompt_delivery import DeliveryVerdict, delivery_verdict
 from remote_agents.application.schedule_times import next_fire
 from remote_agents.domain.models import ProfileId, SessionId, SessionState
+from remote_agents.ports.host_remote_control import CodexRemoteControlBusy
 from remote_agents.ports.schedules import Once, Schedule, ScheduleStore
 from remote_agents.ports.terminal import PromptDelivery, PromptReason
 
@@ -152,6 +153,14 @@ class SchedulePass:
                 # next start. The ones fired before it still go on to be typed and told.
                 _LOG.debug("the schedule pass met the shutdown drain; the rest stay due")
                 break
+            except CodexRemoteControlBusy:
+                # A Codex Remote Control change held the daemon for the whole unattended wait.
+                # Refused before the key was claimed, so this fire stays due for the next pass.
+                _LOG.warning(
+                    "schedule %s waited out a Codex Remote Control change; it stays due",
+                    schedule.id,
+                )
+                continue
             except Exception:
                 _LOG.exception("schedule %s could not be fired; it stays due", schedule.id)
                 continue
@@ -266,6 +275,7 @@ class SchedulePass:
             schedule.profile_id,
             f"sched:{schedule.id}:{due_at.astimezone(UTC).isoformat()}",
             SCHEDULED_LABEL,
+            guard_wait=UNATTENDED_LAUNCH_WAIT_SECONDS,
         )
         try:
             outcome = await self._launch(command)
@@ -273,9 +283,9 @@ class SchedulePass:
             return await self._record(
                 schedule, now, FireReport(schedule, FireOutcome.DUPLICATE, due_at)
             )
-        except MutationsDraining:
-            # Refused at the gate, before the launch claimed its key: nothing started, so this
-            # is not a failed fire. Recording one would spend the fire on a shutdown.
+        except (MutationsDraining, CodexRemoteControlBusy):
+            # Refused at the gate or at the Codex daemon guard, before the launch claimed its
+            # key: nothing started, so this is not a failed fire. Recording one would spend it.
             raise
         except Exception as error:
             # The launch may have got part-way, so this fire is over either way: recorded and

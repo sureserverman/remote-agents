@@ -8,6 +8,19 @@ from remote_agents.domain.conversations import ResolvedConversation
 from remote_agents.domain.models import ProfileId, ProjectId, SessionId
 from remote_agents.domain.remote_control import RemoteControlState
 
+LAUNCH_WAIT_SECONDS = 2.0
+"""How long an owner's launch waits for a Codex Remote Control change in flight (BL-037).
+
+Short, because the owner is watching: past it the launch is refused by name and the surface
+says to launch again in a moment. Nothing has been recorded or started by then."""
+
+UNATTENDED_LAUNCH_WAIT_SECONDS = 60.0
+"""How long a schedule or rollover launch waits for the same change.
+
+Nobody is there to press again, and a refusal would spend the fire or the rollover. Sixty
+seconds outlasts a change's own bounds: up to 30 s waiting for a launch, then a `codex`
+command bounded at 30 s."""
+
 
 @dataclass(frozen=True, slots=True)
 class LaunchCommand:
@@ -15,6 +28,8 @@ class LaunchCommand:
     profile_id: ProfileId
     idempotency_key: str
     label: str | None = None
+    guard_wait: float = LAUNCH_WAIT_SECONDS
+    """How long a launch whose agent shares the Codex daemon waits for its guard."""
 
 
 @dataclass(frozen=True, slots=True)

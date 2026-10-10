@@ -109,6 +109,17 @@ was resent.` and then `This conversation is unavailable; no operation was sent.`
 does not heal. So "off" costs you in-flight work in attached panes, not the panes themselves.
 Finish or checkpoint anything you care about before pressing it.
 
+**"On" restarts the daemon too, and a pane still starting does not survive either.** Measured
+on codex-cli 0.162.1 (`docs/acceptance-2026-10-codex-enable-race.md`): `remote-control start`,
+`app-server daemon enable-remote-control` and `disable-remote-control` all stop and restart the
+running daemon whenever they change the preference. A pane past its daemon handshake reconnects
+as above. A pane still inside it exits with `transport failed`. That is its first second or so
+after a launch or resume, and the second after its trust question is answered. remote-agents
+holds one lock across its own Codex launches, resumes and trust answers until the handshake is
+drawn, and across every toggle. A toggle waits up to 30 s for a starting session. A launch
+waits 2 s for a toggle, then says "launch again in a moment" with nothing started. A `codex`
+started outside remote-agents takes no lock and can still be caught.
+
 There is no gentler verb to switch to. An earlier version of this section proposed the daemon's
 own `remoteControl/disable` RPC; no such client request exists in the app-server protocol (the
 schema defines `RemoteControlEnableParams`/`RemoteControlDisableParams` as orphan types that no
@@ -143,15 +154,16 @@ The reason "on" is a choice rather than a constant is the same reason `stop` is 
 `codex remote-control start` reaches a function that, on a host which has not been
 bootstrapped, tears down a running managed backend before starting its own. Probing first and
 using the daemon-scoped verb when a daemon exists keeps that branch away from a machine with
-live panes.
+live panes. It does not make the daemon-scoped verb harmless: as measured above, it restarts
+the daemon whenever it changes the preference.
 
-**Only sessions started after the daemon is up are visible to the phone.** Every `codex` TUI
-is app-server backed, and a plain `codex` launch attaches to the daemon socket when it answers
-and starts its own embedded server when it does not. A managed pane launched **after** Remote
-Control is on therefore lives in the daemon and the phone can see it; one launched **before**
-is embedded, cannot be moved, and stays invisible for its whole life. Restart such a session if
-you need it reachable. Neither surface can prevent a launch racing an enable, so this is a rule
-to know rather than a guard to rely on.
+**Every Codex session lives in the daemon now.** `daemon_auto_start` is a stable Codex
+feature, on by default, so a plain `codex` launch attaches to the daemon socket when it answers
+and **starts the daemon itself** when it does not (measured on 0.162.1: the socket answered
+about 0.55 s after the launch). Older releases started an embedded server instead, and a
+session launched before Remote Control was on stayed invisible to the phone. Whether a session
+that reconnected across an enable is then visible to the phone has not been measured. If one
+is not, restart it.
 
 **The pairing code is shown once.** `Pair a phone` mints a short-lived manual code, and both
 surfaces display it exactly once: the terminal in a modal that any key dismisses and that no

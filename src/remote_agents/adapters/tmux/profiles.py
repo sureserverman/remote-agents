@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import subprocess
 from collections.abc import Callable
@@ -90,6 +91,21 @@ _READINESS_BLOCKERS = {
 _TRUST_SETTLE_SECONDS = {
     "claude": 0.0,
     "codex": 0.75,
+}
+
+#: What each agent draws only after its shared daemon has answered, for an agent whose daemon a
+#: Remote Control change restarts (BL-037).
+#:
+#: **Measured 2026-10-10 on codex-cli 0.162.1** (`docs/acceptance-2026-10-codex-enable-race.md`).
+#: Codex draws its banner and prompt at about 0.33 s, before its daemon answers (0.55 s), and
+#: its footer -- `<model> <effort> · <cwd> · ...` -- at 1.06-1.26 s. The footer names the model,
+#: which comes from the handshake's `model/list`. It was on screen in every pane that survived a
+#: daemon restart and absent from every pane that died. The cwd after ` · ` is what this
+#: matches: the prompt's own hint line (`← for agents · ? for shortcuts`) has no path in it.
+#:
+#: Absent for every other agent: they start no shared daemon a change can restart.
+_HANDSHAKE_MARKERS = {
+    "codex": re.compile(r" · [~/]"),
 }
 
 
@@ -187,6 +203,7 @@ def build_launch_profile(
         definition.graceful_keys,
         _READINESS_BLOCKERS.get(str(definition.profile_id), ()),
         _TRUST_SETTLE_SECONDS.get(str(definition.profile_id), 0.0),
+        _HANDSHAKE_MARKERS.get(str(definition.profile_id)),
     )
 
 
@@ -229,4 +246,6 @@ def build_resume_profile(
         # strictly more here than at launch, and a second table is how the more exposed of
         # the two would keep the default forever.
         _TRUST_SETTLE_SECONDS.get(str(definition.profile_id), 0.0),
+        # The handshake follows a resume as it follows a launch.
+        _HANDSHAKE_MARKERS.get(str(definition.profile_id)),
     )

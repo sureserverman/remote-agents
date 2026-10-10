@@ -489,14 +489,22 @@ lands where `/sessions` lands.
 
     Verify the reading is one of the six words and that `no daemon` is not read as `off` — the
     enrolment preference outlives the daemon, so a stopped daemon says nothing about whether
-    this host is enrolled. `off` is `codex app-server daemon disable-remote-control`, which
-    leaves the daemon and its panes alive; `codex remote-control stop` is never issued by this
-    service and should not be issued by hand while managed Codex panes are running, because
-    every TUI attached to that daemon exits when it goes.
+    this host is enrolled. `off` is `codex app-server daemon disable-remote-control`. It
+    restarts the daemon, and a settled pane reconnects but loses its conversation. `codex
+    remote-control stop` is never issued by this service and should not be issued by hand while
+    managed Codex panes are running, because every TUI attached to that daemon exits when it
+    goes.
 
-    **Only Codex sessions launched after the daemon is up are visible to the phone.** One
-    launched before runs an embedded server and cannot be moved into the daemon; restart it if
-    it needs to be reachable.
+    **Either direction restarts the daemon, so a toggle waits for a Codex session that is still
+    starting** (BL-037). A pane inside its first second or so, or the second after its trust
+    answer, exits on a restart. Verify the guard: launch a Codex session and press the toggle
+    at once. The toggle waits until the session's footer (`<model> <effort> · <path>`) is
+    drawn, and the pane survives. A launch pressed while a toggle is running answers "launch
+    again in a moment" with nothing started. A `codex` started by hand takes no part in this.
+
+    **Every Codex launch is daemon-backed.** Codex 0.162 starts the daemon itself when none is
+    running. Whether a session that reconnected across an enable is visible to the phone has
+    not been measured; restart one that is not.
 
     **Never share a pairing code, and never repeat one.** `Pair a phone` mints a short-lived
     secret shown exactly once — a modal in the terminal, one unforwardable message in Telegram.

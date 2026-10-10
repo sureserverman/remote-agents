@@ -557,3 +557,36 @@ async def test_two_queued_enters_on_a_failed_resume_start_exactly_one_session() 
         f"two queued enters on a failing resume issued {launcher.issued}; each extra one is a "
         f"second pane writing to the same provider conversation"
     )
+
+
+class _RefusedResumer(_RecordingLauncher):
+    """Answers every resume the way the service does while a Codex Remote Control change holds
+    the daemon guard (BL-037): refused, with nothing recorded."""
+
+    async def resume(self, _command):
+        from remote_agents.ports.host_remote_control import CodexRemoteControlBusy
+
+        self.issued.append("resume")
+        raise CodexRemoteControlBusy("held")
+
+
+async def test_a_resume_refused_for_a_remote_control_change_says_so() -> None:
+    launcher = _RefusedResumer()
+    app = RemoteAgentsTui(_context(launcher, conversations=_Resolving()))
+    async with app.run_test(size=(100, 30)) as pilot:
+        await pilot.pause()
+        await app.push_screen(ResumeConversationsScreen(_PROJECT, "claude", _conversation_page()))
+        await settle(app, pilot)
+        screen = app.screen
+        choices = screen.query_one("#choices", OptionList)
+        index = choices.get_option_index(str(_conversation().summary.reference))
+        screen.post_message(
+            OptionList.OptionSelected(choices, choices.get_option_at_index(index), index)
+        )
+        await pilot.pause()
+        await pilot.pause()
+        said = announcements(app)
+
+    assert launcher.issued == ["resume"]
+    assert any("Codex Remote Control is changing" in line for line in said), said
+    assert not any("held" in line for line in said), said

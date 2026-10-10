@@ -12,7 +12,11 @@ import pytest
 
 from remote_agents.adapters.sqlite.database import open_database
 from remote_agents.adapters.sqlite.rollover_store import SQLiteRolloverStore
-from remote_agents.application.commands import GracefulStopCommand, LaunchCommand
+from remote_agents.application.commands import (
+    UNATTENDED_LAUNCH_WAIT_SECONDS,
+    GracefulStopCommand,
+    LaunchCommand,
+)
 from remote_agents.application.errors import DuplicateCommandError
 from remote_agents.application.reconcile import SessionLocks
 from remote_agents.application.rollover import (
@@ -270,6 +274,9 @@ async def test_one_ready_across_five_passes_launches_exactly_once(rig: Rig) -> N
     (command,) = rig.launches
     assert command.idempotency_key == f"rollover:{HANDOFF}"
     assert (command.project_id, command.profile_id) == (PROJECT, CLAUDE)
+    # Unattended: a Codex Remote Control change in flight is waited out, not met with the
+    # owner's two-second refusal that would fail the rollover (BL-037).
+    assert command.guard_wait == UNATTENDED_LAUNCH_WAIT_SECONDS
     assert (await rig.rollover()).state is RolloverState.ADOPTING
     assert rig.stops == []
 

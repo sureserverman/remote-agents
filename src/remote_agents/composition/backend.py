@@ -16,6 +16,7 @@ from remote_agents.adapters.agents.catalogue import ProfileConversationCatalogue
 from remote_agents.adapters.agents.registry import (
     ProfileUsageReaders,
     claude_remote_control_default,
+    codex_daemon_guard,
     profile_composers,
     profiles_that_roll_over,
     provider_descriptors,
@@ -324,6 +325,13 @@ def compose_backend(
     # would be a second reader of the same file, which is harmless today and is exactly the
     # shape that lets a cached read drift from a written one tomorrow.
     claude_default = claude_remote_control_default(paths.home)
+    # One guard for the machine's one daemon, held by the launches of whichever provider owns
+    # host Remote Control and by that provider's toggles (BL-037). The profiles come from the
+    # descriptors, as `_host_remote_control`'s owner does, rather than from a name here.
+    daemon_guard = codex_daemon_guard(paths.codex_launch_lock_path)
+    daemon_profiles = [
+        descriptor.profile_id for descriptor in descriptors if descriptor.remote_control is not None
+    ]
     return Backend(
         state_events=StoreWatch(watched_paths(paths.database_path)),
         sessions=SessionService(
@@ -336,9 +344,10 @@ def compose_backend(
             # `test_a_provider_lives_in_one_package` refuses, and the answer is Claude's to
             # give. The root's job is to connect the two, which is this line.
             remote_control_defaults=dict.fromkeys(claude_default.profiles, claude_default),
+            daemon_guards=dict.fromkeys(daemon_profiles, daemon_guard),
         ),
         host_remote_control=_host_remote_control(
-            descriptors, store=backend_store, locks=backend_locks
+            descriptors, store=backend_store, locks=backend_locks, guard=daemon_guard
         ),
         # Built from the operator home rather than from a descriptor field, which is the one
         # place this capability parts company with the host toggle above. Codex's is declared by
@@ -405,7 +414,7 @@ def _schedule_composers(descriptors) -> dict[str, object]:
     }
 
 
-def _host_remote_control(descriptors, *, store, locks):
+def _host_remote_control(descriptors, *, store, locks, guard=None):
     """Build the one host-level Remote Control use case, or `None` when nobody declares one.
 
     Folded from the descriptors for the reason `provider_usage` is (ARCH-04, DEC-046): the
@@ -427,7 +436,7 @@ def _host_remote_control(descriptors, *, store, locks):
             f"({sorted(str(owner.profile_id) for owner in owners)}); the subject is the "
             "machine, so exactly one may own it"
         )
-    return HostRemoteControlService(owners[0].remote_control, store, locks)
+    return HostRemoteControlService(owners[0].remote_control, store, locks, guard=guard)
 
 
 def _conversation_service(project_paths, descriptors) -> ConversationService:

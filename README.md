@@ -899,10 +899,11 @@ nothing can revoke it from here, so treat it like a password: anyone who types i
 ChatGPT app gets control of this machine until it expires, and a phone that pairs keeps its
 access afterwards. Turning Codex Remote Control off is what ends that.
 
-**Codex sessions started after Remote Control is on are the ones your phone can see.** Only a
-pane launched after the daemon is up lives in that daemon; one launched while the daemon is
-down runs its own embedded server and stays invisible for its whole life, so restart it if you
-need it reachable.
+**Turning Codex Remote Control on or off restarts its daemon.** A settled Codex pane
+reconnects and loses its conversation, so finish what you care about first. A pane still
+starting would exit, so the toggle waits for one, and a launch pressed during a toggle asks you
+to launch again in a moment. Every Codex session now lives in the daemon. If one you started
+before turning it on is not visible to your phone, restart it.
 
 In Telegram the same fact appears under `Plan limits` in `/sessions`, and `/remote` opens the
 toggle and the `Pair a phone` button. Both surfaces confirm the toggle and neither confirms the

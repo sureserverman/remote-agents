@@ -75,6 +75,18 @@ class ProductionPaths:
         return self.state_directory / "console.lock"
 
     @property
+    def codex_launch_lock_path(self) -> Path:
+        """The file a Codex launch and a Codex Remote Control change take turns on (BL-037).
+
+        One file for the machine, because its subject is one daemon: a change restarts the
+        daemon every Codex pane is attached to. `flock`ed by whichever surface is launching or
+        toggling; nothing is read from it. Created on first use, owner-only, like
+        `console_lock_path`'s file; a host where it cannot be created serialises within each
+        process only (`adapters/agents/codex/launch_lock.py`).
+        """
+        return self.state_directory / "codex-launch.lock"
+
+    @property
     def key_lock_directory(self) -> Path:
         """Where the per-session keystroke locks live (BL-056, DEC-099).
 

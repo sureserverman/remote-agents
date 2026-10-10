@@ -125,6 +125,7 @@ from remote_agents.domain.models import (
 from remote_agents.domain.remote_control import RemoteControlState
 from remote_agents.ports.agent_usage import ContextWindow
 from remote_agents.ports.console import StatusBarPalette
+from remote_agents.ports.host_remote_control import CodexRemoteControlBusy
 from remote_agents.ports.state_events import StoreChanged, Unsubscribe
 from remote_agents.ports.terminal import RemoteControlRefused
 
@@ -1826,6 +1827,12 @@ class RemoteAgentsTui(App[AttachRequest | None]):
             # had not touched was the defect. Recorded here so the asymmetry reads as a
             # decision the next person can check rather than as one surface being behind.
             record = outcome.record
+        except CodexRemoteControlBusy:
+            # Refused before anything was recorded (BL-037); the conversation is untouched.
+            await screen.redraw_after_failure()
+            screen.set_status("Nothing was started. Resume again in a moment.")
+            screen.announce("Codex Remote Control is changing on this machine.")
+            return
         except Exception as error:
             _LOG.exception("resume failed")
             await screen.redraw_after_failure()
@@ -2055,6 +2062,13 @@ class RemoteAgentsTui(App[AttachRequest | None]):
                 status = await control.set_state(
                     HostRemoteControlCommand(desired, _idempotency_key())
                 )
+        except CodexRemoteControlBusy:
+            # A Codex session was still starting for the whole wait (BL-037). Nothing was run.
+            screen.announce(
+                f"{HOST_REMOTE_CONTROL_TITLE} was not changed: a Codex session is still "
+                "starting. Try again in a moment."
+            )
+            return
         except Exception as error:
             _LOG.exception("this host's Remote Control could not be changed")
             screen.announce(f"{HOST_REMOTE_CONTROL_TITLE} was not changed: {error}")
@@ -2589,6 +2603,12 @@ class RemoteAgentsTui(App[AttachRequest | None]):
                         None,
                     )
                 )
+        except CodexRemoteControlBusy:
+            # Refused before anything was recorded (BL-037): pressing again is a real attempt.
+            return LaunchFailure(
+                status="Nothing was started. Launch again in a moment.",
+                explanation="Codex Remote Control is changing on this machine.",
+            )
         except Exception as error:
             _LOG.exception("launch failed")
             return LaunchFailure(

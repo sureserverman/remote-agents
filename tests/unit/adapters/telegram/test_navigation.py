@@ -825,6 +825,36 @@ def _resume_boundary() -> tuple[PrivateBotBoundary, _ResumingLauncher]:
 
 
 @pytest.mark.asyncio
+async def test_a_resume_refused_for_a_codex_remote_control_change_says_so() -> None:
+    """BL-037: refused before anything was recorded, so the owner is told why and that
+    nothing started, rather than handed a traceback's silence."""
+    from remote_agents.ports.host_remote_control import CodexRemoteControlBusy
+
+    class _Busy(_ResumingLauncher):
+        async def resume(self, _command):
+            raise CodexRemoteControlBusy("held")
+
+    boundary = build_private_bot(
+        OWNER,
+        CHAT,
+        backend=backend_for(
+            catalogue=(PROJECT,),
+            sessions=_Busy(_record()),
+            conversations=ConversationService(_Catalogue(_resolved())),
+        ),
+        profiles=(ProfileAvailability("claude", True, None),),
+        names=profile_names(),
+    )
+    token = boundary._callback("resume.confirm", "c-0123456789abcdef", mutation=True)
+    boundary.callbacks.bind_pending(CHAT, 1)
+
+    text = str((await boundary._resume_reply("c-0123456789abcdef", token, 1))["text"])
+
+    assert "Codex Remote Control is changing" in text
+    assert "Nothing was started" in text
+
+
+@pytest.mark.asyncio
 async def test_resume_without_review_makes_the_conversation_choice_the_act() -> None:
     """Launch stopped asking for a review when choosing the agent became the act. Choosing a
     named conversation is a *more* specific choice than choosing an agent, so resume was

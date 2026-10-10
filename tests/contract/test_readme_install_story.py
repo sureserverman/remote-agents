@@ -267,13 +267,16 @@ def test_the_readme_makes_the_two_host_remote_control_keys_findable() -> None:
     assert "/remote" in readme
 
 
-def test_the_readme_carries_the_launch_order_rule_where_the_keys_are_named() -> None:
-    """The one rule an owner cannot recover from by trying again: the pane is invisible for
-    its whole life, so learning it afterwards costs them the session."""
+def test_the_readme_says_a_codex_toggle_restarts_the_daemon_where_the_keys_are_named() -> None:
+    """What a toggle costs the sessions already running, said before the owner presses it.
+
+    This was the launch-order rule (a pane launched before the daemon was up stayed invisible
+    for its whole life). Codex 0.162.1 starts the daemon on every launch and restarts it on
+    every toggle (BL-037), so the fact an owner acts on is the restart."""
     readme = _readme_prose()
 
-    assert "started after Remote Control is on" in readme
-    assert "invisible for its whole life" in readme
+    assert "restarts its daemon" in readme
+    assert "loses its conversation" in readme
 
 
 def test_the_readme_says_a_pairing_code_cannot_be_revoked_from_here() -> None:

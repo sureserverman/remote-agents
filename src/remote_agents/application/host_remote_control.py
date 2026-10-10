@@ -24,6 +24,7 @@ contents and that the two no longer overlap.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 from dataclasses import dataclass
 
 from remote_agents.application.errors import DuplicateCommandError
@@ -34,9 +35,14 @@ from remote_agents.domain.remote_control import (
     PairingCode,
     RemoteControlState,
 )
-from remote_agents.ports.host_remote_control import HostRemoteControl
+from remote_agents.ports.host_remote_control import DaemonGuard, HostRemoteControl
 from remote_agents.ports.provider_errors import ProviderUnavailable
 from remote_agents.ports.session_store import SessionStore
+
+TOGGLE_WAIT_SECONDS = 30.0
+"""How long a Remote Control change waits for a Codex launch, resume or trust answer to finish
+starting (BL-037). A launch holds the guard through its startup budget (20 s) and its daemon
+handshake, so 30 s outlasts one that is merely slow; past it the change is refused by name."""
 
 #: What each direction is called on screen. This host's own table since 2026-09-11 -- see the
 #: module docstring for why it stopped being the pane toggle's, and what replaced the alias
@@ -130,13 +136,13 @@ class HostRemoteControlService:
     from `for_session(...)` beside it, and a host action has no session to key on. So this
     service owns one lock, because it has exactly one subject: the machine.
 
-    Stated precisely, since the neighbouring guarantee is easy to assume: this serialises
-    *host toggles against each other*. It does **not** serialise a toggle against a session
-    launch, and no lock available here would -- `launch` takes `operation()` alone, which
-    excludes nothing. That matters because of the launch-order rule: a managed `codex` pane
-    started while the daemon is coming up may end up embedded rather than daemon-backed, and
-    so invisible to the phone. The honest mitigation is that the owner can see the reading
-    and launch after it settles, not a lock this class could take.
+    Stated precisely, since the neighbouring guarantee is easy to assume: this lock
+    serialises *host toggles against each other*. Toggles against launches are the
+    `DaemonGuard`'s job (BL-037). Every toggle that changes the preference restarts the
+    daemon, and a Codex pane still in its daemon handshake exits when that happens. So a
+    toggle holds the guard that `SessionService` holds across a Codex launch, resume or trust
+    answer, waiting up to `TOGGLE_WAIT_SECONDS` for one to finish starting. A launch from
+    outside remote-agents takes no guard and still races; that residual is accepted.
 
     **The lock is per-process, and the subject is not.** `compose_backend` is called
     independently by the TUI and the bot compositions, each minting its own `SessionLocks`
@@ -158,12 +164,18 @@ class HostRemoteControlService:
     """
 
     def __init__(
-        self, control: HostRemoteControl, store: SessionStore, locks: SessionLocks
+        self,
+        control: HostRemoteControl,
+        store: SessionStore,
+        locks: SessionLocks,
+        *,
+        guard: DaemonGuard | None = None,
     ) -> None:
         self._control = control
         self._store = store
         self._locks = locks
         self._host_lock = asyncio.Lock()
+        self._guard = guard
 
     async def aclose(self) -> None:
         """Reclaim whatever the provider boundary opened, if it can be reclaimed.
@@ -210,8 +222,17 @@ class HostRemoteControlService:
         press -- the owner presses again and gets a real attempt -- but written down because
         the two operations on this service read inconsistently side by side otherwise, and
         `pair`'s docstring explains the same trade in the opposite direction.
+
+        **A launch still starting refuses the toggle by name.** The guard is waited on for up
+        to `TOGGLE_WAIT_SECONDS`, before the key is claimed; past that this raises
+        `CodexRemoteControlBusy` with nothing run and the key unspent.
         """
-        async with self._locks.operation(), self._host_lock:
+        guard = (
+            contextlib.nullcontext()
+            if self._guard is None
+            else self._guard.hold(TOGGLE_WAIT_SECONDS, alone=True)
+        )
+        async with self._locks.operation(), self._host_lock, guard:
             if not await self._store.claim_idempotency_key(command.idempotency_key):
                 raise DuplicateCommandError("host remote control callback was already handled")
             try:

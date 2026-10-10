@@ -16,6 +16,8 @@ going", then "an attached Codex TUI exits on disconnect" -- and running the live
 standalone install settled it. The attached pane is **not** killed: same pid, still at a
 usable prompt afterwards. What it loses is the conversation, durably: the TUI reconnects to
 the replacement daemon and reports "This conversation is unavailable; no operation was sent."
+That holds for a settled pane. One still inside its daemon handshake exits instead, and "on"
+restarts the daemon the same way (`_enable`; BL-037).
 
 So the cost of "off" is in-flight work, not the session, and there is no gentler verb to
 switch to. An earlier note here proposed the daemon's own `remoteControl/disable` RPC; no such
@@ -400,19 +402,20 @@ class CodexRemoteControl:
 
         - **A daemon is already running** -> `app-server daemon enable-remote-control`, the
           daemon-scoped verb documented as "enable remote control for future starts and a
-          currently running managed daemon". It flips the preference on the live daemon and
-          returns; it starts nothing and stops nothing, so no attached pane can be harmed.
+          currently running managed daemon". It never bootstraps. It does restart the daemon
+          when it changes the preference (measured 3 of 3 on 0.162.1), which a settled pane
+          survives by reconnecting.
         - **No daemon is running** -> `remote-control start --json`, which is what actually
-          brings one up. Any bootstrap it performs has nothing to stop, because we just
-          established nothing is listening.
+          brings one up.
 
-        That makes the destructive branch **very nearly** unreachable, and the gap is worth
-        stating rather than rounding off: the probe and the start are two separate execs, so a
-        session launch landing between them can bring a backend up that the start then tears
-        down. One spawn wide, and reachable by the sequence these surfaces teach -- turn it on
-        with no daemon, then launch. Closing it needs a lock the `codex` CLI does not offer;
-        BL-037 carries the decision. What this rule removes is the far larger case, where the
-        branch was taken on *every* non-bootstrapped host, every time.
+        **Neither branch is safe for a pane still starting, and the guard is what covers it**
+        (BL-037, `docs/acceptance-2026-10-codex-enable-race.md`). A `codex` launch starts the
+        daemon itself, so one landing between the probe and the start brings up a backend
+        that the start then stops (10 of 10 measured), and any preference change restarts the
+        daemon under a TUI still in its handshake, which exits. `HostRemoteControlService`
+        holds the `DaemonGuard` around this call, and remote-agents' own Codex launches,
+        resumes and trust answers hold it until their handshake is drawn. A `codex` started
+        outside remote-agents takes no guard and still races; that residual is accepted.
 
         Then report what the daemon says rather than what the CLI guessed.
 

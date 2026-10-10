@@ -18,6 +18,7 @@ would not answer -- not an exception for a renderer to handle.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 from datetime import UTC, datetime
 
 import pytest
@@ -25,6 +26,7 @@ import pytest
 from remote_agents.adapters.agents.protocols import ProtocolError
 from remote_agents.application.errors import DuplicateCommandError
 from remote_agents.application.host_remote_control import (
+    TOGGLE_WAIT_SECONDS,
     HostRemoteControlCommand,
     HostRemoteControlService,
     PairCommand,
@@ -36,6 +38,7 @@ from remote_agents.domain.remote_control import (
     PairingCode,
     RemoteControlState,
 )
+from remote_agents.ports.host_remote_control import CodexRemoteControlBusy
 
 EXPIRES = datetime(2026, 9, 3, 12, 0, tzinfo=UTC)
 
@@ -128,6 +131,54 @@ def test_a_command_carries_no_session_because_its_subject_is_the_host() -> None:
 
 
 # ------------------------------------------------------------------------------ set_state
+
+
+class Guard:
+    """A `DaemonGuard` that records its bound and whether the port ran inside it."""
+
+    def __init__(self, *, busy: bool = False) -> None:
+        self.busy = busy
+        self.waits: list[tuple[float, bool]] = []
+        self.inside = False
+
+    @contextlib.asynccontextmanager
+    async def hold(self, wait: float, *, alone: bool):
+        self.waits.append((wait, alone))
+        if self.busy:
+            raise CodexRemoteControlBusy("a Codex launch held the daemon")
+        self.inside = True
+        try:
+            yield
+        finally:
+            self.inside = False
+
+
+@pytest.mark.parametrize("desired", [RemoteControlState.ACTIVE, RemoteControlState.INACTIVE])
+async def test_a_toggle_runs_inside_the_daemon_guard(desired: RemoteControlState) -> None:
+    """Both directions restart the daemon when they change the preference (BL-037)."""
+    guard = Guard()
+    seen: list[bool] = []
+
+    class Watching(FakeControl):
+        async def set_state(self, desired: RemoteControlState) -> HostRemoteControlStatus:
+            seen.append(guard.inside)
+            return await super().set_state(desired)
+
+    toggles = HostRemoteControlService(Watching(), Store(), SessionLocks(), guard=guard)
+    await toggles.set_state(HostRemoteControlCommand(desired, "key-1"))
+
+    assert seen == [True]
+    assert guard.waits == [(TOGGLE_WAIT_SECONDS, True)], "a change holds the daemon alone"
+
+
+async def test_a_toggle_refused_by_the_guard_runs_nothing_and_spends_no_key() -> None:
+    control = FakeControl()
+    store = Store()
+    toggles = HostRemoteControlService(control, store, SessionLocks(), guard=Guard(busy=True))
+    with pytest.raises(CodexRemoteControlBusy):
+        await toggles.set_state(HostRemoteControlCommand(RemoteControlState.ACTIVE, "key-1"))
+    assert control.calls == []
+    assert store.claims == set()
 
 
 async def test_setting_the_state_drives_the_port_and_answers_with_the_reading() -> None:

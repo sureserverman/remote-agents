@@ -168,6 +168,30 @@ def test_the_settle_is_read_from_one_table_by_both_constructions() -> None:
     assert resumed.trust_settle_seconds == launched.trust_settle_seconds
 
 
+def test_only_codex_waits_for_a_daemon_handshake_and_both_constructions_agree() -> None:
+    """Codex's launches and resumes are held until its footer is drawn (BL-037); an agent
+    with no shared daemon is never held."""
+    session_id = SessionId.new()
+    codex = ProfileDefinition(
+        ProfileId("codex"), "codex", ("codex",), ("--version",), ("/exit", "Enter", "Enter")
+    )
+    for definition, expected in ((codex, True), (_claude(), False)):
+        profile_id = str(definition.profile_id)
+        executable = definition.executable
+        launched = build_launch_profile(
+            definition, Path(f"/usr/bin/{executable}"), session_id, dict(_CURATED)
+        )
+        resumed = build_resume_profile(
+            definition,
+            Path(f"/usr/bin/{executable}"),
+            session_id,
+            ProviderConversationId("conversation"),
+            dict(_CURATED),
+        )
+        assert (launched.handshake_marker is not None) is expected, profile_id
+        assert resumed.handshake_marker == launched.handshake_marker, profile_id
+
+
 def test_a_readiness_marker_is_a_string_the_agent_actually_draws() -> None:
     """**This one shipped broken and a live drill found it.**
 

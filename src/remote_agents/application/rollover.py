@@ -64,7 +64,11 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
-from remote_agents.application.commands import GracefulStopCommand, LaunchCommand
+from remote_agents.application.commands import (
+    UNATTENDED_LAUNCH_WAIT_SECONDS,
+    GracefulStopCommand,
+    LaunchCommand,
+)
 from remote_agents.application.errors import DuplicateCommandError, MutationsDraining
 from remote_agents.application.notification_policy import rollover_told
 from remote_agents.application.prompt_delivery import DeliveryVerdict, delivery_verdict
@@ -432,6 +436,7 @@ class RolloverPass:
                         rollover.project_id,
                         rollover.profile_id,
                         f"rollover:{rollover.handoff_id}",
+                        guard_wait=UNATTENDED_LAUNCH_WAIT_SECONDS,
                     )
                 )
             except DuplicateCommandError:
@@ -441,7 +446,9 @@ class RolloverPass:
                 return
             except Exception as error:
                 # The launch may have got part-way; its key is claimed, so it is never tried
-                # again.
+                # again. A `CodexRemoteControlBusy` lands here too, after the unattended wait:
+                # nothing started, but SUCCESSOR_STARTING is persisted and cannot step back, so
+                # the rollover fails under that name (BL-037's residual for a wedged change).
                 _LOG.exception("launching the successor for rollover %s failed", rollover.id)
                 await self._fail(starting, seen, LAUNCH_FAILED, type(error).__name__)
                 return

@@ -7,6 +7,7 @@ import contextlib
 import json
 import logging
 import os
+import re
 import time
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, replace
@@ -150,6 +151,12 @@ class TerminalWaits:
     """A turn being aborted before a stop's own keys. Codex 0.158.0 drew its interrupted line and
     dropped its title spinner within 1.5 s; a turn still running after this is stopped anyway."""
 
+    handshake: float = 5.0
+    """An agent finishing its daemon handshake after it looked ready, for a profile that
+    declares `handshake_marker`. Codex 0.162.1 drew its footer 0.7-0.9 s after its banner over
+    five launches (`docs/acceptance-2026-10-codex-enable-race.md`). Past this the launch is
+    reported as it was: a footer that never matches costs this much, not a failed launch."""
+
 
 #: What a caller that has no opinion gets, so the production path names nothing.
 _DEFAULT_WAITS = TerminalWaits()
@@ -217,6 +224,12 @@ class LaunchProfile:
     A window, not a delay: the launch still returns as soon as a blocker appears inside it,
     and returns the ready observation the moment it closes.
     """
+    handshake_marker: re.Pattern[str] | None = None
+    """Text the agent draws only once its shared daemon has answered, or None when it has none.
+
+    Codex draws its banner and prompt before its daemon is up, and a daemon restart inside the
+    handshake that follows exits the TUI (BL-037). Where this is set, a launch, a resume and a
+    trust answer each wait for it, so the daemon guard held around them covers the window."""
 
     def __post_init__(self) -> None:
         if (
@@ -226,6 +239,15 @@ class LaunchProfile:
             or self.readiness_marker == ""
         ):
             raise ValueError("profile executable and argv must be fixed and absolute")
+
+
+_FOOTER_LINES = 4
+"""How many of a pane's last lines may hold a `handshake_marker`. Codex draws its footer last or
+second to last, under at most a hint line and a warning."""
+
+_HANDSHAKE_POLL_SECONDS = 0.1
+"""Between handshake reads: two tmux calls each, against a footer drawn about 0.7 s after the
+banner, so a tighter poll only spends processes."""
 
 
 _STILL_SECONDS = 20.0
@@ -414,6 +436,58 @@ class TmuxTerminal:
         return await self._settle_launch(session_id, profile_id, profile)
 
     async def _settle_launch(
+        self, session_id: SessionId, profile_id: ProfileId, profile: LaunchProfile
+    ) -> TerminalObservation:
+        """Settle the new pane, then, for an agent that declares one, wait out its handshake.
+
+        A pane on its trust dialog is not waited on: the handshake follows the answer, and
+        `answer_trust` waits for it there."""
+        settled = await self._settle_readiness(session_id, profile_id, profile)
+        if not settled.live or settled.awaiting_trust:
+            return settled
+        return await self._await_handshake(session_id, profile_id, profile, settled)
+
+    async def _await_handshake(
+        self,
+        session_id: SessionId,
+        profile_id: ProfileId,
+        profile: LaunchProfile,
+        ready: TerminalObservation,
+    ) -> TerminalObservation:
+        """Poll until the agent draws `handshake_marker`, asks for trust, or dies.
+
+        Bounded by `TerminalWaits.handshake`; reaching the bound answers `ready` unchanged,
+        because the agent did come up and a footer this cannot read is not a failed launch.
+        A pane that dies meanwhile is answered as dead, for `_settle_readiness`'s reason: a
+        reading taken before it died is not evidence about it now.
+        """
+        marker = profile.handshake_marker
+        if marker is None:
+            return ready
+        gone = TerminalObservation(
+            session_id, live=False, preserved=False, detail="startup_timeout"
+        )
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + self._waits.handshake
+        while loop.time() < deadline:
+            try:
+                capture = await self._gateway.capture(session_id)
+            except TerminalTargetMissing:
+                # The pane exited inside its handshake, which is the very event this waits out.
+                return gone
+            # The footer is drawn at the bottom; a resumed conversation redrawn above it may
+            # quote a ` · /path` of its own, so only the last lines are read.
+            if marker.search("\n".join(capture.rstrip().splitlines()[-_FOOTER_LINES:])):
+                return ready
+            observation = await self.inspect(session_id)
+            if observation is None or not observation.live:
+                return observation or gone
+            if self._is_awaiting_trust(profile, profile_id, capture):
+                return replace(observation, awaiting_trust=True)
+            await asyncio.sleep(_HANDSHAKE_POLL_SECONDS)
+        return ready
+
+    async def _settle_readiness(
         self, session_id: SessionId, profile_id: ProfileId, profile: LaunchProfile
     ) -> TerminalObservation:
         """Poll the new pane until it proves ready, proves blocked, or the budget runs out.
@@ -1333,7 +1407,24 @@ class TmuxTerminal:
             # or one killed meanwhile. What was sent was sent, whatever happened after, and
             # the owner's wording already covers the rest ("relaunch if it already gave up").
             return TrustAnswer(pressed=True, observed=TrustState.UNKNOWN)
-        return TrustAnswer(pressed=True, observed=classify_trust_capture(after, dialog))
+        observed = classify_trust_capture(after, dialog)
+        if observed is not TrustState.AWAITING:
+            # The answer starts the agent's daemon handshake. Waited out here, under the guard
+            # `SessionService.answer_trust` holds, so a Remote Control change cannot land in it.
+            await self._handshake_after_answer(session_id)
+        return TrustAnswer(pressed=True, observed=observed)
+
+    async def _handshake_after_answer(self, session_id: SessionId) -> None:
+        """Wait for a just-trusted agent's handshake, when its profile declares one."""
+        with contextlib.suppress(TerminalTargetMissing):
+            observation = await self.inspect(session_id)
+            if observation is None or not observation.live or observation.profile_id is None:
+                return
+            profile = self._resolved_profile(session_id, observation.profile_id)
+            if profile is not None:
+                await self._await_handshake(
+                    session_id, observation.profile_id, profile, observation
+                )
 
     async def decline_trust(self, session_id: SessionId) -> TerminalObservation:
         """Answer the folder-trust question with *no*, and make sure the pane is gone.

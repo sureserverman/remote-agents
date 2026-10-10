@@ -492,6 +492,31 @@ async def test_a_failed_toggle_is_reported_rather_than_lost() -> None:
         assert app.busy is False
 
 
+async def test_a_toggle_refused_while_a_codex_session_starts_says_so() -> None:
+    """BL-037: the toggle waited for a Codex session still starting and gave up. The owner is
+    told which, not handed the exception's own words."""
+    from remote_agents.ports.host_remote_control import CodexRemoteControlBusy
+
+    control = FakeHostRemoteControl(HostConnection.DISABLED)
+
+    async def refused(command):
+        raise CodexRemoteControlBusy("held")
+
+    control.set_state = refused  # type: ignore[method-assign]
+    app = RemoteAgentsTui(_context(control))
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        asking = await _asking(app, pilot)
+        await pilot.press("down")
+        await pilot.press("enter")
+        await _answered(asking)
+        await pilot.pause()
+        said = announcements(app)
+        assert any("a Codex session is still starting" in line for line in said), said
+        assert not any("held" in line for line in said), said
+        assert app.busy is False
+
+
 async def test_the_key_is_inert_where_no_host_toggle_is_wired() -> None:
     """A dead-end entry is worse than an absent one: no modal, no command, no crash."""
     app = RemoteAgentsTui(_context(None))
@@ -781,20 +806,21 @@ async def test_the_chooser_says_what_the_daemon_actually_reported() -> None:
             await asyncio.gather(asking, return_exceptions=True)
 
 
-def test_the_enable_confirmation_names_the_launch_order_rule() -> None:
-    """A pane started before the daemon is up stays invisible to the phone for its whole life.
+def test_the_enable_confirmation_names_what_the_restart_costs() -> None:
+    """Turning it on restarts the daemon, and running sessions lose their conversation.
 
-    The confirmation used to promise the phone could drive Codex sessions on this machine,
-    full stop -- which is false for every pane already running, and the owner has no other
-    way to find that out. It is the one screen they are guaranteed to read.
+    This was the launch-order rule (a pane started before the daemon was up stayed invisible),
+    until codex-cli 0.162.1 started the daemon on every launch and restarted it on every
+    toggle (BL-037). It is the one screen the owner is guaranteed to read.
     """
     modal = HostRemoteControlConfirmModal.for_direction(RemoteControlState.ACTIVE)
     # The instance's question, not the class default: `for_direction` passes it to the
     # constructor, and the class attribute is the fallback for the registry sweep.
     asked = modal._question.casefold()
 
-    assert "after" in asked, asked
+    assert "restarts" in asked, asked
     assert "already running" in asked, asked
+    assert "lose the conversation" in asked, asked
 
 
 def test_the_pairing_modal_cannot_be_photographed_by_the_command_palette() -> None:

@@ -1,0 +1,28 @@
+{
+ "baseline": {
+  "elapsed_s": 44.4,
+  "exit": 0,
+  "tail": "....................................................................     [100%]\n68 passed in 43.83s"
+ },
+ "break_patch": "--- a/src/remote_agents/application/services.py\t2026-10-10 08:57:41.512642398 +0100\n+++ b/src/remote_agents/application/services.py\t2026-10-10 08:57:41.521642480 +0100\n@@ -251,10 +251,7 @@\n         # Before the key is claimed and the record saved, so a refusal leaves nothing behind\n         # and the owner's next press is a real attempt. Taken holding no other lock; the\n         # Remote Control side takes no session lock, so nothing under it waits on this.\n-        async with (\n-            self._daemon_guard(command.profile_id, command.guard_wait),\n-            self._locks.operation(),\n-        ):\n+        async with self._locks.operation():\n             if not await self._store.claim_idempotency_key(command.idempotency_key):\n                 raise DuplicateCommandError(\"launch callback was already handled\")\n             session_id = SessionId.new()\n",
+ "build": null,
+ "created": "2026-10-10T07:59:10+00:00",
+ "fingerprint": "e2e28f0804563d23bf26abf809651851430136c106b791a8f859f189809875a9",
+ "index": 1,
+ "kind": "claim",
+ "named_break": null,
+ "no_build_reason": "pure Python, no build",
+ "plan": "/mnt/vault/Portfolio/infra/remote-agents/plans/2026-10-09-decisions-and-worktrees-sub-02-robustness-plan.md",
+ "red": {
+  "elapsed_s": 44.1,
+  "exit": 1,
+  "tail": "        toggles = HostRemoteControlService(\n            Control(terminal.events), Store(), SessionLocks(), guard=lock\n        )\n    \n        launching = asyncio.create_task(sessions.launch(LaunchCommand(PROJECT, CODEX, \"launch-1\")))\n        await terminal.entered.wait()\n        toggling = asyncio.create_task(toggles.set_state(HostRemoteControlCommand(desired, \"t-1\")))\n        await asyncio.sleep(0.3)\n>       assert terminal.events == [\"launch:codex\"], \"the change ran while the launch was starting\"\nE       AssertionError: the change ran while the launch was starting\nE       assert ['launch:code...ate:inactive'] == ['launch:codex']\nE         \nE         Left contains one more item: 'set_state:inactive'\nE         Use -v to get more diff\n\ntests/unit/adapters/agents/codex/test_launch_lock.py:172: AssertionError\n____ test_a_codex_launch_is_refused_by_name_while_an_enable_holds_the_lock _____\n\ntmp_path = PosixPath('/tmp/pytest-of-user/pytest-965/test_a_codex_launch_is_refused0')\n\n    async def test_a_codex_launch_is_refused_by_name_while_an_enable_holds_the_lock(\n        tmp_path: Path,\n    ) -> None:\n        \"\"\"Refused after its two seconds, with nothing claimed, saved or launched.\"\"\"\n        path = tmp_path / \"codex-launch.lock\"\n        store = Store()\n        terminal = Terminal()\n        sessions = _sessions(store, terminal, CodexLaunchLock(path))\n        with _HeldElsewhere(path, seconds=LAUNCH_WAIT_SECONDS + 3):\n            started = time.monotonic()\n>           with pytest.raises(CodexRemoteControlBusy):\n                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nE           Failed: DID NOT RAISE CodexRemoteControlBusy\n\ntests/unit/adapters/agents/codex/test_launch_lock.py:203: Failed\n=========================== short test summary info ============================\nFAILED tests/unit/adapters/agents/codex/test_launch_lock.py::test_an_enable_waits_for_a_codex_launch_in_flight[active]\nFAILED tests/unit/adapters/agents/codex/test_launch_lock.py::test_an_enable_waits_for_a_codex_launch_in_flight[inactive]\nFAILED tests/unit/adapters/agents/codex/test_launch_lock.py::test_a_codex_launch_is_refused_by_name_while_an_enable_holds_the_lock\n3 failed, 65 passed in 43.57s"
+ },
+ "schema": 2,
+ "task": "2.2",
+ "test": "if grep -q '^Verdict: RACE_REAL$' docs/acceptance-2026-10-codex-enable-race.md; then uv run --locked pytest tests/unit/adapters/agents/codex/test_launch_lock.py tests/unit/application/test_host_remote_control_service.py tests/integration/test_composition_lifecycle.py -q -p no:randomly; else uv run --locked pytest tests/integration/test_composition_lifecycle.py -q -p no:randomly; fi && ! grep -n 'very nearly unreachable' src/remote_agents/adapters/agents/codex/remote_control.py",
+ "text": "`if grep -q '^Verdict: RACE_REAL$' docs/acceptance-2026-10-codex-enable-race.md; then uv run --locked pytest tests/unit/adapters/agents/codex/test_launch_lock.py tests/unit/application/test_host_remote_control_service.py tests/integration/test_composition_lifecycle.py -q -p no:randomly; else uv run --locked pytest tests/integration/test_composition_lifecycle.py -q -p no:randomly; fi && ! grep -n 'very nearly unreachable' src/remote_agents/adapters/agents/codex/remote_control.py`. On `RACE_REAL`, the refusal test goes red if the launch side waits past 2 s.",
+ "touched": [
+  "src/remote_agents/application/services.py"
+ ]
+}

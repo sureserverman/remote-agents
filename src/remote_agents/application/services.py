@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
 from remote_agents.application.commands import (
+    LAUNCH_WAIT_SECONDS,
     AnswerTrustCommand,
     CleanupCommand,
     DeclineTrustCommand,
@@ -43,6 +45,7 @@ from remote_agents.domain.models import (
 from remote_agents.domain.remote_control import RemoteControlDefault, RemoteControlState
 from remote_agents.domain.state_machine import LifecycleEvent, transition
 from remote_agents.domain.trust import TrustState
+from remote_agents.ports.host_remote_control import DaemonGuard
 from remote_agents.ports.remote_control_default import RemoteControlDefaultPort
 from remote_agents.ports.session_store import ProjectUsage, SessionStore
 from remote_agents.ports.terminal import (
@@ -207,6 +210,7 @@ class SessionService:
         locks: SessionLocks | None = None,
         hide_in_console: Callable[[SessionId], Awaitable[None]] | None = None,
         remote_control_defaults: Mapping[ProfileId, RemoteControlDefaultPort] | None = None,
+        daemon_guards: Mapping[ProfileId, DaemonGuard] | None = None,
     ) -> None:
         self._store = store
         self._terminal = terminal
@@ -225,9 +229,32 @@ class SessionService:
         # never carry the flag -- which is the honest answer for an agent whose remote control
         # is a different mechanism entirely, as Codex's daemon enrollment is.
         self._remote_control_defaults = dict(remote_control_defaults or {})
+        # Which profiles share the daemon whose Remote Control can restart under them, and the
+        # guard each takes (BL-037). Supplied by the root for `remote_control_defaults`'s
+        # reason. A profile absent from it never waits on a Remote Control change.
+        self._daemon_guards = dict(daemon_guards or {})
+
+    def _daemon_guard(
+        self, profile_id: ProfileId, wait: float
+    ) -> contextlib.AbstractAsyncContextManager[None]:
+        """The guard this profile's launches hold until their pane is past its daemon handshake.
+
+        Held around the terminal call, whose settle waits for the handshake for exactly these
+        agents, so a Remote Control change cannot restart the daemon under a TUI that would
+        exit (`docs/acceptance-2026-10-codex-enable-race.md`). Raises
+        `CodexRemoteControlBusy` once `wait` has passed.
+        """
+        guard = self._daemon_guards.get(profile_id)
+        return contextlib.nullcontext() if guard is None else guard.hold(wait, alone=False)
 
     async def launch(self, command: LaunchCommand) -> LaunchOutcome:
-        async with self._locks.operation():
+        # Before the key is claimed and the record saved, so a refusal leaves nothing behind
+        # and the owner's next press is a real attempt. Taken holding no other lock; the
+        # Remote Control side takes no session lock, so nothing under it waits on this.
+        async with (
+            self._daemon_guard(command.profile_id, command.guard_wait),
+            self._locks.operation(),
+        ):
             if not await self._store.claim_idempotency_key(command.idempotency_key):
                 raise DuplicateCommandError("launch callback was already handled")
             session_id = SessionId.new()
@@ -293,7 +320,10 @@ class SessionService:
 
     async def resume(self, command: ResumeCommand) -> ResumeOutcome:
         """Create one managed identity for a server-resolved provider conversation."""
-        async with self._locks.operation():
+        async with (
+            self._daemon_guard(command.profile_id, LAUNCH_WAIT_SECONDS),
+            self._locks.operation(),
+        ):
             async with self._locks.for_conversation(
                 command.profile_id, command.conversation.provider_conversation_id
             ):
@@ -496,9 +526,15 @@ class SessionService:
                 # on the surface that rendered it, because it is lifecycle policy and every
                 # caller owes it.
                 raise ValueError("that session is not waiting to be trusted")
-            if not await self._store.claim_idempotency_key(command.idempotency_key):
-                raise DuplicateCommandError("trust callback was already handled")
-            return await self._terminal.answer_trust(command.session_id)
+            # Answering starts the agent's daemon handshake, and a Remote Control change inside
+            # it exits the pane (3 of 3 measured). The terminal waits for the handshake after
+            # the press, so the guard is held across the whole answer. Taken before the claim
+            # for `launch`'s reason; the session lock held here is one the Remote Control side
+            # never takes.
+            async with self._daemon_guard(record.profile_id, LAUNCH_WAIT_SECONDS):
+                if not await self._store.claim_idempotency_key(command.idempotency_key):
+                    raise DuplicateCommandError("trust callback was already handled")
+                return await self._terminal.answer_trust(command.session_id)
 
     async def decline_trust(self, command: DeclineTrustCommand) -> SessionRecord:
         """Answer the folder-trust question with *no*, and end the session (DEC-078).

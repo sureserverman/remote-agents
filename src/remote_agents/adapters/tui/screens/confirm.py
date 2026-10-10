@@ -422,13 +422,12 @@ class HostRemoteControlConfirmModal(ConfirmScreen):
         """
         label = HOST_REMOTE_CONTROL_LABELS[desired]
         effect = (
-            # The launch-order rule, in the one place an owner is guaranteed to read it. A
-            # managed codex pane started while the daemon is down is embedded and stays
-            # invisible to the phone for its whole life; one started after lives in the
-            # daemon. Saying "every Codex session" here -- which this line used to -- promises
-            # the owner something that is false for every pane already running.
-            "Codex sessions you start after this can be driven from your phone. "
-            "Ones already running cannot; restart them if you need them reachable."
+            # What turning it on costs the sessions already running, in the one place an owner
+            # is guaranteed to read it. This was the launch-order rule, until codex-cli 0.162.1
+            # was measured starting the daemon on every launch and restarting it on every
+            # toggle (BL-037). Says what the bot's confirmation says (DEC-007).
+            "The Codex daemon restarts, so Codex sessions already running reconnect but "
+            "lose the conversation they are in. Restart one your phone cannot reach after."
             if desired is RemoteControlState.ACTIVE
             # Third wording, and the first one measured rather than reasoned. It said
             # "sessions already running keep going" (false), then "may be disconnected when

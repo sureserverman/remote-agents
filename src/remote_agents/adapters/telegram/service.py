@@ -200,6 +200,7 @@ from remote_agents.domain.trust import answerable as trust_answerable
 from remote_agents.ports.agent_usage import AgentLimits, ContextWindow, LimitsAbsence
 from remote_agents.ports.callback_state import CallbackStatePort
 from remote_agents.ports.chat_view import ChatViewPort
+from remote_agents.ports.host_remote_control import CodexRemoteControlBusy
 from remote_agents.ports.message_relay import (
     CLAIM_ABANDONED_AFTER_FOR_MESSAGES,
     MessageRelay,
@@ -658,14 +659,15 @@ press the toggle forever without ever being told that.
 
 _HOST_DIRECTION_CAUTIONS: dict[RemoteControlState, str] = {
     RemoteControlState.ACTIVE: (
-        # The launch-order rule, stated where the owner is guaranteed to be looking. A
-        # managed codex pane started while the daemon is down is embedded and stays invisible
-        # to the phone for its whole life; one started afterwards lives in the daemon. This
-        # line used to promise "every codex session on it", which is false for every pane
-        # already running and gives the owner no way to find that out.
-        "This enrols the whole machine with the relay. codex sessions you start afterwards "
-        "can be driven from your phone; ones already running cannot, so restart them if you "
-        "need them reachable."
+        # What turning it on costs the sessions already running, stated where the owner is
+        # guaranteed to be looking. This was the launch-order rule (a pane started while the
+        # daemon was down stayed embedded and invisible), until codex-cli 0.162.1 was measured
+        # starting the daemon on every launch and restarting it on every toggle (BL-037,
+        # `docs/acceptance-2026-10-codex-enable-race.md`). Must say what the terminal's
+        # confirmation says (DEC-007); the two move together by hand.
+        "This enrols the whole machine with the relay. The codex daemon restarts, so codex "
+        "sessions already running reconnect but lose the conversation they are in. Restart "
+        "one your phone cannot reach afterwards."
     ),
     RemoteControlState.INACTIVE: (
         # Measured on 2026-09-03 rather than reasoned about, after two earlier wordings got
@@ -1897,16 +1899,35 @@ class PrivateBotBoundary:
             message_id=message_id,
         ):
             return _reply_arguments(self._message("That action has already run."))
-        outcome = await self.backend.sessions.launch(
-            LaunchCommand(
-                ProjectId(project_id),
-                ProfileId(profile_id),
-                token,
-                # No label at launch: choosing the agent starts the session, and naming it is
-                # a later, optional act from the session's own menu (Task 2.3).
-                None,
+        try:
+            outcome = await self.backend.sessions.launch(
+                LaunchCommand(
+                    ProjectId(project_id),
+                    ProfileId(profile_id),
+                    token,
+                    # No label at launch: choosing the agent starts the session, and naming it
+                    # is a later, optional act from the session's own menu (Task 2.3).
+                    None,
+                )
             )
-        )
+        except CodexRemoteControlBusy:
+            # Refused before anything was recorded (BL-037), so pressing again is a real
+            # attempt -- but not this button, whose token is spent. A fresh one, for the same
+            # project and agent.
+            return _reply_arguments(
+                self._message(
+                    "Codex Remote Control is changing on this machine — launch again in a "
+                    "moment. Nothing was started.",
+                    (
+                        (
+                            Button(
+                                "Launch again",
+                                self._callback("launch.profile", entity_id, mutation=True),
+                            ),
+                        ),
+                    ),
+                )
+            )
         if outcome is None:
             return _reply_arguments(self._message("Session launch requested."))
         record = outcome.record
@@ -2023,14 +2044,23 @@ class PrivateBotBoundary:
             message_id=message_id,
         ):
             return _reply_arguments(self._message("That action has already run."))
-        outcome = await self.backend.sessions.resume(
-            ResumeCommand(
-                resolved.summary.project_id,
-                resolved.summary.profile_id,
-                resolved,
-                token,
+        try:
+            outcome = await self.backend.sessions.resume(
+                ResumeCommand(
+                    resolved.summary.project_id,
+                    resolved.summary.profile_id,
+                    resolved,
+                    token,
+                )
             )
-        )
+        except CodexRemoteControlBusy:
+            # Refused before anything was recorded (BL-037); the conversation is untouched.
+            return _reply_arguments(
+                self._message(
+                    "Codex Remote Control is changing on this machine — resume again in a "
+                    "moment. Nothing was started."
+                )
+            )
         record = outcome.record
         if outcome.created and record.state is SessionState.FAILED:
             # A resume this press really did create, whose pane did not come up. Stage 3's
@@ -3465,7 +3495,17 @@ class PrivateBotBoundary:
             message_id=message_id,
         ):
             return _reply_arguments(self._message("That action has already run."))
-        status = await control.set_state(HostRemoteControlCommand(direction, token))
+        try:
+            status = await control.set_state(HostRemoteControlCommand(direction, token))
+        except CodexRemoteControlBusy:
+            # A Codex session was still starting for the whole wait, and a change now would
+            # restart the daemon under it (BL-037). Nothing was run.
+            return _reply_arguments(
+                self._message(
+                    "A Codex session is still starting, so Remote Control was not changed. "
+                    "Try again in a moment."
+                )
+            )
         # The reading the host now reports, not the direction that was asked for. A screen
         # claiming the press succeeded would be asserting something this layer cannot see --
         # the service answers a failed enable with a reading rather than an exception, and
@@ -4158,6 +4198,23 @@ class PrivateBotBoundary:
         try:
             result = await self.backend.sessions.answer_trust(
                 AnswerTrustCommand(SessionId.parse(entity_id), token)
+            )
+        except CodexRemoteControlBusy:
+            # Refused before any key went in (BL-037): the question is still on screen. A
+            # fresh button, because this one's token is spent.
+            return _reply_arguments(
+                self._message(
+                    "Codex Remote Control is changing on this machine, so nothing was sent. "
+                    "Press Trust again in a moment.",
+                    (
+                        (
+                            Button(
+                                "Trust",
+                                self._callback("session.trust", entity_id, mutation=True),
+                            ),
+                        ),
+                    ),
+                )
             )
         except ValueError:
             # **The refusal DEC-080 added, given a sentence.** The service refuses a press for

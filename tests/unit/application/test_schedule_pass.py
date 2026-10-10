@@ -236,6 +236,34 @@ async def test_a_fire_refused_by_the_shutdown_drain_stays_due() -> None:
     assert still is not None and still.next_fire_at == FIRE
 
 
+async def test_a_fire_refused_by_a_codex_remote_control_change_stays_due() -> None:
+    """BL-037: a launch that waited out its whole unattended bound for a Remote Control change
+    was refused before its key was claimed, so the fire is not spent. The other schedules in
+    the pass still fire; this one is tried again on the next pass."""
+    from remote_agents.application.commands import UNATTENDED_LAUNCH_WAIT_SECONDS
+    from remote_agents.ports.host_remote_control import CodexRemoteControlBusy
+
+    store = MemoryScheduleStore(_schedule("s1"), _schedule("s2"))
+    rig = Rig()
+    plain = rig.launch
+
+    async def busy_for_the_first(command):
+        if not rig.launches:
+            rig.launches.append(command)
+            raise CodexRemoteControlBusy("held")
+        return await plain(command)
+
+    rig.launch = busy_for_the_first  # type: ignore[method-assign]
+
+    reports = await _run(store, rig, FIRE)
+
+    assert [report.outcome for report in reports] == [FireOutcome.STARTED]
+    refused = rig.launches[0]
+    assert refused.guard_wait == UNATTENDED_LAUNCH_WAIT_SECONDS
+    still = await store.get("s1" if reports[0].schedule.id == "s2" else "s2")
+    assert still is not None and still.next_fire_at == FIRE
+
+
 async def test_a_launch_error_is_carried_to_the_report() -> None:
     store = MemoryScheduleStore(_schedule())
     rig = Rig(launch_error=RuntimeError("tmux:\n  server   gone"))

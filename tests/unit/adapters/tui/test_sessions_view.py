@@ -1140,6 +1140,34 @@ async def test_a_trust_blocked_launch_opens_the_session_rather_than_reporting_a_
     )
 
 
+async def test_a_launch_refused_for_a_remote_control_change_says_so() -> None:
+    """BL-037: a Codex launch waits two seconds for a Remote Control change, then is refused
+    with nothing started. The local surface says why, rather than "not started: held"."""
+    from remote_agents.ports.host_remote_control import CodexRemoteControlBusy
+
+    class _Refused(_TrustBlockedLauncher):
+        async def launch(self, _command):
+            self.launched += 1
+            raise CodexRemoteControlBusy("held")
+
+    launcher = _Refused((_record(SessionState.UNTRUSTED),))
+    app = RemoteAgentsTui(_context(launcher))
+
+    async with app.run_test() as pilot:
+        app.selection = dataclasses.replace(
+            app.selection,
+            project=_EXISTING,
+            profile=ProfileAvailability("codex", True),
+        )
+        failure = await app.launch()
+        await pilot.pause()
+
+    assert launcher.launched == 1, "the launch never reached the backend; the assert is vacuous"
+    assert failure is not None
+    assert failure.status == "Nothing was started. Launch again in a moment."
+    assert "Codex Remote Control is changing" in failure.explanation
+
+
 @pytest.mark.parametrize("carried", (True, False))
 async def test_the_local_surface_names_remote_control_only_when_the_launch_carried_it(
     carried: bool,

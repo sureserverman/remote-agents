@@ -24,8 +24,8 @@ def test_the_compatibility_document_states_the_four_codex_remote_control_facts()
 
     Not a check that a section exists: a heading with the wrong contents under it would pass
     that. These are the four things that, if the document got them wrong, would lead an owner
-    to do something they cannot undo -- run the destructive verb, expect a pane the phone
-    cannot see, expect a code they can read twice, or read "no daemon" as "off".
+    to do something they cannot undo -- run the destructive verb, toggle under a session
+    still starting, expect a code they can read twice, or read "no daemon" as "off".
     """
     document = Path("docs/profile-compatibility.md").read_text(encoding="utf-8")
 
@@ -35,9 +35,11 @@ def test_the_compatibility_document_states_the_four_codex_remote_control_facts()
     assert "disable-remote-control" in document
     assert "remote-control start" in document
     assert "is **never** issued" in document
-    # 3. The launch-order rule.
-    assert "Only sessions started after the daemon is up" in document
-    assert "invisible for its whole life" in document
+    # 3. What a toggle does to running sessions. This was the launch-order rule ("only
+    # sessions started after the daemon is up"), until codex-cli 0.162.1 was measured starting
+    # the daemon itself on every launch and restarting it on every toggle (BL-037).
+    assert "starts the daemon itself" in document
+    assert "running daemon whenever they change the preference" in document
     # 4. The pairing code is shown once and cannot be revoked from here.
     assert "pairing code is shown once" in document.lower()
     assert "nothing here can revoke one" in document
