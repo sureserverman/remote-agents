@@ -1,0 +1,28 @@
+{
+ "baseline": {
+  "elapsed_s": 0.6,
+  "exit": 0,
+  "tail": "..                                                                       [100%]\n2 passed in 0.41s"
+ },
+ "break_patch": "--- a/src/remote_agents/adapters/tmux/profiles.py\n+++ b/src/remote_agents/adapters/tmux/profiles.py\n@@ -55,6 +55,7 @@\n #: is no dialog's heading, so it stays here as a readiness fact.\n _PRE_TRUST_SCREENS = {\n     \"claude\": (\"Accessing workspace:\",),\n+    \"codex\": (\"Folder access\",),\n }\n \n \n",
+ "build": null,
+ "created": "2026-10-10T12:22:15+00:00",
+ "fingerprint": "05a46578bf99af3ae42841b9ba42d1e77bd35ac04ab8f65d7c354e856d09d31e",
+ "index": 1,
+ "kind": "claim",
+ "named_break": null,
+ "no_build_reason": "pure Python, no build",
+ "plan": "/mnt/vault/Portfolio/infra/remote-agents/plans/2026-10-09-decisions-and-worktrees-sub-03-provider-boundaries-plan.md",
+ "red": {
+  "elapsed_s": 0.6,
+  "exit": 1,
+  "tail": "F.                                                                       [100%]\n=================================== FAILURES ===================================\n___ test_no_dialog_wording_is_spelled_outside_the_vertical_that_declares_it ____\n\n    def test_no_dialog_wording_is_spelled_outside_the_vertical_that_declares_it() -> None:\n        wordings = _declared_wordings()\n        assert wordings, \"no vertical declares a dialog; this check would pass vacuously\"\n    \n        offenders = []\n        for path in _SOURCE.rglob(\"*.py\"):\n            relative = str(path.relative_to(_SOURCE))\n            if relative.startswith(_VERTICALS):\n                continue\n            constants = _string_constants(path)\n            for profile, strings in wordings.items():\n                for wording in strings & constants:\n                    offenders.append(f\"{relative}: {profile}'s {wording!r}\")\n    \n>       assert offenders == [], (\n            \"an agent's dialog wording is a string constant outside its own vertical, so a fifth \"\n            \"provider could not be made answerable by editing only its own package (DEC-070):\\n\"\n            + \"\\n\".join(offenders)\n        )\nE       AssertionError: an agent's dialog wording is a string constant outside its own vertical, so a fifth provider could not be made answerable by editing only its own package (DEC-070):\nE         adapters/tmux/profiles.py: codex's 'Folder access'\nE       assert [\"adapters/tm...lder access'\"] == []\nE         \nE         Left contains one more item: \"adapters/tmux/profiles.py: codex's 'Folder access'\"\nE         Use -v to get more diff\n\ntests/architecture/test_dialog_wordings_live_in_their_verticals.py:85: AssertionError\n=========================== short test summary info ============================\nFAILED tests/architecture/test_dialog_wordings_live_in_their_verticals.py::test_no_dialog_wording_is_spelled_outside_the_vertical_that_declares_it\n1 failed, 1 passed in 0.41s"
+ },
+ "schema": 2,
+ "task": "2.3",
+ "test": "! grep -n '_NAMED_EXCEPTION' tests/architecture/test_dialog_wordings_live_in_their_verticals.py && ! grep -rnF 'Do you trust the contents of this directory?' src/remote_agents/adapters/tmux/ && uv run --locked pytest tests/architecture/test_dialog_wordings_live_in_their_verticals.py -q -p no:randomly",
+ "text": "`! grep -n '_NAMED_EXCEPTION' tests/architecture/test_dialog_wordings_live_in_their_verticals.py && ! grep -rnF 'Do you trust the contents of this directory?' src/remote_agents/adapters/tmux/ && uv run --locked pytest tests/architecture/test_dialog_wordings_live_in_their_verticals.py -q -p no:randomly`. The sweep passes over every file in `src/` outside the verticals, `profiles.py` now included. Red if `profiles.py` still spells a declared wording.",
+ "touched": [
+  "src/remote_agents/adapters/tmux/profiles.py"
+ ]
+}
