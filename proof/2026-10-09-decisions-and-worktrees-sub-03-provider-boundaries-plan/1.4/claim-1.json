@@ -1,0 +1,28 @@
+{
+ "baseline": {
+  "elapsed_s": 38.7,
+  "exit": 0,
+  "tail": "........................................................................ [ 20%]\n........................................................................ [ 41%]\n........................................................................ [ 61%]\n........................................................................ [ 82%]\n...............................................................          [100%]\n351 passed in 36.46s"
+ },
+ "break_patch": "diff --git b/src/remote_agents/ports/console.py a/src/remote_agents/ports/console.py\nindex e002622f..0bb04c1d 100644\n--- b/src/remote_agents/ports/console.py\n+++ a/src/remote_agents/ports/console.py\n@@ -60,12 +60,13 @@ class ConsoleKeyTable(Enum):\n     \"\"\"\n \n     ROOT = \"root\"\n-    \"\"\"`bind-key -n`, the table with no prefix. The cost of each table is argued once, at\n-    `application/console.py` `ConsoleBinding.table`.\"\"\"\n+    \"\"\"`bind-key -n`: no prefix. A key every agent on this server can never receive, for as\n+    long as it is bound \u2014 the budget DEC-093 sets at eleven, the function-key row minus F11,\n+    and which DEC-041 held at one before the agents were asked which keys they bind.\"\"\"\n \n     PREFIX = \"prefix\"\n-    \"\"\"`bind-key -T prefix`, the table behind the prefix key. The cost of each table is argued\n-    once, at `application/console.py` `ConsoleBinding.table`.\"\"\"\n+    \"\"\"`bind-key -T prefix`: costs an agent nothing, because tmux intercepts the prefix in the\n+    *client* before any key reaches a pane. Paid for in the owner's memory instead.\"\"\"\n \n \n class ConsoleBindingAction(Enum):\n@@ -79,7 +80,7 @@ class ConsoleBindingAction(Enum):\n     A binding's action decides tmux argv, so it is chosen from here rather than passed as\n     free text (DEC-001).\n \n-    **Two members were removed.** The Alt layer's forwarding action bound one prefix key per\n+    **Two members were removed.** `FORWARD_TO_SESSIONS` bound one prefix key per\n     Alt chord and retired with that layer: it existed because a chord typed inside a displayed\n     agent reached the agent instead of the console, and a root function key does not have that\n     problem. The other: A `FOCUS_NEXT_PANE` action bound a second root key\n@@ -94,8 +95,10 @@ class ConsoleBindingAction(Enum):\n     FORWARD_FUNCTION_KEY = \"forward_function_key\"\n     \"\"\"Deliver one function key to whichever pane should have it, decided at press time.\n \n-    The console's one forwarding action: a root key with three destinations, chosen from the\n-    marks on the pane the owner is actually in:\n+    The **root** table's forwarding action, and the counterpart of `FORWARD_TO_SESSIONS` rather\n+    than a variant of it. That one is a prefix key that always means \"the sessions pane\"; this\n+    one is a root key with three destinations, chosen from the marks on the pane the owner is\n+    actually in:\n \n     * one of the console's own panes \u2014 the surface running there owns the key;\n     * an agent whose provider declares the key in `reserved_keys` \u2014 the agent binds it already,\n@@ -243,8 +246,8 @@ selection and a stale one must both read as \"nothing to act on\".\"\"\"\n TYPING_OPTION = \"@remote_agents_typing\"\n \"\"\"`1` while a text entry holds the keyboard (the rename box, a new project's name).\n \n-The bar dims the keys the entry screens refuse there (the commitment check `_offers_session_key`\n-makes ahead of `_position_kind`), and its right end says how to get out: `esc cancels`.\"\"\"\n+The bar dims the keys `_offers_session_key` and the entry screens refuse there, and its right\n+end says how to get out: `esc cancels`.\"\"\"\n \n REMOTE_CONTROL_OPTION = \"@remote_agents_remote_control\"\n \"\"\"The full bar's Remote Control words, styled, exactly as the limits pane reads them.\"\"\"\n",
+ "build": null,
+ "created": "2026-10-10T11:57:48+00:00",
+ "fingerprint": "27c88869a212c516a2de4b17636b8e695c87a7df2cc4914c6f1671c63573f0a1",
+ "index": 1,
+ "kind": "claim",
+ "named_break": null,
+ "no_build_reason": "pure Python, no build",
+ "plan": "/mnt/vault/Portfolio/infra/remote-agents/plans/2026-10-09-decisions-and-worktrees-sub-03-provider-boundaries-plan.md",
+ "red": {
+  "elapsed_s": 0.0,
+  "exit": 1,
+  "tail": ""
+ },
+ "schema": 2,
+ "task": "1.4",
+ "test": "grep -q 'ConsoleBinding.table' src/remote_agents/ports/console.py && ! grep -nE 'FORWARD_TO_SESSIONS|root-table key costs|prefix-table key costs' src/remote_agents/ports/console.py && uv run --locked pytest tests/architecture tests/unit/application/test_console_composer.py -q -p no:randomly",
+ "text": "`grep -q 'ConsoleBinding.table' src/remote_agents/ports/console.py && ! grep -nE 'FORWARD_TO_SESSIONS|root-table key costs|prefix-table key costs' src/remote_agents/ports/console.py && uv run --locked pytest tests/architecture tests/unit/application/test_console_composer.py -q -p no:randomly`. Red while the port still argues the cost or names the removed member.",
+ "touched": [
+  "src/remote_agents/ports/console.py"
+ ]
+}

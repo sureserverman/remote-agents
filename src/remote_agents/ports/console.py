@@ -60,13 +60,12 @@ class ConsoleKeyTable(Enum):
     """
 
     ROOT = "root"
-    """`bind-key -n`: no prefix. A key every agent on this server can never receive, for as
-    long as it is bound — the budget DEC-093 sets at eleven, the function-key row minus F11,
-    and which DEC-041 held at one before the agents were asked which keys they bind."""
+    """`bind-key -n`, the table with no prefix. The cost of each table is argued once, at
+    `application/console.py` `ConsoleBinding.table`."""
 
     PREFIX = "prefix"
-    """`bind-key -T prefix`: costs an agent nothing, because tmux intercepts the prefix in the
-    *client* before any key reaches a pane. Paid for in the owner's memory instead."""
+    """`bind-key -T prefix`, the table behind the prefix key. The cost of each table is argued
+    once, at `application/console.py` `ConsoleBinding.table`."""
 
 
 class ConsoleBindingAction(Enum):
@@ -80,7 +79,7 @@ class ConsoleBindingAction(Enum):
     A binding's action decides tmux argv, so it is chosen from here rather than passed as
     free text (DEC-001).
 
-    **Two members were removed.** `FORWARD_TO_SESSIONS` bound one prefix key per
+    **Two members were removed.** The Alt layer's forwarding action bound one prefix key per
     Alt chord and retired with that layer: it existed because a chord typed inside a displayed
     agent reached the agent instead of the console, and a root function key does not have that
     problem. The other: A `FOCUS_NEXT_PANE` action bound a second root key
@@ -95,10 +94,8 @@ class ConsoleBindingAction(Enum):
     FORWARD_FUNCTION_KEY = "forward_function_key"
     """Deliver one function key to whichever pane should have it, decided at press time.
 
-    The **root** table's forwarding action, and the counterpart of `FORWARD_TO_SESSIONS` rather
-    than a variant of it. That one is a prefix key that always means "the sessions pane"; this
-    one is a root key with three destinations, chosen from the marks on the pane the owner is
-    actually in:
+    The console's one forwarding action: a root key with three destinations, chosen from the
+    marks on the pane the owner is actually in:
 
     * one of the console's own panes — the surface running there owns the key;
     * an agent whose provider declares the key in `reserved_keys` — the agent binds it already,
@@ -246,8 +243,8 @@ selection and a stale one must both read as "nothing to act on"."""
 TYPING_OPTION = "@remote_agents_typing"
 """`1` while a text entry holds the keyboard (the rename box, a new project's name).
 
-The bar dims the keys `_offers_session_key` and the entry screens refuse there, and its right
-end says how to get out: `esc cancels`."""
+The bar dims the keys the entry screens refuse there (the commitment check `_offers_session_key`
+makes ahead of `_position_kind`), and its right end says how to get out: `esc cancels`."""
 
 REMOTE_CONTROL_OPTION = "@remote_agents_remote_control"
 """The full bar's Remote Control words, styled, exactly as the limits pane reads them."""
