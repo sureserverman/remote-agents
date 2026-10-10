@@ -4,7 +4,6 @@ from pathlib import Path
 
 import pytest
 
-from remote_agents.adapters.agents.registry import profile_readiness_blockers
 from remote_agents.adapters.tmux.profiles import build_launch_profile, probe_profiles
 from remote_agents.composition.tui import _profile_factory, _resume_profile_factory
 from remote_agents.domain.conversations import ProviderConversationId
@@ -112,80 +111,32 @@ def test_a_remote_control_launch_substitutes_only_the_generated_managed_name() -
 @pytest.mark.parametrize(
     ("profile_id", "expected_blockers"),
     (
-        ("claude", ("Accessing workspace:", "Quick safety check")),
-        ("codex", ("Folder access",)),
-        ("cursor-agent", ("Workspace Trust Required",)),
+        ("claude", ("Accessing workspace:",)),
+        ("codex", ()),
+        ("cursor-agent", ()),
         ("opencode", ()),
     ),
 )
-def test_profile_readiness_rejects_a_workspace_trust_dialogue(
+def test_no_dialog_wording_is_a_readiness_blocker(
     profile_id: str, expected_blockers: tuple[str, ...]
 ) -> None:
-    """The composed launch and resume profiles carry each vertical's declared dialog heading.
+    """Only claude's pre-trust line answers a launch on its own (BL-052).
 
-    Built through the composition's own factories and the registry's derived map, which is
-    the path production takes (BL-052): the tmux adapter spells only claude's pre-trust
-    screen, and every dialog heading arrives from the vertical that declares it. opencode
-    declares no dialog and gets nothing.
+    Every dialog is recognised by the classifier from the vertical's declaration, so no
+    profile, launched or resumed, carries a dialog's wording as a lone-phrase blocker.
     """
     definition = next(
         profile for profile in closed_profiles() if str(profile.profile_id) == profile_id
     )
-    blockers = profile_readiness_blockers().get(profile_id, ())
     executable = Path(f"/tools/{profile_id}")
 
-    launched = _profile_factory(definition, executable, {"PATH": "/tools"}, blockers)(
-        SessionId.new(), False
-    )
+    launched = _profile_factory(definition, executable, {"PATH": "/tools"})(SessionId.new(), False)
     assert launched.readiness_blockers == expected_blockers
     if profile_id != "cursor-agent":  # cursor-agent has no curated resume
-        resumed = _resume_profile_factory(definition, executable, {"PATH": "/tools"}, blockers)(
+        resumed = _resume_profile_factory(definition, executable, {"PATH": "/tools"})(
             SessionId.new(), ProviderConversationId("conversation-1")
         )
         assert resumed.readiness_blockers == expected_blockers
-
-
-def test_the_production_terminal_carries_each_dialog_heading_as_a_blocker(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """The factories the composed terminal holds, not ones this file builds (BL-052).
-
-    `_local_runtime` is where the derived map is handed to the factories, and a test that
-    calls the factories itself cannot see a composition that forgets to. So this runs the real
-    composition with only the host-dependent parts replaced: the version probe and the
-    executable lookup, which would otherwise make the result depend on the agents installed
-    here. The terminal's own factories are then asked for codex's launch and resume profiles.
-    """
-    import remote_agents.composition.tui as composition
-    from remote_agents.adapters.agents.registry import provider_descriptors
-    from remote_agents.domain.profiles import ProfileCompatibility
-    from remote_agents.production import ProductionPaths
-
-    monkeypatch.setattr(
-        composition,
-        "probe_profiles",
-        lambda definitions, resolve: tuple(
-            ProfileCompatibility(definition.profile_id, True, "1.0", "available", None)
-            for definition in definitions
-        ),
-    )
-    monkeypatch.setattr(
-        composition,
-        "_resolve_profile_executable",
-        lambda executable, home: Path(f"/tools/{executable}"),
-    )
-
-    runtime = composition._local_runtime(
-        None, ProductionPaths.for_home(tmp_path), {}, provider_descriptors()
-    )
-    codex = ProfileId("codex")
-    launched = runtime.terminal._profile_factories[codex](SessionId.new(), False)
-    resumed = runtime.terminal._resume_profile_factories[codex](
-        SessionId.new(), ProviderConversationId("conversation-1")
-    )
-
-    assert launched.readiness_blockers == ("Folder access",)
-    assert resumed.readiness_blockers == ("Folder access",)
 
 
 def test_profile_availability_is_not_version_pinned() -> None:
@@ -340,89 +291,13 @@ def test_a_profile_with_no_curated_variant_ignores_the_remote_control_flag(
     assert definition.remote_control_argv is None
 
 
-def _composed(profile_id: str, blockers: dict[str, tuple[str, ...]]):
-    """A profile's launch and resume profiles, built the way composition builds them."""
-    import remote_agents.composition.tui as composition
-
-    definition = next(
-        profile for profile in closed_profiles() if str(profile.profile_id) == profile_id
-    )
-    executable = Path(f"/tools/{profile_id}")
-    entry = blockers.get(profile_id, ())
-    launched = composition._profile_factory(definition, executable, {"PATH": "/tools"}, entry)(
-        SessionId.new(), False
-    )
-    try:
-        resumed = composition._resume_profile_factory(
-            definition, executable, {"PATH": "/tools"}, entry
-        )(SessionId.new(), ProviderConversationId("conversation-1"))
-    except ProfileError:
-        resumed = None  # no curated resume (cursor-agent)
-    return launched, resumed
-
-
-def test_every_declared_trust_dialog_yields_a_readiness_blocker() -> None:
-    """Every vertical that declares a dialog has its heading answer that profile's launch.
-
-    Swept over the descriptors rather than listed, so a vertical that learns to declare its
-    dialog is covered the moment it does (BL-052).
-    """
-    from remote_agents.adapters.agents.registry import (
-        profile_trust_dialogs,
-        provider_descriptors,
-    )
-
-    descriptors = provider_descriptors()
-    blockers = profile_readiness_blockers(descriptors)
-    dialogs = profile_trust_dialogs(descriptors)
-    assert dialogs, "no vertical declares a trust dialog, so this sweep is vacuous"
-
-    missing = {}
-    for profile_id, dialog in dialogs.items():
-        launched, resumed = _composed(profile_id, blockers)
-        for name, profile in (("launch", launched), ("resume", resumed)):
-            if profile is not None and dialog.identifies_by not in profile.readiness_blockers:
-                missing[f"{profile_id} {name}"] = profile.readiness_blockers
-    assert not missing, f"these composed profiles do not stop on their own dialog: {missing}"
-
-
-def test_a_new_vertical_needs_no_edit_to_the_tmux_profiles() -> None:
-    """A dialog heading the tmux adapter has never seen becomes a blocker all the same.
-
-    Codex's descriptor is swapped for one declaring an invented heading. Nothing in
-    `adapters/tmux/profiles.py` spells it, so a profile that carries it got it from the
-    vertical's declaration and nowhere else.
-    """
-    from dataclasses import replace as replaced
-
-    from remote_agents.adapters.agents.registry import provider_descriptors
-
-    invented = "Heading no adapter spells"
-    descriptors = tuple(
-        replaced(
-            descriptor,
-            trust_dialog=replaced(descriptor.trust_dialog, identifies_by=invented),
-        )
-        if str(descriptor.profile_id) == "codex"
-        else descriptor
-        for descriptor in provider_descriptors()
-    )
-    profiles_source = Path("src/remote_agents/adapters/tmux/profiles.py").read_text()
-
-    launched, resumed = _composed("codex", profile_readiness_blockers(descriptors))
-
-    assert invented not in profiles_source
-    assert launched.readiness_blockers == (invented,)
-    assert resumed is not None and resumed.readiness_blockers == (invented,)
-
-
-#: Captures where a derived blocker legitimately appears although the screen is not that
-#: profile's dialog: cursor-agent keeps its trust box drawn above the composer after the
-#: question is answered, so `Workspace Trust Required` stays on screen while it is idle, busy
-#: and stopping. That exposure predates BL-052 (cursor's blocker string did not change) and is
-#: the history BL-053 was filed from; listed so it stays a known set rather than a growing one.
+#: Captures where a declared dialog is legitimately recognised although the screen is not that
+#: dialog's capture: cursor-agent keeps its trust box drawn above the composer after the
+#: question is answered, so the whole dialog stays on screen while it is idle, busy and
+#: stopping. That exposure predates BL-052 and is the history BL-053 was filed from; listed so
+#: it stays a known set rather than a growing one.
 KNOWN_DRAWN_TRUST_BOX = {
-    "Workspace Trust Required": frozenset(
+    "cursor-agent": frozenset(
         {
             "panes/cursor/busy.txt",
             "panes/cursor/composed.txt",
@@ -436,42 +311,179 @@ KNOWN_DRAWN_TRUST_BOX = {
 }
 
 
-def _is_own_dialog_capture(relative: str, profile_id: str) -> bool:
-    """`trust_dialogs/<profile>.txt`, or `panes/<agent>/dialog_trust.txt` for that agent."""
-    parts = relative.split("/")
-    if parts[0] == "trust_dialogs":
-        return parts[-1] == f"{profile_id}.txt"
-    return (
-        len(parts) == 3
-        and parts[0] == "panes"
-        and profile_id.startswith(parts[1])
-        and parts[2] == "dialog_trust.txt"
-    )
-
-
-def test_no_derived_blocker_matches_a_capture_of_another_screen() -> None:
-    """A derived blocker appears only on its own dialog, or where the known trust box stays.
-
-    Swept over every committed capture. Codex's blocker changed from its question to its
-    heading here, and a heading that also appeared on an ordinary screen would conclude a
-    working launch as awaiting trust.
-    """
+def _captures() -> dict[str, str]:
     fixtures = Path("tests/fixtures")
     captures = {
         str(path.relative_to(fixtures)): path.read_text(encoding="utf-8", errors="replace")
         for path in sorted(fixtures.rglob("*.txt"))
     }
     assert len(captures) > 20, "the capture sweep found almost nothing to read"
+    return captures
 
+
+#: Each declared dialog's current measured capture. Named rather than inferred from file names,
+#: because two captures named for an agent are not its current dialog: `trust_dialogs/
+#: claude.txt` is a claude 2.1.266 pane that raised no dialog, and `panes/codex/
+#: dialog_trust.txt` is codex's pre-0.158 dialog, whose wording the vertical no longer declares.
+CURRENT_DIALOG_CAPTURES = {
+    "claude": frozenset({"panes/claude/dialog_trust.txt"}),
+    "codex": frozenset({"trust_dialogs/codex.txt"}),
+    "cursor-agent": frozenset({"trust_dialogs/cursor-agent.txt", "panes/cursor/dialog_trust.txt"}),
+}
+
+
+def _production_terminal(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, descriptors=None):
+    """The terminal `_local_runtime` composes, with only the host-dependent parts replaced.
+
+    The version probe and the executable lookup would otherwise make the result depend on the
+    agents installed here. Everything else, the dialog declarations included, is production's.
+    """
+    import remote_agents.composition.tui as composition
+    from remote_agents.adapters.agents.registry import provider_descriptors
+    from remote_agents.domain.profiles import ProfileCompatibility
+    from remote_agents.production import ProductionPaths
+
+    monkeypatch.setattr(
+        composition,
+        "probe_profiles",
+        lambda definitions, resolve: tuple(
+            ProfileCompatibility(definition.profile_id, True, "1.0", "available", None)
+            for definition in definitions
+        ),
+    )
+    monkeypatch.setattr(
+        composition,
+        "_resolve_profile_executable",
+        lambda executable, home: Path(f"/tools/{executable}"),
+    )
+    built = provider_descriptors() if descriptors is None else descriptors
+    return composition._local_runtime(None, ProductionPaths.for_home(tmp_path), {}, built).terminal
+
+
+def _awaiting(terminal, profile_id: str, capture: str) -> bool:
+    profile = terminal._profile_factories[ProfileId(profile_id)](SessionId.new(), False)
+    return terminal._is_awaiting_trust(profile, ProfileId(profile_id), capture)
+
+
+def test_every_declared_trust_dialog_is_recognised_by_the_production_terminal(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Every vertical that declares a dialog has it recognised on its own measured capture.
+
+    Swept over the descriptors, not over the registry's fold, so a dialog the composition
+    drops on the way to the terminal is a failure here rather than a silent gap (BL-052).
+    """
+    from remote_agents.adapters.agents.registry import provider_descriptors
+
+    declared = [
+        str(descriptor.profile_id)
+        for descriptor in provider_descriptors()
+        if descriptor.trust_dialog is not None
+    ]
+    assert declared, "no vertical declares a trust dialog, so this sweep is vacuous"
+    assert sorted(declared) == sorted(CURRENT_DIALOG_CAPTURES), (
+        "a declared dialog has no measured capture named in CURRENT_DIALOG_CAPTURES"
+    )
+    terminal = _production_terminal(monkeypatch, tmp_path)
+    captures = _captures()
+
+    unrecognised = {}
+    for profile_id in declared:
+        own = CURRENT_DIALOG_CAPTURES[profile_id]
+        missed = [
+            relative for relative in own if not _awaiting(terminal, profile_id, captures[relative])
+        ]
+        if missed:
+            unrecognised[profile_id] = missed
+    assert not unrecognised, (
+        f"declared dialogs the production terminal does not see: {unrecognised}"
+    )
+
+
+def test_a_working_pane_that_quotes_a_dialog_is_not_awaiting_trust(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A working agent that writes a dialog's heading, or its heading and question, is working.
+
+    The case a review reproduced when BL-052 first made each heading a blocker: a claude pane
+    printing "Quick safety check" read as awaiting trust, so a decline on a stale UNTRUSTED
+    record passed `decline_trust`'s guard and killed a working session (DEC-078's guard).
+    """
+    from remote_agents.adapters.agents.registry import profile_trust_dialogs
+
+    terminal = _production_terminal(monkeypatch, tmp_path)
+    misread = {}
+    for profile_id, dialog in profile_trust_dialogs().items():
+        for quoted in (
+            f"⏺ {dialog.identifies_by}: the diff only touches tests, so nothing ships.",
+            f"⏺ {dialog.identifies_by}. {dialog.question} I answered it earlier.",
+        ):
+            working = f"> Running tests\n  14 passed\n{quoted}\n"
+            if _awaiting(terminal, profile_id, working):
+                misread.setdefault(profile_id, []).append(quoted)
+    assert not misread, f"working panes read as awaiting trust: {misread}"
+
+
+def test_a_new_vertical_needs_no_edit_to_the_tmux_profiles(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A dialog the tmux adapter has never seen is recognised all the same.
+
+    Codex's declaration is swapped for invented wording. Nothing in
+    `adapters/tmux/profiles.py` spells it, so a terminal that recognises it learned it from the
+    vertical's declaration, handed over by composition, and nowhere else.
+    """
+    from dataclasses import replace as replaced
+
+    from remote_agents.adapters.agents.registry import provider_descriptors
+
+    invented = replaced(
+        next(d for d in provider_descriptors() if str(d.profile_id) == "codex").trust_dialog,
+        identifies_by="Heading no adapter spells",
+        question="Is this invented folder yours?",
+        affirmative="Yes, it is mine",
+    )
+    descriptors = tuple(
+        replaced(descriptor, trust_dialog=invented)
+        if str(descriptor.profile_id) == "codex"
+        else descriptor
+        for descriptor in provider_descriptors()
+    )
+    profiles_source = Path("src/remote_agents/adapters/tmux/profiles.py").read_text()
+    capture = (
+        f"  {invented.identifies_by}\n"
+        f"  {invented.question}\n"
+        f"{invented.cursor} 1. {invented.affirmative}\n"
+        f"  2. {invented.negative}\n"
+    )
+
+    terminal = _production_terminal(monkeypatch, tmp_path, descriptors)
+
+    assert all(
+        wording not in profiles_source
+        for wording in (invented.identifies_by, invented.question, invented.affirmative)
+    )
+    assert _awaiting(terminal, "codex", capture)
+
+
+def test_no_declared_dialog_is_recognised_on_a_capture_of_another_screen(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Over every committed capture, a profile is awaiting trust only on its own dialog.
+
+    Or where cursor-agent's trust box stays drawn (`KNOWN_DRAWN_TRUST_BOX`). Claude's
+    pre-trust line is swept too: it is a lone-phrase blocker, and it appears only on claude's
+    dialog capture.
+    """
+    from remote_agents.adapters.agents.registry import profile_trust_dialogs
+
+    terminal = _production_terminal(monkeypatch, tmp_path)
     stray = {}
-    for profile_id, blockers in profile_readiness_blockers().items():
-        for blocker in blockers:
-            allowed = KNOWN_DRAWN_TRUST_BOX.get(blocker, frozenset())
-            for relative, text in captures.items():
-                if (
-                    blocker in text
-                    and not _is_own_dialog_capture(relative, profile_id)
-                    and relative not in allowed
-                ):
-                    stray.setdefault(blocker, []).append(relative)
-    assert not stray, f"derived blockers found on screens that are not their dialog: {stray}"
+    for profile_id in profile_trust_dialogs():
+        allowed = CURRENT_DIALOG_CAPTURES.get(profile_id, frozenset()) | KNOWN_DRAWN_TRUST_BOX.get(
+            profile_id, frozenset()
+        )
+        for relative, text in _captures().items():
+            if _awaiting(terminal, profile_id, text) and relative not in allowed:
+                stray.setdefault(profile_id, []).append(relative)
+    assert not stray, f"profiles read as awaiting trust on screens that are not theirs: {stray}"

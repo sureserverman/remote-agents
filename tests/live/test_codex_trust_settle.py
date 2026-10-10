@@ -24,7 +24,7 @@ from pathlib import Path
 
 import pytest
 
-from remote_agents.adapters.agents.registry import profile_readiness_blockers
+from remote_agents.adapters.agents.registry import profile_trust_dialogs
 from remote_agents.adapters.tmux.gateway import TmuxGateway
 from remote_agents.adapters.tmux.profiles import build_launch_profile
 from remote_agents.adapters.tmux.runtime import AsyncTmuxRunner, TmuxTerminal
@@ -103,13 +103,7 @@ async def test_codex_trust_settle_catches_the_dialog_on_every_launch(
         session_id = SessionId.new()
         project_id = ProjectId("settle")
         project = _fresh_repo(tmp_path / f"repo-{index:02d}")
-        profile = build_launch_profile(
-            definition,
-            Path(executable),
-            session_id,
-            environment,
-            trust_blockers=profile_readiness_blockers().get("codex", ()),
-        )
+        profile = build_launch_profile(definition, Path(executable), session_id, environment)
         socket = f"remote-agents-test-{session_id.value.hex}"
         # A held 160x40 session sizes the server's later sessions, as in the 0.158 drill.
         subprocess.run(
@@ -121,7 +115,13 @@ async def test_codex_trust_settle_catches_the_dialog_on_every_launch(
         try:
             gateway = TmuxGateway(socket, AsyncTmuxRunner(), intent_directory=tmp_path / "intents")
             terminal = TmuxTerminal(
-                gateway, {project_id: project}, {definition.profile_id: profile}, startup_timeout=20
+                gateway,
+                {project_id: project},
+                {definition.profile_id: profile},
+                startup_timeout=20,
+                # Production's dialog declarations: since BL-052 no codex wording is a readiness
+                # blocker, so without these the terminal could not see the dialog it measures.
+                trust_dialogs=profile_trust_dialogs(),
             )
             sampler = asyncio.create_task(_sample(gateway, session_id))
             launched = await terminal.launch(session_id, project_id, definition.profile_id)

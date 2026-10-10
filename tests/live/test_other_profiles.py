@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from remote_agents.adapters.agents.registry import profile_readiness_blockers
+from remote_agents.adapters.agents.registry import profile_trust_dialogs
 from remote_agents.adapters.tmux.gateway import TmuxGateway
 from remote_agents.adapters.tmux.profiles import build_launch_profile
 from remote_agents.adapters.tmux.runtime import AsyncTmuxRunner, TmuxTerminal
@@ -47,7 +47,6 @@ async def test_other_profile_live_lifecycle(
             for key in ("HOME", "LANG", "LC_ALL", "PATH", "TERM")
             if key in os.environ
         },
-        trust_blockers=profile_readiness_blockers().get(profile_id, ()),
     )
     socket = f"remote-agents-test-{session_id.value.hex}"
     gateway = TmuxGateway(socket, AsyncTmuxRunner(), intent_directory=tmp_path / "intents")
@@ -56,6 +55,7 @@ async def test_other_profile_live_lifecycle(
         {project_id: project_path},
         {definition.profile_id: profile},
         startup_timeout=15,
+        trust_dialogs=profile_trust_dialogs(),
     )
     try:
         launched = await terminal.launch(session_id, project_id, definition.profile_id)

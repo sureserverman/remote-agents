@@ -106,7 +106,7 @@ def _profile(marker: bool = True) -> LaunchProfile:
         {},
         "Codex",
         ("C-c",),
-        ("Trust this folder?",),
+        (),  # no dialog wording is a blocker (BL-052); `trust_dialogs` recognises it
         0.0,
         _HANDSHAKE_MARKERS["codex"] if marker else None,
     )

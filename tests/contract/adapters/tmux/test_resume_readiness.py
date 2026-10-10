@@ -184,13 +184,13 @@ async def test_a_blocker_answers_the_launch_instead_of_waiting_out_the_budget(tm
 
 @pytest.mark.asyncio
 async def test_the_dialog_alone_answers_a_profile_that_may_be_asked(tmp_path) -> None:
-    """The blocker table is not the only evidence; the dialog itself counts for claude.
+    """A blocker is not the only evidence; the dialog itself counts, and for every profile.
 
-    `claude`'s configured blocker is the *pre-trust* screen ("Accessing workspace:"), so a
-    pane that has already drawn the question and is resting on it matches no blocker at all.
-    Classifying the capture is what closes that gap, and it reads the dialog the profile's own
-    vertical declares — the same declaration the answering path uses, so what is noticed and
-    what can be answered cannot disagree.
+    Since BL-052 no dialog wording is a blocker: claude's one blocker is its pre-trust line
+    ("Accessing workspace:"), and this abbreviated dialog does not carry it. Classifying the
+    capture is what recognises the dialog, and it reads the dialog the profile's own vertical
+    declares — the same declaration the answering path uses, so what is noticed and what can be
+    answered cannot disagree.
 
     Driven from `_DIALOG` rather than a second copy inline. It *was* a copy, and it went stale
     the day claude's identifier stopped being its affirmative: the shared fixture beside it was
@@ -280,12 +280,10 @@ class _DeclineGateway(Gateway):
         self.live = False
 
 
-_CODEX_BLOCKER = "Trust this folder?"
-
 _CODEX_DIALOG = (
     "  Folder access\n"
     "  /home/user/dev/example\n"
-    f"  {_CODEX_BLOCKER} Codex can read, edit, and run files here.\n"
+    "  Trust this folder? Codex can read, edit, and run files here.\n"
     "\u203a 1. Trust and continue\n"
     "  2. Back to Agent Command Center\n"
 )
@@ -312,16 +310,23 @@ _DIALOG = (
 )
 
 
-def _decline_terminal(tmp_path: Path, profile_id: str, capture: str, **flags: object):
+def _decline_terminal(
+    tmp_path: Path,
+    profile_id: str,
+    capture: str,
+    *,
+    blockers: tuple[str, ...] = (),
+    **flags: object,
+):
     session_id = SessionId.new()
     project = tmp_path / "opaque-editor"
     project.mkdir(exist_ok=True)
     gateway = _DeclineGateway(session_id, capture, tmp_path, ProfileId(profile_id))
     for name, value in flags.items():
         setattr(gateway, name, value)
-    # The blocker table is what tells a non-answerable profile's dialog from its ordinary
-    # output, so a codex fixture without codex's blocker is not a codex sitting on a dialog.
-    blockers = () if profile_id == "claude" else (_CODEX_BLOCKER,)
+    # No dialog wording is a blocker (BL-052): every profile's dialog is recognised by the
+    # classifier, from `trust_dialogs` below, exactly as in production. A test that needs a
+    # blocker passes one, and says why.
     terminal = TmuxTerminal(
         gateway,
         {ProjectId("opaque-editor"): project},
@@ -431,8 +436,15 @@ async def test_a_profile_that_declares_no_dialog_has_its_pane_killed(tmp_path) -
     none — and nothing is typed into a pane whose screen this project has no declaration for.
     The session still ends: declining needs no ability to read the screen, because saying *no*
     ends a session that never started. What differs is only how the pane goes.
+
+    **A hypothetical profile, stated as one.** Since BL-052 the only readiness blocker is
+    claude's pre-trust screen, and claude declares a dialog, so no production profile reaches
+    `decline_trust` with no dialog to read. The branch stays as a defence, and this gives
+    opencode a blocker of its own so the branch can be driven at all.
     """
-    terminal, gateway, session_id = _decline_terminal(tmp_path, "opencode", _CODEX_DIALOG)
+    terminal, gateway, session_id = _decline_terminal(
+        tmp_path, "opencode", _CODEX_DIALOG, blockers=("Trust this folder?",)
+    )
 
     observation = await terminal.decline_trust(session_id)
 
@@ -498,9 +510,10 @@ async def test_a_pane_that_is_no_longer_asking_is_refused_rather_than_killed(tmp
 async def test_a_codex_pane_that_is_no_longer_asking_is_refused_too(tmp_path) -> None:
     """The parity claim, asserted rather than read off a shared code path.
 
-    codex reaches `_is_awaiting_trust` by its declared blocker string and claude by the
-    capture classifier, so "both families are protected" is a claim about two different
-    branches meeting the same guard. One test on the claude branch does not establish it.
+    Each profile reaches `_is_awaiting_trust` through the classifier with its own declared
+    dialog, and claude also through its pre-trust screen, so "both families are protected" is a
+    claim about two declarations meeting the same guard. One test on claude does not establish
+    it.
     """
     working = "> Running tests\n  14 passed\n"
     terminal, gateway, session_id = _decline_terminal(tmp_path, "codex", working)
@@ -518,7 +531,7 @@ async def test_a_codex_pane_that_is_no_longer_asking_is_refused_too(tmp_path) ->
 _CODEX_DIALOG_WITHOUT_A_CURSOR = (
     "  Folder access\n"
     "  /home/user/dev/example\n"
-    f"  {_CODEX_BLOCKER} Codex can read, edit, and run files here.\n"
+    "  Trust this folder? Codex can read, edit, and run files here.\n"
     "  1. Trust and continue\n"
     "  2. Back to Agent Command Center\n"
 )
@@ -594,7 +607,7 @@ async def test_a_pane_that_dies_after_taking_the_keys_still_reports_that_they_we
     terminal = TmuxTerminal(
         gateway,
         {ProjectId("opaque-editor"): project},
-        {ProfileId("codex"): _profile("Claude Code", (_CODEX_BLOCKER,))},
+        {ProfileId("codex"): _profile("Claude Code", ())},
         startup_timeout=0.2,
         trust_dialogs=profile_trust_dialogs(),
     )
@@ -630,7 +643,7 @@ async def test_a_pane_gone_before_the_keys_reports_that_nothing_was_sent(tmp_pat
     terminal = TmuxTerminal(
         gateway,
         {ProjectId("opaque-editor"): project},
-        {ProfileId("codex"): _profile("Claude Code", (_CODEX_BLOCKER,))},
+        {ProfileId("codex"): _profile("Claude Code", ())},
         startup_timeout=0.2,
         trust_dialogs=profile_trust_dialogs(),
     )
@@ -670,7 +683,7 @@ async def test_a_read_of_a_vanished_pane_answers_in_the_read_methods_own_vocabul
     terminal = TmuxTerminal(
         gateway,
         {ProjectId("opaque-editor"): project},
-        {ProfileId("codex"): _profile("Claude Code", (_CODEX_BLOCKER,))},
+        {ProfileId("codex"): _profile("Claude Code", ())},
         startup_timeout=0.2,
         trust_dialogs=profile_trust_dialogs(),
     )
@@ -705,7 +718,7 @@ async def test_a_pane_gone_before_the_first_read_reports_that_nothing_was_sent(t
     terminal = TmuxTerminal(
         gateway,
         {ProjectId("opaque-editor"): project},
-        {ProfileId("codex"): _profile("Claude Code", (_CODEX_BLOCKER,))},
+        {ProfileId("codex"): _profile("Claude Code", ())},
         startup_timeout=0.2,
         trust_dialogs=profile_trust_dialogs(),
     )

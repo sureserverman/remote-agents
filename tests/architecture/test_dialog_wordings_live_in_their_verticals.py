@@ -26,9 +26,9 @@ _VERTICALS = "adapters/agents/"
 
 #: **No module outside the verticals is exempt.** `adapters/tmux/profiles.py` was, while its
 #: readiness blockers spelled codex's question and cursor-agent's heading. BL-052 closed that by
-#: derivation rather than by a move (DEC-070 rejected moving the table): composition hands the
-#: tmux builders each vertical's `identifies_by` (`registry.profile_readiness_blockers`), and
-#: `profiles.py` keeps only claude's pre-trust screen, which is no dialog's wording.
+#: retiring dialog wordings as blockers: every dialog is recognised by the classifier from the
+#: declaration composition hands the terminal, and `profiles.py` keeps only claude's pre-trust
+#: line, which is no dialog's wording.
 
 
 def _declared_wordings() -> dict[str, set[str]]:

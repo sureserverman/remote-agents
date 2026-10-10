@@ -557,24 +557,24 @@ class TmuxTerminal:
     ) -> bool:
         """Whether this capture shows an agent stopped on its own folder-trust question.
 
-        Two kinds of evidence, because the profile and the classifier know different things. A
-        `readiness_blocker` is what the profile says its agent prints while blocked: each
-        dialog's `identifies_by`, handed in by composition from the vertical that declares it
-        (BL-052), plus claude's pre-trust screen, the one blocker this adapter spells. An agent
-        whose vertical declares no dialog (`opencode`) has none. Classifying the capture is the
-        second, and it is gated on the same declaration
+        Two kinds of evidence. A `readiness_blocker` is a string the profile says its agent
+        prints only while blocked; since BL-052 the one left is claude's pre-trust line
+        (`profiles._PRE_TRUST_SCREENS`). Every dialog is recognised by the second: classifying
+        the capture against the dialog its vertical declares, which needs the question, the
+        affirmative and `identifies_by` together. It is gated on the same declaration
         `_trust_capture` reads, for the same reason: it is the classifier the answering path
         uses, and a pane whose dialog this holds no declaration for must not be read with
-        another agent's parser. It matters because `claude`'s declared blocker is the
-        *pre-trust* screen, so a pane resting on the question itself matches no blocker at
-        all.
+        another agent's parser.
         """
-        # **A blocker alone decides this, and since DEC-081 its reach is bounded.** codex's blocker,
-        # its dialog's `Folder access` heading, is a phrase this repository's own files carry, so an
-        # agent displaying one of them satisfies this line. Two pane re-reads used to write the
-        # record from it and could hand a working session DEC-078's unconfirmed kill. They no longer
-        # can: a pane read may clear `untrusted` and may no longer set it. What a misreading can
-        # still do:
+        # **A blocker alone decides this, which is why only one remains.** A lone string is met
+        # by an agent that merely writes it, and this is the guard `decline_trust` relies on
+        # before its unconfirmed kill (DEC-078). BL-052 first made each dialog's heading a
+        # blocker and a review reproduced the cost: a working claude pane that printed "Quick
+        # safety check" read as awaiting trust, and a decline on a stale UNTRUSTED record
+        # killed it. So dialogs go through the classifier's three markers instead, which gives
+        # the old answers on every committed capture. Since DEC-081 a misreading's reach is
+        # bounded too: a pane read may clear `untrusted` and may no longer set it. What claude's
+        # remaining blocker, or a screen that meets all three markers, can still do:
         #
         # - **mark a session, but only in a launch or resume settle.** A launch has drawn only
         #   its own startup. A *resume* redraws its old conversation, and one about this repo
@@ -585,10 +585,9 @@ class TmuxTerminal:
         # - **pass the decline guard** (`decline_trust`), but only for a record that is
         #   already UNTRUSTED.
         #
-        # **Requiring the dialog wherever one is declared is still not the fix.** claude's
-        # blocker is its *pre-trust screen*, a different screen from its dialog, so requiring
-        # the classifier changes what a claude launch concludes: `a blocker answers the launch
-        # instead of prolonging it` is deliberate (sub-plan 1, Task 1.2), and
+        # **Requiring the dialog for claude's blocker too was not done here.** It would change
+        # what a claude launch concludes on that line alone, and `a blocker answers the launch
+        # instead of prolonging it` is deliberate (sub-plan 1, Task 1.2);
         # `test_a_blocker_answers_the_launch_instead_of_waiting_out_the_budget` pins it.
         if any(blocker in capture for blocker in profile.readiness_blockers):
             return True

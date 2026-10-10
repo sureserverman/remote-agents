@@ -44,9 +44,9 @@ class TrustDialog:
     so there rather than pretending to be a measurement.
 
     **`identifies_by` exists because the question does not identify the agent.** Two agents can
-    ask the same question **verbatim**: `cursor-agent` and `codex` 0.153.4-0.155.1 did. It is also
-    each dialog's readiness blocker: composition hands it to the tmux profile builders
-    (`registry.profile_readiness_blockers`, BL-052). Answering one agent's dialog with another's row
+    ask the same question **verbatim**: `cursor-agent` and `codex` 0.153.4-0.155.1 did. It is one of
+    three markers the classifier needs together, never a trigger on its own: an agent that merely
+    writes it is not stopped on it (BL-052). Answering one agent's dialog with another's row
     arithmetic is not a near miss: codex rests its cursor on the affirmative and claude on the
     negative, so the confirming keypress lands on exactly the wrong option and the owner who pressed
     *Trust* watches the agent quit. So a dialog is recognised by a string only its own agent draws,

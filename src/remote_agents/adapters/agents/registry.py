@@ -422,24 +422,6 @@ def profile_trust_dialogs(
     return resolved
 
 
-def profile_readiness_blockers(
-    descriptors: tuple[ProviderDescriptor, ...] | None = None,
-) -> dict[str, tuple[str, ...]]:
-    """What each curated profile's agent shows while stopped on its folder-trust dialog.
-
-    Derived from `profile_trust_dialogs`, so a profile has a blocker exactly when its vertical
-    declares a dialog, and the blocker is that dialog's `identifies_by`: the text the vertical
-    declares unique to the dialog (BL-052). The tmux adapter used to spell these itself, which
-    put agent wordings in a module that may not know an agent, and a vertical that learned to
-    declare its dialog still had to be remembered there.
-
-    Takes the descriptors for `profile_trust_dialogs`' reason: building one is not free.
-    """
-    return {
-        name: (dialog.identifies_by,) for name, dialog in profile_trust_dialogs(descriptors).items()
-    }
-
-
 def profile_composers(
     descriptors: tuple[ProviderDescriptor, ...] | None = None,
 ) -> dict[str, ProviderDescriptor]:

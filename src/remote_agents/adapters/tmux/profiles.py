@@ -41,18 +41,24 @@ _READINESS_MARKERS = {
     "opencode": "Ask anything",
     "cursor-agent": "Cursor",
 }
-#: The one readiness blocker that is not a dialog: claude's *pre-trust* screen.
+#: The one readiness blocker: claude's *pre-trust* screen, spelled here as a readiness fact.
 #:
-#: A readiness blocker is what an agent prints while it is stopped on a question rather than
-#: working, and it **answers** the launch: an agent that has drawn its folder-trust question
-#: has finished starting and will not start further, so the first capture carrying one is the
-#: conclusion rather than a reason to poll on to the end of the budget.
+#: A readiness blocker is a string whose presence alone **answers** the launch: an agent that
+#: has drawn its folder-trust question has finished starting and will not start further, so the
+#: first capture carrying one is the conclusion rather than a reason to poll on to the end of
+#: the budget.
 #:
-#: Every other blocker is a dialog heading, declared by its vertical as the dialog's
-#: `identifies_by` and handed to the builders below as `trust_blockers` by composition
-#: (`registry.profile_readiness_blockers`, BL-052). This adapter may not import a vertical
-#: (DEC-070), so it spells no dialog. claude's pre-trust screen comes *before* its dialog and
-#: is no dialog's heading, so it stays here as a readiness fact.
+#: **No dialog wording is a blocker** (BL-052). Codex's question and cursor-agent's heading used
+#: to be listed here. Every dialog is now recognised by `TmuxTerminal._is_awaiting_trust`'s
+#: classifier, which needs the vertical's question, its affirmative and its `identifies_by`
+#: together, read from the declarations composition hands the terminal (`trust_dialogs`). One
+#: string alone is too easy to meet: an agent that merely *writes* a dialog's heading would
+#: otherwise read as stopped on it, and the decline guard would let its pane be killed. On every
+#: committed capture the classifier gives the answer the old strings gave.
+#:
+#: claude's entry is drawn on the same screen as its dialog, as the box's first line
+#: (`tests/fixtures/panes/claude/dialog_trust.txt`), and is not part of the dialog the vertical
+#: declares. It is the one lone-phrase trigger left, and it predates BL-052.
 _PRE_TRUST_SCREENS = {
     "claude": ("Accessing workspace:",),
 }
@@ -173,7 +179,6 @@ def build_launch_profile(
     environment: dict[str, str],
     *,
     remote_control: bool = False,
-    trust_blockers: tuple[str, ...] = (),
 ) -> LaunchProfile:
     """Resolve a reviewed definition into a fixed tmux profile for one opaque session.
 
@@ -201,7 +206,7 @@ def build_launch_profile(
         _with_session_identity(environment, session_id),
         _READINESS_MARKERS[str(definition.profile_id)],
         definition.graceful_keys,
-        _PRE_TRUST_SCREENS.get(str(definition.profile_id), ()) + trust_blockers,
+        _PRE_TRUST_SCREENS.get(str(definition.profile_id), ()),
         _TRUST_SETTLE_SECONDS.get(str(definition.profile_id), 0.0),
         _HANDSHAKE_MARKERS.get(str(definition.profile_id)),
     )
@@ -223,8 +228,6 @@ def build_resume_profile(
     session_id: SessionId,
     source_id: ProviderConversationId,
     environment: dict[str, str],
-    *,
-    trust_blockers: tuple[str, ...] = (),
 ) -> LaunchProfile:
     """Resolve only a curated provider resume argv into a managed launch profile."""
     if not executable.is_absolute():
@@ -242,7 +245,7 @@ def build_resume_profile(
         # its pane carried on working. Blockers still apply: those are drawn on resume too.
         None,
         definition.graceful_keys,
-        _PRE_TRUST_SCREENS.get(str(definition.profile_id), ()) + trust_blockers,
+        _PRE_TRUST_SCREENS.get(str(definition.profile_id), ()),
         # Read from the same table as the launch construction. A resumed profile carries no
         # marker at all, so any live pane counts as ready -- which makes the settle worth
         # strictly more here than at launch, and a second table is how the more exposed of

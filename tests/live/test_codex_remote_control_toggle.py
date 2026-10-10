@@ -46,7 +46,7 @@ from remote_agents.adapters.agents.codex.remote_control import (
     AsyncCommandRunner,
     CodexRemoteControl,
 )
-from remote_agents.adapters.agents.registry import profile_readiness_blockers
+from remote_agents.adapters.agents.registry import profile_trust_dialogs
 from remote_agents.adapters.tmux.gateway import TmuxGateway
 from remote_agents.adapters.tmux.profiles import build_launch_profile
 from remote_agents.adapters.tmux.runtime import AsyncTmuxRunner, TmuxTerminal
@@ -117,7 +117,6 @@ async def test_codex_remote_control_enables_launches_visibly_and_disables_withou
                 for key in ("HOME", "LANG", "LC_ALL", "PATH", "TERM")
                 if key in os.environ
             },
-            trust_blockers=profile_readiness_blockers().get("codex", ()),
         )
         socket = f"remote-agents-test-{session_id.value.hex}"
         tmux = AsyncTmuxRunner()
@@ -128,6 +127,7 @@ async def test_codex_remote_control_enables_launches_visibly_and_disables_withou
             {project_id: project_path},
             {definition.profile_id: profile},
             startup_timeout=30,
+            trust_dialogs=profile_trust_dialogs(),
         )
         try:
             launched = await terminal.launch(session_id, project_id, definition.profile_id)

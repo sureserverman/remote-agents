@@ -14,7 +14,6 @@ from pathlib import Path
 
 from remote_agents.adapters.agents.registry import (
     profile_composers,
-    profile_readiness_blockers,
     profile_trust_dialogs,
     provider_descriptors,
 )
@@ -128,20 +127,15 @@ def _local_runtime(config, paths: ProductionPaths, project_paths, descriptors=No
     allowed_environment["PATH"] = ":".join(
         (*profile_directories, allowed_environment.get("PATH", ""))
     ).rstrip(":")
-    # Each dialog's heading, declared by its vertical, becomes that profile's readiness blocker
-    # (BL-052). Built here, beside `trust_dialogs` below and from the same descriptors, because
-    # this is the one place allowed to know both the tmux adapter and the provider packages.
-    readiness_blockers = profile_readiness_blockers(descriptors)
     for result in compatibility:
         executable = executables[result.profile_id]
         if result.available and executable is not None:
             definition = definitions_by_id[result.profile_id]
-            blockers = readiness_blockers.get(str(result.profile_id), ())
             profile_factories[result.profile_id] = _profile_factory(
-                definition, executable, allowed_environment, blockers
+                definition, executable, allowed_environment
             )
             resume_profile_factories[result.profile_id] = _resume_profile_factory(
-                definition, executable, allowed_environment, blockers
+                definition, executable, allowed_environment
             )
     gateway = TmuxGateway(
         "remote-agents",
@@ -555,24 +549,15 @@ def local_context(config, connection, paths: ProductionPaths):
     )
 
 
-def _profile_factory(
-    definition, executable: Path, environment: dict[str, str], trust_blockers: tuple[str, ...]
-):
+def _profile_factory(definition, executable: Path, environment: dict[str, str]):
     return lambda session_id, remote_control: build_launch_profile(
-        definition,
-        executable,
-        session_id,
-        environment,
-        remote_control=remote_control,
-        trust_blockers=trust_blockers,
+        definition, executable, session_id, environment, remote_control=remote_control
     )
 
 
-def _resume_profile_factory(
-    definition, executable: Path, environment: dict[str, str], trust_blockers: tuple[str, ...]
-):
+def _resume_profile_factory(definition, executable: Path, environment: dict[str, str]):
     return lambda session_id, source_id: build_resume_profile(
-        definition, executable, session_id, source_id, environment, trust_blockers=trust_blockers
+        definition, executable, session_id, source_id, environment
     )
 
 
