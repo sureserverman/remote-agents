@@ -1,5 +1,7 @@
 """Technology-neutral health reporting for configured core dependencies."""
 
+from collections import Counter
+
 from remote_agents.application.health import health_report
 from remote_agents.domain.conversations import ProfileResumeCapability
 from remote_agents.domain.profiles import ProfileCompatibility
@@ -112,6 +114,7 @@ def production_doctor(
     cursor_limits_source: str | None = None,
     schedule_zone: str | None = None,
     ui_store_ready: bool | None = None,
+    console_marks: tuple[tuple[str, str, bool], ...] | None = None,
 ) -> dict[str, object]:
     """Render the installed service's non-secret dependency health report.
 
@@ -198,6 +201,18 @@ def production_doctor(
     # makes the console load-bearing is the one entitled to move this into `components`.
     if tmux_console_ready is not None:
         report["console"] = {"panes_splittable": tmux_console_ready}
+    # Each slot-marked pane as (session, slot, held by a session of ours), read off the
+    # production server by the composition root (DEC-015). Reported, never aggregated, for the
+    # paragraph above's reason (BL-043). A renamed `ra-console` makes the F-keys, F2 and prefix
+    # `h` go inert, and the next entry builds a second console whose marks then exist twice.
+    if console_marks is not None:
+        console = report.setdefault("console", {})
+        assert isinstance(console, dict)
+        console["unexpected_sessions"] = sorted(
+            {session for session, _slot, ours in console_marks if not ours}
+        )
+        slots = Counter(slot for _session, slot, _ours in console_marks)
+        console["duplicate_slots"] = sorted(slot for slot, count in slots.items() if count > 1)
     if config_drift is not None:
         report["config"] = config_drift
         # A config the code cannot load is not a healthy deploy, whatever else is answering.

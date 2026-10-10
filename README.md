@@ -562,6 +562,12 @@ server carries no such note, and rebinding one of ours without `-N` drops the no
 ever touched. Two costs come with it: rolling back to an older release unbinds the newer keys it
 does not know, and unbinding a prefix key does not restore tmux's own default for it.
 
+**Don't rename the `ra-console` session.** F1–F10, F2 Settings and prefix `h` go inert in a
+renamed console, because they look for it by name; F12 still works. `remote-agents doctor`
+names a renamed console under `console.unexpected_sessions`. Rename it back, before entering
+again, with `tmux -L remote-agents rename-session -t <its name> ra-console`. Don't kill it:
+an agent displayed in it at the time would go with it.
+
 **F11 is unbound on purpose.** It is the full-screen toggle in almost every emulator, and a
 binding of ours would be a key you lose without being able to tell which side took it.
 

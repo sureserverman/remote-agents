@@ -741,6 +741,31 @@ def _console_features_available(working_directory: Path) -> bool:
         return False
 
 
+def _console_marks(socket: str = "remote-agents") -> tuple[tuple[str, str, bool], ...]:
+    """Read every slot-marked pane on the production server, for `doctor` (BL-043).
+
+    Read-only: one `list-panes`. Beside `_console_features_available` and for its reason
+    (DEC-015): the tmux knowledge stays in the composition root, and the doctor gets plain
+    rows. A host with no server, or any failure, is no marks; a diagnostic never raises.
+    """
+    from remote_agents.adapters.tmux.codec import console_marks_argv, parse_console_marks
+
+    try:
+        completed = subprocess.run(
+            console_marks_argv(socket),
+            check=False,
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        if completed.returncode != 0:
+            return ()
+        return parse_console_marks(completed.stdout)
+    except Exception:  # noqa: BLE001 — a diagnostic probe reports, it never raises
+        return ()
+
+
 def _command_succeeds(argv: tuple[str, ...]) -> bool:
     """Check one fixed local dependency command without a shell or captured content."""
     try:
@@ -780,6 +805,7 @@ def _doctor_report(paths: ProductionPaths, config, drift: dict[str, object]) -> 
         ui_store_ready=database_is_ready(ui_database_path(config.database_path), UI_MIGRATIONS),
         tmux_ready=_command_succeeds(("tmux", "-L", "remote-agents", "-V")),
         tmux_console_ready=_console_features_available(paths.home),
+        console_marks=_console_marks(),
         telegram_ready=_telegram_credentials_are_private(paths),
         service_ready=_command_succeeds(supervisor.liveness_command()),
         profiles=profiles,

@@ -1,0 +1,28 @@
+{
+ "baseline": {
+  "elapsed_s": 0.7,
+  "exit": 0,
+  "tail": ".....................                                                    [100%]\n21 passed in 0.30s"
+ },
+ "break_patch": "--- a/src/remote_agents/application/doctor.py\t2026-10-10 09:44:16.290385636 +0100\n+++ b/src/remote_agents/application/doctor.py\t2026-10-10 09:44:16.298876383 +0100\n@@ -213,6 +213,8 @@\n         )\n         slots = Counter(slot for _session, slot, _ours in console_marks)\n         console[\"duplicate_slots\"] = sorted(slot for slot, count in slots.items() if count > 1)\n+        if console[\"unexpected_sessions\"]:\n+            report[\"healthy\"] = False\n     if config_drift is not None:\n         report[\"config\"] = config_drift\n         # A config the code cannot load is not a healthy deploy, whatever else is answering.\n",
+ "build": null,
+ "created": "2026-10-10T08:44:17+00:00",
+ "fingerprint": "6b99516f27837719c2ba1fe30c87143d5d6b561e0dd0a0d93792c432ebecc8f8",
+ "index": 1,
+ "kind": "claim",
+ "named_break": null,
+ "no_build_reason": "pure Python, no build",
+ "plan": "/mnt/vault/Portfolio/infra/remote-agents/plans/2026-10-09-decisions-and-worktrees-sub-02-robustness-plan.md",
+ "red": {
+  "elapsed_s": 0.7,
+  "exit": 1,
+  "tail": ".....FF..............                                                    [100%]\n=================================== FAILURES ===================================\n________ test_a_renamed_console_is_reported_and_never_moves_the_verdict ________\n\n    def test_a_renamed_console_is_reported_and_never_moves_the_verdict() -> None:\n        \"\"\"BL-043: after `tmux rename-session -t ra-console mine`, F1-F10, F2 and prefix `h` go\n        inert. Named for the operator; the service is no less healthy for it.\"\"\"\n        report = _healthy_doctor(\n            console_marks=(\n                (\"mine\", \"projects\", False),\n                (\"mine\", \"sessions\", False),\n                (_AGENT, \"limits\", True),\n            )\n        )\n    \n>       assert report[\"healthy\"] is True\nE       assert False is True\n\ntests/unit/application/test_doctor.py:171: AssertionError\n____________________ test_duplicate_slot_marks_are_reported ____________________\n\n    def test_duplicate_slot_marks_are_reported() -> None:\n        \"\"\"The next entry after a rename builds a second `ra-console`, so each mark exists twice\n        and the F-key scripts, which refuse ambiguity, deliver nothing.\"\"\"\n        report = _healthy_doctor(\n            console_marks=(\n                (\"mine\", \"projects\", False),\n                (\"ra-console\", \"projects\", True),\n                (\"ra-console\", \"sessions\", True),\n            )\n        )\n    \n>       assert report[\"healthy\"] is True\nE       assert False is True\n\ntests/unit/application/test_doctor.py:188: AssertionError\n=========================== short test summary info ============================\nFAILED tests/unit/application/test_doctor.py::test_a_renamed_console_is_reported_and_never_moves_the_verdict\nFAILED tests/unit/application/test_doctor.py::test_duplicate_slot_marks_are_reported\n2 failed, 19 passed in 0.32s"
+ },
+ "schema": 2,
+ "task": "3.3",
+ "test": "uv run --locked pytest tests/unit/application/test_doctor.py tests/integration/tmux/test_doctor_console_probe.py -q -p no:randomly",
+ "text": "`uv run --locked pytest tests/unit/application/test_doctor.py tests/integration/tmux/test_doctor_console_probe.py -q -p no:randomly`. The rename case goes red if a renamed session moves `healthy` to false, or is missing from `unexpected_sessions`.",
+ "touched": [
+  "src/remote_agents/application/doctor.py"
+ ]
+}

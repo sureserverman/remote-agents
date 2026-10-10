@@ -797,6 +797,43 @@ def console_unbinding_args(table: ConsoleKeyTable, key: str) -> tuple[str, ...]:
     return ("unbind-key", "-T", table.value, key)
 
 
+CONSOLE_MARKS_FORMAT = f"#{{session_name}}|#{{{CONSOLE_SLOT_OPTION}}}"
+"""One row per pane: the session holding it, then its console slot mark (empty when unmarked)."""
+
+
+def console_marks_argv(socket: str = "remote-agents") -> tuple[str, ...]:
+    """The full argv that lists every pane's session and slot mark on one server.
+
+    For `doctor`'s read-only probe (BL-043). Full form for `attach_argv`'s reason: the caller is
+    the composition root, which must not assemble a tmux invocation of its own (DEC-001).
+    """
+    return ("tmux", "-L", socket, "list-panes", "-a", "-F", CONSOLE_MARKS_FORMAT)
+
+
+def parse_console_marks(output: str) -> tuple[tuple[str, str, bool], ...]:
+    """Each slot-marked pane as `(session name, slot, held by a session of ours)`.
+
+    Ours means the console's own session or a managed `ra-<uuid>` one: a console pane exchanged
+    into an agent's window travels there with its mark, so that is not a rename. Anything else
+    holding a mark is a console the owner renamed, and the F-key scripts no longer find it.
+    """
+    marks = []
+    for line in output.splitlines():
+        session, separator, slot = line.strip().rpartition("|")
+        if not separator or not slot:
+            continue
+        ours = session == CONSOLE_SESSION_NAME
+        if not ours and session.startswith("ra-"):
+            try:
+                SessionId.parse(session.removeprefix("ra-"))
+            except ValueError:
+                pass
+            else:
+                ours = True
+        marks.append((session, slot, ours))
+    return tuple(marks)
+
+
 def switch_client_argv(session_id: SessionId) -> tuple[str, ...]:
     """Return the full production argv that switches the current client to one session.
 

@@ -136,6 +136,66 @@ def test_console_capability_is_reported_and_never_moves_the_verdict() -> None:
     assert "tmux_console" not in report["components"]
 
 
+def _healthy_doctor(**console) -> dict:
+    return production_doctor(
+        core_ready=True,
+        database_ready=True,
+        tmux_ready=True,
+        telegram_ready=True,
+        service_ready=True,
+        profiles=(
+            ProfileCompatibility(ProfileId("claude"), True, "claude 1.2.3", "AVAILABLE", None),
+        ),
+        registered_projects=1,
+        discovered_projects=1,
+        catalogue_projects=1,
+        tmux_console_ready=True,
+        **console,
+    )
+
+
+_AGENT = "ra-01234567-89ab-cdef-0123-456789abcdef"
+
+
+def test_a_renamed_console_is_reported_and_never_moves_the_verdict() -> None:
+    """BL-043: after `tmux rename-session -t ra-console mine`, F1-F10, F2 and prefix `h` go
+    inert. Named for the operator; the service is no less healthy for it."""
+    report = _healthy_doctor(
+        console_marks=(
+            ("mine", "projects", False),
+            ("mine", "sessions", False),
+            (_AGENT, "limits", True),
+        )
+    )
+
+    assert report["healthy"] is True
+    assert report["console"]["unexpected_sessions"] == ["mine"]
+    assert report["console"]["duplicate_slots"] == []
+    assert report["console"]["panes_splittable"] is True
+
+
+def test_duplicate_slot_marks_are_reported() -> None:
+    """The next entry after a rename builds a second `ra-console`, so each mark exists twice
+    and the F-key scripts, which refuse ambiguity, deliver nothing."""
+    report = _healthy_doctor(
+        console_marks=(
+            ("mine", "projects", False),
+            ("ra-console", "projects", True),
+            ("ra-console", "sessions", True),
+        )
+    )
+
+    assert report["healthy"] is True
+    assert report["console"]["duplicate_slots"] == ["projects"]
+
+
+def test_no_server_and_no_marks_report_empty_lists() -> None:
+    report = _healthy_doctor(console_marks=())
+
+    assert report["console"]["unexpected_sessions"] == []
+    assert report["console"]["duplicate_slots"] == []
+
+
 def test_production_doctor_blocks_a_missing_agent_executable() -> None:
     report = production_doctor(
         core_ready=True,
