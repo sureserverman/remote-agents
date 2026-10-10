@@ -1,0 +1,11 @@
+{
+ "created": "2026-10-10T18:21:21+00:00",
+ "fingerprint": "6e4505b1082d5a264fca63c1e37ba927a8e975a0214b22896452d074b39b31b3",
+ "index": 1,
+ "kind": "claim-deviation",
+ "plan": "/mnt/vault/Portfolio/infra/remote-agents/plans/2026-10-09-decisions-and-worktrees-sub-03-provider-boundaries-plan.md",
+ "schema": 2,
+ "task": "4.3",
+ "text": "`grep -nE '^## DEC-[0-9]+ \u2014 Provider facts used by a shared module' /mnt/vault/Portfolio/infra/remote-agents/decisions.md && ! grep -nE '^## BL-(044|045|048|050|052) ' /mnt/vault/Portfolio/infra/remote-agents/backlog.md`. Red until the decision exists and all five entries are gone.",
+ "why": "The claim is about the vault's decisions.md and backlog.md, which sit outside this repository and cannot carry a break patch. The test ran green after the edits (DEC-122 found at line 8; none of BL-044/045/048/050/052 present). It was red before them: the register's newest entry was DEC-121, and the backlog held all five (24 entries, 19 after the removal, counted)."
+}
