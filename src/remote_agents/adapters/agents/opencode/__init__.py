@@ -13,10 +13,16 @@ from remote_agents.adapters.agents.opencode.sessions import (
 from remote_agents.adapters.agents.opencode.usage import OpenCodeUsageReader
 from remote_agents.domain.models import ProfileId, ProjectId
 from remote_agents.ports.provider_descriptor import ComposerScreen, ProviderDescriptor
+from remote_agents.ports.worktree_store import ProjectWorktreeFolders
 
 
-def _sessions(project_paths: Mapping[ProjectId, Path]) -> OpenCodeSessionCatalogue:
-    return OpenCodeSessionCatalogue(project_paths, OpenCodeCliRunner())
+def _sessions(
+    project_paths: Mapping[ProjectId, Path],
+    worktree_folders: ProjectWorktreeFolders | None = None,
+) -> OpenCodeSessionCatalogue:
+    return OpenCodeSessionCatalogue(
+        project_paths, OpenCodeCliRunner(), worktree_folders=worktree_folders
+    )
 
 
 def descriptor() -> ProviderDescriptor:

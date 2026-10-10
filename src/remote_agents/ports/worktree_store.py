@@ -18,13 +18,17 @@ refused.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Protocol
 
 from remote_agents.domain.models import ProjectId, SessionId
+
+ProjectWorktreeFolders = Callable[[ProjectId], Awaitable[tuple[Path, ...]]]
+"""A project's live (not removed) session worktree folders, oldest first. What a resume list
+reads beside the project's own folder, so a worktree session's conversation can be found."""
 
 
 class WorktreeUnavailable(Exception):

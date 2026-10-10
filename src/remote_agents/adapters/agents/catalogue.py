@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from pathlib import Path
 
 from remote_agents.domain.conversations import (
     ConversationCataloguePage,
@@ -12,6 +13,7 @@ from remote_agents.domain.conversations import (
 )
 from remote_agents.domain.models import ProfileId, ProjectId
 from remote_agents.ports.conversation_catalog import ConversationCatalog
+from remote_agents.ports.worktree_store import ProjectWorktreeFolders
 
 
 class ProfileConversationCatalogue:
@@ -51,3 +53,20 @@ class ProfileConversationCatalogue:
         for catalogue in self._catalogues.values():
             capabilities.extend(await catalogue.resume_capabilities())
         return tuple(capabilities)
+
+
+async def project_folders(
+    projects: tuple[tuple[ProjectId, Path], ...],
+    worktree_folders: ProjectWorktreeFolders | None,
+) -> tuple[tuple[ProjectId, Path, Path | None], ...]:
+    """Every folder a project's conversations can be filed under: its own, then each live
+    session worktree (BL-116). The third item is the worktree, None for the project's own
+    folder, and is what a conversation found there carries into its resume."""
+    folders: list[tuple[ProjectId, Path, Path | None]] = []
+    for project_id, path in projects:
+        folders.append((project_id, path, None))
+        if worktree_folders is not None:
+            folders.extend(
+                (project_id, worktree, worktree) for worktree in await worktree_folders(project_id)
+            )
+    return tuple(folders)

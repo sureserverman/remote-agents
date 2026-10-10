@@ -26,6 +26,8 @@ WORKTREE_REMOVED_SENTENCE = "This session's worktree has been removed."
 class _BoundFolders(Protocol):
     async def folder_for(self, session_id: SessionId) -> Worktree | None: ...
 
+    async def live_for_project(self, project_id: ProjectId) -> tuple[Worktree, ...]: ...
+
 
 class SessionFolders:
     """The session-folder lookup, over the live project mapping and the worktree rows."""
@@ -48,3 +50,10 @@ class SessionFolders:
         if worktree.removed_at is not None or not worktree.path.is_dir():
             return None
         return worktree.path
+
+    async def worktree_folders(self, project_id: ProjectId) -> tuple[Path, ...]:
+        """The project's live worktree folders, which its resume lists read beside its own
+        (`ProjectWorktreeFolders`). None of them with no store."""
+        if self._store is None:
+            return ()
+        return tuple(worktree.path for worktree in await self._store.live_for_project(project_id))

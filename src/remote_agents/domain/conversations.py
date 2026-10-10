@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime
 from enum import StrEnum
+from pathlib import Path
 from string import ascii_lowercase, digits
 
 from remote_agents.domain.models import ProfileId, ProjectId
@@ -107,6 +108,10 @@ class ResolvedConversation:
 
     summary: ConversationSummary
     provider_conversation_id: ProviderConversationId
+    folder: Path | None = None
+    """The session worktree the conversation was found in, or None for the project's own
+    folder. A resume binds its new session to this folder, so it lands back where the
+    conversation ran (BL-116)."""
 
 
 @dataclass(frozen=True, slots=True)

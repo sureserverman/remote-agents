@@ -9,6 +9,7 @@ from hashlib import sha256
 from pathlib import Path
 from uuid import UUID
 
+from remote_agents.adapters.agents.catalogue import project_folders
 from remote_agents.domain.conversations import (
     ConversationCataloguePage,
     ConversationReference,
@@ -20,6 +21,7 @@ from remote_agents.domain.conversations import (
     display_description,
 )
 from remote_agents.domain.models import ProfileId, ProjectId
+from remote_agents.ports.worktree_store import ProjectWorktreeFolders
 
 
 class ClaudeSessionCatalogue:
@@ -35,8 +37,12 @@ class ClaudeSessionCatalogue:
         project_paths: Mapping[ProjectId, Path],
         *,
         sessions_root: Path = Path.home() / ".claude" / "projects",
+        worktree_folders: ProjectWorktreeFolders | None = None,
     ) -> None:
         self._project_paths = project_paths
+        # A project's worktree folders, each of which files its conversations under its own
+        # directory. None lists the project folders alone (BL-116).
+        self._worktree_folders = worktree_folders
         self._sessions_root = sessions_root
         self._resolved: dict[ConversationReference, ResolvedConversation] = {}
 
@@ -56,8 +62,9 @@ class ClaudeSessionCatalogue:
         if projects is None:
             return ConversationCataloguePage((), page, 1, "project_not_available")
         entries: list[ResolvedConversation] = []
+        folders = await project_folders(projects, self._worktree_folders)
         try:
-            for candidate_project_id, project_path in projects:
+            for candidate_project_id, project_path, worktree in folders:
                 directory = self._sessions_root / _claude_project_directory(project_path)
                 if not directory.is_dir():
                     continue
@@ -74,7 +81,7 @@ class ClaudeSessionCatalogue:
                         updated_at,
                         _resume_description(transcript),
                     )
-                    entries.append(ResolvedConversation(summary, source))
+                    entries.append(ResolvedConversation(summary, source, worktree))
         except OSError:
             return ConversationCataloguePage((), page, 1, "catalogue_unavailable")
         entries.sort(key=lambda entry: entry.summary.updated_at, reverse=True)

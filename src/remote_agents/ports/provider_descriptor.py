@@ -284,8 +284,9 @@ class ProviderDescriptor:
     """
 
     sessions: object | None = None
-    """A factory over the live project-path mapping returning the provider's conversation
-    catalogue, or None when it exposes none."""
+    """A factory over the live project-path mapping, and optionally each project's live
+    worktree folders (`ProjectWorktreeFolders`, BL-116), returning the provider's
+    conversation catalogue, or None when it exposes none."""
 
     usage: object | None = None
     """The provider's usage reader — read off its own files, per DEC-061 — or None when

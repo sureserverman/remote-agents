@@ -57,6 +57,7 @@ from remote_agents.domain.profiles import ProfileCompatibility, closed_profiles
 from remote_agents.ports.agent_activity import AgentActivity
 from remote_agents.ports.agent_usage import AgentLimits, AgentUsage, UsageQuery
 from remote_agents.ports.git_checkout import GitCheckout
+from remote_agents.ports.terminal import SessionFolderLookup
 from remote_agents.ports.worktree_store import WorktreeStore
 from remote_agents.production import ProductionPaths
 
@@ -189,13 +190,15 @@ def _narrow_profiles(
 
 def _usage_reader(
     store: SQLiteSessionStore,
-    project_paths: Mapping[ProjectId, Path],
+    folder_for: SessionFolderLookup,
     readers: ProfileUsageReaders,
 ) -> Callable[[SessionId], Awaitable[AgentUsage | None]]:
     """Bind the provider usage readers to the two things only the root knows.
 
     A session is a row; a provider conversation is a file in a directory named after a
-    workspace. Turning the first into the second needs the store *and* the project paths, and
+    workspace. Turning the first into the second needs the store *and* the session's folder --
+    its worktree when it has one, whose conversations are filed under that folder (BL-116) --
+    and
     neither belongs on a screen builder — which is why `Backend.usage` is a bound callable in
     the shape of `capture` rather than a service the frontends resolve themselves.
 
@@ -210,7 +213,10 @@ def _usage_reader(
         record = await store.get(session_id)
         if record is None:
             return None
-        workspace = project_paths.get(record.project_id)
+        try:
+            workspace = await folder_for(record.session_id, record.project_id)
+        except KeyError:
+            return None
         if workspace is None:
             return None
         query = UsageQuery(record.profile_id, workspace, record.created_at, record.resume_source_id)
@@ -325,14 +331,11 @@ def compose_backend(
         cursor_limits_switch=partial(read_cursor_limits_source, config.path or paths.config_path),
         cursor_home=paths.home,
     )
+    # Which folder each session works in (BL-116), asked by the pane, the usage reader and the
+    # resume lists alike, over the one set of worktree rows this process was handed.
+    folders = SessionFolders(projects.paths, worktrees.store if worktrees is not None else None)
     runtime = runtime or _local_runtime(
-        config,
-        paths,
-        projects.paths,
-        descriptors,
-        folder_for=SessionFolders(
-            projects.paths, worktrees.store if worktrees is not None else None
-        ).folder_for,
+        config, paths, projects.paths, descriptors, folder_for=folders.folder_for
     )
     registered = {str(descriptor.profile_id) for descriptor in descriptors}
     curated = {definition.executable for definition in closed_profiles()}
@@ -382,6 +385,7 @@ def compose_backend(
             # give. The root's job is to connect the two, which is this line.
             remote_control_defaults=dict.fromkeys(claude_default.profiles, claude_default),
             daemon_guards=dict.fromkeys(daemon_profiles, daemon_guard),
+            worktrees=worktrees.store if worktrees is not None else None,
         ),
         host_remote_control=_host_remote_control(
             descriptors, store=backend_store, locks=backend_locks, guard=daemon_guard
@@ -404,7 +408,9 @@ def compose_backend(
         resume_after_limit=ConfigResumeSetting(config.path or paths.config_path),
         auto_rollover=ConfigRolloverSetting(config.path or paths.config_path),
         projects=_project_creator(config),
-        conversations=_conversation_service(projects.paths, descriptors),
+        conversations=_conversation_service(
+            projects.paths, descriptors, worktree_folders=folders.worktree_folders
+        ),
         catalogue=catalogue,
         refresh_catalogue=lambda: projects.refresh().catalogue,
         # The one narrowing, for both surfaces. `ProfileCompatibility.reason` answers two
@@ -414,7 +420,7 @@ def compose_backend(
         profiles=_narrow_profiles(runtime.compatibility),
         capture=runtime.terminal.capture,
         activity_feed=activity_feed,
-        usage=_usage_reader(backend_store, projects.paths, provider_usage),
+        usage=_usage_reader(backend_store, folders.folder_for, provider_usage),
         limits=_limits_reader(provider_usage),
         close_usage_readers=provider_usage.aclose,
         # Over the same connection as the session store: schedules are domain rows, so a change
@@ -476,7 +482,7 @@ def _host_remote_control(descriptors, *, store, locks, guard=None):
     return HostRemoteControlService(owners[0].remote_control, store, locks, guard=guard)
 
 
-def _conversation_service(project_paths, descriptors) -> ConversationService:
+def _conversation_service(project_paths, descriptors, *, worktree_folders) -> ConversationService:
     """The one conversation composition both surfaces use.
 
     Kept in a single function so the terminal cannot drift onto a different catalogue set
@@ -487,7 +493,7 @@ def _conversation_service(project_paths, descriptors) -> ConversationService:
     return ConversationService(
         ProfileConversationCatalogue(
             {
-                descriptor.profile_id: descriptor.sessions(project_paths)
+                descriptor.profile_id: descriptor.sessions(project_paths, worktree_folders)
                 for descriptor in descriptors
                 if descriptor.sessions is not None
             }

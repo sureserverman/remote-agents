@@ -8,6 +8,7 @@ import logging
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from pathlib import Path
 
 from remote_agents.application.commands import (
     LAUNCH_WAIT_SECONDS,
@@ -60,6 +61,7 @@ from remote_agents.ports.terminal import (
     TerminalPort,
     TrustAnswer,
 )
+from remote_agents.ports.worktree_store import WorktreeStore, WorktreeUnavailable
 
 _LOG = logging.getLogger(__name__)
 
@@ -218,8 +220,13 @@ class SessionService:
         hide_in_console: Callable[[SessionId], Awaitable[None]] | None = None,
         remote_control_defaults: Mapping[ProfileId, RemoteControlDefaultPort] | None = None,
         daemon_guards: Mapping[ProfileId, DaemonGuard] | None = None,
+        worktrees: WorktreeStore | None = None,
     ) -> None:
         self._store = store
+        # The session worktree rows: a resume of a conversation found in a worktree binds its
+        # new session there before the pane starts (BL-116). None in a composition that keeps
+        # no worktree rows, which can then resume nothing found in one.
+        self._worktrees = worktrees
         self._terminal = terminal
         self._locks = locks or SessionLocks()
         # Optional, on DEC-007's widening pattern: a host that wires nothing keeps the
@@ -240,6 +247,20 @@ class SessionService:
         # guard each takes (BL-037). Supplied by the root for `remote_control_defaults`'s
         # reason. A profile absent from it never waits on a Remote Control change.
         self._daemon_guards = dict(daemon_guards or {})
+
+    async def _bind_worktree(self, session_id: SessionId, folder: Path) -> bool:
+        """Bind a new session to a worktree before its pane starts; False when it cannot be.
+
+        False for a folder removed or claimed for removal since the conversation was listed,
+        and for a composition with no worktree rows. Never answered by starting the session in
+        the project folder instead (`WORKTREE_REMOVED`)."""
+        if self._worktrees is None:
+            return False
+        try:
+            await self._worktrees.bind(session_id, folder)
+        except WorktreeUnavailable:
+            return False
+        return True
 
     def _daemon_guard(
         self, profile_id: ProfileId, wait: float
@@ -373,6 +394,13 @@ class SessionService:
         # so the per-session lock is what makes this resume visible to
         # `ReconciliationService.session_is_busy` for its whole duration.
         async with self._locks.for_session(session_id):
+            folder = command.conversation.folder
+            if folder is not None and not await self._bind_worktree(session_id, folder):
+                return ResumeOutcome(
+                    await self._store.record_event(session_id, LifecycleEvent.STARTUP_ERROR),
+                    created=True,
+                    worktree_removed=True,
+                )
             observation = await self._terminal.resume(
                 session_id,
                 command.project_id,

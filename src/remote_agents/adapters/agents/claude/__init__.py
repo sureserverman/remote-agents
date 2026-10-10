@@ -13,10 +13,14 @@ from remote_agents.adapters.agents.claude.usage import ClaudeUsageReader
 from remote_agents.adapters.agents.claude.usage_api import ClaudeUsageApiReader
 from remote_agents.domain.models import ProfileId, ProjectId
 from remote_agents.ports.provider_descriptor import ComposerScreen, ProviderDescriptor, TrustDialog
+from remote_agents.ports.worktree_store import ProjectWorktreeFolders
 
 
-def _sessions(project_paths: Mapping[ProjectId, Path]) -> ClaudeSessionCatalogue:
-    return ClaudeSessionCatalogue(project_paths)
+def _sessions(
+    project_paths: Mapping[ProjectId, Path],
+    worktree_folders: ProjectWorktreeFolders | None = None,
+) -> ClaudeSessionCatalogue:
+    return ClaudeSessionCatalogue(project_paths, worktree_folders=worktree_folders)
 
 
 def _usage(hop: ClaudeUsageReader, limits_switch: Callable[[], str] | None, home: Path | None):

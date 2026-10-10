@@ -1,0 +1,28 @@
+{
+ "baseline": {
+  "elapsed_s": 1.3,
+  "exit": 0,
+  "tail": "...........                                                              [100%]\n11 passed in 0.93s"
+ },
+ "break_patch": "--- a/src/remote_agents/application/services.py\n+++ b/src/remote_agents/application/services.py\n@@ -394,7 +394,7 @@\n         # so the per-session lock is what makes this resume visible to\n         # `ReconciliationService.session_is_busy` for its whole duration.\n         async with self._locks.for_session(session_id):\n-            folder = command.conversation.folder\n+            folder = None\n             if folder is not None and not await self._bind_worktree(session_id, folder):\n                 return ResumeOutcome(\n                     await self._store.record_event(session_id, LifecycleEvent.STARTUP_ERROR),\n",
+ "build": null,
+ "created": "2026-10-10T19:38:03+00:00",
+ "fingerprint": "fa083e86a406a3799fb7065c1be9d7b825541596d2da914850ffb960f54ae476",
+ "index": 1,
+ "kind": "claim",
+ "named_break": null,
+ "no_build_reason": "pure Python, no build",
+ "plan": "/mnt/vault/Portfolio/infra/remote-agents/plans/2026-10-09-decisions-and-worktrees-sub-04-session-worktrees-plan.md",
+ "red": {
+  "elapsed_s": 1.5,
+  "exit": 1,
+  "tail": "        await read(regular.record.session_id)\n    \n>       assert readers.workspaces == [worktree, harness.project]\nE       AssertionError: assert [PosixPath('/...ge0/project')] == [PosixPath('/...ge0/project')]\nE         \nE         At index 0 diff: PosixPath('/tmp/pytest-of-user/pytest-1193/test_a_worktree_sessions_usage0/project') != PosixPath('/tmp/pytest-of-user/pytest-1193/test_a_worktree_sessions_usage0/worktrees/one')\nE         Use -v to get more diff\n\ntests/unit/application/test_resume_into_worktree.py:212: AssertionError\n_________ test_a_removed_worktree_sessions_usage_is_not_read_anywhere __________\n\ntmp_path = PosixPath('/tmp/pytest-of-user/pytest-1193/test_a_removed_worktree_sessio0')\n\n    @pytest.mark.asyncio\n    async def test_a_removed_worktree_sessions_usage_is_not_read_anywhere(tmp_path) -> None:\n        from remote_agents.composition.backend import _usage_reader\n    \n        harness = _Harness(tmp_path)\n        worktree = await harness.worktree(tmp_path / \"worktrees\" / \"one\")\n        bound = await harness.resume(worktree, \"7\")\n        await harness.worktrees.mark_removed(worktree, at=datetime(2026, 10, 12, tzinfo=UTC))\n        readers = _Readers()\n        folders = SessionFolders({_PROJECT: harness.project}, harness.worktrees)\n        read = _usage_reader(harness.sessions, folders.folder_for, readers)  # type: ignore[arg-type]\n    \n        assert await read(bound.record.session_id) is None\n>       assert readers.workspaces == []\nE       AssertionError: assert [PosixPath('/...io0/project')] == []\nE         \nE         Left contains one more item: PosixPath('/tmp/pytest-of-user/pytest-1193/test_a_removed_worktree_sessio0/project')\nE         Use -v to get more diff\n\ntests/unit/application/test_resume_into_worktree.py:228: AssertionError\n=========================== short test summary info ============================\nFAILED tests/unit/application/test_resume_into_worktree.py::test_a_conversation_found_in_a_worktree_resumes_into_it\nFAILED tests/unit/application/test_resume_into_worktree.py::test_a_conversation_whose_worktree_was_removed_is_refused\nFAILED tests/unit/application/test_resume_into_worktree.py::test_a_worktree_conversation_with_no_store_wired_is_refused\nFAILED tests/unit/application/test_resume_into_worktree.py::test_a_worktree_sessions_usage_is_read_under_its_worktree\nFAILED tests/unit/application/test_resume_into_worktree.py::test_a_removed_worktree_sessions_usage_is_not_read_anywhere\n5 failed, 6 passed in 1.09s"
+ },
+ "schema": 2,
+ "task": "2.2",
+ "test": "uv run --locked pytest tests/unit/adapters/agents/test_worktree_catalogues.py tests/unit/application/test_resume_into_worktree.py tests/e2e/test_integrated_resume_journey.py -q -p no:randomly",
+ "text": "`uv run --locked pytest tests/unit/adapters/agents/test_worktree_catalogues.py tests/unit/application/test_resume_into_worktree.py tests/e2e/test_integrated_resume_journey.py -q -p no:randomly`.",
+ "touched": [
+  "src/remote_agents/application/services.py"
+ ]
+}

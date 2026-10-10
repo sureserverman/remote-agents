@@ -13,10 +13,14 @@ from remote_agents.adapters.agents.cursor.usage import CursorUsageReader
 from remote_agents.adapters.agents.cursor.usage_api import CursorUsageApiReader
 from remote_agents.domain.models import ProfileId, ProjectId
 from remote_agents.ports.provider_descriptor import ComposerScreen, ProviderDescriptor, TrustDialog
+from remote_agents.ports.worktree_store import ProjectWorktreeFolders
 
 
-def _sessions(project_paths: Mapping[ProjectId, Path]) -> CursorSessionCatalogue:  # noqa: ARG001
-    # Cursor's catalogue is workspace-blind; the parameter keeps the factory contract one
+def _sessions(
+    project_paths: Mapping[ProjectId, Path],  # noqa: ARG001
+    worktree_folders: ProjectWorktreeFolders | None = None,  # noqa: ARG001
+) -> CursorSessionCatalogue:
+    # Cursor's catalogue is workspace-blind; the parameters keep the factory contract one
     # shape for every provider.
     return CursorSessionCatalogue()
 

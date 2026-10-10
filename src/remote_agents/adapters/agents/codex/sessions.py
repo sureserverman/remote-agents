@@ -8,6 +8,7 @@ from hashlib import sha256
 from pathlib import Path
 from typing import Protocol
 
+from remote_agents.adapters.agents.catalogue import project_folders
 from remote_agents.adapters.agents.protocols import JsonRpcProcess, ProtocolError
 from remote_agents.domain.conversations import (
     ConversationCataloguePage,
@@ -20,6 +21,7 @@ from remote_agents.domain.conversations import (
     display_description,
 )
 from remote_agents.domain.models import ProfileId, ProjectId
+from remote_agents.ports.worktree_store import ProjectWorktreeFolders
 
 _PAGE_LIMIT = 50
 _MAX_CATALOGUE_ITEMS = 250
@@ -67,8 +69,17 @@ class CodexAppServerClient:
 class CodexSessionCatalogue:
     """Collect at most a fixed number of content-free local Codex thread records."""
 
-    def __init__(self, project_paths: Mapping[ProjectId, Path], client: CodexThreadClient) -> None:
+    def __init__(
+        self,
+        project_paths: Mapping[ProjectId, Path],
+        client: CodexThreadClient,
+        *,
+        worktree_folders: ProjectWorktreeFolders | None = None,
+    ) -> None:
         self._project_paths = project_paths
+        # A project's worktree folders, each a `cwd` of its own to Codex. None lists the
+        # project folders alone (BL-116).
+        self._worktree_folders = worktree_folders
         self._client = client
         self._resolved: dict[ConversationReference, ResolvedConversation] = {}
 
@@ -107,14 +118,14 @@ class CodexSessionCatalogue:
         self, projects: tuple[tuple[ProjectId, Path], ...]
     ) -> list[ResolvedConversation]:
         entries: list[ResolvedConversation] = []
-        for project_id, cwd in projects:
+        for project_id, cwd, worktree in await project_folders(projects, self._worktree_folders):
             cursor: str | None = None
             while len(entries) < _MAX_CATALOGUE_ITEMS:
                 payload = await self._client.list_threads(cwd=cwd, cursor=cursor, limit=_PAGE_LIMIT)
                 threads = payload.get("data")
                 if not isinstance(threads, list):
                     raise ProtocolError("Codex thread/list returned no thread list")
-                entries.extend(_thread_entries(threads, project_id))
+                entries.extend(_thread_entries(threads, project_id, worktree))
                 next_cursor = payload.get("nextCursor")
                 if not isinstance(next_cursor, str) or not next_cursor or next_cursor == cursor:
                     break
@@ -130,7 +141,9 @@ class CodexSessionCatalogue:
         return None if path is None else ((project_id, path),)
 
 
-def _thread_entries(rows: list[object], project_id: ProjectId) -> list[ResolvedConversation]:
+def _thread_entries(
+    rows: list[object], project_id: ProjectId, worktree: Path | None
+) -> list[ResolvedConversation]:
     entries: list[ResolvedConversation] = []
     for row in rows:
         if not isinstance(row, dict):
@@ -153,7 +166,7 @@ def _thread_entries(rows: list[object], project_id: ProjectId) -> list[ResolvedC
             updated_at,
             display_description(row.get("name") or row.get("title") or row.get("preview")),
         )
-        entries.append(ResolvedConversation(summary, source))
+        entries.append(ResolvedConversation(summary, source, worktree))
     return entries
 
 

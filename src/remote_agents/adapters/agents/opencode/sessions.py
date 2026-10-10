@@ -10,6 +10,7 @@ from hashlib import sha256
 from pathlib import Path
 from typing import Protocol
 
+from remote_agents.adapters.agents.catalogue import project_folders
 from remote_agents.adapters.agents.protocols import ProtocolError
 from remote_agents.domain.conversations import (
     ConversationCataloguePage,
@@ -22,6 +23,7 @@ from remote_agents.domain.conversations import (
     display_description,
 )
 from remote_agents.domain.models import ProfileId, ProjectId
+from remote_agents.ports.worktree_store import ProjectWorktreeFolders
 
 _MAX_CATALOGUE_ITEMS = 250
 
@@ -57,9 +59,16 @@ class OpenCodeSessionCatalogue:
     """Expose only project-bound opaque references from OpenCode's JSON list."""
 
     def __init__(
-        self, project_paths: Mapping[ProjectId, Path], runner: OpenCodeSessionRunner
+        self,
+        project_paths: Mapping[ProjectId, Path],
+        runner: OpenCodeSessionRunner,
+        *,
+        worktree_folders: ProjectWorktreeFolders | None = None,
     ) -> None:
         self._project_paths = project_paths
+        # A project's worktree folders: a row whose `directory` is one of them belongs to the
+        # project, filed under that worktree. None maps the project folders alone (BL-116).
+        self._worktree_folders = worktree_folders
         self._runner = runner
         self._resolved: dict[ConversationReference, ResolvedConversation] = {}
 
@@ -75,9 +84,11 @@ class OpenCodeSessionCatalogue:
             return ConversationCataloguePage((), page, 1, "profile_not_supported")
         if page < 1 or page_size < 1:
             raise ValueError("catalogue page bounds are invalid")
+        projects = tuple(self._project_paths.items())
+        folders = await project_folders(projects, self._worktree_folders)
         try:
             payload = json.loads(await self._runner.list_sessions(_MAX_CATALOGUE_ITEMS))
-            entries = _entries(payload, self._project_paths, project_id)
+            entries = _entries(payload, folders, project_id)
         except (OSError, ProtocolError, ValueError, json.JSONDecodeError):
             return ConversationCataloguePage((), page, 1, "catalogue_unavailable")
         entries.sort(key=lambda entry: entry.summary.updated_at, reverse=True)
@@ -94,20 +105,25 @@ class OpenCodeSessionCatalogue:
 
 
 def _entries(
-    payload: object, project_paths: Mapping[ProjectId, Path], project_id: ProjectId | None
+    payload: object,
+    folders: tuple[tuple[ProjectId, Path, Path | None], ...],
+    project_id: ProjectId | None,
 ) -> list[ResolvedConversation]:
     rows = payload.get("sessions") if isinstance(payload, dict) else payload
     if not isinstance(rows, list):
         raise ValueError("OpenCode session list did not return an array")
     resolved_paths = {
-        project_id: path.resolve(strict=False) for project_id, path in project_paths.items()
+        path.resolve(strict=False): (candidate, worktree) for candidate, path, worktree in folders
     }
     entries: list[ResolvedConversation] = []
     for row in rows[:_MAX_CATALOGUE_ITEMS]:
         if not isinstance(row, dict):
             continue
-        mapped_project = _project_for(row.get("directory"), resolved_paths)
-        if mapped_project is None or (project_id is not None and mapped_project != project_id):
+        mapped = _project_for(row.get("directory"), resolved_paths)
+        if mapped is None:
+            continue
+        mapped_project, worktree = mapped
+        if project_id is not None and mapped_project != project_id:
             continue
         source_value = row.get("id")
         updated_at = _timestamp(row.get("updatedAt"))
@@ -126,17 +142,17 @@ def _entries(
             updated_at,
             display_description(row.get("title") or row.get("name")),
         )
-        entries.append(ResolvedConversation(summary, source))
+        entries.append(ResolvedConversation(summary, source, worktree))
     return entries
 
 
-def _project_for(value: object, project_paths: Mapping[ProjectId, Path]) -> ProjectId | None:
+def _project_for(
+    value: object, folders: Mapping[Path, tuple[ProjectId, Path | None]]
+) -> tuple[ProjectId, Path | None] | None:
+    """The project a row's directory belongs to, and the worktree it is, if it is one."""
     if not isinstance(value, str):
         return None
-    candidate = Path(value).resolve(strict=False)
-    return next(
-        (project_id for project_id, path in project_paths.items() if path == candidate), None
-    )
+    return folders.get(Path(value).resolve(strict=False))
 
 
 def _timestamp(value: object) -> datetime | None:

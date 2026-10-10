@@ -15,10 +15,16 @@ from remote_agents.adapters.agents.codex.sessions import (
 )
 from remote_agents.domain.models import ProfileId, ProjectId
 from remote_agents.ports.provider_descriptor import ComposerScreen, ProviderDescriptor, TrustDialog
+from remote_agents.ports.worktree_store import ProjectWorktreeFolders
 
 
-def _sessions(project_paths: Mapping[ProjectId, Path]) -> CodexSessionCatalogue:
-    return CodexSessionCatalogue(project_paths, CodexAppServerClient())
+def _sessions(
+    project_paths: Mapping[ProjectId, Path],
+    worktree_folders: ProjectWorktreeFolders | None = None,
+) -> CodexSessionCatalogue:
+    return CodexSessionCatalogue(
+        project_paths, CodexAppServerClient(), worktree_folders=worktree_folders
+    )
 
 
 def descriptor() -> ProviderDescriptor:
