@@ -559,11 +559,14 @@ itself.
 console installs carries a `remote-agents:` note (`tmux -L remote-agents list-keys -N`), and on
 each entry it unbinds the noted keys it no longer installs. A key you bound yourself on that
 server carries no such note, and rebinding one of ours without `-N` drops the note, so neither is
-ever touched. Two costs come with it: rolling back to an older release unbinds the newer keys it
-does not know, and unbinding a prefix key does not restore tmux's own default for it.
+ever touched. The costs:
+- Rolling back to an older release that also does this unbinds the newer keys it does not know.
+- While an upgrade is in progress, an old process still entering the console can do the same.
+- The next entry by the new release puts those keys back.
+- Unbinding a prefix key does not restore tmux's own default for it.
 
-**Don't rename the `ra-console` session.** F1–F10, F2 Settings and prefix `h` go inert in a
-renamed console, because they look for it by name; F12 still works. `remote-agents doctor`
+**Don't rename the `ra-console` session.** Every console key, F1–F12 and prefix `h`, looks for
+it by name, so a renamed console stops answering them. `remote-agents doctor`
 names a renamed console under `console.unexpected_sessions`. Rename it back, before entering
 again, with `tmux -L remote-agents rename-session -t <its name> ra-console`. Don't kill it:
 an agent displayed in it at the time would go with it.

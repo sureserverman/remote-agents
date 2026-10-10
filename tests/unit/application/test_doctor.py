@@ -196,6 +196,13 @@ def test_no_server_and_no_marks_report_empty_lists() -> None:
     assert report["console"]["duplicate_slots"] == []
 
 
+def test_an_unreadable_server_omits_both_lists() -> None:
+    report = _healthy_doctor(console_marks=None)
+
+    assert "unexpected_sessions" not in report["console"]
+    assert "duplicate_slots" not in report["console"]
+
+
 def test_production_doctor_blocks_a_missing_agent_executable() -> None:
     report = production_doctor(
         core_ready=True,

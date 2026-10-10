@@ -741,12 +741,17 @@ def _console_features_available(working_directory: Path) -> bool:
         return False
 
 
-def _console_marks(socket: str = "remote-agents") -> tuple[tuple[str, str, bool], ...]:
+def _console_marks(socket: str = "remote-agents") -> tuple[tuple[str, str, bool], ...] | None:
     """Read every slot-marked pane on the production server, for `doctor` (BL-043).
 
     Read-only: one `list-panes`. Beside `_console_features_available` and for its reason
     (DEC-015): the tmux knowledge stays in the composition root, and the doctor gets plain
-    rows. A host with no server, or any failure, is no marks; a diagnostic never raises.
+    rows. A diagnostic never raises.
+
+    **No server is no marks; a failed read is no answer.** tmux exits 1 naming the socket it
+    could not reach when nothing is running, and that is a clean console. A timeout, a missing
+    `tmux`, or any other failure answers None, so `doctor` omits the two fields rather than
+    reporting a renamed console as absent.
     """
     from remote_agents.adapters.tmux.codec import console_marks_argv, parse_console_marks
 
@@ -760,10 +765,14 @@ def _console_marks(socket: str = "remote-agents") -> tuple[tuple[str, str, bool]
             timeout=5,
         )
         if completed.returncode != 0:
-            return ()
+            no_server = completed.returncode == 1 and (
+                "no server running" in completed.stderr
+                or "No such file or directory" in completed.stderr
+            )
+            return () if no_server else None
         return parse_console_marks(completed.stdout)
     except Exception:  # noqa: BLE001 — a diagnostic probe reports, it never raises
-        return ()
+        return None
 
 
 def _command_succeeds(argv: tuple[str, ...]) -> bool:

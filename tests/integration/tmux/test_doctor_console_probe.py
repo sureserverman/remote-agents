@@ -54,3 +54,20 @@ def test_the_probe_reads_a_real_renamed_console(server) -> None:
 
 def test_a_host_with_no_server_has_no_marks() -> None:
     assert _console_marks(f"remote-agents-test-doctor-{uuid.uuid4().hex[:8]}") == ()
+
+
+def test_a_read_that_fails_is_no_answer_rather_than_a_clean_console(monkeypatch) -> None:
+    """A wedged server or a missing `tmux` must not read as "no renamed console"."""
+    from remote_agents import bootstrap
+
+    def times_out(*_args, **_kwargs):
+        raise subprocess.TimeoutExpired("tmux", 5)
+
+    monkeypatch.setattr(bootstrap.subprocess, "run", times_out)
+    assert _console_marks("remote-agents-test-doctor-wedged") is None
+
+    def refuses(*_args, **_kwargs):
+        return subprocess.CompletedProcess(("tmux",), 1, "", "server exited unexpectedly")
+
+    monkeypatch.setattr(bootstrap.subprocess, "run", refuses)
+    assert _console_marks("remote-agents-test-doctor-refusing") is None
