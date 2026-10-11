@@ -26,12 +26,16 @@ from remote_agents.adapters.sqlite.rollover_store import SQLiteRolloverStore
 from remote_agents.adapters.sqlite.session_store import SQLiteSessionStore
 from remote_agents.adapters.tmux.gateway import TmuxGateway
 from remote_agents.adapters.tmux.runtime import AsyncTmuxRunner, LaunchProfile, TmuxTerminal
-from remote_agents.application.commands import LaunchCommand
+from remote_agents.application.commands import AnswerTrustCommand, LaunchCommand
 from remote_agents.application.services import SessionService
 from remote_agents.composition.service import build_rollover_pass
 from remote_agents.domain.models import ProfileId, ProjectId, SessionId, SessionState
 from remote_agents.domain.rollover import RolloverState
-from remote_agents.ports.provider_descriptor import ComposerScreen, ProviderDescriptor
+from remote_agents.ports.provider_descriptor import (
+    ComposerScreen,
+    ProviderDescriptor,
+    TrustDialog,
+)
 from remote_agents.ports.session_identity import SESSION_ID_VARIABLE
 from remote_agents.ports.terminal import PromptOutcome
 
@@ -45,6 +49,7 @@ import json, os, sys, time
 from pathlib import Path
 
 HANDOFF, MODE = sys.argv[1], Path(sys.argv[2])
+ASK = len(sys.argv) > 3 and Path(sys.argv[3]).read_text() == "ask"
 me = os.environ["REMOTE_AGENTS_SESSION_ID"]
 handoffs = Path.cwd() / ".claude" / "handoffs"
 
@@ -63,6 +68,18 @@ def envelope(event, suffix, **extra):
     }
     (handoffs / f"{HANDOFF}.{suffix}.json").write_text(json.dumps(body))
 
+
+if ASK:
+    # A folder-trust question, drawn before anything else, as Claude draws its own; answered,
+    # it is cleared, as Claude's redraw clears it.
+    print("FAKE-TRUST-7f3", flush=True)
+    print("Do you trust this fake folder?", flush=True)
+    print("", flush=True)
+    print("› Yes, trust it", flush=True)
+    print("  No, exit", flush=True)
+    if input() != "":
+        sys.exit(0)
+    print("\033[2J\033[H", end="", flush=True)
 
 print("READY", flush=True)
 while True:
@@ -311,6 +328,131 @@ async def test_a_worktree_sessions_successor_starts_in_the_same_worktree(tmp_pat
         intent = (tmp_path / "i" / f"{successor}.json").read_text(encoding="utf-8")
         assert f'"cwd": "{worktree.resolve()}"' in intent, intent
         assert not (project / ".claude").exists(), "nothing was written in the main checkout"
+    finally:
+        for session_id in launched:
+            try:
+                await gateway.destroy(session_id)
+            except RuntimeError:
+                pass
+        killing = await asyncio.create_subprocess_exec(
+            "tmux", "-L", socket, "kill-server", stderr=asyncio.subprocess.DEVNULL
+        )
+        await killing.wait()
+        connection.close()
+
+
+#: The fake's folder-trust question, declared as a vertical declares its own -- for the test's
+#: profile only. Its cursor rests on the affirmative, so the production answer is one `Enter`.
+_TRUST = TrustDialog(
+    question="Do you trust this fake folder?",
+    affirmative="Yes, trust it",
+    negative="No, exit",
+    cursor="›",
+    identifies_by="FAKE-TRUST-7f3",
+)
+
+
+async def test_a_trust_held_successor_is_typed_once_after_the_owner_trusts_it(
+    tmp_path: Path,
+) -> None:
+    """DEC-125: the successor comes up on its folder-trust question; the rollover holds, types
+    nothing into it, and carries on to completion once the owner trusts it from the bot."""
+    project = tmp_path / "opaque-editor"
+    (project / ".git").mkdir(parents=True)
+    agent, mode_file, ask = tmp_path / "fake_agent.py", tmp_path / "mode", tmp_path / "ask"
+    agent.write_text(_AGENT, encoding="utf-8")
+    mode_file.write_text("accept", encoding="utf-8")
+    ask.write_text("no", encoding="utf-8")
+    socket = f"remote-agents-test-{uuid4().hex}"
+    gateway = TmuxGateway(socket, AsyncTmuxRunner(), intent_directory=tmp_path / "i")
+    terminal = TmuxTerminal(
+        gateway,
+        {PROJECT: project},
+        {},
+        startup_timeout=10.0,
+        profile_factories={
+            PROFILE: lambda session_id, _remote_control: LaunchProfile(
+                sys.executable,
+                (sys.executable, str(agent), HANDOFF, str(mode_file), str(ask)),
+                {"PATH": os.environ["PATH"], SESSION_ID_VARIABLE: str(session_id)},
+                "READY",
+            )
+        },
+        composers={"fake": ProviderDescriptor(PROFILE, "F", "Fake", composer=_COMPOSER)},
+        trust_dialogs={str(PROFILE): _TRUST},
+    )
+    connection = open_database(tmp_path / "sessions.sqlite3")
+    sessions = SessionService(SQLiteSessionStore(connection), terminal)
+
+    async def on() -> bool:
+        return True
+
+    rollover_pass = build_rollover_pass(
+        connection=connection,
+        sessions=sessions,
+        terminal=terminal,
+        enabled=on,
+        project_paths={PROJECT: project},
+        rollable=frozenset({PROFILE}),
+    )
+    rollovers = SQLiteRolloverStore(connection)
+    launched: list[SessionId] = []
+
+    async def walk(until: RolloverState, *, passes: int = 60) -> object:
+        row = None
+        for _ in range(passes):
+            await rollover_pass.run_once()
+            launched.extend(
+                record.session_id
+                for record in await sessions.list_sessions()
+                if record.session_id not in launched
+            )
+            rows = rollovers._select("1 = 1", ())
+            row = rows[0] if rows else None
+            if row is not None and row.state is until and row.successor_session_id is not None:
+                return row
+            await asyncio.sleep(0.2)
+        raise AssertionError(
+            None if row is None else (row.state, row.failure_code, row.failure_detail)
+        )
+
+    try:
+        predecessor = (await sessions.launch(LaunchCommand(PROJECT, PROFILE, "pred"))).record
+        launched.append(predecessor.session_id)
+        ask.write_text("ask", encoding="utf-8")  # only the successor is asked
+        await _type(terminal, predecessor.session_id, "handoff")
+
+        held = await walk(RolloverState.SUCCESSOR_STARTING)
+        successor = held.successor_session_id
+        for _ in range(5):  # the hold stands, pass after pass
+            await rollover_pass.run_once()
+            await asyncio.sleep(0.2)
+        (row,) = rollovers._select("1 = 1", ())
+        assert row.state is RolloverState.SUCCESSOR_STARTING
+        states = {record.session_id: record.state for record in await sessions.list_sessions()}
+        assert states[successor] is SessionState.UNTRUSTED
+        screen = await terminal.capture(successor)
+        assert "GOT:" not in screen and TEMPLATE not in screen, "nothing typed onto the dialog"
+        assert len(launched) == 2, "exactly one successor"
+
+        # The owner presses Trust: the call the bot's button makes, then the readiness re-read
+        # the service runs, which is how an answered dialog is noticed.
+        answer = await sessions.answer_trust(AnswerTrustCommand(successor, "trust-press-1"))
+        assert answer.pressed
+        for _ in range(50):
+            states = {r.session_id: r.state for r in await sessions.refresh_readiness()}
+            if states[successor] is SessionState.RUNNING:
+                break
+            await asyncio.sleep(0.2)
+        assert states[successor] is SessionState.RUNNING
+
+        done = await walk(RolloverState.COMPLETED)
+        assert done.successor_session_id == successor
+        assert (await terminal.capture(successor)).count(f"GOT: {TEMPLATE}") == 1
+        states = {record.session_id: record.state for record in await sessions.list_sessions()}
+        assert states[predecessor.session_id] is SessionState.ENDED
+        assert await rollovers.continued_as(predecessor.session_id) == successor
+        assert len(launched) == 2, "still exactly one successor"
     finally:
         for session_id in launched:
             try:
