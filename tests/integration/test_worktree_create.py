@@ -238,12 +238,12 @@ async def test_a_directory_by_a_listed_name_is_skipped_and_leaks_no_descriptor(
     (repo / ".claude").mkdir()
     (repo / ".claude" / "settings.local.json").write_text("{}\n", encoding="utf-8")
     harness = _Harness(tmp_path, repo, copy=(".claude", ".claude/"))
-    before = len(os.listdir("/proc/self/fd"))
+    before = len(os.listdir("/dev/fd"))
 
     worktree = await harness.service.create(await harness.session(), PROJECT)
 
     assert worktree.copied == {}
-    assert len(os.listdir("/proc/self/fd")) <= before
+    assert len(os.listdir("/dev/fd")) <= before
 
 
 async def test_copied_paths_are_keyed_as_git_names_them(tmp_path: Path, repo: Path) -> None:
