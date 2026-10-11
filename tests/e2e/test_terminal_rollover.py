@@ -356,7 +356,11 @@ async def test_a_trust_held_successor_is_typed_once_after_the_owner_trusts_it(
     tmp_path: Path,
 ) -> None:
     """DEC-125: the successor comes up on its folder-trust question; the rollover holds, types
-    nothing into it, and carries on to completion once the owner trusts it from the bot."""
+    nothing into it, and carries on to completion once the owner trusts it from the bot.
+
+    The dialog is the fake's own, declared through the production `TrustDialog` for the test's
+    profile, so the production classifier, launch settle and answer path all run on it. Claude's
+    real dialog text is pinned against its capture in `tests/provider_contract`, not here."""
     project = tmp_path / "opaque-editor"
     (project / ".git").mkdir(parents=True)
     agent, mode_file, ask = tmp_path / "fake_agent.py", tmp_path / "mode", tmp_path / "ask"
@@ -431,6 +435,7 @@ async def test_a_trust_held_successor_is_typed_once_after_the_owner_trusts_it(
         assert row.state is RolloverState.SUCCESSOR_STARTING
         states = {record.session_id: record.state for record in await sessions.list_sessions()}
         assert states[successor] is SessionState.UNTRUSTED
+        assert states[predecessor.session_id] is SessionState.RUNNING, "untouched while held"
         screen = await terminal.capture(successor)
         assert "GOT:" not in screen and TEMPLATE not in screen, "nothing typed onto the dialog"
         assert len(launched) == 2, "exactly one successor"

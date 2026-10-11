@@ -128,7 +128,8 @@ def recovery_action(state: RolloverState, facts: RecoveryFacts) -> RecoveryActio
                 return RecoveryAction.GIVE_UP_SUCCESSOR_UNKNOWN
             if facts.trust_held:
                 # Held on its trust dialog, so never typed to: that is the one successor a
-                # restart may still type to, once trusted -- ADOPTING first, then the keys.
+                # restart may still type to, once trusted -- ADOPTING first, then the keys, and
+                # only while its predecessor is still running and idle (the pass checks that).
                 if facts.successor_on_trust_dialog:
                     return RecoveryAction.WAIT
                 if facts.successor_alive:

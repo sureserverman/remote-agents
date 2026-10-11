@@ -1270,3 +1270,54 @@ async def test_a_hold_lost_between_recording_and_noting_is_taken_up_next_pass(
 
     assert rig.sends == [(rig.successor, TEMPLATE)]
     assert (await rig.rollover()).state is RolloverState.ADOPTING
+
+
+async def test_a_trusted_successor_waits_for_its_predecessor_to_be_idle_again(rig: Rig) -> None:
+    rig.ready()
+    rig.launched_state = SessionState.UNTRUSTED
+    await rig.run()
+    # The owner went back to the old session during the hold: its pane is working.
+    rig.not_idle.add(rig.predecessor)
+    _trust(rig)
+
+    await rig.run(passes=3)
+
+    assert rig.sends == []
+    assert (await rig.rollover()).state is RolloverState.SUCCESSOR_STARTING
+
+    rig.not_idle.discard(rig.predecessor)
+    await rig.run()
+
+    assert rig.sends == [(rig.successor, TEMPLATE)]
+    assert (await rig.rollover()).state is RolloverState.ADOPTING
+
+
+async def test_a_predecessor_still_working_at_the_patience_fails_the_rollover_untyped(
+    rig: Rig,
+) -> None:
+    rig.ready()
+    rig.launched_state = SessionState.UNTRUSTED
+    await rig.run()
+    rig.not_idle.add(rig.predecessor)
+    _trust(rig)
+
+    rig.later(TRUST_PATIENCE)
+    await rig.run()
+
+    rollover = await rig.rollover()
+    assert (rollover.state, rollover.failure_code) == (RolloverState.FAILED, "predecessor-not-idle")
+    assert rig.sends == [] and rig.stops == []
+
+
+async def test_a_predecessor_gone_during_the_hold_fails_the_rollover_untyped(rig: Rig) -> None:
+    rig.ready()
+    rig.launched_state = SessionState.UNTRUSTED
+    await rig.run()
+    rig.sessions[rig.predecessor] = _record(rig.predecessor, SessionState.ENDED)
+    _trust(rig)
+
+    await rig.run()
+
+    rollover = await rig.rollover()
+    assert (rollover.state, rollover.failure_code) == (RolloverState.FAILED, "predecessor-gone")
+    assert rig.sends == [] and rig.stops == []

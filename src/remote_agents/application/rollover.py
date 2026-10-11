@@ -10,10 +10,12 @@ Only sessions of a `rollable` profile -- one whose plan executor writes envelope
   launches the predecessor's own project and profile under the key `rollover:<handoff_id>`
   (DEC-114), recording the successor the moment the launch returns;
 - a RUNNING successor is typed the fixed template through the terminal's guarded send, with the
-  schedules' retry policy (DEC-099), and moves to ADOPTING once the send is confirmed;
+  schedules' retry policy (DEC-099), and moves to ADOPTING once the send is confirmed (on the
+  trust path below, ADOPTING is persisted first);
 - a successor that comes up on its folder-trust dialog is held, untyped, in SUCCESSOR_STARTING
-  until the owner trusts it (DEC-125): then ADOPTING is persisted first and the template typed
-  once. The owner is asked by the trust notice every UNTRUSTED session already gets;
+  until the owner trusts it and its predecessor is still running and idle (DEC-125): then
+  ADOPTING is persisted first and the template typed once, all within `TRUST_PATIENCE`. The
+  owner is asked by the trust notice every UNTRUSTED session already gets;
 - an `accepted` envelope from that successor moves to SUCCESSOR_ACCEPTED, and only then is the
   predecessor stopped -- gracefully, against an idle pane, never by force (DEC-007).
 
@@ -582,8 +584,9 @@ class RolloverPass:
         held_at = await self._trust_hold(rollover)
         if held_at is None and seen.untrusted(rollover.successor_session_id):
             # On its dialog with no hold recorded: the launch's pass ended between recording the
-            # successor and writing the hold. Nothing was typed (nothing is, onto a dialog), so
-            # it is held from now.
+            # successor and writing the hold. Nothing was typed: only a launch settle records
+            # UNTRUSTED (DEC-081), and the launch types only into a successor up on its
+            # composer. So it is held from now.
             await self._store.note(rollover.id, TRUST_HOLD, at=self._now())
             return
         if held_at is None:
@@ -604,6 +607,16 @@ class RolloverPass:
         if not seen.up(rollover.successor_session_id):
             # Declined ("No, exit"), stopped, or failed while it was asking.
             await self._fail(rollover, seen, SUCCESSOR_FAILED)
+            return
+        # The hold can last hours, and the owner may have gone back to the old session: its
+        # handoff is then stale, and two sessions would work one plan. So the predecessor must
+        # still be running and idle -- the launch's own condition -- before the template goes in.
+        if not seen.running(rollover.predecessor_session_id):
+            await self._fail(rollover, seen, PREDECESSOR_GONE)
+            return
+        if not await self._looks_idle(rollover.predecessor_session_id):
+            if self._now() - held_at >= TRUST_PATIENCE:
+                await self._fail(rollover, seen, PREDECESSOR_NOT_IDLE)
             return
         adopting = await self._store.advance(
             rollover.id, _S.ADOPTING, at=self._now(), detail=TRUSTED_TYPING
