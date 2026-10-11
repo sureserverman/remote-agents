@@ -1101,6 +1101,8 @@ branch, only when all of these hold:
   branch, and so is every commit its own refs and reflogs still reach — a commit you reset
   away or made on a detached HEAD keeps it;
 - `git status` lists nothing in it except the copied files, each byte-for-byte as copied.
+  Ignored files count: a worktree where an agent made a `.venv`, `node_modules` or build output
+  is kept as `dirty`, because `worktree remove` would delete them without asking.
 
 It never forces: git's own unforced `worktree remove` and `branch -d` do the work, and a
 refusal leaves the folder. Anything else is kept, and `remote-agents doctor` lists every

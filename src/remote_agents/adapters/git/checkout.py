@@ -303,7 +303,16 @@ class GitCli:
         # `--ignored=traditional` with `--untracked-files=all` lists every ignored *file*, one
         # entry each: `worktree remove` refuses modified and untracked files but deletes ignored
         # ones without asking, and the files a worktree copies in are usually ignored ones.
-        raw = await self._read_ok(path, *_STATUS, "--ignored=traditional")
+        status = await self._read(path, *_STATUS, "--ignored=traditional")
+        if status.returncode != 0:
+            raise GitRefused(_reason(status))
+        # Past the cap -- a `.venv` or `node_modules` -- the folder is certainly more than its
+        # copies: a closing `T?` entry says the rest went unread, rather than refusing the read.
+        raw = status.stdout + (
+            f"\0T? (more than {OUTPUT_CAP_BYTES} bytes of entries; the rest not read)".encode()
+            if status.truncated
+            else b""
+        )
         # `assume-unchanged` and `skip-worktree` hide a tracked file's edit from `status`, and
         # `worktree remove` deletes that edit too. `ls-files -v` tags such a file with a
         # lowercase letter or `S`; each is listed as `<tag>? <path>`, edited or not, because

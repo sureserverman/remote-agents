@@ -19,7 +19,7 @@ from pathlib import Path
 import pytest
 
 from remote_agents.adapters.git.checkout import GitCli, GitResult
-from remote_agents.ports.git_checkout import GitCheckout, GitError, GitRefused, GitTimeout
+from remote_agents.ports.git_checkout import GitCheckout, GitError, GitTimeout
 
 _READ_ENV = {"GIT_OPTIONAL_LOCKS": "0", "GIT_TERMINAL_PROMPT": "0", "LC_ALL": "C"}
 
@@ -196,14 +196,15 @@ async def test_a_hung_git_is_killed_at_its_timeout(
         os.kill(pid, 0)
 
 
-async def test_a_listing_longer_than_the_cap_is_refused_not_cut(
+async def test_a_listing_longer_than_the_cap_says_so_rather_than_read_short(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A status cut at the cap reads as fewer changes than the folder holds."""
+    """A status cut at the cap, returned bare, reads as fewer changes than the folder holds:
+    it ends in a `T?` entry instead, which no caller can take for an untouched copy."""
     _fake_git(tmp_path, "head -c 300000 /dev/zero | tr '\\0' 'x'\n")
     monkeypatch.setenv("PATH", f"{tmp_path}{os.pathsep}{os.environ['PATH']}")
-    with pytest.raises(GitRefused, match="more than"):
-        await GitCli().status_lines(tmp_path)
+    lines = await GitCli().status_lines(tmp_path)
+    assert any(line.startswith("T? (more than") for line in lines)
 
 
 def _alive(pid: int) -> bool:

@@ -806,7 +806,9 @@ A second session on a git project can run in its own worktree (BL-116). The READ
   them is open, it was cut from a branch that now contains its branch and every commit its own
   refs, reflogs and pseudo-refs reach, and `git status` lists nothing in it but unchanged copies
   (ignored files and `.git`-named entries included). It never forces. A removal cut off by a
-  shutdown stays and is listed as dirty.
+  shutdown stays and is listed as dirty. So, usually, does a worktree an agent built or tested
+  in: its `.venv`, `node_modules` or build output are ignored files, and a `status` listing past
+  the read cap (64 KiB) reads as dirty, not as a `git:` refusal.
 - **`doctor`'s `worktrees` list.** Every recorded, not-removed worktree, as
   `path · branch · reason`: `unmerged`, `not on its branch`, `dirty`, `in use`, `detached base`,
   `removable` (the next pass takes it), or `git: …` / `fault: …`. It never moves `healthy`. An

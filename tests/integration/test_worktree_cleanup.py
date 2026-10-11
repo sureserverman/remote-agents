@@ -532,12 +532,6 @@ async def test_a_branch_git_refuses_to_delete_after_the_folder_went_is_reported(
             id="remove-refused",
         ),
         pytest.param(
-            "status_lines",
-            GitRefused("git status wrote more than 65536 bytes; not read"),
-            "git: git status wrote more than 65536 bytes; not read",
-            id="status-past-the-cap",
-        ),
-        pytest.param(
             "is_ancestor", RuntimeError("store hiccup"), "fault: RuntimeError", id="fault"
         ),
     ],
@@ -860,3 +854,19 @@ async def test_a_kept_folder_costs_the_store_no_write_on_a_pass(tmp_path: Path, 
 
     assert (await harness.cleanup.pass_once()).kept == {worktree.path: UNMERGED}
     assert harness.connection.total_changes == before
+
+
+async def test_a_folder_with_more_ignored_files_than_status_can_list_is_dirty(
+    tmp_path: Path, repo: Path
+) -> None:
+    harness = _Harness(tmp_path, repo)
+    session, worktree = await harness.worktree()
+    harness.end(session)
+    (worktree.path / ".gitignore").write_text("build/\n")
+    build = worktree.path / "build"
+    build.mkdir()
+    for index in range(1500):
+        (build / f"an-ignored-file-with-a-long-name-{index:05d}.o").write_text("")
+
+    assert (await harness.cleanup.pass_once()).kept == {worktree.path: DIRTY}
+    await _kept(harness, worktree)

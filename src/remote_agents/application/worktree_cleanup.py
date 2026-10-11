@@ -1,7 +1,9 @@
 """Removing a session worktree once nothing in it can be lost (BL-116).
 
-This is the only code in the project that deletes the owner's work product, so a folder goes
-only when every guard says it may, each asked fresh on every pass:
+This is the only code that deletes a worktree a session has run in, so a folder goes only when
+every guard says it may, each asked fresh on every pass. (The one other removal,
+`WorktreeService.discard`, takes back a worktree whose launch was refused before any pane
+existed: nothing ran there, and only the session that made it is bound to it.)
 
 - (a) it was cut from a branch, not a detached HEAD -- with no base branch there is nothing to
   call it merged into;

@@ -136,8 +136,9 @@ class GitCheckout(Protocol):
         can open -- a file, a plain folder, a nested repository gone corrupt -- and `worktree
         remove` deletes it all the same.
 
-        Raises `GitRefused` when the listing is longer than the adapter will read, rather than
-        return one missing its tail."""
+        A listing longer than the adapter will read ends in a `T? <note>` entry after the
+        entries it did read, so a caller asking "nothing but these files?" hears no -- a folder
+        with that much in it is never just its copies -- rather than a refusal it cannot act on."""
         ...
 
     async def merge_base(self, path: Path, one: str, other: str) -> str | None:

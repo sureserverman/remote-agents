@@ -500,3 +500,18 @@ def test_shortstat_reads_every_shape_git_prints(text: str, counts: tuple[int, in
     from remote_agents.adapters.git.checkout import _shortstat
 
     assert _shortstat(text) == counts
+
+
+async def test_status_past_the_cap_ends_in_a_marker_not_a_refusal(repo: Path) -> None:
+    # More ignored files than the read cap holds: a `.venv` or `node_modules`. The folder is
+    # certainly not just its copies, so the listing says so instead of failing the read.
+    (repo / ".gitignore").write_text("build/\n")
+    build = repo / "build"
+    build.mkdir()
+    for index in range(1500):
+        (build / f"an-ignored-file-with-a-long-name-{index:05d}.o").write_text("")
+
+    lines = await GitCli().status_lines(repo)
+
+    assert lines[-1].startswith("T? ")
+    assert any(line.startswith("!! build/") for line in lines)
