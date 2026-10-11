@@ -28,8 +28,8 @@ migration ran, so it sits at the schema of the release before the one that wrote
 migrates it forward in a private temporary copy first. Only then does it move the damaged file
 aside and publish the copy. A migration that fails leaves the damaged file, its sidecars and the
 backup exactly where they were. A backup two or more schemas behind is refused, naming its
-version and this release's, for example "two or more schema versions behind (v16; this release is
-v18)". Restore that one on a release whose schema is at most one ahead of it.
+version and this release's, for example "two or more schema versions behind (v17; this release is
+v19)". Restore that one on a release whose schema is at most one ahead of it.
 
 The surface store, `ui.sqlite3` beside it, restores the same way. It holds the bot's button tokens
 and standing messages, and `remote-agents doctor` reports it as its own `ui_store` component. Its
