@@ -691,6 +691,7 @@ it and ask for it but never act.
 | `rollover pending · waiting for another session's request` | Another session's request holds this checkout |
 | `starting successor` | Waiting for the old session to go idle, or launching the new one |
 | `starting successor · waiting for folder trust` | The new session is up on its folder-trust question; trust it and the rollover carries on |
+| `starting successor · waiting for this session to be idle` | The new session is trusted; its command goes in once this session is idle |
 | `successor validating handoff` | The command is being typed, or is typed; waiting for `accepted` |
 | `successor accepted · stopping` | Accepted; the old session is being stopped |
 | `rollover failed · predecessor preserved` | `FAILED`; the old session was not touched |
@@ -728,6 +729,8 @@ closes out instead, so cancel the pending rollover then.
 
 - **`predecessor-not-idle`** — the old session was not idle for 10 minutes, so nothing was
   launched. Let it finish its turn, clear its input or answer its question, then ask again.
+  After a folder-trust hold (see `successor-untrusted`) the successor was launched but never
+  typed to: it is left open, so stop it before asking again.
 - **`predecessor-gone`** — the old session stopped before its successor was up. Nothing is left
   to stop; launch or resume by hand if the work should go on.
 - **`launch-failed`** — the launch raised, or answered with no session. Its key is claimed, so
@@ -741,9 +744,9 @@ closes out instead, so cancel the pending rollover then.
   rollover holds, types nothing, and the bot sends the usual trust message. Press **Trust**
   there and the rollover carries on, typing its command once — but only while the old session
   is still running and idle; if you went back to working in it, the rollover waits for it to be
-  idle again (`predecessor-not-idle` after the 2 hours), and ends as `predecessor-gone` if it
-  stopped. A held rollover cannot be cancelled: choosing *No, exit*, or stopping the successor,
-  ends it as `successor-failed`. Only after 2 hours unanswered is it
+  idle again for up to 10 minutes from the trust (then `predecessor-not-idle`), and ends as
+  `predecessor-gone` if it stopped. A held rollover cannot be cancelled: choosing *No, exit*,
+  or stopping the successor, ends it as `successor-failed`. Only after 2 hours unanswered is it
   this code; the successor is left open, still asking. Trust it, stop it, then ask again.
   Claude asks again in a folder that became its own git repo after the first session started:
   its trust lookup stops at the repo root, so trust inherited from a parent folder no longer

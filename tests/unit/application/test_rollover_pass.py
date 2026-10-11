@@ -25,6 +25,7 @@ from remote_agents.application.rollover import (
     READY_FRESHNESS,
     TRUST_HOLD,
     TRUST_PATIENCE,
+    TRUSTED_WAITING,
     RolloverPass,
 )
 from remote_agents.domain.models import (
@@ -1242,18 +1243,50 @@ async def test_a_row_moved_under_the_trusted_pass_is_left_as_it_is_and_untyped(
     assert rig.sends == [] and rig.stops == []
 
 
-async def test_a_hold_lost_between_recording_and_noting_is_taken_up_next_pass(
+async def test_a_pass_ended_just_after_recording_types_once_after_a_trust_given_meanwhile(
     rig: Rig, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     rig.ready()
     rig.launched_state = SessionState.UNTRUSTED
-    note = rig.store.note
+    record_successor = rig.store.record_successor
 
-    async def lost(rollover_id: str, detail: str, *, at: datetime) -> None:
-        monkeypatch.setattr(rig.store, "note", note)
-        raise OSError("the pass ended before the hold was written")
+    async def recorded_then_gone(*args: object, **kwargs: object) -> Rollover:
+        # The successor's row commits, and the process dies before anything after it runs.
+        await record_successor(*args, **kwargs)  # type: ignore[arg-type]
+        raise asyncio.CancelledError
 
-    monkeypatch.setattr(rig.store, "note", lost)
+    monkeypatch.setattr(rig.store, "record_successor", recorded_then_gone)
+    with pytest.raises(asyncio.CancelledError):
+        await rig.run()
+    monkeypatch.setattr(rig.store, "record_successor", record_successor)
+    rollover = await rig.rollover()
+    assert rollover.successor_session_id == rig.successor
+    # The hold went in with the record, in one transaction, so nothing could separate them.
+    assert TRUST_HOLD in [e.detail for e in await rig.store.events(rollover.id)]
+
+    _trust(rig)  # while the service was down
+    rig._pass = None
+    await rig.run(passes=2)
+
+    assert rig.sends == [(rig.successor, TEMPLATE)]
+    assert "restart: type_once" in [e.detail for e in await rig.store.events(rollover.id)]
+    assert (await rig.rollover()).state is RolloverState.ADOPTING
+
+
+async def test_a_row_recorded_without_its_hold_is_held_on_the_next_pass(
+    rig: Rig, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A row a 0.63.0 pass left: the successor recorded, the hold note never written.
+    rig.ready()
+    rig.launched_state = SessionState.UNTRUSTED
+    record_successor = rig.store.record_successor
+
+    async def unheld(
+        rollover_id: str, successor: SessionId, *, at: datetime, held: bool = False
+    ) -> Rollover:
+        return await record_successor(rollover_id, successor, at=at)
+
+    monkeypatch.setattr(rig.store, "record_successor", unheld)
     await rig.run()
     rollover = await rig.rollover()
     assert rollover.successor_session_id == rig.successor
@@ -1292,21 +1325,52 @@ async def test_a_trusted_successor_waits_for_its_predecessor_to_be_idle_again(ri
     assert (await rig.rollover()).state is RolloverState.ADOPTING
 
 
-async def test_a_predecessor_still_working_at_the_patience_fails_the_rollover_untyped(
+async def test_a_predecessor_still_working_long_after_the_trust_fails_the_rollover_untyped(
     rig: Rig,
 ) -> None:
     rig.ready()
     rig.launched_state = SessionState.UNTRUSTED
     await rig.run()
+    # Trusted near the end of the trust patience, with the old session working at that moment.
+    rig.later(TRUST_PATIENCE - timedelta(minutes=1))
     rig.not_idle.add(rig.predecessor)
     _trust(rig)
 
-    rig.later(TRUST_PATIENCE)
+    await rig.run(passes=3)
+    rollover = await rig.rollover()
+    assert rollover.state is RolloverState.SUCCESSOR_STARTING
+    # Written once, however many passes find it waiting: its time is the wait's start.
+    details = [e.detail for e in await rig.store.events(rollover.id)]
+    assert details.count(TRUSTED_WAITING) == 1
+
+    # Past the trust patience, the wait for idle has its own clock, started at the trust.
+    rig.later(NOT_IDLE_PATIENCE - timedelta(seconds=1))
+    await rig.run()
+    assert (await rig.rollover()).state is RolloverState.SUCCESSOR_STARTING
+
+    rig.later(timedelta(seconds=1))
     await rig.run()
 
     rollover = await rig.rollover()
     assert (rollover.state, rollover.failure_code) == (RolloverState.FAILED, "predecessor-not-idle")
     assert rig.sends == [] and rig.stops == []
+
+
+async def test_a_predecessor_idle_again_within_its_wait_is_typed_once(rig: Rig) -> None:
+    rig.ready()
+    rig.launched_state = SessionState.UNTRUSTED
+    await rig.run()
+    rig.later(TRUST_PATIENCE - timedelta(minutes=1))
+    rig.not_idle.add(rig.predecessor)
+    _trust(rig)
+    await rig.run()
+
+    rig.later(timedelta(minutes=5))  # past the trust patience, within the wait's own
+    rig.not_idle.discard(rig.predecessor)
+    await rig.run(passes=2)
+
+    assert rig.sends == [(rig.successor, TEMPLATE)]
+    assert (await rig.rollover()).state is RolloverState.ADOPTING
 
 
 async def test_a_predecessor_gone_during_the_hold_fails_the_rollover_untyped(rig: Rig) -> None:

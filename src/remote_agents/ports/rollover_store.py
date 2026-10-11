@@ -25,7 +25,12 @@ A row reads it to tell a written request from one still waiting for its checkout
 TRUST_HOLD = "trust-hold: successor on its folder-trust dialog"
 """The history detail that holds a rollover for its successor's folder trust (DEC-125). Its
 presence is the durable fact that nothing was typed at the launch, the one case a later pass may
-still type; a row reads it to say the rollover is waiting for trust."""
+still type; a row reads it to say the rollover is waiting for trust. Written by
+`record_successor` in the transaction that records the successor, so neither exists alone."""
+
+TRUSTED_WAITING = "trusted: waiting for an idle predecessor"
+"""The history detail a pass writes, once, on finding a trust-held successor trusted but its
+predecessor working (DEC-125). Its time starts the wait for idle; a row reads it to say so."""
 
 
 class IllegalRolloverMove(ValueError):
@@ -127,11 +132,13 @@ class RolloverStore(Protocol):
         ...
 
     async def record_successor(
-        self, rollover_id: str, successor: SessionId, *, at: datetime
+        self, rollover_id: str, successor: SessionId, *, at: datetime, held: bool = False
     ) -> Rollover:
         """Record the session a launch just started, while SUCCESSOR_STARTING, as its own
         history row. The launch mints the id, so it is known only after the state that licensed
         the launch is persisted. Idempotent for the same id; any other is `IllegalRolloverMove`.
+        With `held`, a `TRUST_HOLD` row is appended in the same transaction: a successor up on
+        its trust dialog is never recorded without the hold that says nothing was typed.
         """
         ...
 

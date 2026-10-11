@@ -13,9 +13,10 @@ Only sessions of a `rollable` profile -- one whose plan executor writes envelope
   schedules' retry policy (DEC-099), and moves to ADOPTING once the send is confirmed (on the
   trust path below, ADOPTING is persisted first);
 - a successor that comes up on its folder-trust dialog is held, untyped, in SUCCESSOR_STARTING
-  until the owner trusts it and its predecessor is still running and idle (DEC-125): then
-  ADOPTING is persisted first and the template typed once, all within `TRUST_PATIENCE`. The
-  owner is asked by the trust notice every UNTRUSTED session already gets;
+  until the owner trusts it, within `TRUST_PATIENCE`, and its predecessor is still running and
+  idle, within `NOT_IDLE_PATIENCE` of the trust (DEC-125): then ADOPTING is persisted first and
+  the template typed once. The owner is asked by the trust notice every UNTRUSTED session
+  already gets;
 - an `accepted` envelope from that successor moves to SUCCESSOR_ACCEPTED, and only then is the
   predecessor stopped -- gracefully, against an idle pane, never by force (DEC-007).
 
@@ -91,6 +92,7 @@ from remote_agents.domain.rollover import (
 from remote_agents.ports.handoff_envelopes import HandoffEnvelope, HandoffEnvelopes, HandoffEvent
 from remote_agents.ports.rollover_store import (
     TRUST_HOLD,
+    TRUSTED_WAITING,
     IllegalRolloverMove,
     Rollover,
     RolloverStore,
@@ -517,14 +519,16 @@ class RolloverPass:
                 )
                 return
             # Inside the hold too: a successor launched but not recorded is the one state a
-            # restart can only give up on (successor-unknown).
+            # restart can only give up on (successor-unknown). One up on its folder-trust
+            # dialog is recorded with its hold, in one transaction: typing would answer the
+            # dialog (DEC-099), so it is held until the owner trusts it, and no restart can
+            # find it recorded but not held (DEC-125).
+            held = record.state is SessionState.UNTRUSTED
             starting = await self._store.record_successor(
-                rollover.id, record.session_id, at=self._now()
+                rollover.id, record.session_id, at=self._now(), held=held
             )
-        if record.state is SessionState.UNTRUSTED:
-            # Up on its folder-trust dialog: typing would answer the dialog (DEC-099). Held
-            # until the owner trusts it; `_found_starting` takes it from here (DEC-125).
-            await self._store.note(rollover.id, TRUST_HOLD, at=self._now())
+        if held:
+            # `_found_starting` takes it from here.
             return
         if record.state not in _UP:
             await self._fail(starting, seen, SUCCESSOR_FAILED, record.state.value)
@@ -575,18 +579,23 @@ class RolloverPass:
 
         A successor held on its trust dialog (`TRUST_HOLD`) was never typed to: nothing is
         typed while it is up. It is waited on for `TRUST_PATIENCE`. Once the owner trusts it,
-        ADOPTING is persisted *before* the template is typed, so a restart part-way finds
+        its predecessor must be running and idle; a working one is waited on for
+        `NOT_IDLE_PATIENCE`, counted from the first pass that found it so (`TRUSTED_WAITING`).
+        Then ADOPTING is persisted *before* the template is typed, so a restart part-way finds
         ADOPTING, which waits and never types (DEC-099: never typed twice).
         """
         if rollover.successor_session_id is None:
             await self._fail(rollover, seen, SUCCESSOR_UNKNOWN)
             return
-        held_at = await self._trust_hold(rollover)
+        details: dict[str | None, datetime] = {}
+        for event in await self._store.events(rollover.id):
+            details.setdefault(event.detail, event.created_at)  # each one's first time
+        held_at = details.get(TRUST_HOLD)
         if held_at is None and seen.untrusted(rollover.successor_session_id):
-            # On its dialog with no hold recorded: the launch's pass ended between recording the
-            # successor and writing the hold. Nothing was typed: only a launch settle records
-            # UNTRUSTED (DEC-081), and the launch types only into a successor up on its
-            # composer. So it is held from now.
+            # On its dialog with no hold recorded: a row a 0.63.0 pass left, which wrote the
+            # hold after the record and could end between the two. Nothing was typed: only a
+            # launch settle records UNTRUSTED (DEC-081), and the launch types only into a
+            # successor up on its composer. So it is held from now.
             await self._store.note(rollover.id, TRUST_HOLD, at=self._now())
             return
         if held_at is None:
@@ -615,7 +624,12 @@ class RolloverPass:
             await self._fail(rollover, seen, PREDECESSOR_GONE)
             return
         if not await self._looks_idle(rollover.predecessor_session_id):
-            if self._now() - held_at >= TRUST_PATIENCE:
+            # Its own clock, started now: the trust may have come late in its patience, and a
+            # session busy at that moment is owed the launch's wait for idle, not none.
+            waiting_since = details.get(TRUSTED_WAITING)
+            if waiting_since is None:
+                await self._store.note(rollover.id, TRUSTED_WAITING, at=self._now())
+            elif self._now() - waiting_since >= NOT_IDLE_PATIENCE:
                 await self._fail(rollover, seen, PREDECESSOR_NOT_IDLE)
             return
         adopting = await self._store.advance(

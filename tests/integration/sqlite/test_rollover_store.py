@@ -27,7 +27,7 @@ from remote_agents.domain.rollover import (
     RolloverState,
     may_stop_predecessor,
 )
-from remote_agents.ports.rollover_store import IllegalRolloverMove
+from remote_agents.ports.rollover_store import TRUST_HOLD, IllegalRolloverMove
 
 NOW = datetime(2026, 10, 5, 9, 0, tzinfo=UTC)
 HANDOFF = "h-0123456789abcdef0123"
@@ -417,6 +417,38 @@ async def test_a_successor_is_recorded_while_starting_as_its_own_history_row(
     assert len(await store.events(opened.id)) == 3
     with pytest.raises(IllegalRolloverMove):
         await store.record_successor(opened.id, SessionId.new(), at=NOW)
+
+
+async def test_a_held_successor_is_recorded_with_its_hold_in_one_transaction(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store, successor = _store(tmp_path), SessionId.new()
+    opened = await _open(store, SessionId.new())
+    assert opened is not None
+    await store.advance(opened.id, RolloverState.SUCCESSOR_STARTING, at=NOW)
+    append = store._append
+    calls: list[str | None] = []
+
+    def hold_fails(*args: object) -> None:
+        calls.append(args[4])  # type: ignore[arg-type]
+        if args[4] == TRUST_HOLD:
+            raise sqlite3.OperationalError("disk I/O error")
+        append(*args)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(store, "_append", hold_fails)
+    with pytest.raises(sqlite3.OperationalError):
+        await store.record_successor(opened.id, successor, at=NOW, held=True)
+    # Neither half survives without the other.
+    assert calls == ["successor recorded", TRUST_HOLD]
+    assert (await store.get(opened.id)).successor_session_id is None
+    assert [e.detail for e in await store.events(opened.id)][-1] != "successor recorded"
+
+    monkeypatch.setattr(store, "_append", append)
+    recorded = await store.record_successor(opened.id, successor, at=NOW, held=True)
+
+    assert recorded.successor_session_id == successor
+    details = [e.detail for e in await store.events(opened.id)]
+    assert details[-2:] == ["successor recorded", TRUST_HOLD]
 
 
 async def test_a_successor_is_recorded_only_while_starting_and_never_the_predecessor(

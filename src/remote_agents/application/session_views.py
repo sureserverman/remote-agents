@@ -51,6 +51,7 @@ from remote_agents.ports.git_checkout import GitSummary
 from remote_agents.ports.rollover_store import (
     REQUEST_WRITTEN,
     TRUST_HOLD,
+    TRUSTED_WAITING,
     Rollover,
     RolloverEvent,
 )
@@ -210,7 +211,9 @@ class RolloverMark:
     waiting: bool = False
     """A REQUESTED rollover held back behind another session's request in its checkout."""
     trust_hold: bool = False
-    """A SUCCESSOR_STARTING rollover held until the owner trusts its successor (DEC-125)."""
+    """A SUCCESSOR_STARTING rollover held for its successor, which is still asking (DEC-125)."""
+    idle_wait: bool = False
+    """A SUCCESSOR_STARTING rollover whose trusted successor waits for this session's idle."""
 
 
 _ROLLOVER_NOTES: dict[RolloverState, str | None] = {
@@ -238,12 +241,17 @@ _WAITING_NOTE = "rollover pending · waiting for another session's request"
 _TRUST_HOLD_NOTE = "starting successor · waiting for folder trust"
 """SUCCESSOR_STARTING, held: the successor is up on its folder-trust question (DEC-125)."""
 
+_IDLE_WAIT_NOTE = "starting successor · waiting for this session to be idle"
+"""SUCCESSOR_STARTING, trusted: the template goes in once this session's pane is idle."""
+
 
 def rollover_note(mark: RolloverMark) -> str | None:
     """`state line[ · continued from #N][ · continued as #N]`, or None for nothing to say."""
     pieces = []
     if mark.state is RolloverState.REQUESTED and mark.waiting:
         pieces.append(_WAITING_NOTE)
+    elif mark.state is RolloverState.SUCCESSOR_STARTING and mark.idle_wait:
+        pieces.append(_IDLE_WAIT_NOTE)
     elif mark.state is RolloverState.SUCCESSOR_STARTING and mark.trust_hold:
         pieces.append(_TRUST_HOLD_NOTE)
     elif mark.state is not None and (line := _ROLLOVER_NOTES[mark.state]) is not None:
@@ -302,7 +310,8 @@ async def rollover_marks(
     sequences = {record.session_id: record.display.sequence for record in listed}
     found: dict[str, tuple[RolloverState | None, SessionId | None, SessionId | None]] = {}
     waiting: set[str] = set()
-    held: set[str] = set()
+    held: dict[str, SessionId | None] = {}
+    idle_waits: set[str] = set()
     for record in listed:
         latest = await book.latest_for(record.session_id)
         state = latest.state if latest is not None else None
@@ -318,8 +327,11 @@ async def rollover_marks(
             if any(d.startswith("waiting:") for d in details) and REQUEST_WRITTEN not in details:
                 waiting.add(str(record.session_id))
         if state is RolloverState.SUCCESSOR_STARTING and latest is not None:
-            if any(event.detail == TRUST_HOLD for event in await book.events(latest.id)):
-                held.add(str(record.session_id))
+            details = {event.detail for event in await book.events(latest.id)}
+            if TRUSTED_WAITING in details:
+                idle_waits.add(str(record.session_id))
+            elif TRUST_HOLD in details:
+                held[str(record.session_id)] = latest.successor_session_id
         before = await book.continued_from(record.session_id)
         after = await book.continued_as(record.session_id)
         if state is not None or before is not None or after is not None:
@@ -330,11 +342,23 @@ async def rollover_marks(
         for other in (before, after)
         if other is not None and other not in sequences
     }
-    if missing and sessions is not None:
+    # A hold is said only while its successor is still asking: once the owner has trusted it,
+    # the row would send them back to a question already answered. A successor no row lists
+    # is looked up once; one nobody can find is not claimed to be asking.
+    states = {record.session_id: record.state for record in listed}
+    unlisted = {other for other in held.values() if other is not None and other not in states}
+    if (missing or unlisted) and sessions is not None:
         lister: _SessionLister = sessions  # type: ignore[assignment]
         for record in await lister.list_sessions():
             if record.session_id in missing:
                 sequences[record.session_id] = record.display.sequence
+            if record.session_id in unlisted:
+                states[record.session_id] = record.state
+    asking = {
+        key
+        for key, other in held.items()
+        if other is not None and states.get(other) is SessionState.UNTRUSTED
+    }
 
     def lineage(other: SessionId | None) -> Lineage | None:
         return None if other is None else Lineage(sequences.get(other))
@@ -345,7 +369,8 @@ async def rollover_marks(
             lineage(before),
             lineage(after),
             waiting=key in waiting,
-            trust_hold=key in held,
+            trust_hold=key in asking,
+            idle_wait=key in idle_waits,
         )
         for key, (state, before, after) in found.items()
     }

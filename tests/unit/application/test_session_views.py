@@ -79,7 +79,7 @@ from remote_agents.ports.agent_usage import (
     UsagePart,
     UsageWindow,
 )
-from remote_agents.ports.rollover_store import TRUST_HOLD
+from remote_agents.ports.rollover_store import TRUST_HOLD, TRUSTED_WAITING
 
 _NOW = datetime(2026, 8, 22, 12, 0, tzinfo=UTC)
 
@@ -1575,4 +1575,48 @@ async def test_a_successor_held_on_its_trust_dialog_says_so_on_the_predecessors_
     marks = await rollover_marks(RolloverBook(rollover_store), (predecessor, successor))
 
     line = "starting successor · waiting for folder trust" if held else "starting successor"
+    assert _notes((predecessor,), marks) == {1: line}
+
+
+@pytest.mark.parametrize(
+    ("successor_state", "waiting", "line"),
+    [
+        # Trusted, and this pass has not looked yet: nothing is asked of the owner.
+        (SessionState.RUNNING, False, "starting successor"),
+        # Trusted, and the pass found this session working: the owner's turn is here.
+        (SessionState.RUNNING, True, "starting successor · waiting for this session to be idle"),
+        # A successor no row lists is not claimed to be asking.
+        (None, False, "starting successor"),
+    ],
+)
+async def test_a_trusted_successor_no_longer_sends_the_owner_to_its_trust_dialog(
+    rollover_store: SQLiteRolloverStore,
+    successor_state: SessionState | None,
+    waiting: bool,
+    line: str,
+) -> None:
+    predecessor = _numbered(1)
+    successor = _numbered(2, successor_state or SessionState.RUNNING)
+    opened = await rollover_store.open_for_ready(
+        predecessor.session_id,
+        "h-0123456789abcdef0123",
+        project_id=predecessor.project_id,
+        profile_id=predecessor.profile_id,
+        plan=None,
+        at=_ROLL_AT,
+    )
+    assert opened is not None
+    await rollover_store.advance(
+        opened.id,
+        RolloverState.SUCCESSOR_STARTING,
+        at=_ROLL_AT,
+        successor_session_id=successor.session_id,
+    )
+    await rollover_store.note(opened.id, TRUST_HOLD, at=_ROLL_AT)
+    if waiting:
+        await rollover_store.note(opened.id, TRUSTED_WAITING, at=_ROLL_AT)
+    listed = (predecessor, successor) if successor_state is not None else (predecessor,)
+
+    marks = await rollover_marks(RolloverBook(rollover_store), listed)
+
     assert _notes((predecessor,), marks) == {1: line}

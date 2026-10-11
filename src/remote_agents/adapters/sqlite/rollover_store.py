@@ -15,6 +15,7 @@ from remote_agents.domain.models import ProfileId, ProjectId, SessionId
 from remote_agents.domain.rollover import NEEDS_SUCCESSOR, TERMINAL, RolloverState, is_legal
 from remote_agents.ports.rollover_store import (
     REQUEST_WRITTEN,
+    TRUST_HOLD,
     IllegalRolloverMove,
     Rollover,
     RolloverEvent,
@@ -83,7 +84,7 @@ class SQLiteRolloverStore:
             return self._own(seen[0], predecessor, project_id) if seen else None
 
     async def record_successor(
-        self, rollover_id: str, successor: SessionId, *, at: datetime
+        self, rollover_id: str, successor: SessionId, *, at: datetime, held: bool = False
     ) -> Rollover:
         current = await self.get(rollover_id)
         if current is None:
@@ -110,6 +111,8 @@ class SQLiteRolloverStore:
             self._append(
                 rollover_id, current.state, current.state, None, "successor recorded", stamp
             )
+            if held:
+                self._append(rollover_id, current.state, current.state, None, TRUST_HOLD, stamp)
         return self._select("rollover_id = ?", (rollover_id,))[0]
 
     async def request(
