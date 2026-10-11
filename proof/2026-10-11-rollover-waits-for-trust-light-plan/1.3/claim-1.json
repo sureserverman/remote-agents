@@ -1,0 +1,28 @@
+{
+ "baseline": {
+  "elapsed_s": 1.1,
+  "exit": 0,
+  "tail": "........................................................................ [ 37%]\n........................................................................ [ 74%]\n.................................................                        [100%]\n193 passed in 0.82s"
+ },
+ "break_patch": "--- a/src/remote_agents/application/session_views.py\t2026-10-11 18:37:57.023679601 +0100\n+++ b/src/remote_agents/application/session_views.py\t2026-10-11 18:37:57.033685208 +0100\n@@ -244,8 +244,6 @@\n     pieces = []\n     if mark.state is RolloverState.REQUESTED and mark.waiting:\n         pieces.append(_WAITING_NOTE)\n-    elif mark.state is RolloverState.SUCCESSOR_STARTING and mark.trust_hold:\n-        pieces.append(_TRUST_HOLD_NOTE)\n     elif mark.state is not None and (line := _ROLLOVER_NOTES[mark.state]) is not None:\n         pieces.append(line)\n     if mark.continued_from is not None:\n",
+ "build": null,
+ "created": "2026-10-11T17:37:59+00:00",
+ "fingerprint": "aba32fd48448a30d0671a24e51563f5c7994617a4a321d294a1e080fefeba2df",
+ "index": 1,
+ "kind": "claim",
+ "named_break": null,
+ "no_build_reason": "pure python, no build",
+ "plan": "/mnt/vault/Portfolio/infra/remote-agents/plans/2026-10-11-rollover-waits-for-trust-light-plan.md",
+ "red": {
+  "elapsed_s": 1.2,
+  "exit": 1,
+  "tail": "rollover_store = <remote_agents.adapters.sqlite.rollover_store.SQLiteRolloverStore object at 0x7f852b75d7c0>\nheld = True\n\n    @pytest.mark.parametrize(\"held\", [False, True])\n    async def test_a_successor_held_on_its_trust_dialog_says_so_on_the_predecessors_row(\n        rollover_store: SQLiteRolloverStore, held: bool\n    ) -> None:\n        predecessor, successor = _numbered(1), _numbered(2, SessionState.UNTRUSTED)\n        opened = await rollover_store.open_for_ready(\n            predecessor.session_id,\n            \"h-0123456789abcdef0123\",\n            project_id=predecessor.project_id,\n            profile_id=predecessor.profile_id,\n            plan=None,\n            at=_ROLL_AT,\n        )\n        assert opened is not None\n        await rollover_store.advance(\n            opened.id,\n            RolloverState.SUCCESSOR_STARTING,\n            at=_ROLL_AT,\n            successor_session_id=successor.session_id,\n        )\n        if held:\n            await rollover_store.note(opened.id, TRUST_HOLD, at=_ROLL_AT)\n    \n        marks = await rollover_marks(RolloverBook(rollover_store), (predecessor, successor))\n    \n        line = \"starting successor \u00b7 waiting for folder trust\" if held else \"starting successor\"\n>       assert _notes((predecessor,), marks) == {1: line}\nE       AssertionError: assert {1: 'starting successor'} == {1: 'starting...folder trust'}\nE         \nE         Differing items:\nE         {1: 'starting successor'} != {1: 'starting successor \u00b7 waiting for folder trust'}\nE         Use -v to get more diff\n\ntests/unit/application/test_session_views.py:1578: AssertionError\n=========================== short test summary info ============================\nFAILED tests/unit/application/test_session_views.py::test_a_successor_held_on_its_trust_dialog_says_so_on_the_predecessors_row[True]\n1 failed, 192 passed in 0.83s"
+ },
+ "schema": 2,
+ "task": "1.3",
+ "test": "uv run --locked pytest tests/unit/application/test_session_views.py tests/unit/adapters/telegram/test_rollover_notifications.py -q -p no:randomly",
+ "text": "`uv run --locked pytest tests/unit/application/test_session_views.py tests/unit/adapters/telegram/test_rollover_notifications.py -q -p no:randomly`",
+ "touched": [
+  "src/remote_agents/application/session_views.py"
+ ]
+}

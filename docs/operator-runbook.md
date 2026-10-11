@@ -690,6 +690,7 @@ it and ask for it but never act.
 | `rollover pending · waiting for workflow boundary` | Asked for; the workflow has not handed off yet |
 | `rollover pending · waiting for another session's request` | Another session's request holds this checkout |
 | `starting successor` | Waiting for the old session to go idle, or launching the new one |
+| `starting successor · waiting for folder trust` | The new session is up on its folder-trust question; trust it and the rollover carries on |
 | `successor validating handoff` | The command is typed; waiting for `accepted` |
 | `successor accepted · stopping` | Accepted; the old session is being stopped |
 | `rollover failed · predecessor preserved` | `FAILED`; the old session was not touched |
@@ -735,9 +736,15 @@ closes out instead, so cancel the pending rollover then.
 - **`successor-unknown`** — a launch may have happened with no successor recorded: a restart
   mid-launch, or a launch key already claimed. Look in the project's sessions for a new `claude`
   session from that time, stop it if unwanted, then ask again.
-- **`successor-untrusted`** — the successor came up on its folder-trust question, and typing
-  would have answered it. It is left open, still asking. Answer the question there (trust the
-  folder) so the next launch comes up trusted, stop that session, then ask again.
+- **`successor-untrusted`** — the successor sat on its folder-trust question for 2 hours with
+  no answer. A successor on that question does not fail the rollover at once (DEC-125): the
+  rollover holds, types nothing, and the bot sends the usual trust message. Press **Trust**
+  there and the rollover carries on, typing its command once. Choosing *No, exit*, or stopping
+  the successor, ends the rollover as `successor-failed`. Only after 2 hours unanswered is it
+  this code; the successor is left open, still asking. Trust it, stop it, then ask again.
+  Claude asks again in a folder that became its own git repo after the first session started:
+  its trust lookup stops at the repo root, so trust inherited from a parent folder no longer
+  applies.
 - **`successor-failed`** — the successor failed to start, or its pane went away (also after it
   accepted, before the old session was stopped). Inspect it, then ask again.
 - **`not-typed`** — the command could not be typed, or its send was not confirmed; the message

@@ -101,7 +101,7 @@ class RecoveryFacts:
     successor_alive: bool = False
     timed_out: bool = False
     trust_held: bool = False
-    """The successor came up on its folder-trust dialog, so nothing was typed into it then."""
+    """The successor was held on its folder-trust dialog at its launch, so nothing was typed."""
     successor_on_trust_dialog: bool = False
     """The successor is still on that dialog."""
 

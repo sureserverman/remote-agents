@@ -170,3 +170,13 @@ def test_what_reaches_the_chat_is_escaped() -> None:
 )
 def test_no_other_end_or_move_is_told(state: RolloverState) -> None:
     assert rollover_message(_report(state, None), project_name="remote-agents") == ""
+
+
+def test_an_untrusted_successor_is_said_to_have_waited_out_the_trust_patience() -> None:
+    text = rollover_message(
+        _report(RolloverState.FAILED, "successor-untrusted", successor=_record(4)),
+        project_name="remote-agents",
+    )
+
+    assert "was not trusted within 2 hours" in text
+    assert "waiting on its folder-trust question" not in text

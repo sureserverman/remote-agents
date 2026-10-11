@@ -34,6 +34,7 @@ from remote_agents.application.rollover import (
     ADOPTION_PATIENCE,
     NOT_IDLE_PATIENCE,
     REQUEST_PATIENCE,
+    TRUST_PATIENCE,
     RolloverReport,
 )
 from remote_agents.domain.rollover import RolloverState
@@ -46,6 +47,7 @@ _GIVE_UP_AFTER = timedelta(minutes=10)
 _MINUTES_IDLE = int(NOT_IDLE_PATIENCE.total_seconds() // 60)
 _MINUTES_ADOPT = int(ADOPTION_PATIENCE.total_seconds() // 60)
 _HOURS_ASKED = int(REQUEST_PATIENCE.total_seconds() // 3600)
+_HOURS_TRUST = int(TRUST_PATIENCE.total_seconds() // 3600)
 
 #: Why a rollover failed, in words. A code missing here is shown as itself.
 _WHY = {
@@ -53,7 +55,7 @@ _WHY = {
     "predecessor-gone": "the session stopped before its successor was up",
     "launch-failed": "the successor's launch failed, perhaps part-way; check its sessions",
     "successor-unknown": "a successor may have started unrecorded; check its sessions",
-    "successor-untrusted": "the successor is waiting on its folder-trust question",
+    "successor-untrusted": f"the successor was not trusted within {_HOURS_TRUST} hours",
     "successor-failed": "the successor failed or went away",
     "not-typed": "the handoff command was not typed into the successor",
     "adoption-timeout": f"the successor did not take over within {_MINUTES_ADOPT} minutes",

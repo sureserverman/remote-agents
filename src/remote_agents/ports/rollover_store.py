@@ -22,6 +22,11 @@ REQUEST_WRITTEN = "request written"
 """The history detail `record_request` writes: the owner's request was handed to the workflow.
 A row reads it to tell a written request from one still waiting for its checkout's slot."""
 
+TRUST_HOLD = "trust-hold: successor on its folder-trust dialog"
+"""The history detail that holds a rollover for its successor's folder trust (DEC-125). Its
+presence is the durable fact that nothing was typed at the launch, the one case a later pass may
+still type; a row reads it to say the rollover is waiting for trust."""
+
 
 class IllegalRolloverMove(ValueError):
     """An `advance` the domain matrix does not allow; nothing was written."""

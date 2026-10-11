@@ -79,6 +79,7 @@ from remote_agents.ports.agent_usage import (
     UsagePart,
     UsageWindow,
 )
+from remote_agents.ports.rollover_store import TRUST_HOLD
 
 _NOW = datetime(2026, 8, 22, 12, 0, tzinfo=UTC)
 
@@ -1546,3 +1547,32 @@ async def test_a_request_waiting_behind_another_says_so(
         1: "rollover pending · waiting for workflow boundary",
         2: "rollover pending · waiting for another session's request",
     }
+
+
+@pytest.mark.parametrize("held", [False, True])
+async def test_a_successor_held_on_its_trust_dialog_says_so_on_the_predecessors_row(
+    rollover_store: SQLiteRolloverStore, held: bool
+) -> None:
+    predecessor, successor = _numbered(1), _numbered(2, SessionState.UNTRUSTED)
+    opened = await rollover_store.open_for_ready(
+        predecessor.session_id,
+        "h-0123456789abcdef0123",
+        project_id=predecessor.project_id,
+        profile_id=predecessor.profile_id,
+        plan=None,
+        at=_ROLL_AT,
+    )
+    assert opened is not None
+    await rollover_store.advance(
+        opened.id,
+        RolloverState.SUCCESSOR_STARTING,
+        at=_ROLL_AT,
+        successor_session_id=successor.session_id,
+    )
+    if held:
+        await rollover_store.note(opened.id, TRUST_HOLD, at=_ROLL_AT)
+
+    marks = await rollover_marks(RolloverBook(rollover_store), (predecessor, successor))
+
+    line = "starting successor · waiting for folder trust" if held else "starting successor"
+    assert _notes((predecessor,), marks) == {1: line}

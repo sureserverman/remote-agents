@@ -48,7 +48,12 @@ from remote_agents.ports.agent_usage import (
     UsageWindow,
 )
 from remote_agents.ports.git_checkout import GitSummary
-from remote_agents.ports.rollover_store import REQUEST_WRITTEN, Rollover, RolloverEvent
+from remote_agents.ports.rollover_store import (
+    REQUEST_WRITTEN,
+    TRUST_HOLD,
+    Rollover,
+    RolloverEvent,
+)
 from remote_agents.ports.schedules import Once, Repeat, Schedule, When
 
 
@@ -204,6 +209,8 @@ class RolloverMark:
     continued_as: Lineage | None = None
     waiting: bool = False
     """A REQUESTED rollover held back behind another session's request in its checkout."""
+    trust_hold: bool = False
+    """A SUCCESSOR_STARTING rollover held until the owner trusts its successor (DEC-125)."""
 
 
 _ROLLOVER_NOTES: dict[RolloverState, str | None] = {
@@ -228,12 +235,17 @@ so a state added without a decision raises on the first row that carries it."""
 _WAITING_NOTE = "rollover pending · waiting for another session's request"
 """REQUESTED, held back: the checkout's one `request.json` is another session's until it ends."""
 
+_TRUST_HOLD_NOTE = "starting successor · waiting for folder trust"
+"""SUCCESSOR_STARTING, held: the successor is up on its folder-trust question (DEC-125)."""
+
 
 def rollover_note(mark: RolloverMark) -> str | None:
     """`state line[ · continued from #N][ · continued as #N]`, or None for nothing to say."""
     pieces = []
     if mark.state is RolloverState.REQUESTED and mark.waiting:
         pieces.append(_WAITING_NOTE)
+    elif mark.state is RolloverState.SUCCESSOR_STARTING and mark.trust_hold:
+        pieces.append(_TRUST_HOLD_NOTE)
     elif mark.state is not None and (line := _ROLLOVER_NOTES[mark.state]) is not None:
         pieces.append(line)
     if mark.continued_from is not None:
@@ -290,6 +302,7 @@ async def rollover_marks(
     sequences = {record.session_id: record.display.sequence for record in listed}
     found: dict[str, tuple[RolloverState | None, SessionId | None, SessionId | None]] = {}
     waiting: set[str] = set()
+    held: set[str] = set()
     for record in listed:
         latest = await book.latest_for(record.session_id)
         state = latest.state if latest is not None else None
@@ -304,6 +317,9 @@ async def rollover_marks(
             details = [event.detail or "" for event in await book.events(latest.id)]
             if any(d.startswith("waiting:") for d in details) and REQUEST_WRITTEN not in details:
                 waiting.add(str(record.session_id))
+        if state is RolloverState.SUCCESSOR_STARTING and latest is not None:
+            if any(event.detail == TRUST_HOLD for event in await book.events(latest.id)):
+                held.add(str(record.session_id))
         before = await book.continued_from(record.session_id)
         after = await book.continued_as(record.session_id)
         if state is not None or before is not None or after is not None:
@@ -324,7 +340,13 @@ async def rollover_marks(
         return None if other is None else Lineage(sequences.get(other))
 
     return {
-        key: RolloverMark(state, lineage(before), lineage(after), waiting=key in waiting)
+        key: RolloverMark(
+            state,
+            lineage(before),
+            lineage(after),
+            waiting=key in waiting,
+            trust_hold=key in held,
+        )
         for key, (state, before, after) in found.items()
     }
 

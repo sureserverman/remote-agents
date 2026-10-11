@@ -87,7 +87,12 @@ from remote_agents.domain.rollover import (
     recovery_action,
 )
 from remote_agents.ports.handoff_envelopes import HandoffEnvelope, HandoffEnvelopes, HandoffEvent
-from remote_agents.ports.rollover_store import IllegalRolloverMove, Rollover, RolloverStore
+from remote_agents.ports.rollover_store import (
+    TRUST_HOLD,
+    IllegalRolloverMove,
+    Rollover,
+    RolloverStore,
+)
 from remote_agents.ports.terminal import (
     NOT_IDLE,
     PromptDelivery,
@@ -111,10 +116,6 @@ ADOPTION_PATIENCE = timedelta(minutes=30)
 TRUST_PATIENCE = timedelta(hours=2)
 """How long a successor may wait on its folder-trust dialog, counted from the hold (DEC-125).
 Long enough for a phone left in another room; meanwhile both sessions only sit idle."""
-
-TRUST_HOLD = "trust-hold: successor on its folder-trust dialog"
-"""The note that holds a rollover for its successor's trust. Its presence is the durable fact
-that nothing was typed at the launch, the one case a later pass may still type."""
 
 TRUSTED_TYPING = "trusted; typing once"
 """The detail on the ADOPTING move persisted just before typing into a trusted successor."""
