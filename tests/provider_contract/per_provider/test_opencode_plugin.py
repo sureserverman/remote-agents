@@ -22,6 +22,7 @@ from __future__ import annotations
 import json
 import shutil
 import subprocess
+import sys
 import time
 from pathlib import Path
 
@@ -67,6 +68,11 @@ from pathlib import Path
 
 Path(sys.argv[1]).write_bytes(sys.stdin.buffer.read())
 """
+
+
+#: The plugin's wait while a content test drives it: well inside `_run`'s 60 s timeout, and
+#: far past any start-up a loaded runner has shown.
+_CONTENT_WAIT_MS = 30_000
 
 
 def _node() -> str:
@@ -116,13 +122,22 @@ def _drive(
     capture = tmp_path / "capture.py"
     capture.write_text(_CAPTURE, encoding="utf-8")
 
-    _run(
-        tmp_path,
-        event,
-        ["python3", str(capture), str(delivered)],
-        session_id=session_id,
-        timeout=60,
-    )
+    # The capture runs under this interpreter, as the real spool command runs under the
+    # install's, and with the wait raised: these tests read *what* is delivered, and the
+    # deadline has its own tests below. Measured on a macOS runner under `-n auto`
+    # (2026-10-11): a bare `python3` there is Xcode's `/usr/bin/python3` stub, whose first
+    # start did not reach the script's first line inside the 5 s wait, so nothing was delivered.
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(
+            "remote_agents.adapters.agents.opencode.plugin._WAIT_MILLISECONDS", _CONTENT_WAIT_MS
+        )
+        _run(
+            tmp_path,
+            event,
+            [sys.executable, str(capture), str(delivered)],
+            session_id=session_id,
+            timeout=60,
+        )
     return delivered.read_bytes() if delivered.exists() else None
 
 
