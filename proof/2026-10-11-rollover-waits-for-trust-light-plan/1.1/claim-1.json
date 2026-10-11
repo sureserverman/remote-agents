@@ -1,0 +1,28 @@
+{
+ "baseline": {
+  "elapsed_s": 3.7,
+  "exit": 0,
+  "tail": "........................................................................ [ 19%]\n........................................................................ [ 39%]\n........................................................................ [ 59%]\n........................................................................ [ 79%]\n........................................................................ [ 99%]\n...                                                                      [100%]\n363 passed in 3.43s"
+ },
+ "break_patch": "--- a/src/remote_agents/application/rollover.py\t2026-10-11 18:30:33.954669409 +0100\n+++ b/src/remote_agents/application/rollover.py\t2026-10-11 18:30:33.965081715 +0100\n@@ -518,7 +518,7 @@\n         if record.state is SessionState.UNTRUSTED:\n             # Up on its folder-trust dialog: typing would answer the dialog (DEC-099). Held\n             # until the owner trusts it; `_found_starting` takes it from here (DEC-125).\n-            await self._store.note(rollover.id, TRUST_HOLD, at=self._now())\n+            await self._fail(starting, seen, SUCCESSOR_UNTRUSTED)\n             return\n         if record.state not in _UP:\n             await self._fail(starting, seen, SUCCESSOR_FAILED, record.state.value)\n",
+ "build": null,
+ "created": "2026-10-11T17:32:53+00:00",
+ "fingerprint": "cc318450e55843da58db8a329fe7b8b47b39c58e5195c55adf1ad95e8a6116bc",
+ "index": 1,
+ "kind": "claim",
+ "named_break": null,
+ "no_build_reason": "pure python, no build",
+ "plan": "/mnt/vault/Portfolio/infra/remote-agents/plans/2026-10-11-rollover-waits-for-trust-light-plan.md",
+ "red": {
+  "elapsed_s": 3.8,
+  "exit": 1,
+  "tail": "_____ test_a_hold_lost_between_recording_and_noting_is_taken_up_next_pass ______\n\nrig = Rig(store=<remote_agents.adapters.sqlite.rollover_store.SQLiteRolloverStore object at 0x752b4b4ee710>, predecessor=Ses...=None), successor=None)], locks=None, _pass=<remote_agents.application.rollover.RolloverPass object at 0x752b4b5d99b0>)\nmonkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x752b4b561550>\n\n    async def test_a_hold_lost_between_recording_and_noting_is_taken_up_next_pass(\n        rig: Rig, monkeypatch: pytest.MonkeyPatch\n    ) -> None:\n        rig.ready()\n        rig.launched_state = SessionState.UNTRUSTED\n        note = rig.store.note\n    \n        async def lost(rollover_id: str, detail: str, *, at: datetime) -> None:\n            monkeypatch.setattr(rig.store, \"note\", note)\n            raise OSError(\"the pass ended before the hold was written\")\n    \n        monkeypatch.setattr(rig.store, \"note\", lost)\n        await rig.run()\n        rollover = await rig.rollover()\n        assert rollover.successor_session_id == rig.successor\n        assert TRUST_HOLD not in [e.detail for e in await rig.store.events(rollover.id)]\n    \n        await rig.run(passes=2)\n        rollover = await rig.rollover()\n>       assert rollover.state is RolloverState.SUCCESSOR_STARTING\nE       AssertionError: assert <RolloverState.FAILED: 'failed'> is <RolloverState.SUCCESSOR_STARTING: 'successor_starting'>\nE        +  where <RolloverState.FAILED: 'failed'> = Rollover(id='6d911371904c4a41ad3869bcd1e0b80f', handoff_id='h-0123456789abcdef0123', predecessor_session_id=SessionId(... 5, 9, 0, tzinfo=datetime.timezone.utc), updated_at=datetime.datetime(2026, 10, 5, 9, 0, tzinfo=datetime.timezone.utc)).state\nE        +  and   <RolloverState.SUCCESSOR_STARTING: 'successor_starting'> = RolloverState.SUCCESSOR_STARTING\n\ntests/unit/application/test_rollover_pass.py:1264: AssertionError\n=========================== short test summary info ============================\nFAILED tests/unit/application/test_rollover_pass.py::test_a_trust_held_successor_is_typed_once_only_after_it_is_trusted\nFAILED tests/unit/application/test_rollover_pass.py::test_a_trust_held_successor_is_given_up_only_after_the_patience\nFAILED tests/unit/application/test_rollover_pass.py::test_a_successor_declined_on_its_trust_dialog_fails_the_rollover\nFAILED tests/unit/application/test_rollover_pass.py::test_a_restart_across_the_trust_hold_types_once_after_trust\nFAILED tests/unit/application/test_rollover_pass.py::test_a_pass_killed_while_typing_after_trust_never_types_again\nFAILED tests/unit/application/test_rollover_pass.py::test_a_refused_send_after_trust_fails_not_typed_and_is_never_retried\nFAILED tests/unit/application/test_rollover_pass.py::test_a_row_moved_under_the_trusted_pass_is_left_as_it_is_and_untyped\nFAILED tests/unit/application/test_rollover_pass.py::test_a_hold_lost_between_recording_and_noting_is_taken_up_next_pass\n8 failed, 355 passed in 3.56s"
+ },
+ "schema": 2,
+ "task": "1.1",
+ "test": "uv run --locked pytest tests/unit/application/test_rollover_pass.py tests/unit/domain/test_rollover.py -q -p no:randomly",
+ "text": "`uv run --locked pytest tests/unit/application/test_rollover_pass.py tests/unit/domain/test_rollover.py -q -p no:randomly`",
+ "touched": [
+  "src/remote_agents/application/rollover.py"
+ ]
+}

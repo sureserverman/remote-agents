@@ -23,6 +23,8 @@ from remote_agents.application.rollover import (
     ADOPTION_PATIENCE,
     NOT_IDLE_PATIENCE,
     READY_FRESHNESS,
+    TRUST_HOLD,
+    TRUST_PATIENCE,
     RolloverPass,
 )
 from remote_agents.domain.models import (
@@ -35,7 +37,7 @@ from remote_agents.domain.models import (
 )
 from remote_agents.domain.rollover import RolloverState
 from remote_agents.ports.handoff_envelopes import HandoffEnvelope, HandoffEvent
-from remote_agents.ports.rollover_store import Rollover
+from remote_agents.ports.rollover_store import Rollover, RolloverEvent
 from remote_agents.ports.terminal import (
     GRACEFUL_TIMEOUT,
     NOT_IDLE,
@@ -128,6 +130,11 @@ class Rig:
     launched_state: SessionState = SessionState.RUNNING
     launch_answers_nothing: bool = False
     sends: list[tuple[SessionId, str]] = field(default_factory=list)
+    send_states: list[RolloverState | None] = field(default_factory=list)
+    """The successor's rollover state on disk at each send."""
+    send_crashes: bool = False
+    """The next send is cut short as a killed process cuts it: after the keys, before any
+    answer, by an exception the pass does not catch."""
     deliveries: list[PromptDelivery] = field(default_factory=list)
     stops: list[GracefulStopCommand] = field(default_factory=list)
     stop_answer: str = ""
@@ -183,8 +190,13 @@ class Rig:
 
     async def send(self, session_id: SessionId, text: str) -> PromptDelivery:
         self.sends.append((session_id, text))
-        if self._persisted(successor_session_id=session_id) is None:
+        persisted = self._persisted(successor_session_id=session_id)
+        self.send_states.append(None if persisted is None else persisted.state)
+        if persisted is None:
             self.out_of_order.append("send")
+        if self.send_crashes:
+            self.send_crashes = False
+            raise asyncio.CancelledError
         return self.deliveries.pop(0) if self.deliveries else SENT
 
     async def graceful_stop(self, command: GracefulStopCommand) -> TerminalObservation:
@@ -390,7 +402,10 @@ async def _launch_answers_nothing(rig: Rig) -> None:
 
 
 async def _untrusted(rig: Rig) -> None:
+    # Held on its trust question, and never answered within the patience.
     rig.launched_state = SessionState.UNTRUSTED
+    await rig.run()
+    rig.later(TRUST_PATIENCE)
 
 
 async def _successor_failed_to_start(rig: Rig) -> None:
@@ -1075,3 +1090,183 @@ async def test_a_successor_is_launched_to_reuse_its_predecessors_folder(rig: Rig
 
     (command,) = rig.launches
     assert command.reuse_folder_of == rig.predecessor
+
+
+# -- a successor held on its folder-trust dialog ---------------------------------------------
+
+
+def _trust(rig: Rig) -> None:
+    """The owner answers the successor's trust question: it comes up on its composer."""
+    rig.sessions[rig.successor] = _record(rig.successor)
+
+
+async def test_a_trust_held_successor_is_typed_once_only_after_it_is_trusted(rig: Rig) -> None:
+    rig.ready()
+    rig.launched_state = SessionState.UNTRUSTED
+
+    await rig.run(passes=3)
+
+    rollover = await rig.rollover()
+    assert rollover.state is RolloverState.SUCCESSOR_STARTING
+    assert rollover.successor_session_id == rig.successor
+    assert TRUST_HOLD in [e.detail for e in await rig.store.events(rollover.id)]
+    assert len(rig.launches) == 1
+    assert rig.sends == [] and rig.stops == [] and rig.reports == []
+
+    _trust(rig)
+    await rig.run(passes=3)
+
+    assert rig.sends == [(rig.successor, TEMPLATE)]
+    # Persisted before the keys, so a restart part-way can never type it again.
+    assert rig.send_states == [RolloverState.ADOPTING]
+    assert (await rig.rollover()).state is RolloverState.ADOPTING
+    assert rig.stops == []
+
+    rig.accepted_by(rig.successor)
+    await rig.run()
+
+    assert (await rig.rollover()).state is RolloverState.COMPLETED
+    assert rig.stops == [GracefulStopCommand(rig.predecessor, CLAUDE, only_if_idle=True)]
+    assert len(rig.sends) == 1
+
+
+async def test_a_trust_held_successor_is_given_up_only_after_the_patience(rig: Rig) -> None:
+    rig.ready()
+    rig.launched_state = SessionState.UNTRUSTED
+    await rig.run()
+
+    rig.later(TRUST_PATIENCE - timedelta(seconds=1))
+    await rig.run()
+    assert (await rig.rollover()).state is RolloverState.SUCCESSOR_STARTING
+
+    rig.later(timedelta(seconds=1))
+    await rig.run(passes=2)
+
+    rollover = await rig.rollover()
+    assert (rollover.state, rollover.failure_code) == (RolloverState.FAILED, "successor-untrusted")
+    assert [report.rollover.failure_code for report in rig.reports] == ["successor-untrusted"]
+    assert rig.sends == [] and rig.stops == []
+
+
+async def test_a_successor_declined_on_its_trust_dialog_fails_the_rollover(rig: Rig) -> None:
+    rig.ready()
+    rig.launched_state = SessionState.UNTRUSTED
+    await rig.run()
+
+    # "No, exit": the agent quits, and its session ends.
+    rig.sessions[rig.successor] = _record(rig.successor, SessionState.ENDED)
+    await rig.run()
+
+    rollover = await rig.rollover()
+    assert (rollover.state, rollover.failure_code) == (RolloverState.FAILED, "successor-failed")
+    assert rig.sends == [] and rig.stops == []
+
+
+async def test_a_restart_across_the_trust_hold_types_once_after_trust(rig: Rig) -> None:
+    rig.ready()
+    rig.launched_state = SessionState.UNTRUSTED
+    await rig.run()
+
+    rig._pass = None  # a restart while the question is still up
+    await rig.run()
+    rollover = await rig.rollover()
+    assert rollover.state is RolloverState.SUCCESSOR_STARTING
+    assert "restart: wait" in [e.detail for e in await rig.store.events(rollover.id)]
+    assert rig.sends == []
+
+    _trust(rig)
+    rig._pass = None  # and another, after the owner trusted it
+    await rig.run(passes=2)
+
+    assert rig.sends == [(rig.successor, TEMPLATE)]
+    assert "restart: type_once" in [e.detail for e in await rig.store.events(rollover.id)]
+    assert (await rig.rollover()).state is RolloverState.ADOPTING
+
+
+async def test_a_pass_killed_while_typing_after_trust_never_types_again(rig: Rig) -> None:
+    rig.ready()
+    rig.launched_state = SessionState.UNTRUSTED
+    await rig.run()
+    _trust(rig)
+    rig.send_crashes = True
+
+    with pytest.raises(asyncio.CancelledError):
+        await rig.run()
+    assert len(rig.sends) == 1
+
+    rig._pass = None  # the process that was typing is gone
+    await rig.run(passes=3)
+
+    assert len(rig.sends) == 1
+    assert (await rig.rollover()).state is RolloverState.ADOPTING
+    assert rig.stops == []
+
+
+async def test_a_refused_send_after_trust_fails_not_typed_and_is_never_retried(rig: Rig) -> None:
+    rig.ready()
+    rig.launched_state = SessionState.UNTRUSTED
+    await rig.run()
+    _trust(rig)
+    rig.deliveries = [PromptDelivery(PromptOutcome.REFUSED, PromptReason.DIALOG)]
+
+    await rig.run(passes=3)
+
+    rollover = await rig.rollover()
+    assert (rollover.state, rollover.failure_code) == (RolloverState.FAILED, "not-typed")
+    assert len(rig.sends) == 1
+    assert rig.send_states == [RolloverState.ADOPTING]
+    assert rig.stops == []
+
+
+async def test_a_row_moved_under_the_trusted_pass_is_left_as_it_is_and_untyped(
+    rig: Rig, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    rig.ready()
+    rig.launched_state = SessionState.UNTRUSTED
+    await rig.run()
+    _trust(rig)
+    events = rig.store.events
+
+    async def moved_meanwhile(rollover_id: str) -> tuple[RolloverEvent, ...]:
+        # Another writer ends the row after this pass read it open, before its ADOPTING move.
+        read = tuple(await events(rollover_id))
+        monkeypatch.setattr(rig.store, "events", events)
+        await rig.store.advance(rollover_id, RolloverState.FAILED, at=NOW, failure_code="other")
+        return read
+
+    monkeypatch.setattr(rig.store, "events", moved_meanwhile)
+    await rig.run()
+
+    rollover = await rig.rollover()
+    assert (rollover.state, rollover.failure_code) == (RolloverState.FAILED, "other")
+    assert rig.sends == [] and rig.stops == []
+
+
+async def test_a_hold_lost_between_recording_and_noting_is_taken_up_next_pass(
+    rig: Rig, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    rig.ready()
+    rig.launched_state = SessionState.UNTRUSTED
+    note = rig.store.note
+
+    async def lost(rollover_id: str, detail: str, *, at: datetime) -> None:
+        monkeypatch.setattr(rig.store, "note", note)
+        raise OSError("the pass ended before the hold was written")
+
+    monkeypatch.setattr(rig.store, "note", lost)
+    await rig.run()
+    rollover = await rig.rollover()
+    assert rollover.successor_session_id == rig.successor
+    assert TRUST_HOLD not in [e.detail for e in await rig.store.events(rollover.id)]
+
+    await rig.run(passes=2)
+    rollover = await rig.rollover()
+    assert rollover.state is RolloverState.SUCCESSOR_STARTING
+    assert TRUST_HOLD in [e.detail for e in await rig.store.events(rollover.id)]
+    assert rig.sends == []
+
+    _trust(rig)
+    await rig.run()
+
+    assert rig.sends == [(rig.successor, TEMPLATE)]
+    assert (await rig.rollover()).state is RolloverState.ADOPTING

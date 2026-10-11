@@ -90,6 +90,7 @@ class RecoveryAction(StrEnum):
     TIME_OUT = "time_out"
     STOP_PREDECESSOR = "stop_predecessor"
     RECONCILE_STOP = "reconcile_stop"
+    TYPE_ONCE = "type_once"
 
 
 @dataclass(frozen=True, slots=True)
@@ -99,6 +100,10 @@ class RecoveryFacts:
     has_successor_id: bool = False
     successor_alive: bool = False
     timed_out: bool = False
+    trust_held: bool = False
+    """The successor came up on its folder-trust dialog, so nothing was typed into it then."""
+    successor_on_trust_dialog: bool = False
+    """The successor is still on that dialog."""
 
 
 def recovery_action(state: RolloverState, facts: RecoveryFacts) -> RecoveryAction:
@@ -121,6 +126,14 @@ def recovery_action(state: RolloverState, facts: RecoveryFacts) -> RecoveryActio
         case _S.SUCCESSOR_STARTING:
             if not facts.has_successor_id:
                 return RecoveryAction.GIVE_UP_SUCCESSOR_UNKNOWN
+            if facts.trust_held:
+                # Held on its trust dialog, so never typed to: that is the one successor a
+                # restart may still type to, once trusted -- ADOPTING first, then the keys.
+                if facts.successor_on_trust_dialog:
+                    return RecoveryAction.WAIT
+                if facts.successor_alive:
+                    return RecoveryAction.TYPE_ONCE
+                return RecoveryAction.GIVE_UP_SUCCESSOR_FAILED
             if facts.successor_alive:
                 return RecoveryAction.WAIT
             return RecoveryAction.GIVE_UP_SUCCESSOR_FAILED

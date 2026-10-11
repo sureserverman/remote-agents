@@ -104,6 +104,26 @@ def test_every_non_terminal_state_has_a_recovery_action(
             RecoveryFacts(has_successor_id=True, successor_alive=False),
             RecoveryAction.GIVE_UP_SUCCESSOR_FAILED,
         ),
+        (
+            S.SUCCESSOR_STARTING,
+            RecoveryFacts(has_successor_id=True, trust_held=True, successor_on_trust_dialog=True),
+            RecoveryAction.WAIT,
+        ),
+        (
+            S.SUCCESSOR_STARTING,
+            RecoveryFacts(has_successor_id=True, trust_held=True, successor_alive=True),
+            RecoveryAction.TYPE_ONCE,
+        ),
+        (
+            S.SUCCESSOR_STARTING,
+            RecoveryFacts(has_successor_id=True, trust_held=True),
+            RecoveryAction.GIVE_UP_SUCCESSOR_FAILED,
+        ),
+        (
+            S.SUCCESSOR_STARTING,
+            RecoveryFacts(has_successor_id=False, trust_held=True, successor_on_trust_dialog=True),
+            RecoveryAction.GIVE_UP_SUCCESSOR_UNKNOWN,
+        ),
         (S.ADOPTING, RecoveryFacts(has_successor_id=True, timed_out=False), RecoveryAction.WAIT),
         (
             S.ADOPTING,
@@ -155,3 +175,18 @@ def test_may_stop_predecessor_only_after_acceptance(state: RolloverState) -> Non
     expected = state in {S.SUCCESSOR_ACCEPTED, S.PREDECESSOR_STOPPING}
     assert may_stop_predecessor(state) is expected
     assert may_stop_predecessor(_Row(state)) is expected
+
+
+@pytest.mark.parametrize("state", sorted(set(RolloverState) - {S.SUCCESSOR_STARTING}))
+@pytest.mark.parametrize("facts", ANY_FACTS)
+def test_only_a_trust_held_successor_starting_is_typed_after_a_restart(
+    state: RolloverState, facts: RecoveryFacts
+) -> None:
+    held = RecoveryFacts(
+        has_successor_id=facts.has_successor_id,
+        successor_alive=facts.successor_alive,
+        timed_out=facts.timed_out,
+        trust_held=True,
+    )
+    assert recovery_action(state, facts) is not RecoveryAction.TYPE_ONCE
+    assert recovery_action(state, held) is not RecoveryAction.TYPE_ONCE

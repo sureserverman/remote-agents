@@ -11,6 +11,9 @@ Only sessions of a `rollable` profile -- one whose plan executor writes envelope
   (DEC-114), recording the successor the moment the launch returns;
 - a RUNNING successor is typed the fixed template through the terminal's guarded send, with the
   schedules' retry policy (DEC-099), and moves to ADOPTING once the send is confirmed;
+- a successor that comes up on its folder-trust dialog is held, untyped, in SUCCESSOR_STARTING
+  until the owner trusts it (DEC-125): then ADOPTING is persisted first and the template typed
+  once. The owner is asked by the trust notice every UNTRUSTED session already gets;
 - an `accepted` envelope from that successor moves to SUCCESSOR_ACCEPTED, and only then is the
   predecessor stopped -- gracefully, against an idle pane, never by force (DEC-007).
 
@@ -23,7 +26,7 @@ code it is recorded under:
 - `FAILED: predecessor-gone` -- the predecessor stopped running before its successor was up
 - `FAILED: launch-failed` -- the launch raised, or answered with no session
 - `FAILED: successor-unknown` -- a launch may have happened with no successor recorded
-- `FAILED: successor-untrusted` -- the successor came up on its folder-trust dialog
+- `FAILED: successor-untrusted` -- the successor was not trusted within `TRUST_PATIENCE`
 - `FAILED: successor-failed` -- the successor failed to start, or its pane went away
 - `FAILED: not-typed` -- the template could not be typed, or its send was not confirmed
 - `FAILED: adoption-timeout` -- no `accepted` within `ADOPTION_PATIENCE`
@@ -105,6 +108,17 @@ NOT_IDLE_PATIENCE = timedelta(minutes=10)
 
 ADOPTION_PATIENCE = timedelta(minutes=30)
 
+TRUST_PATIENCE = timedelta(hours=2)
+"""How long a successor may wait on its folder-trust dialog, counted from the hold (DEC-125).
+Long enough for a phone left in another room; meanwhile both sessions only sit idle."""
+
+TRUST_HOLD = "trust-hold: successor on its folder-trust dialog"
+"""The note that holds a rollover for its successor's trust. Its presence is the durable fact
+that nothing was typed at the launch, the one case a later pass may still type."""
+
+TRUSTED_TYPING = "trusted; typing once"
+"""The detail on the ADOPTING move persisted just before typing into a trusted successor."""
+
 REQUEST_PATIENCE = timedelta(hours=24)
 """How long an owner's request waits for the workflow's `ready`, counted from the asking (DEC-119).
 
@@ -182,6 +196,11 @@ class _Seen:
         if root is None and rollover.successor_session_id is not None:
             root = self.roots.get(rollover.successor_session_id)
         return root
+
+    def untrusted(self, session_id: SessionId | None) -> bool:
+        """Whether a successor is up on its folder-trust dialog, waiting on the owner."""
+        record = None if session_id is None else self.sessions.get(session_id)
+        return record is not None and record.state is SessionState.UNTRUSTED
 
     def up(self, session_id: SessionId | None) -> bool:
         """Whether a successor is still there: running, or still recorded as starting."""
@@ -296,6 +315,12 @@ class RolloverPass:
                 successor_alive=seen.up(rollover.successor_session_id),
                 timed_out=rollover.state is _S.ADOPTING
                 and self._now() - rollover.updated_at >= ADOPTION_PATIENCE,
+                trust_held=rollover.state is _S.SUCCESSOR_STARTING
+                and (
+                    seen.untrusted(rollover.successor_session_id)
+                    or await self._trust_hold(rollover) is not None
+                ),
+                successor_on_trust_dialog=seen.untrusted(rollover.successor_session_id),
             )
             action = recovery_action(rollover.state, facts)
             await self._store.note(rollover.id, f"restart: {action.value}", at=self._now())
@@ -494,8 +519,9 @@ class RolloverPass:
                 rollover.id, record.session_id, at=self._now()
             )
         if record.state is SessionState.UNTRUSTED:
-            # Up on its folder-trust dialog: typing would answer the dialog (DEC-099).
-            await self._fail(starting, seen, SUCCESSOR_UNTRUSTED)
+            # Up on its folder-trust dialog: typing would answer the dialog (DEC-099). Held
+            # until the owner trusts it; `_found_starting` takes it from here (DEC-125).
+            await self._store.note(rollover.id, TRUST_HOLD, at=self._now())
             return
         if record.state not in _UP:
             await self._fail(starting, seen, SUCCESSOR_FAILED, record.state.value)
@@ -536,24 +562,62 @@ class RolloverPass:
             await self._sleep(RETRY_SECONDS)
 
     async def _found_starting(self, rollover: Rollover, seen: _Seen) -> None:
-        """A launch this pass did not make just now: a restart, or a pass cut short.
+        """A launch this pass did not make just now: a restart, a pass cut short, or a successor
+        held on its folder-trust dialog.
 
         No successor recorded means a launch may or may not have happened, and there is no
         lookup from the key to a session, so it is given up -- never launched again. A
         recorded, running successor may or may not have been typed to; it is never typed to
         again, only waited on, and the adoption's own patience bounds the wait.
+
+        A successor held on its trust dialog (`TRUST_HOLD`) was never typed to: nothing is
+        typed while it is up. It is waited on for `TRUST_PATIENCE`. Once the owner trusts it,
+        ADOPTING is persisted *before* the template is typed, so a restart part-way finds
+        ADOPTING, which waits and never types (DEC-099: never typed twice).
         """
         if rollover.successor_session_id is None:
             await self._fail(rollover, seen, SUCCESSOR_UNKNOWN)
-        elif seen.up(rollover.successor_session_id):
-            await self._store.advance(
-                rollover.id,
-                _S.ADOPTING,
-                at=self._now(),
-                detail="found starting; the template is never typed twice",
-            )
-        else:
+            return
+        held_at = await self._trust_hold(rollover)
+        if held_at is None and seen.untrusted(rollover.successor_session_id):
+            # On its dialog with no hold recorded: the launch's pass ended between recording the
+            # successor and writing the hold. Nothing was typed (nothing is, onto a dialog), so
+            # it is held from now.
+            await self._store.note(rollover.id, TRUST_HOLD, at=self._now())
+            return
+        if held_at is None:
+            if seen.up(rollover.successor_session_id):
+                await self._store.advance(
+                    rollover.id,
+                    _S.ADOPTING,
+                    at=self._now(),
+                    detail="found starting; the template is never typed twice",
+                )
+            else:
+                await self._fail(rollover, seen, SUCCESSOR_FAILED)
+            return
+        if seen.untrusted(rollover.successor_session_id):
+            if self._now() - held_at >= TRUST_PATIENCE:
+                await self._fail(rollover, seen, SUCCESSOR_UNTRUSTED)
+            return
+        if not seen.up(rollover.successor_session_id):
+            # Declined ("No, exit"), stopped, or failed while it was asking.
             await self._fail(rollover, seen, SUCCESSOR_FAILED)
+            return
+        adopting = await self._store.advance(
+            rollover.id, _S.ADOPTING, at=self._now(), detail=TRUSTED_TYPING
+        )
+        assert adopting.handoff_id is not None  # opened from a `ready`, which names one
+        reason = await self._type_template(rollover.successor_session_id, adopting.handoff_id)
+        if reason is not None:
+            await self._fail(adopting, seen, NOT_TYPED, reason)
+
+    async def _trust_hold(self, rollover: Rollover) -> datetime | None:
+        """When this rollover's successor was held on its trust dialog, or None if it never was."""
+        for event in await self._store.events(rollover.id):
+            if event.detail == TRUST_HOLD:
+                return event.created_at
+        return None
 
     async def _await_adoption(self, rollover: Rollover, seen: _Seen) -> None:
         envelope = self._adoption(rollover, seen)
