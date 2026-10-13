@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import json
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
@@ -45,6 +47,7 @@ from remote_agents.composition.service import (
     ServiceComposition,
     _check_waiting_turns_once,
     _watch_activity_once,
+    _watch_activity_periodically,
 )
 from remote_agents.config import ConfigError, TelegramSecrets
 from remote_agents.domain.models import (
@@ -2887,3 +2890,31 @@ async def test_a_running_session_is_not_filtered_like_an_ended_one(tmp_path) -> 
         assert len(bot.sends) == 1
     finally:
         connection.close()
+
+
+async def test_the_roster_is_published_at_start_not_one_interval_later() -> None:
+    """A roster left by a long stop or a downgrade must not outlive the service's start (DEC-126).
+
+    The hooks trust whatever roster is on disk. Until the first pass rewrote it -- one whole
+    interval after start, 30 s by default -- one written before a stop still named sessions that
+    had ended and lacked any launched since, so their first hooks named nobody.
+    """
+    published = asyncio.Event()
+
+    async def roster() -> None:
+        published.set()
+
+    loop = asyncio.create_task(
+        _watch_activity_periodically(
+            ServiceComposition(
+                SimpleNamespace(), _SilentTerminal(), _SilentReconciler(), hook_roster=roster
+            ),
+            3600.0,
+        )
+    )
+    try:
+        await asyncio.wait_for(published.wait(), timeout=5.0)
+    finally:
+        loop.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await loop

@@ -748,9 +748,24 @@ def live_session_check(store: SessionStore) -> Callable[[str], Awaitable[bool]]:
 
 
 async def _watch_activity_periodically(composition: ServiceComposition, interval: float) -> None:
+    # The roster first, not one interval later: the hooks trust whatever roster is on disk, and
+    # one left by a long stop or a downgrade names sessions that ended and lacks any launched
+    # since (DEC-126). Publishing is not polling, so the watcher's restart baseline is untouched.
+    await _publish_hook_roster(composition)
     while True:
         await asyncio.sleep(interval)
         await _watch_activity_once(composition)
+
+
+async def _publish_hook_roster(composition: ServiceComposition) -> None:
+    """Rewrite the hook rosters from the store -- guarded: a roster that cannot be written costs
+    hooks, never the activity pass."""
+    if composition.hook_roster is None:
+        return
+    try:
+        await composition.hook_roster()
+    except Exception:
+        _LOG.exception("publishing the hook roster failed")
 
 
 async def _watch_activity_once(composition: ServiceComposition) -> None:
@@ -783,13 +798,8 @@ async def _watch_activity_once(composition: ServiceComposition) -> None:
     thread: this coroutine shares its event loop with Telegram long-polling and pane captures,
     and a spool with a backlog would otherwise stall both.
     """
-    if composition.hook_roster is not None:
-        # Before the drain, so a session that ended since the last pass names nobody from here
-        # on. Guarded on its own: a roster that cannot be written costs hooks, not this pass.
-        try:
-            await composition.hook_roster()
-        except Exception:
-            _LOG.exception("publishing the hook roster failed")
+    # Before the drain, so a session that ended since the last pass names nobody from here on.
+    await _publish_hook_roster(composition)
     activities: list[AgentActivity] = []
     if composition.activity_directory is not None:
         try:
