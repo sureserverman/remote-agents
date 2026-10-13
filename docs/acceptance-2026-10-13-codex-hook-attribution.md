@@ -73,15 +73,23 @@ The drill ran once, because each run spends a Codex turn on the owner's account.
 exercises, the spool's roster branch, has a host-side mutation proof
 (`proof/2026-10-13-codex-hook-attribution-plan/1.2/claim-1.json`).
 
+**What the drill does not prove.** A and B work in different folders, so B is the only session in
+its folder. Rule 3 alone names B, and the UUIDv7 time rule (rule 2) is not exercised live. The
+drill also writes the roster itself with `FileHookRoster`, not through the service's publisher.
+Rule 2 is covered by `tests/unit/adapters/agents/test_hook_identity.py`, and the publisher by
+`tests/integration/test_hook_roster.py`. Neither runs against a real daemon. The `cwd` order is
+pinned for `Stop` only. Its place against `prompt` in a `UserPromptSubmit` is not measured.
+
 ## What stays wrong, on purpose
 
-Folder and time are evidence, not proof. The rule in `hook_identity.py` still misfiles three
-cases:
+Folder and time are evidence, not proof. The rule in `hook_identity.py` still misfiles these
+cases, and drops one:
 
 - A Codex the owner starts by hand, in a folder where a managed Codex session is live, is filed
   under that session.
 - With two managed sessions in one folder, a thread the older one opens after the newer one
-  started (a `/new`, a reviewer or subagent thread) is filed under the newer one.
+  started (a `/new`, a reviewer or subagent thread) is filed under the newer one. One the time
+  rule cannot place is filed under neither.
 - A subagent thread is filed under its parent's session, as before.
 
 Each is far narrower than "every Codex event on the host, filed under whichever pane started the

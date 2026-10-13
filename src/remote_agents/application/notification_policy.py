@@ -198,7 +198,8 @@ def current(activities: tuple[AgentActivity, ...]) -> tuple[AgentActivity, ...]:
     keeping a question rather than dropping it.
 
     Applied to what the bot sends, never to what is stored. The feed reads the append-only
-    `agent_activity` table and keeps every row (DEC-037), and the standing message's store only
+    `agent_activity` table and keeps every row it stores (DEC-037; since DEC-126 it stores none
+    for a session that is not live), and the standing message's store only
     ever receives what this left.
     """
     newest = max((activity.observed_at for activity in activities), default=None)

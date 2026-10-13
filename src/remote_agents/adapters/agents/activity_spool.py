@@ -249,9 +249,11 @@ def _fields_in_prefix(raw: bytes, names: tuple[str, ...]) -> dict[str, object]:
     key -- is never read as a key. The walk stops at the first value the cut leaves incomplete:
     a field that comes after the long one is not in the prefix, and is not guessed. Claude
     2.1.282 and Codex 0.155.1 both send `session_id` and `hook_event_name` before `prompt` and
-    `last_assistant_message` (measured 2026-09-25). Where Codex puts `cwd`, which a rostered hook
-    needs, is pinned by `tests/live/test_codex_shared_daemon_attribution.py`; a resumed thread is
-    named without it, and any other loses its record rather than being guessed (DEC-126).
+    `last_assistant_message` (measured 2026-09-25). Codex 0.162.1 sends `cwd`, which a rostered
+    hook needs, before `last_assistant_message` in a `Stop` (pinned by
+    `tests/live/test_codex_shared_daemon_attribution.py`); its place against `prompt` in a
+    `UserPromptSubmit` is not measured. A resumed thread is named without it, and any other loses
+    its record rather than being guessed (DEC-126).
     """
     found: dict[str, object] = {}
     text = raw.decode("utf-8", errors="replace")

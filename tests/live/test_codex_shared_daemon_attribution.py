@@ -97,6 +97,16 @@ def _finished(spool: Path, seconds: float = 180.0) -> list[AgentActivity]:
     pytest.fail(f"no finished turn was spooled in {seconds:.0f}s; drained {drained}")
 
 
+def _written(path: Path, seconds: float = 10.0) -> str:
+    """The copy a sibling Stop hook writes: Codex may still be running it when the record drains."""
+    deadline = time.monotonic() + seconds
+    while time.monotonic() < deadline:
+        if path.is_file() and (text := path.read_text(encoding="utf-8")):
+            return text
+        time.sleep(0.2)
+    pytest.fail(f"the payload-copying Stop hook wrote nothing to {path} in {seconds:.0f}s")
+
+
 def test_a_turn_in_the_second_pane_is_filed_under_the_second_session(tmp_path: Path) -> None:
     if os.environ.get("REMOTE_AGENTS_LIVE_ACCEPTANCE") != "1":
         pytest.skip("BLOCKED: REMOTE_AGENTS_LIVE_ACCEPTANCE is not enabled")
@@ -154,8 +164,12 @@ def test_a_turn_in_the_second_pane_is_filed_under_the_second_session(tmp_path: P
 
         finished = [activity for activity in drained if activity.kind is ActivityKind.COMPLETED]
         assert [str(activity.session_id) for activity in finished] == [str(second)], drained
-        raw = payload_copy.read_text(encoding="utf-8")
+        raw = _written(payload_copy)
         assert raw.index('"cwd"') < raw.index('"last_assistant_message"'), raw
     finally:
-        _tmux(socket, "kill-server")
-        retire_codex_home(codex_home)
+        # The home is retired even when tmux does not answer: a daemon left running from it keeps
+        # an authenticated Codex alive until the host reboots (BL-133).
+        try:
+            _tmux(socket, "kill-server")
+        finally:
+            retire_codex_home(codex_home)

@@ -5,7 +5,7 @@ was launched with names its session. A Codex hook does not: Codex runs every tur
 app-server daemon per `CODEX_HOME`, the pane is only a client of it, and the daemon spawns the
 hook. The daemon carries the environment of whichever pane started it -- measured on 2026-10-13,
 when the `~/.codex` daemon an obsidian-wiki pane had started on 10-08 was still filing an
-engineering-skills session's asks under the obsidian-wiki session five days after it ended.
+engineering-skills session's asks under the obsidian-wiki session four days after it ended.
 
 So for such a provider the service writes a **roster** of its live managed sessions, and the
 hook names its session from what the payload says instead: the provider's own thread id and the
@@ -29,7 +29,7 @@ a thread to the pane that opened it, so the folder and the time are evidence, no
 
 - a Codex the owner starts by hand in a folder where a managed Codex session is live shares the
   daemon, and its threads are filed under that session -- where the environment rule filed
-  nothing, this files them somewhere plausible;
+  them under whichever pane started the daemon, this files them somewhere plausible;
 - with two managed sessions in one folder, a thread the older one opens after the newer one
   started (a `/new`, a reviewer or subagent thread) is filed under the newer one, and one the
   time rule cannot place is filed under neither;
@@ -77,7 +77,7 @@ _HEX = frozenset("0123456789abcdef")
 
 @dataclass(frozen=True, slots=True)
 class RosterEntry:
-    """One running managed session a payload-identified hook may belong to."""
+    """One live managed session (`notifiable`) a payload-identified hook may belong to."""
 
     session_id: str
     workspace: str

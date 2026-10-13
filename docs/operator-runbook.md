@@ -1201,7 +1201,8 @@ python3 -m json.tool ~/.claude/settings.json | grep -c 'remote_agents agent-even
 
 That must report `5` (`4` before 0.49.0, which added `UserPromptSubmit`). Then confirm the guard, which is what makes a global hook safe to install —
 the hook writes nothing and exits 0 when `REMOTE_AGENTS_SESSION_ID` is absent from its
-environment, so a Claude session started outside a managed pane notifies nobody:
+environment, so a Claude session started outside a managed pane notifies nobody (a Codex hook is
+guarded by the roster instead, below):
 
 ```bash
 mkdir -p /tmp/ra-hook-check
@@ -1237,11 +1238,12 @@ you can see still working usually means a nested `claude`. A *sibling* tmux pane
 — the variable never enters the tmux server's environment, only the launched process's — so an
 unrelated pane on the same server is silent, as is any `claude` started outside the managed tree.
 
-**Codex hooks do not read the variable: they run in the shared daemon.** Codex runs every turn in
-one app-server daemon per `CODEX_HOME`, and the pane is only a client of it. The daemon spawns the
-hooks, so they carry the environment of whichever pane started the daemon, which may be a
-session that ended days ago (`docs/acceptance-2026-10-13-codex-hook-attribution.md`). So the
-service keeps a roster of its running Codex sessions at
+**Once the service has written a roster, Codex hooks do not read the variable: they run in the
+shared daemon.** Codex runs every turn in one app-server daemon per `CODEX_HOME`, and the pane is
+only a client of it. The daemon spawns the hooks, so they carry the environment of whichever pane
+started the daemon, which may be a session that ended days ago
+(`docs/acceptance-2026-10-13-codex-hook-attribution.md`). So the service keeps a roster of its
+live Codex sessions (starting, running, or waiting on folder trust) at
 `~/.local/state/remote-agents/activity/identity/codex.json` (mode `0600`). It rewrites it on
 every activity pass and before every launch or resume. When that file exists, a Codex hook names
 its session from the payload's thread id and folder, in this order (DEC-126):
@@ -1253,9 +1255,12 @@ its session from the payload's thread id and folder, in this order (DEC-126):
 4. otherwise nobody's: the hook writes nothing.
 
 With no roster file, as before the service's first pass, the hook falls back to the variable.
-A roster file that others can read or write, that is not the owner's, that is a symlink, or that
-does not parse names nobody.
-Folder and time are evidence, not proof, so three cases are filed wrongly rather than dropped:
+A roster file that others can read or write, that is not the owner's, that is a symlink, that is
+oversized, or that does not parse names nobody. Every Codex session then goes quiet until the next
+activity pass rewrites the file.
+
+Folder and time are evidence, not proof, so some threads are filed under the wrong session, and
+one is filed under none:
 
 - a `codex` you start by hand in a folder where a managed Codex session is live is filed under
   that session;
@@ -1264,9 +1269,11 @@ Folder and time are evidence, not proof, so three cases are filed wrongly rather
   time rule cannot place is filed under neither;
 - a subagent thread is filed under its parent's session.
 
-An unexplained Codex "finished" on a session you can see idle usually means one of these. The
-feed also stores nothing for a session that is not running or starting, so an event that reaches
-an ended session is dropped rather than shown (DEC-031).
+An unexplained Codex "finished" on a session you can see idle usually means one of these. A
+`Stop` filed under nobody also leaves that session's turn marker in place, so the session reads
+busy until the service sees on screen that the turn is over. The feed also stores nothing for a
+session that is not live, for every provider, so an event that reaches an ended session is dropped
+rather than shown (DEC-031, DEC-126). If the store cannot be read, the event is stored anyway.
 
 ### Removing the hooks
 
