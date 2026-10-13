@@ -11,7 +11,7 @@ from types import MappingProxyType
 
 from remote_agents.adapters.agents.hook_settings import _HookProvider
 from remote_agents.ports.agent_activity import ActivityKind, ActivitySource
-from remote_agents.ports.provider_descriptor import EventLicence, HookLicence
+from remote_agents.ports.provider_descriptor import EventLicence, HookIdentity, HookLicence
 
 #: `UserPromptSubmit` joined 2026-09-24 (BL-108, DEC-104) to start the turn marker. Codex 0.155.1
 #: was measured firing it by that name, beside `SessionStart`, in a hook-event log that day. Two
@@ -203,5 +203,9 @@ HOOK_LICENCE = HookLicence(
     # it, not a claim this licence makes about the hook.
     reports=frozenset({ActivityKind.COMPLETED, ActivityKind.NEEDS_ANSWER}),
     admits=_the_owner_answers,
+    # Codex runs every turn, and so every hook, in its per-home app-server daemon. The daemon
+    # carries the environment of whichever pane started it, so the variable names the wrong
+    # session -- measured 2026-10-13 on codex-cli 0.162.1 (DEC-126).
+    identity=HookIdentity.PAYLOAD_THREAD,
 )
 """What Codex's activity hook may record (BL-050); the descriptor's `activity` is this value."""

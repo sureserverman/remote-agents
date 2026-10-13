@@ -30,6 +30,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping
 from dataclasses import MISSING, dataclass, fields
+from enum import Enum
 
 from remote_agents.domain.models import ProfileId
 from remote_agents.ports.agent_activity import ActivityKind, ActivitySource
@@ -198,6 +199,21 @@ class EventLicence:
     """
 
 
+class HookIdentity(Enum):
+    """Where a provider's hook learns which managed session an event belongs to (DEC-126).
+
+    `ENVIRONMENT`: the session variable the managed pane was launched with. Right for a hook the
+    agent spawns itself, as a descendant of the pane.
+
+    `PAYLOAD_THREAD`: the payload's own thread id and folder, resolved against the roster the
+    service writes (`adapters/agents/hook_identity`). Right for a hook spawned by a daemon the
+    pane is only a client of, which carries the environment of whichever pane started it.
+    """
+
+    ENVIRONMENT = "environment"
+    PAYLOAD_THREAD = "payload-thread"
+
+
 @dataclass(frozen=True, slots=True, eq=False)
 class HookLicence:
     """What one provider's activity hook may admit and keep, declared by its vertical (BL-050).
@@ -242,6 +258,14 @@ class HookLicence:
     admits: Callable[[Mapping[str, object]], bool] | None = None
     """A predicate over the whole payload, checked after the event is admitted; None admits
     every listed event. Codex's reviewer rule (DEC-112) and Cursor's `status == "completed"`."""
+
+    identity: HookIdentity = HookIdentity.ENVIRONMENT
+    """Where the hook learns its session: the pane's environment, or its payload (DEC-126).
+
+    Read by the service, which writes a roster only for `PAYLOAD_THREAD` providers. The hook
+    never reads this field -- the licence loads only past its gate -- and asks instead whether a
+    roster for its own hook name exists.
+    """
 
 
 @dataclass(frozen=True, slots=True)

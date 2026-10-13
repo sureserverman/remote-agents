@@ -1,0 +1,28 @@
+{
+ "baseline": {
+  "elapsed_s": 29.0,
+  "exit": 0,
+  "tail": "........................................................................ [ 26%]\n.s.ss........................s.......................................... [ 53%]\n..............s...s..................................................... [ 80%]\n......................................................                   [100%]\n=========================== short test summary info ============================\nSKIPPED [1] tests/provider_contract/kit.py:39: unsupported by declaration: claude's toggle is a pane action, not a host one; the registry declares None [requirements.py]\nSKIPPED [1] tests/provider_contract/kit.py:39: unsupported by declaration: opencode has no remote control; the registry declares None [requirements.py]\nSKIPPED [1] tests/provider_contract/kit.py:39: unsupported by declaration: cursor has no remote control; the registry declares None [requirements.py]\nSKIPPED [1] tests/provider_contract/kit.py:39: unsupported by declaration: no limit sentence measured for opencode; the registry declares None [requirements.py]\nSKIPPED [2] tests/provider_contract/kit.py:39: unsupported by declaration: opencode raises no folder-trust dialog at all; the registry declares None [requirements.py]\n264 passed, 6 skipped in 28.70s"
+ },
+ "break_patch": "--- a/src/remote_agents/adapters/agents/codex/hooks.py\n+++ b/src/remote_agents/adapters/agents/codex/hooks.py\n@@ -206,6 +206,6 @@\n     # Codex runs every turn, and so every hook, in its per-home app-server daemon. The daemon\n     # carries the environment of whichever pane started it, so the variable names the wrong\n     # session -- measured 2026-10-13 on codex-cli 0.162.1 (DEC-126).\n-    identity=HookIdentity.PAYLOAD_THREAD,\n+    identity=HookIdentity.ENVIRONMENT,\n )\n \"\"\"What Codex's activity hook may record (BL-050); the descriptor's `activity` is this value.\"\"\"\n",
+ "build": null,
+ "created": "2026-10-13T19:02:07+00:00",
+ "fingerprint": "72212f16a3ab1da890295e520d75482bb2b417d5c1d89c457870a7e491164b03",
+ "index": 1,
+ "kind": "claim",
+ "named_break": null,
+ "no_build_reason": "pure Python",
+ "plan": "/mnt/vault/Portfolio/infra/remote-agents/plans/2026-10-13-codex-hook-attribution-plan.md",
+ "red": {
+  "elapsed_s": 29.1,
+  "exit": 1,
+  "tail": "........................................................................ [ 26%]\n.s.ss........................s.......................................... [ 53%]\n..............s...s........................................F............ [ 80%]\n......................................................                   [100%]\n=================================== FAILURES ===================================\n_____________ test_codex_names_its_session_from_the_payload_thread _____________\n\n    def test_codex_names_its_session_from_the_payload_thread() -> None:\n        \"\"\"Measured 2026-10-13: Codex 0.162.1 spawns hooks from its app-server daemon (DEC-126).\"\"\"\n        licence = hook_licence(\"codex\")\n    \n        assert licence is not None\n>       assert licence.identity is HookIdentity.PAYLOAD_THREAD\nE       AssertionError: assert <HookIdentity.ENVIRONMENT: 'environment'> is <HookIdentity.PAYLOAD_THREAD: 'payload-thread'>\nE        +  where <HookIdentity.ENVIRONMENT: 'environment'> = HookLicence(events=mappingproxy({'Stop': EventLicence(discriminating_fields=(), detail_fields=('last_assistant_message...vents=None, admits=<function _the_owner_answers at 0x7c54b6f6f5e0>, identity=<HookIdentity.ENVIRONMENT: 'environment'>).identity\nE        +  and   <HookIdentity.PAYLOAD_THREAD: 'payload-thread'> = HookIdentity.PAYLOAD_THREAD\n\ntests/unit/adapters/agents/codex/test_hook_licence_identity.py:17: AssertionError\n=========================== short test summary info ============================\nSKIPPED [1] tests/provider_contract/kit.py:39: unsupported by declaration: claude's toggle is a pane action, not a host one; the registry declares None [requirements.py]\nSKIPPED [1] tests/provider_contract/kit.py:39: unsupported by declaration: opencode has no remote control; the registry declares None [requirements.py]\nSKIPPED [1] tests/provider_contract/kit.py:39: unsupported by declaration: cursor has no remote control; the registry declares None [requirements.py]\nSKIPPED [1] tests/provider_contract/kit.py:39: unsupported by declaration: no limit sentence measured for opencode; the registry declares None [requirements.py]\nSKIPPED [2] tests/provider_contract/kit.py:39: unsupported by declaration: opencode raises no folder-trust dialog at all; the registry declares None [requirements.py]\nFAILED tests/unit/adapters/agents/codex/test_hook_licence_identity.py::test_codex_names_its_session_from_the_payload_thread\n1 failed, 263 passed, 6 skipped in 28.75s"
+ },
+ "schema": 2,
+ "task": "1.3",
+ "test": "uv run --locked pytest tests/provider_contract tests/architecture/test_shared_modules_name_no_provider.py tests/unit/adapters/agents/codex -q -p no:randomly",
+ "text": "`uv run --locked pytest tests/provider_contract tests/architecture/test_shared_modules_name_no_provider.py tests/unit/adapters/agents/codex -q -p no:randomly`",
+ "touched": [
+  "src/remote_agents/adapters/agents/codex/hooks.py"
+ ]
+}
