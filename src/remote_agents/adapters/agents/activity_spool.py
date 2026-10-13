@@ -5,12 +5,13 @@ things about it. The first is that it must never fail loudly: anything raised he
 the session the operator is working in, so losing one activity record is always the lesser
 failure and every path below ends in exit status zero. The second is that it is reachable by
 any agent on the machine, so the environment variable the service exports decides whether to
-spool at all: absent or malformed, this writes nothing. That is a guarantee about a session
-that merely *doesn't have* the variable - the ordinary case of an operator running claude by
-hand - and it is worth stating exactly that narrowly. It is not a guarantee against a process
-that sets the variable deliberately, and no check here could be: the spool is owner-only, the
-hook runs as that owner, and anything else running as that owner can write into the directory
-without going through this file at all.
+spool at all: absent or malformed, this writes nothing. (For a provider the service writes a
+roster for, the payload decides instead -- `spool_agent_event` says why, DEC-126.) That is a
+guarantee about a session that merely *doesn't have* the variable - the ordinary case of an
+operator running claude by hand - and it is worth stating exactly that narrowly. It is not a
+guarantee against a process that sets the variable deliberately, and no check here could be:
+the spool is owner-only, the hook runs as that owner, and anything else running as that owner
+can write into the directory without going through this file at all.
 
 What the guard below does buy, which the variable cannot, is that an *authorized* record
 lands where it was meant to. Deciding who may spool says nothing about where the spool goes,
@@ -36,6 +37,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import IO, TYPE_CHECKING
 
+from remote_agents.adapters.agents.hook_identity import read_roster, resolve, roster_path
 from remote_agents.adapters.agents.turn_markers import FileTurnMarkers
 from remote_agents.ports.agent_activity import bounded_detail_line
 from remote_agents.ports.private_directory import open_private_directory
@@ -117,6 +119,7 @@ def spool_agent_event(
     *,
     activity_directory: Path,
     licence: Callable[[], HookLicence | None],
+    hook_name: str | None = None,
     environment: Mapping[str, str] = os.environ,
     now: Callable[[], datetime] = lambda: datetime.now(UTC),
     markers: TurnMarkers | None = None,
@@ -134,11 +137,23 @@ def spool_agent_event(
     and a broken vertical raised into the agent before this frame could swallow it. It is also
     never called before a finished turn ends its marker, which needs no licence. Required, so a
     caller cannot forget it and get silence by default.
+
+    **Whose event it is.** When the service has written a roster for `hook_name`, the payload
+    names the session and the environment is not read at all (DEC-126): a provider that runs its
+    hooks in a shared daemon hands every hook the environment of whichever pane started that
+    daemon, so the variable names the wrong session -- or an ended one, or none. With no roster
+    the variable decides, as it always has. Reading the roster is one `open` that fails on the
+    "not mine" path of every provider the service writes none for.
     """
     try:
-        session_id = safe_session_id(environment.get(SESSION_ID_VARIABLE))
-        if session_id is None:
-            return 0
+        roster = (
+            None if hook_name is None else read_roster(roster_path(activity_directory, hook_name))
+        )
+        session_id = None
+        if roster is None:
+            session_id = safe_session_id(environment.get(SESSION_ID_VARIABLE))
+            if session_id is None:
+                return 0
         raw = payload.read(MAXIMUM_PAYLOAD_BYTES + 1)
         document = _document(raw)
         if document is not None:
@@ -150,6 +165,11 @@ def spool_agent_event(
             fields = _fields_in_prefix(raw, _MARKER_FIELDS)
         else:
             return 0
+        if roster is not None:
+            # The folder is compared inside `resolve` and goes no further (DEC-013 clause 2).
+            session_id = resolve(fields.get("session_id"), fields.get("cwd"), roster)
+            if session_id is None:
+                return 0
         event = fields.get("hook_event_name")
         # The agent's own id for its session, not the pane's: an agent started inside a managed
         # pane inherits the pane's id, and only this tells its hooks from its parent's.
@@ -212,8 +232,9 @@ def _document(raw: bytes) -> dict | None:
 
 _DECODER = json.JSONDecoder()
 _BLANK = re.compile(r"[ \t\n\r]*")
-#: What the marker step reads from a payload: the event, and the agent's own id for its session.
-_MARKER_FIELDS = ("hook_event_name", "session_id")
+#: What the marker step reads from a payload: the event, the agent's own id for its session, and
+#: the folder its turn runs in -- which a rostered hook needs to name its session at all.
+_MARKER_FIELDS = ("hook_event_name", "session_id", "cwd")
 
 
 def _fields_in_prefix(raw: bytes, names: tuple[str, ...]) -> dict[str, object]:

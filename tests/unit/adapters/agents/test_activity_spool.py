@@ -19,6 +19,7 @@ from remote_agents.adapters.agents.activity_spool import (
     spool_agent_event,
 )
 from remote_agents.adapters.agents.codex import hooks as codex_hooks
+from remote_agents.adapters.agents.hook_identity import RosterEntry, roster_path, write_roster
 from remote_agents.adapters.agents.hook_licences import hook_licence
 from remote_agents.ports.agent_activity import MAXIMUM_DETAIL_CHARACTERS
 
@@ -74,7 +75,7 @@ def _run(
     # A misspelt provider would get no licence, and every "writes nothing" test below would
     # then pass without testing anything; only the one deliberate stranger may have none.
     assert licence is not None or provider == _UNDECLARED, f"{provider} has no hook licence"
-    arguments = {"now": _clock(), "licence": lambda: licence}
+    arguments = {"now": _clock(), "licence": lambda: licence, "hook_name": provider}
     arguments.update(overrides)
     return spool_agent_event(
         stream, activity_directory=directory, environment=environment, **arguments
@@ -1186,3 +1187,184 @@ def test_cursor_admits_no_event_but_stop(event: str, tmp_path: Path) -> None:
     )
 
     assert list(directory.iterdir()) == []
+
+
+# -- A hook whose provider has a roster is named by its payload, not its environment (DEC-126) --
+
+#: The 2026-10-13 incident's thread: minted 16:14:01.574 UTC by the engineering-skills pane, but
+#: run by a daemon the obsidian-wiki pane had started, whose session variable it inherited.
+_INCIDENT_THREAD = "01a1360a-d366-7913-abdc-27aa12faf338"
+_ASKING = "8b4f34c9-92c9-45db-bb45-1ab0c24dd7bb"
+_DAEMON_STARTER = "840f2da2-543c-4299-b676-fe8d10895be3"
+
+
+def _codex_payload(workspace: Path, event: str = "Stop") -> dict[str, Any]:
+    return {
+        **_STOP_PAYLOAD,
+        "session_id": _INCIDENT_THREAD,
+        "cwd": str(workspace),
+        "hook_event_name": event,
+        "last_assistant_message": "Allow the read-only planning-plugin probe?",
+    }
+
+
+def _roster(directory: Path, *entries: RosterEntry) -> None:
+    write_roster(roster_path(directory, "codex"), entries)
+
+
+def _asking_pane(workspace: Path) -> RosterEntry:
+    return RosterEntry(
+        _ASKING, str(workspace.resolve()), datetime(2026, 10, 13, 16, 14, 0, 387761, tzinfo=UTC)
+    )
+
+
+def test_a_rostered_hook_names_the_pane_that_asked_not_the_daemons_starter(
+    tmp_path: Path,
+) -> None:
+    directory = _spool(tmp_path)
+    workspace = tmp_path / "engineering-skills"
+    workspace.mkdir()
+    _roster(directory, _asking_pane(workspace))
+
+    assert (
+        _run(_stream(_codex_payload(workspace)), directory, _DAEMON_STARTER, provider="codex") == 0
+    )
+
+    assert [record["session_id"] for record in map(_read, _records(directory))] == [_ASKING]
+
+
+def test_a_rostered_hook_that_resolves_to_nobody_writes_nothing_whatever_its_environment(
+    tmp_path: Path,
+) -> None:
+    directory = _spool(tmp_path)
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    workspace = tmp_path / "engineering-skills"
+    workspace.mkdir()
+    _roster(directory, _asking_pane(elsewhere))
+
+    for event in ("UserPromptSubmit", "Stop", "PermissionRequest"):
+        payload = _codex_payload(workspace, event)
+        assert _run(_stream(payload), directory, _DAEMON_STARTER, provider="codex") == 0
+
+    assert _records(directory) == []
+    assert not (directory / "turns").exists()
+
+
+def test_an_empty_roster_names_nobody_even_with_an_environment_id(tmp_path: Path) -> None:
+    directory = _spool(tmp_path)
+    _roster(directory)
+
+    assert (
+        _run(_stream(_codex_payload(tmp_path)), directory, _DAEMON_STARTER, provider="codex") == 0
+    )
+
+    assert _records(directory) == []
+
+
+def test_a_rostered_hook_needs_no_environment_id(tmp_path: Path) -> None:
+    """A daemon started outside any managed pane carries no variable, and must still be heard."""
+    directory = _spool(tmp_path)
+    workspace = tmp_path / "engineering-skills"
+    workspace.mkdir()
+    _roster(directory, _asking_pane(workspace))
+
+    assert _run(_stream(_codex_payload(workspace)), directory, None, provider="codex") == 0
+
+    assert [record["session_id"] for record in map(_read, _records(directory))] == [_ASKING]
+
+
+def test_a_rostered_submit_starts_the_resolved_sessions_marker(tmp_path: Path) -> None:
+    directory = _spool(tmp_path)
+    workspace = tmp_path / "engineering-skills"
+    workspace.mkdir()
+    _roster(directory, _asking_pane(workspace))
+    submit = {**_SUBMIT_PAYLOAD, "session_id": _INCIDENT_THREAD, "cwd": str(workspace)}
+
+    _run(_stream(submit), directory, _DAEMON_STARTER, provider="codex")
+
+    assert _marker(directory, _ASKING).read_bytes() == _INCIDENT_THREAD.encode()
+    assert not _marker(directory, _DAEMON_STARTER).exists()
+
+
+def test_an_oversized_rostered_submit_still_finds_its_session_from_the_prefix(
+    tmp_path: Path,
+) -> None:
+    directory = _spool(tmp_path)
+    workspace = tmp_path / "engineering-skills"
+    workspace.mkdir()
+    _roster(directory, _asking_pane(workspace))
+    submit = {
+        "session_id": _INCIDENT_THREAD,
+        "cwd": str(workspace),
+        "hook_event_name": "UserPromptSubmit",
+        "prompt": "x" * (MAXIMUM_PAYLOAD_BYTES * 2),
+    }
+
+    _run(_stream(submit), directory, _DAEMON_STARTER, provider="codex")
+
+    assert _marker(directory, _ASKING).is_file()
+
+
+def test_another_providers_roster_does_not_change_this_hooks_identity(tmp_path: Path) -> None:
+    directory = _spool(tmp_path)
+    _roster(directory)  # Codex's, and empty
+
+    assert _run(_stream(_STOP_PAYLOAD), directory, "s-42", provider="claude") == 0
+
+    assert [record["session_id"] for record in map(_read, _records(directory))] == ["s-42"]
+
+
+def test_a_rostered_record_never_carries_the_payloads_folder(tmp_path: Path) -> None:
+    directory = _spool(tmp_path)
+    workspace = tmp_path / "a-folder-name-nobody-else-uses"
+    workspace.mkdir()
+    _roster(directory, _asking_pane(workspace))
+
+    _run(_stream(_codex_payload(workspace)), directory, None, provider="codex")
+
+    (record,) = _records(directory)
+    assert workspace.name.encode() not in record.read_bytes()
+
+
+def test_a_roster_others_can_read_redirects_nothing_and_falls_back_to_nothing(
+    tmp_path: Path,
+) -> None:
+    """A roster that is not the service's names nobody; it never hands control back to the env."""
+    directory = _spool(tmp_path)
+    workspace = tmp_path / "engineering-skills"
+    workspace.mkdir()
+    _roster(directory, _asking_pane(workspace))
+    roster_path(directory, "codex").chmod(0o644)
+
+    assert (
+        _run(_stream(_codex_payload(workspace)), directory, _DAEMON_STARTER, provider="codex") == 0
+    )
+
+    assert _records(directory) == []
+
+
+def test_an_unresolved_stop_ends_no_marker_and_a_resolved_one_ends_only_its_own(
+    tmp_path: Path,
+) -> None:
+    directory = _spool(tmp_path)
+    workspace = tmp_path / "engineering-skills"
+    workspace.mkdir()
+    _roster(directory, _asking_pane(workspace))
+    submit = {**_SUBMIT_PAYLOAD, "session_id": _INCIDENT_THREAD, "cwd": str(workspace)}
+    _run(_stream(submit), directory, _DAEMON_STARTER, provider="codex")
+    # The daemon starter's own turn, marked by a pane-local hook before it ended.
+    _run(_stream(_SUBMIT_PAYLOAD), directory, _DAEMON_STARTER, provider="claude")
+
+    stray = _codex_payload(tmp_path / "nowhere")
+    _run(_stream(stray), directory, _DAEMON_STARTER, provider="codex")
+    assert _marker(directory, _ASKING).is_file()
+    assert _marker(directory, _DAEMON_STARTER).is_file()
+
+    _run(_stream(_codex_payload(workspace)), directory, _DAEMON_STARTER, provider="codex")
+    assert not _marker(directory, _ASKING).exists()
+    assert _marker(directory, _DAEMON_STARTER).is_file()
+
+
+def _read(path: Path) -> dict[str, Any]:
+    return json.loads(path.read_text(encoding="utf-8"))

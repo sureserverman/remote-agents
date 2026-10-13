@@ -67,7 +67,9 @@ def spool_from_stdin(activity_directory: Path | None, *, provider: str = "claude
 
         return hook_licence(provider)
 
-    return spool_agent_event(payload, activity_directory=resolved, licence=licence)
+    return spool_agent_event(
+        payload, activity_directory=resolved, licence=licence, hook_name=provider
+    )
 
 
 def run_agent_event(argv: list[str] | None = None) -> int:

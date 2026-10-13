@@ -1,0 +1,28 @@
+{
+ "baseline": {
+  "elapsed_s": 45.6,
+  "exit": 0,
+  "tail": "........................................................................ [ 16%]\n........................................................................ [ 32%]\n........................................................................ [ 48%]\n........................................................................ [ 64%]\n........................................................................ [ 80%]\n........................................................................ [ 97%]\n.............                                                            [100%]\n445 passed in 43.07s"
+ },
+ "break_patch": "--- a/src/remote_agents/adapters/agents/activity_spool.py\n+++ b/src/remote_agents/adapters/agents/activity_spool.py\n@@ -147,7 +147,7 @@\n     \"\"\"\n     try:\n         roster = (\n-            None if hook_name is None else read_roster(roster_path(activity_directory, hook_name))\n+            None\n         )\n         session_id = None\n         if roster is None:\n",
+ "build": null,
+ "created": "2026-10-13T19:00:58+00:00",
+ "fingerprint": "00a4bc468eda6a37038ca47bb06d3f3f02343c73d3aa618fbcc829aa790c13fd",
+ "index": 1,
+ "kind": "claim",
+ "named_break": null,
+ "no_build_reason": "pure Python",
+ "plan": "/mnt/vault/Portfolio/infra/remote-agents/plans/2026-10-13-codex-hook-attribution-plan.md",
+ "red": {
+  "elapsed_s": 45.8,
+  "exit": 1,
+  "tail": "E         Left contains one more item: PosixPath('/tmp/pytest-of-user/pytest-1555/test_a_roster_others_can_read_0/activity/840f2da2-543c-4299-b676-fe8d10895be3-20260811T142233123456Z.json')\nE         Use -v to get more diff\n\ntests/unit/adapters/agents/test_activity_spool.py:1344: AssertionError\n_ test_an_unresolved_stop_ends_no_marker_and_a_resolved_one_ends_only_its_own __\n\ntmp_path = PosixPath('/tmp/pytest-of-user/pytest-1555/test_an_unresolved_stop_ends_n0')\n\n    def test_an_unresolved_stop_ends_no_marker_and_a_resolved_one_ends_only_its_own(\n        tmp_path: Path,\n    ) -> None:\n        directory = _spool(tmp_path)\n        workspace = tmp_path / \"engineering-skills\"\n        workspace.mkdir()\n        _roster(directory, _asking_pane(workspace))\n        submit = {**_SUBMIT_PAYLOAD, \"session_id\": _INCIDENT_THREAD, \"cwd\": str(workspace)}\n        _run(_stream(submit), directory, _DAEMON_STARTER, provider=\"codex\")\n        # The daemon starter's own turn, marked by a pane-local hook before it ended.\n        _run(_stream(_SUBMIT_PAYLOAD), directory, _DAEMON_STARTER, provider=\"claude\")\n    \n        stray = _codex_payload(tmp_path / \"nowhere\")\n        _run(_stream(stray), directory, _DAEMON_STARTER, provider=\"codex\")\n>       assert _marker(directory, _ASKING).is_file()\nE       AssertionError: assert False\nE        +  where False = is_file()\nE        +    where is_file = PosixPath('/tmp/pytest-of-user/pytest-1555/test_an_unresolved_stop_ends_n0/activity/turns/8b4f34c9-92c9-45db-bb45-1ab0c24dd7bb').is_file\nE        +      where PosixPath('/tmp/pytest-of-user/pytest-1555/test_an_unresolved_stop_ends_n0/activity/turns/8b4f34c9-92c9-45db-bb45-1ab0c24dd7bb') = _marker(PosixPath('/tmp/pytest-of-user/pytest-1555/test_an_unresolved_stop_ends_n0/activity'), '8b4f34c9-92c9-45db-bb45-1ab0c24dd7bb')\n\ntests/unit/adapters/agents/test_activity_spool.py:1361: AssertionError\n=========================== short test summary info ============================\nFAILED tests/unit/adapters/agents/test_activity_spool.py::test_a_rostered_hook_names_the_pane_that_asked_not_the_daemons_starter\nFAILED tests/unit/adapters/agents/test_activity_spool.py::test_a_rostered_hook_that_resolves_to_nobody_writes_nothing_whatever_its_environment\nFAILED tests/unit/adapters/agents/test_activity_spool.py::test_an_empty_roster_names_nobody_even_with_an_environment_id\nFAILED tests/unit/adapters/agents/test_activity_spool.py::test_a_rostered_hook_needs_no_environment_id\nFAILED tests/unit/adapters/agents/test_activity_spool.py::test_a_rostered_submit_starts_the_resolved_sessions_marker\nFAILED tests/unit/adapters/agents/test_activity_spool.py::test_an_oversized_rostered_submit_still_finds_its_session_from_the_prefix\nFAILED tests/unit/adapters/agents/test_activity_spool.py::test_a_rostered_record_never_carries_the_payloads_folder\nFAILED tests/unit/adapters/agents/test_activity_spool.py::test_a_roster_others_can_read_redirects_nothing_and_falls_back_to_nothing\nFAILED tests/unit/adapters/agents/test_activity_spool.py::test_an_unresolved_stop_ends_no_marker_and_a_resolved_one_ends_only_its_own\n9 failed, 436 passed in 43.20s"
+ },
+ "schema": 2,
+ "task": "1.2",
+ "test": "uv run --locked pytest tests/unit/adapters/agents/test_activity_spool.py tests/unit/test_entry_routing.py tests/architecture tests/security/test_the_hook_keeps_no_prompt_words.py -q -p no:randomly",
+ "text": "`uv run --locked pytest tests/unit/adapters/agents/test_activity_spool.py tests/unit/test_entry_routing.py tests/architecture tests/security/test_the_hook_keeps_no_prompt_words.py -q -p no:randomly`",
+ "touched": [
+  "src/remote_agents/adapters/agents/activity_spool.py"
+ ]
+}
