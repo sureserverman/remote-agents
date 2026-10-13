@@ -135,12 +135,14 @@ def read_roster(path: Path) -> tuple[RosterEntry, ...] | None:
     The two answers mean different things to the hook. None means the service never wrote one,
     so the hook keeps the environment rule it had. An empty tuple means the service has spoken
     and names nobody -- which is also the answer for a file that is not the service's: a
-    symlink, a file others may read or write, one owned by someone else, or one that does not
-    parse. Failing closed costs a notification; failing open is the incident this module exists
-    to end.
+    symlink, a pipe or anything else that is not a regular file, a file others may read or
+    write, one owned by someone else, or one that does not parse. Failing closed costs a
+    notification; failing open is the incident this module exists to end.
     """
     try:
-        descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
+        # Non-blocking, because opening a pipe for reading waits for a writer, and this runs in
+        # every Codex turn; the regular-file check below then refuses it.
+        descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC | os.O_NONBLOCK)
     except FileNotFoundError:
         return None
     except OSError:

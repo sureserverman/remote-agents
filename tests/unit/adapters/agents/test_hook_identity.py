@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import threading
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -293,3 +294,24 @@ def test_a_roster_too_large_for_the_hook_to_read_is_refused_at_write(tmp_path: P
 
     with pytest.raises(ValueError):
         write_roster(roster_path(tmp_path, "codex"), entries)
+
+
+def test_a_pipe_where_the_roster_belongs_names_nobody_without_blocking(tmp_path: Path) -> None:
+    """The hook runs in every Codex turn, and opening a FIFO for reading waits for a writer.
+
+    A pipe is not the service's file, so it names nobody -- but only if the open returns: a
+    blocking open would hang every Codex hook on the host until something wrote to it.
+    """
+    path = roster_path(tmp_path, "codex")
+    path.parent.mkdir(mode=0o700)
+    os.mkfifo(path, 0o600)
+    answer: list[object] = []
+    reader = threading.Thread(target=lambda: answer.append(read_roster(path)), daemon=True)
+    reader.start()
+    reader.join(timeout=5.0)
+    if reader.is_alive():
+        # Release the blocked open so the thread ends, then fail on what was measured.
+        os.close(os.open(path, os.O_WRONLY | os.O_NONBLOCK))
+        reader.join(timeout=5.0)
+        pytest.fail("reading a roster that is a pipe blocked until a writer came")
+    assert answer == [()]
