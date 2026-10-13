@@ -5,13 +5,17 @@ things about it. The first is that it must never fail loudly: anything raised he
 the session the operator is working in, so losing one activity record is always the lesser
 failure and every path below ends in exit status zero. The second is that it is reachable by
 any agent on the machine, so the environment variable the service exports decides whether to
-spool at all: absent or malformed, this writes nothing. (For a provider the service writes a
-roster for, the payload decides instead -- `spool_agent_event` says why, DEC-126.) That is a
-guarantee about a session that merely *doesn't have* the variable - the ordinary case of an
-operator running claude by hand - and it is worth stating exactly that narrowly. It is not a
-guarantee against a process that sets the variable deliberately, and no check here could be:
-the spool is owner-only, the hook runs as that owner, and anything else running as that owner
-can write into the directory without going through this file at all.
+spool at all: absent or malformed, this writes nothing. That is a guarantee about a session
+that merely *doesn't have* the variable - the ordinary case of an operator running claude by
+hand - and it is worth stating exactly that narrowly. It is not a guarantee against a process
+that sets the variable deliberately, and no check here could be: the spool is owner-only, the
+hook runs as that owner, and anything else running as that owner can write into the directory
+without going through this file at all.
+
+For a provider the service writes a roster for, the payload decides instead of the variable, and
+the guarantee is weaker: a Codex the owner starts by hand in a folder where a managed Codex
+session is live is filed under that session (`spool_agent_event` and `hook_identity` say why,
+DEC-126).
 
 What the guard below does buy, which the variable cannot, is that an *authorized* record
 lands where it was meant to. Deciding who may spool says nothing about where the spool goes,
@@ -245,7 +249,9 @@ def _fields_in_prefix(raw: bytes, names: tuple[str, ...]) -> dict[str, object]:
     key -- is never read as a key. The walk stops at the first value the cut leaves incomplete:
     a field that comes after the long one is not in the prefix, and is not guessed. Claude
     2.1.282 and Codex 0.155.1 both send `session_id` and `hook_event_name` before `prompt` and
-    `last_assistant_message` (measured 2026-09-25).
+    `last_assistant_message` (measured 2026-09-25). Where Codex puts `cwd`, which a rostered hook
+    needs, is pinned by `tests/live/test_codex_shared_daemon_attribution.py`; a resumed thread is
+    named without it, and any other loses its record rather than being guessed (DEC-126).
     """
     found: dict[str, object] = {}
     text = raw.decode("utf-8", errors="replace")

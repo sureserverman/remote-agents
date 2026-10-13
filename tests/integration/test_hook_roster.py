@@ -157,3 +157,52 @@ async def test_the_roster_is_private_and_another_providers_sessions_stay_off_it(
     assert stat.S_IMODE(path.stat().st_mode) == 0o600
     assert rig.roster() == ()
     assert rig.roster("claude") is None
+
+
+async def test_a_publish_that_read_the_store_before_a_launch_never_leaves_it_off(
+    tmp_path: Path,
+) -> None:
+    """Two publishers -- the pass and a launch, or the bot and the console -- race.
+
+    The pass lists the store, a launch saves its record and publishes, and only then does the
+    pass's older list land. Whatever order the writes take, the roster must end with the launch
+    on it, or that session's first hooks name nobody until the next pass.
+    """
+    import asyncio
+
+    rig = _Rig(tmp_path)
+    early = await rig.record()
+    listed = asyncio.Event()
+    release = asyncio.Event()
+
+    class _PausingStore:
+        """The real store, holding the stale publisher after its first list."""
+
+        def __init__(self) -> None:
+            self.calls = 0
+
+        async def list(self, states=None):  # type: ignore[no-untyped-def]
+            records = await rig.store.list(states)
+            self.calls += 1
+            if self.calls == 1:
+                listed.set()
+                await release.wait()
+            return records
+
+    stale = HookRosterPublisher(
+        _PausingStore(),  # type: ignore[arg-type]
+        rig.publisher._folder_for,
+        profiles_named_by_payload(),
+        FileHookRoster(rig.spool),
+    )
+    pending = asyncio.create_task(stale.publish())
+    await listed.wait()
+    launched = await rig.record()
+    await rig.publisher.publish()
+    release.set()
+    await pending
+
+    assert {entry.session_id for entry in rig.roster() or ()} == {
+        str(early.session_id),
+        str(launched.session_id),
+    }

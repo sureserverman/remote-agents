@@ -443,7 +443,7 @@ class SessionService:
         try:
             await self._before_pane()
         except Exception:
-            _LOG.exception("could not announce a session before its pane started")
+            _LOG.exception("could not publish which sessions are live")
 
     async def _remote_control_at_launch(self, profile_id: ProfileId) -> bool:
         """Whether this launch carries the remote-control flag, read now rather than remembered.

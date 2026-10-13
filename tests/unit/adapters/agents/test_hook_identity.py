@@ -83,13 +83,6 @@ def test_two_sessions_in_one_folder_each_keep_their_own_thread(tmp_path: Path) -
     assert resolve(_thread_at(second + timedelta(seconds=2)), str(tmp_path), roster) == "second"
 
 
-def test_a_thread_older_than_every_session_in_its_folder_is_nobodys(tmp_path: Path) -> None:
-    started = datetime(2026, 10, 13, 16, 0, tzinfo=UTC)
-    roster = (_entry("only", tmp_path, started),)
-
-    assert resolve(_thread_at(started - timedelta(seconds=1)), str(tmp_path), roster) is None
-
-
 def test_a_thread_in_another_folder_is_nobodys(tmp_path: Path) -> None:
     started = datetime(2026, 10, 13, 16, 0, tzinfo=UTC)
     (tmp_path / "a").mkdir()
@@ -235,3 +228,68 @@ def test_a_roster_is_never_written_through_a_linked_directory(tmp_path: Path) ->
         write_roster(roster_path(spool, "codex"), ())
 
     assert list(elsewhere.iterdir()) == []
+
+
+# -- Stage 1 gate remediation: the cases the time rule cannot decide --
+
+
+def test_a_resumed_thread_is_claimed_even_without_a_folder(tmp_path: Path) -> None:
+    """An oversized payload may lose its folder to the prefix cut; the exact id needs none."""
+    roster = (_entry("resumed", tmp_path, datetime(2026, 10, 13, tzinfo=UTC), _INCIDENT_THREAD),)
+
+    assert resolve(_INCIDENT_THREAD, None, roster) == "resumed"
+
+
+def test_an_older_thread_reopened_inside_the_only_session_in_its_folder_is_that_sessions(
+    tmp_path: Path,
+) -> None:
+    """Codex's own `/resume` of an older thread inside a managed pane: too old for the time rule,
+    but only one live session works in that folder."""
+    started = datetime(2026, 10, 13, 16, 0, tzinfo=UTC)
+    roster = (_entry("only", tmp_path, started),)
+
+    assert resolve(_thread_at(started - timedelta(days=3)), str(tmp_path), roster) == "only"
+
+
+def test_a_thread_id_with_no_time_goes_to_the_only_session_in_its_folder(tmp_path: Path) -> None:
+    """A Codex that stopped minting version-7 ids must not silence every notification."""
+    roster = (_entry("only", tmp_path, datetime(2026, 10, 13, tzinfo=UTC)),)
+
+    assert resolve("f4020001-e712-4832-9fc8-dd28d38d5b8a", str(tmp_path), roster) == "only"
+
+
+def test_an_undecidable_thread_in_a_shared_folder_is_nobodys(tmp_path: Path) -> None:
+    """Two sessions in one folder and no usable time: guessing would mis-file, so nobody."""
+    started = datetime(2026, 10, 13, 16, 0, tzinfo=UTC)
+    roster = (_entry("first", tmp_path, started), _entry("second", tmp_path, started))
+
+    assert resolve("f4020001-e712-4832-9fc8-dd28d38d5b8a", str(tmp_path), roster) is None
+    assert resolve(_thread_at(started - timedelta(days=1)), str(tmp_path), roster) is None
+
+
+def test_a_relative_folder_names_nobody(tmp_path: Path) -> None:
+    started = datetime(2026, 10, 13, 16, 0, tzinfo=UTC)
+    roster = (_entry("only", Path(os.path.realpath(".")), started),)
+
+    assert resolve(_thread_at(started + timedelta(seconds=1)), ".", roster) is None
+
+
+def test_the_boundary_is_inclusive_a_thread_minted_in_its_sessions_millisecond(
+    tmp_path: Path,
+) -> None:
+    started = datetime(2026, 10, 13, 16, 0, 0, 123000, tzinfo=UTC)
+    later = started + timedelta(minutes=5)
+    roster = (_entry("first", tmp_path, started), _entry("second", tmp_path, later))
+
+    assert resolve(_thread_at(started), str(tmp_path), roster) == "first"
+
+
+def test_a_roster_too_large_for_the_hook_to_read_is_refused_at_write(tmp_path: Path) -> None:
+    """Every hook would read an oversized roster as naming nobody; refuse to write one."""
+    entries = [
+        _entry(f"s{index}", tmp_path / ("x" * 200), datetime(2026, 1, 1, tzinfo=UTC))
+        for index in range(2000)
+    ]
+
+    with pytest.raises(ValueError):
+        write_roster(roster_path(tmp_path, "codex"), entries)

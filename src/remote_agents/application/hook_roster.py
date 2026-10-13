@@ -24,6 +24,10 @@ from remote_agents.ports.terminal import SessionFolderLookup
 
 _LIVE = tuple(state for state in SessionState if notifiable(state))
 
+#: How many times one publish rewrites a roster the store moved under. A launch a second never
+#: makes it loop more than once; the bound is for a store that never settles.
+_MAXIMUM_REWRITES = 3
+
 
 class HookRosterPublisher:
     """Write one roster per payload-identified hook, from the store, every time it is asked."""
@@ -40,6 +44,7 @@ class HookRosterPublisher:
         self._folder_for = folder_for
         self._hooks = dict(hooks)
         self._writer = writer
+        self._lock = asyncio.Lock()
 
     async def publish(self) -> None:
         """Rewrite every roster, an empty one included: an empty roster names nobody.
@@ -47,9 +52,28 @@ class HookRosterPublisher:
         A hook whose provider has no roster falls back to its environment, so a roster is
         written even with no session on it -- once the service has spoken, the inherited
         variable is never trusted again.
+
+        **Read again after writing, and written again if the store moved.** Publishers race:
+        the activity pass, a launch in this process, and the other process's launches. One that
+        listed the store just before a launch saved its record can land its older list after
+        the launch's own publish, leaving the new session off until the next pass -- with its
+        first hooks naming nobody, or an older session in the same folder. The lock orders the
+        publishers in this process; the re-read is what covers the other process, because
+        whichever publisher writes last has then seen the store as it stood after its write.
         """
         if not self._hooks:
             return
+        async with self._lock:
+            rosters = await self._rosters()
+            for _ in range(_MAXIMUM_REWRITES):
+                for hook, sessions in rosters.items():
+                    await asyncio.to_thread(self._writer.write, hook, sessions)
+                current = await self._rosters()
+                if current == rosters:
+                    return
+                rosters = current
+
+    async def _rosters(self) -> dict[str, tuple[RosterSession, ...]]:
         rosters: dict[str, list[RosterSession]] = {name: [] for name in self._hooks.values()}
         for record in await self._store.list(_LIVE):
             hook = self._hooks.get(str(record.profile_id))
@@ -69,5 +93,4 @@ class HookRosterPublisher:
                     record.resume_source_id,
                 )
             )
-        for hook, sessions in rosters.items():
-            await asyncio.to_thread(self._writer.write, hook, tuple(sessions))
+        return {hook: tuple(sessions) for hook, sessions in rosters.items()}

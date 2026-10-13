@@ -7,20 +7,36 @@ hook. The daemon carries the environment of whichever pane started it -- measure
 when the `~/.codex` daemon an obsidian-wiki pane had started on 10-08 was still filing an
 engineering-skills session's asks under the obsidian-wiki session five days after it ended.
 
-So for such a provider the service writes a **roster** of its running managed sessions, and the
+So for such a provider the service writes a **roster** of its live managed sessions, and the
 hook names its session from what the payload says instead: the provider's own thread id and the
 folder the turn runs in. The rule, in order:
 
-1. a thread id equal to a session's `resume_source_id` is that session's -- a resumed
-   conversation began before its session did, so only the exact id can claim it;
+1. a thread id equal to a session's `resume_source_id` is that session's, folder or not -- a
+   resumed conversation began before its session did, so only the exact id can claim it;
 2. otherwise, among the sessions working in the payload's folder whose `created_at` is no later
    than the thread's own creation time, the latest -- a session's thread is minted at its launch,
-   after its record, and before any session launched later in the same folder;
-3. otherwise nobody's, and the hook writes nothing.
+   after its record, so of the sessions sharing a folder it is the newest one older than it;
+3. otherwise, when exactly one session works in that folder, that one -- a thread the time rule
+   cannot place (an older thread reopened inside the pane, an id with no time in it) still has
+   only one session it can belong to;
+4. otherwise nobody's, and the hook writes nothing.
 
 The thread's creation time is read from the id itself: Codex mints version-7 UUIDs (RFC 9562),
-whose first 48 bits are the Unix time in milliseconds. An id of any other shape has no time, and
-only rule 1 can claim it.
+whose first 48 bits are the Unix time in milliseconds. An id of any other shape has no time.
+
+**What this cannot tell apart, and so gets wrong rather than silent.** Nothing in a payload ties
+a thread to the pane that opened it, so the folder and the time are evidence, not proof:
+
+- a Codex the owner starts by hand in a folder where a managed Codex session is live shares the
+  daemon, and its threads are filed under that session -- where the environment rule filed
+  nothing, this files them somewhere plausible;
+- with two managed sessions in one folder, a thread the older one opens after the newer one
+  started (a `/new`, a reviewer or subagent thread) is filed under the newer one, and one the
+  time rule cannot place is filed under neither;
+- a subagent thread is filed under its parent's session, as the environment rule did.
+
+Each is narrower than what it replaced: every Codex event on the host filed under whichever pane
+happened to start the daemon (DEC-126 records the trade).
 
 Nothing here names a provider (DEC-122): which hooks get a roster is each vertical's licence's
 answer, read by the service, and the hook only asks whether a roster for its own hook name
@@ -90,25 +106,27 @@ def thread_created_at(thread_id: object) -> datetime | None:
 
 def resolve(thread_id: object, cwd: object, roster: Iterable[RosterEntry]) -> str | None:
     """The session a payload belongs to under the module's rule, or None for nobody's."""
-    if not isinstance(thread_id, str) or not isinstance(cwd, str) or not cwd:
+    if not isinstance(thread_id, str):
         return None
     entries = tuple(roster)
     for entry in entries:
         if entry.resume_source_id is not None and entry.resume_source_id == thread_id:
             return entry.session_id
-    minted = thread_created_at(thread_id)
-    if minted is None:
+    # Absolute only: `realpath` would resolve a relative folder against the hook's own.
+    if not isinstance(cwd, str) or not os.path.isabs(cwd):
         return None
     try:
         workspace = os.path.realpath(cwd)
     except (OSError, ValueError):
         return None
-    candidates = [
-        entry for entry in entries if entry.workspace == workspace and entry.created_at <= minted
-    ]
-    if not candidates:
-        return None
-    return max(candidates, key=lambda entry: entry.created_at).session_id
+    here = [entry for entry in entries if entry.workspace == workspace]
+    minted = thread_created_at(thread_id)
+    older = [entry for entry in here if minted is not None and entry.created_at <= minted]
+    if older:
+        return max(older, key=lambda entry: entry.created_at).session_id
+    if len(here) == 1:
+        return here[0].session_id
+    return None
 
 
 def read_roster(path: Path) -> tuple[RosterEntry, ...] | None:
@@ -200,10 +218,14 @@ def write_roster(path: Path, entries: Iterable[RosterEntry]) -> None:
             for entry in entries
         ]
     }
+    encoded = json.dumps(document).encode("utf-8")
+    if len(encoded) > _MAXIMUM_ROSTER_BYTES:
+        # Every hook would read it as naming nobody, silencing the provider; say so here instead.
+        raise ValueError(f"a roster of {len(encoded)} bytes is past what a hook will read")
     descriptor, temporary = tempfile.mkstemp(dir=path.parent, prefix=".roster-", suffix=".tmp")
     try:
-        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
-            json.dump(document, handle)
+        with os.fdopen(descriptor, "wb") as handle:
+            handle.write(encoded)
             handle.flush()
             os.fsync(handle.fileno())
         os.chmod(temporary, 0o600)
