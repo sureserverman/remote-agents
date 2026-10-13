@@ -53,6 +53,7 @@ from remote_agents.composition.service import (
     ServiceComposition,
     build_rollover_pass,
     build_worktree_cleanup,
+    live_session_check,
 )
 from remote_agents.composition.tui import _console_composer, _local_runtime
 from remote_agents.config import (
@@ -275,6 +276,7 @@ def _private_boundary(
         drain=locks.drain,
         turn_markers=turn_markers,
         hook_roster=backend.sessions.announce_sessions,
+        live_session=live_session_check(store),
         # The limits read both surfaces share, and each vertical's own limit sentence: a limit
         # stop is given the window that stopped it before it is recorded or delivered.
         limit_classifier=(

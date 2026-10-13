@@ -1,0 +1,28 @@
+{
+ "baseline": {
+  "elapsed_s": 0.7,
+  "exit": 0,
+  "tail": ".....                                                                    [100%]\n5 passed, 78 deselected in 0.31s"
+ },
+ "break_patch": "--- a/src/remote_agents/composition/service.py\n+++ b/src/remote_agents/composition/service.py\n@@ -832,7 +832,7 @@\n             if composition.live_session is not None:\n                 try:\n                     if not await composition.live_session(activity.session_id):\n-                        continue\n+                        pass\n                 except Exception:\n                     _LOG.exception(\"could not tell whether a session is live; recording anyway\")\n             try:\n",
+ "build": null,
+ "created": "2026-10-13T19:07:48+00:00",
+ "fingerprint": "dff64641feeb7a46c90080dda5b2d15a94aaf55fc79404d8115d6216bd3c42ef",
+ "index": 1,
+ "kind": "claim",
+ "named_break": null,
+ "no_build_reason": "pure Python",
+ "plan": "/mnt/vault/Portfolio/infra/remote-agents/plans/2026-10-13-codex-hook-attribution-plan.md",
+ "red": {
+  "elapsed_s": 0.8,
+  "exit": 1,
+  "tail": "=================================== FAILURES ===================================\n___________ test_an_ended_sessions_record_is_not_stored_in_the_feed ____________\n\ntmp_path = PosixPath('/tmp/pytest-of-user/pytest-1569/test_an_ended_sessions_record_0')\n\n    async def test_an_ended_sessions_record_is_not_stored_in_the_feed(tmp_path) -> None:\n        \"\"\"A daemon that outlived its pane must not give a dead session fresh feed rows (DEC-031).\n    \n        Measured 2026-10-13: 33 rows reached the feed for a Codex session ended four days earlier,\n        while the bot already dropped every one of them as \"no longer running\".\n        \"\"\"\n        from remote_agents.adapters.sqlite.activity_store import SQLiteActivityStore\n    \n        ended = _record(SessionState.ENDED, \"gone\", ProjectId(\"p\" * 24))\n        boundary, bot = _notified(ended)\n        spool = tmp_path / \"activity\"\n        _spool(spool, str(ended.session_id), event=\"PermissionRequest\")\n        connection = open_database(tmp_path / \"ended.sqlite3\")\n        store = SQLiteActivityStore(connection)\n        try:\n            await _watch_activity_once(\n                ServiceComposition(\n                    boundary,\n                    _SilentTerminal(),\n                    _SilentReconciler(),\n                    activity_directory=spool,\n                    activity_store=store,\n                    live_session=_live_check(ended),\n                )\n            )\n>           assert await store.recent(limit=10) == ()\nE           AssertionError: assert (AgentActivit... limit=None),) == ()\nE             \nE             Left contains one more item: AgentActivity(session_id='9a8b6522-bc2e-4dd1-985c-43078f83ee8e', kind=<ActivityKind.NEEDS_ANSWER: 'needs_answer'>, det..., 11, 14, 5, tzinfo=datetime.timezone.utc), confidence=<ActivityConfidence.REPORTED: 'reported'>, ask=None, limit=None)\nE             Use -v to get more diff\n\ntests/integration/test_live_service.py:2860: AssertionError\n=========================== short test summary info ============================\nFAILED tests/integration/test_live_service.py::test_an_ended_sessions_record_is_not_stored_in_the_feed\n1 failed, 4 passed, 78 deselected in 0.37s"
+ },
+ "schema": 2,
+ "task": "1.5",
+ "test": "uv run --locked pytest tests/integration/test_live_service.py -q -p no:randomly -k \"ended or not_running\"",
+ "text": "`uv run --locked pytest tests/integration/test_live_service.py -q -p no:randomly -k \"ended or not_running\"`",
+ "touched": [
+  "src/remote_agents/composition/service.py"
+ ]
+}

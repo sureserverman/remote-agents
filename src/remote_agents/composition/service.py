@@ -34,6 +34,7 @@ from remote_agents.application.reconcile import ReconciliationService
 from remote_agents.application.rollover import RolloverPass, RolloverReport
 from remote_agents.application.schedules import SchedulePass
 from remote_agents.application.services import SessionService
+from remote_agents.application.session_actions import notifiable
 from remote_agents.application.session_folders import live_folder
 from remote_agents.application.worktree_cleanup import WorktreeCleanupPass
 from remote_agents.application.worktrees import main_checkout
@@ -259,6 +260,14 @@ class ServiceComposition:
     """Closes the mutation gate and waits for operations in flight: the one `SessionLocks`
     the bot's services share (DEC-046), so the drain counts every operation. None in
     compositions that wire no lock set, which today means tests."""
+
+    live_session: Callable[[str], Awaitable[bool]] | None = None
+    """Whether an observation's session is one the feed may still record news about (DEC-031).
+
+    The feed's table and the bot answer one question about a session that has ended: neither
+    tells the owner something new happened in it. None records every observation, which today
+    means tests.
+    """
 
     hook_roster: Callable[[], Awaitable[None]] | None = None
     """Rewrites the hook rosters before each activity drain (DEC-126), so a session that ended
@@ -720,6 +729,24 @@ def build_rollover_pass(
     )
 
 
+def live_session_check(store: SessionStore) -> Callable[[str], Awaitable[bool]]:
+    """`notifiable`'s answer for a session id, read from the store at the moment it is asked.
+
+    The same predicate the bot drops a notification by, so the feed and the phone agree about
+    which sessions can still have news. An id the store does not know is not live.
+    """
+
+    async def live(session_id: str) -> bool:
+        try:
+            key = SessionId.parse(session_id)
+        except ValueError:
+            return False
+        record = await store.get(key)
+        return record is not None and notifiable(record.state)
+
+    return live
+
+
 async def _watch_activity_periodically(composition: ServiceComposition, interval: float) -> None:
     while True:
         await asyncio.sleep(interval)
@@ -802,6 +829,12 @@ async def _watch_activity_once(composition: ServiceComposition) -> None:
             _LOG.exception("classifying limit stops failed; they are delivered as they arrived")
     if composition.activity_store is not None:
         for activity in activities:
+            if composition.live_session is not None:
+                try:
+                    if not await composition.live_session(activity.session_id):
+                        continue
+                except Exception:
+                    _LOG.exception("could not tell whether a session is live; recording anyway")
             try:
                 await composition.activity_store.append(activity)
             except Exception:

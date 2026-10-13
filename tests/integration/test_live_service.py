@@ -2819,3 +2819,71 @@ async def test_a_raising_retry_for_a_session_with_nothing_waiting_announces_noth
     await _retry_waiting_messages(composition, [finished])
 
     assert announced == []
+
+
+def _live_check(*records: SessionRecord):
+    """The service's live-session check over these records, as production builds it."""
+    from remote_agents.composition.service import live_session_check
+
+    class _Store:
+        async def get(self, session_id):
+            return next((r for r in records if r.session_id == session_id), None)
+
+    return live_session_check(_Store())
+
+
+async def test_an_ended_sessions_record_is_not_stored_in_the_feed(tmp_path) -> None:
+    """A daemon that outlived its pane must not give a dead session fresh feed rows (DEC-031).
+
+    Measured 2026-10-13: 33 rows reached the feed for a Codex session ended four days earlier,
+    while the bot already dropped every one of them as "no longer running".
+    """
+    from remote_agents.adapters.sqlite.activity_store import SQLiteActivityStore
+
+    ended = _record(SessionState.ENDED, "gone", ProjectId("p" * 24))
+    boundary, bot = _notified(ended)
+    spool = tmp_path / "activity"
+    _spool(spool, str(ended.session_id), event="PermissionRequest")
+    connection = open_database(tmp_path / "ended.sqlite3")
+    store = SQLiteActivityStore(connection)
+    try:
+        await _watch_activity_once(
+            ServiceComposition(
+                boundary,
+                _SilentTerminal(),
+                _SilentReconciler(),
+                activity_directory=spool,
+                activity_store=store,
+                live_session=_live_check(ended),
+            )
+        )
+        assert await store.recent(limit=10) == ()
+        assert bot.sends == []
+    finally:
+        connection.close()
+
+
+async def test_a_running_session_is_not_filtered_like_an_ended_one(tmp_path) -> None:
+    from remote_agents.adapters.sqlite.activity_store import SQLiteActivityStore
+
+    record = _running()
+    boundary, bot = _notified(record)
+    spool = tmp_path / "activity"
+    _spool(spool, str(record.session_id))
+    connection = open_database(tmp_path / "running.sqlite3")
+    store = SQLiteActivityStore(connection)
+    try:
+        await _watch_activity_once(
+            ServiceComposition(
+                boundary,
+                _SilentTerminal(),
+                _SilentReconciler(),
+                activity_directory=spool,
+                activity_store=store,
+                live_session=_live_check(record),
+            )
+        )
+        assert len(await store.recent(limit=10)) == 1
+        assert len(bot.sends) == 1
+    finally:
+        connection.close()
