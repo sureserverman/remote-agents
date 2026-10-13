@@ -1244,9 +1244,9 @@ only a client of it. The daemon spawns the hooks, so they carry the environment 
 started the daemon, which may be a session that ended days ago
 (`docs/acceptance-2026-10-13-codex-hook-attribution.md`). So the service keeps a roster of its
 live Codex sessions (starting, running, or waiting on folder trust) at
-`~/.local/state/remote-agents/activity/identity/codex.json` (mode `0600`). It rewrites it on
-every activity pass and before every launch or resume. When that file exists, a Codex hook names
-its session from the payload's thread id and folder, in this order (DEC-126):
+`~/.local/state/remote-agents/activity/identity/codex.json` (mode `0600`). It writes it when the
+service starts, on every activity pass, and before every launch or resume. When that file exists,
+a Codex hook names its session from the payload's thread id and folder, in this order (DEC-126):
 
 1. a thread id equal to a session's resumed-from id is that session's, whatever the folder;
 2. otherwise, among the sessions working in the payload's folder, the latest one created no later
@@ -1254,10 +1254,10 @@ its session from the payload's thread id and folder, in this order (DEC-126):
 3. otherwise, when exactly one session works in that folder, that one;
 4. otherwise nobody's: the hook writes nothing.
 
-With no roster file, as before the service's first pass, the hook falls back to the variable.
-A roster file that others can read or write, that is not the owner's, that is a symlink, that is
-oversized, or that does not parse names nobody. Every Codex session then goes quiet until the next
-activity pass rewrites the file.
+With no roster file, as on a host where the service has never run, the hook falls back to the
+variable. A roster file that others can read or write, that is not the owner's, that is a symlink,
+that is oversized, that is a pipe, or that does not parse names nobody. Every Codex session then
+goes quiet until the next activity pass rewrites the file.
 
 Folder and time are evidence, not proof, so some threads are filed under the wrong session, and
 one is filed under none:

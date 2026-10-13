@@ -253,7 +253,8 @@ def _fields_in_prefix(raw: bytes, names: tuple[str, ...]) -> dict[str, object]:
     hook needs, before `last_assistant_message` in a `Stop` (pinned by
     `tests/live/test_codex_shared_daemon_attribution.py`); its place against `prompt` in a
     `UserPromptSubmit` is not measured. A resumed thread is named without it, and any other loses
-    its record rather than being guessed (DEC-126).
+    its turn-marker step rather than being guessed -- an oversized payload is never recorded
+    (DEC-126).
     """
     found: dict[str, object] = {}
     text = raw.decode("utf-8", errors="replace")

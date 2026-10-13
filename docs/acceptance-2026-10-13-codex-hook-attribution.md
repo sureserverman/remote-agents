@@ -23,9 +23,14 @@ the measurements the design rests on, and the live drill that proves it.
 
 - `codex-cli 0.162.1` runs every turn in one app-server daemon per `CODEX_HOME`. The TUI pane is
   only a client.
-- Pane `840f2da2` started the `~/.codex` daemon on 2026-10-08: pid 783627 (`pid-update-loop`)
-  and pid 2787510 (`app-server --remote-control … --managed-daemon`).
-- `/proc/2787510/environ` still carried `REMOTE_AGENTS_SESSION_ID=840f2da2-…`.
+- Pane `840f2da2` started the `~/.codex` daemon on 2026-10-08 at 20:06 UTC: pid 783627, the
+  `pid-update-loop`.
+- The loop respawns the app-server. Its current one, pid 2787510
+  (`app-server --remote-control … --managed-daemon`), is the loop's child. It started on
+  2026-10-09 at 20:11:46 UTC, 3.5 hours after `840f2da2` ended.
+- `/proc/2787510/environ` still carried `REMOTE_AGENTS_SESSION_ID=840f2da2-…`. So the loop hands
+  its starter's environment to every app-server it respawns, even after that session has
+  ended.
 - Pane `8b4f34c9`'s `codex` (pid 2090860) had a unix socket connected to that daemon's
   `/tmp/codex-daemon-1000/…` socket. It ran no daemon of its own.
 - The daemon spawns the hooks, so every Codex hook on the host spooled under `840f2da2`
