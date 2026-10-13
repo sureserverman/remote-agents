@@ -1,0 +1,28 @@
+{
+ "baseline": {
+  "elapsed_s": 0.3,
+  "exit": 0,
+  "tail": ".............................                                            [100%]\n29 passed in 0.04s"
+ },
+ "break_patch": "--- a/src/remote_agents/adapters/agents/hook_identity.py\n+++ b/src/remote_agents/adapters/agents/hook_identity.py\n@@ -96,9 +96,7 @@\n         workspace = os.path.realpath(cwd)\n     except (OSError, ValueError):\n         return None\n-    candidates = [\n-        entry for entry in entries if entry.workspace == workspace and entry.created_at <= minted\n-    ]\n+    candidates = [entry for entry in entries if entry.workspace == workspace]\n     if not candidates:\n         return None\n     return max(candidates, key=lambda entry: entry.created_at).session_id\n",
+ "build": null,
+ "created": "2026-10-13T18:53:52+00:00",
+ "fingerprint": "5f2c0f45b9cf494cda68b1d18f429f814573c843c9e331a9ed37aed443386cd2",
+ "index": 1,
+ "kind": "claim",
+ "named_break": null,
+ "no_build_reason": "pure Python",
+ "plan": "/mnt/vault/Portfolio/infra/remote-agents/plans/2026-10-13-codex-hook-attribution-plan.md",
+ "red": {
+  "elapsed_s": 0.3,
+  "exit": 1,
+  "tail": ".........FF..................                                            [100%]\n=================================== FAILURES ===================================\n__________ test_two_sessions_in_one_folder_each_keep_their_own_thread __________\n\ntmp_path = PosixPath('/tmp/pytest-of-user/pytest-1546/test_two_sessions_in_one_folde0')\n\n    def test_two_sessions_in_one_folder_each_keep_their_own_thread(tmp_path: Path) -> None:\n        first = datetime(2026, 10, 13, 16, 0, tzinfo=UTC)\n        second = first + timedelta(minutes=30)\n        roster = (_entry(\"first\", tmp_path, first), _entry(\"second\", tmp_path, second))\n    \n>       assert resolve(_thread_at(first + timedelta(seconds=2)), str(tmp_path), roster) == \"first\"\nE       AssertionError: assert 'second' == 'first'\nE         \nE         - first\nE         + second\n\ntests/unit/adapters/agents/test_hook_identity.py:82: AssertionError\n_______ test_a_thread_older_than_every_session_in_its_folder_is_nobodys ________\n\ntmp_path = PosixPath('/tmp/pytest-of-user/pytest-1546/test_a_thread_older_than_every0')\n\n    def test_a_thread_older_than_every_session_in_its_folder_is_nobodys(tmp_path: Path) -> None:\n        started = datetime(2026, 10, 13, 16, 0, tzinfo=UTC)\n        roster = (_entry(\"only\", tmp_path, started),)\n    \n>       assert resolve(_thread_at(started - timedelta(seconds=1)), str(tmp_path), roster) is None\nE       AssertionError: assert 'only' is None\nE        +  where 'only' = resolve('01a135fd-f818-7abc-8def-0123456789ab', '/tmp/pytest-of-user/pytest-1546/test_a_thread_older_than_every0', (RosterEntry(session_id='only', workspace='/tmp/pytest-of-user/pytest-1546/test_a_thread_older_than_every0', created_at=datetime.datetime(2026, 10, 13, 16, 0, tzinfo=datetime.timezone.utc), resume_source_id=None),))\nE        +    where '01a135fd-f818-7abc-8def-0123456789ab' = _thread_at((datetime.datetime(2026, 10, 13, 16, 0, tzinfo=datetime.timezone.utc) - datetime.timedelta(seconds=1)))\nE        +      where datetime.timedelta(seconds=1) = timedelta(seconds=1)\nE        +    and   '/tmp/pytest-of-user/pytest-1546/test_a_thread_older_than_every0' = str(PosixPath('/tmp/pytest-of-user/pytest-1546/test_a_thread_older_than_every0'))\n\ntests/unit/adapters/agents/test_hook_identity.py:90: AssertionError\n=========================== short test summary info ============================\nFAILED tests/unit/adapters/agents/test_hook_identity.py::test_two_sessions_in_one_folder_each_keep_their_own_thread\nFAILED tests/unit/adapters/agents/test_hook_identity.py::test_a_thread_older_than_every_session_in_its_folder_is_nobodys\n2 failed, 27 passed in 0.06s"
+ },
+ "schema": 2,
+ "task": "1.1",
+ "test": "uv run --locked pytest tests/unit/adapters/agents/test_hook_identity.py -q -p no:randomly",
+ "text": "`uv run --locked pytest tests/unit/adapters/agents/test_hook_identity.py -q -p no:randomly`",
+ "touched": [
+  "src/remote_agents/adapters/agents/hook_identity.py"
+ ]
+}
