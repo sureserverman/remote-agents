@@ -1,0 +1,28 @@
+{
+ "baseline": {
+  "elapsed_s": 0.0,
+  "exit": 0,
+  "tail": ""
+ },
+ "break_patch": "diff --git b/docs/operator-runbook.md a/docs/operator-runbook.md\nindex 8bb4430f..586b5798 100644\n--- b/docs/operator-runbook.md\n+++ a/docs/operator-runbook.md\n@@ -1237,37 +1237,6 @@ you can see still working usually means a nested `claude`. A *sibling* tmux pane\n \u2014 the variable never enters the tmux server's environment, only the launched process's \u2014 so an\n unrelated pane on the same server is silent, as is any `claude` started outside the managed tree.\n \n-**Codex hooks do not read the variable: they run in the shared daemon.** Codex runs every turn in\n-one app-server daemon per `CODEX_HOME`, and the pane is only a client of it. The daemon spawns the\n-hooks, so they carry the environment of whichever pane started the daemon, which may be a\n-session that ended days ago (`docs/acceptance-2026-10-13-codex-hook-attribution.md`). So the\n-service keeps a roster of its running Codex sessions at\n-`~/.local/state/remote-agents/activity/identity/codex.json` (mode `0600`). It rewrites it on\n-every activity pass and before every launch or resume. When that file exists, a Codex hook names\n-its session from the payload's thread id and folder, in this order (DEC-126):\n-\n-1. a thread id equal to a session's resumed-from id is that session's, whatever the folder;\n-2. otherwise, among the sessions working in the payload's folder, the latest one created no later\n-   than the thread (the thread id is a UUIDv7, so it carries its own creation time);\n-3. otherwise, when exactly one session works in that folder, that one;\n-4. otherwise nobody's: the hook writes nothing.\n-\n-With no roster file, as before the service's first pass, the hook falls back to the variable.\n-A roster file that others can read or write, that is not the owner's, that is a symlink, or that\n-does not parse names nobody.\n-Folder and time are evidence, not proof, so three cases are filed wrongly rather than dropped:\n-\n-- a `codex` you start by hand in a folder where a managed Codex session is live is filed under\n-  that session;\n-- with two managed sessions in one folder, a thread the older one opens after the newer one\n-  started (a `/new`, a reviewer or subagent thread) is filed under the newer one, and one the\n-  time rule cannot place is filed under neither;\n-- a subagent thread is filed under its parent's session.\n-\n-An unexplained Codex \"finished\" on a session you can see idle usually means one of these. The\n-feed also stores nothing for a session that is not running or starting, so an event that reaches\n-an ended session is dropped rather than shown (DEC-031).\n-\n ### Removing the hooks\n \n ```bash\n",
+ "build": null,
+ "created": "2026-10-13T19:36:32+00:00",
+ "fingerprint": "39234c782d26b250619205f0e0944c8718088bcd874975191e72e5f1bfe5c880",
+ "index": 1,
+ "kind": "claim",
+ "named_break": null,
+ "no_build_reason": "documentation only",
+ "plan": "/mnt/vault/Portfolio/infra/remote-agents/plans/2026-10-13-codex-hook-attribution-plan.md",
+ "red": {
+  "elapsed_s": 0.0,
+  "exit": 1,
+  "tail": ""
+ },
+ "schema": 2,
+ "task": "2.2",
+ "test": "grep -q 'UUIDv7' docs/acceptance-2026-10-13-codex-hook-attribution.md && grep -q 'shared daemon' docs/operator-runbook.md",
+ "text": "`grep -q 'UUIDv7' docs/acceptance-2026-10-13-codex-hook-attribution.md && grep -q 'shared daemon' docs/operator-runbook.md`",
+ "touched": [
+  "docs/operator-runbook.md"
+ ]
+}

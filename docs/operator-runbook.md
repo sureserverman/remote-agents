@@ -1237,6 +1237,37 @@ you can see still working usually means a nested `claude`. A *sibling* tmux pane
 — the variable never enters the tmux server's environment, only the launched process's — so an
 unrelated pane on the same server is silent, as is any `claude` started outside the managed tree.
 
+**Codex hooks do not read the variable: they run in the shared daemon.** Codex runs every turn in
+one app-server daemon per `CODEX_HOME`, and the pane is only a client of it. The daemon spawns the
+hooks, so they carry the environment of whichever pane started the daemon, which may be a
+session that ended days ago (`docs/acceptance-2026-10-13-codex-hook-attribution.md`). So the
+service keeps a roster of its running Codex sessions at
+`~/.local/state/remote-agents/activity/identity/codex.json` (mode `0600`). It rewrites it on
+every activity pass and before every launch or resume. When that file exists, a Codex hook names
+its session from the payload's thread id and folder, in this order (DEC-126):
+
+1. a thread id equal to a session's resumed-from id is that session's, whatever the folder;
+2. otherwise, among the sessions working in the payload's folder, the latest one created no later
+   than the thread (the thread id is a UUIDv7, so it carries its own creation time);
+3. otherwise, when exactly one session works in that folder, that one;
+4. otherwise nobody's: the hook writes nothing.
+
+With no roster file, as before the service's first pass, the hook falls back to the variable.
+A roster file that others can read or write, that is not the owner's, that is a symlink, or that
+does not parse names nobody.
+Folder and time are evidence, not proof, so three cases are filed wrongly rather than dropped:
+
+- a `codex` you start by hand in a folder where a managed Codex session is live is filed under
+  that session;
+- with two managed sessions in one folder, a thread the older one opens after the newer one
+  started (a `/new`, a reviewer or subagent thread) is filed under the newer one, and one the
+  time rule cannot place is filed under neither;
+- a subagent thread is filed under its parent's session.
+
+An unexplained Codex "finished" on a session you can see idle usually means one of these. The
+feed also stores nothing for a session that is not running or starting, so an event that reaches
+an ended session is dropped rather than shown (DEC-031).
+
 ### Removing the hooks
 
 ```bash
