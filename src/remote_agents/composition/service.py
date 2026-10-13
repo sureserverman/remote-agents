@@ -260,6 +260,10 @@ class ServiceComposition:
     the bot's services share (DEC-046), so the drain counts every operation. None in
     compositions that wire no lock set, which today means tests."""
 
+    hook_roster: Callable[[], Awaitable[None]] | None = None
+    """Rewrites the hook rosters before each activity drain (DEC-126), so a session that ended
+    leaves them. None in compositions with no payload-identified hook, which today means tests."""
+
 
 async def _serve_with_reconciliation(
     secrets: TelegramSecrets,
@@ -752,6 +756,13 @@ async def _watch_activity_once(composition: ServiceComposition) -> None:
     thread: this coroutine shares its event loop with Telegram long-polling and pane captures,
     and a spool with a backlog would otherwise stall both.
     """
+    if composition.hook_roster is not None:
+        # Before the drain, so a session that ended since the last pass names nobody from here
+        # on. Guarded on its own: a roster that cannot be written costs hooks, not this pass.
+        try:
+            await composition.hook_roster()
+        except Exception:
+            _LOG.exception("publishing the hook roster failed")
     activities: list[AgentActivity] = []
     if composition.activity_directory is not None:
         try:

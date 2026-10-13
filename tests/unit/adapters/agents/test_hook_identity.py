@@ -212,3 +212,26 @@ def test_a_symlinked_roster_names_nobody(tmp_path: Path) -> None:
     os.symlink(real, path)
 
     assert read_roster(path) == ()
+
+
+def test_writing_a_roster_makes_every_missing_directory_private(tmp_path: Path) -> None:
+    """The spool directory may not exist yet; the hooks refuse one that is not owner-only."""
+    path = roster_path(tmp_path / "state" / "activity", "codex")
+
+    write_roster(path, ())
+
+    for directory in (tmp_path / "state", tmp_path / "state" / "activity", path.parent):
+        assert directory.stat().st_mode & 0o777 == 0o700, directory
+
+
+def test_a_roster_is_never_written_through_a_linked_directory(tmp_path: Path) -> None:
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir(mode=0o700)
+    spool = tmp_path / "activity"
+    spool.mkdir(mode=0o700)
+    (spool / ROSTER_DIRECTORY).symlink_to(elsewhere)
+
+    with pytest.raises(OSError):
+        write_roster(roster_path(spool, "codex"), ())
+
+    assert list(elsewhere.iterdir()) == []

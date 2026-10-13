@@ -1096,3 +1096,58 @@ def test_claude_installs_the_user_prompt_submit_event_beside_the_owners_own(tmp_
     remove_agent_hooks(settings)
 
     assert settings.read_bytes() == before
+
+
+def test_the_installed_codex_hook_names_its_session_from_the_roster_not_the_daemon(
+    tmp_path: Path,
+) -> None:
+    """The 2026-10-13 incident, end to end through the real command and the real writer (DEC-126).
+
+    The hook inherits the session variable of whichever pane started Codex's daemon -- here a
+    session that has since ended. The roster the service's own writer produced names the pane
+    that asked, and the drain must read the record as that pane's.
+    """
+    from datetime import UTC, datetime
+
+    from remote_agents.adapters.agents.hook_identity import FileHookRoster
+    from remote_agents.application.activity import drain_activity
+    from remote_agents.ports.hook_roster import RosterSession
+
+    spool = tmp_path / "spool"
+    workspace = tmp_path / "engineering-skills"
+    workspace.mkdir()
+    FileHookRoster(spool).write(
+        "codex",
+        (
+            RosterSession(
+                "8b4f34c9-92c9-45db-bb45-1ab0c24dd7bb",
+                workspace,
+                datetime(2026, 10, 13, 16, 14, 0, 387761, tzinfo=UTC),
+            ),
+        ),
+    )
+    payload = {
+        "session_id": "01a1360a-d366-7913-abdc-27aa12faf338",
+        "cwd": str(workspace),
+        "hook_event_name": "Stop",
+        "last_assistant_message": "Allow the read-only planning-plugin probe?",
+    }
+
+    subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "remote_agents",
+            "agent-event",
+            "--activity-dir",
+            str(spool),
+            "--provider",
+            "codex",
+        ],
+        input=json.dumps(payload).encode("utf-8"),
+        check=True,
+        env={**os.environ, SESSION_ID_VARIABLE: "840f2da2-543c-4299-b676-fe8d10895be3"},
+    )
+
+    (activity,) = drain_activity(spool)
+    assert str(activity.session_id) == "8b4f34c9-92c9-45db-bb45-1ab0c24dd7bb"

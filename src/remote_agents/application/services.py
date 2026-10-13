@@ -242,8 +242,10 @@ class SessionService:
         daemon_guards: Mapping[ProfileId, DaemonGuard] | None = None,
         worktrees: WorktreeStore | None = None,
         worktree_service: WorktreeService | None = None,
+        before_pane: Callable[[], Awaitable[None]] | None = None,
     ) -> None:
         self._store = store
+        self._before_pane = before_pane
         # Makes a worktree launch's own branch and folder, and says when one is offered
         # (BL-116). None in a composition that makes none: nothing is then offered, and a
         # worktree launch fails by name rather than starting in the shared folder.
@@ -401,6 +403,7 @@ class SessionService:
                         worktree_removed=bound is _Bound.GONE,
                     )
                 remote_control = await self._remote_control_at_launch(command.profile_id)
+                await self.announce_sessions()
                 observation = await self._terminal.launch(
                     session_id,
                     command.project_id,
@@ -425,6 +428,22 @@ class SessionService:
                     remote_control,
                     worktree_removed=observation.detail == WORKTREE_REMOVED,
                 )
+
+    async def announce_sessions(self) -> None:
+        """Tell whoever must know which sessions are live before an agent can speak (DEC-126).
+
+        Today that is the hook roster: a provider whose hooks run in a shared daemon names its
+        session from the payload against the roster, and its first hook can fire seconds after
+        the pane starts. So it runs before every pane, and the service's activity pass calls it
+        too, so a session that ended leaves the roster. A failure costs early hooks, never a
+        launch.
+        """
+        if self._before_pane is None:
+            return
+        try:
+            await self._before_pane()
+        except Exception:
+            _LOG.exception("could not announce a session before its pane started")
 
     async def _remote_control_at_launch(self, profile_id: ProfileId) -> bool:
         """Whether this launch carries the remote-control flag, read now rather than remembered.
@@ -508,6 +527,7 @@ class SessionService:
                     created=True,
                     worktree_removed=bound is _Bound.GONE,
                 )
+            await self.announce_sessions()
             observation = await self._terminal.resume(
                 session_id,
                 command.project_id,

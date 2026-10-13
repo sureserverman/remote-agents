@@ -1,0 +1,28 @@
+{
+ "baseline": {
+  "elapsed_s": 1.6,
+  "exit": 0,
+  "tail": "........................................................................ [ 86%]\n...........                                                              [100%]\n83 passed in 1.18s"
+ },
+ "break_patch": "--- a/src/remote_agents/application/services.py\n+++ b/src/remote_agents/application/services.py\n@@ -403,7 +403,6 @@\n                         worktree_removed=bound is _Bound.GONE,\n                     )\n                 remote_control = await self._remote_control_at_launch(command.profile_id)\n-                await self.announce_sessions()\n                 observation = await self._terminal.launch(\n                     session_id,\n                     command.project_id,\n",
+ "build": null,
+ "created": "2026-10-13T19:06:05+00:00",
+ "fingerprint": "3f73d5bead6cf755734b5897d09dd87dc36f8f8bb9ab6d3eddb513cfdd6c97ee",
+ "index": 1,
+ "kind": "claim",
+ "named_break": null,
+ "no_build_reason": "pure Python",
+ "plan": "/mnt/vault/Portfolio/infra/remote-agents/plans/2026-10-13-codex-hook-attribution-plan.md",
+ "red": {
+  "elapsed_s": 1.6,
+  "exit": 1,
+  "tail": ".F...................................................................... [ 86%]\n...........                                                              [100%]\n=================================== FAILURES ===================================\n____________ test_a_launch_is_on_the_roster_before_its_pane_starts _____________\n\ntmp_path = PosixPath('/tmp/pytest-of-user/pytest-1564/test_a_launch_is_on_the_roster0')\n\n    async def test_a_launch_is_on_the_roster_before_its_pane_starts(tmp_path: Path) -> None:\n        rig = _Rig(tmp_path)\n        terminal = _Terminal(rig)\n        service = SessionService(rig.store, terminal, before_pane=rig.publisher.publish)  # type: ignore[arg-type]\n    \n        outcome = await service.launch(LaunchCommand(PROJECT, CODEX, \"k1\"))\n    \n>       assert terminal.seen_at_launch is not None\nE       assert None is not None\nE        +  where None = <test_hook_roster._Terminal object at 0x75a0839127b0>.seen_at_launch\n\ntests/integration/test_hook_roster.py:111: AssertionError\n=========================== short test summary info ============================\nFAILED tests/integration/test_hook_roster.py::test_a_launch_is_on_the_roster_before_its_pane_starts\n1 failed, 82 passed in 1.26s"
+ },
+ "schema": 2,
+ "task": "1.4",
+ "test": "uv run --locked pytest tests/integration/test_hook_roster.py tests/integration/test_agent_hook_install.py -q -p no:randomly",
+ "text": "`uv run --locked pytest tests/integration/test_hook_roster.py tests/integration/test_agent_hook_install.py -q -p no:randomly`",
+ "touched": [
+  "src/remote_agents/application/services.py"
+ ]
+}

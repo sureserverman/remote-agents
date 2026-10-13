@@ -35,12 +35,19 @@ import json
 import os
 import stat
 import tempfile
-from collections.abc import Iterable
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import TYPE_CHECKING
 
+from remote_agents.ports.private_directory import open_private_directory
 from remote_agents.ports.session_identity import safe_session_id
+
+if TYPE_CHECKING:
+    # Annotations only: the hook imports this module on every turn, and the port is the
+    # service's side of it.
+    from remote_agents.ports.hook_roster import RosterSession
 
 #: Beside the turn markers' directory, never among the records: the drain reads only the spool's
 #: top-level `*.json`, and a roster there would be read as a record.
@@ -174,8 +181,14 @@ def _entry(item: object) -> RosterEntry | None:
 
 
 def write_roster(path: Path, entries: Iterable[RosterEntry]) -> None:
-    """Replace the roster at `path` atomically, owner-only, creating its directory owner-only."""
-    path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    """Replace the roster at `path` atomically, owner-only, creating its directory owner-only.
+
+    Through `open_private_directory`, never a plain `mkdir(parents=True)`: that would make a
+    missing spool directory with the umask's mode, and refuse nothing standing in for it as a
+    link -- the spool directory this roster sits under is the one every hook writes into.
+    """
+    if open_private_directory(path.parent) is None:
+        raise OSError(f"refusing to write a roster through a link or a shared directory: {path}")
     document = {
         "sessions": [
             {
@@ -201,3 +214,25 @@ def write_roster(path: Path, entries: Iterable[RosterEntry]) -> None:
         except OSError:
             pass
         raise
+
+
+class FileHookRoster:
+    """The service's side: write each hook's roster under the spool, folders made real (DEC-126)."""
+
+    def __init__(self, activity_directory: Path) -> None:
+        self._activity_directory = activity_directory
+
+    def write(self, hook_name: str, sessions: Sequence[RosterSession]) -> None:
+        """Replace `hook_name`'s roster with `sessions`, each folder as `realpath` answers it."""
+        write_roster(
+            roster_path(self._activity_directory, hook_name),
+            (
+                RosterEntry(
+                    session.session_id,
+                    os.path.realpath(session.workspace),
+                    session.created_at,
+                    session.resume_source_id,
+                )
+                for session in sessions
+            ),
+        )

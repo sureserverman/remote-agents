@@ -13,11 +13,13 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING
 
 from remote_agents.adapters.agents.catalogue import ProfileConversationCatalogue
+from remote_agents.adapters.agents.hook_identity import FileHookRoster
 from remote_agents.adapters.agents.registry import (
     ProfileUsageReaders,
     claude_remote_control_default,
     codex_daemon_guard,
     profile_composers,
+    profiles_named_by_payload,
     profiles_that_roll_over,
     provider_descriptors,
     usage_readers,
@@ -34,6 +36,7 @@ from remote_agents.adapters.sqlite.session_store import SQLiteSessionStore
 from remote_agents.adapters.sqlite.worktree_store import SQLiteWorktreeStore
 from remote_agents.application.backend import Backend
 from remote_agents.application.conversations import ConversationService
+from remote_agents.application.hook_roster import HookRosterPublisher
 from remote_agents.application.host_remote_control import HostRemoteControlService
 from remote_agents.application.profiles import ProfileAvailability
 from remote_agents.application.project_admin import ProjectCreationService
@@ -447,6 +450,14 @@ def compose_backend(
     # independently is two drains and neither one covers the other.
     backend_store = store if store is not None else SQLiteSessionStore(connection)
     backend_locks = locks if locks is not None else SessionLocks()
+    # The roster a payload-identified hook names its session from (DEC-126). Written by both
+    # processes before each of their launches, and by the service's activity pass.
+    hook_roster = HookRosterPublisher(
+        backend_store,
+        folders.folder_for,
+        profiles_named_by_payload(descriptors),
+        FileHookRoster(paths.activity_directory),
+    )
     # One watcher per process, beside the one store and the one lock set and for the same
     # reason (DEC-046): every list in this process wants the same "the store moved" signal,
     # and two watchers would mean two `stat` pairs per second saying the same thing at
@@ -477,6 +488,7 @@ def compose_backend(
             # give. The root's job is to connect the two, which is this line.
             remote_control_defaults=dict.fromkeys(claude_default.profiles, claude_default),
             daemon_guards=dict.fromkeys(daemon_profiles, daemon_guard),
+            before_pane=hook_roster.publish,
             worktrees=worktrees.store if worktrees is not None else None,
             worktree_service=(
                 None

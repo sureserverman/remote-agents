@@ -125,7 +125,12 @@ from remote_agents.ports.agent_usage import (
     UsageQuery,
 )
 from remote_agents.ports.limit_screen import LimitScreen
-from remote_agents.ports.provider_descriptor import HookLicence, ProviderDescriptor, TrustDialog
+from remote_agents.ports.provider_descriptor import (
+    HookIdentity,
+    HookLicence,
+    ProviderDescriptor,
+    TrustDialog,
+)
 from remote_agents.ports.provider_errors import ProviderUnavailable
 
 ProjectPaths = Mapping[ProjectId, Path]
@@ -536,6 +541,30 @@ def reported_kinds_of(
     """The kinds this profile's hook reports without inference; empty for one with no licence."""
     licence = _profile_licences(descriptors).get(profile_id)
     return frozenset() if licence is None else licence.reports
+
+
+def profiles_named_by_payload(
+    descriptors: tuple[ProviderDescriptor, ...] | None = None,
+) -> dict[str, str]:
+    """Each curated profile whose hook names its session from its payload, with its hook name.
+
+    What `HookRosterPublisher` writes rosters for (DEC-126): a profile outside this mapping keeps
+    its pane's environment, and no roster is written for its hook.
+    """
+    built = provider_descriptors() if descriptors is None else descriptors
+    by_provider = {str(descriptor.profile_id): descriptor for descriptor in built}
+    named = {}
+    for profile in closed_profiles():
+        name = str(profile.profile_id)
+        descriptor = by_provider.get(name) or by_provider.get(profile.executable)
+        if (
+            descriptor is not None
+            and descriptor.hooks is not None
+            and descriptor.activity is not None
+            and descriptor.activity.identity is HookIdentity.PAYLOAD_THREAD
+        ):
+            named[name] = descriptor.hooks
+    return named
 
 
 def profiles_watched_by_title(
