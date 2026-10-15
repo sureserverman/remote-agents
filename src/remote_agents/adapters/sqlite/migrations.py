@@ -418,6 +418,20 @@ MIGRATIONS: tuple[tuple[int, str], ...] = (
         CREATE INDEX session_worktrees_by_path ON session_worktrees(worktree_path);
         """,
     ),
+    (
+        20,
+        # What became of each session a restart interrupted (DEC-127). `resuming` is written
+        # before the launch and replaced by `resumed:<id>` or `skipped:<reason>`; a decided row
+        # is never acted on again, so a restart never resumes a session twice (DEC-114). Its
+        # own table, never a field on `sessions` (DEC-115's reason: a row rebuilt by position).
+        """
+        CREATE TABLE interrupted_resumes (
+            session_id TEXT PRIMARY KEY,
+            outcome TEXT NOT NULL,
+            decided_at TEXT NOT NULL
+        );
+        """,
+    ),
 )
 """Migration 14 takes the surface's bookkeeping out of the watched store.
 

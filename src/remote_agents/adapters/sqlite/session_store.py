@@ -389,6 +389,14 @@ class SQLiteSessionStore:
             ProjectUsage(ProjectId(row[0]), int(row[1]), _instant_from_row(row[2])) for row in rows
         )
 
+    async def idempotency_key_claimed(self, key: str) -> bool:
+        """Whether `key` was claimed, without claiming it: the restart resume pass asks after a
+        failed resume, to tell an error before the claim from one after it."""
+        row = self._connection.execute(
+            "SELECT 1 FROM idempotency_claims WHERE key = ?", (key,)
+        ).fetchone()
+        return row is not None
+
     async def claim_idempotency_key(self, key: str) -> bool:
         """Atomically claim a callback key without creating a fake session event."""
         with self._connection:

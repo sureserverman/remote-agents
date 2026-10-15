@@ -355,3 +355,26 @@ def test_the_snapshot_is_not_mutated() -> None:
     plan_resumes(snapshot)
 
     assert snapshot == before
+
+
+def test_a_session_an_earlier_start_left_resuming_counts_whatever_its_state() -> None:
+    """Reconcile ended it after the earlier start; the intent is what says it was interrupted."""
+    record = _record(state=SessionState.ENDED)
+    snapshot = replace(
+        _snapshot(_lost(record), server_started_at=CREATED, marks={record: "conv-a"}),
+        pending=frozenset({str(record.session_id)}),
+    )
+
+    (decision,) = plan_resumes(snapshot)
+
+    assert decision.skip is None
+
+
+def test_a_pending_session_whose_pane_is_listed_is_left_alone() -> None:
+    record = _record()
+    snapshot = replace(
+        _snapshot(_live(record), marks={record: "conv-a"}),
+        pending=frozenset({str(record.session_id)}),
+    )
+
+    assert plan_resumes(snapshot) == ()

@@ -505,7 +505,7 @@ class RolloverPass:
                 )
                 return
             except Exception as error:
-                # The launch may have got part-way; its key is claimed, so it is never tried
+                # The launch may have got part-way; its key may be claimed, so it is never tried
                 # again. A `CodexRemoteControlBusy` lands here too, after the unattended wait:
                 # nothing started, but SUCCESSOR_STARTING is persisted and cannot step back, so
                 # the rollover fails under that name (BL-037's residual for a wedged change).

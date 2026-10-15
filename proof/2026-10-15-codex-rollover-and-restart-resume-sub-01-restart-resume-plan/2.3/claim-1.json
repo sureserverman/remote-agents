@@ -1,0 +1,28 @@
+{
+ "baseline": {
+  "elapsed_s": 1.1,
+  "exit": 0,
+  "tail": "..........................                                               [100%]\n26 passed in 0.87s"
+ },
+ "break_patch": "--- a/src/remote_agents/application/interrupted_resume.py\n+++ b/src/remote_agents/application/interrupted_resume.py\n@@ -259,8 +259,6 @@\n         for decision in plan_resumes(snapshot):\n             session = str(decision.record.session_id)\n             current = decided.get(session)\n-            if current is not None and current != RESUMING:\n-                continue\n             if decision.skip is not None:\n                 reports.append(await self._decide(decision, f\"{SKIPPED}:{decision.skip.value}\"))\n                 continue\n",
+ "build": null,
+ "created": "2026-10-15T23:51:14+00:00",
+ "fingerprint": "dcd8ece8710763038e93adc5ae7ac93eda00420371fa8c4c8dd50f76a5b04a8b",
+ "index": 1,
+ "kind": "claim",
+ "named_break": null,
+ "no_build_reason": "python tests only",
+ "plan": "/mnt/vault/Portfolio/infra/remote-agents/plans/2026-10-15-codex-rollover-and-restart-resume-sub-01-restart-resume-plan.md",
+ "red": {
+  "elapsed_s": 1.1,
+  "exit": 1,
+  "tail": "------------------------------ Captured log call -------------------------------\nWARNING  remote_agents.application.interrupted_resume:interrupted_resume.py:353 interrupted session 81e84c12-fec1-4626-8344-c25cd4087a15 was already decided as skipped:no-conversation\n_____ test_a_launch_error_after_the_claim_is_decided_and_never_tried_again _____\n\nrig = <test_interrupted_resume_pass.Rig object at 0x73d9833dd950>\n\n    async def test_a_launch_error_after_the_claim_is_decided_and_never_tried_again(rig: Rig) -> None:\n        record = await rig.running()\n        snapshot = await rig.snapshot(record)\n    \n        async def broken(command: ResumeCommand):\n            assert await rig.sessions.claim_idempotency_key(command.idempotency_key)\n            raise RuntimeError(\"tmux said no\")\n    \n        (report,) = await rig.run_pass(resume=broken).run(snapshot)\n        again = await rig.run_pass().run(await rig.snapshot(record))\n    \n        assert report.outcome == \"skipped:launch_error\"\n>       assert again == () and rig.commands == []\nE       AssertionError: assert ((ResumeReport...nudge=False),) == ()\nE         \nE         Left contains one more item: ResumeReport(record=SessionRecord(session_id=SessionId(value=UUID('5f91b9b6-4cc4-463e-85c3-fd5ad206044d')), project_id..., orphan_provenance=None, remote_control_state=None), outcome='skipped:launch_error', new_session_id=None, nudge=False)\nE         Use -v to get more diff)\n\ntests/integration/test_interrupted_resume_pass.py:271: AssertionError\n------------------------------ Captured log call -------------------------------\nERROR    remote_agents.application.interrupted_resume:interrupted_resume.py:324 resuming interrupted session 5f91b9b6-4cc4-463e-85c3-fd5ad206044d failed\nTraceback (most recent call last):\n  File \"/home/user/dev/infra/remote-agents/src/remote_agents/application/interrupted_resume.py\", line 313, in _resumed\n    outcome = await self._resume(command)\n              ^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/user/dev/infra/remote-agents/tests/integration/test_interrupted_resume_pass.py\", line 265, in broken\n    raise RuntimeError(\"tmux said no\")\nRuntimeError: tmux said no\nWARNING  remote_agents.application.interrupted_resume:interrupted_resume.py:353 interrupted session 5f91b9b6-4cc4-463e-85c3-fd5ad206044d was already decided as skipped:launch_error\n=========================== short test summary info ============================\nFAILED tests/integration/test_interrupted_resume_pass.py::test_a_second_pass_over_the_same_snapshot_launches_nothing\nFAILED tests/integration/test_interrupted_resume_pass.py::test_a_skip_is_recorded_once_and_launches_nothing\nFAILED tests/integration/test_interrupted_resume_pass.py::test_a_launch_error_after_the_claim_is_decided_and_never_tried_again\n3 failed, 23 passed in 0.91s"
+ },
+ "schema": 2,
+ "task": "2.3",
+ "test": "uv run --locked pytest tests/integration/test_interrupted_resume_pass.py tests/architecture/test_unattended_launch_keyed.py -q -p no:randomly",
+ "text": "`uv run --locked pytest tests/integration/test_interrupted_resume_pass.py tests/architecture/test_unattended_launch_keyed.py -q -p no:randomly`. The architecture test walks every `LaunchCommand(`/`ResumeCommand(` construction in `application/` that passes `UNATTENDED_LAUNCH_WAIT_SECONDS`, and asserts a non-empty idempotency key. With a fake terminal:",
+ "touched": [
+  "src/remote_agents/application/interrupted_resume.py"
+ ]
+}

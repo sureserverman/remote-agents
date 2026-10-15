@@ -292,7 +292,7 @@ class SchedulePass:
             raise
         except Exception as error:
             # The launch may have got part-way, so this fire is over either way: recorded and
-            # reported, never retried (its key is claimed already).
+            # reported, never retried (its key may be claimed already).
             _LOG.exception("launching schedule %s failed", schedule.id)
             return await self._record(
                 schedule,

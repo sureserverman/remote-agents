@@ -469,7 +469,7 @@ class SessionService:
     async def resume(self, command: ResumeCommand) -> ResumeOutcome:
         """Create one managed identity for a server-resolved provider conversation."""
         async with (
-            self._daemon_guard(command.profile_id, LAUNCH_WAIT_SECONDS),
+            self._daemon_guard(command.profile_id, command.guard_wait),
             self._locks.operation(),
         ):
             async with self._locks.for_conversation(
@@ -501,7 +501,11 @@ class SessionService:
             command.project_id,
             command.profile_id,
             SessionDisplayIdentity(
-                str(command.project_id), str(command.profile_id), "resumed", sequence
+                str(command.project_id),
+                str(command.profile_id),
+                "resumed",
+                sequence,
+                command.label,
             ),
             SessionState.STARTING,
             datetime.now(UTC),

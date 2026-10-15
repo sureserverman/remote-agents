@@ -53,6 +53,11 @@ class ResumeCommand:
     profile_id: ProfileId
     conversation: ResolvedConversation
     idempotency_key: str
+    guard_wait: float = LAUNCH_WAIT_SECONDS
+    """How long a resume whose agent shares the Codex daemon waits for its guard; an unattended
+    resume waits `UNATTENDED_LAUNCH_WAIT_SECONDS`, as an unattended launch does."""
+    label: str | None = None
+    """The new session's name, as `LaunchCommand.label`; None leaves it unnamed."""
 
     def __post_init__(self) -> None:
         if self.conversation.summary.profile_id != self.profile_id:

@@ -9,15 +9,44 @@ the same table.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+import hashlib
+import logging
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from enum import StrEnum
+from pathlib import Path
 
-from remote_agents.domain.conversations import ProviderConversationId
+from remote_agents.application.commands import UNATTENDED_LAUNCH_WAIT_SECONDS, ResumeCommand
+from remote_agents.application.errors import DuplicateCommandError, MutationsDraining
+from remote_agents.application.services import ResumeOutcome
+from remote_agents.domain.conversations import (
+    ConversationReference,
+    ConversationState,
+    ConversationSummary,
+    ProviderConversationId,
+    ResolvedConversation,
+)
 from remote_agents.domain.models import ProfileId, SessionId, SessionRecord, SessionState
 from remote_agents.domain.rollover import RolloverState
+from remote_agents.ports.host_remote_control import CodexRemoteControlBusy
+from remote_agents.ports.interrupted_resumes import (
+    RESUMED,
+    RESUMING,
+    SKIPPED,
+    InterruptedResumes,
+)
 from remote_agents.ports.rollover_store import Rollover
+from remote_agents.ports.worktree_store import Worktree
+
+_LOG = logging.getLogger(__name__)
+
+RESUMED_LABEL = "resumed after restart"
+"""The name a resumed session carries, so the owner can tell it from one they started."""
+
+DEFERRED = "deferred"
+"""A report's outcome when the resume was refused before its key was claimed: the intent
+stays `resuming`, and the next start tries again."""
 
 SERVER_CLOCK_SLACK = timedelta(seconds=1)
 """tmux reports its start time in whole seconds, and the first launch on a host starts the
@@ -69,6 +98,10 @@ class RestartSnapshot:
     rollovers: tuple[Rollover, ...]
     resumable_profiles: frozenset[ProfileId]
     """Profiles whose agent can reopen a chosen conversation (`resume_capable`)."""
+    pending: frozenset[str] = frozenset()
+    """Sessions an earlier start left at `resuming`. They were judged interrupted then, and
+    reconcile has ended them since, so they count whatever their state while no pane is
+    listed for them."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -97,7 +130,7 @@ def plan_resumes(snapshot: RestartSnapshot) -> tuple[ResumeDecision, ...]:
         (
             session.record
             for session in snapshot.sessions
-            if _interrupted(session, snapshot.server_started_at)
+            if _interrupted(session, snapshot.server_started_at, snapshot.pending)
         ),
         key=lambda record: (record.created_at, str(record.session_id)),
     )
@@ -129,8 +162,14 @@ def plan_resumes(snapshot: RestartSnapshot) -> tuple[ResumeDecision, ...]:
     return tuple(decisions)
 
 
-def _interrupted(session: SessionAtRestart, server_started_at: datetime | None) -> bool:
-    if session.record.state is not SessionState.RUNNING or session.pane_listed:
+def _interrupted(
+    session: SessionAtRestart, server_started_at: datetime | None, pending: frozenset[str]
+) -> bool:
+    if session.pane_listed:
+        return False
+    if str(session.record.session_id) in pending:
+        return True
+    if session.record.state is not SessionState.RUNNING:
         return False
     return (
         server_started_at is None
@@ -174,4 +213,167 @@ def _held_conversations(record: SessionRecord, marks: Mapping[str, str]) -> tupl
         value
         for value in (marks.get(str(record.session_id)), record.resume_source_id)
         if value is not None
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class ResumeReport:
+    """What the pass did for one interrupted session, for the summary notice."""
+
+    record: SessionRecord
+    outcome: str
+    """`resumed:<id>`, `skipped:<reason>`, or `DEFERRED`."""
+    new_session_id: SessionId | None = None
+    nudge: bool = False
+    """The decision asked for the resume nudge (Task 2.4 types it)."""
+
+
+class InterruptedResumePass:
+    """Act on `plan_resumes` once per interrupted session, durably (DEC-114, DEC-127).
+
+    Every decision is written before anything is launched: a skip as its final outcome, a
+    resume as the `RESUMING` intent first. A session whose row holds a final outcome is never
+    acted on again and is not reported. One holding `RESUMING` is tried again; its
+    `restart:<session>` key is claimed at most once, so the retry launches only when the
+    earlier attempt never reached the claim.
+
+    **An error is final only once the key is claimed.** Before the claim nothing can have
+    started, so the intent is left for the next start (`DEFERRED`); after it the launch may
+    have got part-way, so it is decided as `skipped:launch_error` and never tried again. When
+    the claim cannot be read, the intent is left too: the key still refuses a second launch.
+    """
+
+    def __init__(
+        self,
+        outcomes: InterruptedResumes,
+        *,
+        resume: Callable[[ResumeCommand], Awaitable[ResumeOutcome]],
+        folder_of: Callable[[SessionId], Awaitable[Worktree | None]],
+        key_claimed: Callable[[str], Awaitable[bool]],
+        now: Callable[[], datetime],
+    ) -> None:
+        self._outcomes = outcomes
+        self._resume = resume
+        self._folder_of = folder_of
+        self._key_claimed = key_claimed
+        self._now = now
+
+    async def run(self, snapshot: RestartSnapshot) -> tuple[ResumeReport, ...]:
+        """Resume or skip every interrupted session the snapshot shows, and say what each came
+        to. When the service starts draining, the pass stops there and answers what it has done
+        so far; every session it did not reach keeps its intent for the next start."""
+        decided = await self._outcomes.outcomes()
+        reports: list[ResumeReport] = []
+        for decision in plan_resumes(snapshot):
+            session = str(decision.record.session_id)
+            current = decided.get(session)
+            if current is not None and current != RESUMING:
+                continue
+            if decision.skip is not None:
+                reports.append(await self._decide(decision, f"{SKIPPED}:{decision.skip.value}"))
+                continue
+            if current is None:
+                await self._outcomes.record(session, RESUMING, decided_at=self._now())
+            try:
+                reports.append(await self._resumed(decision))
+            except MutationsDraining:
+                _LOG.warning("the service began stopping; the restart resume pass stops here")
+                break
+        return tuple(reports)
+
+    async def _resumed(self, decision: ResumeDecision) -> ResumeReport:
+        record = decision.record
+        assert decision.conversation_id is not None  # a decision that is not a skip has one
+        try:
+            worktree = await self._folder_of(record.session_id)
+        except Exception:
+            _LOG.exception(
+                "the folder of interrupted session %s could not be read", record.session_id
+            )
+            return ResumeReport(record, DEFERRED)
+        if worktree is not None and worktree.removed_at is not None:
+            return await self._decide(decision, f"{SKIPPED}:worktree_removed")
+        try:
+            command = ResumeCommand(
+                record.project_id,
+                record.profile_id,
+                _resolved(
+                    record,
+                    decision.conversation_id,
+                    None if worktree is None else worktree.path,
+                    self._now(),
+                ),
+                f"restart:{record.session_id}",
+                guard_wait=UNATTENDED_LAUNCH_WAIT_SECONDS,
+                label=RESUMED_LABEL,
+            )
+        except ValueError:
+            # Nothing was claimed, but the same record would fail the same way on every start.
+            _LOG.exception("interrupted session %s has no resumable command", record.session_id)
+            return await self._decide(decision, f"{SKIPPED}:launch_error")
+        try:
+            outcome = await self._resume(command)
+        except DuplicateCommandError:
+            # The key was claimed by an earlier start that never recorded what it did.
+            return await self._decide(decision, f"{SKIPPED}:interrupted")
+        except MutationsDraining:
+            raise
+        except CodexRemoteControlBusy:
+            # Refused at the Codex daemon guard, before the key was claimed: nothing started.
+            _LOG.warning("resuming %s waited out the Codex daemon guard", record.session_id)
+            return ResumeReport(record, DEFERRED)
+        except Exception:
+            _LOG.exception("resuming interrupted session %s failed", record.session_id)
+            if await self._claimed(command.idempotency_key):
+                # It may have got part-way: decided, never tried again.
+                return await self._decide(decision, f"{SKIPPED}:launch_error")
+            return ResumeReport(record, DEFERRED)
+        if outcome.worktree_removed:
+            return await self._decide(decision, f"{SKIPPED}:worktree_removed")
+        if not outcome.created:
+            return await self._decide(decision, f"{SKIPPED}:already-open")
+        if outcome.record.state is SessionState.FAILED:
+            return await self._decide(decision, f"{SKIPPED}:launch_failed")
+        new = outcome.record.session_id
+        report = await self._decide(decision, f"{RESUMED}:{new}")
+        return ResumeReport(record, report.outcome, new, decision.nudge)
+
+    async def _claimed(self, key: str) -> bool:
+        """Whether the resume's key is claimed; False when that cannot be read, which leaves
+        the intent for the next start, where the key refuses a second launch anyway."""
+        try:
+            return await self._key_claimed(key)
+        except Exception:
+            _LOG.exception("could not read whether %s was claimed", key)
+            return False
+
+    async def _decide(self, decision: ResumeDecision, outcome: str) -> ResumeReport:
+        session = str(decision.record.session_id)
+        if not await self._outcomes.record(session, outcome, decided_at=self._now()):
+            # Another writer decided it first; the first outcome stands, so report that one.
+            stored = (await self._outcomes.outcomes()).get(session, outcome)
+            _LOG.warning("interrupted session %s was already decided as %s", session, stored)
+            return ResumeReport(decision.record, stored)
+        return ResumeReport(decision.record, outcome)
+
+
+def _resolved(
+    record: SessionRecord,
+    conversation: ProviderConversationId,
+    folder: Path | None,
+    now: datetime,
+) -> ResolvedConversation:
+    """The conversation as a resume takes it. The reference is opaque and never shown: it is
+    derived from the id the way the provider catalogues derive theirs."""
+    digest = hashlib.sha256(f"{record.profile_id}:{conversation.value}".encode()).hexdigest()
+    return ResolvedConversation(
+        ConversationSummary(
+            ConversationReference(f"c-{digest[:32]}"),
+            record.profile_id,
+            record.project_id,
+            ConversationState.RESUMABLE,
+            now,
+        ),
+        conversation,
+        folder,
     )
