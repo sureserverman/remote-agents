@@ -27,7 +27,6 @@ from remote_agents.adapters.workflow.handoff_envelopes import FileHandoffEnvelop
 from remote_agents.adapters.workflow.roots import handoff_root
 from remote_agents.application.activity import CodexApprovalWatcher, drain_activity
 from remote_agents.application.backend import CLOSE_TIMEOUT_SECONDS, DRAIN_TIMEOUT_SECONDS
-from remote_agents.application.conversation_sightings import record_conversations
 from remote_agents.application.limit_lifts import LimitLiftWatcher
 from remote_agents.application.limit_resume import prune_outcomes
 from remote_agents.application.limit_stops import LimitScreenWatcher, LimitStopClassifier
@@ -42,7 +41,6 @@ from remote_agents.application.worktrees import main_checkout
 from remote_agents.config import TelegramSecrets
 from remote_agents.domain.models import ProfileId, ProjectId, SessionId
 from remote_agents.ports.agent_activity import ActivityConfidence, ActivityKind, AgentActivity
-from remote_agents.ports.conversation_ledger import ConversationLedger
 from remote_agents.ports.git_checkout import GitCheckout
 from remote_agents.ports.limit_stop_outcomes import LimitStopOutcomes
 from remote_agents.ports.message_relay import MessageRelay, RelayOutcome, RelayResult
@@ -254,10 +252,6 @@ class ServiceComposition:
 
     limit_stop_outcomes: LimitStopOutcomes | None = None
     """What became of each limit stop, pruned once a day after `OUTCOME_RETENTION`, or None."""
-
-    conversation_ledger: ConversationLedger | None = None
-    """Each session's latest provider conversation, written from the drained activity, read by
-    the resume after a restart; or None, in compositions that resume nothing."""
 
     relay_notice_flush: Callable[[], Awaitable[None]] | None = None
     """Sends the queued-message notices a flood hold kept, on every activity pass (BL-107)."""
@@ -814,11 +808,6 @@ async def _watch_activity_once(composition: ServiceComposition) -> None:
             )
         except Exception:
             _LOG.exception("draining the activity spool failed")
-    if composition.conversation_ledger is not None:
-        try:
-            await record_conversations(activities, composition.conversation_ledger)
-        except Exception:
-            _LOG.exception("recording conversation sightings failed; delivery continues")
     if composition.approval_watcher is not None:
         try:
             reported_needs_answer_session_ids = tuple(

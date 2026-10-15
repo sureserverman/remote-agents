@@ -36,13 +36,13 @@ import os
 import re
 import tempfile
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import IO, TYPE_CHECKING
 
 from remote_agents.adapters.agents.hook_identity import read_roster, resolve, roster_path
-from remote_agents.adapters.agents.turn_markers import FileTurnMarkers
+from remote_agents.adapters.agents.turn_markers import FileConversationMarks, FileTurnMarkers
 from remote_agents.ports.agent_activity import bounded_detail_line
 from remote_agents.ports.private_directory import open_private_directory
 from remote_agents.ports.session_identity import SESSION_ID_VARIABLE, safe_session_id
@@ -107,15 +107,6 @@ class ObservedAgentEvent:
     treats as reversible by the next edit. A Tier-1 review found it.
     """
 
-    conversation: str | None = None
-    """The agent's own conversation id, kept only on a turn its own agent ended.
-
-    The payload's `session_id` is the agent's id for its conversation, not the pane's: an
-    identifier, bounded by `safe_session_id`, never anything typed (DEC-067). The resume after
-    a restart reopens it. A nested agent ending its turn inside its parent's leaves none, so
-    the parent's conversation is never overwritten by a child's.
-    """
-
     def document(self) -> dict[str, object]:
         return {
             "session_id": self.session_id,
@@ -124,7 +115,6 @@ class ObservedAgentEvent:
             "detail": self.detail,
             "observed_at": self.observed_at.isoformat(),
             "ask": self.ask,
-            "conversation": self.conversation,
         }
 
 
@@ -140,8 +130,10 @@ def spool_agent_event(
 ) -> int:
     """Record one hook event privately, and always report success to the agent.
 
-    A submit starts the session's turn marker and records nothing else; a finished turn ends
-    the marker and is then recorded as before. What is recorded, and whether a submit marks a
+    A submit starts the session's turn marker and, when its agent owns that marker, writes the
+    agent's own conversation id as the session's conversation mark -- an identifier, never the
+    prompt; it records no activity. A finished turn ends the marker and is then recorded as
+    before. What is recorded, and whether a submit marks a
     turn at all, is the licence the hook's vertical declares (BL-050): this module names no
     provider, and a hook with no licence records nothing and starts no marker.
 
@@ -195,14 +187,23 @@ def spool_agent_event(
         found = licence() if event == TURN_STARTED else None
         if found is not None and found.starts_turn_marker:
             turns.start(session_id, owner=owner if isinstance(owner, str) else None)
+            # The turn's owner names its own conversation, kept for the resume after a restart.
+            # Only the agent that holds the marker after `start` writes it: a nested agent lands
+            # on its parent's running turn and never owns it (DEC-104), so it never replaces
+            # the parent's conversation. Guarded on its own: it never costs the marker.
+            try:
+                agent = safe_session_id(owner)
+                if agent is not None and turns.owner(session_id) == agent:
+                    conversations = FileConversationMarks(activity_directory)
+                    conversations.record(session_id, agent)
+            except Exception:
+                pass
             return 0
         # Ungated, unlike the start: ending a marker that was never started is a no-op. Guarded
         # on its own, so a marker that cannot be removed never costs the "finished" record.
-        conversation = None
         if event in TURN_ENDED:
             try:
-                if turns.end_if_owned_by(session_id, owner):
-                    conversation = safe_session_id(owner)
+                turns.end_if_owned_by(session_id, owner)
             except Exception:
                 pass
         if document is None:
@@ -211,8 +212,6 @@ def spool_agent_event(
             found = licence()
         observed = _observed(document, session_id, now(), found)
         if observed is not None:
-            if conversation is not None:
-                observed = replace(observed, conversation=conversation)
             _write_privately(observed, activity_directory)
     except Exception:
         # Catching broadly is correct exactly here and nowhere else in this package. This

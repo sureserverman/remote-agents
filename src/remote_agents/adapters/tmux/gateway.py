@@ -7,6 +7,7 @@ import contextlib
 import sys
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Protocol
 
@@ -272,22 +273,28 @@ class TmuxGateway:
         """
         return SessionKeyLock(self._key_lock_directory, session_id)
 
-    async def server_present(self) -> bool:
-        """Whether the dedicated server is running at all, which `inventory` folds away.
+    async def server_started_at(self) -> datetime | None:
+        """When the dedicated server started, or None when none is running.
 
         `inventory` answers an absent server with zero panes, because to reconcile the two are
-        the same. To the resume-after-restart pass they are not: no server means every pane was
-        lost at once (a reboot, a power loss, a tmux crash), while a server with no managed
-        panes means nothing was interrupted. Any failure other than the absent-server one is
-        raised, as `inventory` raises it, rather than guessed at.
+        the same. To the resume-after-restart pass they are not, and neither is a server that
+        started after a session did: either way that session's pane was lost with its server
+        (a reboot, a power loss, a tmux crash), even if the console has since started a fresh
+        one. Any failure other than the absent-server one is raised, as `inventory` raises it.
+        `#{start_time}` is a server variable, so every session line carries the same value.
         """
         try:
-            await self._runner.run(*self._base_argv(), "list-sessions", "-F", "#{session_id}")
+            output = await self._runner.run(
+                *self._base_argv(), "list-sessions", "-F", "#{start_time}"
+            )
         except RuntimeError as error:
             if _reports_absent_server(str(error)):
-                return False
+                return None
             raise
-        return True
+        first = output.split("\n", 1)[0].strip()
+        if not first.isdigit():
+            raise RuntimeError("tmux reported no server start time")
+        return datetime.fromtimestamp(int(first), UTC)
 
     async def inventory(self) -> TmuxInventory:
         """List panes only on the dedicated socket and quarantine malformed tags.

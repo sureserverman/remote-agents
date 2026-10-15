@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
+
 from remote_agents.adapters.tmux.codec import attach_command
 from remote_agents.domain.conversations import ProviderConversationId
 from remote_agents.domain.models import ProfileId, ProjectId, SessionId
@@ -42,12 +44,13 @@ class FakeTerminal:
         self.launched_remote_control: list[tuple[ProfileId, bool]] = []
         #: Every relayed message, as (session, text), and the deliveries to answer them with.
         self.prompts: list[tuple[SessionId, str]] = []
-        #: What `server_present` answers: set False to model a host that lost its tmux server.
-        self.server_up = True
+        #: What `server_started_at` answers: None models a host that lost its tmux server, and a
+        #: time after a session's creation models a server restarted since.
+        self.server_started: datetime | None = datetime(2000, 1, 1, tzinfo=UTC)
         self.prompt_deliveries: list[PromptDelivery] = []
 
-    async def server_present(self) -> bool:
-        return self.server_up
+    async def server_started_at(self) -> datetime | None:
+        return self.server_started
 
     async def managed_process_roots(self) -> tuple[int, ...]:
         return ()

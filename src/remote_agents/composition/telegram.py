@@ -24,7 +24,6 @@ from remote_agents.adapters.agents.turn_markers import FileTurnMarkers
 from remote_agents.adapters.sqlite.activity_store import SQLiteActivityStore
 from remote_agents.adapters.sqlite.callback_state_store import SQLiteCallbackStateStore
 from remote_agents.adapters.sqlite.chat_view_store import SQLiteChatViewStore
-from remote_agents.adapters.sqlite.conversation_ledger import SQLiteConversationLedger
 from remote_agents.adapters.sqlite.limit_stop_store import SQLiteLimitStopStore
 from remote_agents.adapters.sqlite.queued_prompt_store import SQLiteQueuedPromptStore
 from remote_agents.adapters.sqlite.schedule_store import SQLiteScheduleStore
@@ -325,7 +324,6 @@ def _private_boundary(
         schedule_notifier=boundary.schedule_notifier,
         # The same outcome rows the lift watcher writes, pruned daily by the service (BL-111).
         limit_stop_outcomes=limit_stops,
-        conversation_ledger=SQLiteConversationLedger(connection),
         # The rollover pass (DEC-115), built beside the loop that runs it. Wired only where the
         # backend has sessions, the switch and the rollover rows, which production always does;
         # the switch, read afresh each pass, is what keeps it idle until the owner turns it on.

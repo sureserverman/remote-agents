@@ -338,8 +338,6 @@ def _activity(record: dict) -> AgentActivity | None:
         # file, so the far end bounds again rather than trusting what it finds (the argument
         # `MAXIMUM_DETAIL_CHARACTERS` is written down for).
         ask=_ask_token(record.get("ask")),
-        # Checked again here for the same reason: a different process wrote the file.
-        conversation=safe_session_id(record.get("conversation")),
     )
 
 

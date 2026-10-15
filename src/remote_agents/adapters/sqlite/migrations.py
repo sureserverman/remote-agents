@@ -418,20 +418,6 @@ MIGRATIONS: tuple[tuple[int, str], ...] = (
         CREATE INDEX session_worktrees_by_path ON session_worktrees(worktree_path);
         """,
     ),
-    (
-        20,
-        # Each session's latest provider conversation, from its own turn-ending hooks, so a
-        # restart can resume it (`ports/conversation_ledger`). Its own table for DEC-115's
-        # reason; an identifier and a time only (DEC-067). `seen_at` is ISO-8601 UTC, so the
-        # upsert's "newer wins" compares as text.
-        """
-        CREATE TABLE session_conversations (
-            session_id TEXT PRIMARY KEY,
-            provider_conversation_id TEXT NOT NULL,
-            seen_at TEXT NOT NULL
-        );
-        """,
-    ),
 )
 """Migration 14 takes the surface's bookkeeping out of the watched store.
 

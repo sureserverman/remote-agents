@@ -26,13 +26,13 @@ class TurnMarkers(Protocol):
         service's end: the screen showed the turn over, or the session ended."""
         ...
 
-    def end_if_owned_by(self, session_id: str, owner: object) -> bool:
+    def end_if_owned_by(self, session_id: str, owner: object) -> None:
         """A hook's end: remove the marker only when it records `owner`, or no owner at all. An
-        `owner` that is not a usable id ends no marker that has one.
+        `owner` that is not a usable id ends no marker that has one."""
+        ...
 
-        Answers whether this end came from the turn's own agent: True when the marker named
-        `owner`, named nobody, or was not there to say otherwise; False when another agent
-        holds it (a nested agent ending its turn inside its parent's)."""
+    def owner(self, session_id: str) -> str | None:
+        """The agent id the session's marker records, or None: no marker, or none recorded."""
         ...
 
     def started_at(self, session_id: str) -> datetime | None:
@@ -41,4 +41,29 @@ class TurnMarkers(Protocol):
 
     def sessions(self) -> tuple[str, ...]:
         """Every session holding a marker."""
+        ...
+
+
+class ConversationMarks(Protocol):
+    """Each session's latest own conversation, as its agent named it at a turn's start;
+    never raises.
+
+    Written by the hook, read by the resume after a restart. It holds an identifier and
+    nothing typed (DEC-067: admitted because the resume reopens it). It is replaced whole, so
+    the newest write wins with no clock, and it survives a reboot with no drain."""
+
+    def record(self, session_id: str, conversation_id: str) -> None:
+        """Make `conversation_id` the session's latest; a malformed id is never written."""
+        ...
+
+    def latest(self, session_id: str) -> str | None:
+        """The session's latest conversation, or None when none is recorded or it is malformed."""
+        ...
+
+    def sessions(self) -> tuple[str, ...]:
+        """Every session holding a mark."""
+        ...
+
+    def forget(self, session_id: str) -> None:
+        """Remove the session's mark, once nothing will resume it."""
         ...

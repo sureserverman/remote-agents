@@ -30,6 +30,7 @@ from remote_agents.ports.private_directory import open_private_directory
 from remote_agents.ports.session_identity import safe_session_id
 
 TURNS_DIRECTORY = "turns"
+CONVERSATIONS_DIRECTORY = "conversations"
 
 #: Non-blocking, both: a read-only open of a FIFO planted at a marker's name waits for a writer,
 #: and a hook waiting there hangs the owner's live session. On a regular file it changes nothing.
@@ -73,29 +74,23 @@ class FileTurnMarkers:
         finally:
             os.close(descriptor)
 
-    def end_if_owned_by(self, session_id: str, owner: object) -> bool:
+    def end_if_owned_by(self, session_id: str, owner: object) -> None:
         name = safe_session_id(session_id)
-        if name is None:
-            return False
-        if not self._is_real_directory():
-            return True
+        if name is None or not self._is_real_directory():
+            return
         # A hook's end: only the agent that started the marker ends it, and an end that names
         # no usable agent ends none that has an owner. A marker with no owner recorded has none
         # to protect, and ends as before owners existed.
         try:
             descriptor = os.open(self._directory / name, _READ)
         except OSError:
-            # No marker: the service may already have ended it on the screen's evidence, or
-            # this provider starts none. Nothing says another agent owns the turn.
-            return True
+            return
         try:
             current = _owner_of(descriptor)
         finally:
             os.close(descriptor)
         if current is None or current == safe_session_id(owner):
             self.end(session_id)
-            return True
-        return False
 
     def end(self, session_id: str) -> None:
         name = safe_session_id(session_id)
@@ -107,6 +102,19 @@ class FileTurnMarkers:
             os.unlink(self._directory / name)
         except OSError:
             return
+
+    def owner(self, session_id: str) -> str | None:
+        name = safe_session_id(session_id)
+        if name is None or not self._is_real_directory():
+            return None
+        try:
+            descriptor = os.open(self._directory / name, _READ)
+        except OSError:
+            return None
+        try:
+            return _owner_of(descriptor)
+        finally:
+            os.close(descriptor)
 
     def started_at(self, session_id: str) -> datetime | None:
         name = safe_session_id(session_id)
@@ -138,6 +146,88 @@ class FileTurnMarkers:
             return stat.S_ISDIR(os.lstat(self._directory).st_mode)
         except OSError:
             return False
+
+
+class FileConversationMarks:
+    """`ConversationMarks` as one 0600 file per session in a private directory.
+
+    Beside the turn markers, under `<activity directory>/conversations/`, and in this module so
+    the hook's path imports nothing more. A mark is written to a fresh temporary and renamed
+    into place: a reader never sees a half-written id, which `safe_session_id` would accept as
+    a different, shorter one. The rename replaces whatever stood at the name -- a planted link
+    included -- and never writes through it. Every read goes through the turn markers' rules:
+    `O_NOFOLLOW`, non-blocking, a regular file only, and an id that reads as one or nothing.
+    """
+
+    def __init__(self, activity_directory: Path) -> None:
+        self._directory = activity_directory / CONVERSATIONS_DIRECTORY
+
+    def record(self, session_id: str, conversation_id: str) -> None:
+        name = safe_session_id(session_id)
+        conversation = safe_session_id(conversation_id)
+        if name is None or conversation is None:
+            return
+        directory = open_private_directory(self._directory)
+        if directory is None:
+            return
+        temporary = directory / f".pending-{os.urandom(6).hex()}"
+        try:
+            descriptor = os.open(temporary, _CREATE | os.O_EXCL, 0o600)
+        except OSError:
+            return
+        try:
+            try:
+                os.write(descriptor, conversation.encode("ascii"))
+            finally:
+                os.close(descriptor)
+            os.replace(temporary, directory / name)
+        except OSError:
+            try:
+                os.unlink(temporary)
+            except OSError:
+                pass
+
+    def latest(self, session_id: str) -> str | None:
+        name = safe_session_id(session_id)
+        if name is None or not _is_real_directory(self._directory):
+            return None
+        try:
+            descriptor = os.open(self._directory / name, _READ)
+        except OSError:
+            return None
+        try:
+            return _owner_of(descriptor)
+        finally:
+            os.close(descriptor)
+
+    def sessions(self) -> tuple[str, ...]:
+        if not _is_real_directory(self._directory):
+            return ()
+        try:
+            entries = list(os.scandir(self._directory))
+        except OSError:
+            return ()
+        return tuple(
+            entry.name
+            for entry in entries
+            if safe_session_id(entry.name) is not None and _is_regular(entry)
+        )
+
+    def forget(self, session_id: str) -> None:
+        name = safe_session_id(session_id)
+        if name is None or not _is_real_directory(self._directory):
+            return
+        try:
+            os.unlink(self._directory / name)
+        except OSError:
+            return
+
+
+def _is_real_directory(path: Path) -> bool:
+    try:
+        return stat.S_ISDIR(os.lstat(path).st_mode)
+    except OSError:
+        return False
 
 
 def _owner_of(descriptor: int) -> str | None:

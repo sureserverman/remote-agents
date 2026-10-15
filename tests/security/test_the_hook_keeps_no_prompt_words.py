@@ -96,14 +96,19 @@ def test_a_submitted_prompt_is_kept_nowhere_and_delivers_nothing(
 
 @pytest.mark.parametrize("provider", ["claude", "codex"])
 def test_a_submit_writes_the_marker_and_nothing_else(provider: str, tmp_path: Path) -> None:
-    """The marker is the whole of what a submit leaves: no record, and a file holding only the
-    agent's own id for its session (asserted above)."""
+    """The marker and the conversation mark are the whole of what a submit leaves: no record,
+    and two files each holding only the agent's own id for its session -- the conversation mark
+    since 2026-10-16, kept for the resume after a restart (DEC-067's terms)."""
     directory = _spool(tmp_path)
 
     _submit(directory, provider)
 
-    written = [path.relative_to(directory) for path in directory.rglob("*") if path.is_file()]
-    assert written == [Path("turns") / "s-42"]
+    written = sorted(
+        path.relative_to(directory) for path in directory.rglob("*") if path.is_file()
+    )
+    assert written == [Path("conversations") / "s-42", Path("turns") / "s-42"]
+    for path in written:
+        assert (directory / path).read_bytes() == str(_SUBMIT["session_id"]).encode("ascii")
 
 
 @pytest.mark.parametrize("provider", ["claude", "codex"])

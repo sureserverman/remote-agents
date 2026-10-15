@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
+from datetime import datetime
 from enum import StrEnum
 from pathlib import Path
 from typing import Protocol
@@ -228,9 +229,10 @@ class PromptDelivery:
 
 class TerminalPort(Protocol):
     async def managed_process_roots(self) -> tuple[int, ...]: ...
-    # Whether the terminal's server is running at all. Observations answer a missing server
-    # with no panes; the resume-after-restart pass needs to know which of the two it saw.
-    async def server_present(self) -> bool: ...
+    # When the terminal's server started, or None when none runs. Observations answer a
+    # missing server with no panes; the resume-after-restart pass needs to know whether a
+    # session's pane was lost with its server.
+    async def server_started_at(self) -> datetime | None: ...
     # `remote_control` asks for the agent's reviewed remote-control launch, where it has one.
     #
     # Defaulted to False -- the unconnected launch -- because that is the value every answer
