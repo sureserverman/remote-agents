@@ -272,6 +272,23 @@ class TmuxGateway:
         """
         return SessionKeyLock(self._key_lock_directory, session_id)
 
+    async def server_present(self) -> bool:
+        """Whether the dedicated server is running at all, which `inventory` folds away.
+
+        `inventory` answers an absent server with zero panes, because to reconcile the two are
+        the same. To the resume-after-restart pass they are not: no server means every pane was
+        lost at once (a reboot, a power loss, a tmux crash), while a server with no managed
+        panes means nothing was interrupted. Any failure other than the absent-server one is
+        raised, as `inventory` raises it, rather than guessed at.
+        """
+        try:
+            await self._runner.run(*self._base_argv(), "list-sessions", "-F", "#{session_id}")
+        except RuntimeError as error:
+            if _reports_absent_server(str(error)):
+                return False
+            raise
+        return True
+
     async def inventory(self) -> TmuxInventory:
         """List panes only on the dedicated socket and quarantine malformed tags.
 

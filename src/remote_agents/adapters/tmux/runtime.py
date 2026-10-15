@@ -1630,6 +1630,10 @@ class TmuxTerminal:
             for pane in inventory.managed
         )
 
+    async def server_present(self) -> bool:
+        """Whether the dedicated tmux server is running (`TmuxGateway.server_present`)."""
+        return await self._gateway.server_present()
+
     async def managed_process_roots(self) -> tuple[int, ...]:
         """Expose trusted dedicated-pane roots solely for external-process exclusion."""
         try:

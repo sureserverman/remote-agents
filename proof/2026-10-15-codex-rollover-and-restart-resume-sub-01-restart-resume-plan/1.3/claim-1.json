@@ -1,0 +1,28 @@
+{
+ "baseline": {
+  "elapsed_s": 0.4,
+  "exit": 0,
+  "tail": "...                                                                      [100%]\n3 passed in 0.08s"
+ },
+ "break_patch": "--- a/src/remote_agents/adapters/tmux/gateway.py\t2026-10-16 00:05:13.098492710 +0100\n+++ b/src/remote_agents/adapters/tmux/gateway.py\t2026-10-16 00:05:13.109796718 +0100\n@@ -285,7 +285,7 @@\n             await self._runner.run(*self._base_argv(), \"list-sessions\", \"-F\", \"#{session_id}\")\n         except RuntimeError as error:\n             if _reports_absent_server(str(error)):\n-                return False\n+                return True\n             raise\n         return True\n \n",
+ "build": null,
+ "created": "2026-10-15T23:05:14+00:00",
+ "fingerprint": "975160289707f81141992e9717198edd89f31ae384a15edf83c6f940fed855b0",
+ "index": 1,
+ "kind": "claim",
+ "named_break": null,
+ "no_build_reason": "python tests only",
+ "plan": "/mnt/vault/Portfolio/infra/remote-agents/plans/2026-10-15-codex-rollover-and-restart-resume-sub-01-restart-resume-plan.md",
+ "red": {
+  "elapsed_s": 0.4,
+  "exit": 1,
+  "tail": "FF.                                                                      [100%]\n=================================== FAILURES ===================================\n___________ test_a_running_server_is_present_and_a_killed_one_is_not ___________\n\ntmp_path = PosixPath('/tmp/pytest-of-user/pytest-12/test_a_running_server_is_prese0')\n\n    async def test_a_running_server_is_present_and_a_killed_one_is_not(tmp_path: Path) -> None:\n        socket = _socket()\n        runner = AsyncTmuxRunner()\n        gateway = TmuxGateway(socket, runner, intent_directory=tmp_path / \"intents\")\n        try:\n            await runner.run(\n                \"tmux\", \"-L\", socket, \"-f\", \"/dev/null\", \"new-session\", \"-d\", \"-s\", \"pin\", \"sleep\", \"30\"\n            )\n            assert await gateway.server_present() is True\n    \n            await runner.run(\"tmux\", \"-L\", socket, \"kill-server\")\n>           assert await gateway.server_present() is False\nE           assert True is False\n\ntests/integration/tmux/test_server_present.py:43: AssertionError\n_______________ test_a_socket_that_never_existed_is_not_present ________________\n\ntmp_path = PosixPath('/tmp/pytest-of-user/pytest-12/test_a_socket_that_never_exist0')\n\n    async def test_a_socket_that_never_existed_is_not_present(tmp_path: Path) -> None:\n        gateway = TmuxGateway(_socket(), AsyncTmuxRunner(), intent_directory=tmp_path / \"intents\")\n>       assert await gateway.server_present() is False\nE       assert True is False\n\ntests/integration/tmux/test_server_present.py:50: AssertionError\n=========================== short test summary info ============================\nFAILED tests/integration/tmux/test_server_present.py::test_a_running_server_is_present_and_a_killed_one_is_not\nFAILED tests/integration/tmux/test_server_present.py::test_a_socket_that_never_existed_is_not_present\n2 failed, 1 passed in 0.09s"
+ },
+ "schema": 2,
+ "task": "1.3",
+ "test": "uv run --locked pytest tests/integration/tmux/test_server_present.py -q -p no:randomly",
+ "text": "`uv run --locked pytest tests/integration/tmux/test_server_present.py -q -p no:randomly`. On a real isolated socket: True with a server, False after `kill-server`, and False on a socket path that never existed",
+ "touched": [
+  "src/remote_agents/adapters/tmux/gateway.py"
+ ]
+}

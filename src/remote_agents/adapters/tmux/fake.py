@@ -42,7 +42,12 @@ class FakeTerminal:
         self.launched_remote_control: list[tuple[ProfileId, bool]] = []
         #: Every relayed message, as (session, text), and the deliveries to answer them with.
         self.prompts: list[tuple[SessionId, str]] = []
+        #: What `server_present` answers: set False to model a host that lost its tmux server.
+        self.server_up = True
         self.prompt_deliveries: list[PromptDelivery] = []
+
+    async def server_present(self) -> bool:
+        return self.server_up
 
     async def managed_process_roots(self) -> tuple[int, ...]:
         return ()
