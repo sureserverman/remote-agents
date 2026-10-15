@@ -1,0 +1,28 @@
+{
+ "baseline": {
+  "elapsed_s": 0.3,
+  "exit": 0,
+  "tail": ".......................                                                  [100%]\n23 passed, 121 deselected in 0.05s"
+ },
+ "break_patch": "--- a/src/remote_agents/config.py\n+++ b/src/remote_agents/config.py\n@@ -996,8 +996,7 @@\n         return when_unsure\n     if \"resume_interrupted\" not in restart:\n         return DEFAULT_RESUME_INTERRUPTED\n-    value = restart[\"resume_interrupted\"]\n-    return value if isinstance(value, bool) else when_unsure\n+    return when_unsure\n \n \n def write_limits_key(path: Path, key: str, value: bool | str | int) -> None:\n",
+ "build": null,
+ "created": "2026-10-15T23:39:40+00:00",
+ "fingerprint": "e45ef07356072045d5db3c5a67f6c8336a787dde84c6ccb8ed4bfa252a5ce6dd",
+ "index": 1,
+ "kind": "claim",
+ "named_break": null,
+ "no_build_reason": "python tests only",
+ "plan": "/mnt/vault/Portfolio/infra/remote-agents/plans/2026-10-15-codex-rollover-and-restart-resume-sub-01-restart-resume-plan.md",
+ "red": {
+  "elapsed_s": 0.3,
+  "exit": 1,
+  "tail": "        write_config_key(path, \"restart\", \"resume_interrupted\", False)\n        off = path.read_text(encoding=\"utf-8\")\n        assert off.startswith(before)\n        assert \"[restart]\\nresume_interrupted = false\" in off\n        assert load_config(path).resume_interrupted is False\n        assert read_resume_interrupted(path, when_unsure=False) is False\n>       assert read_resume_interrupted(path) is False\nE       AssertionError: assert True is False\nE        +  where True = <function read_resume_interrupted at 0x77c6c3462c40>(PosixPath('/tmp/pytest-of-user/pytest-71/test_resume_interrupted_writer0/config.toml'))\n\ntests/unit/test_config.py:1239: AssertionError\n___________ test_resume_interrupted_writer_keeps_the_rollover_table ____________\n\ntmp_path = PosixPath('/tmp/pytest-of-user/pytest-71/test_resume_interrupted_writer1')\n\n    def test_resume_interrupted_writer_keeps_the_rollover_table(tmp_path: Path) -> None:\n        \"\"\"Both optional tables can be appended to one file, and each flip edits only its own.\"\"\"\n        from remote_agents.config import read_auto_rollover, read_resume_interrupted, write_config_key\n    \n        path = write_config(tmp_path, limits_source_body(tmp_path))\n    \n        write_config_key(path, \"rollover\", \"auto_rollover\", True)\n        write_config_key(path, \"restart\", \"resume_interrupted\", False)\n        write_config_key(path, \"rollover\", \"auto_rollover\", False)\n    \n        text = path.read_text(encoding=\"utf-8\")\n        assert text.count(\"[rollover]\") == 1 and text.count(\"[restart]\") == 1\n        assert read_auto_rollover(path) is False\n>       assert read_resume_interrupted(path) is False\nE       AssertionError: assert True is False\nE        +  where True = <function read_resume_interrupted at 0x77c6c3462c40>(PosixPath('/tmp/pytest-of-user/pytest-71/test_resume_interrupted_writer1/config.toml'))\n\ntests/unit/test_config.py:1261: AssertionError\n=========================== short test summary info ============================\nFAILED tests/unit/test_config.py::test_resume_interrupted_loads_a_stated_false\nFAILED tests/unit/test_config.py::test_the_fresh_read_of_resume_interrupted_takes_when_unsure_in_doubt[[restart]\\nresume_interrupted = false\\n-False]\nFAILED tests/unit/test_config.py::test_the_fresh_read_of_resume_interrupted_takes_when_unsure_in_doubt[[restart]\\nresume_interrupted = true\\n-True]\nFAILED tests/unit/test_config.py::test_resume_interrupted_writer_adds_the_table_and_changes_no_other_byte\nFAILED tests/unit/test_config.py::test_resume_interrupted_writer_keeps_the_rollover_table\n5 failed, 18 passed, 121 deselected in 0.11s"
+ },
+ "schema": 2,
+ "task": "2.1",
+ "test": "uv run --locked pytest tests/unit/test_config.py -q -p no:randomly -k resume_interrupted",
+ "text": "`uv run --locked pytest tests/unit/test_config.py -q -p no:randomly -k resume_interrupted`. Cases:",
+ "touched": [
+  "src/remote_agents/config.py"
+ ]
+}

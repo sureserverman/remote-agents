@@ -1136,3 +1136,139 @@ def test_the_shipped_example_carries_auto_rollover_off() -> None:
 
     assert "[rollover]\n" in shipped and "auto_rollover = false" in shipped
     assert drift["unknown"] == [] and drift["missing"] == []
+
+
+# --- the switch that says whether a restart resumes the sessions it interrupted --------------
+
+
+def test_resume_interrupted_defaults_to_on_when_absent(tmp_path: Path) -> None:
+    """Absent means on: a restart that lost the tmux server resumes its sessions by default."""
+    from remote_agents.config import read_resume_interrupted
+
+    path = write_config(tmp_path, example(tmp_path))
+
+    assert load_config(path).resume_interrupted is True
+    assert read_resume_interrupted(path) is True
+    assert read_resume_interrupted(path, when_unsure=False) is True
+
+
+def test_resume_interrupted_absent_is_not_drift(tmp_path: Path) -> None:
+    """DEC-058: a config written before `[restart]` existed is not drift, nor is an empty one."""
+    from remote_agents.config import describe_schema_drift
+
+    for body in (example(tmp_path), example(tmp_path) + "\n[restart]\n"):
+        drift = describe_schema_drift(write_config(tmp_path, body))
+        assert drift["missing"] == [] and drift["unknown"] == [], (body, drift)
+        assert load_config(write_config(tmp_path, body)).resume_interrupted is True
+
+
+def test_resume_interrupted_loads_a_stated_false(tmp_path: Path) -> None:
+    from remote_agents.config import describe_schema_drift, read_resume_interrupted
+
+    path = write_config(tmp_path, example(tmp_path) + "\n[restart]\nresume_interrupted = false\n")
+
+    assert load_config(path).resume_interrupted is False
+    assert read_resume_interrupted(path) is False
+    drift = describe_schema_drift(path)
+    assert drift["unknown"] == [] and drift["missing"] == []
+
+
+@pytest.mark.parametrize("value", ["1", '"false"', '"true"', "0"])
+def test_resume_interrupted_refuses_anything_but_a_bool_by_name(tmp_path: Path, value: str) -> None:
+    from remote_agents.config import read_resume_interrupted
+
+    path = write_config(
+        tmp_path, example(tmp_path) + f"\n[restart]\nresume_interrupted = {value}\n"
+    )
+
+    with pytest.raises(ConfigError, match="restart.resume_interrupted"):
+        load_config(path)
+    assert read_resume_interrupted(path) is True
+    assert read_resume_interrupted(path, when_unsure=False) is False
+
+
+def test_the_restart_table_refuses_an_unknown_key_for_resume_interrupted(tmp_path: Path) -> None:
+    path = write_config(tmp_path, example(tmp_path) + "\n[restart]\nresume_interruptd = true\n")
+
+    with pytest.raises(ConfigError, match=r"^restart has unknown or missing keys"):
+        load_config(path)
+
+
+@pytest.mark.parametrize(
+    ("body", "expected"),
+    [
+        ("this is not toml [[[", None),
+        ("restart = 1\n", None),
+        ('[restart]\nresume_interrupted = "false"\n', None),
+        ("[restart]\nresume_interrupted = 0\n", None),
+        ("[limits]\nmax_label_length = 40\n", True),
+        ("[restart]\n", True),
+        ("[restart]\nresume_interrupted = false\n", False),
+        ("[restart]\nresume_interrupted = true\n", True),
+    ],
+)
+def test_the_fresh_read_of_resume_interrupted_takes_when_unsure_in_doubt(
+    tmp_path: Path, body: str, expected: bool | None
+) -> None:
+    """Two callers, two directions: the rows draw the default, the service resumes on a yes."""
+    from remote_agents.config import read_resume_interrupted
+
+    path = write_config(tmp_path, body)
+    for when_unsure in (True, False):
+        want = when_unsure if expected is None else expected
+        assert read_resume_interrupted(path, when_unsure=when_unsure) is want, (body, when_unsure)
+    assert read_resume_interrupted(tmp_path / "absent.toml") is True
+    assert read_resume_interrupted(tmp_path / "absent.toml", when_unsure=False) is False
+
+
+def test_resume_interrupted_writer_adds_the_table_and_changes_no_other_byte(
+    tmp_path: Path,
+) -> None:
+    """The first flip appends `[restart]`; a written False reads back False, then True again."""
+    from remote_agents.config import read_resume_interrupted, write_config_key
+
+    path = write_config(tmp_path, limits_source_body(tmp_path))
+    before = path.read_text(encoding="utf-8")
+
+    write_config_key(path, "restart", "resume_interrupted", False)
+    off = path.read_text(encoding="utf-8")
+    assert off.startswith(before)
+    assert "[restart]\nresume_interrupted = false" in off
+    assert load_config(path).resume_interrupted is False
+    assert read_resume_interrupted(path, when_unsure=False) is False
+    assert read_resume_interrupted(path) is False
+
+    write_config_key(path, "restart", "resume_interrupted", True)
+    on = path.read_text(encoding="utf-8")
+    assert on.count("resume_interrupted =") == 1 and on.count("[restart]") == 1
+    assert everything_but(on, "resume_interrupted") == everything_but(off, "resume_interrupted")
+    assert load_config(path).resume_interrupted is True
+
+
+def test_resume_interrupted_writer_keeps_the_rollover_table(tmp_path: Path) -> None:
+    """Both optional tables can be appended to one file, and each flip edits only its own."""
+    from remote_agents.config import read_auto_rollover, read_resume_interrupted, write_config_key
+
+    path = write_config(tmp_path, limits_source_body(tmp_path))
+
+    write_config_key(path, "rollover", "auto_rollover", True)
+    write_config_key(path, "restart", "resume_interrupted", False)
+    write_config_key(path, "rollover", "auto_rollover", False)
+
+    text = path.read_text(encoding="utf-8")
+    assert text.count("[rollover]") == 1 and text.count("[restart]") == 1
+    assert read_auto_rollover(path) is False
+    assert read_resume_interrupted(path) is False
+
+
+@pytest.mark.parametrize("value", [1, 0, "false", "true", None])
+def test_resume_interrupted_writer_refuses_a_non_bool(tmp_path: Path, value: object) -> None:
+    from remote_agents.config import write_config_key
+
+    path = write_config(tmp_path, limits_source_body(tmp_path))
+    before = path.read_bytes()
+
+    with pytest.raises(ConfigError, match=r"restart\.resume_interrupted must be true or false"):
+        write_config_key(path, "restart", "resume_interrupted", value)  # type: ignore[arg-type]
+
+    assert path.read_bytes() == before

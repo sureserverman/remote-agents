@@ -94,6 +94,9 @@ DEFAULT_RESUME_AFTER_LIMIT = True
 DEFAULT_AUTO_ROLLOVER = False
 """Off until the owner switches it on: a rollover launches and stops sessions alone (DEC-115)."""
 
+DEFAULT_RESUME_INTERRUPTED = True
+"""On unless the owner switches it off: a restart that lost the tmux server resumes its sessions."""
+
 DEFAULT_WORKTREE_COPY: tuple[str, ...] = (
     "CLAUDE.md",
     "AGENTS.md",
@@ -193,6 +196,14 @@ class AppConfig:
     this field, so a flip lands without a restart.
     """
 
+    resume_interrupted: bool = DEFAULT_RESUME_INTERRUPTED
+    """Whether `serve` resumes, at startup, the sessions a lost tmux server interrupted.
+
+    Optional and **on** when absent, in its own `[restart]` table. Written by the Settings row
+    on either surface through `write_config_key`. The startup pass reads it afresh through
+    `read_resume_interrupted` with `when_unsure=False`, so a half-edited file resumes nothing.
+    """
+
     worktree_copy: tuple[str, ...] = DEFAULT_WORKTREE_COPY
     """`[worktrees] copy`: the repo-relative files a new session worktree copies (BL-116)."""
 
@@ -228,8 +239,8 @@ class AppConfig:
         return self.worktree_copy if own is None else own
 
 
-_TOP_LEVEL_KEYS = {"paths", "limits", "rollover", "worktrees"}
-_OPTIONAL_TOP_LEVEL_KEYS = frozenset({"rollover", "worktrees"})
+_TOP_LEVEL_KEYS = {"paths", "limits", "rollover", "restart", "worktrees"}
+_OPTIONAL_TOP_LEVEL_KEYS = frozenset({"rollover", "restart", "worktrees"})
 """Tables the schema accepts but does not require: a host written before one existed lacks it.
 
 DEC-058 for a whole table rather than a key. `[rollover]` holds only optional keys, so a file
@@ -290,6 +301,10 @@ written for -- and DEC-058 says a config lacking a new key is not drift.
 _ROLLOVER_KEYS = {"auto_rollover"}
 _OPTIONAL_ROLLOVER_KEYS = frozenset({"auto_rollover"})
 """Every `[rollover]` key is optional: the switch is off until the owner writes it (DEC-058)."""
+
+_RESTART_KEYS = {"resume_interrupted"}
+_OPTIONAL_RESTART_KEYS = frozenset({"resume_interrupted"})
+"""Every `[restart]` key is optional: a file without the table resumes by default (DEC-058)."""
 
 _WORKTREE_KEYS = {"copy", "projects"}
 _OPTIONAL_WORKTREE_KEYS = frozenset({"copy", "projects"})
@@ -442,6 +457,7 @@ def _schema_sections(
             _OPTIONAL_LIMIT_KEYS | _RETIRED_LIMIT_KEYS,
         ),
         ("rollover", _ROLLOVER_KEYS, _OPTIONAL_ROLLOVER_KEYS),
+        ("restart", _RESTART_KEYS, _OPTIONAL_RESTART_KEYS),
         ("worktrees", _WORKTREE_KEYS, _OPTIONAL_WORKTREE_KEYS),
     ):
         section = raw.get(name)
@@ -473,6 +489,8 @@ def load_config(path: Path) -> AppConfig:
     limits = _mapping(raw["limits"], "limits")
     rollover = _mapping(raw.get("rollover", {}), "rollover")
     _require_exact_keys(rollover, _ROLLOVER_KEYS, "rollover", _OPTIONAL_ROLLOVER_KEYS)
+    restart = _mapping(raw.get("restart", {}), "restart")
+    _require_exact_keys(restart, _RESTART_KEYS, "restart", _OPTIONAL_RESTART_KEYS)
     worktrees = _mapping(raw.get("worktrees", {}), "worktrees")
     _require_exact_keys(worktrees, _WORKTREE_KEYS, "worktrees", _OPTIONAL_WORKTREE_KEYS)
     _require_exact_keys(paths, _PATH_KEYS, "paths")
@@ -527,6 +545,9 @@ def load_config(path: Path) -> AppConfig:
     auto_rollover = _flag(
         rollover.get("auto_rollover", DEFAULT_AUTO_ROLLOVER), "rollover.auto_rollover"
     )
+    resume_interrupted = _flag(
+        restart.get("resume_interrupted", DEFAULT_RESUME_INTERRUPTED), "restart.resume_interrupted"
+    )
     worktree_copy = (
         _copy_list(worktrees["copy"], "worktrees.copy")
         if "copy" in worktrees
@@ -547,6 +568,7 @@ def load_config(path: Path) -> AppConfig:
         cursor_limits_source=cursor_limits_source,
         resume_after_limit=resume_after_limit,
         auto_rollover=auto_rollover,
+        resume_interrupted=resume_interrupted,
         worktree_copy=worktree_copy,
         worktree_copy_by_project=worktree_copy_by_project,
     )
@@ -953,6 +975,31 @@ def read_auto_rollover(path: Path) -> bool:
     return value if isinstance(value, bool) else DEFAULT_AUTO_ROLLOVER
 
 
+def read_resume_interrupted(path: Path, *, when_unsure: bool = DEFAULT_RESUME_INTERRUPTED) -> bool:
+    """The restart-resume switch as the file states it right now; total, never raising.
+
+    A file that parses and has no `[restart]` table, or a table without the key, states
+    nothing, and that is the default -- on. Everything else that cannot be read as a stated
+    bool -- a missing or unreadable file, a file that does not parse, a `restart` that is not a
+    table, a value that is not `true` or `false` -- answers `when_unsure`.
+
+    **Two callers, two directions**, as `read_resume_after_limit`: the Settings rows draw the
+    default; the startup pass launches sessions on this answer and asks with
+    `when_unsure=False`.
+    """
+    try:
+        raw = tomllib.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError):
+        return when_unsure
+    restart = raw.get("restart", {})
+    if not isinstance(restart, dict):
+        return when_unsure
+    if "resume_interrupted" not in restart:
+        return DEFAULT_RESUME_INTERRUPTED
+    value = restart["resume_interrupted"]
+    return value if isinstance(value, bool) else when_unsure
+
+
 def write_limits_key(path: Path, key: str, value: bool | str | int) -> None:
     """`write_config_key` for `[limits]`, where every switch before `[rollover]` lives."""
     write_config_key(path, "limits", key, value)
@@ -982,9 +1029,10 @@ def write_config_key(path: Path, table: str, key: str, value: bool | str | int) 
     in the meantime -- the edit is refused rather than overwriting theirs, the check
     `hook_settings._refuse_if_changed_since_it_was_read` makes for the settings file.
 
-    **`[rollover]` is the one table it may add.** Every key in it is optional (DEC-058), so a
-    host written before it existed has no such table; the first flip appends `[rollover]` and
-    the key at the end of the file. `[limits]` is required, so a file without it is refused.
+    **`[rollover]` and `[restart]` are the tables it may add.** Every key in them is optional
+    (DEC-058), so a host written before one existed has no such table; the first flip appends
+    the table and the key at the end of the file. `[limits]` is required, so a file without it
+    is refused.
 
     Two shapes it declines by design. A commented-out `# key = ...` line is a comment and is
     left as it is; the active line is appended after it. A `[limits]` table holding a value
@@ -1002,6 +1050,10 @@ def write_config_key(path: Path, table: str, key: str, value: bool | str | int) 
         if key not in _ROLLOVER_KEYS:
             raise ConfigError(f"rollover.{key} is not a key this schema writes")
         rendered = _toml_value(_flag(value, f"rollover.{key}"))
+    elif table == "restart":
+        if key not in _RESTART_KEYS:
+            raise ConfigError(f"restart.{key} is not a key this schema writes")
+        rendered = _toml_value(_flag(value, f"restart.{key}"))
     elif table != "limits" or key not in _LIMIT_KEYS:
         raise ConfigError(f"{table}.{key} is not a key this schema writes")
     elif key == "claude_limits_source":
