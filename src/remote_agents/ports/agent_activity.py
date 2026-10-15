@@ -309,3 +309,9 @@ class AgentActivity:
     one recorded before the window was kept, or one nothing could classify -- so a reader never
     has to tell "not a limit stop" from "a stop with nothing known" by this field alone.
     """
+    conversation: str | None = None
+    """The agent's own conversation id, on a turn its own agent ended; `None` otherwise.
+
+    An identifier and nothing else (DEC-067: admitted because the resume after a restart reopens
+    it). Never stored with the activity: the drain loop hands it to the conversation ledger.
+    """

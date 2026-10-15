@@ -226,7 +226,9 @@ def test_a_fifo_planted_at_the_marker_never_blocks_the_hook(tmp_path: Path, call
     worker.join(timeout=5.0)
 
     assert not worker.is_alive(), f"{call} blocked on a FIFO at the marker's name"
-    assert outcome and outcome[0] in (None, ())
+    # `end_if_owned_by` answers whether the end was the turn's own: a FIFO holds no owner, so
+    # it is ended and answers True. The others answer nothing, or no sessions.
+    assert outcome and outcome[0] in (None, (), True)
 
 
 @pytest.mark.parametrize("owner", [None, "", 42, "a\nb"])

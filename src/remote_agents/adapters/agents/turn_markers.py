@@ -73,23 +73,29 @@ class FileTurnMarkers:
         finally:
             os.close(descriptor)
 
-    def end_if_owned_by(self, session_id: str, owner: object) -> None:
+    def end_if_owned_by(self, session_id: str, owner: object) -> bool:
         name = safe_session_id(session_id)
-        if name is None or not self._is_real_directory():
-            return
+        if name is None:
+            return False
+        if not self._is_real_directory():
+            return True
         # A hook's end: only the agent that started the marker ends it, and an end that names
         # no usable agent ends none that has an owner. A marker with no owner recorded has none
         # to protect, and ends as before owners existed.
         try:
             descriptor = os.open(self._directory / name, _READ)
         except OSError:
-            return
+            # No marker: the service may already have ended it on the screen's evidence, or
+            # this provider starts none. Nothing says another agent owns the turn.
+            return True
         try:
             current = _owner_of(descriptor)
         finally:
             os.close(descriptor)
         if current is None or current == safe_session_id(owner):
             self.end(session_id)
+            return True
+        return False
 
     def end(self, session_id: str) -> None:
         name = safe_session_id(session_id)

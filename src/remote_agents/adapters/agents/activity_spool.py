@@ -36,7 +36,7 @@ import os
 import re
 import tempfile
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import IO, TYPE_CHECKING
@@ -107,6 +107,15 @@ class ObservedAgentEvent:
     treats as reversible by the next edit. A Tier-1 review found it.
     """
 
+    conversation: str | None = None
+    """The agent's own conversation id, kept only on a turn its own agent ended.
+
+    The payload's `session_id` is the agent's id for its conversation, not the pane's: an
+    identifier, bounded by `safe_session_id`, never anything typed (DEC-067). The resume after
+    a restart reopens it. A nested agent ending its turn inside its parent's leaves none, so
+    the parent's conversation is never overwritten by a child's.
+    """
+
     def document(self) -> dict[str, object]:
         return {
             "session_id": self.session_id,
@@ -115,6 +124,7 @@ class ObservedAgentEvent:
             "detail": self.detail,
             "observed_at": self.observed_at.isoformat(),
             "ask": self.ask,
+            "conversation": self.conversation,
         }
 
 
@@ -188,9 +198,11 @@ def spool_agent_event(
             return 0
         # Ungated, unlike the start: ending a marker that was never started is a no-op. Guarded
         # on its own, so a marker that cannot be removed never costs the "finished" record.
+        conversation = None
         if event in TURN_ENDED:
             try:
-                turns.end_if_owned_by(session_id, owner)
+                if turns.end_if_owned_by(session_id, owner):
+                    conversation = safe_session_id(owner)
             except Exception:
                 pass
         if document is None:
@@ -199,6 +211,8 @@ def spool_agent_event(
             found = licence()
         observed = _observed(document, session_id, now(), found)
         if observed is not None:
+            if conversation is not None:
+                observed = replace(observed, conversation=conversation)
             _write_privately(observed, activity_directory)
     except Exception:
         # Catching broadly is correct exactly here and nowhere else in this package. This

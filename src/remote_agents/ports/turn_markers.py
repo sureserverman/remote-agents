@@ -26,9 +26,13 @@ class TurnMarkers(Protocol):
         service's end: the screen showed the turn over, or the session ended."""
         ...
 
-    def end_if_owned_by(self, session_id: str, owner: object) -> None:
+    def end_if_owned_by(self, session_id: str, owner: object) -> bool:
         """A hook's end: remove the marker only when it records `owner`, or no owner at all. An
-        `owner` that is not a usable id ends no marker that has one."""
+        `owner` that is not a usable id ends no marker that has one.
+
+        Answers whether this end came from the turn's own agent: True when the marker named
+        `owner`, named nobody, or was not there to say otherwise; False when another agent
+        holds it (a nested agent ending its turn inside its parent's)."""
         ...
 
     def started_at(self, session_id: str) -> datetime | None:

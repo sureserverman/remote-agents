@@ -1,0 +1,28 @@
+{
+ "baseline": {
+  "elapsed_s": 2.1,
+  "exit": 0,
+  "tail": "........................................................................ [ 37%]\n........................................................................ [ 74%]\n.................................................                        [100%]\n193 passed in 1.42s"
+ },
+ "break_patch": "--- a/src/remote_agents/adapters/agents/activity_spool.py\t2026-10-16 00:11:24.211981390 +0100\n+++ b/src/remote_agents/adapters/agents/activity_spool.py\t2026-10-16 00:11:24.220301768 +0100\n@@ -201,8 +201,8 @@\n         conversation = None\n         if event in TURN_ENDED:\n             try:\n-                if turns.end_if_owned_by(session_id, owner):\n-                    conversation = safe_session_id(owner)\n+                turns.end_if_owned_by(session_id, owner)\n+                conversation = safe_session_id(owner)\n             except Exception:\n                 pass\n         if document is None:\n",
+ "build": null,
+ "created": "2026-10-15T23:11:30+00:00",
+ "fingerprint": "808b9b9ce7061e8bef7618ff16bc6b1dc0cfc6d445f736b2a013873fce038dec",
+ "index": 1,
+ "kind": "claim",
+ "named_break": null,
+ "no_build_reason": "python tests only",
+ "plan": "/mnt/vault/Portfolio/infra/remote-agents/plans/2026-10-15-codex-rollover-and-restart-resume-sub-01-restart-resume-plan.md",
+ "red": {
+  "elapsed_s": 4.5,
+  "exit": 1,
+  "tail": ".F...................................................................... [ 37%]\n........................................................................ [ 74%]\n.................................................                        [100%]\n=================================== FAILURES ===================================\n_____ test_a_nested_agents_stop_does_not_replace_the_parents_conversation ______\n\ntmp_path = PosixPath('/tmp/pytest-of-user/pytest-19/test_a_nested_agents_stop_does0')\n\n    async def test_a_nested_agents_stop_does_not_replace_the_parents_conversation(\n        tmp_path: Path,\n    ) -> None:\n        directory = _spool(tmp_path)\n        _hook(directory, _payload(\"UserPromptSubmit\", _PARENT), \"claude\", _SESSION)\n        # A `claude -p` the parent ran inherits the pane's session id; its turn ends inside the\n        # parent's, which still holds the marker.\n        _hook(directory, _payload(\"UserPromptSubmit\", _CHILD), \"claude\", _SESSION)\n        _hook(directory, _payload(\"Stop\", _CHILD), \"claude\", _SESSION)\n    \n        ledger = await _ledgered(tmp_path, directory)\n    \n>       assert await ledger.latest(_SESSION) is None\nE       AssertionError: assert '5b1d2e7a-0c3f-4a9e-8d21-6f4b9c0e1a77' is None\n\ntests/unit/adapters/agents/test_activity_spool_conversation.py:95: AssertionError\n=========================== short test summary info ============================\nFAILED tests/unit/adapters/agents/test_activity_spool_conversation.py::test_a_nested_agents_stop_does_not_replace_the_parents_conversation\n1 failed, 192 passed in 3.76s"
+ },
+ "schema": 2,
+ "task": "1.2",
+ "test": "uv run --locked pytest tests/unit/adapters/agents/test_activity_spool_conversation.py tests/security -q -p no:randomly",
+ "text": "`uv run --locked pytest tests/unit/adapters/agents/test_activity_spool_conversation.py tests/security -q -p no:randomly`. Cases:",
+ "touched": [
+  "src/remote_agents/adapters/agents/activity_spool.py"
+ ]
+}

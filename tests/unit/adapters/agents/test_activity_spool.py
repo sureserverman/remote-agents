@@ -112,6 +112,9 @@ def test_a_stop_payload_keeps_only_the_fields_the_notification_needs(tmp_path: P
         # words. `None` here because a `Stop` is not waiting on anything, and because this
         # payload is Claude's, whose branch never populates it.
         "ask": None,
+        # `conversation` joined on 2026-10-16: the agent's own id for the conversation whose
+        # turn just ended, an identifier the resume after a restart reopens (DEC-067's terms).
+        "conversation": "f4020001-e712-4832-9fc8-dd28d38d5b8a",
     }
 
 
