@@ -1,0 +1,28 @@
+{
+ "baseline": {
+  "elapsed_s": 0.3,
+  "exit": 0,
+  "tail": "....................................                                     [100%]\n36 passed in 0.04s"
+ },
+ "break_patch": "--- a/src/remote_agents/application/interrupted_resume.py\n+++ b/src/remote_agents/application/interrupted_resume.py\n@@ -132,10 +132,7 @@\n def _interrupted(session: SessionAtRestart, server_started_at: datetime | None) -> bool:\n     if session.record.state is not SessionState.RUNNING or session.pane_listed:\n         return False\n-    return (\n-        server_started_at is None\n-        or server_started_at > session.record.created_at + SERVER_CLOCK_SLACK\n-    )\n+    return True\n \n \n def _skip(\n",
+ "build": null,
+ "created": "2026-10-15T23:42:26+00:00",
+ "fingerprint": "96442c750177a65c688787bdbb1c6fb0e5b71640f21aa74dbd59380a55f3e024",
+ "index": 1,
+ "kind": "claim",
+ "named_break": null,
+ "no_build_reason": "python tests only",
+ "plan": "/mnt/vault/Portfolio/infra/remote-agents/plans/2026-10-15-codex-rollover-and-restart-resume-sub-01-restart-resume-plan.md",
+ "red": {
+  "elapsed_s": 0.3,
+  "exit": 1,
+  "tail": "\ntests/unit/application/test_interrupted_resume.py:137: AssertionError\n________ test_nothing_is_resumed_when_the_server_was_present[started2] _________\n\nstarted = datetime.datetime(2026, 10, 16, 9, 0, 1, tzinfo=datetime.timezone.utc)\n\n    @pytest.mark.parametrize(\n        \"started\", [CREATED - timedelta(hours=1), CREATED, CREATED + timedelta(seconds=1)]\n    )\n    def test_nothing_is_resumed_when_the_server_was_present(started: datetime) -> None:\n        \"\"\"A service-only restart leaves panes alive; one pane killed under a live server is not ours.\n    \n        One second of slack: tmux reports its start time in whole seconds, and the first launch on\n        a host starts the server itself, a moment after its record was written.\n        \"\"\"\n        killed = _record()\n        alive = _record()\n    \n>       assert (\n            plan_resumes(\n                _snapshot(\n                    _lost(killed),\n                    _live(alive),\n                    server_started_at=started,\n                    marks={killed: \"conv-a\", alive: \"conv-b\"},\n                )\n            )\n            == ()\n        )\nE       AssertionError: assert (ResumeDecisi...nudge=False),) == ()\nE         \nE         Left contains one more item: ResumeDecision(record=SessionRecord(session_id=SessionId(value=UUID('da5ca504-dcca-40cd-91d3-062e5d85cb54')), project_...nance=None, remote_control_state=None), conversation_id=ProviderConversationId(value='conv-a'), skip=None, nudge=False)\nE         Use -v to get more diff\n\ntests/unit/application/test_interrupted_resume.py:137: AssertionError\n=========================== short test summary info ============================\nFAILED tests/unit/application/test_interrupted_resume.py::test_nothing_is_resumed_when_the_server_was_present[started0]\nFAILED tests/unit/application/test_interrupted_resume.py::test_nothing_is_resumed_when_the_server_was_present[started1]\nFAILED tests/unit/application/test_interrupted_resume.py::test_nothing_is_resumed_when_the_server_was_present[started2]\n3 failed, 33 passed in 0.06s"
+ },
+ "schema": 2,
+ "task": "2.2",
+ "test": "uv run --locked pytest tests/unit/application/test_interrupted_resume.py -q -p no:randomly",
+ "text": "`uv run --locked pytest tests/unit/application/test_interrupted_resume.py -q -p no:randomly`. A table of cases, one per rule above. Includes `-k rollover` cases (predecessor handed off is skipped; a successor is resumed) and a case where the server was present (empty result)",
+ "touched": [
+  "src/remote_agents/application/interrupted_resume.py"
+ ]
+}
