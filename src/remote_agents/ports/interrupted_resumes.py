@@ -20,6 +20,14 @@ refusal comes before the claim), claimed means the earlier launch got part-way a
 given up as `skipped:interrupted`, never launched a second time.
 """
 
+NUDGING = "nudging"
+"""The prefix of `nudging:<new session id>`: resumed, and the nudge is about to be typed.
+
+An intent too, replaced by `resumed:<id>` once the nudge is decided. A later start that finds
+it was interrupted between the typing and the record, so whether the text landed is unknown:
+it is given up as `not nudged:unconfirmed`, never typed again (DEC-099).
+"""
+
 RESUMED = "resumed"
 """The prefix of `resumed:<new session id>`."""
 
@@ -36,5 +44,5 @@ class InterruptedResumes(Protocol):
 
     async def record(self, session_id: str, outcome: str, *, decided_at: datetime) -> bool:
         """Write `outcome` for the session. The first outcome stands, except over a `RESUMING`
-        intent, which it replaces. True when the row was written."""
+        or `nudging:` intent, which it replaces. True when the row was written."""
         ...

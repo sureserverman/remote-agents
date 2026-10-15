@@ -9,6 +9,7 @@ with `resumed:<id>` or `skipped:<reason>`, and never acts on a decided row again
 from __future__ import annotations
 
 import asyncio
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -28,8 +29,10 @@ from remote_agents.application.interrupted_resume import (
     RestartSnapshot,
     SessionAtRestart,
 )
+from remote_agents.application.limit_resume import NUDGE
 from remote_agents.application.reconcile import SessionLocks
-from remote_agents.application.services import SessionService
+from remote_agents.application.schedules import RETRY_SECONDS, STARTUP_PATIENCE
+from remote_agents.application.services import ResumeOutcome, SessionService
 from remote_agents.domain.models import (
     ProfileId,
     ProjectId,
@@ -41,6 +44,7 @@ from remote_agents.domain.models import (
 from remote_agents.domain.state_machine import LifecycleEvent
 from remote_agents.ports.host_remote_control import CodexRemoteControlBusy
 from remote_agents.ports.interrupted_resumes import RESUMING
+from remote_agents.ports.terminal import PromptDelivery, PromptOutcome, PromptReason
 from remote_agents.ports.worktree_store import Worktree
 
 PROJECT = ProjectId("remote-agents")
@@ -63,6 +67,9 @@ class Rig:
         )
         self.commands: list[ResumeCommand] = []
         self.marks: dict[str, str] = {}
+        self.mid_turn: set[str] = set()
+        self.clock = NOW
+        self.sleeps: list[float] = []
 
     async def running(self, mark: str | None = "conv", *, created: datetime = CREATED):
         record = SessionRecord(
@@ -84,7 +91,7 @@ class Rig:
             sessions=tuple(SessionAtRestart(record, pane_listed=False) for record in records),
             server_started_at=None,
             server_known=True,
-            turn_marker_sessions=frozenset(),
+            turn_marker_sessions=frozenset(self.mid_turn),
             conversation_marks=dict(self.marks),
             rollovers=(),
             resumable_profiles=frozenset({CLAUDE}),
@@ -109,8 +116,15 @@ class Rig:
             resume=resume or recorded,
             folder_of=self.worktrees.folder_for,
             key_claimed=self.sessions.idempotency_key_claimed,
-            now=lambda: NOW,
+            send=self.terminal.send_prompt,
+            sleep=self.sleep,
+            stopping=lambda: self.locks.draining,
+            now=lambda: self.clock,
         )
+
+    async def sleep(self, seconds: float) -> None:
+        self.sleeps.append(seconds)
+        self.clock += timedelta(seconds=seconds)
 
 
 @pytest.fixture
@@ -374,3 +388,219 @@ async def test_the_first_outcome_stands_except_over_the_intent(rig: Rig) -> None
     assert not await rig.outcomes.record("s", "skipped:launch_error", decided_at=at)
     assert not await rig.outcomes.record("s", RESUMING, decided_at=at)
     assert (await rig.outcomes.outcomes()) == {"s": "resumed:new"}
+
+
+async def test_a_nudging_intent_yields_only_to_a_final_outcome(rig: Rig) -> None:
+    at = NOW
+
+    assert await rig.outcomes.record("s", RESUMING, decided_at=at)
+    assert await rig.outcomes.record("s", "nudging:new", decided_at=at)
+    assert not await rig.outcomes.record("s", RESUMING, decided_at=at)
+    assert not await rig.outcomes.record("s", "nudging:other", decided_at=at)
+    assert await rig.outcomes.record("s", "resumed:new; not nudged:dialog", decided_at=at)
+    assert not await rig.outcomes.record("s", "resumed:new", decided_at=at)
+    assert (await rig.outcomes.outcomes()) == {"s": "resumed:new; not nudged:dialog"}
+
+
+# --- Task 2.4: the nudge, typed once into a session that was mid-turn ------------------------
+
+
+async def _mid_turn(rig: Rig, **kwargs) -> SessionRecord:
+    record = await rig.running(**kwargs)
+    rig.mid_turn.add(str(record.session_id))
+    return record
+
+
+async def test_nudge_a_marked_session_gets_exactly_one_send(rig: Rig) -> None:
+    marked = await _mid_turn(rig)
+    idle = await rig.running(created=CREATED + timedelta(minutes=1))
+    snapshot = await rig.snapshot(marked, idle)
+
+    reports = await rig.run_pass().run(snapshot)
+
+    by_record = {report.record: report for report in reports}
+    new = by_record[marked].new_session_id
+    assert rig.terminal.prompts == [(new, NUDGE)]
+    assert by_record[marked].outcome == f"resumed:{new}"
+    assert (await rig.outcomes.outcomes())[str(marked.session_id)] == f"resumed:{new}"
+
+
+async def test_nudge_an_unmarked_session_gets_none(rig: Rig) -> None:
+    record = await rig.running()
+
+    await rig.run_pass().run(await rig.snapshot(record))
+
+    assert rig.terminal.prompts == []
+
+
+async def test_nudge_waits_out_a_booting_agent_every_three_seconds(rig: Rig) -> None:
+    record = await _mid_turn(rig)
+    rig.terminal.prompt_deliveries = [
+        PromptDelivery(PromptOutcome.REFUSED, PromptReason.BUSY),
+        PromptDelivery(PromptOutcome.REFUSED, PromptReason.UNRECOGNISED),
+    ]
+
+    (report,) = await rig.run_pass().run(await rig.snapshot(record))
+
+    assert len(rig.terminal.prompts) == 3
+    assert rig.sleeps == [RETRY_SECONDS, RETRY_SECONDS]
+    assert report.outcome == f"resumed:{report.new_session_id}"
+
+
+async def test_nudge_gives_up_after_the_startup_patience(rig: Rig) -> None:
+    record = await _mid_turn(rig)
+    rig.terminal.prompt_deliveries = [
+        PromptDelivery(PromptOutcome.REFUSED, PromptReason.BUSY) for _ in range(100)
+    ]
+
+    (report,) = await rig.run_pass().run(await rig.snapshot(record))
+
+    assert report.outcome == f"resumed:{report.new_session_id}; not nudged:not_ready"
+    assert sum(rig.sleeps) >= STARTUP_PATIENCE.total_seconds()
+    assert sum(rig.sleeps) < STARTUP_PATIENCE.total_seconds() + RETRY_SECONDS + 1
+
+
+async def test_nudge_a_trust_dialog_gets_none_and_says_why(rig: Rig) -> None:
+    """Up on its folder-trust dialog: typing would answer the dialog (DEC-099)."""
+    record = await _mid_turn(rig)
+
+    async def untrusted(command: ResumeCommand):
+        outcome = await rig.service.resume(command)
+        return ResumeOutcome(replace(outcome.record, state=SessionState.UNTRUSTED), created=True)
+
+    (report,) = await rig.run_pass(resume=untrusted).run(await rig.snapshot(record))
+
+    assert rig.terminal.prompts == []
+    assert report.outcome == f"resumed:{report.new_session_id}; not nudged:dialog"
+
+
+async def test_nudge_a_dialog_on_the_screen_is_given_up_at_once(rig: Rig) -> None:
+    record = await _mid_turn(rig)
+    rig.terminal.prompt_deliveries = [PromptDelivery(PromptOutcome.REFUSED, PromptReason.DIALOG)]
+
+    (report,) = await rig.run_pass().run(await rig.snapshot(record))
+
+    assert len(rig.terminal.prompts) == 1 and rig.sleeps == []
+    assert report.outcome.endswith("; not nudged:dialog")
+
+
+@pytest.mark.parametrize("answer", ["unconfirmed", "raises"])
+async def test_nudge_an_unconfirmed_send_is_not_repeated(rig: Rig, answer: str) -> None:
+    record = await _mid_turn(rig)
+    sends: list[str] = []
+
+    async def send(session_id: SessionId, text: str) -> PromptDelivery:
+        sends.append(text)
+        if answer == "raises":
+            raise RuntimeError("tmux went away mid-paste")
+        return PromptDelivery(PromptOutcome.UNCONFIRMED, PromptReason.SUBMIT_NOT_SEEN)
+
+    resume_pass = rig.run_pass()
+    resume_pass._send = send  # type: ignore[attr-defined]
+    (report,) = await resume_pass.run(await rig.snapshot(record))
+
+    assert sends == [NUDGE]
+    assert report.outcome.endswith("; not nudged:unconfirmed")
+
+
+async def test_nudge_killed_mid_send_is_never_typed_again(rig: Rig) -> None:
+    """The `nudging:` intent is on disk before the send: a later start gives it up."""
+    record = await _mid_turn(rig)
+    snapshot = await rig.snapshot(record)
+
+    async def killed(session_id: SessionId, text: str) -> PromptDelivery:
+        raise asyncio.CancelledError
+
+    resume_pass = rig.run_pass()
+    resume_pass._send = killed  # type: ignore[attr-defined]
+    with pytest.raises(asyncio.CancelledError):
+        await resume_pass.run(snapshot)
+    (stored,) = (await rig.outcomes.outcomes()).values()
+    assert stored.startswith("nudging:")
+
+    await rig.run_pass().run(snapshot)
+
+    (stored,) = (await rig.outcomes.outcomes()).values()
+    assert (
+        stored == f"resumed:{stored.removeprefix('resumed:').split(';')[0]}; not nudged:unconfirmed"
+    )
+    assert rig.terminal.prompts == []
+
+
+async def test_nudge_two_sessions_are_nudged_side_by_side(rig: Rig) -> None:
+    """Both resumes come first, then both nudges, so one slow agent does not hold the other."""
+    first = await _mid_turn(rig)
+    second = await _mid_turn(rig, created=CREATED + timedelta(minutes=1))
+    order: list[str] = []
+
+    async def resume(command: ResumeCommand):
+        order.append("resume")
+        return await rig.service.resume(command)
+
+    second_sent = asyncio.Event()
+
+    async def send(session_id: SessionId, text: str) -> PromptDelivery:
+        order.append("send")
+        if len([step for step in order if step == "send"]) == 1:
+            # The first nudge cannot finish until the second one has been sent: a sequential
+            # loop would wait here for ever.
+            await asyncio.wait_for(second_sent.wait(), timeout=2)
+        else:
+            second_sent.set()
+        return PromptDelivery(PromptOutcome.SENT)
+
+    resume_pass = rig.run_pass(resume=resume)
+    resume_pass._send = send  # type: ignore[attr-defined]
+    reports = await resume_pass.run(await rig.snapshot(first, second))
+
+    assert order == ["resume", "resume", "send", "send"]
+    assert all(";" not in report.outcome for report in reports)
+
+
+async def test_nudge_stops_typing_once_the_service_drains(rig: Rig) -> None:
+    """A drain while an agent boots ends the wait; nothing was typed, so it says `stopping`."""
+    record = await _mid_turn(rig)
+    rig.terminal.prompt_deliveries = [PromptDelivery(PromptOutcome.REFUSED, PromptReason.BUSY)]
+
+    async def drain_while_waiting(seconds: float) -> None:
+        await rig.locks.drain()
+
+    resume_pass = rig.run_pass()
+    resume_pass._sleep = drain_while_waiting  # type: ignore[attr-defined]
+    (report,) = await resume_pass.run(await rig.snapshot(record))
+
+    assert len(rig.terminal.prompts) == 1
+    assert report.outcome == f"resumed:{report.new_session_id}; not nudged:stopping"
+
+
+async def test_nudge_a_failed_outcome_write_costs_no_sibling_its_report(
+    rig: Rig, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    first = await _mid_turn(rig)
+    second = await _mid_turn(rig, created=CREATED + timedelta(minutes=1))
+    record = rig.outcomes.record
+
+    async def locked_once(session_id: str, outcome: str, *, decided_at: datetime) -> bool:
+        if session_id == str(first.session_id) and outcome.startswith("resumed:"):
+            raise RuntimeError("database is locked")
+        return await record(session_id, outcome, decided_at=decided_at)
+
+    monkeypatch.setattr(rig.outcomes, "record", locked_once)
+    reports = await rig.run_pass().run(await rig.snapshot(first, second))
+
+    assert [report.record for report in reports] == [first, second]
+    assert len(rig.terminal.prompts) == 2
+    stored = await rig.outcomes.outcomes()
+    assert stored[str(first.session_id)].startswith("nudging:")
+    assert stored[str(second.session_id)] == reports[1].outcome
+
+
+async def test_nudge_a_refusal_says_why_by_its_reason(rig: Rig) -> None:
+    record = await _mid_turn(rig)
+    rig.terminal.prompt_deliveries = [
+        PromptDelivery(PromptOutcome.REFUSED, PromptReason.NO_COMPOSER)
+    ]
+
+    (report,) = await rig.run_pass().run(await rig.snapshot(record))
+
+    assert report.outcome.endswith("; not nudged:no_composer")

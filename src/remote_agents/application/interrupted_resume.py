@@ -9,6 +9,7 @@ the same table.
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import logging
 from collections.abc import Awaitable, Callable, Mapping
@@ -19,6 +20,9 @@ from pathlib import Path
 
 from remote_agents.application.commands import UNATTENDED_LAUNCH_WAIT_SECONDS, ResumeCommand
 from remote_agents.application.errors import DuplicateCommandError, MutationsDraining
+from remote_agents.application.limit_resume import NUDGE
+from remote_agents.application.prompt_delivery import DeliveryVerdict, delivery_verdict
+from remote_agents.application.schedules import RETRY_SECONDS, STARTUP_PATIENCE
 from remote_agents.application.services import ResumeOutcome
 from remote_agents.domain.conversations import (
     ConversationReference,
@@ -31,18 +35,29 @@ from remote_agents.domain.models import ProfileId, SessionId, SessionRecord, Ses
 from remote_agents.domain.rollover import RolloverState
 from remote_agents.ports.host_remote_control import CodexRemoteControlBusy
 from remote_agents.ports.interrupted_resumes import (
+    NUDGING,
     RESUMED,
     RESUMING,
     SKIPPED,
     InterruptedResumes,
 )
 from remote_agents.ports.rollover_store import Rollover
+from remote_agents.ports.terminal import PromptDelivery, PromptReason
 from remote_agents.ports.worktree_store import Worktree
 
 _LOG = logging.getLogger(__name__)
 
 RESUMED_LABEL = "resumed after restart"
 """The name a resumed session carries, so the owner can tell it from one they started."""
+
+NOT_NUDGED = "not nudged"
+"""Appended to `resumed:<id>` as `; not nudged:<reason>` when the nudge was not typed."""
+
+#: What a booting agent shows on its way to an idle composer, so the nudge waits it out, as a
+#: schedule's first prompt does.
+_BOOTING = frozenset(
+    {DeliveryVerdict.WAIT, DeliveryVerdict.NOT_RUNNING, DeliveryVerdict.UNRECOGNISED}
+)
 
 DEFERRED = "deferred"
 """A report's outcome when the resume was refused before its key was claimed: the intent
@@ -237,6 +252,12 @@ class InterruptedResumePass:
     `restart:<session>` key is claimed at most once, so the retry launches only when the
     earlier attempt never reached the claim.
 
+    **Every resume comes first, then the nudges, side by side.** A session that was mid-turn
+    gets `limit_resume.NUDGE` typed once (DEC-099, DEC-109), tried every `RETRY_SECONDS` for
+    `STARTUP_PATIENCE` while its agent boots, and never again after a send that may have typed.
+    A `nudging:<id>` intent is written before the first send, so a start that finds one left
+    over gives it up as unconfirmed rather than typing it twice.
+
     **An error is final only once the key is claimed.** Before the claim nothing can have
     started, so the intent is left for the next start (`DEFERRED`); after it the launch may
     have got part-way, so it is decided as `skipped:launch_error` and never tried again. When
@@ -250,12 +271,18 @@ class InterruptedResumePass:
         resume: Callable[[ResumeCommand], Awaitable[ResumeOutcome]],
         folder_of: Callable[[SessionId], Awaitable[Worktree | None]],
         key_claimed: Callable[[str], Awaitable[bool]],
+        send: Callable[[SessionId, str], Awaitable[PromptDelivery]],
+        sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
+        stopping: Callable[[], bool] = lambda: False,
         now: Callable[[], datetime],
     ) -> None:
         self._outcomes = outcomes
         self._resume = resume
         self._folder_of = folder_of
         self._key_claimed = key_claimed
+        self._send = send
+        self._sleep = sleep
+        self._stopping = stopping
         self._now = now
 
     async def run(self, snapshot: RestartSnapshot) -> tuple[ResumeReport, ...]:
@@ -263,7 +290,9 @@ class InterruptedResumePass:
         to. When the service starts draining, the pass stops there and answers what it has done
         so far; every session it did not reach keeps its intent for the next start."""
         decided = await self._outcomes.outcomes()
+        await self._give_up_interrupted_nudges(decided)
         reports: list[ResumeReport] = []
+        draining = False
         for decision in plan_resumes(snapshot):
             session = str(decision.record.session_id)
             current = decided.get(session)
@@ -278,8 +307,68 @@ class InterruptedResumePass:
                 reports.append(await self._resumed(decision))
             except MutationsDraining:
                 _LOG.warning("the service began stopping; the restart resume pass stops here")
+                draining = True
                 break
-        return tuple(reports)
+        nudged = await asyncio.gather(
+            *(self._nudged(report, stopping=draining) for report in reports)
+        )
+        return tuple(nudged)
+
+    async def _give_up_interrupted_nudges(self, decided: Mapping[str, str]) -> None:
+        """Finish every `nudging:` intent an earlier start left: it may have typed (DEC-099)."""
+        for session, outcome in decided.items():
+            if outcome.startswith(f"{NUDGING}:"):
+                new = outcome.removeprefix(f"{NUDGING}:")
+                final = f"{RESUMED}:{new}; {NOT_NUDGED}:unconfirmed"
+                await self._outcomes.record(session, final, decided_at=self._now())
+                _LOG.warning("the nudge into %s was interrupted; not typed again", new)
+
+    async def _nudged(self, report: ResumeReport, *, stopping: bool) -> ResumeReport:
+        """Type the nudge into a report's resumed session if it asks for one, and finish it."""
+        if not report.outcome.startswith(f"{NUDGING}:"):
+            return report
+        assert report.new_session_id is not None  # only a resumed report holds the intent
+        reason = "stopping" if stopping else await self._nudge(report.new_session_id)
+        resumed = f"{RESUMED}:{report.new_session_id}"
+        final = resumed if reason is None else f"{resumed}; {NOT_NUDGED}:{reason}"
+        try:
+            await self._outcomes.record(
+                str(report.record.session_id), final, decided_at=self._now()
+            )
+        except Exception:
+            # Never raised into the gather: one failed write would drop every sibling's report
+            # while their nudges carried on. The intent stays, and the next start gives it up as
+            # unconfirmed -- the safe reading, never a second send.
+            _LOG.exception("the nudge outcome for %s could not be written", report.new_session_id)
+        return ResumeReport(report.record, final, report.new_session_id, report.nudge)
+
+    async def _nudge(self, session_id: SessionId) -> str | None:
+        """None once the nudge landed, else why it was not typed. Never raises."""
+        started = self._now()
+        while True:
+            if self._stopping():
+                # Nothing has been typed: every earlier try answered a verdict that types nothing.
+                return "stopping"
+            try:
+                delivery = await self._send(session_id, NUDGE)
+            except Exception:
+                # The send never raises by contract; a raise here may have typed (DEC-099).
+                _LOG.exception("typing the resume nudge into %s failed partway", session_id)
+                return DeliveryVerdict.UNCONFIRMED.value
+            verdict = delivery_verdict(delivery)
+            if verdict is DeliveryVerdict.SENT:
+                return None
+            if verdict not in _BOOTING:
+                if verdict is DeliveryVerdict.REFUSED and delivery.reason is not None:
+                    return delivery.reason.value
+                if delivery.reason is PromptReason.MENU:
+                    return PromptReason.MENU.value
+                return verdict.value
+            if self._now() - started >= STARTUP_PATIENCE:
+                if verdict is DeliveryVerdict.WAIT:
+                    return "not_ready"
+                return verdict.value
+            await self._sleep(RETRY_SECONDS)
 
     async def _resumed(self, decision: ResumeDecision) -> ResumeReport:
         record = decision.record
@@ -335,7 +424,14 @@ class InterruptedResumePass:
         if outcome.record.state is SessionState.FAILED:
             return await self._decide(decision, f"{SKIPPED}:launch_failed")
         new = outcome.record.session_id
-        report = await self._decide(decision, f"{RESUMED}:{new}")
+        if not decision.nudge:
+            outcome_text = f"{RESUMED}:{new}"
+        elif outcome.record.state is SessionState.UNTRUSTED:
+            # Up on its folder-trust dialog: typing would answer the dialog (DEC-099).
+            outcome_text = f"{RESUMED}:{new}; {NOT_NUDGED}:{DeliveryVerdict.DIALOG.value}"
+        else:
+            outcome_text = f"{NUDGING}:{new}"
+        report = await self._decide(decision, outcome_text)
         return ResumeReport(record, report.outcome, new, decision.nudge)
 
     async def _claimed(self, key: str) -> bool:

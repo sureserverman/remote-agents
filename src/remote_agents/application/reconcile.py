@@ -510,6 +510,12 @@ class SessionLocks:
             if self._active_operations == 0:
                 self._drained.set()
 
+    @property
+    def draining(self) -> bool:
+        """Whether the admission gate has shut: a long wait outside any operation (the restart
+        pass's nudges) reads it to stop early rather than hold shutdown up."""
+        return not self._accepting_operations
+
     async def drain(self) -> None:
         """Close the mutation admission gate and wait for active operations to finish."""
         self._accepting_operations = False

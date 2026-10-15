@@ -6,7 +6,7 @@ import sqlite3
 from collections.abc import Mapping
 from datetime import UTC, datetime
 
-from remote_agents.ports.interrupted_resumes import RESUMING
+from remote_agents.ports.interrupted_resumes import NUDGING, RESUMING
 
 
 class SQLiteInterruptedResumes:
@@ -22,7 +22,8 @@ class SQLiteInterruptedResumes:
         return {str(session_id): str(outcome) for session_id, outcome in rows}
 
     async def record(self, session_id: str, outcome: str, *, decided_at: datetime) -> bool:
-        """The first outcome stands, except over a `RESUMING` intent, which it replaces."""
+        """The first outcome stands, except over an intent. `RESUMING` yields to anything;
+        `nudging:` yields only to a final outcome, so it can never step back to an intent."""
         with self._connection:
             cursor = self._connection.execute(
                 """
@@ -31,7 +32,22 @@ class SQLiteInterruptedResumes:
                 ON CONFLICT(session_id) DO UPDATE
                 SET outcome = excluded.outcome, decided_at = excluded.decided_at
                 WHERE interrupted_resumes.outcome = ?
+                OR (
+                    substr(interrupted_resumes.outcome, 1, ?) = ?
+                    AND excluded.outcome <> ?
+                    AND substr(excluded.outcome, 1, ?) <> ?
+                )
                 """,
-                (session_id, outcome, decided_at.astimezone(UTC).isoformat(), RESUMING),
+                (
+                    session_id,
+                    outcome,
+                    decided_at.astimezone(UTC).isoformat(),
+                    RESUMING,
+                    len(NUDGING) + 1,
+                    f"{NUDGING}:",
+                    RESUMING,
+                    len(NUDGING) + 1,
+                    f"{NUDGING}:",
+                ),
             )
         return cursor.rowcount > 0

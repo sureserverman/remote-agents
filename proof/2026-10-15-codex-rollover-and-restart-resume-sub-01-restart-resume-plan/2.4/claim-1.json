@@ -1,0 +1,28 @@
+{
+ "baseline": {
+  "elapsed_s": 0.9,
+  "exit": 0,
+  "tail": ".............                                                            [100%]\n13 passed, 16 deselected in 0.63s"
+ },
+ "break_patch": "--- a/src/remote_agents/application/interrupted_resume.py\n+++ b/src/remote_agents/application/interrupted_resume.py\n@@ -56,7 +56,12 @@\n #: What a booting agent shows on its way to an idle composer, so the nudge waits it out, as a\n #: schedule's first prompt does.\n _BOOTING = frozenset(\n-    {DeliveryVerdict.WAIT, DeliveryVerdict.NOT_RUNNING, DeliveryVerdict.UNRECOGNISED}\n+    {\n+        DeliveryVerdict.WAIT,\n+        DeliveryVerdict.NOT_RUNNING,\n+        DeliveryVerdict.UNRECOGNISED,\n+        DeliveryVerdict.UNCONFIRMED,\n+    }\n )\n \n DEFERRED = \"deferred\"\n",
+ "build": null,
+ "created": "2026-10-15T23:55:58+00:00",
+ "fingerprint": "e81fa30f9a21d3cdaa68ba6e123efaa885a476eeb3d3e9178c0154d17709da2a",
+ "index": 1,
+ "kind": "claim",
+ "named_break": null,
+ "no_build_reason": "python tests only",
+ "plan": "/mnt/vault/Portfolio/infra/remote-agents/plans/2026-10-15-codex-rollover-and-restart-resume-sub-01-restart-resume-plan.md",
+ "red": {
+  "elapsed_s": 0.9,
+  "exit": 1,
+  "tail": "......F......                                                            [100%]\n=================================== FAILURES ===================================\n_________ test_nudge_an_unconfirmed_send_is_not_repeated[unconfirmed] __________\n\nrig = <test_interrupted_resume_pass.Rig object at 0x7cd5947dd590>\nanswer = 'unconfirmed'\n\n    @pytest.mark.parametrize(\"answer\", [\"unconfirmed\", \"raises\"])\n    async def test_nudge_an_unconfirmed_send_is_not_repeated(rig: Rig, answer: str) -> None:\n        record = await _mid_turn(rig)\n        sends: list[str] = []\n    \n        async def send(session_id: SessionId, text: str) -> PromptDelivery:\n            sends.append(text)\n            if answer == \"raises\":\n                raise RuntimeError(\"tmux went away mid-paste\")\n            return PromptDelivery(PromptOutcome.UNCONFIRMED, PromptReason.SUBMIT_NOT_SEEN)\n    \n        resume_pass = rig.run_pass()\n        resume_pass._send = send  # type: ignore[attr-defined]\n        (report,) = await resume_pass.run(await rig.snapshot(record))\n    \n>       assert sends == [NUDGE]\nE       AssertionError: assert ['carry on', ...arry on', ...] == ['carry on']\nE         \nE         Left contains 30 more items, first extra item: 'carry on'\nE         Use -v to get more diff\n\ntests/integration/test_interrupted_resume_pass.py:502: AssertionError\n=========================== short test summary info ============================\nFAILED tests/integration/test_interrupted_resume_pass.py::test_nudge_an_unconfirmed_send_is_not_repeated[unconfirmed]\n1 failed, 12 passed, 16 deselected in 0.64s"
+ },
+ "schema": 2,
+ "task": "2.4",
+ "test": "uv run --locked pytest tests/integration/test_interrupted_resume_pass.py -q -p no:randomly -k nudge",
+ "text": "`uv run --locked pytest tests/integration/test_interrupted_resume_pass.py -q -p no:randomly -k nudge`. Cases:",
+ "touched": [
+  "src/remote_agents/application/interrupted_resume.py"
+ ]
+}
