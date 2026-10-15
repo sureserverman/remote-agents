@@ -133,9 +133,9 @@ def spool_agent_event(
     A submit starts the session's turn marker and, when its agent owns that marker, writes the
     agent's own conversation id as the session's conversation mark -- an identifier, never the
     prompt; it records no activity. A finished turn ends the marker and is then recorded as
-    before. What is recorded, and whether a submit marks a
-    turn at all, is the licence the hook's vertical declares (BL-050): this module names no
-    provider, and a hook with no licence records nothing and starts no marker.
+    before. What is recorded, and whether a submit marks a turn at all, is the licence the
+    hook's vertical declares (BL-050): this module names no provider, and a hook with no
+    licence records nothing and starts no marker.
 
     `licence` is a lookup, not a value, and required. It is called only past the session gate,
     because finding a licence imports a whole vertical: done earlier, every turn of every

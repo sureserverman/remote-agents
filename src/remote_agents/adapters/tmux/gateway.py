@@ -280,8 +280,12 @@ class TmuxGateway:
         the same. To the resume-after-restart pass they are not, and neither is a server that
         started after a session did: either way that session's pane was lost with its server
         (a reboot, a power loss, a tmux crash), even if the console has since started a fresh
-        one. Any failure other than the absent-server one is raised, as `inventory` raises it.
-        `#{start_time}` is a server variable, so every session line carries the same value.
+        one. Any failure other than the absent-server one is raised, as `inventory` raises it,
+        and so is a server that lists no session (impossible while `exit-empty` is on, its
+        default): the caller cannot tell when such a server started, and must not guess.
+        `#{start_time}` is a server variable, so every session line carries the same value. It
+        has one-second resolution, and a caller comparing it with a record's creation allows
+        for that.
         """
         try:
             output = await self._runner.run(

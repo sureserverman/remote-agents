@@ -17,6 +17,14 @@ belongs; a marker is opened with `O_NOFOLLOW`, so a link planted at its name is 
 than written through; and nothing here raises -- every `OSError` answers "no marker". A lost
 marker costs the relay the protection it adds and nothing more: without one it reads the screen
 alone, which is its behaviour before this existed.
+
+Beside the markers, `FileConversationMarks` keeps each session's own conversation under
+`<activity directory>/conversations/`, written by the hook at a turn's start when its agent
+owns the marker, and read by the resume after a restart. Its one known blind spot: an
+interrupted turn fires no `Stop`, so if the owner interrupts, `/clear`s and submits before the
+service has ended the stale marker on the screen's evidence, the new conversation's agent does
+not own the turn and the mark keeps the previous conversation. No hook payload tells that
+submit from a nested agent's, which must never win.
 """
 
 from __future__ import annotations
@@ -178,6 +186,10 @@ class FileConversationMarks:
         try:
             try:
                 os.write(descriptor, conversation.encode("ascii"))
+                # Durable before it is visible: the mark exists for the resume after a power
+                # loss, and a rename that outlives its data would leave an empty file. One
+                # fsync of a few dozen bytes, on a submit only.
+                os.fsync(descriptor)
             finally:
                 os.close(descriptor)
             os.replace(temporary, directory / name)
@@ -207,6 +219,7 @@ class FileConversationMarks:
             entries = list(os.scandir(self._directory))
         except OSError:
             return ()
+        _clear_abandoned(entries)
         return tuple(
             entry.name
             for entry in entries
@@ -221,6 +234,24 @@ class FileConversationMarks:
             os.unlink(self._directory / name)
         except OSError:
             return
+
+
+#: A `.pending-*` temporary older than this was left by a hook killed between its create and
+#: its rename; nothing still writing one is anywhere near this old.
+_ABANDONED_SECONDS = 3600
+
+
+def _clear_abandoned(entries: list[os.DirEntry[str]]) -> None:
+    """Collect the temporaries killed hooks left behind; never raises."""
+    horizon = datetime.now(UTC).timestamp() - _ABANDONED_SECONDS
+    for entry in entries:
+        if not entry.name.startswith(".pending-"):
+            continue
+        try:
+            if entry.stat(follow_symlinks=False).st_mtime < horizon:
+                os.unlink(entry.path)
+        except OSError:
+            continue
 
 
 def _is_real_directory(path: Path) -> bool:

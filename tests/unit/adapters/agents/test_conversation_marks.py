@@ -183,3 +183,20 @@ def test_the_turn_marker_reports_its_owner(tmp_path: Path) -> None:
     markers.start(_SESSION, owner=_PARENT)
     markers.start(_SESSION, owner=_CHILD)
     assert markers.owner(_SESSION) == _PARENT
+
+
+def test_an_abandoned_temporary_is_collected_and_a_fresh_one_is_left(tmp_path: Path) -> None:
+    """A hook killed between its create and its rename leaves a `.pending-*` file behind."""
+    directory = _spool(tmp_path)
+    marks = FileConversationMarks(directory)
+    marks.record(_SESSION, _PARENT)
+    old = directory / "conversations" / ".pending-0123456789ab"
+    fresh = directory / "conversations" / ".pending-ba9876543210"
+    old.write_text(_CHILD)
+    fresh.write_text(_CHILD)
+    two_hours_ago = datetime.now(UTC).timestamp() - 7200
+    os.utime(old, (two_hours_ago, two_hours_ago))
+
+    assert marks.sessions() == (_SESSION,)
+    assert not old.exists()
+    assert fresh.exists()
