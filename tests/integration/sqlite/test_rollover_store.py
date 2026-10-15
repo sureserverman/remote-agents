@@ -292,7 +292,7 @@ def test_an_existing_store_migrates_to_18_with_a_backup_and_every_row_kept(
 
     after = open_database(path)
 
-    assert current_version(after) == 19
+    assert current_version(after) == MIGRATIONS[-1][0]
     assert after.execute("SELECT COUNT(*) FROM sessions").fetchone() == (1,)
     assert after.execute("SELECT COUNT(*) FROM rollovers").fetchone() == (0,)
     assert current_version(sqlite3.connect(backup_path(path))) == 17

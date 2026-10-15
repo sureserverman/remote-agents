@@ -67,7 +67,7 @@ def test_an_existing_store_migrates_to_19_with_every_session_kept(tmp_path: Path
 
     after = open_database(path)
 
-    assert current_version(after) == 19
+    assert current_version(after) == MIGRATIONS[-1][0]
     assert after.execute("SELECT session_id FROM sessions").fetchall() == [(S1,)]
     assert after.execute("SELECT COUNT(*) FROM worktrees").fetchone() == (0,)
     assert after.execute("SELECT COUNT(*) FROM session_worktrees").fetchone() == (0,)
