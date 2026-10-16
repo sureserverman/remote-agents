@@ -296,7 +296,7 @@ async def test_the_owner_switches_auto_rollover_on_and_back_off_through_the_chat
     assert len(chat.bot_messages) == 1, chat.transcript()
 
 
-async def test_the_owner_switches_restart_resume_off_and_back_on_through_the_chat(
+async def test_the_owner_switches_resume_interrupted_off_and_back_on_through_the_chat(
     tmp_path,
 ) -> None:
     """Through the real config writer: a fresh config draws on, and a press stores `false`."""
