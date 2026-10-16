@@ -207,5 +207,8 @@ HOOK_LICENCE = HookLicence(
     # carries the environment of whichever pane started it, so the variable names the wrong
     # session -- measured 2026-10-13 on codex-cli 0.162.1 (DEC-126).
     identity=HookIdentity.PAYLOAD_THREAD,
+    # Set per thread in every tool shell; the shell's session variable is the daemon starter's,
+    # like a hook's -- measured 2026-10-16 on codex-cli 0.162.1 (DEC-128).
+    thread_variable="CODEX_THREAD_ID",
 )
 """What Codex's activity hook may record (BL-050); the descriptor's `activity` is this value."""

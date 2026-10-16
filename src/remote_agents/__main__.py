@@ -31,6 +31,10 @@ def main(argv: list[str] | None = None) -> int:
         from remote_agents.statusline import run_statusline
 
         return run_statusline(arguments[1:])
+    if arguments[:1] == ["session-id"]:
+        from remote_agents.agent_event import run_session_id
+
+        return run_session_id(arguments[1:])
 
     from remote_agents.bootstrap import main as run_service
 

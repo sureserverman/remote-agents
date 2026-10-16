@@ -55,7 +55,7 @@ if TYPE_CHECKING:
     from remote_agents.adapters.tui.context import TuiContext
     from remote_agents.adapters.tui.model import AttachRequest
 from remote_agents.adapters.sqlite.store_split import split_stores
-from remote_agents.agent_event import HOOK_PROVIDERS, spool_from_stdin
+from remote_agents.agent_event import HOOK_PROVIDERS, run_session_id, spool_from_stdin
 from remote_agents.application.console import CloseOutcome
 from remote_agents.application.doctor import (
     credential_file_report,
@@ -172,6 +172,9 @@ def main(
     agent_event_parser = subcommands.add_parser("agent-event")
     agent_event_parser.add_argument("--activity-dir", type=Path)
     agent_event_parser.add_argument("--provider", choices=HOOK_PROVIDERS, default="claude")
+    # The calling tool shell's managed session, for a handoff writer (DEC-128).
+    session_id_parser = subcommands.add_parser("session-id")
+    session_id_parser.add_argument("--activity-dir", type=Path)
     # The wrapper around the owner's status-line command; `--then` is that command.
     statusline_parser = subcommands.add_parser("statusline")
     statusline_parser.add_argument("--then", default=None)
@@ -225,6 +228,10 @@ def main(
         # straight to that module without importing this one, and two copies of a path that
         # promises never to raise would eventually stop agreeing about how it does that.
         return spool_from_stdin(arguments.activity_dir, provider=arguments.provider)
+    if arguments.command == "session-id":
+        # Delegated like `agent-event`: one implementation, reached without this module first.
+        directory = arguments.activity_dir
+        return run_session_id([] if directory is None else ["--activity-dir", str(directory)])
     if arguments.command == "statusline":
         # Delegated for the same reason as `agent-event`, on a path that runs far more often.
         return hop_from_stdin(arguments.then, arguments.state_dir)

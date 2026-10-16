@@ -17,9 +17,16 @@ with `2683fdd6-…`:
 So a tool shell is spawned by the daemon as a hook is, and inherits the environment of the pane
 that started it: B's shell names A's session. Only `CODEX_THREAD_ID` is per thread.
 
-The facts the design relies on are asserted: each shell's `CODEX_THREAD_ID` is its own pane's
-thread, and the two differ. The wrong session variable is recorded here, not asserted: the design
-never reads it, so a later Codex that fixes it must not fail this drill.
+The facts the design relies on are asserted (`-k measure`): each shell's `CODEX_THREAD_ID` is its
+own pane's thread, and the two differ. The wrong session variable is recorded here, not asserted:
+the design never reads it, so a later Codex that fixes it must not fail this drill.
+
+The same tool command then runs the installed `remote-agents session-id` against a roster the
+drill publishes, as `serve` would (`-k verb`, DEC-128): A and B each print their own id, and a
+Codex the owner starts by hand in the project's main checkout -- sharing the daemon, so its shell
+carries A's variable -- exits 3. A and B work in the project's worktrees, as managed sessions do.
+What the verb cannot tell apart is `hook_identity`'s recorded limit, not drilled here: a Codex
+started by hand in the very folder a live managed session works in is filed under that session.
 
 `REMOTE_AGENTS_LIVE_ACCEPTANCE=1` is required: it spends short Codex turns on the owner's
 account. Every skip says `BLOCKED:` and why.
@@ -36,25 +43,39 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 import time
 from collections.abc import Iterator
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
 from agent_panes import CODEX_OPENING, CODEX_READY, open_to_composer
 from codex_home import retire_codex_home, short_codex_home
 
+from remote_agents.adapters.agents.hook_identity import FileHookRoster
 from remote_agents.domain.models import SessionId
+from remote_agents.ports.hook_roster import RosterSession
 from remote_agents.ports.session_identity import SESSION_ID_VARIABLE
 
-#: What each pane's tool command writes: one `name=value` line per fact, read back by the test.
-_PROBE = f"""#!/bin/sh
+#: The installed console script, not the module: the writer runs the command a shell would.
+_VERB = Path(sys.executable).parent / "remote-agents"
+
+
+def _probe_script(spool: Path) -> str:
+    """What a pane's tool command runs: one `name=value` line per fact, then `done`."""
+    return f"""#!/bin/sh
 {{
   printf 'session=%s\\n' "${{{SESSION_ID_VARIABLE}-}}"
   printf 'thread=%s\\n' "${{CODEX_THREAD_ID-}}"
+  printf 'verb=%s\\n' "$('{_VERB}' session-id --activity-dir '{spool}' 2>/dev/null)"
+  '{_VERB}' session-id --activity-dir '{spool}' >/dev/null 2>&1
+  printf 'verb_exit=%s\\n' "$?"
+  printf 'done=1\\n'
 }} > seen.txt
 """
+
 
 _TURN = "Run the shell command `sh probe.sh` exactly once, then reply with exactly the word: done"
 
@@ -104,7 +125,7 @@ def _probe(socket: str, pane: str, workspace: Path, seconds: float = 180.0) -> d
     written = workspace / "seen.txt"
     deadline = time.monotonic() + seconds
     while time.monotonic() < deadline:
-        if written.is_file() and (text := written.read_text(encoding="utf-8")).count("\n") >= 2:
+        if written.is_file() and "done=1" in (text := written.read_text(encoding="utf-8")):
             return dict(line.split("=", 1) for line in text.splitlines() if "=" in line)
         time.sleep(1.0)
     screen = _tmux(socket, "capture-pane", "-p", "-t", pane).stdout
@@ -127,18 +148,49 @@ def _thread(codex_home: Path, workspace: Path, seconds: float = 30.0) -> str:
     pytest.fail(f"no rollout under {codex_home} ran in {workspace}")
 
 
+@dataclass(frozen=True, slots=True)
+class Drill:
+    """One tmux socket and one daemon home, a project with two worktrees, and the roster's spool."""
+
+    socket: str
+    codex_home: Path
+    project: Path
+    spool: Path
+    roster: FileHookRoster
+    sessions: list[RosterSession]
+
+
+def _git(folder: Path, *arguments: str) -> None:
+    """Git in the drill's throwaway project, with no hook of the owner's run on it."""
+    identity = ("-c", "user.name=drill", "-c", "user.email=drill@invalid")
+    subprocess.run(
+        ["git", "-c", "core.hooksPath=/dev/null", *identity, *arguments],
+        cwd=folder, check=True, timeout=30, capture_output=True,
+    )  # fmt: skip
+
+
 @pytest.fixture(scope="module")
-def panes(tmp_path_factory: pytest.TempPathFactory) -> Iterator[tuple[Pane, Pane]]:
-    """Panes A then B on one daemon, each probed once. Module-scoped: the turns cost quota."""
+def drill(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Drill]:
+    """The shared ground every pane opens on. Module-scoped: the turns cost quota."""
     if os.environ.get("REMOTE_AGENTS_LIVE_ACCEPTANCE") != "1":
         pytest.skip("BLOCKED: REMOTE_AGENTS_LIVE_ACCEPTANCE is not enabled")
-    for needed in ("codex", "tmux"):
+    for needed in ("codex", "tmux", "git"):
         if shutil.which(needed) is None:
             pytest.skip(f"BLOCKED: executable_missing: {needed}")
     if not (Path.home() / ".codex" / "auth.json").is_file():
         pytest.skip("BLOCKED: codex is not logged in with ChatGPT")
+    if not _VERB.is_file():
+        pytest.skip(f"BLOCKED: no installed entry point at {_VERB}")
 
     root = tmp_path_factory.mktemp("tool-shell")
+    spool = root / "spool"
+    spool.mkdir(mode=0o700)
+    project = root / "project"
+    project.mkdir()
+    _git(project, "init", "-q")
+    _git(project, "commit", "-q", "--allow-empty", "-m", "start")
+    for name in ("a", "b"):
+        _git(project, "worktree", "add", "-q", "-b", name, str(root / name))
     socket = f"remote-agents-test-tool-shell-{SessionId.new().value.hex}"
     codex_home = short_codex_home()
     try:
@@ -149,17 +201,7 @@ def panes(tmp_path_factory: pytest.TempPathFactory) -> Iterator[tuple[Pane, Pane
             "[notice]\nhide_rate_limit_model_nudge = true\n",
             encoding="utf-8",
         )
-        found = []
-        for name in ("a", "b"):
-            workspace = root / name
-            workspace.mkdir()
-            subprocess.run(["git", "init", "-q"], cwd=workspace, check=False, timeout=30)
-            (workspace / "probe.sh").write_text(_PROBE, encoding="utf-8")
-            session = str(SessionId.new())
-            pane = _open(socket, f"ra-{session}", workspace, codex_home, session)
-            seen = _probe(socket, pane, workspace)
-            found.append(Pane(session, workspace, seen, _thread(codex_home, workspace)))
-        yield found[0], found[1]
+        yield Drill(socket, codex_home, project, spool, FileHookRoster(spool), [])
     finally:
         # Retired even when tmux does not answer: a daemon left running from the home keeps an
         # authenticated Codex alive until the host reboots (BL-133).
@@ -169,8 +211,47 @@ def panes(tmp_path_factory: pytest.TempPathFactory) -> Iterator[tuple[Pane, Pane
             retire_codex_home(codex_home)
 
 
+def _probed(drill: Drill, workspace: Path, session: str | None) -> Pane:
+    """A Codex pane in `workspace` -- managed when given a session -- after its probe ran."""
+    (workspace / "probe.sh").write_text(_probe_script(drill.spool), encoding="utf-8")
+    if session is not None:
+        # Published before the pane opens, as `serve` lists a session once its record exists.
+        drill.sessions.append(RosterSession(session, workspace, datetime.now(UTC)))
+        drill.roster.write("codex", drill.sessions)
+    name = f"ra-{session}" if session is not None else f"by-hand-{SessionId.new().value.hex}"
+    pane = _open(drill.socket, name, workspace, drill.codex_home, session)
+    seen = _probe(drill.socket, pane, workspace)
+    return Pane(session or "", workspace, seen, _thread(drill.codex_home, workspace))
+
+
+@pytest.fixture(scope="module")
+def panes(drill: Drill) -> tuple[Pane, Pane]:
+    """Managed panes A then B, in the project's two worktrees, on one daemon: A starts it."""
+    root = drill.project.parent
+    first = _probed(drill, root / "a", str(SessionId.new()))
+    second = _probed(drill, root / "b", str(SessionId.new()))
+    return first, second
+
+
+@pytest.fixture(scope="module")
+def by_hand(drill: Drill, panes: tuple[Pane, Pane]) -> Pane:
+    """A Codex started by hand in the project's main checkout, attached to A's daemon."""
+    return _probed(drill, drill.project, None)
+
+
 def test_measure_each_tool_shell_is_told_its_own_thread(panes: tuple[Pane, Pane]) -> None:
     first, second = panes
     assert first.seen["thread"] == first.thread, first
     assert second.seen["thread"] == second.thread, second
     assert first.thread != second.thread
+
+
+def test_verb_each_managed_pane_prints_its_own_session(panes: tuple[Pane, Pane]) -> None:
+    for pane in panes:
+        assert (pane.seen["verb_exit"], pane.seen["verb"]) == ("0", pane.session_id), pane
+
+
+def test_verb_a_codex_started_by_hand_exits_3(by_hand: Pane, panes: tuple[Pane, Pane]) -> None:
+    # Its shell carries A's variable, inherited from the daemon A started: never evidence.
+    assert by_hand.seen["session"] == panes[0].session_id, by_hand
+    assert (by_hand.seen["verb_exit"], by_hand.seen["verb"]) == ("3", ""), by_hand

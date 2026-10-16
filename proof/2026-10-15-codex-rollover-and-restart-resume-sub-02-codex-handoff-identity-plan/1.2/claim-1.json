@@ -1,0 +1,28 @@
+{
+ "baseline": {
+  "elapsed_s": 0.8,
+  "exit": 0,
+  "tail": "..........................                                               [100%]\n26 passed in 0.25s\nss                                                                       [100%]\n=========================== short test summary info ============================\nSKIPPED [1] tests/live/test_codex_tool_shell_identity.py:249: BLOCKED: REMOTE_AGENTS_LIVE_ACCEPTANCE is not enabled\nSKIPPED [1] tests/live/test_codex_tool_shell_identity.py:254: BLOCKED: REMOTE_AGENTS_LIVE_ACCEPTANCE is not enabled\n2 skipped, 1 deselected in 0.02s"
+ },
+ "break_patch": "diff --git a/src/remote_agents/agent_event.py b/src/remote_agents/agent_event.py\nindex 8c9149dd..e906fed8 100644\n--- a/src/remote_agents/agent_event.py\n+++ b/src/remote_agents/agent_event.py\n@@ -127,6 +127,8 @@ def resolve_session_id(\n     from remote_agents.ports.session_identity import SESSION_ID_VARIABLE, safe_session_id\n \n     inherited = safe_session_id(environment.get(SESSION_ID_VARIABLE))\n+    if inherited is not None:\n+        return inherited\n     for hook_name in HOOK_PROVIDERS:\n         found = licence(hook_name)\n         if found is None or found.identity is not HookIdentity.PAYLOAD_THREAD:\n",
+ "build": null,
+ "created": "2026-10-16T07:16:58+00:00",
+ "fingerprint": "b0bd5c735ce754c5421888f79ab1c829173679c98c3114774a4b3d7a5c2f74bc",
+ "index": 1,
+ "kind": "claim",
+ "named_break": null,
+ "no_build_reason": "pure Python; the test imports the source tree",
+ "plan": "/mnt/vault/Portfolio/infra/remote-agents/plans/2026-10-15-codex-rollover-and-restart-resume-sub-02-codex-handoff-identity-plan.md",
+ "red": {
+  "elapsed_s": 0.6,
+  "exit": 1,
+  "tail": "    def test_session_id_command_exits_3_on_an_untrusted_roster(\n        shell: Path,\n        monkeypatch: pytest.MonkeyPatch,\n        capsys: pytest.CaptureFixture[str],\n        tmp_path: Path,\n        spoil: str,\n    ) -> None:\n        mine = str(SessionId.new())\n        _roster(shell, RosterEntry(mine, str(Path.cwd().resolve()), _MINTED - timedelta(minutes=1)))\n        path = roster_path(shell, \"codex\")\n        if spoil == \"shared\":\n            path.chmod(0o644)\n        elif spoil == \"symlink\":\n            real = tmp_path / \"elsewhere.json\"\n            path.rename(real)\n            path.symlink_to(real)\n        elif spoil == \"garbage\":\n            path.write_text(\"{not json\", encoding=\"utf-8\")\n        else:\n            path.write_text('{\"sessions\": [{\"session_id\": \"x\"}]}', encoding=\"utf-8\")\n        monkeypatch.setenv(\"REMOTE_AGENTS_SESSION_ID\", mine)\n        monkeypatch.setenv(\"CODEX_THREAD_ID\", _THREAD)\n>       assert _run(shell, capsys) == (3, \"\")\nE       AssertionError: assert (0, '8d591adc...a4099bf4ac\\n') == (3, '')\nE         \nE         At index 0 diff: 0 != 3\nE         Use -v to get more diff\n\n/home/user/dev/infra/remote-agents/tests/unit/test_session_id_verb.py:207: AssertionError\n=========================== short test summary info ============================\nFAILED tests/unit/test_session_id_verb.py::test_session_id_command_ignores_a_stale_environment_id_under_a_codex_thread\nFAILED tests/unit/test_session_id_verb.py::test_session_id_command_never_falls_back_to_the_environment_for_an_unplaced_thread\nFAILED tests/unit/test_session_id_verb.py::test_session_id_command_exits_3_with_no_roster\nFAILED tests/unit/test_session_id_verb.py::test_session_id_command_never_trusts_a_rostered_id_without_its_thread[None]\nFAILED tests/unit/test_session_id_verb.py::test_session_id_command_never_trusts_a_rostered_id_without_its_thread[]\nFAILED tests/unit/test_session_id_verb.py::test_session_id_command_exits_3_on_an_untrusted_roster[shared]\nFAILED tests/unit/test_session_id_verb.py::test_session_id_command_exits_3_on_an_untrusted_roster[symlink]\nFAILED tests/unit/test_session_id_verb.py::test_session_id_command_exits_3_on_an_untrusted_roster[garbage]\nFAILED tests/unit/test_session_id_verb.py::test_session_id_command_exits_3_on_an_untrusted_roster[bad-entry]\n9 failed, 17 passed in 0.28s"
+ },
+ "schema": 2,
+ "task": "1.2",
+ "test": "uv run --locked pytest tests/unit/test_session_id_verb.py tests/architecture/test_session_id_command.py -q -p no:randomly && uv run --locked pytest tests/live/test_codex_tool_shell_identity.py -q -p no:randomly -k verb",
+ "text": "`uv run --locked pytest tests/unit/test_session_id_verb.py tests/architecture/test_session_id_command.py -q -p no:randomly && uv run --locked pytest tests/live/test_codex_tool_shell_identity.py -q -p no:randomly -k verb`. The architecture test asserts that the verb's module calls `hook_identity.resolve` and defines no resolver of its own. The unit cases cover: environment id; thread id resolved; a stale environment id under a Codex thread is ignored; an unmanaged shell exits 3; no roster exits 3 *(Test amended 2026-10-16, same reason as Scope; was: `uv run --locked pytest tests/unit/test_session_id_command.py tests/architecture/test_session_id_command.py \u2026`)*",
+ "touched": [
+  "src/remote_agents/agent_event.py"
+ ]
+}

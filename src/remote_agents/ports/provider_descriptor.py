@@ -267,6 +267,15 @@ class HookLicence:
     roster for its own hook name exists.
     """
 
+    thread_variable: str | None = None
+    """The variable this provider sets, per thread, in the tool shells it spawns; None for none.
+
+    Read by `remote-agents session-id` for a `PAYLOAD_THREAD` provider: its tool shells are
+    spawned by the same daemon as its hooks and inherit the same wrong environment (DEC-128), so
+    the shell names its session by this thread id and the roster, as a hook names it by its
+    payload's.
+    """
+
 
 @dataclass(frozen=True, slots=True)
 class ProviderDescriptor:
