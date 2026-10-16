@@ -35,6 +35,7 @@ _GIVE_UP_AFTER = timedelta(minutes=10)
 _WHY_SKIPPED = {
     "not-resumable": "this agent cannot resume a conversation",
     "handed-off": "it had handed its work to a successor",
+    "not-adopted": "its rollover had not been accepted; the session it was taking over came back",
     "already-open": "its conversation is already open",
     "no-conversation": "no conversation was recorded for it",
     "superseded": "a newer session had already opened its conversation",

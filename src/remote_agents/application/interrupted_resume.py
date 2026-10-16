@@ -79,12 +79,22 @@ HANDED_OFF: frozenset[RolloverState] = frozenset(
 """Rollover states in which the successor has accepted the work: the predecessor no longer
 holds it, so bringing the predecessor back would run the work twice (DEC-115)."""
 
+IN_FLIGHT: frozenset[RolloverState] = frozenset(
+    {RolloverState.SUCCESSOR_STARTING, RolloverState.ADOPTING}
+)
+"""Rollover states with a successor launched that has not accepted the work. The predecessor
+still holds it (DEC-115), so the successor is the one not brought back: two resumed sessions
+would carry one plan, and the rollover pass fails the rollover once its successor is gone."""
+
 
 class ResumeSkip(StrEnum):
     """Why an interrupted session is not resumed; persisted as `skipped:<value>`."""
 
     NOT_RESUMABLE = "not-resumable"
     HANDED_OFF = "handed-off"
+    NOT_ADOPTED = "not-adopted"
+    """A rollover's successor that had not accepted the work when the server went: its
+    predecessor holds it and is resumed instead."""
     ALREADY_OPEN = "already-open"
     NO_CONVERSATION = "no-conversation"
     SUPERSEDED = "superseded"
@@ -159,6 +169,11 @@ def plan_resumes(snapshot: RestartSnapshot) -> tuple[ResumeDecision, ...]:
         for rollover in snapshot.rollovers
         if rollover.state in HANDED_OFF
     }
+    not_adopted = {
+        rollover.successor_session_id
+        for rollover in snapshot.rollovers
+        if rollover.state in IN_FLIGHT and rollover.successor_session_id is not None
+    }
     held = {
         (session.record.profile_id, conversation)
         for session in snapshot.sessions
@@ -169,6 +184,8 @@ def plan_resumes(snapshot: RestartSnapshot) -> tuple[ResumeDecision, ...]:
     for record in interrupted:
         conversation = _conversation(record, snapshot.conversation_marks)
         skip = _skip(record, conversation, snapshot.resumable_profiles, handed_off, held)
+        if skip is None and record.session_id in not_adopted:
+            skip = ResumeSkip.NOT_ADOPTED
         if (
             skip is None
             and conversation is not None

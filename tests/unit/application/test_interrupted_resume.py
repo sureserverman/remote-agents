@@ -277,6 +277,31 @@ def test_rollover_predecessor_not_yet_handed_off_is_resumed(state: RolloverState
     assert decision.skip is None
 
 
+@pytest.mark.parametrize("state", [RolloverState.SUCCESSOR_STARTING, RolloverState.ADOPTING])
+def test_a_successor_whose_rollover_was_not_yet_accepted_is_not_resumed(
+    state: RolloverState,
+) -> None:
+    """Cut off before acceptance, the predecessor still holds the work (DEC-115): it comes back,
+    and the successor does not, so one session -- not two -- carries the plan. The rollover pass
+    then fails the rollover and says so."""
+    predecessor = _record()
+    successor = _record(created=CREATED + timedelta(minutes=5))
+
+    decisions = plan_resumes(
+        _snapshot(
+            _lost(predecessor),
+            _lost(successor),
+            marks={predecessor: "conv-old", successor: "conv-new"},
+            rollovers=(_rollover(predecessor, state, successor),),
+        )
+    )
+
+    by_record = {decision.record: decision for decision in decisions}
+    assert by_record[predecessor].skip is None
+    assert by_record[successor].skip is ResumeSkip.NOT_ADOPTED
+    assert not by_record[successor].nudge
+
+
 def test_a_conversation_another_live_record_holds_is_already_open() -> None:
     """A live pane resumed the same conversation (say, from the console) after a fresh server."""
     lost = _record()

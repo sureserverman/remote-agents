@@ -879,6 +879,8 @@ this. The terminal never does.
   - `not-resumable`: Cursor has no resume.
   - `no-conversation`: no mark and no `resume_source_id`; usually an OpenCode session.
   - `handed-off`: a rollover's successor had already accepted the work.
+  - `not-adopted`: it was a rollover's successor that had not accepted the work yet. The
+    session it was taking over comes back instead, and the rollover then fails.
   - `already-open`: another live session holds the conversation.
   - `superseded`: an earlier start left it half-done, and the conversation was opened since.
   - `worktree_removed`: its worktree is gone.
