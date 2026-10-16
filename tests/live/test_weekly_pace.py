@@ -130,18 +130,23 @@ async def _drawn_limits(tmp_path: Path, width: int, height: int) -> list[str]:
             "env", f"HOME={home}", str(_PYTHON), "-m", "remote_agents", "tui",
         )  # fmt: skip
 
+        previous: list[list[str]] = []
+
         async def paced() -> list[str] | None:
             try:
                 limits = _limits(await _capture(socket))
             except StopIteration:
                 return None
             claude = [line for line in limits if line.split()[:1] == ["claude"]]
-            return (
-                limits
-                if any(" 7%" in line for line in claude)
-                or any(" 7%" in line for line in limits if " wk " in line)
-                else None
+            drawn = any(" 7%" in line for line in claude) or any(
+                " 7%" in line for line in limits if " wk " in line
             )
+            # Settled, not merely drawn: the first frame carrying the reading can come before
+            # the pane's last width, cutting the pace line short ("▼ 7 un…"; 2 of 8 first frames,
+            # every one complete 1.5 s later, measured 2026-10-16). Two equal captures in a row.
+            settled = drawn and previous[-1:] == [limits]
+            previous[:] = [limits]
+            return limits if settled else None
 
         limits = await _until(paced, 40.0)
         assert limits, "\n".join(await _capture(socket))

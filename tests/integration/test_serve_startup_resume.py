@@ -1,8 +1,9 @@
-"""`serve` resumes the sessions a lost tmux server interrupted, once, before anything else runs.
+"""`serve` resumes the sessions a lost tmux server interrupted, once, beside polling.
 
-Task 2.5 of the restart-resume plan. The snapshot is taken before the first reconcile ends the
-lost records; the switch is read after it, toward off; the pass runs before the periodic tasks,
-the worktree cleanup's first pass included (DEC-124); and the owner is told once.
+Task 2.5 of the restart-resume plan, as amended at its gate. The snapshot is taken before the
+first reconcile ends the lost records; the switch is read after it, toward off; the pass runs as
+a task beside polling, and only the worktree cleanup's first pass waits for it (DEC-124); and the
+owner is told once.
 """
 
 from __future__ import annotations
@@ -267,6 +268,39 @@ def test_the_notice_names_how_many_came_back_and_why_the_rest_did_not() -> None:
     assert text.startswith("Resumed 2 sessions after restart")
     assert "claude in remote-agents #3 — no conversation was recorded for it" in text
     assert "a dialog was showing" in text
+
+
+def test_every_reason_the_pass_can_write_has_words_in_the_notice() -> None:
+    """Swept from the sources, not listed: a reason missing from a table reaches the owner as a
+    bare word (`superseded`, `keys_busy`), which is how the first two gaps went unseen."""
+    import re
+
+    from remote_agents.adapters.telegram import restart_notifications
+    from remote_agents.application import interrupted_resume
+    from remote_agents.application.interrupted_resume import ResumeSkip
+    from remote_agents.application.prompt_delivery import DeliveryVerdict
+    from remote_agents.ports.terminal import PromptReason
+
+    source = Path(interrupted_resume.__file__).read_text(encoding="utf-8")
+    skips = {skip.value for skip in ResumeSkip} | set(re.findall(r"SKIPPED\}:([a-z_-]+)", source))
+    assert skips - set(restart_notifications._WHY_SKIPPED) == set()
+
+    nudges = (
+        {reason.value for reason in PromptReason}
+        # SENT is no failure, and a final WAIT is written as `not_ready`.
+        | {verdict.value for verdict in DeliveryVerdict}
+        - {DeliveryVerdict.SENT.value, DeliveryVerdict.WAIT.value}
+        | set(re.findall(r'return "([a-z_]+)"', source))
+    )
+    assert nudges - set(restart_notifications._WHY_NOT_NUDGED) == set()
+
+    text = restart_message(
+        (_report("skipped:superseded"), _report("resumed:n; not nudged:keys_busy")),
+        unchecked=0,
+        project_name=str,
+    )
+    assert "a newer session had already opened its conversation" in text
+    assert "someone else was typing into it" in text
 
 
 def test_the_notice_for_one_session_is_singular_and_unchecked_is_said() -> None:

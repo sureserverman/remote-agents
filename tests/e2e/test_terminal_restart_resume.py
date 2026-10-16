@@ -258,6 +258,7 @@ async def test_a_killed_server_resumes_each_session_once_and_nudges_the_mid_turn
 
     # A service-only restart first: the panes are alive, so nothing is lost and nothing is said.
     await rig.serve(until=lambda: rig.passes == 1)
+    assert rig.passes == 1, "the pass judged the start; a silent run proves nothing"
     assert rig.notices == []
     assert await rig.outcomes.outcomes() == {}
     assert {record.session_id for record in await rig.running()} == {
@@ -271,8 +272,11 @@ async def test_a_killed_server_resumes_each_session_once_and_nudges_the_mid_turn
 
     await rig.serve(until=lambda: bool(rig.notices))
 
-    resumed = {record.resume_source_id: record for record in await rig.running()}
-    assert set(resumed) == {"conv-idle", "conv-mid-turn"}
+    assert rig.passes == 2
+    running = await rig.running()
+    sources = sorted(str(record.resume_source_id) for record in running)
+    assert sources == ["conv-idle", "conv-mid-turn"], "one session per conversation, no more"
+    resumed = {record.resume_source_id: record for record in running}
     listed = {observation.session_id for observation in await rig.terminal.managed_observations()}
     assert {record.session_id for record in resumed.values()} <= listed
     assert '"--resume", "conv-idle"' in rig.intent(resumed["conv-idle"].session_id)
@@ -296,10 +300,21 @@ async def test_a_killed_server_resumes_each_session_once_and_nudges_the_mid_turn
     assert "; not nudged:" not in "".join(report.outcome for report in reports)
     notice = restart_message(reports, unchecked=unchecked, project_name=str)
     assert notice.startswith("Resumed 2 sessions after restart"), notice
-    assert set((await rig.outcomes.outcomes()).values()) == {
+    outcomes = await rig.outcomes.outcomes()
+    assert set(outcomes.values()) == {
         f"resumed:{resumed['conv-idle'].session_id}",
         f"resumed:{resumed['conv-mid-turn'].session_id}",
     }
+
+    # A third start over the same store, the resumed panes alive: a restart never acts twice.
+    await rig.serve(until=lambda: rig.passes == 3)
+    assert rig.passes == 3
+    again = await rig.running()
+    assert {record.session_id for record in again} == {r.session_id for r in running}
+    assert await rig.outcomes.outcomes() == outcomes
+    assert len(rig.notices) == 1
+    screen = await rig.terminal.capture(resumed["conv-mid-turn"].session_id)
+    assert screen.count(f"GOT: {NUDGE}") == 1, screen
 
 
 async def test_with_the_switch_off_a_killed_server_brings_nothing_back(rig: Rig) -> None:

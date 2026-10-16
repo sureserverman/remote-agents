@@ -859,8 +859,11 @@ this. The terminal never does.
   (`/settings` on the bot, F2 in the terminal). The first flip writes the table. A missing table
   or key reads as on. A value that is not `true` or `false`, or an unknown key in `[restart]`, is
   refused when `serve` or the terminal starts (`restart.resume_interrupted must be true or
-  false`). `serve` reads the switch once at startup, and an unreadable file counts as off. With
-  it off, nothing is resumed and nothing is written.
+  false`). `serve` reads the switch once at startup, and an unreadable file counts as off. The
+  Settings row reads the same file toward its default, so a file edited into a broken state
+  while `serve` runs can show *on* in the row and resume nothing at the next start. With the
+  switch off, nothing is resumed and nothing is written, so conversation marks wait until a
+  start with it on.
 - **What counts as interrupted.** A record still `running` whose pane is gone, **and** a tmux
   server that is gone or started after that record was created. Restarting only the service
   leaves the panes alive, so nothing is resumed. Killing one pane while its server runs is not a
@@ -881,17 +884,23 @@ this. The terminal never does.
   - `worktree_removed`: its worktree is gone.
   - `interrupted`: an earlier start claimed the launch and did not finish.
   - `launch_error` or `launch_failed`: the resume itself failed.
-- **The notice.** One message per start: *Resumed N sessions after restart*, then the sessions
+
+  A resume refused before it started is not a skip. Examples are the Codex daemon guard and
+  a folder that could not be read. The notice says *it will be tried again at the next start*.- **The notice.** One message per start: *Resumed N sessions after restart*, then the sessions
   not resumed with their reasons, then the ones resumed but not nudged. It also says how many
   sessions could not be judged when tmux could not be read. It waits until the bot is attached.
   If nothing was interrupted, nothing is sent.
 - **Once, durably.** Every decision is written to `interrupted_resumes` in `sessions.sqlite3`
   (migration 20) before the first launch. A session with a final outcome is never acted on
   again. A start cut off mid-pass carries on at the next start without launching or typing
-  twice. To see what a start decided:
+  twice. Only one `serve` runs the pass: it holds `restart-resume.lock` beside the database, and
+  a second `serve` resumes nothing (its journal says `another serve holds the restart resume
+  pass`). Once the pass has decided, the conversation marks of ended sessions are deleted. To
+  see what a start decided:
   `sqlite3 ~/.local/state/remote-agents/sessions.sqlite3 "select * from interrupted_resumes"`.
 - **Timing.** The pass runs beside polling, so the bot answers at once. The worktree cleanup's
-  first pass waits for it. A nudge waits up to 90 s for an agent to reach its prompt. On Linux,
+  first pass waits for the whole pass: every launch, then the nudges. A nudge is tried every 3 s,
+  31 times, for an agent to reach its prompt — about 90 s, longer when a send is slow. On Linux,
   `serve` starts at login, so after a reboot the resume happens when you log in.
 
 ## Telegram credential denial and recovery drill

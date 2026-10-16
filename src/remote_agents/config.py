@@ -759,6 +759,14 @@ _LIMIT_COMMENTS: dict[str, str] = {
         "# Claude rows; leave it commented and those rows show a token count instead."
     ),
 }
+"""Prose the generated file carries, for the keys whose value is a *declaration*.
+
+The only commented key, and it earns the machinery: the rest of `DEFAULT_LIMITS` are knobs with
+safe defaults, while this one is the owner asserting a fact about their plan that nothing else
+can check. Raised by this task's Tier-1 review, which observed that the explanation existed only
+in `config/remote-agents.example.toml` -- a file this module's own docstring says is rendered
+and never copied, so it reaches nobody the onboarding path onboards.
+"""
 
 _DEFAULTED_LIMITS: dict[str, int] = {"claude_context_window": DEFAULT_CLAUDE_CONTEXT_WINDOW}
 """Keys the generated file explains but writes commented out **when nothing chose the value**.
@@ -770,14 +778,6 @@ will find it and "stated" still means stated.
 
 A caller who passes a *different* value has chosen one, so it is written live: `render_config`
 is also how an onboarding flow records an answer the owner actually gave.
-"""
-"""Prose the generated file carries, for the keys whose value is a *declaration*.
-
-The only commented key, and it earns the machinery: the rest of `DEFAULT_LIMITS` are knobs with
-safe defaults, while this one is the owner asserting a fact about their plan that nothing else
-can check. Raised by this task's Tier-1 review, which observed that the explanation existed only
-in `config/remote-agents.example.toml` -- a file this module's own docstring says is rendered
-and never copied, so it reaches nobody the onboarding path onboards.
 """
 
 

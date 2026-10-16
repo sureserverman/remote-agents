@@ -362,7 +362,7 @@ async def test_a_lost_server_brings_real_claude_and_codex_back_in_their_own_conv
 
         # 2. The reboot: the server and every pane on it go, and so does the Codex daemon.
         subprocess.run(["tmux", "-S", str(socket), "kill-server"], capture_output=True, timeout=30)
-        _stop_codex_daemon(codex_home)
+        _stop_codex_daemon(codex, codex_home)
         await _until_gone(first)
 
         # 3. A new process starts `serve`.
@@ -407,12 +407,19 @@ async def test_a_lost_server_brings_real_claude_and_codex_back_in_their_own_conv
             argv = json.dumps(intent)
             assert f'"{argument}", "{conversations[profile]}"' in argv, argv
     finally:
-        subprocess.run(
-            ["tmux", "-S", str(socket), "kill-server"], capture_output=True, timeout=30, check=False
-        )
+        # Each step on its own: a tmux that hangs past its timeout must not leave an
+        # authenticated Codex daemon running from the disposable home (BL-133).
+        with contextlib.suppress(Exception):
+            subprocess.run(
+                ["tmux", "-S", str(socket), "kill-server"],
+                capture_output=True,
+                timeout=30,
+                check=False,
+            )
         retire_codex_home(codex_home)
         for connection in connections:
-            connection.close()
+            with contextlib.suppress(Exception):
+                connection.close()
         if repo is not None:
             shutil.rmtree(repo, ignore_errors=True)
         shutil.rmtree(tmux_directory, ignore_errors=True)
@@ -422,12 +429,13 @@ def _key(prefix: str) -> str:
     return f"{prefix}-{date.today()}-{uuid4()}"
 
 
-def _stop_codex_daemon(home: Path) -> None:
+def _stop_codex_daemon(codex: Path, home: Path) -> None:
     """End every process running from the drill's `CODEX_HOME`, keeping the home and its
-    threads: after a reboot the daemon is gone and `codex resume` has to start a new one."""
+    threads: after a reboot the daemon is gone and `codex resume` has to start a new one. The
+    daemon runs from a binary inside the home (measured, `codex_home.py`), so `/proc` finds it."""
     with contextlib.suppress(subprocess.TimeoutExpired):
         subprocess.run(
-            ["codex", "app-server", "daemon", "stop"],
+            [str(codex), "app-server", "daemon", "stop"],
             env={**os.environ, "CODEX_HOME": str(home)},
             capture_output=True,
             timeout=5,

@@ -4,10 +4,10 @@
 resumed without its nudge, saying why. Nothing at all when nothing was interrupted. This is
 the notice DEC-127 amends DEC-031 for: one per restart, about sessions that are live again.
 
-The rollover notices' shape (`rollover_notifications.py`): sent apart from the live view, held
-while the bot is not attached yet -- the pass runs before polling starts, so it always is --
-and given up with one journal line after `_GIVE_UP_AFTER`. **Escaped here, once** (DEC-014):
-the project's name reaches a surface that parses HTML.
+The rollover notices' shape (`rollover_notifications.py`): sent apart from the live view, at once
+when the bot is attached, else held until it attaches -- the pass runs beside polling, so it can
+finish either side of that -- and given up with one journal line after `_GIVE_UP_AFTER`.
+**Escaped here, once** (DEC-014): the project's name reaches a surface that parses HTML.
 """
 
 from __future__ import annotations
@@ -29,25 +29,44 @@ _LOG = logging.getLogger(__name__)
 #: How long a refused notice is tried again before it is given up, as the rollovers' are.
 _GIVE_UP_AFTER = timedelta(minutes=10)
 
-#: Why a session was not resumed, in words. A reason missing here is shown as itself.
+#: Why a session was not resumed, in words: one entry per reason the pass can write
+#: (`ResumeSkip` and the pass's own `skipped:` outcomes). A reason missing here is shown as
+#: itself, so a test walks both sources against this table.
 _WHY_SKIPPED = {
     "not-resumable": "this agent cannot resume a conversation",
     "handed-off": "it had handed its work to a successor",
     "already-open": "its conversation is already open",
     "no-conversation": "no conversation was recorded for it",
+    "superseded": "a newer session had already opened its conversation",
     "worktree_removed": "its worktree was removed",
     "interrupted": "an earlier start may have resumed it part-way; check its sessions",
     "launch_error": "the resume failed, perhaps part-way; check its sessions",
     "launch_failed": "the resumed session did not start",
 }
 
-#: Why a resumed session was not nudged, in words. A reason missing here is shown as itself.
+#: Why a resumed session was not nudged, in words: one entry per value the nudge can end on --
+#: every `PromptReason` a refused send names, every `DeliveryVerdict` it falls back to, and the
+#: pass's own `not_ready` and `stopping`. A reason missing here is shown as itself, so a test
+#: walks those sources against this table.
 _WHY_NOT_NUDGED = {
     "dialog": "a dialog was showing",
+    "menu": "a menu was showing",
     "not_ready": "the agent was not ready in time",
     "unconfirmed": "the message may not have landed",
+    "submit_not_seen": "the message may not have been submitted",
+    "draft_not_seen": "the message was not seen in its input",
+    "timeout": "typing it took too long",
     "stopping": "the service was stopping",
     "composing": "its input already held text",
+    "busy": "the agent was busy",
+    "keys_busy": "someone else was typing into it",
+    "not_running": "the resumed session was not running",
+    "no_composer": "this agent has no input to type into",
+    "unrecognised": "its screen was not recognised",
+    "tmux_error": "tmux failed before anything was typed",
+    "shell": "the message would have run as a shell command",
+    "empty": "there was nothing to type",
+    "refused": "the message was refused",
 }
 
 

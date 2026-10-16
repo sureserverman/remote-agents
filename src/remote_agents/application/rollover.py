@@ -116,6 +116,7 @@ NOT_IDLE_PATIENCE = timedelta(minutes=10)
 """How long a predecessor may stay not-IDLE at a step that needs it idle before it is given up."""
 
 ADOPTION_PATIENCE = timedelta(minutes=30)
+"""How long a typed successor has to write `accepted`, counted from entering ADOPTING."""
 
 TRUST_PATIENCE = timedelta(hours=2)
 """How long a successor may wait on its folder-trust dialog, counted from the hold (DEC-125).
@@ -139,7 +140,6 @@ so a `ready` first seen older than this was written while nobody was watching --
 off, or `serve` down -- and the plugin then told the owner to resume by hand. Acting on it
 later could put a second session on a plan the owner already resumed (DEC-115: only when
 switched on), so it is cleared instead, which is the manual path it already fell to."""
-"""How long a typed successor has to write `accepted`, counted from entering ADOPTING."""
 
 PREDECESSOR_NOT_IDLE = "predecessor-not-idle"
 PREDECESSOR_GONE = "predecessor-gone"

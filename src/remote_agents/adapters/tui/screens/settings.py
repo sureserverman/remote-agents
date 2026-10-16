@@ -140,7 +140,7 @@ _RESTART_RESUME_ROW = "settings:resume-interrupted"
 _THEME_ROW = "settings:theme"
 _ORDER_ROW = "settings:project-order"
 
-#: The rows this screen declares, in the order it draws them: the three host subjects first,
+#: The rows this screen declares, in the order it draws them: the machine's subjects first,
 #: then the two the terminal keeps for itself.
 #:
 #: A tuple rather than a count in prose, for the reason `ALL_SCREENS` gives next door -- a

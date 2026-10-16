@@ -5691,7 +5691,8 @@ async def run_private_bot(
     # And to the rollover notices, which answer no update either.
     if boundary.rollover_notifier is not None:
         boundary.rollover_notifier.attach(application.bot)
-    # And to the restart notice, held since the startup pass ran before polling began.
+    # And to the restart notice, held if the startup pass, which runs beside polling, finished
+    # before the bot attached.
     if boundary.restart_notifier is not None:
         boundary.restart_notifier.attach(application.bot)
     try:

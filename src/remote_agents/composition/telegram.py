@@ -365,8 +365,8 @@ def _private_boundary(
             project_paths=projects.paths,
             operation=locks.operation,
         ),
-        # The restart resume pass (DEC-127), run once by `serve` before anything else: it reads
-        # what a lost tmux server interrupted before the first reconcile ends it, resumes
+        # The restart resume pass (DEC-127), run once by `serve` as a task beside polling: it
+        # reads what a lost tmux server interrupted before the first reconcile ends it, resumes
         # through the one session use case, and nudges through the terminal's guarded send.
         restart_resume=(
             None

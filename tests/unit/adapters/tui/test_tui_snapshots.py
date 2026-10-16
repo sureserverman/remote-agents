@@ -461,6 +461,17 @@ class _CursorLimitsSource:
         return "off"
 
 
+class _Switch:
+    """A stored on/off Settings switch, answering the default production reads on a fresh
+    config: `resume_after_limit` and `resume_interrupted` on, `auto_rollover` off."""
+
+    def __init__(self, value: bool) -> None:
+        self._value = value
+
+    async def read(self) -> bool:
+        return self._value
+
+
 def _activities() -> tuple[AgentActivity, ...]:
     return (
         AgentActivity(
@@ -571,7 +582,7 @@ def _context(
 
 
 def _settings_context() -> TuiContext:
-    """The host the SETTINGS capture is driven against: all three of its rows wired.
+    """The host the SETTINGS capture is driven against: every host row wired.
 
     **Why this position gets a context of its own, when every other one shares `_context`.**
     One reason only, and it is narrower than the first version of this docstring claimed:
@@ -608,6 +619,11 @@ def _settings_context() -> TuiContext:
             # Wired for the rule above: unwired, the baseline would photograph a Cursor row
             # reading `unavailable` on a host where production always wires it.
             cursor_limits_source=_CursorLimitsSource(),
+            # The three stored switches, for the same rule: production wires each one
+            # unconditionally (`composition/backend.py`), so `unavailable` is never its row.
+            resume_after_limit=_Switch(True),
+            auto_rollover=_Switch(False),
+            resume_interrupted=_Switch(True),
         ),
     )
 

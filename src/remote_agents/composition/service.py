@@ -116,10 +116,10 @@ _ROLLOVER_POLL_SECONDS = 30.0
 _WORKTREE_POLL_SECONDS = 60.0
 
 _RESTART_NOTICE_POLL_SECONDS = 1.0
+"""How often the held restart notice is retried: the bot attaches moments after the pass."""
 
 _RESTART_STOP_GRACE_SECONDS = 5.0
 """How long shutdown waits, after the drain, for the restart pass to record its stop."""
-"""How often the held restart notice is retried: the bot attaches moments after the pass."""
 #: Bounds one limit-stop pass (a limits read, the session and outcome reads, a Telegram edit or
 #: delete per lifted stop), so one wedged call costs a pass rather than every later lift.
 _LIMIT_STOP_PASS_TIMEOUT_SECONDS = 20.0
@@ -318,8 +318,8 @@ class RestartResume:
     """The Settings switch, read toward off (`read_resume_interrupted(when_unsure=False)`)."""
     resume: InterruptedResumePass
     forget_marks: Callable[[], Awaitable[None]]
-    """Forget the conversation marks of every session no longer RUNNING, so they do not pile up;
-    a session an earlier start left `resuming` keeps its mark for the retry."""
+    """Forget the conversation marks of every ENDED session, so they do not pile up; a live or
+    FAILED session, and one an earlier start left `resuming`, keeps its mark for a later resume."""
     notify: Callable[[tuple[ResumeReport, ...], int], Awaitable[None]] | None = None
     """Tell the owner once: the reports, and how many sessions could not be judged."""
     exclusive: Callable[[], AbstractContextManager[bool]] = lambda: nullcontext(True)
