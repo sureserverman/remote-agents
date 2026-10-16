@@ -2511,6 +2511,11 @@ table first**, for the same reason. The auto-rollover Settings switch adds it on
 **Rolling back to 0.64.1 or earlier: delete the `[restart]` table first** (`resume_interrupted`),
 for the same reason. The *Resume after restart* switch adds it on first use. The database needs nothing either: an older version
 opens it, and its `doctor` reports `database_ready` false, as after any release that migrated.
+**Rolling back below 0.65.0 also turns Codex rollover off.** 0.64.1 rolls over Claude sessions only and has no
+`remote-agents session-id`, so a Codex session's handoff writer writes nothing there. A Codex
+rollover still open across the rollback fails — `not-rollable` or `not-typed`, or
+`adoption-timeout` once its successor was already told to adopt — and leaves its predecessor
+running.
 Do not remove a
 managed tmux session until its ownership and output have been inspected.
 
