@@ -9,7 +9,7 @@ Only sessions of a `rollable` profile -- one whose plan executor writes envelope
 - HANDOFF_READY waits for the predecessor's pane to be IDLE, persists SUCCESSOR_STARTING, and
   launches the predecessor's own project and profile under the key `rollover:<handoff_id>`
   (DEC-114), recording the successor the moment the launch returns;
-- a RUNNING successor is typed the fixed template through the terminal's guarded send, with the
+- a RUNNING successor is typed its own provider's adopt template through the guarded send, with the
   schedules' retry policy (DEC-099), and moves to ADOPTING once the send is confirmed (on the
   trust path below, ADOPTING is persisted first);
 - a successor that comes up on its folder-trust dialog is held, untyped, in SUCCESSOR_STARTING

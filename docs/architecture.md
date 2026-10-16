@@ -344,7 +344,7 @@ and Cursor declare none.
   request, cancel and read rollovers through.
 - `application/rollover.py` (`RolloverPass`) walks each rollover one step a pass, persisting
   each state before the action it licenses: it launches through `SessionService.launch` under
-  `rollover:<handoff_id>`, types the fixed template through `send_prompt`, and stops through
+  `rollover:<handoff_id>`, types the successor's adopt template through `send_prompt`, and stops through
   `SessionService.graceful_stop` -- only behind `may_stop_predecessor`, never by force.
   `TmuxTerminal.pane_idle` is the idle look it launches and stops against.
 - `composition/service.py` builds the pass (`build_rollover_pass`) and runs it every 30 s in

@@ -1,4 +1,4 @@
-"""Opt-in live proof: "Rollover now" hands a real plan from one real Claude session to another.
+"""Opt-in live proof: "Rollover now" hands a real plan to a fresh session, on Claude and Codex.
 
 The master plan's gate runs this on a real host:
 
@@ -113,7 +113,7 @@ same drive with a real `codex` and the managed `planning@engineering-skills` plu
 does), or `REMOTE_AGENTS_LIVE_ACCEPTANCE=1` as for every other live acceptance test. A plain run
 skips it, because it spends real model usage and runs for up to fifteen minutes. **Once asked
 for, a missing prerequisite FAILS, naming it** -- never a skip: the master gate reads this run,
-and a skip there would be a green that proved nothing. The gate still wants `1 passed`.
+and a skip there would be a green that proved nothing. The gate still wants `2 passed`.
 """
 
 from __future__ import annotations

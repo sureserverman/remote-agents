@@ -663,7 +663,7 @@ it and ask for it but never act.
   `planning@engineering-skills` 0.2.1 or later, which asks `remote-agents session-id` who it is).
   Which agents roll over is each one's own declaration (its adopt command); OpenCode and Cursor
   declare none. A `ready` envelope from a running one, under `.claude/handoffs/`
-  at the project's git top level (planning plugin 0.55.0 or later), opens a rollover -- if it is
+  at the project's git top level (Claude's planning plugin 0.55.0 or later), opens a rollover -- if it is
   seen within five minutes of being written. One written while the switch was off or `serve` was
   down is cleared, never acted on: the plugin has already told you to resume by hand. So does the
   owner's **Rollover now**: the button on the bot's session screen, or `l` on the terminal's
@@ -743,8 +743,8 @@ closes out instead, so cancel the pending rollover then.
   it is never retried. Read the journal for the error, check the project's sessions for a stray
   one, then ask again.
 - **`successor-unknown`** — a launch may have happened with no successor recorded: a restart
-  mid-launch, or a launch key already claimed. Look in the project's sessions for a new `claude`
-  session from that time, stop it if unwanted, then ask again.
+  mid-launch, or a launch key already claimed. Look in the project's sessions for a new session
+  of the same agent from that time, stop it if unwanted, then ask again.
 - **`successor-untrusted`** — the successor sat on its folder-trust question for 2 hours with
   no answer. A successor on that question does not fail the rollover at once (DEC-125): the
   rollover holds, types nothing, and the bot sends the usual trust message. Press **Trust**
@@ -761,7 +761,7 @@ closes out instead, so cancel the pending rollover then.
   accepted, before the old session was stopped). Inspect it, then ask again.
 - **`not-typed`** — the command could not be typed, or its send was not confirmed; the message
   names why. *no adopt template declared* means the agent stopped declaring an adopt command while
-  the rollover was open (a downgrade across a restart); nothing was typed. The successor is
+  the rollover was open (a revert across a restart); nothing was typed. The successor is
   left open; for any other cause it may hold the half-typed command. Stop it, then ask
   again. A successor you trusted that then shows a second question (a permission or MCP
   prompt) ends here at once rather than waiting again.
