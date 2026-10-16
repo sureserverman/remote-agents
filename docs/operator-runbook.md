@@ -762,7 +762,7 @@ closes out instead, so cancel the pending rollover then.
 - **`not-typed`** — the command could not be typed, or its send was not confirmed; the message
   names why. *no adopt template declared* means the agent stopped declaring an adopt command while
   the rollover was open (a downgrade across a restart); nothing was typed. The successor is
-  left open and may hold the half-typed command. Stop it, then ask
+  left open; for any other cause it may hold the half-typed command. Stop it, then ask
   again. A successor you trusted that then shows a second question (a permission or MCP
   prompt) ends here at once rather than waiting again.
 - **`adoption-timeout`** — no `accepted` within 30 minutes. The successor is left open. Its

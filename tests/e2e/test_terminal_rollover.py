@@ -515,9 +515,13 @@ def envelope(event, suffix, **extra):
 
 
 def draw(draft):
+    # As codex-cli 0.163.0 draws it (`composed_skill_mention.txt`, and its idle screen beside
+    # it): the hint line shows under the model line only while the composer is empty.
     screen = "\\r\\n".join(log[-12:]) + "\\r\\n\\r\\n"
     screen += "› " + (draft or "Ask Codex to do anything") + "\\r\\n"
     screen += "  fake-model default · " + Path.cwd().name
+    if not draft:
+        screen += "\\r\\n  ← for agents · ? for shortcuts"
     os.write(1, ("\\033[2J\\033[H" + screen).encode())
 
 
@@ -626,6 +630,8 @@ async def test_a_codex_ready_rolls_over_to_a_codex_successor_typed_the_dollar_te
         assert row is not None and row.state is want, (
             None if row is None else (row.state, row.failure_code, row.failure_detail)
         )
+        # First, so a failure for any other reason is told apart from the one this case drives.
+        assert row.failure_code == (None if mode == "accept" else "id-mismatch"), row
         assert len(launched) == 2, "exactly one successor"
         successor = row.successor_session_id
         assert successor is not None and successor != predecessor.session_id
@@ -641,7 +647,6 @@ async def test_a_codex_ready_rolls_over_to_a_codex_successor_typed_the_dollar_te
             assert records[predecessor.session_id].state is SessionState.ENDED
             assert await rollovers.continued_as(predecessor.session_id) == successor
         else:
-            assert row.failure_code == "id-mismatch"
             assert not (exits / str(predecessor.session_id)).exists(), "never sent the stop"
             assert predecessor.session_id in managed, "the predecessor pane is still alive"
             assert records[predecessor.session_id].state is SessionState.RUNNING

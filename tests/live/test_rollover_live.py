@@ -12,7 +12,7 @@ request, and only then types `/planning:executing-plans <plan>` into the pane th
 terminal's guarded send. The Stage 1 gate then reads the request and hands off with
 `rule requested`. The pass in `serve` launches the successor and types the adoption template;
 the successor verifies and writes `accepted`, and the pass stops the predecessor. After at most
-`_DEADLINE`, four things are asserted:
+`_DEADLINE`, five things are asserted:
 
 1. the rollover row is COMPLETED;
 2. the successor's `accepted` envelope was written. The envelope itself cannot be read
@@ -24,8 +24,9 @@ the successor verifies and writes `accepted`, and the pass stops the predecessor
    writes. The envelopes seen by polling the directory every `_POLL_SECONDS` are reported in
    every failure message, but they are not asserted: a pass can take an envelope between two
    polls, so asserting on it would be flaky;
-3. the predecessor is ENDED;
-4. the predecessor's row says `continued as #N`, read through `session_views.rollover_marks`
+3. the predecessor is ENDED, by the pass's own stop;
+4. its tmux session is gone, read from this run's own tmux server, whose listing must succeed;
+5. the predecessor's row says `continued as #N`, read through `session_views.rollover_marks`
    and `rollover_note`, as both surfaces draw it.
 
 **What is real.** The `claude` binary and the owner's own login, model and permission mode.
@@ -51,7 +52,7 @@ and the reconciler run on `serve`'s own loop functions (`_roll_over_periodically
   0.55.0, and the curated argv is a bare `claude`. So the temporary home's `.local/bin/claude`,
   the first place `_resolve_profile_executable` looks, is a two-line `sh` script. It `exec`s the
   real binary with `--plugin-dir <checkout>/planning`, and Claude Code lets that copy override
-  the installed one for the session. The pane's `HOME` is still the owner's (the curated
+  the installed one for the session. The Claude pane's `HOME` is still the owner's (the curated
   environment is read from this process), so the login is real.
 - **The fixture repository is trusted by the product's own answer.** When the launch comes up
   on the folder-trust dialog, the test answers it through `SessionService.answer_trust`, the
@@ -63,7 +64,7 @@ and the reconciler run on `serve`'s own loop functions (`_roll_over_periodically
 `~/.claude/projects/`, and (without a trusted root) a trust entry for the throwaway folder in
 `~/.claude.json`. The owner's activity hooks may spool turns from these sessions into the
 production spool; the production service does not know the session ids. Those three outlive
-the run. The plan itself runs with the owner's real HOME, so the planning skills could in
+the run. The Claude plan runs with the owner's real HOME, so the planning skills could in
 principle reach the owner's registers: the test fingerprints the project registry and the
 vault's Portfolio roll-ups before and after, and fails if either changed. Everything this test
 starts is torn down in `finally`: the periodic tasks, the private tmux server and every agent in
@@ -78,10 +79,13 @@ same drive with a real `codex` and the managed `planning@engineering-skills` plu
 `$planning:executing-plans <plan>`; the pass types Codex's own `$` adopt template. What differs:
 
 - **A short `CODEX_HOME` of its own** (`tests/support/codex_home.py`): a link to the owner's
-  `auth.json`, never opened here; a copy of the owner's installed plugin cache, and of the three
-  config sections that install it (its marketplace, its enablement, its hooks' trusted hashes);
-  nothing else of the owner's config. Retired in `finally` with the app-server daemon the TUI
-  started there (BL-133).
+  `auth.json`, as every Codex drill makes, which this test never opens and Codex reads; a copy
+  of the owner's installed plugin cache, and of the three config tables that install it (its
+  marketplace, its enablement, its hooks' trusted hashes), matched by whole header; nothing
+  else of the owner's config. After the drive the test asserts the link is still a link and the
+  owner's `auth.json` is unchanged: a Codex that rewrote its login through the link, or replaced
+  the link with a refreshed copy, would leave the owner on a rotated token. Retired in `finally`
+  with the app-server daemon the TUI started there (BL-133), whatever failed before it.
 - **`HOME` is the temporary home, for `codex` and every shell it runs.** The plugin's writer runs
   `remote-agents session-id` with no argument, and that reads the hook roster under
   `$HOME/.local/state/remote-agents` -- the owner's real one, which names none of this run's
@@ -92,10 +96,13 @@ same drive with a real `codex` and the managed `planning@engineering-skills` plu
   reaches the installed `remote-agents` first -- which, before this release, has no
   `session-id`, and the gate reads no request (the drill's first two runs, 2026-10-16). The
   roster is the one this run's composition publishes.
-- **Sandboxed, never asking.** `workspace-write` with the repository's `.git` added as a writable
-  root (the sandbox makes `.git` read-only otherwise, and the plan commits), and
-  `approval_policy = "never"`, so no approval dialog can stall a turn. Nothing outside the
-  repository and `/tmp` is writable to the model.
+- **Sandboxed, never asking.** `workspace-write`, with `/tmp` and `$TMPDIR` taken out of it
+  (`exclude_slash_tmp`, `exclude_tmpdir_env_var`), and two writable roots: the repository's
+  `.git` (the sandbox makes it read-only otherwise, and the plan commits) and a `tmp` folder
+  beside the repository, which the wrapper names as `TMPDIR`. So the model can write the
+  repository and that folder, and not the rest of `/tmp`: not the owner's tmux socket, not the
+  drill's own `CODEX_HOME` (measured with `codex sandbox`, 2026-10-16). `approval_policy =
+  "never"`, so no approval dialog can stall a turn.
 - **Under `/tmp` directly**, the fixture repository, so the model line Codex draws under its
   composer stays short.
 
@@ -369,26 +376,38 @@ def _codex_prerequisites(config: pytest.Config) -> Path:
         _blocked("executable_missing: codex")
     if not (Path.home() / ".codex" / "auth.json").is_file():
         _blocked("codex is not logged in (no ~/.codex/auth.json)")
-    skills = sorted(_CODEX_PLUGINS.glob("planning/*/skills/executing-plans"))
+    skills = sorted(
+        _CODEX_PLUGINS.glob("planning/*/skills/executing-plans"),
+        key=lambda skill: tuple(
+            int(piece) if piece.isdigit() else -1 for piece in skill.parents[1].name.split(".")
+        ),
+    )
     if not skills or not (skills[-1] / "scripts" / "handoff-envelope.py").is_file():
         _blocked(f"no Codex planning plugin with handoff envelopes under {_CODEX_PLUGINS}")
     if "--adopt-handoff" not in (skills[-1] / "SKILL.md").read_text(encoding="utf-8"):
         _blocked(f"the Codex planning plugin at {skills[-1].parents[1]} cannot adopt a handoff")
+    if not (Path.home() / ".codex" / "config.toml").is_file():
+        _blocked("no ~/.codex/config.toml to copy the planning plugin's install from")
     if "[marketplaces.engineering-skills]" not in _codex_plugin_sections():
         _blocked("the owner's Codex config installs no engineering-skills marketplace")
     return codex
 
 
 def _codex_plugin_sections() -> str:
-    """The sections of the owner's Codex config that install the planning plugin: its
-    marketplace, its enablement and its hooks' trusted hashes. Nothing else of the config."""
+    """The tables of the owner's Codex config that install the planning plugin: its
+    marketplace, its enablement and its hooks' trusted hashes. Nothing else of the config: a
+    table is kept by its whole header, so a sub-table under one (which could carry an `env`) or
+    a look-alike name is not."""
     keep, out = False, []
     for line in (Path.home() / ".codex" / "config.toml").read_text(encoding="utf-8").splitlines():
-        if line.startswith("["):
-            keep = (
-                line.startswith('[plugins."planning@engineering-skills"]')
-                or line.startswith("[marketplaces.engineering-skills]")
-                or line.startswith('[hooks.state."planning@engineering-skills:')
+        header = line.strip()
+        if header.startswith("[") and header.endswith("]") and "=" not in header:
+            keep = header in (
+                '[plugins."planning@engineering-skills"]',
+                "[marketplaces.engineering-skills]",
+            ) or (
+                header.startswith('[hooks.state."planning@engineering-skills:')
+                and header.endswith('"]')
             )
         if keep:
             out.append(line)
@@ -398,6 +417,9 @@ def _codex_plugin_sections() -> str:
 def _isolated_codex_home(root: Path, repo: Path, codex: Path, codex_home: Path) -> ProductionPaths:
     """`_isolated_home` for Codex: the same config and registry, a `CODEX_HOME` holding the
     login link and the plugin, and the `codex` and `remote-agents` wrappers (module docstring)."""
+    # Beside the repository, so it goes with it; the model's only writable folder outside it.
+    scratch = repo.parent / "tmp"
+    scratch.mkdir()
     paths = _isolated_home(
         root,
         repo,
@@ -407,6 +429,7 @@ def _isolated_codex_home(root: Path, repo: Path, codex: Path, codex_home: Path) 
             # (`composition/tui.py`, `_local_runtime`), and the owner's `~/.local/bin`, where
             # the installed `remote-agents` lives, sorts before this temporary one.
             "codex": f"HOME={shlex.quote(str(root))} CODEX_HOME={shlex.quote(str(codex_home))} "
+            f"TMPDIR={shlex.quote(str(scratch))} "
             f'PATH={shlex.quote(str(root / ".local" / "bin"))}:"$PATH" '
             f'exec {shlex.quote(str(codex))} "$@"',
             "remote-agents": f'exec {shlex.quote(sys.executable)} -m remote_agents "$@"',
@@ -417,7 +440,8 @@ def _isolated_codex_home(root: Path, repo: Path, codex: Path, codex_home: Path) 
     (codex_home / "config.toml").write_text(
         'approval_policy = "never"\nsandbox_mode = "workspace-write"\n'
         "[sandbox_workspace_write]\n"
-        f"writable_roots = [{json.dumps(str(repo / '.git'))}]\n"
+        f"writable_roots = [{json.dumps(str(repo / '.git'))}, {json.dumps(str(scratch))}]\n"
+        "exclude_slash_tmp = true\nexclude_tmpdir_env_var = true\n"
         "[notice]\nhide_rate_limit_model_nudge = true\n\n" + _codex_plugin_sections(),
         encoding="utf-8",
     )
@@ -455,7 +479,9 @@ async def test_rollover_now_hands_a_real_plan_to_a_fresh_session(
         config = load_config(paths.config_path)
         connection = open_database(paths.database_path, migrations=MIGRATIONS)
         harness = _compose(config, connection, paths)
-        await _drive(harness, repo, periodic, ProfileId("claude"), "/planning:executing-plans")
+        await _drive(
+            harness, repo, periodic, ProfileId("claude"), "/planning:executing-plans", socket
+        )
         # Nothing the plan ran reached the owner's own registers.
         assert _owner_fingerprint() == owners_before, (
             "the run changed the owner's project registry or Portfolio roll-ups"
@@ -464,14 +490,7 @@ async def test_rollover_now_hands_a_real_plan_to_a_fresh_session(
         for task in periodic:
             task.cancel()
         await asyncio.gather(*periodic, return_exceptions=True)
-        # The explicit socket path, never `-L`: this kills this run's server and nothing else,
-        # whatever `TMUX_TMPDIR` happens to say by now.
-        subprocess.run(
-            ["tmux", "-S", str(socket), "kill-server"],
-            capture_output=True,
-            timeout=_GIT_SECONDS,
-            check=False,
-        )
+        _kill_server(socket)
         if connection is not None:
             connection.close()
         if repo is not None:
@@ -485,47 +504,75 @@ async def test_rollover_now_hands_a_real_plan_to_a_fresh_codex_session(
 ) -> None:
     """BL-123 for Codex: the same drive, on a real `codex` (module docstring, the Codex case)."""
     codex = _codex_prerequisites(request.config)
-    tmux_directory = Path(tempfile.mkdtemp(prefix="ra-roll-", dir="/tmp"))
-    monkeypatch.setenv("TMUX_TMPDIR", str(tmux_directory))
-    socket = tmux_directory / f"tmux-{os.getuid()}" / "remote-agents"
-    repo_parent = Path(tempfile.mkdtemp(prefix="ra-rcx-", dir="/tmp"))
-    codex_home = short_codex_home()
-
+    login = Path.home() / ".codex" / "auth.json"
+    tmux_directory: Path | None = None
+    repo_parent: Path | None = None
+    codex_home: Path | None = None
     connection = None
     periodic: list[asyncio.Task] = []
     owners_before = _owner_fingerprint()
+    login_before = _stat(login)
     try:
+        # Short, because a tmux socket path is capped near 104 bytes and `tmp_path` is long.
+        tmux_directory = Path(tempfile.mkdtemp(prefix="ra-roll-", dir="/tmp"))
+        monkeypatch.setenv("TMUX_TMPDIR", str(tmux_directory))
+        socket = tmux_directory / f"tmux-{os.getuid()}" / "remote-agents"
+        repo_parent = Path(tempfile.mkdtemp(prefix="ra-rcx-", dir="/tmp"))
+        codex_home = short_codex_home()
         repo = _fixture_repository(repo_parent)
-        home = tmp_path / "home"
-        paths = _isolated_codex_home(home, repo, codex, codex_home)
+        paths = _isolated_codex_home(tmp_path / "home", repo, codex, codex_home)
         config = load_config(paths.config_path)
         connection = open_database(paths.database_path, migrations=MIGRATIONS)
         harness = _compose(config, connection, paths)
-        await _drive(harness, repo, periodic, ProfileId("codex"), "$planning:executing-plans")
+        await _drive(
+            harness, repo, periodic, ProfileId("codex"), "$planning:executing-plans", socket
+        )
         assert _owner_fingerprint() == owners_before, (
             "the run changed the owner's project registry or Portfolio roll-ups"
         )
+        assert (codex_home / "auth.json").is_symlink(), "Codex replaced the login link"
+        assert _stat(login) == login_before, "Codex rewrote the owner's auth.json"
     finally:
-        for task in periodic:
-            task.cancel()
-        await asyncio.gather(*periodic, return_exceptions=True)
+        try:
+            for task in periodic:
+                task.cancel()
+            await asyncio.gather(*periodic, return_exceptions=True)
+            if tmux_directory is not None:
+                _kill_server(tmux_directory / f"tmux-{os.getuid()}" / "remote-agents")
+            if connection is not None:
+                connection.close()
+            # Codex's own transcripts, the one record of what each tool command printed (a
+            # gate's `context-usage.py` among them), kept in pytest's kept `tmp_path`.
+            if codex_home is not None and (codex_home / "sessions").is_dir():
+                with contextlib.suppress(OSError):
+                    shutil.copytree(codex_home / "sessions", tmp_path / "codex-sessions")
+        finally:
+            # After the panes, and whatever failed above: the daemon the TUI started outlives
+            # them (BL-133).
+            if codex_home is not None:
+                retire_codex_home(codex_home)
+            for made in (repo_parent, tmux_directory):
+                if made is not None:
+                    shutil.rmtree(made, ignore_errors=True)
+
+
+def _kill_server(socket: Path) -> None:
+    """Kill this run's tmux server by its explicit socket path, never `-L`: this server and
+    nothing else, whatever `TMUX_TMPDIR` says by now. Never raises, so a hung tmux cannot skip
+    the teardown after it."""
+    with contextlib.suppress(subprocess.SubprocessError, OSError):
         subprocess.run(
             ["tmux", "-S", str(socket), "kill-server"],
             capture_output=True,
             timeout=_GIT_SECONDS,
             check=False,
         )
-        if connection is not None:
-            connection.close()
-        # Codex's own transcripts, the one record of what each tool command printed (a gate's
-        # `context-usage.py` among them), kept beside pytest's kept `tmp_path` before the home
-        # goes.
-        if (codex_home / "sessions").is_dir():
-            shutil.copytree(codex_home / "sessions", tmp_path / "codex-sessions")
-        # After the panes: the daemon the TUI started outlives them (BL-133).
-        retire_codex_home(codex_home)
-        shutil.rmtree(repo_parent, ignore_errors=True)
-        shutil.rmtree(tmux_directory, ignore_errors=True)
+
+
+def _stat(path: Path) -> tuple[int, int, int]:
+    """Inode, size and mtime: enough to see a file rewritten in place or replaced."""
+    found = path.stat()
+    return found.st_ino, found.st_size, found.st_mtime_ns
 
 
 def _owner_fingerprint() -> dict[str, tuple[int, int]]:
@@ -613,9 +660,11 @@ async def _drive(
     periodic: list[asyncio.Task],
     profile: ProfileId,
     executor: str,
+    socket: Path,
 ) -> None:
     """Rollover now on a `profile` session executing the fixture plan through `executor`, the
-    plugin's own spelling of its executing-plans skill on that agent."""
+    plugin's own spelling of its executing-plans skill on that agent. `socket` is this run's
+    tmux server."""
     backend = harness.backend
     sessions = backend.sessions
     assert profile in profiles_that_roll_over()
@@ -707,10 +756,20 @@ async def _drive(
     assert stopped_by_the_pass, await _diagnosis(
         harness, repo, predecessor, "the predecessor ended on its own, not by the pass's stop"
     )
-    observed = await harness.terminal.inspect(predecessor)
-    assert observed is None or not observed.live, f"the predecessor's pane is live: {observed}"
 
-    # 4. Its row says which session it continued as, as both surfaces draw it.
+    # 4. Its tmux session is gone -- asked of this run's server, which must answer, so a dead
+    # server cannot pass for a stopped pane.
+    listing = subprocess.run(
+        ["tmux", "-S", str(socket), "list-sessions", "-F", "#{session_name}"],
+        capture_output=True,
+        text=True,
+        timeout=_GIT_SECONDS,
+        check=False,
+    )
+    assert listing.returncode == 0, f"this run's tmux server did not answer: {listing.stderr}"
+    assert f"ra-{predecessor}" not in listing.stdout.split(), listing.stdout
+
+    # 5. Its row says which session it continued as, as both surfaces draw it.
     marks = await rollover_marks(backend.rollovers, records.values(), sessions=sessions)
     note = rollover_note(marks[str(predecessor)]) if str(predecessor) in marks else None
     expected = f"continued as #{records[successor].display.sequence}"

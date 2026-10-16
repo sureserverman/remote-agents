@@ -340,8 +340,12 @@ def test_a_real_codex_approval_spools_the_command_it_is_asking_about(tmp_path: P
         )
         assert activity.ask == "Bash"
     finally:
-        _tmux("kill-server")
-        retire_codex_home(codex_home)
+        try:
+            _tmux("kill-server")
+        finally:
+            # Whatever the kill did (`_tmux` can time out): the daemon outlives the panes
+            # (BL-133).
+            retire_codex_home(codex_home)
 
 
 @pytest.mark.live_profile
