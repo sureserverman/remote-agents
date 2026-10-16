@@ -20,12 +20,14 @@ from remote_agents.adapters.agents.registry import (
     profiles_with_finished_events,
     provider_descriptors,
 )
-from remote_agents.adapters.agents.turn_markers import FileTurnMarkers
+from remote_agents.adapters.agents.turn_markers import FileConversationMarks, FileTurnMarkers
 from remote_agents.adapters.sqlite.activity_store import SQLiteActivityStore
 from remote_agents.adapters.sqlite.callback_state_store import SQLiteCallbackStateStore
 from remote_agents.adapters.sqlite.chat_view_store import SQLiteChatViewStore
+from remote_agents.adapters.sqlite.interrupted_resumes import SQLiteInterruptedResumes
 from remote_agents.adapters.sqlite.limit_stop_store import SQLiteLimitStopStore
 from remote_agents.adapters.sqlite.queued_prompt_store import SQLiteQueuedPromptStore
+from remote_agents.adapters.sqlite.rollover_store import SQLiteRolloverStore
 from remote_agents.adapters.sqlite.schedule_store import SQLiteScheduleStore
 from remote_agents.adapters.sqlite.session_store import SQLiteSessionStore
 from remote_agents.adapters.sqlite.standing_notification_store import (
@@ -51,6 +53,7 @@ from remote_agents.composition.backend import (
 )
 from remote_agents.composition.service import (
     ServiceComposition,
+    build_restart_resume,
     build_rollover_pass,
     build_worktree_cleanup,
     live_session_check,
@@ -61,6 +64,7 @@ from remote_agents.config import (
     read_claude_limits_source,
     read_cursor_limits_source,
     read_resume_after_limit,
+    read_resume_interrupted,
 )
 from remote_agents.ports.agent_activity import ActivityKind
 from remote_agents.ports.agent_usage import AgentLimits
@@ -361,7 +365,40 @@ def _private_boundary(
             project_paths=projects.paths,
             operation=locks.operation,
         ),
+        # The restart resume pass (DEC-127), run once by `serve` before anything else: it reads
+        # what a lost tmux server interrupted before the first reconcile ends it, resumes
+        # through the one session use case, and nudges through the terminal's guarded send.
+        restart_resume=(
+            None
+            if backend.sessions is None or backend.conversations is None
+            else build_restart_resume(
+                store=store,
+                terminal=terminal,
+                turn_markers=turn_markers,
+                conversation_marks=FileConversationMarks(paths.activity_directory),
+                rollovers=SQLiteRolloverStore(connection),
+                capabilities=backend.conversations.capabilities,
+                outcomes=SQLiteInterruptedResumes(connection),
+                resume=backend.sessions.resume,
+                folder_of=worktrees.store.folder_for,
+                enabled=_restart_resume_switch(config.path or paths.config_path),
+                notify=(
+                    None if boundary.restart_notifier is None else boundary.restart_notifier.notify
+                ),
+                stopping=lambda: locks.draining,
+            )
+        ),
+        restart_notifier=boundary.restart_notifier,
     )
+
+
+def _restart_resume_switch(path: Path) -> Callable[[], Awaitable[bool]]:
+    """The service's read of the restart switch: fresh, and off on any doubt -- it launches."""
+
+    async def read() -> bool:
+        return await asyncio.to_thread(read_resume_interrupted, path, when_unsure=False)
+
+    return read
 
 
 def _resume_switch(setting: object | None, path: Path) -> Callable[[], Awaitable[bool]]:

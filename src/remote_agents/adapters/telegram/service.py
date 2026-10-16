@@ -57,6 +57,7 @@ from remote_agents.adapters.telegram.presenters import (
     render_message,
     uniform_keyboard,
 )
+from remote_agents.adapters.telegram.restart_notifications import RestartNotifier
 from remote_agents.adapters.telegram.rollover_notifications import RolloverNotifier
 from remote_agents.adapters.telegram.schedule_notifications import ScheduleNotifier
 from remote_agents.adapters.telegram.stops import CONFIRMED_FORCE, StopController
@@ -844,6 +845,9 @@ class PrivateBotBoundary:
     rollover_notifier: RolloverNotifier | None = None
     """Says when a rollover failed or its stop did not go through, or None where the backend
     has no rollovers. Bot-only, like the schedule notices; only failures push (DEC-031)."""
+    restart_notifier: RestartNotifier | None = None
+    """Says, once per restart, which interrupted sessions came back (DEC-127), or None where the
+    backend has no sessions. Bot-only, like the rollover notices."""
     schedule_notifier: ScheduleNotifier | None = None
     """Says what each scheduled fire came to, or None where nothing manages schedules.
 
@@ -5529,6 +5533,16 @@ def build_private_bot(
                 flood=bot.flood,
             ),
         )
+    if bot.backend.sessions is not None:
+        object.__setattr__(
+            bot,
+            "restart_notifier",
+            RestartNotifier(
+                view=bot.view,
+                project_name=bot._project_name,  # noqa: SLF001 -- the cycle this factory pays
+                flood=bot.flood,
+            ),
+        )
     if bot.backend.schedules is not None:
         object.__setattr__(
             bot,
@@ -5617,6 +5631,9 @@ async def run_private_bot(
     # And to the rollover notices, which answer no update either.
     if boundary.rollover_notifier is not None:
         boundary.rollover_notifier.attach(application.bot)
+    # And to the restart notice, held since the startup pass ran before polling began.
+    if boundary.restart_notifier is not None:
+        boundary.restart_notifier.attach(application.bot)
     try:
         await _sync_owner_metadata(
             application.bot, secrets.owner_chat_id, owner_commands(boundary.backend)

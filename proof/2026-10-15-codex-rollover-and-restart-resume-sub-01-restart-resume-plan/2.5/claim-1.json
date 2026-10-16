@@ -1,0 +1,28 @@
+{
+ "baseline": {
+  "elapsed_s": 2.0,
+  "exit": 0,
+  "tail": "...........                                                              [100%]\n11 passed in 1.67s"
+ },
+ "break_patch": "--- a/src/remote_agents/composition/service.py\n+++ b/src/remote_agents/composition/service.py\n@@ -455,8 +455,8 @@\n     await composition.boundary.refresh_catalogue()\n     # Before the first reconcile, which ends every record whose pane a lost server took with it\n     # (DEC-127): after it, nothing says which of them were running.\n+    await _reconcile_quietly(composition)\n     restart = await _restart_snapshot(composition)\n-    await _reconcile_quietly(composition)\n     # And before every periodic task, the worktree cleanup's first pass above all (DEC-124): a\n     # resumed session must be bound to its worktree before anything may judge it unreferenced.\n     await _resume_after_restart(composition, restart)\n",
+ "build": null,
+ "created": "2026-10-16T00:00:51+00:00",
+ "fingerprint": "cb64e83522232e8cb7b34227a2c30a4ff8c6ce07d6a563cb16f16f23944a08db",
+ "index": 1,
+ "kind": "claim",
+ "named_break": null,
+ "no_build_reason": "python tests only",
+ "plan": "/mnt/vault/Portfolio/infra/remote-agents/plans/2026-10-15-codex-rollover-and-restart-resume-sub-01-restart-resume-plan.md",
+ "red": {
+  "elapsed_s": 2.0,
+  "exit": 1,
+  "tail": "    \n        await rig.serve(rig.composition())\n    \n>       ((reports, unchecked),) = rig.notices\n        ^^^^^^^^^^^^^^^^^^^^^^^\nE       ValueError: not enough values to unpack (expected 1, got 0)\n\ntests/integration/test_serve_startup_resume.py:211: ValueError\n____________ test_an_unreadable_server_resumes_nothing_and_says_so _____________\n\nrig = <test_serve_startup_resume.Rig object at 0x78a56c5344d0>\n\n    async def test_an_unreadable_server_resumes_nothing_and_says_so(rig: Rig) -> None:\n        rig.terminal.server_unreadable = True\n        await rig.running()\n        await rig.running()\n    \n        await rig.serve(rig.composition())\n    \n>       assert rig.notices == [((), 2)]\nE       assert [] == [((), 2)]\nE         \nE         Right contains one more item: ((), 2)\nE         Use -v to get more diff\n\ntests/integration/test_serve_startup_resume.py:240: AssertionError\n------------------------------ Captured log call -------------------------------\nERROR    remote_agents.composition.service:service.py:376 what a restart interrupted could not be read; nothing is resumed\nTraceback (most recent call last):\n  File \"/home/user/dev/infra/remote-agents/src/remote_agents/composition/service.py\", line 350, in snapshot\n    started = await terminal.server_started_at()  # type: ignore[attr-defined]\n              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/user/dev/infra/remote-agents/tests/integration/test_serve_startup_resume.py\", line 64, in server_started_at\n    raise RuntimeError(\"tmux said something unexpected\")\nRuntimeError: tmux said something unexpected\n=========================== short test summary info ============================\nFAILED tests/integration/test_serve_startup_resume.py::test_the_snapshot_is_taken_before_reconcile_ends_the_lost_records\nFAILED tests/integration/test_serve_startup_resume.py::test_one_notice_for_n_resumes\nFAILED tests/integration/test_serve_startup_resume.py::test_an_unreadable_server_resumes_nothing_and_says_so\n3 failed, 8 passed in 1.64s"
+ },
+ "schema": 2,
+ "task": "2.5",
+ "test": "uv run --locked pytest tests/integration/test_serve_startup_resume.py -q -p no:randomly",
+ "text": "`uv run --locked pytest tests/integration/test_serve_startup_resume.py -q -p no:randomly`. Cases:",
+ "touched": [
+  "src/remote_agents/composition/service.py"
+ ]
+}

@@ -27,27 +27,38 @@ from remote_agents.adapters.workflow.handoff_envelopes import FileHandoffEnvelop
 from remote_agents.adapters.workflow.roots import handoff_root
 from remote_agents.application.activity import CodexApprovalWatcher, drain_activity
 from remote_agents.application.backend import CLOSE_TIMEOUT_SECONDS, DRAIN_TIMEOUT_SECONDS
+from remote_agents.application.commands import ResumeCommand
+from remote_agents.application.interrupted_resume import (
+    InterruptedResumePass,
+    RestartSnapshot,
+    ResumeReport,
+    SessionAtRestart,
+)
 from remote_agents.application.limit_lifts import LimitLiftWatcher
 from remote_agents.application.limit_resume import prune_outcomes
 from remote_agents.application.limit_stops import LimitScreenWatcher, LimitStopClassifier
 from remote_agents.application.reconcile import ReconciliationService
+from remote_agents.application.resume_flow import resume_capable
 from remote_agents.application.rollover import RolloverPass, RolloverReport
 from remote_agents.application.schedules import SchedulePass
-from remote_agents.application.services import SessionService
+from remote_agents.application.services import ResumeOutcome, SessionService
 from remote_agents.application.session_actions import notifiable
 from remote_agents.application.session_folders import live_folder
 from remote_agents.application.worktree_cleanup import WorktreeCleanupPass
 from remote_agents.application.worktrees import main_checkout
 from remote_agents.config import TelegramSecrets
-from remote_agents.domain.models import ProfileId, ProjectId, SessionId
+from remote_agents.domain.conversations import ProfileResumeCapability
+from remote_agents.domain.models import ProfileId, ProjectId, SessionId, SessionState
 from remote_agents.ports.agent_activity import ActivityConfidence, ActivityKind, AgentActivity
 from remote_agents.ports.git_checkout import GitCheckout
+from remote_agents.ports.interrupted_resumes import RESUMING, InterruptedResumes
 from remote_agents.ports.limit_stop_outcomes import LimitStopOutcomes
 from remote_agents.ports.message_relay import MessageRelay, RelayOutcome, RelayResult
 from remote_agents.ports.session_store import SessionStore
 from remote_agents.ports.state_events import StoreChanged
-from remote_agents.ports.turn_markers import TurnMarkers
-from remote_agents.ports.worktree_store import WorktreeStore
+from remote_agents.ports.terminal import PromptDelivery
+from remote_agents.ports.turn_markers import ConversationMarks, TurnMarkers
+from remote_agents.ports.worktree_store import Worktree, WorktreeStore
 
 _LOG = logging.getLogger(__name__)
 
@@ -96,6 +107,9 @@ _ROLLOVER_POLL_SECONDS = 30.0
 #: How often `serve` looks for a session worktree it may remove (BL-116). Nothing waits on a
 #: removal: a merged, ended folder that stays a minute longer costs disk, never work.
 _WORKTREE_POLL_SECONDS = 60.0
+
+_RESTART_NOTICE_POLL_SECONDS = 1.0
+"""How often the held restart notice is retried: the bot attaches moments after the pass."""
 #: Bounds one limit-stop pass (a limits read, the session and outcome reads, a Telegram edit or
 #: delete per lifted stop), so one wedged call costs a pass rather than every later lift.
 _LIMIT_STOP_PASS_TIMEOUT_SECONDS = 20.0
@@ -273,6 +287,140 @@ class ServiceComposition:
     """Rewrites the hook rosters before each activity drain (DEC-126), so a session that ended
     leaves them. None in compositions with no payload-identified hook, which today means tests."""
 
+    restart_resume: RestartResume | None = None
+    """The startup pass that resumes what a lost tmux server interrupted (DEC-127), or None.
+
+    The bot's composition only, as `rollover_pass` is: one process launches unattended."""
+
+    restart_notifier: object | None = None
+    """Where the restart notice is held until the bot is attached, flushed beside the periodic
+    tasks until it is sent; None where nothing tells the owner."""
+
+
+@dataclass(frozen=True)
+class RestartResume:
+    """What `serve` needs to resume, at startup, the sessions a lost tmux server interrupted."""
+
+    snapshot: Callable[[], Awaitable[RestartSnapshot | None]]
+    """Read before the first reconcile, while the lost records are still RUNNING. Never raises:
+    None when the records themselves could not be read."""
+    enabled: Callable[[], Awaitable[bool]]
+    """The Settings switch, read toward off (`read_resume_interrupted(when_unsure=False)`)."""
+    resume: InterruptedResumePass
+    forget_marks: Callable[[], Awaitable[None]]
+    """Forget the conversation marks of every session no longer RUNNING, so they do not pile up;
+    a session an earlier start left `resuming` keeps its mark for the retry."""
+    notify: Callable[[tuple[ResumeReport, ...], int], Awaitable[None]] | None = None
+    """Tell the owner once: the reports, and how many sessions could not be judged."""
+
+
+def build_restart_resume(
+    *,
+    store: SessionStore,
+    terminal: object,
+    turn_markers: TurnMarkers,
+    conversation_marks: ConversationMarks,
+    rollovers: SQLiteRolloverStore,
+    capabilities: Callable[[], Awaitable[tuple[ProfileResumeCapability, ...]]],
+    outcomes: InterruptedResumes,
+    resume: Callable[[ResumeCommand], Awaitable[ResumeOutcome]],
+    folder_of: Callable[[SessionId], Awaitable[Worktree | None]],
+    enabled: Callable[[], Awaitable[bool]],
+    notify: Callable[[tuple[ResumeReport, ...], int], Awaitable[None]] | None,
+    stopping: Callable[[], bool],
+) -> RestartResume:
+    """The restart resume pass over the bot's stores and terminal (DEC-127)."""
+
+    async def snapshot() -> RestartSnapshot | None:
+        try:
+            records = tuple(await store.list())
+        except Exception:
+            _LOG.exception("the sessions could not be read for the restart resume pass")
+            return None
+        known = True
+        started: datetime | None = None
+        listed: set[str] = set()
+        marks: dict[str, str] = {}
+        markers: frozenset[str] = frozenset()
+        handed: list = []
+        resumable: frozenset[ProfileId] = frozenset()
+        pending: frozenset[str] = frozenset()
+        try:
+            # Raises on anything but an absent server: then nothing is resumed on a guess.
+            started = await terminal.server_started_at()  # type: ignore[attr-defined]
+            listed = {
+                str(observation.session_id)
+                for observation in await terminal.managed_observations()  # type: ignore[attr-defined]
+            }
+            markers = frozenset(turn_markers.sessions())
+            for session in conversation_marks.sessions():
+                mark = conversation_marks.latest(session)
+                if mark is not None:
+                    marks[session] = mark
+            for record in records:
+                if record.state is SessionState.RUNNING:
+                    latest = await rollovers.latest_for(record.session_id)
+                    if latest is not None:
+                        handed.append(latest)
+            resumable = frozenset(
+                capability.profile_id
+                for capability in await capabilities()
+                if resume_capable(capability)
+            )
+            pending = frozenset(
+                session
+                for session, outcome in (await outcomes.outcomes()).items()
+                if outcome == RESUMING
+            )
+        except Exception:
+            _LOG.exception("what a restart interrupted could not be read; nothing is resumed")
+            known = False
+        return RestartSnapshot(
+            sessions=tuple(
+                SessionAtRestart(record, str(record.session_id) in listed) for record in records
+            ),
+            server_started_at=started,
+            server_known=known,
+            turn_marker_sessions=markers,
+            conversation_marks=marks,
+            rollovers=tuple(handed),
+            resumable_profiles=resumable,
+            pending=pending,
+        )
+
+    async def forget_marks() -> None:
+        running = {str(record.session_id) for record in await store.list((SessionState.RUNNING,))}
+        pending = {
+            session
+            for session, outcome in (await outcomes.outcomes()).items()
+            if outcome == RESUMING
+        }
+        for session in conversation_marks.sessions():
+            if session not in running and session not in pending:
+                conversation_marks.forget(session)
+
+    async def key_claimed(key: str) -> bool:
+        return await store.idempotency_key_claimed(key)  # type: ignore[attr-defined]
+
+    async def send(session_id: SessionId, text: str) -> PromptDelivery:
+        return await terminal.send_prompt(session_id, text)  # type: ignore[attr-defined]
+
+    return RestartResume(
+        snapshot=snapshot,
+        enabled=enabled,
+        resume=InterruptedResumePass(
+            outcomes,
+            resume=resume,
+            folder_of=folder_of,
+            key_claimed=key_claimed,
+            send=send,
+            stopping=stopping,
+            now=lambda: datetime.now(UTC),
+        ),
+        forget_marks=forget_marks,
+        notify=notify,
+    )
+
 
 async def _serve_with_reconciliation(
     secrets: TelegramSecrets,
@@ -305,8 +453,16 @@ async def _serve_with_reconciliation(
     # rather than inside the long-poll runner because `main` lets a test substitute the runner,
     # which makes this line reachable by a test; the runner is not.
     await composition.boundary.refresh_catalogue()
+    # Before the first reconcile, which ends every record whose pane a lost server took with it
+    # (DEC-127): after it, nothing says which of them were running.
+    restart = await _restart_snapshot(composition)
     await _reconcile_quietly(composition)
+    # And before every periodic task, the worktree cleanup's first pass above all (DEC-124): a
+    # resumed session must be bound to its worktree before anything may judge it unreferenced.
+    await _resume_after_restart(composition, restart)
     periodic = [asyncio.create_task(_reconcile_periodically(composition, interval))]
+    if composition.restart_notifier is not None:
+        periodic.append(asyncio.create_task(_flush_restart_notice(composition)))
     if composition.approval_watcher is not None or composition.activity_directory is not None:
         # A separate task rather than another step inside the reconciliation pass: the two
         # answer different questions on different clocks, and a pane-title read that hangs must
@@ -981,6 +1137,67 @@ async def _check_waiting_turns_once(
                 await composition.relay_announcer(session_id, result)
             except Exception:
                 _LOG.exception("announcing a waiting message's delivery failed")
+
+
+async def _restart_snapshot(composition: ServiceComposition) -> RestartSnapshot | None:
+    if composition.restart_resume is None:
+        return None
+    try:
+        return await composition.restart_resume.snapshot()
+    except Exception:
+        _LOG.exception("the restart snapshot could not be taken")
+        return None
+
+
+async def _resume_after_restart(
+    composition: ServiceComposition, snapshot: RestartSnapshot | None
+) -> None:
+    """Run the restart resume pass once, if the switch is on, and tell the owner -- never raising.
+
+    With the switch off the snapshot is discarded and nothing is written."""
+    restart = composition.restart_resume
+    if restart is None or snapshot is None:
+        return
+    try:
+        if not await restart.enabled():
+            return
+    except Exception:
+        _LOG.exception("the restart resume switch could not be read; nothing is resumed")
+        return
+    unchecked = 0
+    reports: tuple[ResumeReport, ...] = ()
+    if snapshot.server_known:
+        try:
+            reports = await restart.resume.run(snapshot)
+        except Exception:
+            # Every decision was written before its action; the next start resumes from there.
+            _LOG.exception("the restart resume pass failed")
+    else:
+        unchecked = sum(
+            1
+            for session in snapshot.sessions
+            if session.record.state is SessionState.RUNNING and not session.pane_listed
+        )
+    try:
+        await restart.forget_marks()
+    except Exception:
+        _LOG.exception("the conversation marks could not be swept")
+    if restart.notify is not None and (reports or unchecked):
+        try:
+            await restart.notify(reports, unchecked)
+        except Exception:
+            _LOG.exception("the restart notice could not be handed on")
+
+
+async def _flush_restart_notice(composition: ServiceComposition) -> None:
+    """Send the held restart notice once the bot is attached; done when nothing is held."""
+    notifier = composition.restart_notifier
+    while notifier.pending:  # type: ignore[union-attr]
+        await asyncio.sleep(_RESTART_NOTICE_POLL_SECONDS)
+        try:
+            await notifier.pass_once()  # type: ignore[union-attr]
+        except Exception:
+            _LOG.exception("the held restart notice could not be resent")
 
 
 async def _reconcile_periodically(composition: ServiceComposition, interval: float) -> None:
