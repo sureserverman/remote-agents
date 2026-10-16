@@ -1,16 +1,22 @@
-"""The envelope reader agrees with the planning plugin's own writer, run for real.
+"""The envelope reader agrees with each planning plugin's own writer, run for real.
 
-The protocol has two implementations in two repositories: coder-plugins'
-`handoff-envelope.py` writes the envelopes and reads `request.json`, and
-`adapters/workflow` does the reverse. Fixtures written by hand here would only prove the
-reader agrees with this file's idea of the protocol; this runs the other side's script into
-a temporary git repository and reads what it actually wrote. It also writes a tampered copy
-of every envelope kind beside the real one, so a reader that accepted anything shaped like
-JSON would fail here and not just in the security suite.
+The protocol's writer has two implementations, one per host that rolls over: coder-plugins'
+`handoff-envelope.py` for Claude Code, and engineering-skills' Codex fork of it. Each writes
+the envelopes and reads `request.json`; `adapters/workflow` does the reverse. Fixtures written
+by hand here would only prove the reader agrees with this file's idea of the protocol; this
+runs the other side's script into a temporary git repository and reads what it actually wrote.
+It also writes a tampered copy of every envelope kind beside the real one, so a reader that
+accepted anything shaped like JSON would fail here and not just in the security suite.
 
-Skipped unless `RA_CODER_PLUGINS` names a coder-plugins checkout, so CI -- which has none --
-is unaffected. Set but pointing at no script is a failure, not a skip: a gate run with the
-variable set is claiming this test ran.
+Each writer is a parameter. `claude` runs coder-plugins' script, naming its session by
+`REMOTE_AGENTS_SESSION_ID`. `codex` runs engineering-skills' fork, which names its session by
+asking `remote-agents session-id` (DEC-128): a stub of that command on `PATH` prints the id, and
+the shell carries a different `REMOTE_AGENTS_SESSION_ID` throughout -- the daemon starter's, as
+measured -- which the fork must never stamp.
+
+A writer is skipped unless its variable names a checkout (`RA_CODER_PLUGINS`,
+`RA_ENGINEERING_SKILLS`), so CI -- which has neither -- is unaffected. Set but pointing at no
+script is a failure, not a skip: a gate run with the variable set is claiming this test ran.
 """
 
 from __future__ import annotations
@@ -19,6 +25,7 @@ import json
 import os
 import subprocess
 import sys
+from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
@@ -26,32 +33,105 @@ import pytest
 from remote_agents.adapters.workflow.handoff_envelopes import FileHandoffEnvelopes
 from remote_agents.ports.handoff_envelopes import HandoffEvent
 
-_CHECKOUT = os.environ.get("RA_CODER_PLUGINS", "")
-_SCRIPT = Path(_CHECKOUT) / "planning/skills/executing-plans/scripts/handoff-envelope.py"
 SESSION = "ra-compat_1"
+#: What a Codex tool shell inherits from the pane that started the shared daemon (DEC-128).
+DAEMON_STARTER = "ra-starter_9"
 
-pytestmark = pytest.mark.skipif(
-    not _CHECKOUT, reason="RA_CODER_PLUGINS is unset: no coder-plugins checkout to run against"
-)
+#: The `remote-agents` a Codex writer finds on PATH: it prints the session it is told to, or
+#: exits as told. The real verb's rule is tested in this repo; here only the writer's use of it.
+_STUB = """#!/bin/sh
+if [ -n "$RA_STUB_EXIT" ]; then exit "$RA_STUB_EXIT"; fi
+if [ "$1" != "session-id" ] || [ "$#" -ne 1 ]; then exit 2; fi
+printf '%s\n' "$RA_STUB_SESSION"
+"""
 
 
-def _run(root: Path, *argv: str, session: str | None = SESSION) -> subprocess.CompletedProcess:
-    env = {k: v for k, v in os.environ.items() if k != "REMOTE_AGENTS_SESSION_ID"}
-    if session is not None:
-        env["REMOTE_AGENTS_SESSION_ID"] = session
-    return subprocess.run(
-        [sys.executable, str(_SCRIPT), argv[0], "--root", str(root), *argv[1:]],
-        capture_output=True,
-        text=True,
-        env=env,
-        timeout=60,
-        check=False,
-    )
+@dataclass(frozen=True)
+class Writer:
+    name: str
+    variable: str
+    relative: str
+    asks_the_verb: bool
+
+
+_WRITERS = {
+    "claude": Writer(
+        "claude",
+        "RA_CODER_PLUGINS",
+        "planning/skills/executing-plans/scripts/handoff-envelope.py",
+        asks_the_verb=False,
+    ),
+    "codex": Writer(
+        "codex",
+        "RA_ENGINEERING_SKILLS",
+        "ports/codex/skills/executing-plans/scripts/handoff-envelope.py",
+        asks_the_verb=True,
+    ),
+}
+
+
+@dataclass(frozen=True)
+class Harness:
+    writer: Writer
+    script: Path
+    stub_dir: Path
+
+    def run(
+        self, root: Path, *argv: str, session: str | None = SESSION, stub_exit: int | None = None
+    ) -> subprocess.CompletedProcess:
+        env = {
+            k: v
+            for k, v in os.environ.items()
+            if k not in {"REMOTE_AGENTS_SESSION_ID", "RA_STUB_SESSION", "RA_STUB_EXIT"}
+        }
+        if self.writer.asks_the_verb:
+            env["PATH"] = f"{self.stub_dir}{os.pathsep}{env.get('PATH', os.defpath)}"
+            env["REMOTE_AGENTS_SESSION_ID"] = DAEMON_STARTER
+            if session is None:
+                env["RA_STUB_EXIT"] = "3"
+            else:
+                env["RA_STUB_SESSION"] = session
+            if stub_exit is not None:
+                env["RA_STUB_EXIT"] = str(stub_exit)
+        elif session is not None:
+            env["REMOTE_AGENTS_SESSION_ID"] = session
+        return subprocess.run(
+            [sys.executable, str(self.script), argv[0], "--root", str(root), *argv[1:]],
+            capture_output=True,
+            text=True,
+            env=env,
+            cwd=root,
+            timeout=60,
+            check=False,
+        )
+
+
+@pytest.fixture(params=sorted(_WRITERS))
+def harness(request, tmp_path: Path) -> Harness:
+    return _harness(_WRITERS[request.param], tmp_path)
+
+
+@pytest.fixture
+def codex_harness(tmp_path: Path) -> Harness:
+    return _harness(_WRITERS["codex"], tmp_path)
+
+
+def _harness(writer: Writer, tmp_path: Path) -> Harness:
+    checkout = os.environ.get(writer.variable, "")
+    if not checkout:
+        pytest.skip(f"{writer.variable} is unset: no checkout to run the {writer.name} writer")
+    script = Path(checkout) / writer.relative
+    assert script.is_file(), f"{writer.variable} is set but {script} does not exist"
+    stub_dir = tmp_path / "bin"
+    stub_dir.mkdir()
+    stub = stub_dir / "remote-agents"
+    stub.write_text(_STUB)
+    stub.chmod(0o755)
+    return Harness(writer, script, stub_dir)
 
 
 @pytest.fixture
 def repo(tmp_path: Path) -> Path:
-    assert _SCRIPT.is_file(), f"RA_CODER_PLUGINS is set but {_SCRIPT} does not exist"
     root = tmp_path / "repo"
     root.mkdir()
     subprocess.run(["git", "init", "-q", str(root)], check=True, timeout=60)
@@ -59,23 +139,24 @@ def repo(tmp_path: Path) -> Path:
     return root
 
 
-def _new_id(root: Path) -> str:
-    result = _run(root, "new-id")
+def _new_id(harness: Harness, root: Path) -> str:
+    result = harness.run(root, "new-id")
     assert result.returncode == 0, result.stderr
     return result.stdout.strip()
 
 
-def _written(root: Path) -> dict[str, tuple[str, str]]:
+def _written(harness: Harness, root: Path) -> dict[str, tuple[str, str]]:
     """Run every writer subcommand once; return {kind: (handoff id, file name)}."""
-    ready_id, failed_id = _new_id(root), _new_id(root)
+    ready_id, failed_id = _new_id(harness, root), _new_id(harness, root)
     plan = str(root / "plan.md")
     for argv in (
         ("ready", "--handoff-id", ready_id, "--plan", plan),
         ("accept", "--handoff-id", ready_id, "--plan", plan),
         ("fail", "--handoff-id", failed_id, "--code", "branch-mismatch"),
     ):
-        result = _run(root, *argv)
+        result = harness.run(root, *argv)
         assert result.returncode == 0, (argv, result.stdout, result.stderr)
+        assert result.stdout.strip() != "unsupervised", (argv, "the writer found no session")
     return {
         "ready": (ready_id, f"{ready_id}.ready.json"),
         "accepted": (ready_id, f"{ready_id}.accepted.json"),
@@ -83,8 +164,8 @@ def _written(root: Path) -> dict[str, tuple[str, str]]:
     }
 
 
-def test_what_the_planning_side_writes_reads_back_typed(repo: Path) -> None:
-    written = _written(repo)
+def test_what_the_planning_side_writes_reads_back_typed(harness: Harness, repo: Path) -> None:
+    written = _written(harness, repo)
     handoffs = repo / ".claude" / "handoffs"
     # The writer's own bookkeeping is there, and must not read as events.
     assert (handoffs / f".{written['accepted'][0]}.claim").exists()
@@ -101,6 +182,7 @@ def test_what_the_planning_side_writes_reads_back_typed(repo: Path) -> None:
     )
     assert ready.handoff_id == accepted.handoff_id == written["ready"][0]
     assert failed.handoff_id == written["failed"][0]
+    # For the Codex writer, the shell carried DAEMON_STARTER all along: only the verb names it.
     assert {e.managed_session_id for e in events.values()} == {SESSION}
     assert ready.plan == accepted.plan == str(repo / "plan.md")
     assert failed.plan is None
@@ -121,16 +203,16 @@ _TAMPERS = {
 @pytest.mark.parametrize("kind", ["ready", "accepted", "failed"])
 @pytest.mark.parametrize("tamper", sorted(_TAMPERS))
 def test_a_tampered_copy_of_each_kind_is_rejected_beside_the_real_one(
-    repo: Path, kind: str, tamper: str
+    harness: Harness, repo: Path, kind: str, tamper: str
 ) -> None:
-    written = _written(repo)
+    written = _written(harness, repo)
     handoffs = repo / ".claude" / "handoffs"
     original = json.loads((handoffs / written[kind][1]).read_bytes())
-    copy_id = _new_id(repo)
+    copy_id = _new_id(harness, repo)
     body = _TAMPERS[tamper](original | {"handoff_id": copy_id})
     (handoffs / f"{copy_id}.{kind}.json").write_text(json.dumps(body))
     # An untampered copy under a name that is not its id: the name is part of the envelope.
-    renamed_id = _new_id(repo)
+    renamed_id = _new_id(harness, repo)
     (handoffs / f"{renamed_id}.{kind}.json").write_bytes((handoffs / written[kind][1]).read_bytes())
 
     ids = {(e.event, e.handoff_id) for e in FileHandoffEnvelopes().events(repo)}
@@ -142,25 +224,48 @@ def test_a_tampered_copy_of_each_kind_is_rejected_beside_the_real_one(
     }
 
 
-def test_a_request_this_side_writes_is_one_the_planning_side_sees(repo: Path) -> None:
+def test_a_request_this_side_writes_is_one_the_planning_side_sees(
+    harness: Harness, repo: Path
+) -> None:
     adapter = FileHandoffEnvelopes()
 
-    assert _run(repo, "request-pending").returncode == 1
+    assert harness.run(repo, "request-pending").returncode == 1
     assert adapter.write_request(repo, SESSION) is True
-    assert _run(repo, "request-pending").returncode == 0
-    assert _run(repo, "request-pending", session="another-session").returncode == 1
+    assert harness.run(repo, "request-pending").returncode == 0
+    assert harness.run(repo, "request-pending", session="another-session").returncode == 1
 
     adapter.clear_request(repo, SESSION)
-    assert _run(repo, "request-pending").returncode == 1
+    assert harness.run(repo, "request-pending").returncode == 1
 
 
-def test_the_planning_side_keeps_the_gitignore_this_side_wrote(repo: Path) -> None:
+def test_a_codex_writer_stamps_the_verbs_session_never_the_inherited_one(
+    codex_harness: Harness, repo: Path
+) -> None:
+    """A request for the daemon starter is not one for this shell, and an unmanaged shell
+    (the verb exits 3) writes nothing at all (DEC-128). Codex only: the claude writer names its
+    session by the inherited variable, by design."""
+    harness = codex_harness
+    adapter = FileHandoffEnvelopes()
+    assert adapter.write_request(repo, DAEMON_STARTER) is True
+    assert harness.run(repo, "request-pending").returncode == 1
+
+    handoff = _new_id(harness, repo)
+    result = harness.run(
+        repo, "ready", "--handoff-id", handoff, "--plan", str(repo / "plan.md"), stub_exit=3
+    )
+    assert (result.returncode, result.stdout.strip()) == (0, "unsupervised")
+    assert not (repo / ".claude" / "handoffs" / f"{handoff}.ready.json").exists()
+
+
+def test_the_planning_side_keeps_the_gitignore_this_side_wrote(
+    harness: Harness, repo: Path
+) -> None:
     adapter = FileHandoffEnvelopes()
     assert adapter.write_request(repo, SESSION) is True
     gitignore = repo / ".claude" / "handoffs" / ".gitignore"
     stamp = gitignore.stat().st_mtime_ns
 
-    _written(repo)
+    _written(harness, repo)
 
     # Its writer rewrites a .gitignore that is not exactly its own; an untouched one agrees.
     assert gitignore.read_bytes() == b"*\n"
