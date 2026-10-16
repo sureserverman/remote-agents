@@ -359,6 +359,8 @@ envelope writer depends on, the Codex planning plugin's included:
 | 3 | nothing on stdout | no managed session owns this shell, or the verb could not tell: write no envelope |
 | 2 | argparse's usage message | usage error |
 
+(`-h` prints help and exits 0, as every subcommand does; a writer never passes it.)
+
 A writer treats every exit but 0 as "write nothing". It never passes `--activity-dir`, which
 exists for tests: pointed at a folder with no roster, it turns the roster checks below off.
 
