@@ -846,6 +846,15 @@ class PrivateBotBoundary:
     separately and each kept going regardless.
     """
     notifier: ActivityNotifier = field(init=False)
+    """The three collaborators -- `stops`, `view` and this one -- filled by `build_private_bot`
+    rather than by this class.
+
+    `init=False` and genuinely unset until the factory runs, which is the honest state: a
+    bare `PrivateBotBoundary(...)` is a boundary nobody has wired. Defaulting them instead
+    would be worse than either — it would give a composition root that never chose a live
+    view one that silently works, which is exactly the situation moving the wiring out was
+    meant to end.
+    """
     rollover_notifier: RolloverNotifier | None = None
     """Says when a rollover failed or its stop did not go through, or None where the backend
     has no rollovers. Bot-only, like the schedule notices; only failures push (DEC-031)."""
@@ -870,21 +879,14 @@ class PrivateBotBoundary:
     trust_notifier: TrustNotifier | None = None
     """The pass that asks an untrusted session's folder-trust question, or None where none does.
 
-    Optional rather than `init=False`, unlike the three below it, because it is genuinely
-    absent from most compositions: only a service wired with a durable trust store has one, and
-    every boundary a test constructs directly has none. `run_private_bot` guards on it.
+    Optional rather than `init=False`, unlike the three collaborators above, because it is
+    genuinely absent from most compositions: only a service wired with a durable trust store
+    has one, and every boundary a test constructs directly has none. `run_private_bot` guards
+    on it.
 
     Named rather than `object`, which is what `test_the_boundary_declares_no_untyped_backend_
     field` insists on and was right to: an untyped seam on this class is how a collaborator
     gets swapped for something that only happens to answer the same calls.
-    """
-    """The three collaborators, filled by `build_private_bot` rather than by this class.
-
-    `init=False` and genuinely unset until the factory runs, which is the honest state: a
-    bare `PrivateBotBoundary(...)` is a boundary nobody has wired. Defaulting them instead
-    would be worse than either — it would give a composition root that never chose a live
-    view one that silently works, which is exactly the situation moving the wiring out was
-    meant to end.
     """
     _awaiting_text: dict[tuple[int, int], _TextEntry] = field(default_factory=dict)
     #: The schedule being made, one step at a time, until it is confirmed or abandoned.

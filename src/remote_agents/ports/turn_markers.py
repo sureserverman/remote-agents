@@ -43,6 +43,11 @@ class TurnMarkers(Protocol):
         """Every session holding a marker."""
         ...
 
+    def listable(self) -> bool:
+        """False when the markers' directory exists and cannot be listed. `sessions` then
+        answers empty, which a caller deciding something on it must not read as "none"."""
+        ...
+
 
 class ConversationMarks(Protocol):
     """Each session's latest own conversation, as its agent named it at a turn's start;
@@ -62,6 +67,11 @@ class ConversationMarks(Protocol):
 
     def sessions(self) -> tuple[str, ...]:
         """Every session holding a mark."""
+        ...
+
+    def listable(self) -> bool:
+        """False when the marks' directory exists and cannot be listed: `sessions` then
+        answers empty, and the resume after a restart must not read that as "no marks"."""
         ...
 
     def forget(self, session_id: str) -> None:

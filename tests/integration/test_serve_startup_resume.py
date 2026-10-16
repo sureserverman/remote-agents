@@ -244,6 +244,26 @@ async def test_an_unreadable_server_resumes_nothing_and_says_so(rig: Rig) -> Non
     assert await rig.by_state(SessionState.RUNNING) == []
 
 
+@pytest.mark.parametrize("directory", ["conversations", "turns"])
+async def test_a_marks_directory_that_cannot_be_listed_resumes_nothing_and_says_so(
+    rig: Rig, directory: str
+) -> None:
+    """Unreadable is not empty: listed as empty, every session would be skipped for good as
+    `no-conversation` (or resumed without its nudge), where an unknown start writes nothing."""
+    await rig.running(mid_turn=True)
+    await rig.running(mid_turn=True)
+    locked = rig.activity / directory
+    locked.chmod(0)
+    try:
+        await rig.serve(rig.composition())
+    finally:
+        locked.chmod(0o700)
+
+    assert rig.notices == [((), 2)]
+    assert await rig.outcomes.outcomes() == {}
+    assert await rig.by_state(SessionState.RUNNING) == []
+
+
 async def test_the_marks_of_sessions_no_longer_running_are_forgotten(rig: Rig) -> None:
     lost = await rig.running()
     alive = await rig.running()

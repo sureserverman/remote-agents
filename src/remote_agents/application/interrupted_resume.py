@@ -278,8 +278,9 @@ class InterruptedResumePass:
     earlier attempt never reached the claim.
 
     **Every resume comes first, then the nudges, side by side.** A session that was mid-turn
-    gets `limit_resume.NUDGE` typed once (DEC-099, DEC-109), tried every `RETRY_SECONDS` for
-    `STARTUP_PATIENCE` while its agent boots, and never again after a send that may have typed.
+    gets `limit_resume.NUDGE` typed once (DEC-099, DEC-109), tried every `RETRY_SECONDS`, up to
+    `STARTUP_RETRIES` more times, while its agent boots, and never again after a send that may
+    have typed.
     A `nudging:<id>` intent is written before the first send, so a start that finds one left
     over gives it up as unconfirmed rather than typing it twice.
 

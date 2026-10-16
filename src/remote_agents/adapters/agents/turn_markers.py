@@ -149,6 +149,9 @@ class FileTurnMarkers:
             if safe_session_id(entry.name) is not None and _is_regular(entry)
         )
 
+    def listable(self) -> bool:
+        return _listable(self._directory)
+
     def _is_real_directory(self) -> bool:
         try:
             return stat.S_ISDIR(os.lstat(self._directory).st_mode)
@@ -226,6 +229,9 @@ class FileConversationMarks:
             if safe_session_id(entry.name) is not None and _is_regular(entry)
         )
 
+    def listable(self) -> bool:
+        return _listable(self._directory)
+
     def forget(self, session_id: str) -> None:
         name = safe_session_id(session_id)
         if name is None or not _is_real_directory(self._directory):
@@ -257,6 +263,24 @@ def _clear_abandoned(entries: list[os.DirEntry[str]]) -> None:
 def _is_real_directory(path: Path) -> bool:
     try:
         return stat.S_ISDIR(os.lstat(path).st_mode)
+    except OSError:
+        return False
+
+
+def _listable(path: Path) -> bool:
+    """True when `path` is absent (nothing was ever marked) or a real directory this process
+    can list; False for anything else, which a reader would otherwise take for empty."""
+    try:
+        status = os.lstat(path)
+    except FileNotFoundError:
+        return True
+    except OSError:
+        return False
+    if not stat.S_ISDIR(status.st_mode):
+        return False
+    try:
+        with os.scandir(path):
+            return True
     except OSError:
         return False
 

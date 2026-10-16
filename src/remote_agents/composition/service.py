@@ -367,6 +367,10 @@ def build_restart_resume(
                 str(observation.session_id)
                 for observation in await terminal.managed_observations()  # type: ignore[attr-defined]
             }
+            # Unreadable is not empty: listed as empty, every session would be skipped for good
+            # (`no-conversation`) or resumed without its nudge.
+            if not (turn_markers.listable() and conversation_marks.listable()):
+                raise RuntimeError("the turn markers or conversation marks cannot be listed")
             markers = frozenset(turn_markers.sessions())
             for session in conversation_marks.sessions():
                 mark = conversation_marks.latest(session)
