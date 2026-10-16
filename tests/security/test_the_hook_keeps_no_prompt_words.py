@@ -103,9 +103,7 @@ def test_a_submit_writes_the_marker_and_nothing_else(provider: str, tmp_path: Pa
 
     _submit(directory, provider)
 
-    written = sorted(
-        path.relative_to(directory) for path in directory.rglob("*") if path.is_file()
-    )
+    written = sorted(path.relative_to(directory) for path in directory.rglob("*") if path.is_file())
     assert written == [Path("conversations") / "s-42", Path("turns") / "s-42"]
     for path in written:
         assert (directory / path).read_bytes() == str(_SUBMIT["session_id"]).encode("ascii")
