@@ -164,7 +164,8 @@ def read_roster(path: Path) -> tuple[RosterEntry, ...] | None:
         return ()
     try:
         document = json.loads(raw)
-    except (UnicodeDecodeError, ValueError):
+    except (UnicodeDecodeError, ValueError, RecursionError):
+        # Nesting past the parser's depth raises `RecursionError`, not `ValueError`.
         return ()
     sessions = document.get("sessions") if isinstance(document, dict) else None
     if not isinstance(sessions, list):

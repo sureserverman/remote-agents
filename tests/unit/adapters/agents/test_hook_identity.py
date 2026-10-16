@@ -178,6 +178,7 @@ def _roster_bytes(**overrides: str) -> bytes:
         _roster_bytes(session_id="a b"),  # not an opaque id
         b'{"sessions": [{"session_id": "a", "workspace": "/w", "created_at": "yesterday"}]}',
         _roster_bytes(created_at="2026-01-01T00:00:00"),  # no zone
+        b"[" * 200_000,  # nested past the parser's depth: `RecursionError`, not `ValueError`
     ],
 )
 def test_a_malformed_roster_names_nobody(tmp_path: Path, content: bytes) -> None:

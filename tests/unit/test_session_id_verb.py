@@ -250,3 +250,67 @@ def test_session_id_command_exits_2_on_an_extra_argument(shell: Path) -> None:
     with pytest.raises(SystemExit) as raised:
         main(["session-id", "surplus"])
     assert raised.value.code == 2
+
+
+# --- Stage 1 gate, round 1: a roster that cannot be trusted names nobody, for every shell ---
+
+
+@pytest.mark.parametrize("thread", [None, ""])
+def test_session_id_command_names_nobody_beside_an_untrusted_roster(
+    shell: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    thread: str | None,
+) -> None:
+    # Without a trusted roster a daemon shell missing its thread variable cannot be told from a
+    # Claude shell, and the variable may be the starter's: nobody's, as the hook says for `()`.
+    _roster(shell, RosterEntry(str(SessionId.new()), str(Path.cwd().resolve()), _MINTED))
+    roster_path(shell, "codex").chmod(0o644)
+    monkeypatch.setenv("REMOTE_AGENTS_SESSION_ID", str(SessionId.new()))
+    if thread is not None:
+        monkeypatch.setenv("CODEX_THREAD_ID", thread)
+    assert _run(shell, capsys) == (3, "")
+
+
+def test_session_id_command_names_the_environment_session_when_no_roster_was_written(
+    shell: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # The recorded limit, pinned so a change to it is deliberate: with no roster at all (no
+    # service yet) a shell with no thread variable is named by its variable, as its hooks are.
+    session = str(SessionId.new())
+    monkeypatch.setenv("REMOTE_AGENTS_SESSION_ID", session)
+    assert _run(shell, capsys) == (0, f"{session}\n")
+
+
+def test_session_id_command_gives_a_hand_started_thread_to_the_folder_s_managed_session(
+    shell: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # hook_identity's recorded limit, pinned: a Codex started by hand in the folder a managed
+    # session works in mints a newer thread, and the time rule places it under that session.
+    managed = str(SessionId.new())
+    _roster(shell, RosterEntry(managed, str(Path.cwd().resolve()), _MINTED - timedelta(hours=2)))
+    monkeypatch.setenv("CODEX_THREAD_ID", _THREAD)
+    assert _run(shell, capsys) == (0, f"{managed}\n")
+
+
+def test_session_id_command_exits_3_on_a_roster_too_deep_to_parse(
+    shell: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    path = roster_path(shell, "codex")
+    path.parent.mkdir(mode=0o700, exist_ok=True)
+    path.write_text("[" * 200_000, encoding="utf-8")
+    path.chmod(0o600)
+    monkeypatch.setenv("CODEX_THREAD_ID", _THREAD)
+    assert _run(shell, capsys) == (3, "")
+
+
+def test_session_id_command_exits_3_on_any_unexpected_error(
+    shell: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    from remote_agents import agent_event
+
+    def broken(*_: object, **__: object) -> str:
+        raise LookupError("a vertical that fails to load")
+
+    monkeypatch.setattr(agent_event, "resolve_session_id", broken)
+    assert _run(shell, capsys) == (3, "")

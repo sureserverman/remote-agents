@@ -355,9 +355,12 @@ envelope writer depends on, the Codex planning plugin's included:
 
 | Exit | Output | Meaning |
 |---|---|---|
-| 0 | the session id alone on one line | this shell belongs to that managed session |
-| 3 | nothing on stdout | no managed session owns this shell: write no envelope |
+| 0 | the session id alone on one line | the hook's rule places this shell in that managed session |
+| 3 | nothing on stdout | no managed session owns this shell, or the verb could not tell: write no envelope |
 | 2 | argparse's usage message | usage error |
+
+A writer treats every exit but 0 as "write nothing". It never passes `--activity-dir`, which
+exists for tests: pointed at a folder with no roster, it turns the roster checks below off.
 
 - `agent_event.py` (`resolve_session_id`, `run_session_id`) is the verb, routed in `__main__`
   before `bootstrap` loads. It is read-only: environment, folder, and the roster file under
@@ -368,10 +371,15 @@ envelope writer depends on, the Codex planning plugin's included:
   Its `REMOTE_AGENTS_SESSION_ID` is never read: under Codex's shared daemon it is the daemon
   starter's (measured, `tests/live/test_codex_tool_shell_identity.py`). No roster, or none that
   places the thread, exits 3. The hook, with no roster, keeps the environment rule instead.
-- Any other shell is named by `REMOTE_AGENTS_SESSION_ID`, unless that id is on a payload-thread
-  provider's roster (a daemon shell missing its thread variable): then it exits 3.
-- The folder compared is the shell's own. A writer that changes folder before asking is
-  compared against the folder it moved to.
+- Any other shell is named by `REMOTE_AGENTS_SESSION_ID`, unless a payload-thread provider's
+  roster names that id (a daemon shell missing its thread variable) or exists and cannot be
+  trusted: then it exits 3. With no roster written at all (no service yet), the variable decides.
+- **Exit 0 is evidence, not proof.** The placing rule is `hook_identity`'s, with its recorded
+  limits. A Codex the owner starts by hand in the folder a managed Codex session works in is
+  placed in that session. With two managed sessions in one folder, a thread the older one opens
+  after the newer one started is placed in the newer one. The folder compared is the shell's
+  own: a writer that changes folder before asking is compared against the folder it moved to.
+  So a supervisor that stops a session on an envelope's word confirms the envelope first.
 
 ## DEC-127 — resuming after a restart
 

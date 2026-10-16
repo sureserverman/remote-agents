@@ -22,17 +22,18 @@ from __future__ import annotations
 
 import os
 import sys
-from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 from remote_agents.ports.argv_text import NonEchoingArgumentParser
 
 if TYPE_CHECKING:
+    from collections.abc import Callable, Mapping
+
     from remote_agents.ports.provider_descriptor import HookLicence
 
-#: `session-id`'s exit for a shell no managed session owns. The handoff writer reads it as
-#: "unsupervised" and writes nothing; 2 stays argparse's usage error.
+#: `session-id`'s exit for a shell no managed session owns, and for any failure to tell. The
+#: handoff writer reads it as "unsupervised" and writes nothing; 2 stays argparse's usage error.
 NOT_MANAGED = 3
 
 HOOK_PROVIDERS = ("claude", "codex", "opencode", "cursor")
@@ -113,14 +114,18 @@ def resolve_session_id(
     variable is never read: the shell inherits the environment of whichever pane started the
     provider's daemon, measured naming another session (DEC-128). No roster, or none that places
     the thread, is nobody's -- where the hook, with no roster, keeps the variable: a handoff
-    stamped with the wrong session is worse than none.
+    stamped with a session the variable merely inherited is worse than none.
 
-    Any other shell is named by its pane's variable, as its hooks are -- unless that variable
-    names a session on such a provider's roster. That is a shell of the provider's daemon whose
-    thread variable is missing, and the variable is the starter's, so it is nobody's.
+    Any other shell is named by its pane's variable, as its hooks are -- unless such a
+    provider's roster names that variable's session, or exists and cannot be trusted. A daemon
+    shell whose thread variable is missing carries the starter's variable; a trusted roster that
+    lists the starter tells it apart, an untrusted one cannot, so both are nobody's. With no
+    roster written at all (no service yet), the variable decides, as it does for the hook.
 
-    The folder is the shell's own, not its turn's: a writer that changes folder before asking
-    is compared against the folder it moved to.
+    What this places is placed by the hook's rule, which is evidence, not proof: the limits
+    `hook_identity` records -- a Codex started by hand in a managed session's folder, two
+    sessions sharing one -- hold here too. The folder is the shell's own, not its turn's: a
+    writer that changes folder before asking is compared against the folder it moved to.
     """
     from remote_agents.adapters.agents.hook_identity import read_roster, resolve, roster_path
     from remote_agents.ports.provider_descriptor import HookIdentity
@@ -139,7 +144,9 @@ def resolve_session_id(
         thread = None if found.thread_variable is None else environment.get(found.thread_variable)
         if thread:
             return resolve(thread, cwd, roster) if roster else None
-        if roster and any(entry.session_id == inherited for entry in roster):
+        if roster is not None and (
+            not roster or any(entry.session_id == inherited for entry in roster)
+        ):
             return None
     return inherited
 
@@ -148,6 +155,8 @@ def run_session_id(argv: list[str] | None = None) -> int:
     """Print the calling shell's managed session id alone on one line; exit 3 when it has none.
 
     Read-only: it reads the environment, the folder and the roster file, and never the database.
+    Any failure past argument parsing exits 3, never a traceback: the writer then writes nothing,
+    which is the safe answer to a question this could not settle.
     """
     from remote_agents.adapters.agents.hook_licences import hook_licence
     from remote_agents.config import ConfigError
@@ -167,9 +176,16 @@ def run_session_id(argv: list[str] | None = None) -> int:
     except OSError:
         # A folder removed under the shell; the exact resume id can still place its thread.
         cwd = None
-    session_id = resolve_session_id(os.environ, cwd, activity_directory, licence=hook_licence)
+    try:
+        session_id = resolve_session_id(os.environ, cwd, activity_directory, licence=hook_licence)
+    except Exception:
+        session_id = None
     if session_id is None:
         print("remote-agents: this shell belongs to no managed session", file=sys.stderr)
         return NOT_MANAGED
-    print(session_id)
+    try:
+        print(session_id, flush=True)
+    except OSError:
+        # A closed stdout (`BrokenPipeError`): the writer did not get the id.
+        return NOT_MANAGED
     return 0
