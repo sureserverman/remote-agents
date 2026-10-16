@@ -36,7 +36,9 @@ def _roots(connection: sqlite3.Connection, project: Path):
         terminal=types.SimpleNamespace(pane_idle=None, send_prompt=None),
         enabled=None,
         project_paths={_PROJECT: project},
-        rollable=frozenset({ProfileId("claude")}),
+        adopt_templates={
+            ProfileId("claude"): "/planning:executing-plans --adopt-handoff {handoff_id}"
+        },
         worktrees=SQLiteWorktreeStore(connection),
     )
     return rollover._worktree_roots()

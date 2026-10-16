@@ -56,6 +56,11 @@ import typing
 #: word calls the provider. It was a literal dict inside the Telegram adapter, so every other
 #: surface wanting a name had to reach into that module or spell its own; `glyph`'s argument
 #: (DEC-070) applies to it unchanged.
+#: It moved 12 -> 13 on 2026-10-16 by the plan
+#: `2026-10-15-codex-rollover-and-restart-resume-sub-04-codex-rollover-plan.md` (Task 1.1,
+#: DEC-122), which grew the capability half: `adopt_template` is what a rollover types into a
+#: successor of that provider. A real `None`: a provider with no ported handoff writer has
+#: nothing to adopt with, and its sessions never roll over.
 _IDENTITY_FIELDS = ("profile_id", "glyph", "name")
 _CAPABILITY_FIELDS = (
     "sessions",
@@ -66,6 +71,7 @@ _CAPABILITY_FIELDS = (
     "trust_dialog",
     "composer",
     "limit_screen",
+    "adopt_template",
 )
 _RESERVATION_FIELDS = ("reserved_keys",)
 

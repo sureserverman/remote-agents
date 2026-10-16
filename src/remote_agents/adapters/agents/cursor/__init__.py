@@ -116,4 +116,7 @@ def descriptor(
         # Measured 2026-09-28 (`docs/acceptance-2026-09-28-limit-screens.md`); read off the pane
         # by the limit-screen watch, because this agent reports no limit event of its own.
         limit_screen=LIMIT_SCREEN,
+        # No handoff writer is ported to Cursor (engineering-skills DEC-045), so nothing could
+        # adopt a handoff: its sessions never roll over (BL-123).
+        adopt_template=None,
     )

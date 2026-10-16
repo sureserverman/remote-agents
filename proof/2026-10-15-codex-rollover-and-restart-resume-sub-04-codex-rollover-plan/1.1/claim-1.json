@@ -1,0 +1,28 @@
+{
+ "baseline": {
+  "elapsed_s": 4.5,
+  "exit": 0,
+  "tail": "..ss.................................................................... [ 45%]\n........................................................................ [ 90%]\n...............                                                          [100%]\n=========================== short test summary info ============================\nSKIPPED [1] tests/provider_contract/kit.py:39: unsupported by declaration: no handoff writer ported to opencode (BL-123); the registry declares None [requirements.py]\nSKIPPED [1] tests/provider_contract/kit.py:39: unsupported by declaration: no handoff writer ported to cursor (BL-123); the registry declares None [requirements.py]\n157 passed, 2 skipped, 1418 deselected in 4.19s"
+ },
+ "break_patch": "--- a/src/remote_agents/adapters/agents/codex/__init__.py\n+++ b/src/remote_agents/adapters/agents/codex/__init__.py\n@@ -116,5 +116,5 @@\n         limit_screen=LIMIT_SCREEN,\n         # The managed `planning@engineering-skills` plugin, reached as a `$` skill mention:\n         # Codex declares no command menu, so a `/` command would be refused unsent.\n-        adopt_template=\"$planning:executing-plans --adopt-handoff {handoff_id}\",\n+        adopt_template=None,\n     )\n",
+ "build": null,
+ "created": "2026-10-16T20:09:51+00:00",
+ "fingerprint": "02bb2bbc87cd0b7153ac53d9b7859aed204743b9d89bfc107a5b523cf1395bed",
+ "index": 1,
+ "kind": "claim",
+ "named_break": null,
+ "no_build_reason": "python package, no build step",
+ "plan": "/mnt/vault/Portfolio/infra/remote-agents/plans/2026-10-15-codex-rollover-and-restart-resume-sub-04-codex-rollover-plan.md",
+ "red": {
+  "elapsed_s": 4.7,
+  "exit": 1,
+  "tail": "E       AssertionError: codex.adopt_template declared supported but wired None\n\ntests/provider_contract/kit.py:46: AssertionError\n________ test_claude_and_codex_roll_over_with_their_own_adopt_templates ________\n\n    def test_claude_and_codex_roll_over_with_their_own_adopt_templates() -> None:\n>       assert profiles_that_roll_over() == {ProfileId(\"claude\"), ProfileId(\"codex\")}\nE       AssertionError: assert frozenset({Pr...ue='claude')}) == {ProfileId(va...alue='codex')}\nE         \nE         Extra items in the right set:\nE         ProfileId(value='codex')\nE         Use -v to get more diff\n\ntests/provider_contract/test_adopt_template_contracts.py:55: AssertionError\n_ test_every_capability_has_exactly_one_declared_state[codex-adopt_template-None] _\n\nprofile = 'codex', capability = 'adopt_template', wired = None\n\n    @pytest.mark.parametrize((\"profile\", \"capability\", \"wired\"), list(_rows()))\n    def test_every_capability_has_exactly_one_declared_state(profile, capability, wired) -> None:\n        declared = DECLARATIONS[profile][capability]\n        assert isinstance(declared, tuple) and isinstance(declared[0], Requirement), declared\n        state, reason = declared\n        assert reason, f\"{profile}.{capability} declares no reason\"\n        if state is Requirement.SUPPORTED:\n>           assert wired is not None, (\n                f\"{profile}.{capability} is declared supported but the registry wired None \u2014 \"\n                \"the declaration invents a capability (DEC-061)\"\n            )\nE           AssertionError: codex.adopt_template is declared supported but the registry wired None \u2014 the declaration invents a capability (DEC-061)\nE           assert None is not None\n\ntests/provider_contract/test_requirements_match_registry.py:31: AssertionError\n=========================== short test summary info ============================\nSKIPPED [1] tests/provider_contract/kit.py:39: unsupported by declaration: no handoff writer ported to opencode (BL-123); the registry declares None [requirements.py]\nSKIPPED [1] tests/provider_contract/kit.py:39: unsupported by declaration: no handoff writer ported to cursor (BL-123); the registry declares None [requirements.py]\nFAILED tests/provider_contract/test_adopt_template_contracts.py::test_adopt_template_contract[codex]\nFAILED tests/provider_contract/test_adopt_template_contracts.py::test_claude_and_codex_roll_over_with_their_own_adopt_templates\nFAILED tests/provider_contract/test_requirements_match_registry.py::test_every_capability_has_exactly_one_declared_state[codex-adopt_template-None]\n3 failed, 154 passed, 2 skipped, 1418 deselected in 4.38s"
+ },
+ "schema": 2,
+ "task": "1.1",
+ "test": "uv run --locked pytest tests/provider_contract tests/unit/application tests/architecture/test_adopt_template_in_vertical.py -q -p no:randomly -k \"rollover or adopt_template\"",
+ "text": "`uv run --locked pytest tests/provider_contract tests/unit/application tests/architecture/test_adopt_template_in_vertical.py -q -p no:randomly -k \"rollover or adopt_template\"`. Cases:",
+ "touched": [
+  "src/remote_agents/adapters/agents/codex/__init__.py"
+ ]
+}

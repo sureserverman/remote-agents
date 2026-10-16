@@ -150,4 +150,6 @@ def descriptor(
         # Read out of the 2.1.284 bundle (`docs/acceptance-2026-09-28-limit-screens.md`). Claude
         # reports the stop through `StopFailure`, so this is read for its hint, not watched for.
         limit_screen=LIMIT_SCREEN,
+        # The planning plugin is a Claude Code plugin, reached as a `/` command.
+        adopt_template="/planning:executing-plans --adopt-handoff {handoff_id}",
     )

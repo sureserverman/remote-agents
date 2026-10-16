@@ -162,7 +162,7 @@ async def test_a_ready_rolls_over_to_one_successor_and_stops_only_on_accept(
         terminal=terminal,
         enabled=on,
         project_paths={PROJECT: project},
-        rollable=frozenset({PROFILE}),
+        adopt_templates={PROFILE: "/planning:executing-plans --adopt-handoff {handoff_id}"},
     )
     rollovers = SQLiteRolloverStore(connection)
     launched: list[SessionId] = []
@@ -275,7 +275,7 @@ async def test_a_worktree_sessions_successor_starts_in_the_same_worktree(tmp_pat
         terminal=terminal,
         enabled=on,
         project_paths={PROJECT: project},
-        rollable=frozenset({PROFILE}),
+        adopt_templates={PROFILE: "/planning:executing-plans --adopt-handoff {handoff_id}"},
         worktrees=worktrees,
     )
     rollovers = SQLiteRolloverStore(connection)
@@ -397,7 +397,7 @@ async def test_a_trust_held_successor_is_typed_once_after_the_owner_trusts_it(
         terminal=terminal,
         enabled=on,
         project_paths={PROJECT: project},
-        rollable=frozenset({PROFILE}),
+        adopt_templates={PROFILE: "/planning:executing-plans --adopt-handoff {handoff_id}"},
     )
     rollovers = SQLiteRolloverStore(connection)
     launched: list[SessionId] = []

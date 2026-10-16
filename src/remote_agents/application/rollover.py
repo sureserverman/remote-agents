@@ -108,10 +108,6 @@ _LOG = logging.getLogger(__name__)
 
 _S = RolloverState
 
-TEMPLATE = "/planning:executing-plans --adopt-handoff {handoff_id}"
-"""The only text a rollover types. An envelope supplies the id, which the reader has already
-held to `^h-[0-9a-f]{20}$`; it never supplies text."""
-
 NOT_IDLE_PATIENCE = timedelta(minutes=10)
 """How long a predecessor may stay not-IDLE at a step that needs it idle before it is given up."""
 
@@ -149,6 +145,10 @@ NOT_TYPED = "not-typed"
 ADOPTION_TIMEOUT = "adoption-timeout"
 STOP_UNCONFIRMED = "stop-unconfirmed"
 NOT_ROLLABLE = "not-rollable"
+NO_TEMPLATE = "no-adopt-template"
+"""Why a successor was not typed when its profile's vertical stopped declaring a template
+while the rollover was open (a revert, across a restart): nothing is typed that it did not
+declare."""
 NO_HANDOFF_ROOT = "no-handoff-root"
 REQUEST_UNWRITTEN = "request-unwritten"
 REQUEST_LOST = "request-lost"
@@ -221,7 +221,7 @@ class RolloverPass:
         store: RolloverStore,
         envelopes: HandoffEnvelopes,
         *,
-        rollable: frozenset[ProfileId],
+        adopt_templates: Mapping[ProfileId, str],
         sessions: Callable[[], Awaitable[Sequence[SessionRecord]]],
         handoff_root: Callable[[ProjectId], Path | None],
         worktree_roots: Callable[[], Awaitable[Mapping[SessionId, Path | None]]] | None = None,
@@ -237,7 +237,11 @@ class RolloverPass:
     ) -> None:
         self._store = store
         self._envelopes = envelopes
-        self._rollable = rollable
+        #: The only text a rollover types: the successor's own provider's template, declared
+        #: in its vertical (DEC-122). An envelope supplies the id, which the reader has already
+        #: held to `^h-[0-9a-f]{20}$`; it never supplies text. Its keys are the rollable set.
+        self._templates = dict(adopt_templates)
+        self._rollable = frozenset(self._templates)
         self._sessions = sessions
         self._handoff_root = handoff_root
         #: The root of every session bound to a worktree, read once per pass (BL-126): None
@@ -533,16 +537,23 @@ class RolloverPass:
         if record.state not in _UP:
             await self._fail(starting, seen, SUCCESSOR_FAILED, record.state.value)
             return
-        reason = await self._type_template(record.session_id, rollover.handoff_id)
+        reason = await self._type_template(
+            record.session_id, rollover.profile_id, rollover.handoff_id
+        )
         if reason is not None:
             await self._fail(starting, seen, NOT_TYPED, reason)
             return
         await self._store.advance(rollover.id, _S.ADOPTING, at=self._now())
 
-    async def _type_template(self, session_id: SessionId, handoff_id: str) -> str | None:
+    async def _type_template(
+        self, session_id: SessionId, profile_id: ProfileId, handoff_id: str
+    ) -> str | None:
         """None once the template landed, else why it was not typed. Never typed twice: a send
         that may have typed is given up (DEC-099), as the schedules' first prompt is."""
-        text = TEMPLATE.format(handoff_id=handoff_id)
+        template = self._templates.get(profile_id)
+        if template is None:
+            return NO_TEMPLATE
+        text = template.format(handoff_id=handoff_id)
         retries = 0  # counted, never read off the clock (`STARTUP_RETRIES`)
         while True:
             try:
@@ -637,7 +648,9 @@ class RolloverPass:
             rollover.id, _S.ADOPTING, at=self._now(), detail=TRUSTED_TYPING
         )
         assert adopting.handoff_id is not None  # opened from a `ready`, which names one
-        reason = await self._type_template(rollover.successor_session_id, adopting.handoff_id)
+        reason = await self._type_template(
+            rollover.successor_session_id, rollover.profile_id, adopting.handoff_id
+        )
         if reason is not None:
             await self._fail(adopting, seen, NOT_TYPED, reason)
 

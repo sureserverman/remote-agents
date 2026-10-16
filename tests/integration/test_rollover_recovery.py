@@ -128,7 +128,7 @@ class Host:
         return RolloverPass(
             store,
             self.envelopes,
-            rollable=frozenset({CLAUDE}),
+            adopt_templates={CLAUDE: "/planning:executing-plans --adopt-handoff {handoff_id}"},
             sessions=self.list_sessions,
             handoff_root=lambda project: ROOT,
             enabled=self.enabled,

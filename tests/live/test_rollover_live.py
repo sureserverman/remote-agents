@@ -101,6 +101,7 @@ import yaml
 from _pytest.mark.expression import Expression
 
 from remote_agents.adapters.agents.registry import (
+    adopt_templates,
     profiles_that_roll_over,
     provider_descriptors,
 )
@@ -438,7 +439,7 @@ def _compose(config, connection, paths: ProductionPaths) -> _Harness:
         terminal=runtime.terminal,
         enabled=backend.auto_rollover.read,
         project_paths=projects.paths,
-        rollable=profiles_that_roll_over(),
+        adopt_templates=adopt_templates(),
         notify=notify,
     )
     composition = ServiceComposition(

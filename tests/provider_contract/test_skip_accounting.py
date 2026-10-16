@@ -48,7 +48,11 @@ def test_the_skip_count_is_fully_accounted_for() -> None:
     # 9 -> 5 on 2026-10-10: every vertical declared its hook licence in `activity` (BL-050), so
     # four CONDITIONAL skips became driven contract tests. The live run, re-summed that day,
     # reported 6 SKIPPED lines from these 5 declarations, for the same opencode reason.
-    assert expected_skips() == 5, (
+    # 5 -> 7 on 2026-10-16: `adopt_template` joined the capability set, declared unsupported
+    # for opencode and cursor-agent, which have no ported handoff writer (Sub-plan 4 Task 1.1 of
+    # the codex-rollover plan). The live run, re-summed that day, reported 8 SKIPPED lines from
+    # these 7 declarations, for the same opencode reason.
+    assert expected_skips() == 7, (
         "the kit's skip budget changed; re-derive the gate's grep expectation from this "
         "number rather than editing either side alone"
     )

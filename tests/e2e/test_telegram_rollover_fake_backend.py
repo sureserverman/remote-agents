@@ -135,7 +135,7 @@ def _rig(tmp_path: Path, **host_fields):
     rollover_pass = RolloverPass(
         store,
         _Envelopes(host),
-        rollable=frozenset({CLAUDE}),
+        adopt_templates={CLAUDE: "/planning:executing-plans --adopt-handoff {handoff_id}"},
         sessions=host.list_sessions,
         handoff_root=lambda project: ROOT,
         enabled=on,

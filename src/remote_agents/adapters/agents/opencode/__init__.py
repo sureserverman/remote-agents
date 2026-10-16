@@ -88,4 +88,7 @@ def descriptor() -> ProviderDescriptor:
             dialogs=(r"△ Permission required", r"Allow once +Allow always +Reject"),
             draft_line=r"^[ \t]*┃",
         ),
+        # No handoff writer is ported to OpenCode (engineering-skills DEC-045), so nothing
+        # could adopt a handoff: its sessions never roll over (BL-123).
+        adopt_template=None,
     )

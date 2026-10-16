@@ -53,6 +53,11 @@ HANDOFF = "h-0123456789abcdef0123"
 PROJECT = ProjectId("remote-agents")
 CLAUDE = ProfileId("claude")
 ROOT = Path("/work/remote-agents")
+CODEX = ProfileId("codex")
+TEMPLATES = {
+    CLAUDE: "/planning:executing-plans --adopt-handoff {handoff_id}",
+    CODEX: "$planning:executing-plans --adopt-handoff {handoff_id}",
+}
 TEMPLATE = f"/planning:executing-plans --adopt-handoff {HANDOFF}"
 SENT = PromptDelivery(PromptOutcome.SENT)
 
@@ -185,7 +190,7 @@ class Rig:
             raise self.launch_error
         if self.launch_answers_nothing:
             return object()
-        record = _record(SessionId.new(), self.launched_state)
+        record = _record(SessionId.new(), self.launched_state, profile=command.profile_id)
         self.sessions[record.session_id] = record
         return _Launched(record)
 
@@ -233,7 +238,7 @@ class Rig:
         return RolloverPass(
             self.store,
             self.envelopes,
-            rollable=frozenset({CLAUDE}),
+            adopt_templates={CLAUDE: TEMPLATES[CLAUDE]},
             sessions=self.list_sessions,
             handoff_root=lambda project: ROOT if project == PROJECT else None,
             enabled=self.enabled,
@@ -330,6 +335,64 @@ async def test_the_typed_text_is_the_template_whatever_the_envelope_names(
 
     assert rig.sends == [(rig.successor, TEMPLATE)]
     assert rig.sends[0][1].encode() == TEMPLATE.encode()
+
+
+async def test_rollover_types_a_codex_successor_its_own_dollar_adopt_template(
+    tmp_path: Path,
+) -> None:
+    """Each successor is typed its own provider's template: Codex runs the skill as
+    `$planning:...`, and a `/` command typed into it would be refused (DEC-122)."""
+    rig = Rig(SQLiteRolloverStore(open_database(tmp_path / "sessions.sqlite3")))
+    rig.sessions[rig.predecessor] = _record(rig.predecessor, profile=CODEX)
+    rig._pass = _templated_pass(rig, TEMPLATES)
+    rig.ready()
+
+    await rig.run()
+
+    (command,) = rig.launches
+    assert command.profile_id == CODEX
+    assert rig.sends == [(rig.successor, f"$planning:executing-plans --adopt-handoff {HANDOFF}")]
+
+
+async def test_rollover_types_a_claude_successor_the_slash_form_beside_codex(
+    tmp_path: Path,
+) -> None:
+    rig = Rig(SQLiteRolloverStore(open_database(tmp_path / "sessions.sqlite3")))
+    rig._pass = _templated_pass(rig, TEMPLATES)
+    rig.ready()
+
+    await rig.run()
+
+    assert rig.sends == [(rig.successor, TEMPLATE)]
+
+
+async def test_rollover_leaves_a_profile_with_no_adopt_template_alone(tmp_path: Path) -> None:
+    rig = Rig(SQLiteRolloverStore(open_database(tmp_path / "sessions.sqlite3")))
+    rig.sessions[rig.predecessor] = _record(rig.predecessor, profile=ProfileId("opencode"))
+    rig._pass = _templated_pass(rig, TEMPLATES)
+    rig.ready()
+
+    await rig.run(passes=3)
+
+    assert rig.launches == [] and rig.sends == []
+
+
+def _templated_pass(rig: Rig, templates) -> RolloverPass:
+    return RolloverPass(
+        rig.store,
+        rig.envelopes,
+        adopt_templates=templates,
+        sessions=rig.list_sessions,
+        handoff_root=lambda project: ROOT if project == PROJECT else None,
+        enabled=rig.enabled,
+        idle=rig.idle,
+        launch=rig.launch,
+        send=rig.send,
+        graceful_stop=rig.graceful_stop,
+        notify=rig.told,
+        now=lambda: rig.clock[0],
+        sleep=rig.sleep,
+    )
 
 
 async def test_an_unknown_predecessor_pane_launches_nothing_and_is_given_up_in_time(
@@ -1015,7 +1078,7 @@ def _rooted_pass(rig: Rig, worktree_roots) -> RolloverPass:
     return RolloverPass(
         rig.store,
         rig.envelopes,
-        rollable=frozenset({CLAUDE}),
+        adopt_templates={CLAUDE: TEMPLATES[CLAUDE]},
         sessions=rig.list_sessions,
         handoff_root=lambda project: ROOT if project == PROJECT else None,
         worktree_roots=worktree_roots,
@@ -1129,6 +1192,24 @@ async def test_a_trust_held_successor_is_typed_once_only_after_it_is_trusted(rig
     assert (await rig.rollover()).state is RolloverState.COMPLETED
     assert rig.stops == [GracefulStopCommand(rig.predecessor, CLAUDE, only_if_idle=True)]
     assert len(rig.sends) == 1
+
+
+async def test_a_held_successor_whose_profile_lost_its_template_is_never_typed(rig: Rig) -> None:
+    """A restart after the vertical stopped declaring a template (a Codex revert, Stage 2's
+    rollback) types nothing it did not declare: the open rollover fails as not typed."""
+    rig.ready()
+    rig.launched_state = SessionState.UNTRUSTED
+    await rig.run()
+    assert (await rig.rollover()).state is RolloverState.SUCCESSOR_STARTING
+
+    rig._pass = _templated_pass(rig, {})
+    _trust(rig)
+    await rig.run(passes=3)
+
+    assert rig.sends == [] and rig.stops == []
+    rollover = await rig.rollover()
+    assert rollover.state is RolloverState.FAILED
+    assert (rollover.failure_code, rollover.failure_detail) == ("not-typed", "no-adopt-template")
 
 
 async def test_a_trust_held_successor_is_given_up_only_after_the_patience(rig: Rig) -> None:

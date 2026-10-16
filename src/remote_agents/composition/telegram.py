@@ -8,6 +8,7 @@ from functools import partial
 from pathlib import Path
 
 from remote_agents.adapters.agents.registry import (
+    adopt_templates,
     profile_composers,
     profile_glyphs,
     profile_limit_screens,
@@ -15,7 +16,6 @@ from remote_agents.adapters.agents.registry import (
     profile_reported_kinds,
     profile_trust_dialogs,
     profiles_keeping_a_draft,
-    profiles_that_roll_over,
     profiles_watched_by_title,
     profiles_with_finished_events,
     provider_descriptors,
@@ -342,7 +342,7 @@ def _private_boundary(
                 terminal=terminal,
                 enabled=backend.auto_rollover.read,
                 project_paths=projects.paths,
-                rollable=profiles_that_roll_over(),
+                adopt_templates=adopt_templates(),
                 notify=(
                     None
                     if boundary.rollover_notifier is None

@@ -370,6 +370,18 @@ class ProviderDescriptor:
     `composer`, because it carries strings and one pure function of a string.
     """
 
+    adopt_template: str | None = None
+    """What a rollover types into this provider's successor, with `{handoff_id}` its only
+    field, or None when its sessions do not roll over (DEC-115, DEC-122).
+
+    The planning plugin's plan executor is reached by a different spelling in each agent --
+    Claude Code's `/` command, Codex's `$` skill mention -- and a `/` typed into an agent
+    declaring no command menu is refused by the guarded send. So the template is the
+    vertical's fact, and the rollable set is every provider that declares one: a provider
+    without a ported handoff writer has nothing to adopt with, and its `None` keeps its
+    sessions out of every rollover. Typed, like `trust_dialog`, because it is one string.
+    """
+
     remote_control: object | None = None
     """The provider's host-level Remote Control, shaped like `ports.host_remote_control`'s
     protocol, or None when the provider has no host-level toggle.

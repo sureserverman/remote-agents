@@ -59,6 +59,7 @@ DECLARATIONS: dict[str, dict[str, tuple[Requirement, str]]] = {
         ),
         "composer": (SUPPORTED, "idle/busy/dialog patterns measured on 2.1.280, 2026-09-23"),
         "limit_screen": (SUPPORTED, "limit sentence read from the 2.1.284 bundle, 2026-09-28"),
+        "adopt_template": (SUPPORTED, "the coder-plugins planning plugin's `/` command"),
     },
     "codex": {
         "sessions": (SUPPORTED, "rollout catalogue via the app-server client"),
@@ -72,6 +73,10 @@ DECLARATIONS: dict[str, dict[str, tuple[Requirement, str]]] = {
         "trust_dialog": (SUPPORTED, "asks about folder trust, measured 2026-09-09 at +0.22s"),
         "composer": (SUPPORTED, "idle/busy/dialog patterns measured on 0.155.1, 2026-09-23"),
         "limit_screen": (SUPPORTED, "limit sentence read from the 0.158.0 binary, 2026-09-28"),
+        "adopt_template": (
+            SUPPORTED,
+            "planning@engineering-skills 0.2.1's `$` skill mention (engineering-skills DEC-045)",
+        ),
     },
     "opencode": {
         "sessions": (SUPPORTED, "opencode.db catalogue via the CLI runner"),
@@ -91,6 +96,10 @@ DECLARATIONS: dict[str, dict[str, tuple[Requirement, str]]] = {
             UNSUPPORTED,
             "no limit sentence measured for opencode; the registry declares None",
         ),
+        "adopt_template": (
+            UNSUPPORTED,
+            "no handoff writer ported to opencode (BL-123); the registry declares None",
+        ),
     },
     "cursor-agent": {
         "sessions": (SUPPORTED, "constant catalogue; workspace-blind by design"),
@@ -107,5 +116,9 @@ DECLARATIONS: dict[str, dict[str, tuple[Requirement, str]]] = {
         "trust_dialog": (SUPPORTED, "asks about folder trust, measured 2026-09-09 at +0.66s"),
         "composer": (SUPPORTED, "idle/busy/dialog patterns measured on 2026.09.18, 2026-09-23"),
         "limit_screen": (SUPPORTED, "limit screen captured on 2026.09.28, 2026-09-28"),
+        "adopt_template": (
+            UNSUPPORTED,
+            "no handoff writer ported to cursor (BL-123); the registry declares None",
+        ),
     },
 }

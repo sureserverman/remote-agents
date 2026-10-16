@@ -141,7 +141,7 @@ async def test_a_worktree_session_launches_resumes_and_rolls_over_in_its_worktre
         terminal=terminal,
         enabled=on,
         project_paths={PROJECT: project},
-        rollable=frozenset({PROFILE}),
+        adopt_templates={PROFILE: "/planning:executing-plans --adopt-handoff {handoff_id}"},
         worktrees=worktrees,
     )
     rollovers = SQLiteRolloverStore(connection)

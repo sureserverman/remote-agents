@@ -896,7 +896,7 @@ def build_rollover_pass(
     terminal: TmuxTerminal,
     enabled: Callable[[], Awaitable[bool]],
     project_paths: Mapping[ProjectId, Path],
-    rollable: frozenset[ProfileId],
+    adopt_templates: Mapping[ProfileId, str],
     notify: Callable[[RolloverReport], Awaitable[None]] | None = None,
     operation: Callable[[], AbstractAsyncContextManager[object]] = nullcontext,
     worktrees: WorktreeStore | None = None,
@@ -933,7 +933,7 @@ def build_rollover_pass(
     return RolloverPass(
         SQLiteRolloverStore(connection),
         FileHandoffEnvelopes(),
-        rollable=rollable,
+        adopt_templates=adopt_templates,
         sessions=sessions.list_sessions,
         handoff_root=lambda project: handoff_root(project_paths.get(project)),
         worktree_roots=worktree_roots,

@@ -593,14 +593,26 @@ def profile_reported_kinds(
     return {name: licence.reports for name, licence in _profile_licences(descriptors).items()}
 
 
-def profiles_that_roll_over() -> frozenset[ProfileId]:
-    """The profiles whose sessions may be rolled over (DEC-115): those whose agent runs the
-    planning plugin's plan executor, the one writer of handoff envelopes.
+def adopt_templates(
+    descriptors: tuple[ProviderDescriptor, ...] | None = None,
+) -> dict[ProfileId, str]:
+    """Each rollable profile's adopt template (DEC-115, DEC-122): what the rollover pass types
+    into a successor of that profile. A profile whose vertical declares none is absent."""
+    return {
+        descriptor.profile_id: descriptor.adopt_template
+        for descriptor in (provider_descriptors() if descriptors is None else descriptors)
+        if descriptor.adopt_template is not None
+    }
 
-    Claude Code's alone, because the plugin is a Claude Code plugin. Named through its
-    package's own provider record rather than a literal, as the rest of this module names it.
+
+def profiles_that_roll_over(
+    descriptors: tuple[ProviderDescriptor, ...] | None = None,
+) -> frozenset[ProfileId]:
+    """The profiles whose sessions may be rolled over (DEC-115): those whose vertical declares
+    an adopt template, because its agent runs a ported plan executor that writes handoff
+    envelopes. Derived from the templates, so the two can never disagree.
     """
-    return frozenset({ProfileId(_CLAUDE.name)})
+    return frozenset(adopt_templates(descriptors))
 
 
 def profile_glyphs(descriptors: tuple[ProviderDescriptor, ...] | None = None) -> dict[str, str]:
