@@ -3644,7 +3644,7 @@ class PrivateBotBoundary:
         resume: bool | None = None,
         cursor_limits: str | None = None,
         rollover: bool | None = None,
-        restart_resume: bool | None = None,
+        resume_interrupted: bool | None = None,
     ) -> RenderedMessage:
         """The rows about this machine, each reading its own source.
 
@@ -3814,7 +3814,7 @@ class PrivateBotBoundary:
         else:
             # The caller's read-back where it has one, for the limits-source row's reason.
             chosen_restart = (
-                await restart_switch.read() if restart_resume is None else restart_resume
+                await restart_switch.read() if resume_interrupted is None else resume_interrupted
             )
             rows.append(
                 (
@@ -4021,7 +4021,7 @@ class PrivateBotBoundary:
         intended = not await switch.read()
         await switch.write(intended)
         landed = await switch.read()
-        screen = await self._settings_screen(restart_resume=landed)
+        screen = await self._settings_screen(resume_interrupted=landed)
         if landed == intended:
             return _reply_arguments(screen)
         return _reply_arguments(
