@@ -27,6 +27,11 @@ the Stage 1 gate. Every task creates one empty file; there is nothing to design 
 
 ## Preflight
 
+Record each check's output in `evidence/preflight.txt`, and commit that file in the same commit
+that ticks these boxes: the record audit reads a ticked Preflight box with no evidence file in its
+commit as unproven. The decisions scan finds no register for this repository; that empty result is
+the expected one, not a failure.
+
 - [ ] Working tree clean: `git status --porcelain` prints nothing
 - [ ] Review scope declared — `review-scope: none — two tasks that each create one empty file`
 - [ ] Dispatch probe: skipped — the roster is `0 tasks` and the tier is below `standard`

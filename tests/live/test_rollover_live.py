@@ -95,7 +95,10 @@ same drive with a real `codex` and the managed `planning@engineering-skills` plu
   with every agent's folder, the owner's `~/.local/bin` among them, so a `PATH` set for the pane
   reaches the installed `remote-agents` first -- which, before this release, has no
   `session-id`, and the gate reads no request (the drill's first two runs, 2026-10-16). The
-  roster is the one this run's composition publishes.
+  roster is the one this run's composition publishes. That `HOME` also holds the planning
+  skills' portfolio config, naming an empty vault beside the repository, and an empty
+  registry: with none, the decisions scan failed at Preflight and Codex stopped to ask
+  (2026-10-16).
 - **Sandboxed, never asking.** `workspace-write`, with `/tmp` and `$TMPDIR` taken out of it
   (`exclude_slash_tmp`, `exclude_tmpdir_env_var`), and two writable roots: the repository's
   `.git` (the sandbox makes it read-only otherwise, and the plan commits) and a `tmp` folder
@@ -434,6 +437,18 @@ def _isolated_codex_home(root: Path, repo: Path, codex: Path, codex_home: Path) 
             f'exec {shlex.quote(str(codex))} "$@"',
             "remote-agents": f'exec {shlex.quote(sys.executable)} -m remote_agents "$@"',
         },
+    )
+    # The planning skills' portfolio files, under the temporary `HOME` the wrapper sets: an empty
+    # vault beside the repository and a registry naming nothing. Without them the decisions scan
+    # fails at Preflight (`vault_dir is not configured`) and the executor stops to ask.
+    vault = repo.parent / "vault"
+    (vault / "Portfolio").mkdir(parents=True)
+    (root / ".claude").mkdir()
+    (root / ".claude" / "portfolio-config.yaml").write_text(
+        f"version: 1\nvault_dir: {json.dumps(str(vault))}\n", encoding="utf-8"
+    )
+    (root / ".claude" / "projects-registry.yaml").write_text(
+        "version: 1\nprojects: []\n", encoding="utf-8"
     )
     os.symlink(Path.home() / ".codex" / "auth.json", codex_home / "auth.json")
     shutil.copytree(_CODEX_PLUGINS, codex_home / "plugins" / "cache" / "engineering-skills")
