@@ -1,0 +1,28 @@
+{
+ "baseline": {
+  "elapsed_s": 0.3,
+  "exit": 0,
+  "tail": "..                                                                       [100%]\n2 passed in 0.05s"
+ },
+ "break_patch": "--- a/src/remote_agents/adapters/agents/codex/__init__.py\n+++ b/src/remote_agents/adapters/agents/codex/__init__.py\n@@ -116,5 +116,5 @@\n         limit_screen=LIMIT_SCREEN,\n         # The managed `planning@engineering-skills` plugin, reached as a `$` skill mention:\n         # Codex declares no command menu, so a `/` command would be refused unsent.\n-        adopt_template=\"$planning:executing-plans --adopt-handoff {handoff_id}\",\n+        adopt_template=\"/planning:executing-plans --adopt-handoff {handoff_id}\",\n     )\n",
+ "build": null,
+ "created": "2026-10-16T20:16:34+00:00",
+ "fingerprint": "fe559e78a450138ee1bd2d605b7676304e67ff439c10307cf92cb4960f7073f1",
+ "index": 1,
+ "kind": "claim",
+ "named_break": null,
+ "no_build_reason": "python package, no build step",
+ "plan": "/mnt/vault/Portfolio/infra/remote-agents/plans/2026-10-15-codex-rollover-and-restart-resume-sub-04-codex-rollover-plan.md",
+ "red": {
+  "elapsed_s": 0.3,
+  "exit": 1,
+  "tail": "=================================== FAILURES ===================================\n_ test_skill_mention_capture_reads_as_composing_with_the_adopt_message_intact __\n\n    def test_skill_mention_capture_reads_as_composing_with_the_adopt_message_intact() -> None:\n        screen = (_PANES / \"codex\" / \"composed_skill_mention.txt\").read_text(encoding=\"utf-8\")\n    \n        assert classify(screen, descriptor()) is PaneState.COMPOSING\n>       assert composer_draft(screen, descriptor()) == _adopt_message()\nE       AssertionError: assert '$planning:ex...789abcdef0123' == '/planning:ex...789abcdef0123'\nE         \nE         - /planning:executing-plans --adopt-handoff h-0123456789abcdef0123\nE         ? ^\nE         + $planning:executing-plans --adopt-handoff h-0123456789abcdef0123\nE         ? ^\n\ntests/unit/adapters/tmux/test_composer_codex.py:37: AssertionError\n___ test_skill_mention_draft_is_submitted_by_the_guarded_send_with_one_enter ___\n\n    def test_skill_mention_draft_is_submitted_by_the_guarded_send_with_one_enter() -> None:\n        pane = PromptPane(\n            [\n                _screen(\"codex\", \"idle\"),\n                _screen(\"codex\", \"composed_skill_mention\"),\n                _screen(\"codex\", \"busy\"),\n            ],\n            profile=\"codex\",\n        )\n    \n        delivery = asyncio.run(_terminal(pane).send_prompt(pane.session_id, _adopt_message()))\n    \n>       assert delivery.outcome is PromptOutcome.SENT\nE       AssertionError: assert <PromptOutcome.REFUSED: 'refused'> is <PromptOutcome.SENT: 'sent'>\nE        +  where <PromptOutcome.REFUSED: 'refused'> = PromptDelivery(outcome=<PromptOutcome.REFUSED: 'refused'>, reason=<PromptReason.MENU: 'menu'>).outcome\nE        +  and   <PromptOutcome.SENT: 'sent'> = PromptOutcome.SENT\n\ntests/unit/adapters/tmux/test_composer_codex.py:52: AssertionError\n=========================== short test summary info ============================\nFAILED tests/unit/adapters/tmux/test_composer_codex.py::test_skill_mention_capture_reads_as_composing_with_the_adopt_message_intact\nFAILED tests/unit/adapters/tmux/test_composer_codex.py::test_skill_mention_draft_is_submitted_by_the_guarded_send_with_one_enter\n2 failed in 0.07s"
+ },
+ "schema": 2,
+ "task": "1.2",
+ "test": "uv run --locked pytest tests/unit/adapters/tmux/test_composer_codex.py -q -p no:randomly -k skill_mention",
+ "text": "`uv run --locked pytest tests/unit/adapters/tmux/test_composer_codex.py -q -p no:randomly -k skill_mention`",
+ "touched": [
+  "src/remote_agents/adapters/agents/codex/__init__.py"
+ ]
+}

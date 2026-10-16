@@ -1,0 +1,40 @@
+
+  >_ OpenAI Codex (v0.162.1)
+     /tmp/ra-capture-uqvt1nrm
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+› $planning:executing-plans --adopt-handoff h-0123456789abcdef0123
+
+  GPT-6.1-Sol default · /tmp/ra-capture-uqvt1nrm · 5h 100% left · weekly 86% left
+
