@@ -53,6 +53,7 @@ from remote_agents.application.worktrees import WorktreeService
 from remote_agents.composition.limits_source import (
     ConfigCursorLimitsSource,
     ConfigLimitsSource,
+    ConfigRestartResumeSetting,
     ConfigResumeSetting,
     ConfigRolloverSetting,
 )
@@ -523,6 +524,7 @@ def compose_backend(
         cursor_limits_source=ConfigCursorLimitsSource(config.path or paths.config_path),
         resume_after_limit=ConfigResumeSetting(config.path or paths.config_path),
         auto_rollover=ConfigRolloverSetting(config.path or paths.config_path),
+        resume_interrupted=ConfigRestartResumeSetting(config.path or paths.config_path),
         projects=_project_creator(config),
         conversations=_conversation_service(
             projects.paths, descriptors, worktree_folders=folders.worktree_folders

@@ -1119,3 +1119,114 @@ async def test_help_names_the_settings_screen_for_a_host_that_wired_only_auto_ro
     await only_rollover.help_command(chat.message_update("/help"), None)
 
     assert "Settings" in chat.bot_messages[0].text
+
+
+# --- The restart-resume row --------------------------------------------------------------------
+
+
+def _bot_with_restart_resume(setting: object | None) -> PrivateBotBoundary:
+    bot = _bot(None, None)
+    bot.backend = replace(bot.backend, resume_interrupted=setting)
+    return bot
+
+
+async def _press_restart_resume(bot: PrivateBotBoundary, screen) -> dict[str, object]:
+    from remote_agents.application.restart_resume_setting import RESTART_RESUME_TITLE
+
+    token = _token(screen, _row_label(screen, RESTART_RESUME_TITLE))
+    bot.callbacks.bind_pending(CHAT, 1)
+    state = bot.callbacks.resolve(token, owner_id=OWNER, chat_id=CHAT, message_id=1)
+    assert state is not None and state.action == "settings.resume_interrupted"
+    return await bot._reply_for(state.action, state.entity_id, token=token, message_id=1)
+
+
+async def test_the_restart_resume_row_reads_on_by_default() -> None:
+    from remote_agents.application.restart_resume_setting import (
+        RESTART_RESUME_LABELS,
+        RESTART_RESUME_TITLE,
+    )
+
+    setting = FakeResumeSetting(True)
+
+    screen = await _bot_with_restart_resume(setting)._settings_screen()
+
+    assert (
+        _row_label(screen, RESTART_RESUME_TITLE)
+        == f"{RESTART_RESUME_TITLE}: {RESTART_RESUME_LABELS[True]}"
+    )
+    assert setting.calls == ["read"], "drawing the screen reads; it must not write"
+
+
+async def test_pressing_the_restart_resume_row_flips_it_and_reads_it_back() -> None:
+    from remote_agents.application.restart_resume_setting import (
+        RESTART_RESUME_LABELS,
+        RESTART_RESUME_TITLE,
+    )
+
+    setting = FakeResumeSetting(True)
+    bot = _bot_with_restart_resume(setting)
+    screen = await bot._settings_screen()
+
+    result = await _press_restart_resume(bot, screen)
+
+    assert setting.value is False
+    assert setting.calls == ["read", "read", "write:False", "read"], setting.calls
+    labels = [
+        unmarked(unpadded(button.text))
+        for row in result["reply_markup"].inline_keyboard
+        for button in row
+    ]
+    assert f"{RESTART_RESUME_TITLE}: {RESTART_RESUME_LABELS[False]}" in labels
+
+
+async def test_a_redelivered_restart_resume_callback_does_not_flip_twice() -> None:
+    from remote_agents.application.restart_resume_setting import RESTART_RESUME_TITLE
+
+    setting = FakeResumeSetting(True)
+    bot = _bot_with_restart_resume(setting)
+    screen = await bot._settings_screen()
+    token = _token(screen, _row_label(screen, RESTART_RESUME_TITLE))
+    bot.callbacks.bind_pending(CHAT, 1)
+    state = bot.callbacks.resolve(token, owner_id=OWNER, chat_id=CHAT, message_id=1)
+    assert state is not None
+
+    await bot._reply_for(state.action, state.entity_id, token=token, message_id=1)
+    again = await bot._reply_for(state.action, state.entity_id, token=token, message_id=1)
+
+    assert setting.value is False, "the first press landed and the retry did not undo it"
+    assert "already run" in str(again["text"]), again["text"]
+
+
+async def test_a_refused_restart_resume_write_says_so() -> None:
+    from remote_agents.application.restart_resume_setting import (
+        RESTART_RESUME_LABELS,
+        RESTART_RESUME_TITLE,
+    )
+
+    setting = FakeResumeSetting(True, refuse=True)
+    bot = _bot_with_restart_resume(setting)
+    screen = await bot._settings_screen()
+
+    result = await _press_restart_resume(bot, screen)
+
+    said = str(result["text"])
+    assert RESTART_RESUME_TITLE in said and "still" in said, said
+    assert RESTART_RESUME_LABELS[True] in said, said
+
+
+async def test_an_unwired_restart_resume_setting_says_so_rather_than_hiding_the_row() -> None:
+    from remote_agents.application.restart_resume_setting import RESTART_RESUME_TITLE
+
+    screen = await _bot_with_restart_resume(None)._settings_screen()
+
+    assert f"{RESTART_RESUME_TITLE} is unavailable." in screen.text, screen.text
+    assert not any(label.startswith(RESTART_RESUME_TITLE) for label in _labels(screen))
+
+
+async def test_help_names_the_settings_screen_for_a_host_that_wired_only_restart_resume() -> None:
+    chat = FakeChat(chat_id=CHAT, owner_id=OWNER)
+    only_restart = _bot_with_restart_resume(FakeResumeSetting(True))
+
+    await only_restart.help_command(chat.message_update("/help"), None)
+
+    assert "Settings" in chat.bot_messages[0].text

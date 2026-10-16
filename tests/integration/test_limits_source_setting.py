@@ -249,3 +249,33 @@ async def test_a_refused_cursor_write_is_not_an_exception_and_reads_back_off(
 
     assert await setting.read() == "off", why
     assert path.read_text(encoding="utf-8") == body
+
+
+async def test_the_restart_resume_switch_defaults_on_and_round_trips_through_the_config(
+    tmp_path: Path,
+) -> None:
+    """Read afresh on every call, and written under `[restart]` by the one writer (DEC-088)."""
+    from remote_agents.composition.limits_source import ConfigRestartResumeSetting
+    from remote_agents.config import read_resume_interrupted
+
+    path = _config(tmp_path)
+    setting = ConfigRestartResumeSetting(path)
+
+    assert await setting.read() is True
+    await setting.write(False)
+    assert await setting.read() is False
+    assert read_resume_interrupted(path, when_unsure=True) is False
+    assert "[restart]\nresume_interrupted = false" in path.read_text(encoding="utf-8")
+    path.write_text(_CONFIG, encoding="utf-8")
+    assert await setting.read() is True, "a hand-edit underneath is read on the next call"
+
+
+async def test_a_refused_restart_resume_write_is_not_an_exception(tmp_path: Path) -> None:
+    from remote_agents.composition.limits_source import ConfigRestartResumeSetting
+
+    path = _config(tmp_path, "this is not toml [[[\n")
+    setting = ConfigRestartResumeSetting(path)
+
+    await setting.write(False)
+
+    assert path.read_text(encoding="utf-8") == "this is not toml [[[\n"

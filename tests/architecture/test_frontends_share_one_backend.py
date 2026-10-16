@@ -544,10 +544,13 @@ def test_the_backend_capability_set_is_read_from_the_dataclass() -> None:
     **Twenty-two since `git_summary` joined them** (session worktrees sub-plan 04, Task 5.1,
     BL-117), for `usage`'s reason: a per-session read bound at the root, which a host with no
     git boundary wires as `None`, and both surfaces then render no git line or token.
+
+    **Twenty-three since `resume_interrupted` joined them** (restart-resume sub-plan 01,
+    Task 3.1), for `auto_rollover`'s reason: both surfaces draw a Settings row for it.
     """
     fields = _backend_fields()
-    assert len(fields) == 22, (
-        f"`Backend` now declares {len(fields)} fields, not 22. That is fine — but it widens "
+    assert len(fields) == 23, (
+        f"`Backend` now declares {len(fields)} fields, not 23. That is fine — but it widens "
         "what Rule 2 forbids probing for, so confirm the new field is a capability an adapter "
         "should read as a declared field rather than discover."
     )

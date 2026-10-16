@@ -116,6 +116,10 @@ from remote_agents.application.remote_control_default import (
     next_remote_control_default,
     remote_control_default_line,
 )
+from remote_agents.application.restart_resume_setting import (
+    RESTART_RESUME_LABELS,
+    RESTART_RESUME_TITLE,
+)
 from remote_agents.application.resume_flow import RESUME_PAGE_SIZE, resume_capable
 from remote_agents.application.resume_setting import RESUME_LABELS, RESUME_TITLE
 from remote_agents.application.rollover_setting import ROLLOVER_LABELS, ROLLOVER_TITLE
@@ -1560,6 +1564,7 @@ class PrivateBotBoundary:
             or self.backend.cursor_limits_source is not None
             or self.backend.resume_after_limit is not None
             or self.backend.auto_rollover is not None
+            or self.backend.resume_interrupted is not None
         ):
             # Conditional on a row being wired, unlike the `/settings` menu entry, and the two
             # rules are different on purpose: the menu is a door that always has something
@@ -1870,6 +1875,8 @@ class PrivateBotBoundary:
             return await self._settings_resume_reply(token, message_id)
         if action == "settings.auto_rollover":
             return await self._settings_rollover_reply(token, message_id)
+        if action == "settings.resume_interrupted":
+            return await self._settings_restart_resume_reply(token, message_id)
         # Cursor's switch has three: the question, the write, and the way back from the
         # question. The write carries its direction, so a stale button never toggles.
         if action == "settings.cursor_limits.ask":
@@ -3637,6 +3644,7 @@ class PrivateBotBoundary:
         resume: bool | None = None,
         cursor_limits: str | None = None,
         rollover: bool | None = None,
+        restart_resume: bool | None = None,
     ) -> RenderedMessage:
         """The rows about this machine, each reading its own source.
 
@@ -3797,6 +3805,24 @@ class PrivateBotBoundary:
                         f"{_LIMITS_EMOJI} {ROLLOVER_TITLE}: {ROLLOVER_LABELS[chosen_rollover]}",
                         # `mutation=True`: a redelivered callback must not flip it back.
                         self._callback("settings.auto_rollover", "service", mutation=True),
+                    ),
+                )
+            )
+        restart_switch = self.backend.resume_interrupted
+        if restart_switch is None:
+            lines += ["", f"{escape(RESTART_RESUME_TITLE)} is unavailable."]
+        else:
+            # The caller's read-back where it has one, for the limits-source row's reason.
+            chosen_restart = (
+                await restart_switch.read() if restart_resume is None else restart_resume
+            )
+            rows.append(
+                (
+                    Button(
+                        f"{_LIMITS_EMOJI} {RESTART_RESUME_TITLE}: "
+                        f"{RESTART_RESUME_LABELS[chosen_restart]}",
+                        # `mutation=True`: a redelivered callback must not flip it back.
+                        self._callback("settings.resume_interrupted", "service", mutation=True),
                     ),
                 )
             )
@@ -3968,6 +3994,40 @@ class PrivateBotBoundary:
             self._message(
                 f"{escape(ROLLOVER_TITLE)} could not be changed; it is still "
                 f"<code>{escape(ROLLOVER_LABELS[landed])}</code>.",
+                screen.keyboard,
+            )
+        )
+
+    async def _settings_restart_resume_reply(
+        self, token: str, message_id: int
+    ) -> dict[str, object]:
+        """Flip the restart-resume switch by one press, then draw what the file says.
+
+        `_settings_rollover_reply`'s shape: flip from a fresh read, write, and detect a refused
+        write by the read-back.
+        """
+        switch = self.backend.resume_interrupted
+        if switch is None:
+            return _reply_arguments(
+                self._message(f"{escape(RESTART_RESUME_TITLE)} is unavailable.")
+            )
+        if not self.callbacks.claim_mutation(
+            token,
+            owner_id=self.owner_user_id,
+            chat_id=self.owner_chat_id,
+            message_id=message_id,
+        ):
+            return _reply_arguments(self._message("That action has already run."))
+        intended = not await switch.read()
+        await switch.write(intended)
+        landed = await switch.read()
+        screen = await self._settings_screen(restart_resume=landed)
+        if landed == intended:
+            return _reply_arguments(screen)
+        return _reply_arguments(
+            self._message(
+                f"{escape(RESTART_RESUME_TITLE)} could not be changed; it is still "
+                f"<code>{escape(RESTART_RESUME_LABELS[landed])}</code>.",
                 screen.keyboard,
             )
         )

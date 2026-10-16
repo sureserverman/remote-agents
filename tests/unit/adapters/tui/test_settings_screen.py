@@ -965,7 +965,7 @@ def _with_limits_source(context: TuiContext, port: object | None) -> TuiContext:
     return replace(context, backend=replace(context.backend, claude_limits_source=port))
 
 
-async def test_the_screen_draws_eight_rows_in_the_declared_order(tmp_path: Path) -> None:
+async def test_the_screen_draws_nine_rows_in_the_declared_order(tmp_path: Path) -> None:
     """The set of rows swept from the screen's own table, so the count is the declaration and
     not a numeral in a docstring that the list grows past."""
     from remote_agents.adapters.tui.screens import settings as module
@@ -980,9 +980,9 @@ async def test_the_screen_draws_eight_rows_in_the_declared_order(tmp_path: Path)
         choices = app.screen.query_one("#choices", OptionList)
         drawn = [choices.get_option_at_index(i).id for i in range(choices.option_count)]
 
-        assert len(module.SETTINGS_ROWS) == 8
+        assert len(module.SETTINGS_ROWS) == 9
         assert drawn == list(module.SETTINGS_ROWS)
-        assert len(set(drawn)) == 8, "every row needs a stable id of its own"
+        assert len(set(drawn)) == 9, "every row needs a stable id of its own"
 
 
 async def test_the_limits_source_row_reads_the_hop_on_a_default_config(tmp_path: Path) -> None:
@@ -1500,3 +1500,115 @@ def test_the_rollover_switch_is_a_declared_backend_field() -> None:
 
     assert "auto_rollover" in {field.name for field in fields(Backend)}
     assert Backend(sessions=object(), projects=object()).auto_rollover is None
+
+
+# --- The restart-resume row --------------------------------------------------------------------
+
+
+def _with_restart_resume(context: TuiContext, port: object | None) -> TuiContext:
+    return replace(context, backend=replace(context.backend, resume_interrupted=port))
+
+
+async def test_the_restart_resume_row_reads_on_by_default_and_a_press_flips_and_returns(
+    tmp_path: Path,
+) -> None:
+    from remote_agents.application.restart_resume_setting import (
+        RESTART_RESUME_LABELS,
+        RESTART_RESUME_TITLE,
+    )
+
+    port = FakeResumeSetting(True)
+    context = _with_restart_resume(_context(preferences_path=tmp_path / "preferences.json"), port)
+    app = RemoteAgentsTui(context)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await _open_settings(app, pilot)
+        title = RESTART_RESUME_TITLE
+        assert _row(app, title) == f"{title} · {RESTART_RESUME_LABELS[True]}"
+
+        await _press_row(app, pilot, title)
+        assert port.writes == [False]
+        assert _row(app, title) == f"{title} · {RESTART_RESUME_LABELS[False]}"
+
+        await _press_row(app, pilot, title)
+        assert port.writes == [False, True]
+        assert _row(app, title).endswith(RESTART_RESUME_LABELS[True])
+
+
+async def test_the_restart_resume_row_writes_resume_interrupted_to_the_config_file(
+    tmp_path: Path,
+) -> None:
+    """Through the real writer: a fresh config draws on, and one press stores `false`."""
+    from remote_agents.application.restart_resume_setting import (
+        RESTART_RESUME_LABELS,
+        RESTART_RESUME_TITLE,
+    )
+    from remote_agents.composition.limits_source import ConfigRestartResumeSetting
+    from remote_agents.config import read_resume_interrupted
+
+    config = tmp_path / "config.toml"
+    config.write_text('[paths]\ndev_root = "/tmp"\n\n[limits]\nmax_label_length = 40\n')
+    context = _with_restart_resume(
+        _context(preferences_path=tmp_path / "preferences.json"),
+        ConfigRestartResumeSetting(config),
+    )
+    app = RemoteAgentsTui(context)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await _open_settings(app, pilot)
+        assert _row(app, RESTART_RESUME_TITLE).endswith(RESTART_RESUME_LABELS[True])
+
+        await _press_row(app, pilot, RESTART_RESUME_TITLE)
+        assert read_resume_interrupted(config) is False
+        assert "resume_interrupted = false" in config.read_text(encoding="utf-8")
+        assert _row(app, RESTART_RESUME_TITLE).endswith(RESTART_RESUME_LABELS[False])
+
+        await _press_row(app, pilot, RESTART_RESUME_TITLE)
+        assert read_resume_interrupted(config) is True
+
+
+async def test_a_refused_restart_resume_write_reads_as_a_refusal(tmp_path: Path) -> None:
+    from remote_agents.application.restart_resume_setting import (
+        RESTART_RESUME_LABELS,
+        RESTART_RESUME_TITLE,
+    )
+
+    port = FakeResumeSetting(True, refuse=True)
+    context = _with_restart_resume(_context(preferences_path=tmp_path / "preferences.json"), port)
+    app = RemoteAgentsTui(context)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await _open_settings(app, pilot)
+
+        await _press_row(app, pilot, RESTART_RESUME_TITLE)
+
+        assert port.writes == [False]
+        assert _row(app, RESTART_RESUME_TITLE).endswith(RESTART_RESUME_LABELS[True])
+        said = " ".join(announcements(app))
+        assert RESTART_RESUME_TITLE in said and "still" in said.lower(), said
+
+
+async def test_an_unwired_restart_resume_row_says_unavailable_and_its_press_does_nothing(
+    tmp_path: Path,
+) -> None:
+    from remote_agents.application.remote_control_default import UNAVAILABLE
+    from remote_agents.application.restart_resume_setting import RESTART_RESUME_TITLE
+
+    context = _with_restart_resume(_context(preferences_path=tmp_path / "preferences.json"), None)
+    app = RemoteAgentsTui(context)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await _open_settings(app, pilot)
+
+        assert _row(app, RESTART_RESUME_TITLE).endswith(UNAVAILABLE)
+        await _press_row(app, pilot, RESTART_RESUME_TITLE)
+        assert _row(app, RESTART_RESUME_TITLE).endswith(UNAVAILABLE)
+
+
+def test_the_restart_resume_switch_is_a_declared_backend_field() -> None:
+    from dataclasses import fields
+
+    from remote_agents.application.backend import Backend
+
+    assert "resume_interrupted" in {field.name for field in fields(Backend)}
+    assert Backend(sessions=object(), projects=object()).resume_interrupted is None

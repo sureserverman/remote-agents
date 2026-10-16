@@ -39,6 +39,7 @@ from remote_agents.config import (
     read_claude_limits_source,
     read_cursor_limits_source,
     read_resume_after_limit,
+    read_resume_interrupted,
     write_config_key,
     write_limits_key,
 )
@@ -169,3 +170,33 @@ class ConfigRolloverSetting:
             _LOG.warning("the rollover switch could not be written to %s: %s", self._path, error)
         except Exception:
             _LOG.debug("the rollover switch could not be written", exc_info=True)
+
+
+class ConfigRestartResumeSetting:
+    """`ports.restart_resume_setting.RestartResumeSettingPort` over the operator's `config.toml`.
+
+    `ConfigRolloverSetting`'s twin for `restart.resume_interrupted`, in this module for its
+    reason, and through the same one writer. Read afresh on every call, since the bot and the
+    terminal are two writers over one file. It is the Settings rows' read; the startup pass
+    reads the switch itself, stricter (`composition.telegram`).
+    """
+
+    _TABLE = "restart"
+    _KEY = "resume_interrupted"
+
+    def __init__(self, path: Path) -> None:
+        self._path = path
+
+    async def read(self) -> bool:
+        return await asyncio.to_thread(read_resume_interrupted, self._path)
+
+    async def write(self, value: bool) -> None:
+        """Record the choice, or log why it could not be recorded. Never raises."""
+        try:
+            await asyncio.to_thread(write_config_key, self._path, self._TABLE, self._KEY, value)
+        except ConfigError as error:
+            _LOG.warning(
+                "the restart-resume switch could not be written to %s: %s", self._path, error
+            )
+        except Exception:
+            _LOG.debug("the restart-resume switch could not be written", exc_info=True)

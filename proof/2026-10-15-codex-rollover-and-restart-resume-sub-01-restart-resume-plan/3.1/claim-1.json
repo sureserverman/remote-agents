@@ -1,0 +1,28 @@
+{
+ "baseline": {
+  "elapsed_s": 6.4,
+  "exit": 0,
+  "tail": "..............................................................           [100%]\n62 passed, 149 deselected in 5.99s"
+ },
+ "break_patch": "--- a/src/remote_agents/composition/limits_source.py\n+++ b/src/remote_agents/composition/limits_source.py\n@@ -181,7 +181,7 @@\n     reads the switch itself, stricter (`composition.telegram`).\n     \"\"\"\n \n-    _TABLE = \"restart\"\n+    _TABLE = \"limits\"\n     _KEY = \"resume_interrupted\"\n \n     def __init__(self, path: Path) -> None:\n",
+ "build": null,
+ "created": "2026-10-16T00:41:34+00:00",
+ "fingerprint": "2d799a4c48f49dea127d1d9825cf0c48995361b315d42f73fe94ab26d9d166ad",
+ "index": 1,
+ "kind": "claim",
+ "named_break": null,
+ "no_build_reason": "python tests only",
+ "plan": "/mnt/vault/Portfolio/infra/remote-agents/plans/2026-10-15-codex-rollover-and-restart-resume-sub-01-restart-resume-plan.md",
+ "red": {
+  "elapsed_s": 6.3,
+  "exit": 1,
+  "tail": "        await boundary.settings_command(chat.message_update(\"/settings\"), None)\n        anchor = chat.bot_messages[0].message_id\n        title = RESTART_RESUME_TITLE\n        assert f\"{title}: {RESTART_RESUME_LABELS[True]}\" in _labels(chat.messages[anchor])\n    \n        await boundary.callback(chat.press(_row(chat.messages[anchor], title)), None)\n>       assert read_resume_interrupted(config) is False\nE       AssertionError: assert True is False\nE        +  where True = <function read_resume_interrupted at 0x72679cf1f060>(PosixPath('/tmp/pytest-of-user/pytest-167/test_the_owner_switches_restar0/config.toml'))\n\ntests/e2e/test_telegram_settings_fake_backend.py:324: AssertionError\n------------------------------ Captured log call -------------------------------\nWARNING  remote_agents.composition.limits_source:limits_source.py:198 the restart-resume switch could not be written to /tmp/pytest-of-user/pytest-167/test_the_owner_switches_restar0/config.toml: limits.resume_interrupted is not a key this schema writes\n_ test_the_restart_resume_switch_defaults_on_and_round_trips_through_the_config _\n\ntmp_path = PosixPath('/tmp/pytest-of-user/pytest-167/test_the_restart_resume_switch0')\n\n    async def test_the_restart_resume_switch_defaults_on_and_round_trips_through_the_config(\n        tmp_path: Path,\n    ) -> None:\n        \"\"\"Read afresh on every call, and written under `[restart]` by the one writer (DEC-088).\"\"\"\n        from remote_agents.composition.limits_source import ConfigRestartResumeSetting\n        from remote_agents.config import read_resume_interrupted\n    \n        path = _config(tmp_path)\n        setting = ConfigRestartResumeSetting(path)\n    \n        assert await setting.read() is True\n        await setting.write(False)\n>       assert await setting.read() is False\nE       assert True is False\n\ntests/integration/test_limits_source_setting.py:266: AssertionError\n------------------------------ Captured log call -------------------------------\nWARNING  remote_agents.composition.limits_source:limits_source.py:198 the restart-resume switch could not be written to /tmp/pytest-of-user/pytest-167/test_the_restart_resume_switch0/config.toml: limits.resume_interrupted is not a key this schema writes\n=========================== short test summary info ============================\nFAILED tests/unit/adapters/tui/test_settings_screen.py::test_the_restart_resume_row_writes_resume_interrupted_to_the_config_file\nFAILED tests/e2e/test_telegram_settings_fake_backend.py::test_the_owner_switches_restart_resume_off_and_back_on_through_the_chat\nFAILED tests/integration/test_limits_source_setting.py::test_the_restart_resume_switch_defaults_on_and_round_trips_through_the_config\n3 failed, 59 passed, 149 deselected in 5.86s"
+ },
+ "schema": 2,
+ "task": "3.1",
+ "test": "uv run --locked pytest tests/unit/adapters/tui/test_settings_screen.py tests/e2e/test_telegram_settings_fake_backend.py tests/contract/adapters/telegram/test_settings_actions.py tests/integration/test_limits_source_setting.py tests/architecture/test_frontends_share_one_backend.py -q -p no:randomly -k \"resume_interrupted or restart_resume or one_backend\"",
+ "text": "`uv run --locked pytest tests/unit/adapters/tui/test_settings_screen.py tests/e2e/test_telegram_settings_fake_backend.py tests/contract/adapters/telegram/test_settings_actions.py tests/integration/test_limits_source_setting.py tests/architecture/test_frontends_share_one_backend.py -q -p no:randomly -k \"resume_interrupted or restart_resume or one_backend\"`. Both rows draw \"on\" for a fresh config, flip to \"off\", and the file then holds `resume_interrupted = false`",
+ "touched": [
+  "src/remote_agents/composition/limits_source.py"
+ ]
+}

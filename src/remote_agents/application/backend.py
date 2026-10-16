@@ -267,6 +267,15 @@ class Backend:
     (DEC-061/067). Typed `object` for the reason `sessions` is.
     """
 
+    resume_interrupted: object | None = None
+    """Whether interrupted sessions are resumed after a restart, a `ports.restart_resume_setting`.
+
+    `auto_rollover`'s sibling: a switch in the operator's `config.toml` that decides what this
+    service does, on by default. The startup pass reads the file itself rather than this
+    field. Optional for the same reason, and its absence renders unavailable from `is None`
+    (DEC-061/067). Typed `object` for the reason `sessions` is.
+    """
+
     state_events: object | None = None
     """The store-change source (`application.store_watch.StoreWatch`), a `ports.state_events`.
 

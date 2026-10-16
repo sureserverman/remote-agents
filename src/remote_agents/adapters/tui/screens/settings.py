@@ -2,8 +2,9 @@
 
 Two groups of rows, listed in `SETTINGS_ROWS`. The first group has the **machine** as its
 subject -- whether each provider's next session starts remote-controlled, where Claude's
-account limits are read from, whether Cursor's are read at all, and whether a limit-stopped
-session is resumed -- and the last two rows have this **terminal** as theirs: its theme and
+account limits are read from, whether Cursor's are read at all, whether a limit-stopped
+session is resumed, and whether an interrupted one is resumed after a restart -- and the last
+two rows have this **terminal** as theirs: its theme and
 the order it lists projects in. Nothing here is about a session or a launch, which is what
 makes it a screen and not a line on one of the panes.
 
@@ -116,6 +117,10 @@ from remote_agents.application.remote_control_default import (
     remote_control_default_line,
     remote_control_default_word,
 )
+from remote_agents.application.restart_resume_setting import (
+    RESTART_RESUME_LABELS,
+    RESTART_RESUME_TITLE,
+)
 from remote_agents.application.resume_setting import RESUME_LABELS, RESUME_TITLE
 from remote_agents.application.rollover_setting import ROLLOVER_LABELS, ROLLOVER_TITLE
 from remote_agents.domain.remote_control import HostRemoteControlStatus, RemoteControlDefault
@@ -131,6 +136,7 @@ _LIMITS_SOURCE_ROW = "settings:claude-limits-source"
 _CURSOR_LIMITS_ROW = "settings:cursor-limits-source"
 _RESUME_ROW = "settings:resume-after-limit"
 _ROLLOVER_ROW = "settings:auto-rollover"
+_RESTART_RESUME_ROW = "settings:resume-interrupted"
 _THEME_ROW = "settings:theme"
 _ORDER_ROW = "settings:project-order"
 
@@ -148,6 +154,7 @@ SETTINGS_ROWS = (
     _CURSOR_LIMITS_ROW,
     _RESUME_ROW,
     _ROLLOVER_ROW,
+    _RESTART_RESUME_ROW,
     _THEME_ROW,
     _ORDER_ROW,
 )
@@ -194,6 +201,13 @@ def _rollover_line(value: bool | None) -> str:
     if value is None:
         return f"{ROLLOVER_TITLE} · {UNAVAILABLE}"
     return f"{ROLLOVER_TITLE} · {ROLLOVER_LABELS[value]}"
+
+
+def _restart_resume_line(value: bool | None) -> str:
+    """The restart-resume row, or *unavailable* for a composition that wired no switch."""
+    if value is None:
+        return f"{RESTART_RESUME_TITLE} · {UNAVAILABLE}"
+    return f"{RESTART_RESUME_TITLE} · {RESTART_RESUME_LABELS[value]}"
 
 
 SETTINGS_INSTRUCTION = "Press enter on a row to change it."
@@ -245,6 +259,8 @@ class SettingsScreen(ChoiceScreen):
         self._resume: bool | None = None
         #: The stored auto-rollover switch, or `None` for a composition that wired none.
         self._rollover: bool | None = None
+        #: The stored restart-resume switch, or `None` for a composition that wired none.
+        self._restart_resume: bool | None = None
         #: The two terminal preferences, as last read. Plain strings rather than `None`-able
         #: readings: `read_theme` and `read_project_order` are total and always answer one of
         #: the values this surface knows, so there is no absence for these two rows to render.
@@ -342,6 +358,14 @@ class SettingsScreen(ChoiceScreen):
                 self._rollover = await rollover.read()
             except Exception:
                 _LOG.exception("the rollover switch could not be read")
+        restart_resume = self.services.backend.resume_interrupted
+        if restart_resume is None:
+            self._restart_resume = None
+        else:
+            try:
+                self._restart_resume = await restart_resume.read()
+            except Exception:
+                _LOG.exception("the restart-resume switch could not be read")
         self._read_preferences()
 
     def _draw_settings_rows(self) -> None:
@@ -365,6 +389,7 @@ class SettingsScreen(ChoiceScreen):
                 (_CURSOR_LIMITS_ROW, _cursor_limits_line(self._cursor_limits)),
                 (_RESUME_ROW, _resume_line(self._resume)),
                 (_ROLLOVER_ROW, _rollover_line(self._rollover)),
+                (_RESTART_RESUME_ROW, _restart_resume_line(self._restart_resume)),
                 (_THEME_ROW, f"{THEME_TITLE} · {THEME_LABELS.get(self._theme, self._theme)}"),
                 (
                     _ORDER_ROW,
@@ -416,6 +441,9 @@ class SettingsScreen(ChoiceScreen):
             return
         if key == _ROLLOVER_ROW:
             await self.flip_rollover()
+            return
+        if key == _RESTART_RESUME_ROW:
+            await self.flip_restart_resume()
             return
         if key == _THEME_ROW:
             await self.advance_theme()
@@ -576,6 +604,33 @@ class SettingsScreen(ChoiceScreen):
                 self.set_status(f"{ROLLOVER_TITLE} is now {word}.")
             else:
                 self.announce(f"{ROLLOVER_TITLE} could not be changed; it is still {word}.")
+
+    async def flip_restart_resume(self) -> None:
+        """One press: read, flip, write, read back, say what it now is -- `flip_resume`'s shape."""
+        port = self.services.backend.resume_interrupted
+        if port is None or self.tui.busy:
+            return
+        async with self.holding_the_guard():
+            try:
+                async with self.awaiting(f"Changing {RESTART_RESUME_TITLE}…"):
+                    intended = not await port.read()
+                    await port.write(intended)
+                    self._restart_resume = await port.read()
+            except Exception as error:
+                _LOG.exception("the restart-resume switch could not be changed")
+                self.announce(
+                    f"{RESTART_RESUME_TITLE} could not be confirmed: {error} "
+                    "Reopen Settings to see what it says."
+                )
+                return
+            if not self.showing:
+                return
+            self._draw_settings_rows()
+            word = RESTART_RESUME_LABELS[self._restart_resume]
+            if self._restart_resume == intended:
+                self.set_status(f"{RESTART_RESUME_TITLE} is now {word}.")
+            else:
+                self.announce(f"{RESTART_RESUME_TITLE} could not be changed; it is still {word}.")
 
     async def advance_theme(self) -> None:
         """One press: move to the other relay theme, and say whether it will be remembered.

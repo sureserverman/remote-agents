@@ -294,3 +294,37 @@ async def test_the_owner_switches_auto_rollover_on_and_back_off_through_the_chat
     await boundary.callback(chat.press(_row(chat.messages[anchor], ROLLOVER_TITLE)), None)
     assert read_auto_rollover(config) is False
     assert len(chat.bot_messages) == 1, chat.transcript()
+
+
+async def test_the_owner_switches_restart_resume_off_and_back_on_through_the_chat(
+    tmp_path,
+) -> None:
+    """Through the real config writer: a fresh config draws on, and a press stores `false`."""
+    from remote_agents.application.restart_resume_setting import (
+        RESTART_RESUME_LABELS,
+        RESTART_RESUME_TITLE,
+    )
+    from remote_agents.composition.limits_source import ConfigRestartResumeSetting
+    from remote_agents.config import read_resume_interrupted
+
+    config = tmp_path / "config.toml"
+    config.write_text('[paths]\ndev_root = "/tmp"\n\n[limits]\nmax_label_length = 40\n')
+    boundary = _boundary(None, None)
+    boundary.backend = replace(
+        boundary.backend, resume_interrupted=ConfigRestartResumeSetting(config)
+    )
+    chat = FakeChat()
+
+    await boundary.settings_command(chat.message_update("/settings"), None)
+    anchor = chat.bot_messages[0].message_id
+    title = RESTART_RESUME_TITLE
+    assert f"{title}: {RESTART_RESUME_LABELS[True]}" in _labels(chat.messages[anchor])
+
+    await boundary.callback(chat.press(_row(chat.messages[anchor], title)), None)
+    assert read_resume_interrupted(config) is False
+    assert "[restart]\nresume_interrupted = false" in config.read_text(encoding="utf-8")
+    assert f"{title}: {RESTART_RESUME_LABELS[False]}" in _labels(chat.messages[anchor])
+
+    await boundary.callback(chat.press(_row(chat.messages[anchor], title)), None)
+    assert read_resume_interrupted(config) is True
+    assert len(chat.bot_messages) == 1, chat.transcript()

@@ -272,6 +272,9 @@ def test_no_further_capability_leaked_into_the_context() -> None:
         # Workflow-rollover sub-plan 2 Task 2.1: the auto-rollover switch, a Settings row on
         # both surfaces for `resume_after_limit`'s reason -- it decides what this service does.
         "auto_rollover",
+        # Restart-resume sub-plan 1 Task 3.1: the restart-resume switch, a Settings row on both
+        # surfaces for `auto_rollover`'s reason -- it decides what this service does.
+        "resume_interrupted",
         # Scheduled sessions, 2026-10-02: both surfaces list and manage schedules through the
         # one book, so it is a backend capability rather than a surface's own.
         "schedules",
