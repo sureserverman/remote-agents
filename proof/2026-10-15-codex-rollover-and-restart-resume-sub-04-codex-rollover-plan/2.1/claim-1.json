@@ -1,0 +1,28 @@
+{
+ "baseline": {
+  "elapsed_s": 5.9,
+  "exit": 0,
+  "tail": "..                                                                       [100%]\n2 passed, 4 deselected in 5.60s"
+ },
+ "break_patch": "diff --git a/src/remote_agents/adapters/agents/codex/__init__.py b/src/remote_agents/adapters/agents/codex/__init__.py\nindex a3fa4c58..aa84082d 100644\n--- a/src/remote_agents/adapters/agents/codex/__init__.py\n+++ b/src/remote_agents/adapters/agents/codex/__init__.py\n@@ -116,5 +116,5 @@ def descriptor() -> ProviderDescriptor:\n         limit_screen=LIMIT_SCREEN,\n         # The managed `planning@engineering-skills` plugin, reached as a `$` skill mention:\n         # Codex declares no command menu, so a `/` command would be refused unsent.\n-        adopt_template=\"$planning:executing-plans --adopt-handoff {handoff_id}\",\n+        adopt_template=\"/planning:executing-plans --adopt-handoff {handoff_id}\",\n     )\n",
+ "build": null,
+ "created": "2026-10-16T20:37:39+00:00",
+ "fingerprint": "cab8aef70e132172ec412a1034dcc8c5b210d3e3533c508e0c9763df2c07c627",
+ "index": 1,
+ "kind": "claim",
+ "named_break": null,
+ "no_build_reason": "python package, no build",
+ "plan": "/mnt/vault/Portfolio/infra/remote-agents/plans/2026-10-15-codex-rollover-and-restart-resume-sub-04-codex-rollover-plan.md",
+ "red": {
+  "elapsed_s": 15.1,
+  "exit": 1,
+  "tail": "        rollovers = SQLiteRolloverStore(connection)\n        launched: list[SessionId] = []\n        try:\n            predecessor = (await sessions.launch(LaunchCommand(PROJECT, CODEX, \"pred\"))).record\n            launched.append(predecessor.session_id)\n            await _type(terminal, predecessor.session_id, \"handoff\")\n    \n            want = RolloverState.COMPLETED if mode == \"accept\" else RolloverState.FAILED\n            row = None\n            for _ in range(60):\n                await rollover_pass.run_once()\n                launched.extend(\n                    record.session_id\n                    for record in await sessions.list_sessions()\n                    if record.session_id not in launched\n                )\n                rows = rollovers._select(\"1 = 1\", ())\n                row = rows[0] if rows else None\n                if row is not None and row.state is want:\n                    break\n                await asyncio.sleep(0.2)\n    \n            assert row is not None and row.state is want, (\n                None if row is None else (row.state, row.failure_code, row.failure_detail)\n            )\n            assert len(launched) == 2, \"exactly one successor\"\n            successor = row.successor_session_id\n            assert successor is not None and successor != predecessor.session_id\n            records = {record.session_id: record for record in await sessions.list_sessions()}\n            assert records[successor].profile_id == CODEX, \"a Codex successor\"\n            screen = await terminal.capture(successor)\n>           assert f\"GOT: {CODEX_TEMPLATE}\" in screen, \"the $ template was typed and submitted\"\nE           AssertionError: the $ template was typed and submitted\nE           assert 'GOT: $planning:executing-plans --adopt-handoff h-0123456789abcdef0123' in 'READY\\n\\n\u203a Ask Codex to do anything\\n  fake-model default \u00b7 opaque-editor\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n'\n\ntests/e2e/test_terminal_rollover.py:635: AssertionError\n=========================== short test summary info ============================\nFAILED tests/e2e/test_terminal_rollover.py::test_a_codex_ready_rolls_over_to_a_codex_successor_typed_the_dollar_template[accept]\nFAILED tests/e2e/test_terminal_rollover.py::test_a_codex_ready_rolls_over_to_a_codex_successor_typed_the_dollar_template[id-mismatch]\n2 failed, 4 deselected in 14.83s"
+ },
+ "schema": 2,
+ "task": "2.1",
+ "test": "uv run --locked pytest tests/e2e/test_terminal_rollover.py -q -p no:randomly -k codex",
+ "text": "`uv run --locked pytest tests/e2e/test_terminal_rollover.py -q -p no:randomly -k codex`",
+ "touched": [
+  "src/remote_agents/adapters/agents/codex/__init__.py"
+ ]
+}

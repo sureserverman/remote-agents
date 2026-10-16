@@ -21,6 +21,7 @@ from uuid import uuid4
 
 import pytest
 
+from remote_agents.adapters.agents.codex import descriptor as codex_descriptor
 from remote_agents.adapters.agents.registry import adopt_templates
 from remote_agents.adapters.sqlite.database import open_database
 from remote_agents.adapters.sqlite.rollover_store import SQLiteRolloverStore
@@ -31,6 +32,7 @@ from remote_agents.application.commands import AnswerTrustCommand, LaunchCommand
 from remote_agents.application.services import SessionService
 from remote_agents.composition.service import build_rollover_pass
 from remote_agents.domain.models import ProfileId, ProjectId, SessionId, SessionState
+from remote_agents.domain.profiles import closed_profiles
 from remote_agents.domain.rollover import RolloverState
 from remote_agents.ports.provider_descriptor import (
     ComposerScreen,
@@ -462,6 +464,191 @@ async def test_a_trust_held_successor_is_typed_once_after_the_owner_trusts_it(
         assert states[predecessor.session_id] is SessionState.ENDED
         assert await rollovers.continued_as(predecessor.session_id) == successor
         assert len(launched) == 2, "still exactly one successor"
+    finally:
+        for session_id in launched:
+            try:
+                await gateway.destroy(session_id)
+            except RuntimeError:
+                pass
+        killing = await asyncio.create_subprocess_exec(
+            "tmux", "-L", socket, "kill-server", stderr=asyncio.subprocess.DEVNULL
+        )
+        await killing.wait()
+        connection.close()
+
+
+CODEX = ProfileId("codex")
+#: The managed Codex planning plugin's own spelling (`ports/codex/skills/executing-plans/SKILL.md`
+#: in engineering-skills), which the fake answers to -- kept apart from the Codex vertical's
+#: `adopt_template`, as `TEMPLATE` is from Claude's, so a wrong vertical string is a rollover
+#: that never adopts.
+CODEX_TEMPLATE = f"$planning:executing-plans --adopt-handoff {HANDOFF}"
+
+#: A fake Codex: it draws Codex's composer -- the `› ` row, its placeholder while empty, the
+#: model line under it -- and redraws the whole screen on every key, as a TUI does, so the
+#: production Codex `ComposerScreen` reads it. Raw mode, so `Enter` arrives as `\r` and the
+#: draft is read back exactly as typed. `/exit` leaves a mark in the exits folder named for the
+#: session, so a stop is shown to have arrived as the curated keys, not a kill.
+_CODEX_AGENT = """
+import json, os, sys, time, tty
+from pathlib import Path
+
+HANDOFF, MODE, FAIL_CODE, EXITS = sys.argv[1], Path(sys.argv[2]), sys.argv[3], Path(sys.argv[4])
+me = os.environ["REMOTE_AGENTS_SESSION_ID"]
+handoffs = Path.cwd() / ".claude" / "handoffs"
+log = ["READY"]
+
+
+def envelope(event, suffix, **extra):
+    handoffs.mkdir(parents=True, exist_ok=True)
+    body = {
+        "protocol": "remote-agents-handoff",
+        "version": 1,
+        "event": event,
+        "handoff_id": HANDOFF,
+        "managed_session_id": me,
+        "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "plan": "/work/plan.md",
+        **extra,
+    }
+    (handoffs / f"{HANDOFF}.{suffix}.json").write_text(json.dumps(body))
+
+
+def draw(draft):
+    screen = "\\r\\n".join(log[-12:]) + "\\r\\n\\r\\n"
+    screen += "› " + (draft or "Ask Codex to do anything") + "\\r\\n"
+    screen += "  fake-model default · " + Path.cwd().name
+    os.write(1, ("\\033[2J\\033[H" + screen).encode())
+
+
+tty.setraw(0)
+draft = ""
+draw(draft)
+while True:
+    data = os.read(0, 1024).decode(errors="replace")
+    if not data:
+        break
+    for key in data:
+        if key in "\\r\\n":
+            line, draft = draft, ""
+            log.append("GOT: " + line)
+            if line == "handoff":
+                envelope("HANDOFF_READY", "ready")
+            elif line == "$planning:executing-plans --adopt-handoff " + HANDOFF:
+                if MODE.read_text() == "accept":
+                    envelope("HANDOFF_ACCEPTED", "accepted")
+                else:
+                    envelope("HANDOFF_FAILED", "failed", failure_code=FAIL_CODE)
+            elif line == "/exit":
+                (EXITS / me).write_text("exit")
+                sys.exit(0)
+        elif key == "\\x7f":
+            draft = draft[:-1]
+        elif key.isprintable():
+            draft += key
+    draw(draft)
+"""
+
+
+@pytest.mark.parametrize("mode", ["accept", "id-mismatch"])
+async def test_a_codex_ready_rolls_over_to_a_codex_successor_typed_the_dollar_template(
+    tmp_path: Path, mode: str
+) -> None:
+    """BL-123 for Codex: a fake Codex writes `ready`; the pass launches one Codex successor and
+    types it the Codex vertical's `$` adopt message through the production Codex composer rules;
+    on `accepted` the predecessor gets the curated `/exit Enter Enter` onto its idle composer,
+    and on `failed: id-mismatch` it is left running."""
+    project = tmp_path / "opaque-editor"
+    (project / ".git").mkdir(parents=True)
+    agent, mode_file, exits = tmp_path / "fake_codex.py", tmp_path / "mode", tmp_path / "exits"
+    agent.write_text(_CODEX_AGENT, encoding="utf-8")
+    mode_file.write_text("accept" if mode == "accept" else "fail", encoding="utf-8")
+    exits.mkdir()
+    (codex_profile,) = (p for p in closed_profiles() if p.profile_id == CODEX)
+    socket = f"remote-agents-test-{uuid4().hex}"
+    gateway = TmuxGateway(socket, AsyncTmuxRunner(), intent_directory=tmp_path / "i")
+    terminal = TmuxTerminal(
+        gateway,
+        {PROJECT: project},
+        {},
+        startup_timeout=10.0,
+        profile_factories={
+            CODEX: lambda session_id, _remote_control: LaunchProfile(
+                sys.executable,
+                (sys.executable, str(agent), HANDOFF, str(mode_file), mode, str(exits)),
+                {"PATH": os.environ["PATH"], SESSION_ID_VARIABLE: str(session_id)},
+                "READY",
+                codex_profile.graceful_keys,
+            )
+        },
+        # Codex's own composer rules, so the guarded send and the idle stop are judged as they
+        # are on a real Codex pane.
+        composers={
+            "codex": ProviderDescriptor(CODEX, "C", "Codex", composer=codex_descriptor().composer)
+        },
+    )
+    connection = open_database(tmp_path / "sessions.sqlite3")
+    sessions = SessionService(SQLiteSessionStore(connection), terminal)
+
+    async def on() -> bool:
+        return True
+
+    rollover_pass = build_rollover_pass(
+        connection=connection,
+        sessions=sessions,
+        terminal=terminal,
+        enabled=on,
+        project_paths={PROJECT: project},
+        adopt_templates=adopt_templates(),
+    )
+    rollovers = SQLiteRolloverStore(connection)
+    launched: list[SessionId] = []
+    try:
+        predecessor = (await sessions.launch(LaunchCommand(PROJECT, CODEX, "pred"))).record
+        launched.append(predecessor.session_id)
+        await _type(terminal, predecessor.session_id, "handoff")
+
+        want = RolloverState.COMPLETED if mode == "accept" else RolloverState.FAILED
+        row = None
+        for _ in range(60):
+            await rollover_pass.run_once()
+            launched.extend(
+                record.session_id
+                for record in await sessions.list_sessions()
+                if record.session_id not in launched
+            )
+            rows = rollovers._select("1 = 1", ())
+            row = rows[0] if rows else None
+            if row is not None and row.state is want:
+                break
+            await asyncio.sleep(0.2)
+
+        assert row is not None and row.state is want, (
+            None if row is None else (row.state, row.failure_code, row.failure_detail)
+        )
+        assert len(launched) == 2, "exactly one successor"
+        successor = row.successor_session_id
+        assert successor is not None and successor != predecessor.session_id
+        records = {record.session_id: record for record in await sessions.list_sessions()}
+        assert records[successor].profile_id == CODEX, "a Codex successor"
+        screen = await terminal.capture(successor)
+        assert f"GOT: {CODEX_TEMPLATE}" in screen, "the $ template was typed and submitted"
+        assert "/planning:executing-plans" not in screen, "never Claude's spelling"
+        managed = {pane.session_id for pane in (await gateway.inventory()).managed}
+        if mode == "accept":
+            assert (exits / str(predecessor.session_id)).exists(), "stopped by its /exit"
+            assert predecessor.session_id not in managed, "the predecessor pane is gone"
+            assert records[predecessor.session_id].state is SessionState.ENDED
+            assert await rollovers.continued_as(predecessor.session_id) == successor
+        else:
+            assert row.failure_code == "id-mismatch"
+            assert not (exits / str(predecessor.session_id)).exists(), "never sent the stop"
+            assert predecessor.session_id in managed, "the predecessor pane is still alive"
+            assert records[predecessor.session_id].state is SessionState.RUNNING
+            assert await rollovers.continued_as(predecessor.session_id) is None
+        assert successor in managed
+        assert not (exits / str(successor)).exists()
+        assert not list((project / ".claude" / "handoffs").glob(f"{HANDOFF}.*.json"))
     finally:
         for session_id in launched:
             try:
