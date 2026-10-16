@@ -1043,10 +1043,13 @@ starts one.
 
 ## Session rollover
 
-A `claude` session executing a plan can hand its work to a fresh session at one of the plan's gates
-(DEC-115). It is off until you turn on *Roll over to a fresh session on handoff* in Settings, on
-either surface. With it on, the bot's service starts one new session of the same project and agent,
-types `/planning:executing-plans --adopt-handoff <id>` into it, and stops the old session only
+A `claude` or `codex` session executing a plan can hand its work to a fresh session at one of the
+plan's gates (DEC-115). OpenCode and Cursor sessions do not roll over: no handoff writer has been
+ported to them. It is off until you turn on *Roll over to a fresh session on handoff* in Settings,
+on either surface. With it on, the bot's service starts one new session of the same project and
+agent, types that agent's own adopt command into it -- `/planning:executing-plans --adopt-handoff
+<id>` for Claude, `$planning:executing-plans --adopt-handoff <id>` for Codex -- and stops the old
+session only
 after the new one has accepted the handoff, and only when the old one sits idle. It never
 interrupts a turn and never force-stops. **Rollover now** (`l` in the terminal) asks the workflow
 to hand off at its next gate. Only a failure sends a message: a failed rollover keeps the old

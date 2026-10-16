@@ -145,10 +145,10 @@ NOT_TYPED = "not-typed"
 ADOPTION_TIMEOUT = "adoption-timeout"
 STOP_UNCONFIRMED = "stop-unconfirmed"
 NOT_ROLLABLE = "not-rollable"
-NO_TEMPLATE = "no-adopt-template"
+NO_TEMPLATE = "no adopt template declared"
 """Why a successor was not typed when its profile's vertical stopped declaring a template
 while the rollover was open (a revert, across a restart): nothing is typed that it did not
-declare."""
+declare. A `not-typed` detail, so worded, never a code (the notifier's code sweep)."""
 NO_HANDOFF_ROOT = "no-handoff-root"
 REQUEST_UNWRITTEN = "request-unwritten"
 REQUEST_LOST = "request-lost"
@@ -263,6 +263,11 @@ class RolloverPass:
         #: order in which a shutdown cannot spend a rollover.
         self._operation = operation
         self._recovered = False
+
+    @property
+    def adopt_templates(self) -> Mapping[ProfileId, str]:
+        """What this pass types per profile; its keys are the profiles it rolls over."""
+        return dict(self._templates)
 
     async def run_once(self) -> None:
         """Walk every rollover one step, each from what is persisted now.

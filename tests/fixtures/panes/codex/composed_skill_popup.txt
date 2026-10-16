@@ -1,0 +1,40 @@
+
+  >_ OpenAI Codex (v0.162.1)
+     /tmp/ra-capture-uqvt1nrm
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+› planning-projects (planning)  [Skill] Plan a project of any size — triages Direct/Light/Standard/Master first, may decline trivial jobs. Staged, tested tasks.
+  Plugin Management             [App] Manage plugins in ChatGPT.
+  portfolio (planning)          [Skill] Manage backlog, maturity, ship-readiness across all ~/dev projects. Subcommands: scan/unify/maturity/migrate/integrate/…
+  project-maturity (planning)   [Skill] Ship-readiness checklist docs/MATURITY.md: init, audit (deterministic detectors), get.
+  backlog (planning)            [Skill] Deferred-work register at docs/backlog.md — add, list, remove, unify entries.
+  brainstorming (planning)      [Skill] Question-driven design exploration before non-trivial builds; validates purpose, constraints, and alternatives.
+  business-plan                 [Skill] Compose a full, detailed business plan for ONE portfolio project into business/plan.md. Triggers on "write a business p…
+  decisions (planning)          [Skill] Architectural decision register — per-project DEC and per-domain GDEC entries, with the reasons behind them. Subcommand…
+↓
+  enter insert · esc close
+
+› $plan
+
+  GPT-6.1-Sol default · /tmp/ra-capture-uqvt1nrm · 5h 100% left · weekly 86% left
+

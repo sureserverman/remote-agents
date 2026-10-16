@@ -10,6 +10,7 @@ from pathlib import Path
 
 import pytest
 
+from remote_agents.adapters.agents.registry import adopt_templates
 from remote_agents.adapters.sqlite.database import open_database
 from remote_agents.adapters.sqlite.worktree_store import SQLiteWorktreeStore
 from remote_agents.composition.service import build_rollover_pass
@@ -36,9 +37,7 @@ def _roots(connection: sqlite3.Connection, project: Path):
         terminal=types.SimpleNamespace(pane_idle=None, send_prompt=None),
         enabled=None,
         project_paths={_PROJECT: project},
-        adopt_templates={
-            ProfileId("claude"): "/planning:executing-plans --adopt-handoff {handoff_id}"
-        },
+        adopt_templates={ProfileId("claude"): adopt_templates()[ProfileId("claude")]},
         worktrees=SQLiteWorktreeStore(connection),
     )
     return rollover._worktree_roots()

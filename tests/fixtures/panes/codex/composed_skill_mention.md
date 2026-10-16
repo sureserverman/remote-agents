@@ -12,7 +12,7 @@ text key by key (`send-keys -l`) gave a byte-identical screen.
 
 **When the popup does appear.** Only while the draft is still a bare mention prefix. With
 `$plan` typed, Codex drew a list of matching skills *above* the composer, under a footer
-`enter insert · esc close`. The model line stayed visible, so the composer still read
+`enter insert · esc close` (kept as `composed_skill_popup.txt`). The model line stayed visible, so the composer still read
 COMPOSING (draft `$plan`), and `Enter` there would insert the highlighted entry. The text
 after the mention (` --adopt-handoff <id>`) closes it.
 

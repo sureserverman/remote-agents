@@ -12,6 +12,7 @@ from pathlib import Path
 
 import pytest
 
+from remote_agents.adapters.agents.registry import adopt_templates
 from remote_agents.adapters.sqlite.database import open_database
 from remote_agents.adapters.sqlite.rollover_store import SQLiteRolloverStore
 from remote_agents.application.commands import GracefulStopCommand, LaunchCommand
@@ -128,7 +129,7 @@ class Host:
         return RolloverPass(
             store,
             self.envelopes,
-            adopt_templates={CLAUDE: "/planning:executing-plans --adopt-handoff {handoff_id}"},
+            adopt_templates={CLAUDE: adopt_templates()[CLAUDE]},
             sessions=self.list_sessions,
             handoff_root=lambda project: ROOT,
             enabled=self.enabled,

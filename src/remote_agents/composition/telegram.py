@@ -342,7 +342,7 @@ def _private_boundary(
                 terminal=terminal,
                 enabled=backend.auto_rollover.read,
                 project_paths=projects.paths,
-                adopt_templates=adopt_templates(),
+                adopt_templates=adopt_templates(descriptors),
                 notify=(
                     None
                     if boundary.rollover_notifier is None

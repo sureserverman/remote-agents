@@ -21,6 +21,7 @@ from uuid import uuid4
 
 import pytest
 
+from remote_agents.adapters.agents.registry import adopt_templates
 from remote_agents.adapters.sqlite.database import open_database
 from remote_agents.adapters.sqlite.rollover_store import SQLiteRolloverStore
 from remote_agents.adapters.sqlite.session_store import SQLiteSessionStore
@@ -42,6 +43,9 @@ from remote_agents.ports.terminal import PromptOutcome
 PROJECT = ProjectId("opaque-editor")
 PROFILE = ProfileId("fake")
 HANDOFF = "h-0123456789abcdef0123"
+#: The planning plugin's own spelling, which the fake agent answers to (`_AGENT`), kept apart
+#: from the Claude vertical's `adopt_template` on purpose: the pass types the descriptor's value,
+#: so a wrong vertical string is caught here by an agent that never adopts it.
 TEMPLATE = f"/planning:executing-plans --adopt-handoff {HANDOFF}"
 
 _AGENT = """
@@ -162,7 +166,7 @@ async def test_a_ready_rolls_over_to_one_successor_and_stops_only_on_accept(
         terminal=terminal,
         enabled=on,
         project_paths={PROJECT: project},
-        adopt_templates={PROFILE: "/planning:executing-plans --adopt-handoff {handoff_id}"},
+        adopt_templates={PROFILE: adopt_templates()[ProfileId("claude")]},
     )
     rollovers = SQLiteRolloverStore(connection)
     launched: list[SessionId] = []
@@ -275,7 +279,7 @@ async def test_a_worktree_sessions_successor_starts_in_the_same_worktree(tmp_pat
         terminal=terminal,
         enabled=on,
         project_paths={PROJECT: project},
-        adopt_templates={PROFILE: "/planning:executing-plans --adopt-handoff {handoff_id}"},
+        adopt_templates={PROFILE: adopt_templates()[ProfileId("claude")]},
         worktrees=worktrees,
     )
     rollovers = SQLiteRolloverStore(connection)
@@ -397,7 +401,7 @@ async def test_a_trust_held_successor_is_typed_once_after_the_owner_trusts_it(
         terminal=terminal,
         enabled=on,
         project_paths={PROJECT: project},
-        adopt_templates={PROFILE: "/planning:executing-plans --adopt-handoff {handoff_id}"},
+        adopt_templates={PROFILE: adopt_templates()[ProfileId("claude")]},
     )
     rollovers = SQLiteRolloverStore(connection)
     launched: list[SessionId] = []

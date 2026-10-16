@@ -7,8 +7,10 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
+from remote_agents.adapters.agents.registry import adopt_templates
 from remote_agents.application.rollover import RolloverPass
 from remote_agents.application.rollover_book import RolloverBook
+from remote_agents.domain.models import ProfileId
 
 SRC = Path(__file__).resolve().parents[2] / "src" / "remote_agents"
 
@@ -40,6 +42,16 @@ def test_the_bot_composition_wires_the_pass_and_both_surfaces_get_the_book(
     try:
         assert isinstance(composition.rollover_pass, RolloverPass)
         assert isinstance(composition.boundary.backend.rollovers, RolloverBook)
+        # The pass types what the verticals declare, and the surfaces offer Rollover now on
+        # exactly the profiles it acts for: one map, read from the composition's descriptors.
+        assert composition.rollover_pass.adopt_templates == adopt_templates()
+        assert set(composition.rollover_pass.adopt_templates) == {
+            ProfileId("claude"),
+            ProfileId("codex"),
+        }
+        assert composition.boundary.backend.rollovers.rollable == frozenset(
+            composition.rollover_pass.adopt_templates
+        )
         # Failures are told through the bot, and a held notice is retried by the loop.
         assert composition.rollover_notifier is not None
         assert composition.rollover_notifier is composition.boundary.rollover_notifier

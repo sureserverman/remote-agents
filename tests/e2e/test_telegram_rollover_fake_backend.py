@@ -12,6 +12,7 @@ from pathlib import Path
 from backends import backend_for
 from fake_telegram import OWNER_CHAT_ID, OWNER_USER_ID, FakeChat
 
+from remote_agents.adapters.agents.registry import adopt_templates
 from remote_agents.adapters.sqlite.database import open_database
 from remote_agents.adapters.sqlite.rollover_store import SQLiteRolloverStore
 from remote_agents.adapters.telegram.service import build_private_bot
@@ -135,7 +136,7 @@ def _rig(tmp_path: Path, **host_fields):
     rollover_pass = RolloverPass(
         store,
         _Envelopes(host),
-        adopt_templates={CLAUDE: "/planning:executing-plans --adopt-handoff {handoff_id}"},
+        adopt_templates={CLAUDE: adopt_templates()[CLAUDE]},
         sessions=host.list_sessions,
         handoff_root=lambda project: ROOT,
         enabled=on,

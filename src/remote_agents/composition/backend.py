@@ -564,7 +564,9 @@ def compose_backend(
         # reads the same row the surface wrote. Which profiles roll over is the registry's
         # answer, the same one the pass is built with, so a surface offers Rollover now exactly
         # where the pass would act on it.
-        rollovers=RolloverBook(SQLiteRolloverStore(connection), rollable=profiles_that_roll_over()),
+        rollovers=RolloverBook(
+            SQLiteRolloverStore(connection), rollable=profiles_that_roll_over(descriptors)
+        ),
         max_label_length=config.max_label_length,
     )
 

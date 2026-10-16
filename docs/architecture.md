@@ -326,8 +326,11 @@ A schedule is a project, an agent profile, a message and a *when*, and the servi
 
 ## DEC-115 — workflow rollover
 
-A plan-executing Claude session that hands off at a gate is replaced by one fresh session that
-adopts its work, and is stopped only after that successor accepted.
+A plan-executing session that hands off at a gate is replaced by one fresh session of the same
+agent that adopts its work, and is stopped only after that successor accepted. Which agents roll
+over, and what each successor is typed, is each vertical's `ProviderDescriptor.adopt_template`
+(DEC-122): Claude's `/planning:...` command and Codex's `$planning:...` skill mention; OpenCode
+and Cursor declare none.
 
 - `domain/rollover.py` holds the states, the legal-move matrix, the restart table
   (`recovery_action`) and `may_stop_predecessor`, the one gate on stopping.

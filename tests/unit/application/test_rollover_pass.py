@@ -10,6 +10,7 @@ from pathlib import Path
 
 import pytest
 
+from remote_agents.adapters.agents.registry import adopt_templates
 from remote_agents.adapters.sqlite.database import open_database
 from remote_agents.adapters.sqlite.rollover_store import SQLiteRolloverStore
 from remote_agents.application.commands import (
@@ -54,11 +55,10 @@ PROJECT = ProjectId("remote-agents")
 CLAUDE = ProfileId("claude")
 ROOT = Path("/work/remote-agents")
 CODEX = ProfileId("codex")
-TEMPLATES = {
-    CLAUDE: "/planning:executing-plans --adopt-handoff {handoff_id}",
-    CODEX: "$planning:executing-plans --adopt-handoff {handoff_id}",
-}
-TEMPLATE = f"/planning:executing-plans --adopt-handoff {HANDOFF}"
+#: Read from the verticals, never respelled: the exact strings are pinned once, in
+#: `tests/provider_contract/test_adopt_template_contracts.py`.
+TEMPLATES = {profile: adopt_templates()[profile] for profile in (CLAUDE, CODEX)}
+TEMPLATE = TEMPLATES[CLAUDE].format(handoff_id=HANDOFF)
 SENT = PromptDelivery(PromptOutcome.SENT)
 
 
@@ -351,7 +351,7 @@ async def test_rollover_types_a_codex_successor_its_own_dollar_adopt_template(
 
     (command,) = rig.launches
     assert command.profile_id == CODEX
-    assert rig.sends == [(rig.successor, f"$planning:executing-plans --adopt-handoff {HANDOFF}")]
+    assert rig.sends == [(rig.successor, TEMPLATES[CODEX].format(handoff_id=HANDOFF))]
 
 
 async def test_rollover_types_a_claude_successor_the_slash_form_beside_codex(
@@ -1206,10 +1206,15 @@ async def test_a_held_successor_whose_profile_lost_its_template_is_never_typed(r
     _trust(rig)
     await rig.run(passes=3)
 
+    # Neither session is stopped: the successor is left open for the owner, as every
+    # not-typed failure leaves it (DEC-099, DEC-115) -- never "cleaned up" by the pass.
     assert rig.sends == [] and rig.stops == []
     rollover = await rig.rollover()
     assert rollover.state is RolloverState.FAILED
-    assert (rollover.failure_code, rollover.failure_detail) == ("not-typed", "no-adopt-template")
+    assert (rollover.failure_code, rollover.failure_detail) == (
+        "not-typed",
+        "no adopt template declared",
+    )
 
 
 async def test_a_trust_held_successor_is_given_up_only_after_the_patience(rig: Rig) -> None:

@@ -31,10 +31,15 @@ _HANDOFF = "h-0123456789abcdef0123"
 def test_adopt_template_contract(descriptor) -> None:
     """One field, the handoff id, and a single line the provider's own composer accepts."""
     template = drive_or_skip(descriptor, "adopt_template")
-    fields = [name for _, name, _, _ in Formatter().parse(template) if name is not None]
-    assert fields == ["handoff_id"], (
+    fields = [
+        (name, spec, conversion)
+        for _, name, spec, conversion in Formatter().parse(template)
+        if name is not None
+    ]
+    assert fields == [("handoff_id", "", None)], (
         f"{descriptor.profile_id}'s adopt template names {fields}; it may name the handoff id "
-        "once and nothing else, because an envelope supplies only that"
+        "once, bare, and nothing else: an envelope supplies only that, and a conversion or a "
+        "format spec would type something other than the id"
     )
     text = template.format(handoff_id=_HANDOFF)
     assert "\n" not in text
@@ -46,13 +51,18 @@ def test_adopt_template_contract(descriptor) -> None:
 
 
 def test_the_rollover_set_is_exactly_the_profiles_with_an_adopt_template() -> None:
+    """A smoke check, not evidence: the set is built from the same map today. It guards a later
+    change that derives either side some other way."""
     declared = {d.profile_id for d in provider_descriptors() if d.adopt_template is not None}
     assert profiles_that_roll_over() == frozenset(declared)
     assert set(adopt_templates()) == declared
 
 
 def test_claude_and_codex_roll_over_with_their_own_adopt_templates() -> None:
+    """The exact text, spelled once here: every other test reads it from the descriptors, so
+    this is where a wrong vertical string is caught."""
     assert profiles_that_roll_over() == {ProfileId("claude"), ProfileId("codex")}
-    templates = adopt_templates()
-    assert templates[ProfileId("claude")].startswith("/planning:executing-plans ")
-    assert templates[ProfileId("codex")].startswith("$planning:executing-plans ")
+    assert adopt_templates() == {
+        ProfileId("claude"): "/planning:executing-plans --adopt-handoff {handoff_id}",
+        ProfileId("codex"): "$planning:executing-plans --adopt-handoff {handoff_id}",
+    }

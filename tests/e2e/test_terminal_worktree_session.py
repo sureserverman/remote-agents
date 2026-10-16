@@ -23,6 +23,7 @@ from uuid import uuid4
 import pytest
 from test_terminal_rollover import _AGENT, _COMPOSER, HANDOFF, _type
 
+from remote_agents.adapters.agents.registry import adopt_templates
 from remote_agents.adapters.git.checkout import GitCli
 from remote_agents.adapters.sqlite.database import open_database
 from remote_agents.adapters.sqlite.rollover_store import SQLiteRolloverStore
@@ -141,7 +142,7 @@ async def test_a_worktree_session_launches_resumes_and_rolls_over_in_its_worktre
         terminal=terminal,
         enabled=on,
         project_paths={PROJECT: project},
-        adopt_templates={PROFILE: "/planning:executing-plans --adopt-handoff {handoff_id}"},
+        adopt_templates={PROFILE: adopt_templates()[ProfileId("claude")]},
         worktrees=worktrees,
     )
     rollovers = SQLiteRolloverStore(connection)

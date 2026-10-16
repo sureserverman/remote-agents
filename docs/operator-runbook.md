@@ -641,8 +641,9 @@ server, run alone.
 
 ## Session rollover
 
-A plan-executing Claude session that hands off at a gate is replaced by one fresh session that
-takes over its work. The old session is stopped only after that successor says it accepted
+A plan-executing session -- Claude or Codex -- that hands off at a gate is replaced by one fresh
+session of the same agent that takes over its work. The old session is stopped only after that
+successor says it accepted
 (DEC-115). Only the bot's service does this, on its own 30-second pass; the console panes show
 it and ask for it but never act.
 
@@ -657,25 +658,30 @@ it and ask for it but never act.
   left waiting long may end `adoption-timeout` or `predecessor-not-idle` when the switch comes
   back on. Rolling back to 0.58.0 or earlier needs the table deleted first; see
   [rollback](#rollback-and-local-recovery).
-- **What starts one.** Only `claude` sessions take part: Claude Code's planning plugin is the one
-  writer of handoff envelopes. A `ready` envelope from a running one, under `.claude/handoffs/`
+- **What starts one.** Only `claude` and `codex` sessions take part: each runs a planning plugin
+  that writes handoff envelopes (Claude Code's from coder-plugins; Codex's
+  `planning@engineering-skills` 0.2.1 or later, which asks `remote-agents session-id` who it is).
+  Which agents roll over is each one's own declaration (its adopt command); OpenCode and Cursor
+  declare none. A `ready` envelope from a running one, under `.claude/handoffs/`
   at the project's git top level (planning plugin 0.55.0 or later), opens a rollover -- if it is
   seen within five minutes of being written. One written while the switch was off or `serve` was
   down is cleared, never acted on: the plugin has already told you to resume by hand. So does the
   owner's **Rollover now**: the button on the bot's session screen, or `l` on the terminal's
   sessions list. It writes `request.json` for the workflow, which hands off at its next gate.
   The press says *Rollover asked for — it happens at the workflow's next handoff.* It is offered
-  on a running `claude` session with the switch on and no rollover open. **Cancel rollover**
+  on a running `claude` or `codex` session with the switch on and no rollover open.
+  **Cancel rollover**
   withdraws a request while it is still only requested, on either surface (in the terminal it is
   a row of the session's detail). Once the workflow has answered, only the pass ends the
   rollover. `request.json` is one file per checkout: a second request in the same checkout waits
   until the first rollover ends.
 - **The sequence.** The pass waits for the old session's pane to sit idle, for up to 10
   minutes. It then launches **one** fresh session of the same project and profile, under the
-  key `rollover:<handoff_id>`. It types the fixed command
-  `/planning:executing-plans --adopt-handoff <id>` and nothing else; an envelope supplies the id,
-  never text. The new session checks the handoff and has 30 minutes to write `accepted`. Only
-  then is the old session stopped: gracefully, only onto an idle, empty composer, judged again
+  key `rollover:<handoff_id>`. It types that agent's fixed adopt command and nothing else --
+  `/planning:executing-plans --adopt-handoff <id>` for Claude, `$planning:executing-plans
+  --adopt-handoff <id>` for Codex; an envelope supplies the id, never text. The new session
+  checks the handoff and has 30 minutes to write `accepted`. Only then is the old session
+  stopped: gracefully, only onto an idle, empty composer, judged again
   under the stop's own key lock. A turn is never interrupted to do it.
 - **Restart.** Every step is recorded before it is taken, so a `serve` restart part-way finds
   the record and never repeats the step. A launch found in flight with no successor recorded is
@@ -754,7 +760,9 @@ closes out instead, so cancel the pending rollover then.
 - **`successor-failed`** — the successor failed to start, or its pane went away (also after it
   accepted, before the old session was stopped). Inspect it, then ask again.
 - **`not-typed`** — the command could not be typed, or its send was not confirmed; the message
-  names why. The successor is left open and may hold the half-typed command. Stop it, then ask
+  names why. *no adopt template declared* means the agent stopped declaring an adopt command while
+  the rollover was open (a downgrade across a restart); nothing was typed. The successor is
+  left open and may hold the half-typed command. Stop it, then ask
   again. A successor you trusted that then shows a second question (a permission or MCP
   prompt) ends here at once rather than waiting again.
 - **`adoption-timeout`** — no `accepted` within 30 minutes. The successor is left open. Its
@@ -765,7 +773,8 @@ closes out instead, so cancel the pending rollover then.
   **`plan-missing`** — the successor refused the handoff and wrote its own `failed`: the wrong
   handoff, no handoff found, another directory, the checkout on another branch, or the plan not
   found. It is left open. Fix what it names, stop it, then ask again.
-- **`not-rollable`** — the session's agent writes no envelopes. Only `claude` sessions roll over.
+- **`not-rollable`** — the session's agent writes no envelopes. Only `claude` and `codex`
+  sessions roll over.
 - **`no-handoff-root`** — the project is in no git checkout, so there is nowhere for envelopes.
   Rollover needs the project inside a git repository.
 - **`request-unwritten`** — `request.json` could not be written. Check that `.claude/handoffs/`

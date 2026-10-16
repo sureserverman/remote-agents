@@ -52,3 +52,15 @@ def test_skill_mention_draft_is_submitted_by_the_guarded_send_with_one_enter() -
     assert delivery.outcome is PromptOutcome.SENT
     assert pane.stdin == [_adopt_message()]
     assert pane.keys == ["Enter"], "one Enter, and no key to close a popup: none is drawn"
+
+
+def test_skill_mention_popup_on_a_bare_prefix_still_reads_its_draft() -> None:
+    """The one screen that draws the popup: a bare `$plan`, captured on the same 0.162.1 pane.
+    The popup sits above the composer and leaves the model line, so the composer and its draft
+    still read. `Enter` here would insert the highlighted skill, which only a relayed bare `$`
+    prefix could meet -- the adopt template always carries text after its mention."""
+    screen = (_PANES / "codex" / "composed_skill_popup.txt").read_text(encoding="utf-8")
+
+    assert "enter insert · esc close" in screen
+    assert classify(screen, descriptor()) is PaneState.COMPOSING
+    assert composer_draft(screen, descriptor()) == "$plan"
