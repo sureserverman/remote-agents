@@ -347,6 +347,32 @@ adopts its work, and is stopped only after that successor accepted.
 - `composition/service.py` builds the pass (`build_rollover_pass`) and runs it every 30 s in
   the bot's service only; the switch `rollover.auto_rollover`, off by default, is read each pass.
 
+### The handoff writer's identity — `remote-agents session-id` (DEC-128)
+
+The writer stamps each envelope's `managed_session_id`. It learns that id by running
+`remote-agents session-id` from the folder its tool shell starts in. This is the contract an
+envelope writer depends on, the Codex planning plugin's included:
+
+| Exit | Output | Meaning |
+|---|---|---|
+| 0 | the session id alone on one line | this shell belongs to that managed session |
+| 3 | nothing on stdout | no managed session owns this shell: write no envelope |
+| 2 | argparse's usage message | usage error |
+
+- `agent_event.py` (`resolve_session_id`, `run_session_id`) is the verb, routed in `__main__`
+  before `bootstrap` loads. It is read-only: environment, folder, and the roster file under
+  `--activity-dir` (default: the production spool). It never opens the database.
+- A shell carrying the thread variable a `PAYLOAD_THREAD` licence declares
+  (`HookLicence.thread_variable`; Codex: `CODEX_THREAD_ID`) is resolved by
+  `hook_identity.resolve` against that provider's roster, as the hook drain resolves a payload.
+  Its `REMOTE_AGENTS_SESSION_ID` is never read: under Codex's shared daemon it is the daemon
+  starter's (measured, `tests/live/test_codex_tool_shell_identity.py`). No roster, or none that
+  places the thread, exits 3. The hook, with no roster, keeps the environment rule instead.
+- Any other shell is named by `REMOTE_AGENTS_SESSION_ID`, unless that id is on a payload-thread
+  provider's roster (a daemon shell missing its thread variable): then it exits 3.
+- The folder compared is the shell's own. A writer that changes folder before asking is
+  compared against the folder it moved to.
+
 ## DEC-127 — resuming after a restart
 
 When a reboot or a tmux crash takes the managed panes, `serve` resumes each interrupted RUNNING
