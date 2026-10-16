@@ -848,6 +848,52 @@ A second session on a git project can run in its own worktree (BL-116). The READ
   line means no git, a repository with no commit yet, a
   read past its bound, a git refusal, or a folder that is gone.
 
+## Resuming after a restart
+
+When a reboot or a tmux crash takes the managed panes, the next `serve` start brings each
+interrupted session back in its own conversation, once (DEC-127). Only the bot's service does
+this. The terminal never does.
+
+- **The switch.** `restart.resume_interrupted`, in the `[restart]` table of `config.toml`, is
+  **on by default**. Flip it with *Resume after restart* in Settings, on either surface
+  (`/settings` on the bot, F2 in the terminal). The first flip writes the table. A missing table
+  or key reads as on. A value that is not `true` or `false`, or an unknown key in `[restart]`, is
+  refused when `serve` or the terminal starts (`restart.resume_interrupted must be true or
+  false`). `serve` reads the switch once at startup, and an unreadable file counts as off. With
+  it off, nothing is resumed and nothing is written.
+- **What counts as interrupted.** A record still `running` whose pane is gone, **and** a tmux
+  server that is gone or started after that record was created. Restarting only the service
+  leaves the panes alive, so nothing is resumed. Killing one pane while its server runs is not a
+  restart either. The record ends as before, and nothing comes back.
+- **What comes back.** Each interrupted `running` session is resumed with `--resume <id>` /
+  `resume <id>` of its last conversation, in its worktree if it had one, labelled *resumed after
+  restart*. The conversation is the agent's own id, which the hook writes at each turn's start to
+  `~/.local/state/remote-agents/activity/conversations/<session>`. With no such mark, the
+  session's `resume_source_id` is used. Sessions that were in the middle of a turn are then sent
+  the same one-line nudge as a session resumed after a usage limit. Idle ones are resumed and
+  left alone.
+- **What is skipped, and why.** Each skip is listed in the notice:
+  - `not-resumable`: Cursor has no resume.
+  - `no-conversation`: no mark and no `resume_source_id`; usually an OpenCode session.
+  - `handed-off`: a rollover's successor had already accepted the work.
+  - `already-open`: another live session holds the conversation.
+  - `superseded`: an earlier start left it half-done, and the conversation was opened since.
+  - `worktree_removed`: its worktree is gone.
+  - `interrupted`: an earlier start claimed the launch and did not finish.
+  - `launch_error` or `launch_failed`: the resume itself failed.
+- **The notice.** One message per start: *Resumed N sessions after restart*, then the sessions
+  not resumed with their reasons, then the ones resumed but not nudged. It also says how many
+  sessions could not be judged when tmux could not be read. It waits until the bot is attached.
+  If nothing was interrupted, nothing is sent.
+- **Once, durably.** Every decision is written to `interrupted_resumes` in `sessions.sqlite3`
+  (migration 20) before the first launch. A session with a final outcome is never acted on
+  again. A start cut off mid-pass carries on at the next start without launching or typing
+  twice. To see what a start decided:
+  `sqlite3 ~/.local/state/remote-agents/sessions.sqlite3 "select * from interrupted_resumes"`.
+- **Timing.** The pass runs beside polling, so the bot answers at once. The worktree cleanup's
+  first pass waits for it. A nudge waits up to 90 s for an agent to reach its prompt. On Linux,
+  `serve` starts at login, so after a reboot the resume happens when you log in.
+
 ## Telegram credential denial and recovery drill
 
 The test suite exercises a known-invalid credential against Telegram without reading or replacing
@@ -2441,7 +2487,9 @@ from the `[limits]` table of `config.toml` first.** Either Settings switch write
 the first time it is used, and an older version refuses a config with a key it does not know,
 so `serve`, `tui` and `add-project` would all fail to start. A host that never touched either
 switch has neither key and needs nothing. **Rolling back to 0.58.0 or earlier: delete the `[rollover]`
-table first**, for the same reason. The auto-rollover Settings switch adds it on first use. The database needs nothing either: an older version
+table first**, for the same reason. The auto-rollover Settings switch adds it on first use.
+**Rolling back to 0.64.1 or earlier: delete the `[restart]` table first** (`resume_interrupted`),
+for the same reason. The *Resume after restart* switch adds it on first use. The database needs nothing either: an older version
 opens it, and its `doctor` reports `database_ready` false, as after any release that migrated.
 Do not remove a
 managed tmux session until its ownership and output have been inspected.

@@ -347,6 +347,28 @@ adopts its work, and is stopped only after that successor accepted.
 - `composition/service.py` builds the pass (`build_rollover_pass`) and runs it every 30 s in
   the bot's service only; the switch `rollover.auto_rollover`, off by default, is read each pass.
 
+## DEC-127 — resuming after a restart
+
+When a reboot or a tmux crash takes the managed panes, `serve` resumes each interrupted RUNNING
+session once, in its own conversation, and nudges the ones that were mid-turn.
+
+- `adapters/agents/turn_markers.py` (`FileConversationMarks`) reads the conversation marks the
+  hook writes at a turn's start, only when that agent owns the session's turn marker.
+- `TerminalPort.server_started_at()` tells a lost server from a service-only restart. A record
+  was interrupted when its pane is not listed and the server is absent or newer than the record.
+- `application/interrupted_resume.py`: `plan_resumes` is the pure decision over a
+  `RestartSnapshot` taken before the first reconcile. `InterruptedResumePass` resumes through
+  `SessionService.resume` under `restart:<session>`, then types `limit_resume.NUDGE` through
+  `send_prompt` into the sessions that had a turn marker.
+- `adapters/sqlite/interrupted_resumes.py` stores every decision before the first launch
+  (migration 20, `ports/interrupted_resumes.py`), so a restart never acts twice (DEC-114).
+- `composition/service.py` (`build_restart_resume`, `_resume_after_restart`) takes the snapshot,
+  reads `restart.resume_interrupted` with `read_resume_interrupted(when_unsure=False)`, and runs
+  the pass beside polling. The worktree cleanup's first pass waits for it (DEC-124).
+  `adapters/telegram/restart_notifications.py` (`RestartNotifier`) sends the one summary.
+- `Backend.resume_interrupted` (`ports.restart_resume_setting`) is the Settings row's port on
+  both surfaces. `serve` does not read it: it reads the file itself, toward off.
+
 ## The process model — one `serve`, three pane processes, two SQLite files
 
 The processes that *serve* the owner all open the same **domain** database file and refuse to
