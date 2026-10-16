@@ -1,0 +1,28 @@
+{
+ "baseline": {
+  "elapsed_s": 7.0,
+  "exit": 0,
+  "tail": "..                                                                       [100%]\n2 passed in 6.72s"
+ },
+ "break_patch": "--- a/src/remote_agents/application/interrupted_resume.py\n+++ b/src/remote_agents/application/interrupted_resume.py\n@@ -183,7 +183,7 @@\n                 record,\n                 conversation,\n                 skip,\n-                nudge=skip is None and str(record.session_id) in snapshot.turn_marker_sessions,\n+                nudge=skip is None,\n             )\n         )\n     return tuple(decisions)\n",
+ "build": null,
+ "created": "2026-10-16T00:51:29+00:00",
+ "fingerprint": "84af4272cbcaba7637564f5abc7456f730bf8c91db6e9eae97e3db6586727a1e",
+ "index": 1,
+ "kind": "claim",
+ "named_break": null,
+ "no_build_reason": "python tests only",
+ "plan": "/mnt/vault/Portfolio/infra/remote-agents/plans/2026-10-15-codex-rollover-and-restart-resume-sub-01-restart-resume-plan.md",
+ "red": {
+  "elapsed_s": 7.0,
+  "exit": 1,
+  "tail": "        assert {record.session_id for record in await rig.running()} == {\n            idle.session_id,\n            mid_turn.session_id,\n        }\n    \n        # A turn starts in one of them, and the server goes with every pane on it.\n        rig.markers.start(str(mid_turn.session_id), owner=\"fake\")\n        await rig.kill_server()\n    \n        await rig.serve(until=lambda: bool(rig.notices))\n    \n        resumed = {record.resume_source_id: record for record in await rig.running()}\n        assert set(resumed) == {\"conv-idle\", \"conv-mid-turn\"}\n        listed = {observation.session_id for observation in await rig.terminal.managed_observations()}\n        assert {record.session_id for record in resumed.values()} <= listed\n        assert '\"--resume\", \"conv-idle\"' in rig.intent(resumed[\"conv-idle\"].session_id)\n        assert '\"--resume\", \"conv-mid-turn\"' in rig.intent(resumed[\"conv-mid-turn\"].session_id)\n        for lost in (idle, mid_turn):\n            ended = await rig.store.get(lost.session_id)\n            assert ended is not None and ended.state is SessionState.ENDED\n    \n        nudged = await _screen_settled(rig, resumed[\"conv-mid-turn\"].session_id, f\"GOT: {NUDGE}\")\n        assert nudged.count(f\"GOT: {NUDGE}\") == 1, nudged\n        await asyncio.sleep(0.5)\n>       assert \"GOT:\" not in await rig.terminal.capture(resumed[\"conv-idle\"].session_id)\nE       AssertionError: assert 'GOT:' not in 'READY\\n\u2500\u2500\u2500\u2500...\\n\\n\\n\\n\\n\\n'\nE         \nE         'GOT:' is contained here:\nE           READY\nE           \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\nE           \u276f carry on\nE           GOT: carry on\nE         ? ++++...\nE         \nE         ...Full output truncated (20 lines hidden), use '-vv' to show\n\ntests/e2e/test_terminal_restart_resume.py:287: AssertionError\n=========================== short test summary info ============================\nFAILED tests/e2e/test_terminal_restart_resume.py::test_a_killed_server_resumes_each_session_once_and_nudges_the_mid_turn_one\n1 failed, 1 passed in 6.73s"
+ },
+ "schema": 2,
+ "task": "3.3",
+ "test": "uv run --locked pytest tests/e2e/test_terminal_restart_resume.py -q -p no:randomly",
+ "text": "`uv run --locked pytest tests/e2e/test_terminal_restart_resume.py -q -p no:randomly`",
+ "touched": [
+  "src/remote_agents/application/interrupted_resume.py"
+ ]
+}
