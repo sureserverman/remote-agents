@@ -897,7 +897,8 @@ this. The terminal never does.
   - `launch_error` or `launch_failed`: the resume itself failed.
 
   A resume refused before it started is not a skip. Examples are the Codex daemon guard and
-  a folder that could not be read. The notice says *it will be tried again at the next start*.- **The notice.** One message per start: *Resumed N sessions after restart*, then the sessions
+  a folder that could not be read. The notice says *it will be tried again at the next start*.
+- **The notice.** One message per start: *Resumed N sessions after restart*, then the sessions
   not resumed with their reasons, then the ones resumed but not nudged. It also says how many
   sessions could not be judged when tmux could not be read. It waits until the bot is attached.
   If nothing was interrupted, nothing is sent.
