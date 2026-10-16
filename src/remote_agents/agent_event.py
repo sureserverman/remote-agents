@@ -127,7 +127,12 @@ def resolve_session_id(
     sessions sharing one -- hold here too. The folder is the shell's own, not its turn's: a
     writer that changes folder before asking is compared against the folder it moved to.
     """
-    from remote_agents.adapters.agents.hook_identity import read_roster, resolve, roster_path
+    from remote_agents.adapters.agents.hook_identity import (
+        UNTRUSTED,
+        inspect_roster,
+        resolve,
+        roster_path,
+    )
     from remote_agents.ports.provider_descriptor import HookIdentity
     from remote_agents.ports.session_identity import SESSION_ID_VARIABLE, safe_session_id
 
@@ -139,14 +144,14 @@ def resolve_session_id(
         roster = (
             None
             if activity_directory is None
-            else read_roster(roster_path(activity_directory, hook_name))
+            else inspect_roster(roster_path(activity_directory, hook_name))
         )
         thread = None if found.thread_variable is None else environment.get(found.thread_variable)
+        if roster is UNTRUSTED:
+            return None
         if thread:
             return resolve(thread, cwd, roster) if roster else None
-        if roster is not None and (
-            not roster or any(entry.session_id == inherited for entry in roster)
-        ):
+        if roster and any(entry.session_id == inherited for entry in roster):
             return None
     return inherited
 
@@ -181,7 +186,9 @@ def run_session_id(argv: list[str] | None = None) -> int:
     except Exception:
         session_id = None
     if session_id is None:
-        print("remote-agents: this shell belongs to no managed session", file=sys.stderr)
+        if sys.stderr is not None:
+            # None when fd 2 was closed, and `print(file=None)` would write to stdout.
+            print("remote-agents: this shell belongs to no managed session", file=sys.stderr)
         return NOT_MANAGED
     try:
         print(session_id, flush=True)

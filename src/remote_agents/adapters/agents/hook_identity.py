@@ -129,6 +129,18 @@ def resolve(thread_id: object, cwd: object, roster: Iterable[RosterEntry]) -> st
     return None
 
 
+class _Untrusted:
+    """What `inspect_roster` answers for a roster file that is there and cannot be trusted."""
+
+    __slots__ = ()
+
+    def __repr__(self) -> str:
+        return "UNTRUSTED"
+
+
+UNTRUSTED = _Untrusted()
+
+
 def read_roster(path: Path) -> tuple[RosterEntry, ...] | None:
     """The roster at `path`: None when there is none, `()` when it cannot be trusted.
 
@@ -139,6 +151,19 @@ def read_roster(path: Path) -> tuple[RosterEntry, ...] | None:
     write, one owned by someone else, or one that does not parse. Failing closed costs a
     notification; failing open is the incident this module exists to end.
     """
+    found = inspect_roster(path)
+    return () if found is UNTRUSTED else found
+
+
+def inspect_roster(path: Path) -> tuple[RosterEntry, ...] | _Untrusted | None:
+    """The roster at `path`, keeping apart what `read_roster` folds together.
+
+    None when there is none; `UNTRUSTED` for a file that is there and cannot be trusted, on
+    every ground `read_roster` names; otherwise its entries, `()` when the service listed no
+    session. The hook needs only "names nobody" for the last two. `remote-agents session-id`
+    needs them apart: beside an untrusted roster it cannot tell a daemon shell from any other,
+    beside an empty one it can (DEC-128).
+    """
     try:
         # Non-blocking, because opening a pipe for reading waits for a writer, and this runs in
         # every Codex turn; the regular-file check below then refuses it.
@@ -146,7 +171,7 @@ def read_roster(path: Path) -> tuple[RosterEntry, ...] | None:
     except FileNotFoundError:
         return None
     except OSError:
-        return ()
+        return UNTRUSTED
     try:
         status = os.fstat(descriptor)
         if (
@@ -154,29 +179,29 @@ def read_roster(path: Path) -> tuple[RosterEntry, ...] | None:
             or status.st_mode & 0o077
             or status.st_uid != os.geteuid()
         ):
-            return ()
+            return UNTRUSTED
         raw = os.read(descriptor, _MAXIMUM_ROSTER_BYTES + 1)
     except OSError:
-        return ()
+        return UNTRUSTED
     finally:
         os.close(descriptor)
     if len(raw) > _MAXIMUM_ROSTER_BYTES:
-        return ()
+        return UNTRUSTED
     try:
         document = json.loads(raw)
     except (UnicodeDecodeError, ValueError, RecursionError):
         # Nesting past the parser's depth raises `RecursionError`, not `ValueError`.
-        return ()
+        return UNTRUSTED
     sessions = document.get("sessions") if isinstance(document, dict) else None
     if not isinstance(sessions, list):
-        return ()
+        return UNTRUSTED
     entries = []
     for item in sessions:
         entry = _entry(item)
         if entry is None:
             # One bad entry makes the whole file untrustworthy: a partial roster would let the
             # time rule hand a thread to the wrong session in the same folder.
-            return ()
+            return UNTRUSTED
         entries.append(entry)
     return tuple(entries)
 

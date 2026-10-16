@@ -314,3 +314,26 @@ def test_session_id_command_exits_3_on_any_unexpected_error(
 
     monkeypatch.setattr(agent_event, "resolve_session_id", broken)
     assert _run(shell, capsys) == (3, "")
+
+
+# --- Sub-plan 2 close-out evaluator: an empty roster the service wrote is trusted, not spoiled ---
+
+
+def test_session_id_command_names_the_environment_session_beside_an_empty_codex_roster(
+    shell: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # The service writes the roster even when no Codex session is live (DEC-126). A Claude shell
+    # beside it is named by its variable; an empty roster is not an untrusted one.
+    _roster(shell)
+    session = str(SessionId.new())
+    monkeypatch.setenv("REMOTE_AGENTS_SESSION_ID", session)
+    assert _run(shell, capsys) == (0, f"{session}\n")
+
+
+def test_session_id_command_writes_nothing_to_stdout_with_stderr_closed(
+    shell: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # A process started with fd 2 closed has `sys.stderr` None, and `print(file=None)` writes
+    # to stdout: the contract says exit 3 prints nothing there.
+    monkeypatch.setattr("sys.stderr", None)
+    assert _run(shell, capsys) == (3, "")
