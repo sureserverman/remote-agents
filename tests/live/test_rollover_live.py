@@ -73,6 +73,32 @@ it, the database connection and the fixture repository.
 asks before writing a file, Stage 1 waits on that question and the run fails at its deadline --
 honestly, with the panes in the diagnosis, never as a pass.
 
+**The Codex case** (`test_rollover_now_hands_a_real_plan_to_a_fresh_codex_session`) runs the
+same drive with a real `codex` and the managed `planning@engineering-skills` plugin, typed
+`$planning:executing-plans <plan>`; the pass types Codex's own `$` adopt template. What differs:
+
+- **A short `CODEX_HOME` of its own** (`tests/support/codex_home.py`): a link to the owner's
+  `auth.json`, never opened here; a copy of the owner's installed plugin cache, and of the three
+  config sections that install it (its marketplace, its enablement, its hooks' trusted hashes);
+  nothing else of the owner's config. Retired in `finally` with the app-server daemon the TUI
+  started there (BL-133).
+- **`HOME` is the temporary home, for `codex` and every shell it runs.** The plugin's writer runs
+  `remote-agents session-id` with no argument, and that reads the hook roster under
+  `$HOME/.local/state/remote-agents` -- the owner's real one, which names none of this run's
+  sessions. So the `codex` wrapper sets `HOME`, and puts its own folder first on `PATH`, where a
+  `remote-agents` wrapper beside it runs this checkout's code. Codex's tool shell keeps both
+  (measured 2026-10-16 on codex-cli 0.163.0). It has to be the wrapper: the pane's `PATH` leads
+  with every agent's folder, the owner's `~/.local/bin` among them, so a `PATH` set for the pane
+  reaches the installed `remote-agents` first -- which, before this release, has no
+  `session-id`, and the gate reads no request (the drill's first two runs, 2026-10-16). The
+  roster is the one this run's composition publishes.
+- **Sandboxed, never asking.** `workspace-write` with the repository's `.git` added as a writable
+  root (the sandbox makes `.git` read-only otherwise, and the plan commits), and
+  `approval_policy = "never"`, so no approval dialog can stall a turn. Nothing outside the
+  repository and `/tmp` is writable to the model.
+- **Under `/tmp` directly**, the fixture repository, so the model line Codex draws under its
+  composer stays short.
+
 **Opt-in.** It runs only when asked: `-m` naming `live_acceptance` (as the gate command above
 does), or `REMOTE_AGENTS_LIVE_ACCEPTANCE=1` as for every other live acceptance test. A plain run
 skips it, because it spends real model usage and runs for up to fifteen minutes. **Once asked
@@ -89,6 +115,7 @@ import os
 import shlex
 import shutil
 import subprocess
+import sys
 import tempfile
 import time
 from datetime import date
@@ -99,6 +126,7 @@ from uuid import uuid4
 import pytest
 import yaml
 from _pytest.mark.expression import Expression
+from codex_home import retire_codex_home, short_codex_home
 
 from remote_agents.adapters.agents.registry import (
     adopt_templates,
@@ -268,9 +296,9 @@ def _fixture_repository(parent: Path) -> Path:
     return repo
 
 
-def _isolated_home(root: Path, repo: Path, claude: Path, planning: Path) -> ProductionPaths:
+def _isolated_home(root: Path, repo: Path, wrappers: dict[str, str]) -> ProductionPaths:
     """A temporary operator home: config with the switch on, a registry naming only `repo`,
-    and the `claude` wrapper that loads the planning checkout."""
+    and in its `.local/bin` one `sh` wrapper per name, each running its line."""
     paths = ProductionPaths.for_home(root)
     paths.ensure_directories(include_unit_directory=False)
     dev_root = root / "dev"
@@ -313,14 +341,86 @@ def _isolated_home(root: Path, repo: Path, claude: Path, planning: Path) -> Prod
         ),
         encoding="utf-8",
     )
-    wrapper = root / ".local" / "bin" / "claude"
-    wrapper.parent.mkdir(parents=True)
-    wrapper.write_text(
-        "#!/bin/sh\n"
-        f'exec {shlex.quote(str(claude))} --plugin-dir {shlex.quote(str(planning))} "$@"\n',
+    bin_directory = root / ".local" / "bin"
+    bin_directory.mkdir(parents=True)
+    for name, line in wrappers.items():
+        wrapper = bin_directory / name
+        wrapper.write_text(f"#!/bin/sh\n{line}\n", encoding="utf-8")
+        wrapper.chmod(0o755)
+    return paths
+
+
+#: The owner's installed Codex plugins, copied into the drill's home.
+_CODEX_PLUGINS = Path.home() / ".codex" / "plugins" / "cache" / "engineering-skills"
+
+
+def _codex_prerequisites(config: pytest.Config) -> Path:
+    """The real `codex`, logged in, with a planning plugin that writes and adopts handoffs."""
+    if not _opted_in(config):
+        pytest.skip(
+            "BLOCKED: not asked for; run with `-m live_acceptance` or "
+            "REMOTE_AGENTS_LIVE_ACCEPTANCE=1 (a real Codex run, up to 15 minutes)"
+        )
+    for needed in ("tmux", "git"):
+        if shutil.which(needed) is None:
+            _blocked(f"executable_missing: {needed}")
+    codex = _resolve_profile_executable("codex", Path.home())
+    if codex is None:
+        _blocked("executable_missing: codex")
+    if not (Path.home() / ".codex" / "auth.json").is_file():
+        _blocked("codex is not logged in (no ~/.codex/auth.json)")
+    skills = sorted(_CODEX_PLUGINS.glob("planning/*/skills/executing-plans"))
+    if not skills or not (skills[-1] / "scripts" / "handoff-envelope.py").is_file():
+        _blocked(f"no Codex planning plugin with handoff envelopes under {_CODEX_PLUGINS}")
+    if "--adopt-handoff" not in (skills[-1] / "SKILL.md").read_text(encoding="utf-8"):
+        _blocked(f"the Codex planning plugin at {skills[-1].parents[1]} cannot adopt a handoff")
+    if "[marketplaces.engineering-skills]" not in _codex_plugin_sections():
+        _blocked("the owner's Codex config installs no engineering-skills marketplace")
+    return codex
+
+
+def _codex_plugin_sections() -> str:
+    """The sections of the owner's Codex config that install the planning plugin: its
+    marketplace, its enablement and its hooks' trusted hashes. Nothing else of the config."""
+    keep, out = False, []
+    for line in (Path.home() / ".codex" / "config.toml").read_text(encoding="utf-8").splitlines():
+        if line.startswith("["):
+            keep = (
+                line.startswith('[plugins."planning@engineering-skills"]')
+                or line.startswith("[marketplaces.engineering-skills]")
+                or line.startswith('[hooks.state."planning@engineering-skills:')
+            )
+        if keep:
+            out.append(line)
+    return "\n".join(out) + "\n"
+
+
+def _isolated_codex_home(root: Path, repo: Path, codex: Path, codex_home: Path) -> ProductionPaths:
+    """`_isolated_home` for Codex: the same config and registry, a `CODEX_HOME` holding the
+    login link and the plugin, and the `codex` and `remote-agents` wrappers (module docstring)."""
+    paths = _isolated_home(
+        root,
+        repo,
+        {
+            # The wrapper's own folder first on `PATH`, here and not in the pane's environment:
+            # the composition puts every agent's folder ahead of the inherited `PATH`
+            # (`composition/tui.py`, `_local_runtime`), and the owner's `~/.local/bin`, where
+            # the installed `remote-agents` lives, sorts before this temporary one.
+            "codex": f"HOME={shlex.quote(str(root))} CODEX_HOME={shlex.quote(str(codex_home))} "
+            f'PATH={shlex.quote(str(root / ".local" / "bin"))}:"$PATH" '
+            f'exec {shlex.quote(str(codex))} "$@"',
+            "remote-agents": f'exec {shlex.quote(sys.executable)} -m remote_agents "$@"',
+        },
+    )
+    os.symlink(Path.home() / ".codex" / "auth.json", codex_home / "auth.json")
+    shutil.copytree(_CODEX_PLUGINS, codex_home / "plugins" / "cache" / "engineering-skills")
+    (codex_home / "config.toml").write_text(
+        'approval_policy = "never"\nsandbox_mode = "workspace-write"\n'
+        "[sandbox_workspace_write]\n"
+        f"writable_roots = [{json.dumps(str(repo / '.git'))}]\n"
+        "[notice]\nhide_rate_limit_model_nudge = true\n\n" + _codex_plugin_sections(),
         encoding="utf-8",
     )
-    wrapper.chmod(0o755)
     return paths
 
 
@@ -344,11 +444,18 @@ async def test_rollover_now_hands_a_real_plan_to_a_fresh_session(
     owners_before = _owner_fingerprint()
     try:
         repo = _fixture_repository(repo_parent)
-        paths = _isolated_home(tmp_path / "home", repo, claude, planning)
+        paths = _isolated_home(
+            tmp_path / "home",
+            repo,
+            {
+                "claude": f"exec {shlex.quote(str(claude))} "
+                f'--plugin-dir {shlex.quote(str(planning))} "$@"'
+            },
+        )
         config = load_config(paths.config_path)
         connection = open_database(paths.database_path, migrations=MIGRATIONS)
         harness = _compose(config, connection, paths)
-        await _drive(harness, repo, periodic)
+        await _drive(harness, repo, periodic, ProfileId("claude"), "/planning:executing-plans")
         # Nothing the plan ran reached the owner's own registers.
         assert _owner_fingerprint() == owners_before, (
             "the run changed the owner's project registry or Portfolio roll-ups"
@@ -369,6 +476,55 @@ async def test_rollover_now_hands_a_real_plan_to_a_fresh_session(
             connection.close()
         if repo is not None:
             shutil.rmtree(repo, ignore_errors=True)
+        shutil.rmtree(tmux_directory, ignore_errors=True)
+
+
+@pytest.mark.live_acceptance
+async def test_rollover_now_hands_a_real_plan_to_a_fresh_codex_session(
+    request: pytest.FixtureRequest, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """BL-123 for Codex: the same drive, on a real `codex` (module docstring, the Codex case)."""
+    codex = _codex_prerequisites(request.config)
+    tmux_directory = Path(tempfile.mkdtemp(prefix="ra-roll-", dir="/tmp"))
+    monkeypatch.setenv("TMUX_TMPDIR", str(tmux_directory))
+    socket = tmux_directory / f"tmux-{os.getuid()}" / "remote-agents"
+    repo_parent = Path(tempfile.mkdtemp(prefix="ra-rcx-", dir="/tmp"))
+    codex_home = short_codex_home()
+
+    connection = None
+    periodic: list[asyncio.Task] = []
+    owners_before = _owner_fingerprint()
+    try:
+        repo = _fixture_repository(repo_parent)
+        home = tmp_path / "home"
+        paths = _isolated_codex_home(home, repo, codex, codex_home)
+        config = load_config(paths.config_path)
+        connection = open_database(paths.database_path, migrations=MIGRATIONS)
+        harness = _compose(config, connection, paths)
+        await _drive(harness, repo, periodic, ProfileId("codex"), "$planning:executing-plans")
+        assert _owner_fingerprint() == owners_before, (
+            "the run changed the owner's project registry or Portfolio roll-ups"
+        )
+    finally:
+        for task in periodic:
+            task.cancel()
+        await asyncio.gather(*periodic, return_exceptions=True)
+        subprocess.run(
+            ["tmux", "-S", str(socket), "kill-server"],
+            capture_output=True,
+            timeout=_GIT_SECONDS,
+            check=False,
+        )
+        if connection is not None:
+            connection.close()
+        # Codex's own transcripts, the one record of what each tool command printed (a gate's
+        # `context-usage.py` among them), kept beside pytest's kept `tmp_path` before the home
+        # goes.
+        if (codex_home / "sessions").is_dir():
+            shutil.copytree(codex_home / "sessions", tmp_path / "codex-sessions")
+        # After the panes: the daemon the TUI started outlives them (BL-133).
+        retire_codex_home(codex_home)
+        shutil.rmtree(repo_parent, ignore_errors=True)
         shutil.rmtree(tmux_directory, ignore_errors=True)
 
 
@@ -451,11 +607,18 @@ def _compose(config, connection, paths: ProductionPaths) -> _Harness:
     return _Harness(backend, runtime.terminal, composition, projects, notices)
 
 
-async def _drive(harness: _Harness, repo: Path, periodic: list[asyncio.Task]) -> None:
+async def _drive(
+    harness: _Harness,
+    repo: Path,
+    periodic: list[asyncio.Task],
+    profile: ProfileId,
+    executor: str,
+) -> None:
+    """Rollover now on a `profile` session executing the fixture plan through `executor`, the
+    plugin's own spelling of its executing-plans skill on that agent."""
     backend = harness.backend
     sessions = backend.sessions
-    claude = ProfileId("claude")
-    assert claude in profiles_that_roll_over()
+    assert profile in profiles_that_roll_over()
     project_id = next((pid for pid, path in harness.projects.paths.items() if path == repo), None)
     assert project_id is not None, f"the fixture repository is not in the catalogue: {repo}"
     root = handoff_root(repo)
@@ -472,7 +635,7 @@ async def _drive(harness: _Harness, repo: Path, periodic: list[asyncio.Task]) ->
     )
 
     launched = await sessions.launch(
-        LaunchCommand(project_id, claude, _key("rollover-predecessor"), "rollover-live")
+        LaunchCommand(project_id, profile, _key("rollover-predecessor"), "rollover-live")
     )
     predecessor = launched.record.session_id
     if launched.record.state is SessionState.UNTRUSTED:
@@ -495,7 +658,7 @@ async def _drive(harness: _Harness, repo: Path, periodic: list[asyncio.Task]) ->
         )
         await asyncio.sleep(_POLL_SECONDS)
 
-    await _type(harness, predecessor, f"/planning:executing-plans {repo / _PLAN}")
+    await _type(harness, predecessor, f"{executor} {repo / _PLAN}")
 
     started = time.monotonic()
     rollover = None
@@ -544,6 +707,8 @@ async def _drive(harness: _Harness, repo: Path, periodic: list[asyncio.Task]) ->
     assert stopped_by_the_pass, await _diagnosis(
         harness, repo, predecessor, "the predecessor ended on its own, not by the pass's stop"
     )
+    observed = await harness.terminal.inspect(predecessor)
+    assert observed is None or not observed.live, f"the predecessor's pane is live: {observed}"
 
     # 4. Its row says which session it continued as, as both surfaces draw it.
     marks = await rollover_marks(backend.rollovers, records.values(), sessions=sessions)

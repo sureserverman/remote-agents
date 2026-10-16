@@ -1,0 +1,11 @@
+{
+ "created": "2026-10-16T21:24:23+00:00",
+ "fingerprint": "7cda760695c6ffe5d154f823a97f0c8645042d7e50448a1e48f9812a0aef4f6a",
+ "index": 1,
+ "kind": "claim-deviation",
+ "plan": "/mnt/vault/Portfolio/infra/remote-agents/plans/2026-10-15-codex-rollover-and-restart-resume-sub-04-codex-rollover-plan.md",
+ "schema": 2,
+ "task": "2.2",
+ "text": "`uv run --locked pytest tests/live/test_rollover_live.py -q -p no:randomly -k codex`",
+ "why": "A live drill on real Codex (about 2-3 min of model turns per run), so a break replay spends owner quota on each run; no host-side test guards the live identity path. Its teeth were shown by the run itself on 2026-10-16: runs 1 and 2 went RED (rollover stuck REQUESTED, Codex ran both stages) while the drill's tool shell reached the installed remote-agents v0.64.1 with no session-id verb (pane PATH led with ~/.local/bin; the plugin's context-usage.py answered verdict=unknown, kept transcript in pytest-484); run 3, with the codex wrapper putting the checkout's remote-agents first, passed: 1 passed in 192 s, codex-cli 0.163.0, plugin 0.2.1."
+}
