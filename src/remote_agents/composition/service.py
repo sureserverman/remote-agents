@@ -3,10 +3,17 @@
 from __future__ import annotations
 
 import asyncio
+import fcntl
 import logging
+import os
 import time
-from collections.abc import Awaitable, Callable, Mapping
-from contextlib import AbstractAsyncContextManager, nullcontext
+from collections.abc import Awaitable, Callable, Iterator, Mapping
+from contextlib import (
+    AbstractAsyncContextManager,
+    AbstractContextManager,
+    contextmanager,
+    nullcontext,
+)
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from functools import partial
@@ -109,6 +116,9 @@ _ROLLOVER_POLL_SECONDS = 30.0
 _WORKTREE_POLL_SECONDS = 60.0
 
 _RESTART_NOTICE_POLL_SECONDS = 1.0
+
+_RESTART_STOP_GRACE_SECONDS = 5.0
+"""How long shutdown waits, after the drain, for the restart pass to record its stop."""
 """How often the held restart notice is retried: the bot attaches moments after the pass."""
 #: Bounds one limit-stop pass (a limits read, the session and outcome reads, a Telegram edit or
 #: delete per lifted stop), so one wedged call costs a pass rather than every later lift.
@@ -312,6 +322,10 @@ class RestartResume:
     a session an earlier start left `resuming` keeps its mark for the retry."""
     notify: Callable[[tuple[ResumeReport, ...], int], Awaitable[None]] | None = None
     """Tell the owner once: the reports, and how many sessions could not be judged."""
+    exclusive: Callable[[], AbstractContextManager[bool]] = lambda: nullcontext(True)
+    """Held for the whole pass; False when another process holds it, and then this one resumes
+    nothing. Two `serve` processes on one store would otherwise each launch, and each overwrite
+    the other's outcome."""
 
 
 def build_restart_resume(
@@ -328,6 +342,7 @@ def build_restart_resume(
     enabled: Callable[[], Awaitable[bool]],
     notify: Callable[[tuple[ResumeReport, ...], int], Awaitable[None]] | None,
     stopping: Callable[[], bool],
+    lock_path: Path | None = None,
 ) -> RestartResume:
     """The restart resume pass over the bot's stores and terminal (DEC-127)."""
 
@@ -357,8 +372,15 @@ def build_restart_resume(
                 mark = conversation_marks.latest(session)
                 if mark is not None:
                     marks[session] = mark
+            pending = frozenset(
+                session
+                for session, outcome in (await outcomes.outcomes()).items()
+                if outcome == RESUMING
+            )
             for record in records:
-                if record.state is SessionState.RUNNING:
+                # A pending session is ENDED by now, and may have handed off since it was first
+                # judged: its rollover is read on the retry too.
+                if record.state is SessionState.RUNNING or str(record.session_id) in pending:
                     latest = await rollovers.latest_for(record.session_id)
                     if latest is not None:
                         handed.append(latest)
@@ -366,11 +388,6 @@ def build_restart_resume(
                 capability.profile_id
                 for capability in await capabilities()
                 if resume_capable(capability)
-            )
-            pending = frozenset(
-                session
-                for session, outcome in (await outcomes.outcomes()).items()
-                if outcome == RESUMING
             )
         except Exception:
             _LOG.exception("what a restart interrupted could not be read; nothing is resumed")
@@ -389,14 +406,20 @@ def build_restart_resume(
         )
 
     async def forget_marks() -> None:
-        running = {str(record.session_id) for record in await store.list((SessionState.RUNNING,))}
+        # Only ENDED, never merely not RUNNING: an UNTRUSTED or STARTING session is live, and
+        # FAILED can still be promoted; their marks are what a later resume would need.
+        kept = {
+            str(record.session_id)
+            for record in await store.list()
+            if record.state is not SessionState.ENDED
+        }
         pending = {
             session
             for session, outcome in (await outcomes.outcomes()).items()
             if outcome == RESUMING
         }
         for session in conversation_marks.sessions():
-            if session not in running and session not in pending:
+            if session not in kept and session not in pending:
                 conversation_marks.forget(session)
 
     async def key_claimed(key: str) -> bool:
@@ -419,7 +442,26 @@ def build_restart_resume(
         ),
         forget_marks=forget_marks,
         notify=notify,
+        exclusive=(
+            (lambda: nullcontext(True)) if lock_path is None else partial(_held_alone, lock_path)
+        ),
     )
+
+
+@contextmanager
+def _held_alone(path: Path) -> Iterator[bool]:
+    """An exclusive, non-blocking `flock` on `path`: True while held here, False when another
+    process holds it. Released when the descriptor closes, a crash included."""
+    descriptor = os.open(path, os.O_RDWR | os.O_CREAT, 0o600)
+    try:
+        try:
+            fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            yield False
+            return
+        yield True
+    finally:
+        os.close(descriptor)
 
 
 async def _serve_with_reconciliation(
@@ -457,12 +499,14 @@ async def _serve_with_reconciliation(
     # (DEC-127): after it, nothing says which of them were running.
     restart = await _restart_snapshot(composition)
     await _reconcile_quietly(composition)
-    # And before every periodic task, the worktree cleanup's first pass above all (DEC-124): a
-    # resumed session must be bound to its worktree before anything may judge it unreferenced.
-    await _resume_after_restart(composition, restart)
-    periodic = [asyncio.create_task(_reconcile_periodically(composition, interval))]
+    # Beside polling, not before it: the launches and the nudges' patience can take minutes,
+    # and the bot must answer meanwhile -- and only once polling runs can a stop signal drain
+    # the pass. The worktree cleanup alone waits for it (DEC-124): a resumed session must be
+    # bound to its worktree before anything may judge that folder unreferenced.
+    resuming = asyncio.create_task(_resume_after_restart(composition, restart))
+    periodic = [resuming, asyncio.create_task(_reconcile_periodically(composition, interval))]
     if composition.restart_notifier is not None:
-        periodic.append(asyncio.create_task(_flush_restart_notice(composition)))
+        periodic.append(asyncio.create_task(_flush_restart_notice(composition, resuming)))
     if composition.approval_watcher is not None or composition.activity_directory is not None:
         # A separate task rather than another step inside the reconciliation pass: the two
         # answer different questions on different clocks, and a pane-title read that hangs must
@@ -524,7 +568,9 @@ async def _serve_with_reconciliation(
     if composition.worktree_cleanup is not None:
         # Its own task and clock, like the rollover pass: a pass that raises costs one tick.
         periodic.append(
-            asyncio.create_task(_watch_worktrees_periodically(composition, worktree_interval))
+            asyncio.create_task(
+                _watch_worktrees_periodically(composition, worktree_interval, after=resuming)
+            )
         )
     # Not another periodic task, and the difference is the point: the loops above each poll
     # something on a clock of their own, while this *subscribes* to a watcher that already
@@ -544,10 +590,18 @@ async def _serve_with_reconciliation(
             await _drain_operations(composition)
         finally:
             # Still reached if `serve` is itself cancelled mid-drain: the passes and the two
-            # helper children are reclaimed either way.
-            for task in periodic:
+            # helper children are reclaimed either way. Every other task first, with no turn of
+            # the loop between the drain and their cancel, so none wakes on the shut gate.
+            others = [task for task in periodic if task is not resuming]
+            for task in others:
                 task.cancel()
-            await asyncio.gather(*periodic, return_exceptions=True)
+            await asyncio.gather(*others, return_exceptions=True)
+            # Then the restart pass, which reads the shut gate and stops: a moment lets its
+            # nudges record `stopping` rather than leave an intent read later as unconfirmed.
+            if not resuming.done():
+                await asyncio.wait({resuming}, timeout=_RESTART_STOP_GRACE_SECONDS)
+            resuming.cancel()
+            await asyncio.gather(resuming, return_exceptions=True)
             await _close_host_remote_control(composition)
             await _close_usage_readers(composition)
 
@@ -772,11 +826,16 @@ async def _roll_over_periodically(composition: ServiceComposition, interval: flo
                 _LOG.exception("a held rollover notice could not be resent")
 
 
-async def _watch_worktrees_periodically(composition: ServiceComposition, interval: float) -> None:
+async def _watch_worktrees_periodically(
+    composition: ServiceComposition, interval: float, *, after: asyncio.Task | None = None
+) -> None:
     """Remove the session worktrees every guard lets go, on a clock of their own -- never raising.
 
     Each removal runs inside the shared operation gate the pass was built with, so the drain at
     shutdown waits for one under way, and a pass that wakes after the gate shut removes nothing."""
+    if after is not None:
+        # Not before the restart resume pass has returned (DEC-124).
+        await asyncio.wait({after})
     while True:
         await asyncio.sleep(interval)
         try:
@@ -1164,14 +1223,32 @@ async def _resume_after_restart(
     except Exception:
         _LOG.exception("the restart resume switch could not be read; nothing is resumed")
         return
+    try:
+        holder = restart.exclusive()
+        mine = holder.__enter__()
+    except Exception:
+        _LOG.exception("the restart resume lock could not be taken; nothing is resumed")
+        return
+    try:
+        if not mine:
+            _LOG.warning("another serve holds the restart resume pass; this one resumes nothing")
+            return
+        await _resume_held(restart, snapshot)
+    finally:
+        holder.__exit__(None, None, None)
+
+
+async def _resume_held(restart: RestartResume, snapshot: RestartSnapshot) -> None:
     unchecked = 0
     reports: tuple[ResumeReport, ...] = ()
     if snapshot.server_known:
         try:
             reports = await restart.resume.run(snapshot)
         except Exception:
-            # Every decision was written before its action; the next start resumes from there.
+            # Every decision was written before the first launch; the next start resumes from
+            # there -- and keeps the marks it will need, so the sweep is skipped.
             _LOG.exception("the restart resume pass failed")
+            return
     else:
         unchecked = sum(
             1
@@ -1189,10 +1266,11 @@ async def _resume_after_restart(
             _LOG.exception("the restart notice could not be handed on")
 
 
-async def _flush_restart_notice(composition: ServiceComposition) -> None:
-    """Send the held restart notice once the bot is attached; done when nothing is held."""
+async def _flush_restart_notice(composition: ServiceComposition, pass_: asyncio.Task) -> None:
+    """Send the held restart notice once the bot is attached; done once the pass has returned
+    and nothing is held."""
     notifier = composition.restart_notifier
-    while notifier.pending:  # type: ignore[union-attr]
+    while not pass_.done() or notifier.pending:  # type: ignore[union-attr]
         await asyncio.sleep(_RESTART_NOTICE_POLL_SECONDS)
         try:
             await notifier.pass_once()  # type: ignore[union-attr]

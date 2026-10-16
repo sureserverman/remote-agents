@@ -22,7 +22,7 @@ from remote_agents.application.commands import UNATTENDED_LAUNCH_WAIT_SECONDS, R
 from remote_agents.application.errors import DuplicateCommandError, MutationsDraining
 from remote_agents.application.limit_resume import NUDGE
 from remote_agents.application.prompt_delivery import DeliveryVerdict, delivery_verdict
-from remote_agents.application.schedules import RETRY_SECONDS, STARTUP_PATIENCE
+from remote_agents.application.schedules import RETRY_SECONDS, STARTUP_RETRIES
 from remote_agents.application.services import ResumeOutcome
 from remote_agents.domain.conversations import (
     ConversationReference,
@@ -87,6 +87,10 @@ class ResumeSkip(StrEnum):
     HANDED_OFF = "handed-off"
     ALREADY_OPEN = "already-open"
     NO_CONVERSATION = "no-conversation"
+    SUPERSEDED = "superseded"
+    """A session an earlier start left `resuming` whose conversation a newer session has opened
+    since -- the owner resumed it by hand, or the earlier launch got that far. Never relaunched:
+    the work moved on without it."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -105,7 +109,8 @@ class RestartSnapshot:
     server_started_at: datetime | None
     """None when no tmux server is running."""
     server_known: bool
-    """False when the start time could not be read: nothing is resumed on a guess."""
+    """False when anything the decision needs could not be read -- the server's start time
+    above all: nothing is resumed on a guess."""
     turn_marker_sessions: frozenset[str]
     """Sessions whose turn marker survived: they were mid-turn when they died (DEC-104)."""
     conversation_marks: Mapping[str, str]
@@ -164,6 +169,13 @@ def plan_resumes(snapshot: RestartSnapshot) -> tuple[ResumeDecision, ...]:
     for record in interrupted:
         conversation = _conversation(record, snapshot.conversation_marks)
         skip = _skip(record, conversation, snapshot.resumable_profiles, handed_off, held)
+        if (
+            skip is None
+            and conversation is not None
+            and str(record.session_id) in snapshot.pending
+            and _opened_since(record, conversation, snapshot)
+        ):
+            skip = ResumeSkip.SUPERSEDED
         if skip is None and conversation is not None:
             held.add((record.profile_id, conversation.value))
         decisions.append(
@@ -220,6 +232,19 @@ def _conversation(record: SessionRecord, marks: Mapping[str, str]) -> ProviderCo
         except ValueError:
             continue
     return None
+
+
+def _opened_since(
+    record: SessionRecord, conversation: ProviderConversationId, snapshot: RestartSnapshot
+) -> bool:
+    """Whether a session newer than `record` has been in the same conversation, in any state."""
+    return any(
+        other.record.session_id != record.session_id
+        and other.record.profile_id == record.profile_id
+        and other.record.created_at > record.created_at
+        and conversation.value in _held_conversations(other.record, snapshot.conversation_marks)
+        for other in snapshot.sessions
+    )
 
 
 def _held_conversations(record: SessionRecord, marks: Mapping[str, str]) -> tuple[str, ...]:
@@ -288,29 +313,57 @@ class InterruptedResumePass:
     async def run(self, snapshot: RestartSnapshot) -> tuple[ResumeReport, ...]:
         """Resume or skip every interrupted session the snapshot shows, and say what each came
         to. When the service starts draining, the pass stops there and answers what it has done
-        so far; every session it did not reach keeps its intent for the next start."""
+        so far; every session it did not reach keeps its intent for the next start.
+
+        **Every decision is written before the first launch.** The first reconcile has already
+        ended these records, so a session whose row is missing when the process dies is never
+        seen as interrupted again: a skip is written as its outcome and a resume as its intent,
+        all of them, before anything is launched."""
         decided = await self._outcomes.outcomes()
         await self._give_up_interrupted_nudges(decided)
-        reports: list[ResumeReport] = []
-        draining = False
+        reports: dict[str, ResumeReport] = {}
+        order: list[str] = []
+        to_resume: list[ResumeDecision] = []
         for decision in plan_resumes(snapshot):
             session = str(decision.record.session_id)
             current = decided.get(session)
             if current is not None and current != RESUMING:
                 continue
+            order.append(session)
             if decision.skip is not None:
-                reports.append(await self._decide(decision, f"{SKIPPED}:{decision.skip.value}"))
+                reports[session] = await self._decide(decision, f"{SKIPPED}:{decision.skip.value}")
                 continue
             if current is None:
                 await self._outcomes.record(session, RESUMING, decided_at=self._now())
-            try:
-                reports.append(await self._resumed(decision))
-            except MutationsDraining:
-                _LOG.warning("the service began stopping; the restart resume pass stops here")
+            to_resume.append(decision)
+        busy: set[ProfileId] = set()
+        draining = False
+        for decision in to_resume:
+            session = str(decision.record.session_id)
+            if self._stopping():
                 draining = True
                 break
+            if decision.record.profile_id in busy:
+                # Its shared daemon refused one launch already: each more would wait it out too.
+                reports[session] = ResumeReport(decision.record, DEFERRED)
+                continue
+            try:
+                reports[session] = await self._resumed(decision)
+            except MutationsDraining:
+                draining = True
+                break
+            except CodexRemoteControlBusy:
+                busy.add(decision.record.profile_id)
+                _LOG.warning("resuming %s waited out the daemon guard", decision.record.session_id)
+                reports[session] = ResumeReport(decision.record, DEFERRED)
+        if draining:
+            _LOG.warning("the service began stopping; the restart resume pass stops here")
         nudged = await asyncio.gather(
-            *(self._nudged(report, stopping=draining) for report in reports)
+            *(
+                self._nudged(reports[session], stopping=draining)
+                for session in order
+                if session in reports
+            )
         )
         return tuple(nudged)
 
@@ -343,8 +396,11 @@ class InterruptedResumePass:
         return ResumeReport(report.record, final, report.new_session_id, report.nudge)
 
     async def _nudge(self, session_id: SessionId) -> str | None:
-        """None once the nudge landed, else why it was not typed. Never raises."""
-        started = self._now()
+        """None once the nudge landed, else why it was not typed. Never raises.
+
+        Patience is counted in tries, never read off the wall clock: this runs just after a
+        boot, when the clock is most likely to step, and a step back would wait for ever."""
+        retries = 0
         while True:
             if self._stopping():
                 # Nothing has been typed: every earlier try answered a verdict that types nothing.
@@ -364,10 +420,11 @@ class InterruptedResumePass:
                 if delivery.reason is PromptReason.MENU:
                     return PromptReason.MENU.value
                 return verdict.value
-            if self._now() - started >= STARTUP_PATIENCE:
+            if retries >= STARTUP_RETRIES:
                 if verdict is DeliveryVerdict.WAIT:
                     return "not_ready"
                 return verdict.value
+            retries += 1
             await self._sleep(RETRY_SECONDS)
 
     async def _resumed(self, decision: ResumeDecision) -> ResumeReport:
@@ -409,8 +466,8 @@ class InterruptedResumePass:
             raise
         except CodexRemoteControlBusy:
             # Refused at the Codex daemon guard, before the key was claimed: nothing started.
-            _LOG.warning("resuming %s waited out the Codex daemon guard", record.session_id)
-            return ResumeReport(record, DEFERRED)
+            # Raised on, so `run` defers this profile's other sessions without waiting again.
+            raise
         except Exception:
             _LOG.exception("resuming interrupted session %s failed", record.session_id)
             if await self._claimed(command.idempotency_key):

@@ -78,7 +78,7 @@ from remote_agents.application.commands import (
 from remote_agents.application.errors import DuplicateCommandError, MutationsDraining
 from remote_agents.application.notification_policy import rollover_told
 from remote_agents.application.prompt_delivery import DeliveryVerdict, delivery_verdict
-from remote_agents.application.schedules import RETRY_SECONDS, STARTUP_PATIENCE
+from remote_agents.application.schedules import RETRY_SECONDS, STARTUP_RETRIES
 from remote_agents.domain.models import ProfileId, ProjectId, SessionId, SessionRecord, SessionState
 from remote_agents.domain.rollover import (
     SUCCESSOR_FAILED,
@@ -543,7 +543,7 @@ class RolloverPass:
         """None once the template landed, else why it was not typed. Never typed twice: a send
         that may have typed is given up (DEC-099), as the schedules' first prompt is."""
         text = TEMPLATE.format(handoff_id=handoff_id)
-        started = self._now()
+        retries = 0  # counted, never read off the clock (`STARTUP_RETRIES`)
         while True:
             try:
                 delivery = await self._send(session_id, text)
@@ -562,10 +562,11 @@ class RolloverPass:
                     # A `/` command whose menu cannot be read: no dialog is up, so say which.
                     return PromptReason.MENU.value
                 return verdict.value
-            if self._now() - started >= STARTUP_PATIENCE:
+            if retries >= STARTUP_RETRIES:
                 if verdict in (DeliveryVerdict.NOT_RUNNING, DeliveryVerdict.UNRECOGNISED):
                     return verdict.value
                 return "not_ready"
+            retries += 1
             await self._sleep(RETRY_SECONDS)
 
     async def _found_starting(self, rollover: Rollover, seen: _Seen) -> None:

@@ -386,6 +386,8 @@ def _private_boundary(
                     None if boundary.restart_notifier is None else boundary.restart_notifier.notify
                 ),
                 stopping=lambda: locks.draining,
+                # Beside the store both processes share, so a second `serve` resumes nothing.
+                lock_path=config.database_path.with_name("restart-resume.lock"),
             )
         ),
         restart_notifier=boundary.restart_notifier,

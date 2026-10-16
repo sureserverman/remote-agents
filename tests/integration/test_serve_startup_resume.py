@@ -8,6 +8,7 @@ the worktree cleanup's first pass included (DEC-124); and the owner is told once
 from __future__ import annotations
 
 import asyncio
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -140,6 +141,7 @@ class Rig:
             ReconciliationService(self.store, locks=self.locks),
             restart_resume=restart,
             worktree_cleanup=cleanup,  # type: ignore[arg-type]
+            drain=self.locks.drain,
         )
 
     async def serve(self, composition: ServiceComposition, **intervals: float) -> None:
@@ -318,3 +320,89 @@ def test_only_the_bot_composition_builds_the_restart_pass() -> None:
             and not path.match("application/interrupted_resume.py")
         }
         assert found <= files, (needle, found - files)
+
+
+# --- gate round 2: beside polling; one process; marks of live sessions kept ----------------
+
+
+async def test_the_bot_polls_while_the_pass_is_still_resuming(rig: Rig) -> None:
+    await rig.running()
+    release = asyncio.Event()
+    composition = rig.composition()
+    resume = composition.restart_resume.resume._resume  # type: ignore[union-attr]
+
+    async def held(command):
+        await release.wait()
+        return await resume(command)
+
+    composition.restart_resume.resume._resume = held  # type: ignore[union-attr]
+    polled_during_the_pass: list[bool] = []
+
+    async def poll(secrets: TelegramSecrets, boundary: PrivateBotBoundary) -> None:
+        polled_during_the_pass.append(rig.events == [])
+        release.set()
+        await asyncio.sleep(0.05)
+
+    await _serve_with_reconciliation(_SECRETS, composition, poll, 3600)
+
+    assert polled_during_the_pass == [True]
+    assert rig.events == ["resume pass returned"]
+    assert len(await rig.by_state(SessionState.RUNNING)) == 1
+
+
+async def test_a_stop_during_the_pass_drains_it_and_keeps_every_intent(rig: Rig) -> None:
+    first = await rig.running()
+    second = await rig.running()
+    composition = rig.composition()
+    resume = composition.restart_resume.resume._resume  # type: ignore[union-attr]
+    entered = asyncio.Event()
+
+    async def slow(command):
+        entered.set()
+        await asyncio.sleep(0.2)
+        return await resume(command)
+
+    composition.restart_resume.resume._resume = slow  # type: ignore[union-attr]
+
+    async def poll(secrets: TelegramSecrets, boundary: PrivateBotBoundary) -> None:
+        await entered.wait()  # SIGTERM arrives while the first resume is under way
+
+    await _serve_with_reconciliation(_SECRETS, composition, poll, 3600)
+
+    outcomes = await rig.outcomes.outcomes()
+    assert sorted(outcomes) == sorted([str(first.session_id), str(second.session_id)])
+    assert list(outcomes.values()).count("resuming") >= 1
+
+
+async def test_a_second_serve_holding_the_lock_resumes_nothing(rig: Rig, tmp_path: Path) -> None:
+    from remote_agents.composition.service import _held_alone
+
+    await rig.running()
+    lock = tmp_path / "restart-resume.lock"
+    composition = rig.composition()
+    object.__setattr__(composition.restart_resume, "exclusive", lambda: _held_alone(lock))
+
+    with _held_alone(lock) as first:
+        assert first
+        await rig.serve(composition)
+
+    assert await rig.outcomes.outcomes() == {}
+    assert await rig.by_state(SessionState.RUNNING) == []
+
+
+async def test_the_marks_of_live_sessions_that_are_not_running_are_kept(rig: Rig) -> None:
+    """Only ENDED sessions lose their marks: one stopping is still live, its mark still needed.
+
+    STOP_REQUESTED because reconcile leaves it as it is over a live pane (it promotes an
+    UNTRUSTED or FAILED one to RUNNING here, where no readiness check is wired)."""
+    untrusted = replace(_report("x").record, state=SessionState.STOP_REQUESTED)
+    await rig.store.save(untrusted)
+    rig.marks.record(str(untrusted.session_id), "conv-untrusted")
+    await rig.terminal.launch(untrusted.session_id, PROJECT, CLAUDE)
+    rig.marks.record(str(SessionId.new()), "orphan-mark")  # a session with no record at all
+    lost = await rig.running()
+
+    await rig.serve(rig.composition())
+
+    assert set(rig.marks.sessions()) == {str(untrusted.session_id)}
+    assert rig.marks.latest(str(lost.session_id)) is None

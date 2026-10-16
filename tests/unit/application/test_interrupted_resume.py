@@ -378,3 +378,35 @@ def test_a_pending_session_whose_pane_is_listed_is_left_alone() -> None:
     )
 
     assert plan_resumes(snapshot) == ()
+
+
+def test_a_pending_session_whose_conversation_was_opened_since_is_superseded() -> None:
+    """The owner resumed it by hand after a deferral, and finished: never relaunched."""
+    pending = _record(state=SessionState.ENDED)
+    later = _record(
+        state=SessionState.ENDED, created=CREATED + timedelta(days=2), resume_source_id="conv-a"
+    )
+    snapshot = replace(
+        _snapshot(_lost(pending), _lost(later), marks={pending: "conv-a"}),
+        pending=frozenset({str(pending.session_id)}),
+    )
+
+    (decision,) = plan_resumes(snapshot)
+
+    assert decision.record == pending
+    assert decision.skip is ResumeSkip.SUPERSEDED
+
+
+def test_a_pending_session_with_no_newer_holder_is_still_resumed() -> None:
+    pending = _record(state=SessionState.ENDED)
+    older = _record(
+        state=SessionState.ENDED, created=CREATED - timedelta(days=2), resume_source_id="conv-a"
+    )
+    snapshot = replace(
+        _snapshot(_lost(pending), _lost(older), marks={pending: "conv-a"}),
+        pending=frozenset({str(pending.session_id)}),
+    )
+
+    (decision,) = plan_resumes(snapshot)
+
+    assert decision.skip is None

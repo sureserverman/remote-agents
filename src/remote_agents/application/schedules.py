@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import math
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta, tzinfo
@@ -51,6 +52,11 @@ STARTUP_PATIENCE = timedelta(seconds=90)
 
 RETRY_SECONDS = 3.0
 """How long a booting session is given between tries of its first prompt."""
+
+STARTUP_RETRIES = math.ceil(STARTUP_PATIENCE.total_seconds() / RETRY_SECONDS)
+"""`STARTUP_PATIENCE` counted in retries rather than read off the wall clock, so a clock that
+steps -- most likely just after a boot -- can neither stretch the wait for ever nor end it at
+once. Each pass that types a first prompt into a booting agent counts with it."""
 
 #: What a booting agent shows on its way to an idle composer, so a first prompt waits it out.
 _BOOTING = frozenset(
@@ -215,7 +221,7 @@ class SchedulePass:
 
     async def _first_prompt(self, session_id: SessionId, schedule: Schedule) -> str | None:
         """None once the prompt landed, else why it was not typed."""
-        started = self._now()
+        retries = 0
         while True:
             try:
                 delivery = await self._send(session_id, schedule.prompt)
@@ -234,7 +240,7 @@ class SchedulePass:
                     # A `/` command whose menu cannot be read: no dialog is up, so say which.
                     return PromptReason.MENU.value
                 return verdict.value
-            if self._now() - started >= STARTUP_PATIENCE:
+            if retries >= STARTUP_RETRIES:
                 # Said as what the last look found: a pane that went away is not an agent
                 # that was slow, and a screen nothing recognised is neither.
                 if verdict is DeliveryVerdict.NOT_RUNNING:
@@ -242,6 +248,7 @@ class SchedulePass:
                 if verdict is DeliveryVerdict.UNRECOGNISED:
                     return DeliveryVerdict.UNRECOGNISED.value
                 return "not_ready"
+            retries += 1
             await self._sleep(RETRY_SECONDS)
 
     async def _fire(self, schedule: Schedule, now: datetime) -> FireReport | None:

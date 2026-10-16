@@ -31,7 +31,7 @@ from remote_agents.application.interrupted_resume import (
 )
 from remote_agents.application.limit_resume import NUDGE
 from remote_agents.application.reconcile import SessionLocks
-from remote_agents.application.schedules import RETRY_SECONDS, STARTUP_PATIENCE
+from remote_agents.application.schedules import RETRY_SECONDS, STARTUP_PATIENCE, STARTUP_RETRIES
 from remote_agents.application.services import ResumeOutcome, SessionService
 from remote_agents.domain.models import (
     ProfileId,
@@ -340,7 +340,8 @@ async def test_a_draining_service_refuses_before_the_claim_and_the_pass_stops(ri
 
     assert reports == ()
     outcomes = await rig.outcomes.outcomes()
-    assert outcomes == {str(first.session_id): RESUMING}
+    # Both intents were written before the first launch, so neither is lost to the next start.
+    assert outcomes == {str(first.session_id): RESUMING, str(second.session_id): RESUMING}
     assert not await rig.sessions.idempotency_key_claimed(f"restart:{first.session_id}")
 
 
@@ -604,3 +605,77 @@ async def test_nudge_a_refusal_says_why_by_its_reason(rig: Rig) -> None:
     (report,) = await rig.run_pass().run(await rig.snapshot(record))
 
     assert report.outcome.endswith("; not nudged:no_composer")
+
+
+# --- gate round 2: every decision on disk first; a busy daemon; a clock that steps ----------
+
+
+async def test_a_pass_killed_at_one_session_leaves_every_later_one_its_intent(rig: Rig) -> None:
+    """Reconcile has ended them all by now: a session with no row would never come back."""
+    first = await rig.running()
+    second = await rig.running(created=CREATED + timedelta(minutes=1))
+    third = await rig.running(created=CREATED + timedelta(minutes=2))
+    skipped = await rig.running(mark=None, created=CREATED + timedelta(minutes=3))
+    snapshot = await rig.snapshot(first, second, third, skipped)
+    await rig.end_as_reconcile_does(first, second, third, skipped)
+
+    async def killed_at_the_second(command: ResumeCommand):
+        if rig.commands:
+            raise asyncio.CancelledError
+        rig.commands.append(command)
+        return await rig.service.resume(command)
+
+    with pytest.raises(asyncio.CancelledError):
+        await rig.run_pass(resume=killed_at_the_second).run(snapshot)
+
+    outcomes = await rig.outcomes.outcomes()
+    assert outcomes[str(second.session_id)] == RESUMING
+    assert outcomes[str(third.session_id)] == RESUMING
+    assert outcomes[str(skipped.session_id)] == "skipped:no-conversation"
+
+    reports = await rig.run_pass().run(
+        await rig.snapshot(*[await _get(rig, r) for r in (first, second, third, skipped)])
+    )
+
+    assert {str(r.record.session_id): r.outcome.split(":")[0] for r in reports} == {
+        str(second.session_id): "resumed",
+        str(third.session_id): "resumed",
+    }
+
+
+async def test_a_busy_daemon_defers_the_rest_of_its_profile_without_waiting_again(
+    rig: Rig,
+) -> None:
+    first = await rig.running()
+    second = await rig.running(created=CREATED + timedelta(minutes=1))
+    calls: list[ResumeCommand] = []
+
+    async def busy(command: ResumeCommand):
+        calls.append(command)
+        raise CodexRemoteControlBusy("busy")
+
+    reports = await rig.run_pass(resume=busy).run(await rig.snapshot(first, second))
+
+    assert len(calls) == 1
+    assert [report.outcome for report in reports] == [DEFERRED, DEFERRED]
+    assert set((await rig.outcomes.outcomes()).values()) == {RESUMING}
+
+
+async def test_nudge_patience_is_counted_so_a_clock_stepping_back_still_gives_up(
+    rig: Rig,
+) -> None:
+    record = await _mid_turn(rig)
+    rig.terminal.prompt_deliveries = [
+        PromptDelivery(PromptOutcome.REFUSED, PromptReason.BUSY) for _ in range(100)
+    ]
+
+    async def stepping_back(seconds: float) -> None:
+        rig.sleeps.append(seconds)
+        rig.clock -= timedelta(hours=1)
+
+    resume_pass = rig.run_pass()
+    resume_pass._sleep = stepping_back  # type: ignore[attr-defined]
+    (report,) = await resume_pass.run(await rig.snapshot(record))
+
+    assert report.outcome.endswith("; not nudged:not_ready")
+    assert len(rig.sleeps) == STARTUP_RETRIES
