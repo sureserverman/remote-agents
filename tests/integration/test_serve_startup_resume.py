@@ -145,9 +145,22 @@ class Rig:
             drain=self.locks.drain,
         )
 
-    async def serve(self, composition: ServiceComposition, **intervals: float) -> None:
+    async def serve(
+        self,
+        composition: ServiceComposition,
+        *,
+        until: asyncio.Event | None = None,
+        **intervals: float,
+    ) -> None:
+        """Serve for 50 ms, or until `until` is set, at most five seconds: a fixed window lost
+        the race on a slow CI runner, where the resume pass took most of it and the cleanup
+        task never got its turn (2026-10-17)."""
+
         async def poll(secrets: TelegramSecrets, boundary: PrivateBotBoundary) -> None:
-            await asyncio.sleep(0.05)
+            if until is None:
+                await asyncio.sleep(0.05)
+            else:
+                await asyncio.wait_for(until.wait(), timeout=5.0)
 
         await _serve_with_reconciliation(_SECRETS, composition, poll, 3600, **intervals)
 
@@ -182,11 +195,14 @@ async def test_the_worktree_cleanup_first_pass_starts_after_the_resume_pass_retu
 ) -> None:
     await rig.running()
 
+    ran = asyncio.Event()
+
     class Cleanup:
         async def pass_once(self) -> None:
             rig.events.append("cleanup pass")
+            ran.set()
 
-    await rig.serve(rig.composition(cleanup=Cleanup()), worktree_interval=0)
+    await rig.serve(rig.composition(cleanup=Cleanup()), until=ran, worktree_interval=0)
 
     assert rig.events[0] == "resume pass returned"
     assert "cleanup pass" in rig.events
