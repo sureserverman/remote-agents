@@ -11,6 +11,12 @@ import pytest
 
 _TEST_SOCKET_PREFIX = "remote-agents-test-"
 
+#: Set by the one session that owns the test sockets, and inherited by everything it starts.
+#: A session that finds it set -- a pytest a test runs in a child -- neither reaps nor tears
+#: down: its finish used to kill every test server a sibling xdist worker had started while
+#: it ran, which was BL-100 (`tests/contract/test_nested_pytest_spares_sibling_servers.py`).
+_SOCKET_OWNER_VARIABLE = "REMOTE_AGENTS_TEST_SOCKET_OWNER"
+
 
 def _socket_directory() -> Path:
     """Resolve the directory tmux puts its sockets in, the same way tmux does."""
@@ -60,7 +66,18 @@ def pytest_sessionstart(session: pytest.Session) -> None:
 
     The prefix is the whole guard on blast radius: `remote-agents-test-` cannot match the bare
     `remote-agents` socket the operator's own server uses, because that name has no such prefix.
+
+    **Only the owning session does either half.** An xdist worker, or a pytest a test runs in a
+    child, inherits `_SOCKET_OWNER_VARIABLE` from the session that owns the sockets and leaves
+    them to it. Without that, a child's `before` was taken mid-run, so its finish killed every
+    test server a sibling worker had started since -- whichever real-tmux test was mid-flight
+    lost its server, in any file (BL-100). Its start could also unlink a socket whose server was
+    still coming up and did not yet answer `has-session`.
     """
+    if hasattr(session.config, "workerinput") or os.environ.get(_SOCKET_OWNER_VARIABLE):
+        return
+    os.environ[_SOCKET_OWNER_VARIABLE] = str(os.getpid())
+    session.config._remote_agents_owns_sockets = True
     for socket in _test_sockets():
         if not _server_answers(socket):
             socket.unlink(missing_ok=True)
@@ -80,7 +97,8 @@ def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
     would kill one still in use. The controller starts before every worker and finishes after
     all of them, so its `before` is the true one; it, or a plain run, does the teardown.
     """
-    if hasattr(session.config, "workerinput"):
+    if not getattr(session.config, "_remote_agents_owns_sockets", False):
+        # A worker, or a child pytest: the owning session tears down (`pytest_sessionstart`).
         return
     before = getattr(session.config, "_remote_agents_sockets_before", set())
     for socket in _test_sockets() - before:

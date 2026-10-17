@@ -40,8 +40,6 @@ import time
 from pathlib import Path
 from uuid import uuid4
 
-import pytest
-
 from remote_agents.adapters.tmux.codec import CONSOLE_SESSION_NAME, pane_mark_args
 from remote_agents.adapters.tmux.gateway import TmuxGateway
 from remote_agents.adapters.tmux.runtime import AsyncTmuxRunner
@@ -58,30 +56,15 @@ _IDLE = ("sleep", "600")
 #: How long a bounded wait may take before the assertion is that it did not happen.
 _DEADLINE_SECONDS = 15.0
 
-#: These two run **alone**, and are skipped rather than run under `pytest-xdist`.
-#:
-#: **What is measured.** Serially they pass deterministically (five consecutive runs at the
-#: Stage 1 gate). Under `-n auto` they are flaky, each one failing on its own with no sibling
-#: to interact with. The proximate cause is visible in the report the closer writes: it comes
-#: back `nothing to close`, because `console_exists()` saw tmux answer `error connecting to
-#: /tmp/tmux-1000/<socket> (No such file or directory)` and `gateway.py::
-#: _ABSENT_SERVER_SIGNATURES` counts `"error connecting to"` as an absent server — correctly,
-#: for a dedicated production socket, where unreachable does mean no panes.
-#:
-#: **What is NOT explained, and is therefore not "fixed" here.** Why that socket becomes
-#: unreachable inside an xdist worker at all. Measured against it: a bare console built the same
-#: way inside a worker survives (12 polls over 3 s), and eight consoles built concurrently
-#: outside pytest survive. So it is neither xdist alone nor concurrency alone, and a change made
-#: without knowing which it is would be a guess that happens to go green.
-#:
-#: **What is not in doubt is the product.** A probe dumping every pane through the whole
-#: sequence showed the agent's pane going into the console and coming home with the same pid,
-#: and the two tests below prove it on every serial run. Recorded in the backlog rather than
-#: papered over.
-_SKIP_UNDER_XDIST = pytest.mark.skipif(
-    os.environ.get("PYTEST_XDIST_WORKER") is not None,
-    reason="real-tmux console teardown runs alone; see _SKIP_UNDER_XDIST",
-)
+#: **These run under `pytest-xdist` again (2026-10-17), and why they were skipped is known.**
+#: They were skipped from 2026-09-18 because, in parallel, the closer reported `nothing to
+#: close`: `console_exists()` saw `error connecting to … (No such file or directory)`. The
+#: socket had not been lost by anything here. A pytest that another test ran in a child loaded
+#: `tests/conftest.py`, and its session finish killed every test server created while it ran,
+#: siblings' included (BL-100). The conftest now leaves teardown to the one session that owns
+#: the sockets (`tests/contract/test_nested_pytest_spares_sibling_servers.py`). Measured: with
+#: the skip removed, this file failed in 2 of 5 parallel runs before that fix and in none of 10
+#: after it.
 
 
 def _wait_until(ready) -> bool:
@@ -248,7 +231,6 @@ def _closer_script(tmp_path: Path, socket: str, cwd: Path) -> Path:
     return script
 
 
-@_SKIP_UNDER_XDIST
 async def test_console_close_by_a_real_f10_leaves_the_displayed_agent_running(
     tmp_path: Path,
 ) -> None:
@@ -311,7 +293,6 @@ async def test_console_close_by_a_real_f10_leaves_the_displayed_agent_running(
         server.kill()
 
 
-@_SKIP_UNDER_XDIST
 async def test_the_closer_outlives_the_process_that_started_it(tmp_path: Path) -> None:
     """(b) The detachment, proved on a real process rather than argued from a flag.
 
@@ -366,7 +347,6 @@ async def test_the_closer_outlives_the_process_that_started_it(tmp_path: Path) -
         server.kill()
 
 
-@_SKIP_UNDER_XDIST
 def test_entering_a_console_that_shows_an_agent_brings_the_projects_surface_home(
     tmp_path: Path,
 ) -> None:
