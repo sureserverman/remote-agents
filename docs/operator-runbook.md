@@ -2519,10 +2519,11 @@ opens it, and its `doctor` reports `database_ready` false, as after any release 
 **Rolling back below 0.65.0 also turns Codex rollover off.** 0.64.1 rolls over Claude sessions only and has no
 `remote-agents session-id`, so a Codex session's handoff writer writes nothing there. A Codex
 rollover still open across the rollback ends by the state it had reached. A requested one fails
-`not-rollable`. One whose handoff was ready launches a Codex successor, fails `not-typed`, and
-leaves that successor idle beside its predecessor. One whose successor was told to adopt fails
+`not-rollable`. One whose handoff was ready, or whose successor was starting, fails `not-typed`
+and leaves that Codex successor idle beside its predecessor. One whose successor was told to adopt fails
 `adoption-timeout`: the successor goes on with the plan and the predecessor keeps running. One
-whose successor had accepted finishes, and stops its predecessor as it would have.
+whose successor had accepted, or whose predecessor was being stopped, finishes that stop as it
+would have.
 Do not remove a
 managed tmux session until its ownership and output have been inspected.
 
