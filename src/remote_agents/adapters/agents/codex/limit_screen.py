@@ -7,6 +7,10 @@ round it (another model, an upgrade, the usage page) and by ` Try again at <time
 Codex fires no hook on a failed turn, so this sentence on the pane is the only place its stop is
 visible; the limit-screen watch matches it there.
 
+**The day may carry an ordinal.** codex-cli 0.163.0 writes `Oct 18th, 2026 2:52 AM` (its binary
+holds the `st`/`nd`/`rd`/`th` suffixes; every dated stop on record since 2026-09-30 has one), so
+the suffix is optional rather than required: the 0.158.0 spelling still reads.
+
 **Both apostrophes are matched.** The binary spells U+2019, and the one live sighting on record
 was transcribed with an ASCII one; a marker that matched only one would miss the other silently.
 
@@ -27,7 +31,7 @@ from remote_agents.ports.limit_screen import LimitScreen
 #: answer quoting it is not a stop.
 _STOP = r"^[ \t]*(?:■[ \t]*)?You[’']ve hit your usage limit"
 _RETRY = re.compile(
-    r"[Tt]ry again at (?P<month>[A-Z][a-z]{2}) (?P<day>\d{1,2}), (?P<year>\d{4})"
+    r"[Tt]ry again at (?P<month>[A-Z][a-z]{2}) (?P<day>\d{1,2})(?:st|nd|rd|th)?, (?P<year>\d{4})"
     r" (?P<hour>\d{1,2}):(?P<minute>\d{2}) (?P<meridiem>[AP]M)"
 )
 _MONTHS = ("Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")

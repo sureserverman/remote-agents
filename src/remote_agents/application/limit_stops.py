@@ -441,21 +441,24 @@ def _limit_lines(screen: str, limit_screen: LimitScreen) -> tuple[int, str | Non
 
     The newest is returned with the lines that continue it, joined: a long sentence wraps in an
     ordinary pane (`capture-pane` keeps the wrap), and the part that names the retry instant is
-    the part that lands on the next line. A continuation is an indented line; the first line
-    that is not one, or that opens something of its own, ends the sentence.
+    the part that lands on the next line. A continuation is the line directly below, with no
+    blank line between; a blank line, or a line that opens something of its own, ends the
+    sentence. Not an indent: codex-cli 0.163.0 breaks its own sentence and starts the rest at
+    column 0 (`AM.` alone, on 2026-10-17), and it leaves a blank line under the sentence.
     """
-    tail = [line for line in screen.splitlines() if line.strip()][-_LAST_OUTPUT_LINES:]
+    lines = screen.splitlines()
+    written = [index for index, line in enumerate(lines) if line.strip()][-_LAST_OUTPUT_LINES:]
     found = [
         index
-        for index, line in enumerate(tail)
-        if any(re.search(marker, line) for marker in limit_screen.markers)
+        for index in written
+        if any(re.search(marker, lines[index]) for marker in limit_screen.markers)
     ]
     if not found:
         return 0, None
     newest = found[-1]
-    sentence = [tail[newest].strip()]
-    for continuation in tail[newest + 1 : newest + 1 + _CONTINUATION_LINES]:
-        if not continuation.startswith("  ") or _starts_a_line(continuation):
+    sentence = [lines[newest].strip()]
+    for continuation in lines[newest + 1 : newest + 1 + _CONTINUATION_LINES]:
+        if not continuation.strip() or _starts_a_line(continuation):
             break
         sentence.append(continuation.strip())
     return len(found), " ".join(sentence)

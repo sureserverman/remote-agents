@@ -192,6 +192,25 @@ async def test_a_capture_that_fails_costs_that_pass_and_nothing_else() -> None:
         ),
         ("■ You’ve hit your usage limit.", LimitHit(None, None)),
         ("Ran the suite.", None),
+        # codex-cli 0.163.0 puts an ordinal on the day (the live stop of 2026-10-17).
+        (
+            "■ You’ve hit your usage limit. Upgrade to Pro (https://chatgpt.com/explore/pro),"
+            " visit https://chatgpt.com/settings/usage to purchase more credits or try again at"
+            " Oct 18th, 2026 2:52 AM.",
+            LimitHit(None, datetime(2026, 10, 18, 2, 52).astimezone()),
+        ),
+        (
+            "■ You’ve hit your usage limit. Try again at Oct 1st, 2026 9:05 PM.",
+            LimitHit(None, datetime(2026, 10, 1, 21, 5).astimezone()),
+        ),
+        (
+            "■ You’ve hit your usage limit. Try again at Oct 2nd, 2026 12:56 AM.",
+            LimitHit(None, datetime(2026, 10, 2, 0, 56).astimezone()),
+        ),
+        (
+            "■ You’ve hit your usage limit. Try again at Oct 3rd, 2026 8:26 PM.",
+            LimitHit(None, datetime(2026, 10, 3, 20, 26).astimezone()),
+        ),
     ],
 )
 def test_codex_s_sentence_names_its_retry_instant_in_host_time(text, expected) -> None:
@@ -223,6 +242,49 @@ async def test_a_wrapped_sentence_keeps_the_retry_instant_on_its_continuation_li
     assert CODEX.hint(stop.detail or "", _NOW) == LimitHit(
         None, datetime(2026, 9, 29, 3, 5).astimezone()
     )
+
+
+async def test_codex_s_own_wrap_at_the_first_column_keeps_the_retry_instant() -> None:
+    """codex-cli 0.163.0 breaks its long sentence itself, the rest starting at column 0 -- the
+    live pane of 2026-10-17, where the stored stop lost its "AM." to this."""
+    panes = _Panes()
+    watcher = _watcher(panes, {_CODEX: "codex"})
+    panes.screens[_CODEX] = _CODEX_IDLE
+    await watcher.poll()
+
+    lines = _CODEX_IDLE.rstrip("\n").split("\n")
+    composer = next(i for i, line in enumerate(lines) if line.startswith("›"))
+    wrapped = [
+        "■ You’ve hit your usage limit. Upgrade to Pro (https://chatgpt.com/explore/pro), visit"
+        " https://chatgpt.com/settings/usage to purchase more credits or try again at Oct 18th,"
+        " 2026 2:52",
+        "AM.",
+    ]
+    panes.screens[_CODEX] = (
+        "\n".join([*lines[:composer], *wrapped, "", "", *lines[composer:]]) + "\n"
+    )
+
+    (stop,) = await watcher.poll()
+    assert (stop.detail or "").endswith("2:52 AM.")
+    assert CODEX.hint(stop.detail or "", _NOW) == LimitHit(
+        None, datetime(2026, 10, 18, 2, 52).astimezone()
+    )
+
+
+async def test_a_line_past_a_blank_does_not_continue_the_sentence() -> None:
+    """Codex leaves a blank line under its sentence; what follows it is not the sentence."""
+    panes = _Panes()
+    watcher = _watcher(panes, {_CODEX: "codex"})
+    panes.screens[_CODEX] = _CODEX_IDLE
+    await watcher.poll()
+
+    lines = _CODEX_IDLE.rstrip("\n").split("\n")
+    composer = next(i for i, line in enumerate(lines) if line.startswith("›"))
+    after = ["■ You’ve hit your usage limit.", "", "New activity · Back to bottom"]
+    panes.screens[_CODEX] = "\n".join([*lines[:composer], *after, "", *lines[composer:]]) + "\n"
+
+    (stop,) = await watcher.poll()
+    assert stop.detail == "■ You’ve hit your usage limit."
 
 
 async def test_a_marker_inside_a_line_the_owner_typed_is_not_a_stop() -> None:
