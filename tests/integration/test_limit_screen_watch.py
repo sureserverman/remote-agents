@@ -217,6 +217,36 @@ def test_codex_s_sentence_names_its_retry_instant_in_host_time(text, expected) -
     assert CODEX.hint(text, _NOW) == expected
 
 
+@pytest.mark.parametrize(
+    ("text", "now", "expected"),
+    [
+        # The live stop of 2026-10-01 18:03 UTC: its reading put the reset at 19:54:42 UTC.
+        (
+            "■ You’ve hit your usage limit. Upgrade to Pro (https://chatgpt.com/explore/pro),"
+            " visit https://chatgpt.com/settings/usage to purchase more credits or try again at"
+            " 8:54 PM.",
+            datetime(2026, 10, 1, 18, 3, 27, tzinfo=UTC),
+            datetime(2026, 10, 1, 20, 54).astimezone(),
+        ),
+        ("■ You’ve hit your usage limit. Try again at 12:05 PM.", _NOW, None),
+        # Read a moment after its time: still today, never rolled to tomorrow.
+        (
+            "■ You’ve hit your usage limit. Try again at 8:54 PM.",
+            datetime(2026, 10, 1, 20, 0, tzinfo=UTC),
+            datetime(2026, 10, 1, 20, 54).astimezone(),
+        ),
+    ],
+    ids=["live", "noon", "just-past"],
+)
+def test_codex_s_same_day_time_is_placed_on_today_in_host_time(text, now, expected) -> None:
+    """Codex prints the time alone when the reset falls on the day it prints it (codex-cli
+    0.163.0, `%-I:%M %p`), so the day is the host's date at the moment the sentence is read."""
+    local_now = now.astimezone()
+    if expected is None:
+        expected = datetime(local_now.year, local_now.month, local_now.day, 12, 5).astimezone()
+    assert CODEX.hint(text, now) == LimitHit(None, expected)
+
+
 def test_cursor_s_stop_is_its_monthly_window() -> None:
     assert CURSOR.hint(_CURSOR_LIMIT, _NOW) == LimitHit("month", None)
     assert CURSOR.hint("Plan, search, build anything", _NOW) is None
