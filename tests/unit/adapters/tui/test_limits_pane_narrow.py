@@ -507,7 +507,7 @@ def _cursor_lines(rows: tuple[LimitRow, ...], width: int) -> list[str]:
 def test_a_stacked_cursor_row_labels_each_line_by_its_pool() -> None:
     """`Cursor` and `other`, never `5h` and `wk`: a monthly pool is not a five-hour figure."""
     lines = [content.plain for content in limit_rows_content(_with_cursor(), DASHBOARD_RIGHT)]
-    assert "expected" not in lines[0], "the fixture no longer stacks at the dashboard's width"
+    assert "vs pace" not in lines[0], "the fixture no longer stacks at the dashboard's width"
     first, second = _cursor_lines(_with_cursor(), DASHBOARD_RIGHT)
     assert first.split()[1:] == ["Cursor", "█████░░░", "62%", "↻", "4d"], first
     assert second.split() == ["other", "██░░░░░░", "18%", "↻", "4d"], second
