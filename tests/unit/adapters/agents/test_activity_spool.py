@@ -112,6 +112,9 @@ def test_a_stop_payload_keeps_only_the_fields_the_notification_needs(tmp_path: P
         # words. `None` here because a `Stop` is not waiting on anything, and because this
         # payload is Claude's, whose branch never populates it.
         "ask": None,
+        # `paused` joined on 2026-10-17 (DEC-129): a boolean the licence decides, never a
+        # payload field. `False` because nothing in this payload is still in flight.
+        "paused": False,
     }
 
 
@@ -901,6 +904,24 @@ def test_a_finished_turn_ends_the_marker_and_still_spools(
 
     assert not _marker(directory).exists()
     assert len(_records(directory)) == 1
+
+
+def test_a_claude_turn_paused_on_background_work_ends_the_marker_and_spools_it_paused(
+    tmp_path: Path,
+) -> None:
+    """DEC-129 keeps DEC-104: the paused `Stop` ends its turn, and the wake-up starts the next."""
+    directory = _spool(tmp_path)
+    _run(_stream(_SUBMIT_PAYLOAD), directory)
+
+    shell = {"id": "b", "type": "shell", "status": "running", "command": "sleep 40"}
+    paused = {**_STOP_PAYLOAD, "background_tasks": [shell]}
+    assert _run(_stream(paused), directory) == 0
+
+    assert not _marker(directory).exists()
+    (record,) = _records(directory)
+    document = json.loads(record.read_text(encoding="utf-8"))
+    assert document["paused"] is True, document
+    assert "sleep" not in record.read_text(encoding="utf-8")
 
 
 def test_an_event_that_neither_starts_nor_ends_a_turn_leaves_the_marker(tmp_path: Path) -> None:

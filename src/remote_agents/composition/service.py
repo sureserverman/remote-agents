@@ -7,14 +7,14 @@ import fcntl
 import logging
 import os
 import time
-from collections.abc import Awaitable, Callable, Iterator, Mapping
+from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
 from contextlib import (
     AbstractAsyncContextManager,
     AbstractContextManager,
     contextmanager,
     nullcontext,
 )
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from functools import partial
 from pathlib import Path
@@ -141,6 +141,12 @@ _FAST_CHECK_SECONDS = 2.5
 #: marker, so without this the message would wait for another turn.
 _JUST_FINISHED_SECONDS = 15.0
 
+#: How long a turn that paused for its own background work must stay quiet before its "finished"
+#: is delivered (DEC-129, owner's choice 2026-10-17). A shell or subagent that reports back wakes
+#: the session well inside it; a dev server left running never does, and must not silence the
+#: session for good.
+_PAUSED_QUIET_SECONDS = 120.0
+
 
 @dataclass(frozen=True, slots=True)
 class ServiceComposition:
@@ -214,6 +220,13 @@ class ServiceComposition:
     turn_markers: TurnMarkers | None = None
     """Which sessions' hooks said a turn started (DEC-104), for the fast check, or None where no
     relay is wired."""
+
+    paused_turns: dict[str, tuple[AgentActivity, float]] = field(
+        default_factory=dict, repr=False, compare=False
+    )
+    """Each session's held "finished" from a turn that paused for background work, with when it
+    was drained (monotonic), for `_hold_paused_turns` (DEC-129). In memory only: a restart loses
+    a held one, and that session says "finished" at its next real end."""
 
     relay_rechecks: dict[str, float] = field(default_factory=dict, repr=False, compare=False)
     """Sessions whose retry on a "finished" activity still queued (busy or a dialog), by when
@@ -976,6 +989,39 @@ async def _watch_activity_periodically(composition: ServiceComposition, interval
         await _watch_activity_once(composition)
 
 
+def _hold_paused_turns(
+    composition: ServiceComposition,
+    activities: Sequence[AgentActivity],
+    now: float | None = None,
+) -> list[AgentActivity]:
+    """Hold back each paused "finished", and release it once its session has stayed quiet.
+
+    A turn that ended with background work still in flight (DEC-129) usually wakes again when
+    that work reports back, so its "finished" is held rather than delivered. The hold is dropped
+    when the session does anything else -- any later activity, or a turn its hook marked after
+    the pause -- and released as an ordinary `COMPLETED` after `_PAUSED_QUIET_SECONDS` of
+    neither. Returns this pass's other activities, in order, with any released ones after them.
+    """
+    moment = time.monotonic() if now is None else now
+    held = composition.paused_turns
+    passing: list[AgentActivity] = []
+    for activity in activities:
+        if activity.paused:
+            held[activity.session_id] = (activity, moment)
+        else:
+            held.pop(activity.session_id, None)
+            passing.append(activity)
+    markers = composition.turn_markers
+    for session_id, (paused, since) in list(held.items()):
+        started = markers.started_at(session_id) if markers is not None else None
+        if started is not None and started > paused.observed_at:
+            del held[session_id]
+        elif moment - since >= _PAUSED_QUIET_SECONDS:
+            del held[session_id]
+            passing.append(replace(paused, paused=False))
+    return passing
+
+
 async def _publish_hook_roster(composition: ServiceComposition) -> None:
     """Rewrite the hook rosters from the store -- guarded: a roster that cannot be written costs
     hooks, never the activity pass."""
@@ -1027,6 +1073,11 @@ async def _watch_activity_once(composition: ServiceComposition) -> None:
             )
         except Exception:
             _LOG.exception("draining the activity spool failed")
+    try:
+        activities = _hold_paused_turns(composition, activities)
+    except Exception:
+        _LOG.exception("holding paused turns failed; they are delivered as they arrived")
+        activities = [replace(activity, paused=False) for activity in activities]
     if composition.approval_watcher is not None:
         try:
             reported_needs_answer_session_ids = tuple(

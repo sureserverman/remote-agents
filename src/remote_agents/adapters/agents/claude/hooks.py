@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from pathlib import Path
 from types import MappingProxyType
 
@@ -100,6 +101,32 @@ _RECORD = EventLicence(
     detail_fields=("message", "last_assistant_message"),
 )
 
+
+def _paused_on_background_work(document: Mapping[str, object]) -> bool:
+    """Whether this payload is a `Stop` that only paused for Claude's own background work.
+
+    Claude ends its turn while a background shell, subagent, monitor or workflow still runs,
+    fires `Stop`, and wakes itself with a new turn when that work reports back. Every such pause
+    used to read as "finished", so one piece of work could notify several times (the owner's
+    ask, 2026-10-17). The payload's `background_tasks` lists what is still in flight, and is
+    empty when nothing is: measured on Claude Code 2.1.302, a `Stop` with a `sleep` running in
+    the background carried one `shell` entry, and the `Stop` after its wake-up carried `[]`.
+
+    A paused `Stop` is still recorded, marked: the service holds it back, and delivers it as
+    "finished" only if the session stays quiet -- a dev server left running never reports back,
+    and must not silence the session for good (DEC-129).
+
+    Only that list is read, and only for its length; no entry reaches disk. An absent list is
+    an older Claude that cannot say, so its `Stop` is an end, as it always was.
+    `session_crons` is not consulted: a session waiting on a schedule has finished what it was
+    doing, and a looping one would otherwise never say "finished" until its quiet spell.
+    """
+    if document.get("hook_event_name") != "Stop":
+        return False
+    pending = document.get("background_tasks")
+    return isinstance(pending, list) and bool(pending)
+
+
 HOOK_LICENCE = HookLicence(
     events=MappingProxyType(
         {
@@ -128,5 +155,6 @@ HOOK_LICENCE = HookLicence(
     # Any other plain event keeps its record, so an event added upstream is not silently lost
     # and the drain decides what to interpret; the retired `SessionEnd` (DEC-051) is read here.
     unlisted_events=_RECORD,
+    paused=_paused_on_background_work,
 )
 """What Claude's activity hook may record (BL-050); the descriptor's `activity` is this value."""

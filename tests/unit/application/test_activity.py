@@ -59,6 +59,38 @@ def test_a_finished_turn_is_completed_and_carries_what_the_agent_last_said(
     assert activity.confidence is ActivityConfidence.REPORTED
 
 
+def test_a_paused_stop_drains_as_a_paused_completion(tmp_path: Path) -> None:
+    """DEC-129: the hook marks it, and the drain keeps the mark for the service to hold."""
+    _spool(tmp_path, event="Stop", paused=True)
+
+    (activity,) = drain_activity(tmp_path)
+
+    assert activity.kind is ActivityKind.COMPLETED and activity.paused
+
+
+@pytest.mark.parametrize(
+    ("fields", "paused"),
+    [({}, False), ({"paused": "yes"}, False), ({"paused": 1}, False), ({"paused": False}, False)],
+)
+def test_only_a_true_paused_mark_counts(
+    fields: dict[str, object], paused: bool, tmp_path: Path
+) -> None:
+    """A record from an older build has no mark, and anything but `True` is no mark."""
+    _spool(tmp_path, event="Stop", **fields)
+
+    (activity,) = drain_activity(tmp_path)
+
+    assert activity.paused is paused
+
+
+def test_a_paused_mark_on_anything_but_a_finished_turn_is_ignored(tmp_path: Path) -> None:
+    _spool(tmp_path, event="StopFailure", reason="rate_limit", paused=True)
+
+    (activity,) = drain_activity(tmp_path)
+
+    assert activity.kind is ActivityKind.LIMIT_REACHED and not activity.paused
+
+
 def test_a_rate_limit_is_a_limit_reached(tmp_path: Path) -> None:
     _spool(tmp_path, event="StopFailure", reason="rate_limit")
 

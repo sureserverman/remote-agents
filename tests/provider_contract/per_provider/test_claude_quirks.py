@@ -56,6 +56,58 @@ def test_a_claude_stop_carries_the_agents_own_last_line() -> None:
     assert observed.detail == "Ran the suite and pushed the branch."
 
 
+#: One entry as Claude Code 2.1.302 wrote it, measured 2026-10-17 with `sleep 40; echo done`
+#: started in the background; the values here are synthetic.
+_RUNNING_SHELL = {
+    "id": "b-task",
+    "type": "shell",
+    "status": "running",
+    "description": "a secret description",
+    "command": "sleep 40 && cat /home/owner/secret",
+}
+
+
+def test_a_stop_that_waits_on_background_work_is_recorded_as_paused() -> None:
+    """A turn that ended with a shell or subagent still in flight usually wakes again when it
+    reports back, so its record says `paused` and the service holds it back (DEC-129)."""
+    for task in (_RUNNING_SHELL, {"id": "a-task", "type": "subagent", "status": "running"}):
+        observed = _claude({**_fixture("stop.json"), "background_tasks": [task]})
+        assert observed is not None and observed.paused, observed
+        assert "secret" not in json.dumps(observed.document()), observed.document()
+
+
+def test_a_stop_with_nothing_in_flight_is_finished() -> None:
+    observed = _claude({**_fixture("stop.json"), "background_tasks": []})
+    assert observed is not None and not observed.paused
+
+
+@pytest.mark.parametrize("value", [None, "shell", {"id": "b"}])
+def test_a_stop_without_a_readable_list_is_finished(value: object) -> None:
+    """An older Claude sends no list, so it cannot say it is waiting: its `Stop` is an end.
+    A value that is not a list is read the same way."""
+    payload = dict(_fixture("stop.json"))
+    if value is None:
+        del payload["background_tasks"]
+    else:
+        payload["background_tasks"] = value
+    observed = _claude(payload)
+    assert observed is not None and not observed.paused
+
+
+def test_a_scheduled_wakeup_does_not_pause_the_stop() -> None:
+    """A looping session waits on its schedule between iterations, and has finished each one."""
+    cron = {"id": "c", "schedule": "*/5 * * * *", "recurring": True, "prompt": "check"}
+    observed = _claude({**_fixture("stop.json"), "session_crons": [cron]})
+    assert observed is not None and not observed.paused
+
+
+def test_background_work_pauses_only_the_stop() -> None:
+    """An ask while a shell runs in the background is still an ask."""
+    payload = {**_fixture("notification.json"), "background_tasks": [_RUNNING_SHELL]}
+    observed = _claude(payload)
+    assert observed is not None and not observed.paused
+
+
 @pytest.mark.parametrize(
     ("name", "event", "reason", "detail"),
     [

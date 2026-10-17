@@ -255,6 +255,13 @@ class HookLicence:
     that has not re-run the installer (DEC-051).
     """
 
+    paused: Callable[[Mapping[str, object]], bool] | None = None
+    """A predicate naming an admitted event that only paused the agent, or None for none.
+
+    Claude's alone: a `Stop` while its own background work is still in flight (DEC-129). Its
+    record says `paused`, and the service holds it back until the session stays quiet.
+    """
+
     admits: Callable[[Mapping[str, object]], bool] | None = None
     """A predicate over the whole payload, checked after the event is admitted; None admits
     every listed event. Codex's reviewer rule (DEC-112) and Cursor's `status == "completed"`."""

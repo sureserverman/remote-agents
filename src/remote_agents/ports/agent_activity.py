@@ -309,3 +309,9 @@ class AgentActivity:
     one recorded before the window was kept, or one nothing could classify -- so a reader never
     has to tell "not a limit stop" from "a stop with nothing known" by this field alone.
     """
+    paused: bool = False
+    """A `COMPLETED` whose turn only paused for the agent's own background work (DEC-129).
+
+    Never stored, delivered or shown as it is: the service holds it back, drops it when the
+    session does anything else, and releases it as an ordinary `COMPLETED` after a quiet spell.
+    """

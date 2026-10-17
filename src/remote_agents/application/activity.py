@@ -338,6 +338,9 @@ def _activity(record: dict) -> AgentActivity | None:
         # file, so the far end bounds again rather than trusting what it finds (the argument
         # `MAXIMUM_DETAIL_CHARACTERS` is written down for).
         ask=_ask_token(record.get("ask")),
+        # Only a finished turn can have paused, and only `True` itself counts: the far end
+        # bounds what it finds, and a record from an older build carries no such key.
+        paused=kind is ActivityKind.COMPLETED and record.get("paused") is True,
     )
 
 

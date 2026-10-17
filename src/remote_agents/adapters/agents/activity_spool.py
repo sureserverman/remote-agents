@@ -106,6 +106,9 @@ class ObservedAgentEvent:
     owner decision living only in a code comment is exactly the unrecorded decision this project
     treats as reversible by the next edit. A Tier-1 review found it.
     """
+    paused: bool = False
+    """Whether the licence names this event a pause rather than an end (DEC-129): the service
+    holds the record back until the session stays quiet. A boolean, never a payload field."""
 
     def document(self) -> dict[str, object]:
         return {
@@ -115,6 +118,7 @@ class ObservedAgentEvent:
             "detail": self.detail,
             "observed_at": self.observed_at.isoformat(),
             "ask": self.ask,
+            "paused": self.paused,
         }
 
 
@@ -341,6 +345,7 @@ def _observed(
         ),
         observed_at=moment.astimezone(UTC),
         ask=_first(document, fields.ask_fields, _plain_token),
+        paused=licence.paused is not None and licence.paused(document),
     )
 
 
