@@ -1294,7 +1294,8 @@ def remote_control_words_args(
 #: three surface panes report `mouse_any_flag=1` -- they want it -- and the active agent
 #: pane `0`.
 #:
-#: The accepted cost, recorded because it is real and is why tmux does not default to it:
+#: The accepted cost, recorded because it is real and is why tmux did not default to it
+#: before 3.8:
 #: native terminal text selection then needs Shift held, and the wheel enters copy-mode in
 #: panes that do not request mouse. It is accepted on **this project's own socket only**.
 _OWNED_SERVER_OPTIONS = frozenset({"mouse"})
