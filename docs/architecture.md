@@ -398,8 +398,7 @@ session once, in its own conversation, and nudges the ones that were mid-turn.
 - `application/interrupted_resume.py`: `plan_resumes` is the pure decision over a
   `RestartSnapshot` taken before the first reconcile. `InterruptedResumePass` resumes through
   `SessionService.resume` under `restart:<session>`, then types `limit_resume.NUDGE` through
-  `send_prompt` into the sessions that had a turn marker, unless the successor reads busy: then
-  the turn outlived its pane (a Codex turn in its daemon) and nothing is typed.
+  `send_prompt` into the sessions that had a turn marker.
 - `adapters/sqlite/interrupted_resumes.py` stores every decision before the first launch
   (migration 20, `ports/interrupted_resumes.py`), so a restart never acts twice (DEC-114).
 - `composition/service.py` (`build_restart_resume`, `_resume_after_restart`) takes the snapshot,
