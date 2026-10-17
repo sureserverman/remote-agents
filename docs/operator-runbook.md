@@ -2517,13 +2517,15 @@ table first**, for the same reason. The auto-rollover Settings switch adds it on
 for the same reason. The *Resume after restart* switch adds it on first use. The database needs nothing either: an older version
 opens it, and its `doctor` reports `database_ready` false, as after any release that migrated.
 **Rolling back below 0.65.0 also turns Codex rollover off.** 0.64.1 rolls over Claude sessions only and has no
-`remote-agents session-id`, so a Codex session's handoff writer writes nothing there. A Codex
-rollover still open across the rollback ends by the state it had reached. A requested one fails
-`not-rollable`. One whose handoff was ready, or whose successor was starting, fails `not-typed`
-and leaves that Codex successor idle beside its predecessor. One whose successor was told to adopt fails
-`adoption-timeout`: the successor goes on with the plan and the predecessor keeps running. One
-whose successor had accepted, or whose predecessor was being stopped, finishes that stop as it
-would have.
+`remote-agents session-id`, so a Codex session's handoff writer writes nothing there. Let an open Codex
+rollover finish first: one left open is never carried on. A requested one fails `not-rollable`.
+One whose handoff was ready launches a Codex successor, offers it the Claude `/` adopt form,
+which is refused before anything is typed, fails `not-typed`, and leaves that successor idle. One further along is not
+typed to again, except once you answer a trust question it was still waiting on, and it ends
+failed with its predecessor still running; the notice names why, most often
+`adoption-timeout`. One whose successor had already accepted stops its predecessor as it would
+have. A stop already sent is never sent again: the rollover completes if the predecessor
+stopped, or ends `stop-unconfirmed` for you to stop it.
 Do not remove a
 managed tmux session until its ownership and output have been inspected.
 

@@ -443,7 +443,10 @@ async def test_a_codex_turn_that_outlives_the_server_in_its_daemon_is_not_nudged
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """A tmux crash that spares the Codex daemon: the turn its pane started goes on there, so
-    it was not cut off, and `serve` starting while it runs must type nothing into it."""
+    it was not cut off, and `serve` starting while it runs must type nothing into it.
+
+    The closing `not nudged:busy` assumes this turn shows its on-screen busy line at the first
+    look; a title-only busy is also a Codex boot (BL-137's next step)."""
     claude, codex = _prerequisites()
     tmux_directory = Path(tempfile.mkdtemp(prefix="ra-rsd-", dir="/tmp"))
     monkeypatch.setenv("TMUX_TMPDIR", str(tmux_directory))
