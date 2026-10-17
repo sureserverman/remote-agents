@@ -145,6 +145,33 @@ class SQLiteActivityStore:
                     _LOG.warning("skipping an activity row with an unknown kind or confidence")
         return tuple(activities)
 
+    async def newest_kind(self, session_id: str) -> ActivityKind | None:
+        """The kind of the session's newest observation by insertion, or `None` with none.
+
+        A row in a vocabulary this build no longer speaks also answers `None`: it says nothing
+        about what the session is doing now.
+        """
+        row = self._connection.execute(
+            "SELECT kind FROM agent_activity WHERE session_id = ?"
+            " ORDER BY activity_id DESC LIMIT 1",
+            (session_id,),
+        ).fetchone()
+        if row is None:
+            return None
+        try:
+            return ActivityKind(row[0])
+        except ValueError:
+            return None
+
+    async def newest_stop_detail(self, session_id: str) -> str | None:
+        """The words of the session's newest recorded limit stop, or `None` with none."""
+        row = self._connection.execute(
+            "SELECT detail FROM agent_activity WHERE session_id = ? AND kind = ?"
+            " ORDER BY activity_id DESC LIMIT 1",
+            (session_id, ActivityKind.LIMIT_REACHED.value),
+        ).fetchone()
+        return None if row is None else row[0]
+
 
 def _instant(value: str) -> datetime:
     parsed = datetime.fromisoformat(value)

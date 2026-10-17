@@ -294,6 +294,9 @@ def _private_boundary(
             terminal.capture,
             profile_limit_screens(descriptors),
             reported=profile_reported_kinds(descriptors),
+            # A stop already up at the first pass after a restart is reported when the record
+            # has not seen it: its newest recorded stop says something else.
+            history=SQLiteActivityStore(connection),
         ),
         # A stop whose limit lifted has its line retired from the bot's message, once. The same
         # shared limits read as the classifier; without one, stops lift on their schedule only.

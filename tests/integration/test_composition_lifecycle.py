@@ -214,6 +214,9 @@ def test_the_service_composition_wires_the_limit_stop_watch(tmp_path, monkeypatc
     assert composition.limit_lift_watcher._retire_only == frozenset({"cursor-agent"})
     # BL-111: the same outcome rows reach the service, or the daily prune silently never runs.
     assert composition.limit_stop_outcomes is not None
+    # Without its history the limit-screen watch seeds a stop printed during a restart, and that
+    # stop is never resumed (2026-10-17).
+    assert composition.limit_screen_watcher._history is not None
 
 
 def test_the_service_composition_lets_the_bot_step_the_console_aside(tmp_path, monkeypatch) -> None:

@@ -34,13 +34,17 @@ _CURSOR_LIMIT = (_FIXTURES / "cursor" / "limit_screen.txt").read_text(encoding="
 _CURSOR_IDLE = (_PANES / "cursor" / "idle.txt").read_text(encoding="utf-8")
 
 
+def _sentence(apostrophe: str = "’", at: str = "Sep 29, 2026 3:05 AM") -> str:
+    return (
+        f"■ You{apostrophe}ve hit your usage limit. Upgrade to Plus to continue using Codex"
+        f" (https://chatgpt.com/explore/plus), or try again at {at}."
+    )
+
+
 def _codex_limit(apostrophe: str = "’") -> str:
     """Codex's idle screen with its limit sentence as the last thing it printed."""
     lines = _CODEX_IDLE.rstrip("\n").split("\n")
-    sentence = (
-        f"■ You{apostrophe}ve hit your usage limit. Upgrade to Plus to continue using Codex"
-        " (https://chatgpt.com/explore/plus), or try again at Sep 29, 2026 3:05 AM."
-    )
+    sentence = _sentence(apostrophe)
     # Above the composer, where Codex prints an error into the transcript.
     composer = next(i for i, line in enumerate(lines) if line.startswith("›"))
     return "\n".join([*lines[:composer], sentence, "", *lines[composer:]]) + "\n"
@@ -72,14 +76,29 @@ class _Panes:
         return screen
 
 
-def _watcher(panes: _Panes, sessions: dict[str, str]) -> LimitScreenWatcher:
+def _watcher(panes: _Panes, sessions: dict[str, str], history=None) -> LimitScreenWatcher:
     return LimitScreenWatcher(
         _Store(sessions),
         panes.capture,
         {"codex": CODEX, "cursor-agent": CURSOR, "claude": SimpleNamespace(markers=(".",))},
         now=lambda: _NOW,
         reported=profile_reported_kinds(),
+        history=history,
     )
+
+
+class _History:
+    """The record's answer for every session: its newest kind and its newest stop's words."""
+
+    def __init__(self, newest: ActivityKind | None, stop: str | None = None) -> None:
+        self.newest = newest
+        self.stop = stop
+
+    async def newest_kind(self, session_id: str) -> ActivityKind | None:
+        return self.newest
+
+    async def newest_stop_detail(self, session_id: str) -> str | None:
+        return self.stop
 
 
 async def test_a_limit_screen_is_one_stop_per_appearance() -> None:
@@ -283,3 +302,94 @@ async def test_a_second_stop_while_the_first_is_still_on_screen_is_a_new_stop() 
     panes.screens[_CODEX] = "\n".join([*lines[:composer], *twice, "", *lines[composer:]]) + "\n"
     assert len(await watcher.poll()) == 1
     assert await watcher.poll() == ()
+
+
+@pytest.mark.parametrize(
+    "stop",
+    [_sentence(at="Oct 17, 2026 6:37 PM"), None],
+    ids=["an-earlier-stop", "never-stopped"],
+)
+async def test_a_stop_on_screen_at_first_sight_is_reported_when_the_record_has_not_seen_it(
+    stop: str | None,
+) -> None:
+    """The 2026-10-17 miss: the service restarted at 20:22:03, Codex stopped at 20:22:27, and the
+    first pass at 20:22:33 found the stop already up. The newest recorded news was a question
+    from an hour earlier, and the newest recorded stop named another retry time."""
+    panes = _Panes()
+    watcher = _watcher(panes, {_CODEX: "codex"}, _History(ActivityKind.NEEDS_ANSWER, stop))
+    panes.screens[_CODEX] = _codex_limit()
+
+    (stop_seen,) = await watcher.poll()
+    assert stop_seen.session_id == _CODEX
+    assert stop_seen.kind is ActivityKind.LIMIT_REACHED
+    assert stop_seen.confidence is ActivityConfidence.INFERRED
+    assert await watcher.poll() == (), "reported once, then the screen is seen as before"
+
+
+async def test_a_new_stop_straight_after_a_recorded_one_is_reported() -> None:
+    """Nudged, and stopped again before anything else was recorded: the words differ."""
+    panes = _Panes()
+    recorded = _History(ActivityKind.LIMIT_REACHED, _sentence(at="Sep 28, 2026 10:05 PM"))
+    watcher = _watcher(panes, {_CODEX: "codex"}, recorded)
+    panes.screens[_CODEX] = _codex_limit()
+
+    assert len(await watcher.poll()) == 1
+
+
+@pytest.mark.parametrize(
+    "newest", [ActivityKind.LIMIT_REACHED, ActivityKind.COMPLETED, ActivityKind.NEEDS_ANSWER]
+)
+async def test_the_recorded_stop_still_on_screen_is_not_reported_again(
+    newest: ActivityKind,
+) -> None:
+    """The release review's case: a stop recorded and nudged, a short answer that finished, and
+    its sentence still in the tail under the newer row. Reporting it would nudge it twice."""
+    panes = _Panes()
+    watcher = _watcher(panes, {_CODEX: "codex"}, _History(newest, _sentence()))
+    panes.screens[_CODEX] = _codex_limit()
+
+    assert await watcher.poll() == ()
+    assert await watcher.poll() == ()
+
+
+@pytest.mark.parametrize(
+    "recorded",
+    [
+        # Wrapped at another pane width: the join put a space inside a word.
+        _sentence().replace("usage limit", "us age limit"),
+        # Cut to the stored bound, marked by its ellipsis.
+        _sentence()[:60] + "…",
+    ],
+    ids=["rewrapped", "cut"],
+)
+async def test_the_recorded_words_match_across_a_rewrap_and_a_cut(recorded: str) -> None:
+    panes = _Panes()
+    watcher = _watcher(panes, {_CODEX: "codex"}, _History(ActivityKind.COMPLETED, recorded))
+    panes.screens[_CODEX] = _codex_limit()
+
+    assert await watcher.poll() == ()
+
+
+async def test_a_session_with_no_recorded_news_seeds_its_stop_on_screen() -> None:
+    """A session that has recorded nothing gives no ground to call a stop on screen new."""
+    panes = _Panes()
+    watcher = _watcher(panes, {_CODEX: "codex"}, _History(None))
+    panes.screens[_CODEX] = _codex_limit()
+
+    assert await watcher.poll() == ()
+
+
+async def test_a_failed_read_of_the_record_keeps_the_stop_on_screen_unreported() -> None:
+    class _Failing(_History):
+        async def newest_stop_detail(self, session_id: str) -> str | None:
+            raise RuntimeError("database locked")
+
+    panes = _Panes()
+    watcher = _watcher(panes, {_CODEX: "codex"}, _Failing(ActivityKind.NEEDS_ANSWER))
+    panes.screens[_CODEX] = _codex_limit()
+
+    assert await watcher.poll() == ()
+    panes.screens[_CODEX] = _CODEX_IDLE
+    assert await watcher.poll() == ()
+    panes.screens[_CODEX] = _codex_limit()
+    assert len(await watcher.poll()) == 1, "the watch itself carries on"

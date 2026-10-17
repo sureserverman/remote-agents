@@ -167,3 +167,54 @@ async def test_a_glance_still_ends_when_there_is_genuinely_less_to_show(store) -
 
     assert len(recent) == 1
     assert recent[0].kind is ActivityKind.COMPLETED
+
+
+async def test_a_session_s_newest_kind_is_its_last_row_by_insertion(store) -> None:
+    """What the limit-screen watch asks at first sight: is a stop on screen already recorded?"""
+    session = "01234567-89ab-cdef-0123-456789abcdef"
+    assert await store.newest_kind(session) is None, "a session with no rows has no news"
+
+    await store.append(_activity(ActivityKind.LIMIT_REACHED, minutes_ago=0))
+    # Stamped earlier but written later: insertion order decides, as `recent` reads.
+    await store.append(_activity(ActivityKind.NEEDS_ANSWER, minutes_ago=5))
+    await store.append(
+        AgentActivity(
+            "other",
+            ActivityKind.LIMIT_REACHED,
+            None,
+            datetime.now(UTC),
+            ActivityConfidence.INFERRED,
+        )
+    )
+    assert await store.newest_kind(session) is ActivityKind.NEEDS_ANSWER
+
+
+async def test_a_retired_kind_as_the_newest_row_reads_as_no_news(store) -> None:
+    session = "01234567-89ab-cdef-0123-456789abcdef"
+    await store.append(_activity(ActivityKind.COMPLETED))
+    store._connection.execute(
+        "INSERT INTO agent_activity (session_id, kind, detail, confidence, observed_at)"
+        " VALUES (?, 'quiet', NULL, 'inferred', ?)",
+        (session, datetime.now(UTC).isoformat()),
+    )
+    store._connection.commit()
+    assert await store.newest_kind(session) is None
+
+
+async def test_a_session_s_newest_stop_detail_is_its_last_stop_s_words(store) -> None:
+    session = "01234567-89ab-cdef-0123-456789abcdef"
+    assert await store.newest_stop_detail(session) is None, "a session never stopped has none"
+
+    await store.append(_activity(ActivityKind.LIMIT_REACHED, minutes_ago=9, detail="at 6:37 PM"))
+    await store.append(_activity(ActivityKind.LIMIT_REACHED, minutes_ago=5, detail="at 11:38 PM"))
+    await store.append(_activity(ActivityKind.COMPLETED, minutes_ago=1, detail="done"))
+    await store.append(
+        AgentActivity(
+            "other",
+            ActivityKind.LIMIT_REACHED,
+            "elsewhere",
+            datetime.now(UTC),
+            ActivityConfidence.INFERRED,
+        )
+    )
+    assert await store.newest_stop_detail(session) == "at 11:38 PM"

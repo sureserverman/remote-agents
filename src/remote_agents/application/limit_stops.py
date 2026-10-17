@@ -43,6 +43,7 @@ import time
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import replace
 from datetime import UTC, datetime
+from typing import Protocol
 
 from remote_agents.application.session_views import _STALE_READING_AGE
 from remote_agents.domain.models import SessionId, SessionState
@@ -304,6 +305,14 @@ _PASS_BUDGET_SECONDS = 15.0
 _CAPTURE_TIMEOUT_SECONDS = 5.0
 
 
+class StopHistory(Protocol):
+    """What the record says of a session, for a stop the limit-screen watch sees at first sight."""
+
+    async def newest_kind(self, session_id: str) -> ActivityKind | None: ...
+
+    async def newest_stop_detail(self, session_id: str) -> str | None: ...
+
+
 class LimitScreenWatcher:
     """Find the limit stop an agent draws on its pane when it reports no limit event of its own.
 
@@ -322,10 +331,24 @@ class LimitScreenWatcher:
 
     **Edge-triggered, seeded on first sight.** A session's first successful capture only records
     what it shows, so a restart over a limit screen that was already reported does not report it
-    again -- and, the accepted cost, a stop already on screen when the watch first sees a
-    session is not reported either. After that, one more stop sentence in the tail than last
-    pass is one stop, the same count is nothing, and a count that falls re-arms. A capture that
-    fails costs that session that pass and changes nothing.
+    again. After that, one more stop sentence in the tail than last pass is one stop, the same
+    count is nothing, and a count that falls re-arms. A capture that fails costs that session
+    that pass and changes nothing.
+
+    **Except a stop the record has not seen.** A stop printed between a restart and the first
+    pass after it was lost to the seed: on 2026-10-17 Codex stopped 24 seconds after a restart,
+    the stop was never recorded, and nothing resumed it after the reset. So a stop on screen at
+    first sight is checked against the session's `history`, and reported when the session has
+    recorded news and its newest recorded stop says something else.
+
+    The words, not the kind of the newest row, because the kind cannot tell the two cases
+    apart: a recorded stop that was nudged, answered in a few lines and finished leaves its
+    sentence in the tail under a newer `completed`, exactly as a new stop does under a newer
+    question. Codex names its retry time in the sentence, so a later stop reads differently; a
+    sentence that matches is the recorded one, and reporting it again would be a second nudge
+    (DEC-099). Compared without whitespace, because the wrap the capture keeps follows the pane's
+    width, and as far as the shorter runs, because a recorded line may have been cut. No
+    readable news, or a read that fails, gives no ground to call a stop new, and the seed stands.
     """
 
     def __init__(
@@ -335,10 +358,12 @@ class LimitScreenWatcher:
         screens: Mapping[str, LimitScreen],
         *,
         reported: Mapping[str, frozenset[ActivityKind]],
+        history: StopHistory | None = None,
         now: Callable[[], datetime] = lambda: datetime.now(UTC),
     ) -> None:
         self._store = store
         self._capture = capture
+        self._history = history
         # `reported` is each profile's hook licence (BL-050): a profile whose hook reports its
         # own limit stop is never read off its pane, and one absent from it reports nothing.
         self._watched = {
@@ -380,7 +405,9 @@ class LimitScreenWatcher:
                 continue
             count, line = _limit_lines(screen, self._watched[str(record.profile_id)])
             seen_before = key in self._showing
-            if seen_before and line is not None and count > self._showing[key]:
+            if line is not None and (
+                count > self._showing[key] if seen_before else await self._unrecorded(key, line)
+            ):
                 stops.append(
                     AgentActivity(
                         session_id=key,
@@ -394,6 +421,19 @@ class LimitScreenWatcher:
             # next pass rather than losing it.
             self._showing[key] = count
         return tuple(stops)
+
+    async def _unrecorded(self, session_id: str, line: str) -> bool:
+        """Whether a stop on screen at first sight is one the session's record has not seen."""
+        if self._history is None:
+            return False
+        try:
+            if await self._history.newest_kind(session_id) is None:
+                return False
+            recorded = await self._history.newest_stop_detail(session_id)
+        except Exception:
+            _LOG.warning("could not read a session's recorded news; its stop on screen is seeded")
+            return False
+        return recorded is None or not _same_sentence(recorded, line)
 
 
 def _limit_lines(screen: str, limit_screen: LimitScreen) -> tuple[int, str | None]:
@@ -419,6 +459,14 @@ def _limit_lines(screen: str, limit_screen: LimitScreen) -> tuple[int, str | Non
             break
         sentence.append(continuation.strip())
     return len(found), " ".join(sentence)
+
+
+def _same_sentence(recorded: str, line: str) -> bool:
+    """Whether a recorded stop's words are the sentence on screen, wrap and cut aside."""
+    kept = "".join(recorded.split()).removesuffix("…")
+    seen = "".join(line.split())
+    shorter = min(len(kept), len(seen))
+    return kept[:shorter] == seen[:shorter]
 
 
 def _starts_a_line(line: str) -> bool:
