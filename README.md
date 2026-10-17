@@ -309,8 +309,9 @@ window is always under the weekly column and never under somebody else's five-ho
 time, the pane shows where an even spend would stand today. A `┃` tick sits in the week bar at
 that point: fill past it is overspend. Where the pane is wide enough for one line per agent, a
 header row names the columns, and two more follow the week: `expected` (the even-spend share,
-`14%`) and `vs pace` (`on pace`, `▲ 14 over` or `▼ 7 under`). Where the pane stacks, one line
-under the week bar says the same thing: `↻ 6d · exp 14%  ▼ 7 under`. A five-hour window has
+`14%`) and `vs pace` (`on pace`, `▲ 14 over` or `▼ 7 under`). Where the pane stacks, the week
+bar's line says the same thing: `↻ 6d · exp 14%  ▼ 7 under`. If the pane is too narrow for
+those words beside the bar, they take a line of their own under it. A five-hour window has
 no pace, and neither does a stale reading. From 70 cells wide the week bar doubles to sixteen
 cells, and the pane's bottom border explains the tick.
 

@@ -437,6 +437,26 @@ def test_no_gauge_line_exceeds_37_cells_in_the_dashboard_right_region() -> None:
             assert cell_len(content.plain) <= 37, content.plain
 
 
+def test_a_stacked_pane_wide_enough_keeps_the_pace_words_beside_the_week_bar() -> None:
+    """The console's 73-cell pane stacks, but `↻ 6d · exp 14%  ▼ 7 under` fits beside the bar,
+    so the week takes one line rather than two (the owner's ask, 2026-10-17)."""
+    lines = [c.plain for c in limit_rows_content(_paced_rows(), 60)]
+    assert lines == [
+        "claude  5h ███░░░░░ 28% ↻ 1h",
+        "        wk █┃░░░░░░  7% ↻ 6d · exp 14%  ▼ 7 under",
+        "codex   5h ██░░░░░░ 18% ↻ 1h",
+        "        wk █████┃░░ 71% ↻ 3d · exp 57%  ▲ 14 over",
+    ], lines
+
+
+def test_the_pace_words_take_their_own_line_one_cell_short_of_fitting() -> None:
+    joined = "        wk █┃░░░░░░  7% ↻ 6d · exp 14%  ▼ 7 under"
+    fits = [c.plain for c in limit_rows_content(_paced_rows()[:1], cell_len(joined))]
+    short = [c.plain for c in limit_rows_content(_paced_rows()[:1], cell_len(joined) - 1)]
+    assert fits[1] == joined, fits
+    assert short[1:] == ["        wk █┃░░░░░░  7%", "           ↻ 6d · exp 14%  ▼ 7 under"], short
+
+
 def test_the_readme_stacked_example() -> None:
     """The handoff's stacked example as this pane draws it.
 

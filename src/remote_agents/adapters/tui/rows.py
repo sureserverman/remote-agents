@@ -752,7 +752,8 @@ def _one_line(row: LimitRow, columns: _LimitColumns) -> Content:
 
 
 def _pace_line(row: LimitRow, window) -> Content:
-    """`↻ 6d · exp 14%  ▼ 7 under`: the stacked layout's line under a paced week bar."""
+    """`↻ 6d · exp 14%  ▼ 7 under`: the stacked layout's pace words, beside a paced week bar
+    where they fit and on a line under it where they do not."""
     reset = _reset_text(row, window)
     muted = (
         f"{reset} · exp {window.expected_percent}%" if reset else f"exp {window.expected_percent}%"
@@ -861,11 +862,17 @@ def limit_row_content(
         ]
         paced = pace_cell(row)
         at = None if paced is None else columns.labels.index(paced.label)
+        paced_beside = False
         if paced is not None:
             # The pace cell's reset (the week's, or Cursor's pool's) moves onto its pace line, so
             # the bar's own line stays short enough for the dashboard's 39-cell right region
-            # (DEC-106).
+            # (DEC-106). Where the pace words fit beside the bar -- the console's 73-cell pane --
+            # they stay on its line, as a moved reset or the row's note does.
             cells[at] = _window_content(row, paced, columns, last=True, reset=False).rstrip()
+            beside = cells[at] + Content(" ") + _pace_line(row, paced)
+            if width is None or width <= 0 or indent.cell_length + beside.cell_length <= width:
+                cells[at] = beside
+                paced_beside = True
         # Any other cell too wide for the pane moves its reset onto a line of its own under the
         # bar, as the pace cell's does: a `Cursor` label is four cells wider than `5h`, and at
         # the dashboard's 28-cell region that is what a two-digit day count would cost.
@@ -883,7 +890,7 @@ def limit_row_content(
         for index, cell in enumerate(cells):
             lead = _name(row, columns) + Content(" " * _GROUP_GUTTER) if index == 0 else indent
             lines.append(lead + cell)
-            if index == at:
+            if index == at and not paced_beside:
                 lines.append(gauge + _pace_line(row, paced))
             elif index in moved:
                 lines.append(gauge + Content.assemble((moved[index], MUTED)))
