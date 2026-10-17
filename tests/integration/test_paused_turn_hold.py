@@ -14,6 +14,9 @@ import time
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
+from remote_agents.adapters.sqlite.activity_store import SQLiteActivityStore
+from remote_agents.adapters.sqlite.database import open_database
+from remote_agents.adapters.sqlite.migrations import MIGRATIONS
 from remote_agents.composition.service import (
     _PAUSED_QUIET_SECONDS,
     ServiceComposition,
@@ -167,3 +170,34 @@ async def test_the_activity_pass_holds_a_paused_record_and_releases_it_later(tmp
 
     (finished,) = notifier.delivered
     assert finished.kind is ActivityKind.COMPLETED and not finished.paused
+
+
+async def test_a_session_closed_while_its_finish_is_held_gets_no_feed_row(tmp_path) -> None:
+    """The release passes the same liveness gate as any activity (DEC-031), so a session the
+    owner closed during the quiet spell is not told "finished" in the feed. The bot declines it
+    at send time too (`_display_for`; `test_live_service.py`'s
+    `test_a_session_that_stops_while_its_notification_waits_is_not_notified`)."""
+    connection = open_database(tmp_path / "state.sqlite3", migrations=MIGRATIONS)
+    live = {_SESSION: True}
+
+    async def live_session(session_id: str) -> bool:
+        return live.get(session_id, False)
+
+    composition = ServiceComposition(
+        SimpleNamespace(notifier=_Notifier()),
+        None,
+        None,
+        activity_store=SQLiteActivityStore(connection),
+        live_session=live_session,
+    )
+    composition.paused_turns[_SESSION] = (
+        _activity(paused=True),
+        time.monotonic() - _PAUSED_QUIET_SECONDS,
+    )
+    live[_SESSION] = False
+
+    await _watch_activity_once(composition)
+
+    assert composition.paused_turns == {}
+    assert await SQLiteActivityStore(connection).recent(limit=5) == ()
+    connection.close()
