@@ -405,10 +405,11 @@ _WIDE_WEEK_GAUGE = 16
 #: The pace tick: where an even spend would stand today, drawn inside the bar it measures.
 PACE_TICK = "┃"
 
-#: Which cell the wide layout's two trailing columns carry is `session_views.pace_cell`'s rule
-#: (the week, or a pooled row's Cursor pool), not this surface's. Every paced cell keeps its
-#: tick; the columns hold one per row.
-_EXPECTED_HEADING = "expected"
+#: Which cell the wide layout's trailing `vs pace` column carries is `session_views.pace_cell`'s
+#: rule (the week, or a pooled row's Cursor pool), not this surface's. Every paced cell keeps its
+#: tick; the column holds one per row. There is no `expected` column beside it: the tick already
+#: marks the even-spend share, and its ten cells kept the console's 73-column pane from one line
+#: per agent (the owner's choice, 2026-10-17).
 _PACE_HEADING = "vs pace"
 
 
@@ -458,8 +459,6 @@ class _LimitColumns:
     """
     week_gauge: int = _GAUGE_WIDTH
     """How many cells the week column's bar is drawn in: `_WIDE_WEEK_GAUGE` on a wide pane."""
-    expected: int = len(_EXPECTED_HEADING)
-    """The `expected` column: its heading, which is wider than any `100%`."""
     pace: int = len(_PACE_HEADING)
     """The `vs pace` column: the widest of its heading and every row's pace words."""
 
@@ -736,13 +735,11 @@ def _one_line(row: LimitRow, columns: _LimitColumns) -> Content:
         else:
             cell = _window_content(row, window, columns, last=False, labelled=False)
         line = line + Content(" " * _GROUP_GUTTER) + cell
-    # The pace columns (DEC-106): blank at their widths for a row with no pace cell (`pace_cell`).
+    # The pace column (DEC-106): blank at its width for a row with no pace cell (`pace_cell`).
     paced = pace_cell(row)
     gutter = " " * _GROUP_GUTTER
     if paced is not None:
         line = line + Content.assemble(
-            (gutter, None),
-            (f"{paced.expected_percent}%".rjust(columns.expected), MUTED),
             (gutter, None),
             (pace_text(paced.pace_delta), pace_style(paced.pace_delta)),
         )
@@ -774,15 +771,14 @@ def _cell_width(label: str, columns: _LimitColumns) -> int:
 
 
 def _header_line(columns: _LimitColumns) -> Content:
-    """The one-line layout's column names: `5h`, `week`, `expected` and `vs pace`, muted.
+    """The one-line layout's column names: `5h`, `week` and `vs pace`, muted.
 
     Named once over the table rather than in every row: two agents' rows repeating `5h` and
-    `wk` said the same thing twice, and the two new columns need names somewhere.
+    `wk` said the same thing twice, and the pace column needs a name somewhere.
     """
     parts = [" " * columns.profile]
     for label in columns.labels:
         parts.append(" " * _GROUP_GUTTER + label.ljust(_cell_width(label, columns)))
-    parts.append(" " * _GROUP_GUTTER + _EXPECTED_HEADING.rjust(columns.expected))
     parts.append(" " * _GROUP_GUTTER + _PACE_HEADING)
     return Content.assemble(("".join(parts), MUTED))
 
@@ -796,7 +792,7 @@ def _table_width(columns: _LimitColumns) -> int:
     flipping the whole pane between layouts as a reading ages.
     """
     windows = sum(_GROUP_GUTTER + _cell_width(label, columns) for label in columns.labels)
-    pace = _GROUP_GUTTER + columns.expected + _GROUP_GUTTER + columns.pace
+    pace = _GROUP_GUTTER + columns.pace
     return columns.profile + windows + pace
 
 

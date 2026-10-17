@@ -178,11 +178,11 @@ def test_one_key_row(console: Drill) -> None:
 
 
 def test_pace_survives_chrome(console: Drill) -> None:
-    """The limits pane, inside its border, still shows its header, `expected`, `vs pace`, and
-    the source stamp."""
+    """The limits pane, inside its border, still shows its header, `vs pace`, and the source
+    stamp."""
     _settled(console, 200, 50)
     limits = wait(
-        lambda: (lambda lines: lines if "expected" in "\n".join(lines) else None)(
+        lambda: (lambda lines: lines if "vs pace" in "\n".join(lines) else None)(
             _limits_screen(console)
         ),
         bound=20.0,
@@ -190,7 +190,7 @@ def test_pace_survives_chrome(console: Drill) -> None:
     assert limits, _limits_screen(console)
     drawn = "\n".join(limits)
     assert limits[0].startswith("╭─ Plan limits"), limits
-    assert "expected" in drawn and "vs pace" in drawn, limits
+    assert "vs pace" in drawn, limits
     assert "claude · status line" in drawn and "live" in drawn, limits
 
 

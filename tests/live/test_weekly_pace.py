@@ -164,16 +164,15 @@ def _tmux() -> None:
         pytest.skip("BLOCKED: tmux is not installed")
 
 
-async def test_a_wide_limits_pane_draws_expected_and_the_tick_at_200x50(tmp_path: Path) -> None:
+async def test_a_wide_limits_pane_draws_the_pace_and_the_tick_at_200x50(tmp_path: Path) -> None:
     limits = await _drawn_limits(tmp_path, 200, 50)
     text = "\n".join(limits)
-    header = next(line for line in limits if "expected" in line)
+    header = next(line for line in limits if "vs pace" in line)
     claude = next(line for line in limits if line.split()[:1] == ["claude"])
 
-    # 14% sits in the `expected` column: right-aligned under its heading.
-    end = header.index("expected") + len("expected")
-    assert claude[end - 3 : end] == "14%", text
-    assert "▼ 7 under" in claude, text
+    # The pace words sit under their heading; there is no `expected` column (2026-10-17).
+    assert claude[header.index("vs pace") :].startswith("▼ 7 under"), text
+    assert "expected" not in header, text
 
     # The tick sits inside the week bar at round(14/100 * 16) = cell 2.
     week = [match for match in _BAR.finditer(claude)][1]
@@ -185,7 +184,7 @@ async def test_a_wide_limits_pane_draws_expected_and_the_tick_at_200x50(tmp_path
 async def test_a_stacked_limits_pane_draws_the_pace_line_at_100x30(tmp_path: Path) -> None:
     limits = await _drawn_limits(tmp_path, 100, 30)
     text = "\n".join(limits)
-    assert "expected" not in text, f"the pane should stack at 100x30:\n{text}"
+    assert "vs pace" not in text, f"the pane should stack at 100x30:\n{text}"
     week = next(index for index, line in enumerate(limits) if " wk " in line)
     assert "┃" in limits[week], text
     assert "↻" not in limits[week], text

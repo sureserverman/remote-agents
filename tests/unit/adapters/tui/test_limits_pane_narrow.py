@@ -320,7 +320,7 @@ def test_each_absence_trails_empty_bars_in_both_layouts() -> None:
         (LimitRow("codex", (LimitWindow("5h", 3, "4h"),), None, "2h"), "as of 2h"),
     )
     for row, phrase in cases:
-        for width in (120, NARROW):
+        for width in (120, PANE_CELLS):
             # The pane draws the rows, then the source stamp under them (R3).
             text = "\n".join(
                 content.plain
@@ -331,7 +331,7 @@ def test_each_absence_trails_empty_bars_in_both_layouts() -> None:
             )
             # Stacked cells carry their labels; the one-line layout names them once, in its
             # header row (DEC-106), over each bar.
-            if width == NARROW:
+            if width == PANE_CELLS:
                 labels = _labels_in(text.splitlines())
             else:
                 header, *rows = text.splitlines()
@@ -340,7 +340,9 @@ def test_each_absence_trails_empty_bars_in_both_layouts() -> None:
                     for line in rows
                     for run in _GAUGE_RUN.finditer(line)
                 ]
-            assert labels == ["5h", ("wk" if width == NARROW else "week")], f"at {width}:\n{text}"
+            assert labels == ["5h", ("wk" if width == PANE_CELLS else "week")], (
+                f"at {width}:\n{text}"
+            )
             assert phrase in text, f"at {width} {phrase!r} fell off:\n{text}"
             last_bar = max(
                 m.end() + sum(len(above) + 1 for above in text.splitlines()[:i])
@@ -438,9 +440,9 @@ def test_no_gauge_line_exceeds_37_cells_in_the_dashboard_right_region() -> None:
 
 
 def test_a_stacked_pane_wide_enough_keeps_the_pace_words_beside_the_week_bar() -> None:
-    """The console's 73-cell pane stacks, but `↻ 6d · exp 14%  ▼ 7 under` fits beside the bar,
-    so the week takes one line rather than two (the owner's ask, 2026-10-17)."""
-    lines = [c.plain for c in limit_rows_content(_paced_rows(), 60)]
+    """At 50 cells the table stacks, but `↻ 6d · exp 14%  ▼ 7 under` fits beside the bar, so
+    the week takes one line rather than two (the owner's ask, 2026-10-17)."""
+    lines = [c.plain for c in limit_rows_content(_paced_rows(), 50)]
     assert lines == [
         "claude  5h ███░░░░░ 28% ↻ 1h",
         "        wk █┃░░░░░░  7% ↻ 6d · exp 14%  ▼ 7 under",

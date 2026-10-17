@@ -820,7 +820,7 @@ def is_pooled(row: LimitRow) -> bool:
 def pace_cell(row: LimitRow) -> LimitWindow | None:
     """The cell whose pace a row's one pace slot shows, or None when it has no pace.
 
-    A surface has room for one `expected` / `vs pace` per row, so which cell fills it is a rule
+    A surface has room for one pace slot per row, so which cell fills it is a rule
     both surfaces share rather than one each spells (DEC-043, DEC-091): the `week` cell, or for
     a pooled row -- whose cells `_placed` named -- its first pool, which is Cursor's own (the
     owner's pick, 2026-10-07; DEC-117).

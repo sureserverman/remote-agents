@@ -200,7 +200,7 @@ async def test_the_feed_holds_still_an_arrival_takes_the_cursor_and_limits_keep_
             _ANSI.sub("", _inner(line)) for line in _region(await _capture(socket), "Plan limits")
         ]
         text = "\n".join(limits)
-        header = next((line for line in limits if "expected" in line.split()), None)
+        header = next((line for line in limits if "vs pace" in line), None)
         if header is not None:
             assert header.index("5h") < header.index("week"), text
             rows = [line for line in limits if line.split()[:1] in (["claude"], ["codex"])]

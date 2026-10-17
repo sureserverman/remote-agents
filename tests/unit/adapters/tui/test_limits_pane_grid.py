@@ -818,7 +818,7 @@ def test_the_pace_tick_styles() -> None:
     assert _style_at(content, len(bar) - 1) == "$secondary"
 
 
-# --- the header row and the pace columns (DEC-106, DEC-100) ---------------------------------
+# --- the header row and the pace column (DEC-106, DEC-100) ----------------------------------
 
 
 def _readme_rows() -> tuple[LimitRow, ...]:
@@ -845,9 +845,9 @@ def _readme_rows() -> tuple[LimitRow, ...]:
     )
 
 
-def test_the_pace_columns_are_a_property_of_the_set() -> None:
-    """Widths measured across rows: a row with no pace leaves both cells blank at their widths,
-    and every row's column offsets are identical."""
+def test_the_pace_column_is_a_property_of_the_set() -> None:
+    """Widths measured across rows: a row with no pace leaves its cell blank at its width, and
+    every row's column offsets are identical."""
     paced, _codex = _readme_rows()
     unpaced = LimitRow(
         "a-longer-name",
@@ -862,11 +862,9 @@ def test_the_pace_columns_are_a_property_of_the_set() -> None:
         assert len(starts) == 1, "\n".join((header, *lines))
         (paced_line,) = [line for line in lines if line.startswith("claude")]
         (unpaced_line,) = [line for line in lines if not line.startswith("claude")]
-        expected_end = header.index("expected") + len("expected")
-        assert paced_line[expected_end - 3 : expected_end] == "14%", paced_line
         assert paced_line[header.index("vs pace") :] == "▼ 7 under", paced_line
-        assert unpaced_line.rstrip() == unpaced_line[: header.index("expected")].rstrip(), (
-            "a row with no pace draws nothing in either pace column"
+        assert unpaced_line.rstrip() == unpaced_line[: header.index("vs pace")].rstrip(), (
+            "a row with no pace draws nothing in the pace column"
         )
 
 
@@ -883,13 +881,12 @@ def test_pace_style_thresholds() -> None:
 
 
 def test_the_header_row_labels_each_column() -> None:
-    """`5h` and `week` over their bars, `expected` right-aligned over its figures, `vs pace` over
-    its words -- and the rows below carry no labels of their own."""
+    """`5h` and `week` over their bars, `vs pace` over its words -- and the rows below carry no
+    labels of their own."""
     header, claude, codex = [content.plain for content in limit_rows_content(_readme_rows(), 80)]
     for line in (claude, codex):
         gauges = [match.start() for match in _TICKED_GAUGE.finditer(line)]
         assert gauges == [header.index("5h"), header.index("week")], (header, line)
-        assert header.index("expected") + len("expected") == line.index("%", gauges[1] + 20) + 1
         assert line[header.index("vs pace")] in "▲▼o", (header, line)
         assert " 5h " not in line and " wk " not in line, line
     (styles,) = {str(span.style) for span in limit_rows_content(_readme_rows(), 80)[0].spans}
@@ -897,12 +894,17 @@ def test_the_header_row_labels_each_column() -> None:
 
 
 def test_table_width_counts_the_pace_columns() -> None:
-    """The stack decision flips at exactly the width of the header row."""
-    header = limit_rows_content(_readme_rows(), WIDE)[0].plain
+    """The stack decision flips at exactly the width of the header row.
+
+    Measured below `_WIDE_PANE`, where the week bar keeps its eight cells: a header measured at
+    `WIDE` carries the sixteen-cell bar, and the table it describes is wider than the one that
+    is drawn at the width under test.
+    """
+    header = limit_rows_content(_readme_rows(), 69)[0].plain
     width = len(header.rstrip()) + len("▲ 14 over") - len("vs pace")
     assert len(limit_rows_content(_readme_rows(), width)) == 3, "fits: header and two rows"
     stacked = [content.plain for content in limit_rows_content(_readme_rows(), width - 1)]
-    assert "expected" not in stacked[0], stacked
+    assert "vs pace" not in stacked[0], stacked
 
 
 def test_the_readme_example_rows_at_width_80() -> None:
@@ -915,9 +917,9 @@ def test_the_readme_example_rows_at_width_80() -> None:
     """
     lines = [content.plain for content in limit_rows_content(_readme_rows(), 80)]
     assert lines == [
-        "        5h                 week                       expected  vs pace",
-        "claude  ███░░░░░ 28% ↻ 1h  ██┃░░░░░░░░░░░░░  7% ↻ 6d       14%  ▼ 7 under",
-        "codex   ██░░░░░░ 18% ↻ 1h  █████████┃██░░░░ 71% ↻ 3d       57%  ▲ 14 over",
+        "        5h                 week                       vs pace",
+        "claude  ███░░░░░ 28% ↻ 1h  ██┃░░░░░░░░░░░░░  7% ↻ 6d  ▼ 7 under",
+        "codex   ██░░░░░░ 18% ↻ 1h  █████████┃██░░░░ 71% ↻ 3d  ▲ 14 over",
     ]
 
 
@@ -1092,33 +1094,33 @@ def _quiet(profile: str) -> LimitRow:
 def test_a_long_cursor_name_does_not_stack_a_table_that_fits_without_it(last: LimitRow) -> None:
     """The name gives way, not the layout: its row has nothing in the columns to push apart.
 
-    76 cells is the limits region of a 200-column terminal, where Claude and Codex fit on one
-    line each with three cells to spare. `cursor-agent` is six cells longer than `claude`.
+    At 58 cells Claude and Codex fit on one line each with three cells to spare.
+    `cursor-agent` is six cells longer than `claude`.
     """
-    without = [content.plain for content in limit_rows_content(_readme_rows(), 76)]
-    assert "expected" in without[0], "the fixture no longer fits on one line at 76"
+    without = [content.plain for content in limit_rows_content(_readme_rows(), 58)]
+    assert "vs pace" in without[0], "the fixture no longer fits on one line at 58"
     header, claude, codex, cursor = [
-        content.plain for content in limit_rows_content((*_readme_rows(), last), 76)
+        content.plain for content in limit_rows_content((*_readme_rows(), last), 58)
     ]
-    assert "expected" in header, header
+    assert "vs pace" in header, header
     assert cursor.startswith("cursor-a… "), cursor
     assert (claude, codex) == tuple(line[:6] + "   " + line[6:] for line in without[1:]), (
         "the other rows moved by more than the three cells the column grew"
     )
     for line in (header, claude, codex, cursor):
-        assert len(line) <= 76, line
+        assert len(line) <= 58, line
 
 
 def test_a_name_gives_way_only_down_to_six_cells_and_then_the_table_stacks() -> None:
     """Whatever the rows read: the rule is the names and the width, so no reading flips it."""
     rows = (*_readme_rows(), _cursor_row(profile="cursor-agent"))
-    header = limit_rows_content(rows, 73)[0].plain
-    assert "expected" in header, header
-    assert limit_rows_content(rows, 73)[3].plain.startswith("curso…  █"), "six cells at 73"
-    assert "expected" not in limit_rows_content(rows, 72)[0].plain, "and stacked at 72"
+    header = limit_rows_content(rows, 55)[0].plain
+    assert "vs pace" in header, header
+    assert limit_rows_content(rows, 55)[3].plain.startswith("curso…  █"), "six cells at 55"
+    assert "vs pace" not in limit_rows_content(rows, 54)[0].plain, "and stacked at 54"
     unread = (*_readme_rows(), LimitRow("cursor-agent", (), None, None, absence="unreadable"))
-    for width in range(60, 90):
-        one_line = ["expected" in limit_rows_content(r, width)[0].plain for r in (rows, unread)]
+    for width in range(45, 90):
+        one_line = ["vs pace" in limit_rows_content(r, width)[0].plain for r in (rows, unread)]
         assert len(set(one_line)) == 1, f"at {width} the layout depends on the reading"
 
 
@@ -1143,11 +1145,9 @@ def _paced_cursor_row() -> LimitRow:
 
 
 @pytest.mark.parametrize("width", [WIDE, 80])
-def test_a_cursor_row_fills_the_pace_columns_from_its_cursor_pool(width: int) -> None:
+def test_a_cursor_row_fills_the_pace_column_from_its_cursor_pool(width: int) -> None:
     rows = (*_readme_rows(), _paced_cursor_row())
     header, claude, codex, cursor = [c.plain for c in limit_rows_content(rows, width)]
-    expected_end = header.index("expected") + len("expected")
-    assert cursor[expected_end - 3 : expected_end] == "17%", "\n".join((header, claude, cursor))
     assert cursor[header.index("vs pace") :] == "▲ 12 over", "\n".join((header, claude, cursor))
     # Both pools are paced over the one cycle, so each bar carries the tick.
     ticked = [match.group() for match in _TICKED_GAUGE.finditer(cursor)]
