@@ -297,7 +297,7 @@ class InterruptedResumePass:
     **Every resume comes first, then the nudges, side by side.** A session that was mid-turn
     gets `limit_resume.NUDGE` typed once (DEC-099, DEC-109), tried every `RETRY_SECONDS`, up to
     `STARTUP_RETRIES` more times, while its agent boots, and never again after a send that may
-    have typed.
+    have typed. A successor that reads busy is never typed into: its turn outlived the pane.
     A `nudging:<id>` intent is written before the first send, so a start that finds one left
     over gives it up as unconfirmed rather than typing it twice.
 
@@ -432,6 +432,11 @@ class InterruptedResumePass:
             verdict = delivery_verdict(delivery)
             if verdict is DeliveryVerdict.SENT:
                 return None
+            if delivery.reason is PromptReason.BUSY:
+                # Working: the turn outlived its pane, so it was not cut off. A Codex turn runs
+                # on in its daemon after a tmux crash, and a nudge once it ends starts another
+                # (measured 2026-10-17, `test_restart_resume_live.py`).
+                return PromptReason.BUSY.value
             if verdict not in _BOOTING:
                 if verdict is DeliveryVerdict.REFUSED and delivery.reason is not None:
                     return delivery.reason.value

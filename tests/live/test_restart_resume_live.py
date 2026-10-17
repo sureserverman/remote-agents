@@ -258,6 +258,7 @@ class _Process:
         self.paths = paths
         self.config = config
         self.sends: list[tuple[SessionId, str]] = []
+        self.answers: list[str] = []
         self.notices: list[tuple[tuple[ResumeReport, ...], int]] = []
         self.passes = 0
 
@@ -272,7 +273,9 @@ class _Process:
 
         async def counted(session_id: SessionId, text: str):
             self.sends.append((session_id, text))
-            return await send(session_id, text)
+            delivery = await send(session_id, text)
+            self.answers.append(f"{delivery.outcome.value}:{delivery.reason}")
+            return delivery
 
         self.terminal.send_prompt = counted  # type: ignore[method-assign]
 
@@ -423,6 +426,118 @@ async def test_a_lost_server_brings_real_claude_and_codex_back_in_their_own_conv
         if repo is not None:
             shutil.rmtree(repo, ignore_errors=True)
         shutil.rmtree(tmux_directory, ignore_errors=True)
+
+
+#: A turn long enough to be cut off by the lost server and still running in the Codex daemon
+#: when `serve` starts again.
+_LONG_TURN = "Run the shell command `sleep 40`, then reply with exactly the word: ok"
+_SLEEP = ("sleep", "40")
+
+
+@pytest.mark.live_acceptance
+async def test_a_codex_turn_that_outlives_the_server_in_its_daemon_is_not_nudged(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A tmux crash that spares the Codex daemon: the turn its pane started goes on there, so
+    it was not cut off, and `serve` starting while it runs must type nothing into it."""
+    claude, codex = _prerequisites()
+    tmux_directory = Path(tempfile.mkdtemp(prefix="ra-rsd-", dir="/tmp"))
+    monkeypatch.setenv("TMUX_TMPDIR", str(tmux_directory))
+    socket = tmux_directory / f"tmux-{os.getuid()}" / "remote-agents"
+    codex_home = short_codex_home()
+    repo: Path | None = None
+    connections = []
+    seen: dict[str, object] = {}
+    try:
+        repo = _workspace(tmp_path)
+        paths = _isolated_home(tmp_path / "home", repo, claude, codex, codex_home)
+        config = load_config(paths.config_path)
+        connections.append(open_database(paths.database_path, migrations=MIGRATIONS))
+        first = _Process(config, connections[-1], paths)
+        outcome = await first.backend.sessions.launch(
+            LaunchCommand(first.project(repo), CODEX, _key("restart-daemon"), "restart-live")
+        )
+        session_id = outcome.record.session_id
+        if outcome.record.state is SessionState.UNTRUSTED:
+            await _answer_trust(first, session_id)
+        await _until_running(first, session_id, socket)
+        await _type(first, session_id, _LONG_TURN)
+        markers = FileTurnMarkers(paths.activity_directory)
+        await _until_sleeping(first, markers, session_id)
+
+        # The tmux crash: the server and its pane go; the daemon, and the turn in it, stay.
+        subprocess.run(["tmux", "-S", str(socket), "kill-server"], capture_output=True, timeout=30)
+        await _until_gone(first)
+        seen["after_kill"] = _alive(codex_home)
+
+        connections.append(open_database(paths.database_path, migrations=MIGRATIONS))
+        second = _Process(config, connections[-1], paths)
+
+        async def poll(secrets: TelegramSecrets, boundary: PrivateBotBoundary) -> None:
+            deadline = time.monotonic() + _PASS_SECONDS
+            while not second.notices and time.monotonic() < deadline:
+                await asyncio.sleep(_POLL_SECONDS)
+
+        await _serve_with_reconciliation(
+            TelegramSecrets("token", 7, 11), second.composition(), poll, 3600
+        )
+        seen["after_pass"] = _alive(codex_home)
+        seen["old_marker"] = markers.started_at(str(session_id))
+        seen["answers"] = second.answers
+        seen["notices"] = [
+            [(str(report.record.session_id), report.outcome) for report in reports]
+            for reports, _ in second.notices
+        ]
+        print("MEASURED", json.dumps(seen, default=str))
+        typed = [answer for answer in second.answers if not answer.startswith("refused")]
+        assert typed == [], await _diagnosis(
+            second, f"typed into a turn that was still running: {seen}"
+        )
+        ((reports, _),) = second.notices
+        (report,) = reports
+        assert report.outcome.endswith("; not nudged:busy"), report.outcome
+    finally:
+        with contextlib.suppress(Exception):
+            subprocess.run(
+                ["tmux", "-S", str(socket), "kill-server"],
+                capture_output=True,
+                timeout=30,
+                check=False,
+            )
+        retire_codex_home(codex_home)
+        for connection in connections:
+            with contextlib.suppress(Exception):
+                connection.close()
+        if repo is not None:
+            shutil.rmtree(repo, ignore_errors=True)
+        shutil.rmtree(tmux_directory, ignore_errors=True)
+
+
+def _alive(home: Path | None = None) -> dict[str, int]:
+    """How many processes run from the drill's `CODEX_HOME` (the daemon), and how many run
+    `sleep 40` (the turn's command), read from `/proc`."""
+    daemon = sleeping = 0
+    sleep = [part.encode() for part in _SLEEP]
+    for entry in Path("/proc").glob("[0-9]*"):
+        with contextlib.suppress(OSError):
+            if home is not None and os.readlink(entry / "exe").startswith(f"{home}/"):
+                daemon += 1
+        with contextlib.suppress(OSError):
+            if (entry / "cmdline").read_bytes().split(b"\0")[:2] == sleep:
+                sleeping += 1
+    return {"daemon": daemon, "sleep": sleeping}
+
+
+async def _until_sleeping(process: _Process, markers: FileTurnMarkers, session_id) -> None:
+    """The turn is under way: its marker is down and its `sleep` is running."""
+    started = time.monotonic()
+    while True:
+        if markers.started_at(str(session_id)) is not None and _alive()["sleep"]:
+            return
+        assert time.monotonic() - started < _TURN_SECONDS, await _diagnosis(
+            process, f"{session_id}'s turn never reached its sleep"
+        )
+        await asyncio.sleep(_POLL_SECONDS)
 
 
 def _key(prefix: str) -> str:

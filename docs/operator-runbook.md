@@ -883,7 +883,8 @@ this. The terminal never does.
   `~/.local/state/remote-agents/activity/conversations/<session>`. With no such mark, the
   session's `resume_source_id` is used. Sessions that were in the middle of a turn are then sent
   the same one-line nudge as a session resumed after a usage limit. Idle ones are resumed and
-  left alone.
+  left alone. A resumed session found working is not nudged either (`not nudged:busy`): its turn
+  outlived the server, as a Codex turn does in its daemon when tmux alone crashed.
 - **What is skipped, and why.** Each skip is listed in the notice:
   - `not-resumable`: Cursor has no resume.
   - `no-conversation`: no mark and no `resume_source_id`; usually an OpenCode session.

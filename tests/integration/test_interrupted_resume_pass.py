@@ -437,7 +437,7 @@ async def test_nudge_an_unmarked_session_gets_none(rig: Rig) -> None:
 async def test_nudge_waits_out_a_booting_agent_every_three_seconds(rig: Rig) -> None:
     record = await _mid_turn(rig)
     rig.terminal.prompt_deliveries = [
-        PromptDelivery(PromptOutcome.REFUSED, PromptReason.BUSY),
+        PromptDelivery(PromptOutcome.REFUSED, PromptReason.KEYS_BUSY),
         PromptDelivery(PromptOutcome.REFUSED, PromptReason.UNRECOGNISED),
     ]
 
@@ -448,10 +448,25 @@ async def test_nudge_waits_out_a_booting_agent_every_three_seconds(rig: Rig) -> 
     assert report.outcome == f"resumed:{report.new_session_id}"
 
 
+async def test_nudge_a_successor_found_working_gets_none(rig: Rig) -> None:
+    """Busy means the turn outlived its pane, as a Codex turn does in its daemon after a tmux
+    crash (measured 2026-10-17): it was not cut off, so nothing is typed, then or after it ends."""
+    record = await _mid_turn(rig)
+    rig.terminal.prompt_deliveries = [
+        PromptDelivery(PromptOutcome.REFUSED, PromptReason.UNRECOGNISED),
+        PromptDelivery(PromptOutcome.REFUSED, PromptReason.BUSY),
+    ]
+
+    (report,) = await rig.run_pass().run(await rig.snapshot(record))
+
+    assert len(rig.terminal.prompts) == 2
+    assert report.outcome == f"resumed:{report.new_session_id}; not nudged:busy"
+
+
 async def test_nudge_gives_up_after_the_startup_patience(rig: Rig) -> None:
     record = await _mid_turn(rig)
     rig.terminal.prompt_deliveries = [
-        PromptDelivery(PromptOutcome.REFUSED, PromptReason.BUSY) for _ in range(100)
+        PromptDelivery(PromptOutcome.REFUSED, PromptReason.KEYS_BUSY) for _ in range(100)
     ]
 
     (report,) = await rig.run_pass().run(await rig.snapshot(record))
@@ -561,7 +576,7 @@ async def test_nudge_two_sessions_are_nudged_side_by_side(rig: Rig) -> None:
 async def test_nudge_stops_typing_once_the_service_drains(rig: Rig) -> None:
     """A drain while an agent boots ends the wait; nothing was typed, so it says `stopping`."""
     record = await _mid_turn(rig)
-    rig.terminal.prompt_deliveries = [PromptDelivery(PromptOutcome.REFUSED, PromptReason.BUSY)]
+    rig.terminal.prompt_deliveries = [PromptDelivery(PromptOutcome.REFUSED, PromptReason.KEYS_BUSY)]
 
     async def drain_while_waiting(seconds: float) -> None:
         await rig.locks.drain()
@@ -666,7 +681,7 @@ async def test_nudge_patience_is_counted_so_a_clock_stepping_back_still_gives_up
 ) -> None:
     record = await _mid_turn(rig)
     rig.terminal.prompt_deliveries = [
-        PromptDelivery(PromptOutcome.REFUSED, PromptReason.BUSY) for _ in range(100)
+        PromptDelivery(PromptOutcome.REFUSED, PromptReason.KEYS_BUSY) for _ in range(100)
     ]
 
     async def stepping_back(seconds: float) -> None:
