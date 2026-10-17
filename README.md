@@ -313,7 +313,8 @@ header row names the columns, and a `vs pace` column follows the week (`on pace`
 even-spend share: `↻ 6d · exp 14%  ▼ 7 under`. If the pane is too narrow for
 those words beside the bar, they take a line of their own under it. A five-hour window has
 no pace, and neither does a stale reading. From 70 cells wide the week bar doubles to sixteen
-cells, and the pane's bottom border explains the tick.
+cells, unless that would cut an agent's name the eight-cell bar leaves room for. The pane's
+bottom border explains the tick.
 
 **One dim line under the rows says where each reading came from and how old it is**: for
 example `claude · status line · as of 4m        codex · live`. A stale reading's date lives

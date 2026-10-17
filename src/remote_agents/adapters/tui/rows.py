@@ -399,6 +399,7 @@ _GAUGE_WIDTH = len(percent_gauge(0))
 #: From how wide a pane the week gauge widens, and to how many cells (DEC-106). A pace tick
 #: at 8 cells moves in 12.5% steps -- nearly a day of a week -- so where there is room the week
 #: bar doubles. Only the week: a 5h window has no pace, and a wider bar would say nothing more.
+#: Not where doubling would ellipsise a name the eight-cell table has room for (`_limit_columns`).
 _WIDE_PANE = 70
 _WIDE_WEEK_GAUGE = 16
 
@@ -516,7 +517,6 @@ def _limit_columns(rows: Sequence[LimitRow], width: int | None = None) -> _Limit
         (len(pace_text(window.pace_delta)) for window in paces if window is not None),
         default=0,
     )
-    week_gauge = _WIDE_WEEK_GAUGE if width is not None and width >= _WIDE_PANE else _GAUGE_WIDTH
     pace_line = max(
         (_pace_line(row, window).cell_length for row, window in zip(rows, paces) if window),
         default=0,
@@ -527,9 +527,18 @@ def _limit_columns(rows: Sequence[LimitRow], width: int | None = None) -> _Limit
         percent=percent,
         reset=reset,
         labels=labels,
-        week_gauge=week_gauge,
         pace=max(len(_PACE_HEADING), pace),
     )
+    # **The doubled bar never costs a name its room.** Where the table fits at eight cells with
+    # every name whole but not at sixteen, doubling only ellipsised the names: `cursor-agent`
+    # read `cursor-…` at 70 cells and whole at 69 and 74 (the owner's ask, 2026-10-17).
+    if width is not None and width >= _WIDE_PANE:
+        wide = replace(columns, week_gauge=_WIDE_WEEK_GAUGE)
+        fits_wide = profile + _table_width(wide) <= width
+        fits_plain = profile + _table_width(columns) <= width
+        if fits_wide or not fits_plain:
+            columns = wide
+    week_gauge = columns.week_gauge
     # **A long name gives way before the table stacks.** The profile column is the widest name,
     # and `cursor-agent` is twice `claude`: its six extra cells took a 76-cell pane from one
     # line per agent to three. So where the table would fit with a narrower name column, the

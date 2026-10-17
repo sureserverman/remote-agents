@@ -1124,6 +1124,50 @@ def test_a_name_gives_way_only_down_to_six_cells_and_then_the_table_stacks() -> 
         assert len(set(one_line)) == 1, f"at {width} the layout depends on the reading"
 
 
+def _live_rows() -> tuple[LimitRow, ...]:
+    """The owner's console on 2026-10-17: three paced agents, `cursor-agent` the longest name."""
+    return (
+        LimitRow(
+            "claude",
+            (LimitWindow("5h", 5, "2h"), LimitWindow("week", 47, "4d", 32, 15)),
+            "usage API",
+            None,
+        ),
+        LimitRow(
+            "codex",
+            (LimitWindow("5h", 100, "3h"), LimitWindow("week", 59, "5d", 27, 32)),
+            None,
+            None,
+        ),
+        LimitRow(
+            "cursor-agent",
+            (
+                LimitWindow("5h", 29, "15d", 50, -21, name="Cursor"),
+                LimitWindow("week", 47, "15d", 50, -3, name="other"),
+            ),
+            "Cursor API",
+            None,
+        ),
+    )
+
+
+@pytest.mark.parametrize("width", range(66, 90))
+def test_the_wide_week_bar_never_cuts_a_name_the_plain_bar_leaves_whole(width: int) -> None:
+    """At 70-73 cells the sixteen-cell bar used to cut `cursor-agent` to `cursor-…`, while 69
+    and 74 drew it whole. The bar now doubles only where every name stays whole."""
+    lines = [c.plain for c in limit_rows_content(_live_rows(), width)]
+    assert "vs pace" in lines[0], lines
+    assert lines[3].startswith("cursor-agent  "), f"at {width}: {lines[3]!r}"
+    weeks = {len(_TICKED_GAUGE.findall(line)[1]) for line in lines[1:]}
+    assert weeks == {16 if width >= 74 else 8}, f"at {width}: {lines}"
+
+
+def test_the_week_bar_still_doubles_where_it_costs_no_name() -> None:
+    """Claude and Codex alone fit at sixteen cells from 70, so the bar doubles there as before."""
+    lines = [c.plain for c in limit_rows_content(_live_rows()[:2], 70)]
+    assert {len(_TICKED_GAUGE.findall(line)[1]) for line in lines[1:]} == {16}, lines
+
+
 def test_a_cursor_name_is_drawn_whole_where_the_table_has_the_room() -> None:
     lines = [
         c.plain
