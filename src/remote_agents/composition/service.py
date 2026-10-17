@@ -993,6 +993,7 @@ def _hold_paused_turns(
     composition: ServiceComposition,
     activities: Sequence[AgentActivity],
     now: float | None = None,
+    clock: Callable[[], datetime] = lambda: datetime.now(UTC),
 ) -> list[AgentActivity]:
     """Hold back each paused "finished", and release it once its session has stayed quiet.
 
@@ -1001,6 +1002,11 @@ def _hold_paused_turns(
     when the session does anything else -- any later activity, or a turn its hook marked after
     the pause -- and released as an ordinary `COMPLETED` after `_PAUSED_QUIET_SECONDS` of
     neither. Returns this pass's other activities, in order, with any released ones after them.
+
+    **A released one is stamped with its release.** The feed lists rows in the order they were
+    stored and ages each by its stamp, so one stored two minutes late under its pause's stamp
+    sat above newer rows with an older age (seen live on 2026-10-17). The words are still the
+    paused turn's own.
     """
     moment = time.monotonic() if now is None else now
     held = composition.paused_turns
@@ -1018,7 +1024,7 @@ def _hold_paused_turns(
             del held[session_id]
         elif moment - since >= _PAUSED_QUIET_SECONDS:
             del held[session_id]
-            passing.append(replace(paused, paused=False))
+            passing.append(replace(paused, paused=False, observed_at=clock()))
     return passing
 
 

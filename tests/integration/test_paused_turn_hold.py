@@ -57,11 +57,17 @@ def test_it_is_released_as_an_ordinary_finish_after_the_quiet_spell() -> None:
     _hold_paused_turns(composition, [_activity(paused=True)], now=0.0)
 
     assert _hold_paused_turns(composition, [], now=_PAUSED_QUIET_SECONDS - 1) == []
-    (released,) = _hold_paused_turns(composition, [], now=_PAUSED_QUIET_SECONDS)
+    released_at = _PAUSED_AT + timedelta(seconds=_PAUSED_QUIET_SECONDS)
+    (released,) = _hold_paused_turns(
+        composition, [], now=_PAUSED_QUIET_SECONDS, clock=lambda: released_at
+    )
 
     assert released.kind is ActivityKind.COMPLETED and not released.paused
     assert released.detail == "The shell is running."
     assert composition.paused_turns == {}
+    # Stamped with its release: the feed orders by storage and ages by stamp, so the pause's
+    # stamp put a late row above newer ones with an older age.
+    assert released.observed_at == released_at
 
 
 def test_a_real_finish_replaces_the_hold_and_is_delivered_at_once() -> None:
