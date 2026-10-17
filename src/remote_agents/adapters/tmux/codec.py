@@ -1286,7 +1286,7 @@ def remote_control_words_args(
 #: prefix rule because these are tmux's own names: `@` protects `console_option_args` above,
 #: and there is no syntax that distinguishes a server option we own from one we do not.
 #:
-#: `mouse` earns its place (BL-098). With tmux's default `off`, tmux enables terminal mouse
+#: `mouse` earns its place (BL-098). With `off`, tmux's default before 3.8, tmux enables mouse
 #: reporting only for the **active** pane's application -- and the console's resting state is
 #: an agent displayed in the left slot. An agent that does not ask for mouse (codex reports
 #: `mouse_any_flag=0`) therefore means tmux never asks the terminal to report mouse at all,

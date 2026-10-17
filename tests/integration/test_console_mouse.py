@@ -6,13 +6,13 @@ a later `show-options -g` reads back, or -- the part that actually matters -- th
 lands on **this project's socket and no other**. Those are claims about tmux, so a real
 server answers them.
 
-The defect: with tmux's default `mouse off`, tmux enables terminal mouse reporting only on
-behalf of the **active** pane's application. The console's resting state is an agent
+The defect: with `mouse off` (tmux's default before 3.8), tmux enables terminal mouse reporting
+only on behalf of the **active** pane's application. The console's resting state is an agent
 displayed in the left slot, and an agent that does not ask for mouse (codex reports
-`mouse_any_flag=0`) means tmux never asks the terminal to report mouse at all -- so clicking
-a surface pane does nothing, and not because the click went somewhere wrong. Measured on the
-owner's host 2026-09-17: all three surface panes report `mouse_any_flag=1` and the active
-agent pane `0`.
+`mouse_any_flag=0`) means tmux never asks the terminal to report mouse at all -- so clicking a
+surface pane does nothing, and not because the click went somewhere wrong. Measured on the
+owner's host 2026-09-17: all three surface panes report `mouse_any_flag=1` and the active agent
+pane `0`.
 """
 
 from __future__ import annotations
@@ -43,10 +43,16 @@ async def _kill(socket: str) -> None:
     (Path(f"/tmp/tmux-{os.getuid()}") / socket).unlink(missing_ok=True)
 
 
-async def test_the_console_server_reads_mouse_on_and_an_untouched_server_does_not(
+async def test_the_console_server_reads_mouse_on_and_the_write_reaches_no_other_server(
     tmp_path: Path,
 ) -> None:
     """Two servers, one built by us and one not: the difference is the whole claim.
+
+    **The control is tmux's own default, read, never assumed.** tmux 3.8 made `mouse` default
+    to `on` (its CHANGES: "The mouse option now defaults to on."), so on 3.8 a write of `on`
+    changes nothing anywhere and cannot show where it landed; macOS CI met 3.8 first,
+    2026-10-17. So after the product's `on` reads back, the opposite of the untouched server's
+    default goes through the same write, and the untouched server must still hold its default.
 
     **Both servers are started with `-f /dev/null`, and that is what makes the claim
     unconditional.** tmux reads its configuration once, at *server* start, so a throwaway
@@ -62,12 +68,20 @@ async def test_the_console_server_reads_mouse_on_and_an_untouched_server_does_no
     neither server. The test was therefore never exposed to the confound it named -- and
     would have gone red for an unrelated reason the day somebody loosened that guard to a
     substring, coupling the suite to a file outside the repo. `-f /dev/null` makes the
-    control mean what the docstring says: with no configuration anywhere, `on` on our socket
-    and `off` on the other is this write and nothing else.
+    control mean what the docstring says: with no configuration anywhere, the written value on
+    our socket and the default kept on the other is this write and nothing else.
     """
     ours, theirs = _socket(), _socket()
     runner = AsyncTmuxRunner()
     try:
+        await runner.run(
+            "tmux", "-L", theirs, "-f", "/dev/null", "new-session", "-d", "-s", "t", "sleep", "30"
+        )
+        default = (
+            await runner.run("tmux", "-L", theirs, "show-options", "-g", "-v", "mouse")
+        ).strip()
+        assert default in {"on", "off"}, default
+        flipped = "off" if default == "on" else "on"
         # The server, fixed to compiled defaults before the gateway touches it. `create_console`
         # issues a plain `new-session`, which joins this server rather than starting one.
         await runner.run(
@@ -81,14 +95,16 @@ async def test_the_console_server_reads_mouse_on_and_an_untouched_server_does_no
             await runner.run("tmux", "-L", ours, "show-options", "-g", "-v", "mouse")
         ).strip() == "on", "the console's own server did not take the option"
 
-        await runner.run(
-            "tmux", "-L", theirs, "-f", "/dev/null", "new-session", "-d", "-s", "t", "sleep", "30"
-        )
+        await gateway.write_console_server_option("mouse", flipped)
+        assert (
+            await runner.run("tmux", "-L", ours, "show-options", "-g", "-v", "mouse")
+        ).strip() == flipped, "the console's own server did not take the second write"
         assert (
             await runner.run("tmux", "-L", theirs, "show-options", "-g", "-v", "mouse")
-        ).strip() == "off", (
-            "a server this project never built, started with no configuration at all, came "
-            "up with mouse on -- so the write is not scoped to our socket"
+        ).strip() == default, (
+            f"a server this project never built, started with no configuration at all, lost "
+            f"its default {default!r} to a write of {flipped!r} -- so the write is not "
+            "scoped to our socket"
         )
     finally:
         await _kill(ours)

@@ -2088,7 +2088,7 @@ starts — so an existing console picks it up on the next start rather than only
 one. It is scoped to this project's socket (`tmux -L remote-agents`) and reaches no other tmux
 server you run.
 
-*Why it is set at all, since tmux's default is `off`:* with `mouse off`, tmux enables terminal
+*Why it is set at all, since tmux's default was `off` before 3.8:* with `mouse off`, tmux enables terminal
 mouse reporting only on behalf of the **active** pane's application. The console's resting state
 is an agent displayed in the left slot, and an agent that does not ask for mouse — codex reports
 `mouse_any_flag=0` — means tmux never asks the terminal to report mouse at all. Clicking a
