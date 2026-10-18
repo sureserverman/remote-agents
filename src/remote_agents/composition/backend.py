@@ -52,6 +52,7 @@ from remote_agents.application.store_watch import StoreWatch
 from remote_agents.application.worktrees import WorktreeService
 from remote_agents.composition.limits_source import (
     ConfigCursorLimitsSource,
+    ConfigEarlyResetSetting,
     ConfigLimitsSource,
     ConfigRestartResumeSetting,
     ConfigResumeSetting,
@@ -523,6 +524,7 @@ def compose_backend(
         claude_limits_source=ConfigLimitsSource(config.path or paths.config_path),
         cursor_limits_source=ConfigCursorLimitsSource(config.path or paths.config_path),
         resume_after_limit=ConfigResumeSetting(config.path or paths.config_path),
+        early_reset_notice=ConfigEarlyResetSetting(config.path or paths.config_path),
         auto_rollover=ConfigRolloverSetting(config.path or paths.config_path),
         resume_interrupted=ConfigRestartResumeSetting(config.path or paths.config_path),
         projects=_project_creator(config),

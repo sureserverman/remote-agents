@@ -17,8 +17,8 @@ produce a message nobody could ever disprove.
 reset costs the owner nothing they had before; an invented one costs them their trust in every
 limits figure this service shows. So a reading that cannot be compared is not compared: a
 different source stamp, a reading that did not advance, an undated one, an absence, a window
-that appeared or vanished, a duplicate label. Each of those is a real reading this project has
-seen or can expect, not a hypothetical.
+that appeared or vanished, a duplicate label, a drop whose window kept its reset instant. Each
+of those is a real reading this project has seen or can expect, not a hypothetical.
 
 **Source stamps are never crossed (DEC-061, DEC-087).** Claude's limits come from the
 status-line hop's recording or, opt-in, from the usage API, and Codex's from its app server or
@@ -153,6 +153,8 @@ def detect(
             continue
         if window.used_percent > before.used_percent - MINIMUM_DROP_POINTS:
             continue
+        if not _window_replaced(before.resets_at, window.resets_at):
+            continue
         detected.append(
             EarlyReset(
                 label=label,
@@ -162,6 +164,27 @@ def detect(
             )
         )
     return tuple(detected)
+
+
+def _window_replaced(expected: datetime, current: datetime | None) -> bool:
+    """Whether the lower figure belongs to a window that began after the one before it.
+
+    **A wipe starts a new window, and a new window ends later.** Every early reset this host
+    has recorded moved the reset instant forward by a whole window or most of one. A drop that
+    keeps the old instant is the same window read from a stale copy: a Codex session's first
+    `token_count` after a start or resume carries the figure from its previous turn, then
+    corrects itself seconds later. Seen in the rollouts five times between 2026-09-11 and
+    2026-10-11, `5h 66% -> 17% -> 66%` among them, every one with `resets_at` unchanged. The
+    rollout-file fallback and the status-line hop both read such copies, so either could
+    report one as a reset.
+
+    A moved instant has to clear `EARLY_RESET_GRACE`, because the same instant read twice can
+    differ by seconds. A current window with no stated reset is a window the provider has not
+    started yet, which is what a wiped meter looks like, so it counts.
+    """
+    if current is None:
+        return True
+    return _strictly_after(current, expected + EARLY_RESET_GRACE)
 
 
 def _windows_by_label(windows: tuple[UsageWindow, ...]) -> dict[str, UsageWindow]:

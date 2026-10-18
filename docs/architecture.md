@@ -70,7 +70,7 @@ tests in `tests/architecture/`.
 `sessions`, `projects`, `conversations`, `catalogue`, `refresh_catalogue`, `profiles`,
 `capture`, `activity_feed`, `usage`, `limits`, `close_usage_readers`, `host_remote_control`,
 `claude_remote_control_default`, `claude_limits_source`, `cursor_limits_source`,
-`resume_after_limit`, `auto_rollover`, `state_events`, `schedules`, `rollovers`,
+`resume_after_limit`, `early_reset_notice`, `auto_rollover`, `state_events`, `schedules`, `rollovers`,
 `max_label_length`.
 (It read "nine" and omitted
 `usage` before `limits` was added beside it; a count in prose next to the list it counts is a

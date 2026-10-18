@@ -27,18 +27,27 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Awaitable, Callable, Sequence
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from html import escape
 
 from telegram.constants import ParseMode
 
+from remote_agents.adapters.telegram.expiring_notices import ExpiringMessages
 from remote_agents.adapters.telegram.flood import FloodGate
+from remote_agents.application.early_reset_setting import (
+    DEFAULT_EARLY_RESET_NOTICE,
+    early_reset_lifetime,
+)
 from remote_agents.application.limit_resets import EarlyReset, detect
 from remote_agents.application.notification_policy import REFUSALS_BEFORE_ABANDONING
 from remote_agents.application.session_views import whole_percent
 from remote_agents.ports.agent_usage import AgentLimits
+from remote_agents.ports.expiring_notices import ExpiringNoticeStore
 
 _LOG = logging.getLogger(__name__)
+
+#: The kind its sent messages are remembered under (`ports.expiring_notices`).
+NOTICE_KIND = "limit-reset"
 
 
 def limit_reset_message(provider: str, resets: tuple[EarlyReset, ...]) -> str:
@@ -86,6 +95,10 @@ class LimitResetNotifier:
     permanently — it is held and re-sent instead, and three consecutive refusals abandon it with
     one journal line. A chat that cannot be reached is evidence about the chat, not about this
     provider.
+
+    **A sent message deletes itself** after the lifetime the owner chose in Settings (1 or 6
+    hours), and a newer reset for the same provider replaces it. With the choice at off the
+    watch still moves its baseline and journals what it found, and sends nothing.
     """
 
     def __init__(
@@ -96,6 +109,8 @@ class LimitResetNotifier:
         name_for: Callable[[str], str],
         flood: FloodGate | None = None,
         now: Callable[[], datetime] = lambda: datetime.now(UTC),
+        choice: Callable[[], Awaitable[str]] | None = None,
+        notices: ExpiringNoticeStore | None = None,
     ) -> None:
         self._limits = limits
         self._view = view
@@ -108,6 +123,9 @@ class LimitResetNotifier:
         #: cooldown into a ban of nearly six hours.
         self._flood = flood if flood is not None else FloodGate()
         self._now = now
+        #: The owner's early-reset choice, read on every pass; the default where none is wired.
+        self._choice = choice
+        self._messages = ExpiringMessages(view=view, kind=NOTICE_KIND, store=notices)
         self._bot: object | None = None
         #: The last reading per provider, by profile id. Replaced on every readable pass.
         self._baseline: dict[str, AgentLimits] = {}
@@ -143,6 +161,11 @@ class LimitResetNotifier:
             _LOG.debug("the limits read failed; this pass compares nothing", exc_info=True)
             readings = ()
         now = self._now()
+        lifetime = await self._lifetime()
+        if lifetime is None:
+            # Off: nothing is told, and nothing detected earlier is still owed.
+            self._pending.clear()
+            self._refusals.clear()
         for reading in readings:
             key = str(reading.profile_id)
             previous = self._baseline.get(key)
@@ -163,7 +186,22 @@ class LimitResetNotifier:
                     len(reading.windows),
                 )
             self._baseline[key] = reading
-            if not for_this_provider or key in self._abandoned:
+            if not for_this_provider:
+                continue
+            # The record a claim nobody can check afterwards needs: what moved, from where, and
+            # when the provider had said it would reset.
+            _LOG.info(
+                "early limits reset detected for %s (source %s): %s%s",
+                key,
+                reading.stale_source or "live",
+                "; ".join(
+                    f"{reset.label} {reset.previous_percent:g}% -> {reset.current_percent:g}%"
+                    f" (was to reset {reset.expected_reset_at.isoformat()})"
+                    for reset in for_this_provider
+                ),
+                "" if lifetime is not None else "; not told, the notice is off",
+            )
+            if lifetime is None or key in self._abandoned:
                 continue
             # One message per provider per event, so a second detection while the first is
             # still undelivered replaces it rather than queueing beside it — the later sentence
@@ -175,9 +213,22 @@ class LimitResetNotifier:
             # let a fresh wipe be abandoned on its first real attempt at delivery, on the
             # strength of an unrelated earlier failure.
             self._refusals.pop(key, None)
-        await self._deliver()
+        if lifetime is not None:
+            await self._deliver(now + lifetime)
+        if self._bot is not None:
+            await self._messages.sweep(self._bot, now)
 
-    async def _deliver(self) -> None:
+    async def _lifetime(self) -> timedelta | None:
+        """How long a message sent this pass stays, or `None` when the owner turned it off."""
+        if self._choice is None:
+            return early_reset_lifetime(DEFAULT_EARLY_RESET_NOTICE)
+        try:
+            return early_reset_lifetime(await self._choice())
+        except Exception:
+            _LOG.debug("the early-reset choice could not be read; using the default", exc_info=True)
+            return early_reset_lifetime(DEFAULT_EARLY_RESET_NOTICE)
+
+    async def _deliver(self, expires_at: datetime) -> None:
         """Send what is outstanding, and let a pass that reached nobody say nothing about it.
 
         **A refusal is evidence about this message only when the channel is demonstrably
@@ -212,10 +263,13 @@ class LimitResetNotifier:
                 )
                 break
             try:
-                await self._view.send_apart(self._bot, {"text": text, "parse_mode": ParseMode.HTML})
+                message_id = await self._view.send_apart(
+                    self._bot, {"text": text, "parse_mode": ParseMode.HTML}
+                )
             except Exception:
                 refused.append(key)
                 continue
+            await self._messages.sent(self._bot, message_id, subject=key, expires_at=expires_at)
             self._pending.pop(key, None)
             self._refusals.pop(key, None)
             delivered += 1

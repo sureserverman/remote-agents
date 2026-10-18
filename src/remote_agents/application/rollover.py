@@ -79,6 +79,7 @@ from remote_agents.application.errors import DuplicateCommandError, MutationsDra
 from remote_agents.application.notification_policy import rollover_told
 from remote_agents.application.prompt_delivery import DeliveryVerdict, delivery_verdict
 from remote_agents.application.schedules import RETRY_SECONDS, STARTUP_RETRIES
+from remote_agents.application.session_actions import notifiable
 from remote_agents.domain.models import ProfileId, ProjectId, SessionId, SessionRecord, SessionState
 from remote_agents.domain.rollover import (
     SUCCESSOR_FAILED,
@@ -822,6 +823,33 @@ class RolloverPass:
                 and record.session_id not in open_for
             ):
                 self._envelopes.clear_request(root, str(record.session_id))
+
+
+def rollover_notice_settled(
+    rollovers: RolloverStore,
+    session: Callable[[SessionId], Awaitable[SessionRecord | None]],
+) -> Callable[[str], Awaitable[bool]]:
+    """Whether a failed rollover's message is over before its lifetime, by rollover id.
+
+    Over when the rollover is gone, when a newer rollover of the same session has opened, or
+    when the session the failure left running has stopped -- the owner has acted on it. A
+    `predecessor-gone` failure never left it running, so only time or a newer rollover ends
+    that one; otherwise its message would go before the owner could read it.
+    """
+
+    async def settled(rollover_id: str) -> bool:
+        rollover = await rollovers.get(rollover_id)
+        if rollover is None:
+            return True
+        latest = await rollovers.latest_for(rollover.predecessor_session_id)
+        if latest is not None and latest.id != rollover.id:
+            return True
+        if rollover.failure_code == PREDECESSOR_GONE:
+            return False
+        record = await session(rollover.predecessor_session_id)
+        return record is None or not notifiable(record.state)
+
+    return settled
 
 
 def _grouped(

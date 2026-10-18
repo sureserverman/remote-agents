@@ -269,6 +269,9 @@ def test_no_further_capability_leaked_into_the_context() -> None:
         # surfaces for `claude_limits_source`'s reason -- it decides whether this service reads
         # a credential and calls out.
         "cursor_limits_source",
+        # 2026-10-18: whether an early limits reset is told and for how long, a Settings row on
+        # both surfaces for `resume_after_limit`'s reason -- it decides what this service does.
+        "early_reset_notice",
         # Workflow-rollover sub-plan 2 Task 2.1: the auto-rollover switch, a Settings row on
         # both surfaces for `resume_after_limit`'s reason -- it decides what this service does.
         "auto_rollover",

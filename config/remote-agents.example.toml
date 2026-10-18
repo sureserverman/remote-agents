@@ -38,6 +38,10 @@ claude_limits_source = "status-line"
 # refreshes that token. Settings on either surface writes this key.
 cursor_limits_source = "off"
 
+# Whether an early limits reset is told in Telegram, and how long the message stays before it
+# deletes itself: "off", "1h" (the default) or "6h". Settings on either surface writes this key.
+# early_reset_notice = "1h"
+
 [rollover]
 # Whether the service rolls a session over on its own when the session's workflow hands off. It
 # launches a fresh session in the same project and profile, asks it to adopt the handoff, and

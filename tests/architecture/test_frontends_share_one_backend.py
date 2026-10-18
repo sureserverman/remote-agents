@@ -547,10 +547,13 @@ def test_the_backend_capability_set_is_read_from_the_dataclass() -> None:
 
     **Twenty-three since `resume_interrupted` joined them** (restart-resume sub-plan 01,
     Task 3.1), for `auto_rollover`'s reason: both surfaces draw a Settings row for it.
+
+    **Twenty-four since `early_reset_notice` joined them** (2026-10-18), for the same reason:
+    both surfaces draw a Settings row for it.
     """
     fields = _backend_fields()
-    assert len(fields) == 23, (
-        f"`Backend` now declares {len(fields)} fields, not 23. That is fine — but it widens "
+    assert len(fields) == 24, (
+        f"`Backend` now declares {len(fields)} fields, not 24. That is fine — but it widens "
         "what Rule 2 forbids probing for, so confirm the new field is a capability an adapter "
         "should read as a declared field rather than discover."
     )

@@ -3,7 +3,8 @@
 Two groups of rows, listed in `SETTINGS_ROWS`. The first group has the **machine** as its
 subject -- whether each provider's next session starts remote-controlled, where Claude's
 account limits are read from, whether Cursor's are read at all, whether a limit-stopped
-session is resumed, and whether an interrupted one is resumed after a restart -- and the last
+session is resumed, whether an early limits reset is told and for how long, and whether an
+interrupted one is resumed after a restart -- and the last
 two rows have this **terminal** as theirs: its theme and
 the order it lists projects in. Nothing here is about a session or a launch, which is what
 makes it a screen and not a line on one of the panes.
@@ -100,6 +101,11 @@ from remote_agents.adapters.tui.screens.dashboard import (
     _HOST_CONNECTION_EXPLANATIONS,
     host_remote_control_line,
 )
+from remote_agents.application.early_reset_setting import (
+    EARLY_RESET_LABELS,
+    EARLY_RESET_TITLE,
+    next_early_reset_notice,
+)
 from remote_agents.application.host_remote_control import host_remote_control_directions
 from remote_agents.application.limits_source import (
     CURSOR_LIMITS_ON,
@@ -135,6 +141,7 @@ _CODEX_ROW = "settings:codex-remote-control"
 _LIMITS_SOURCE_ROW = "settings:claude-limits-source"
 _CURSOR_LIMITS_ROW = "settings:cursor-limits-source"
 _RESUME_ROW = "settings:resume-after-limit"
+_EARLY_RESET_ROW = "settings:early-reset-notice"
 _ROLLOVER_ROW = "settings:auto-rollover"
 _RESTART_RESUME_ROW = "settings:resume-interrupted"
 _THEME_ROW = "settings:theme"
@@ -153,6 +160,7 @@ SETTINGS_ROWS = (
     _LIMITS_SOURCE_ROW,
     _CURSOR_LIMITS_ROW,
     _RESUME_ROW,
+    _EARLY_RESET_ROW,
     _ROLLOVER_ROW,
     _RESTART_RESUME_ROW,
     _THEME_ROW,
@@ -194,6 +202,13 @@ def _resume_line(value: bool | None) -> str:
     if value is None:
         return f"{RESUME_TITLE} · {UNAVAILABLE}"
     return f"{RESUME_TITLE} · {RESUME_LABELS[value]}"
+
+
+def _early_reset_line(value: str | None) -> str:
+    """The early-reset notice row, or *unavailable* for a composition that wired no choice."""
+    if value is None:
+        return f"{EARLY_RESET_TITLE} · {UNAVAILABLE}"
+    return f"{EARLY_RESET_TITLE} · {EARLY_RESET_LABELS.get(value, value)}"
 
 
 def _rollover_line(value: bool | None) -> str:
@@ -257,6 +272,8 @@ class SettingsScreen(ChoiceScreen):
         self._cursor_limits: str | None = None
         #: The stored resume switch, or `None` for a composition that wired none.
         self._resume: bool | None = None
+        #: The stored early-reset notice choice, or `None` for a composition that wired none.
+        self._early_reset: str | None = None
         #: The stored auto-rollover switch, or `None` for a composition that wired none.
         self._rollover: bool | None = None
         #: The stored restart-resume switch, or `None` for a composition that wired none.
@@ -350,6 +367,14 @@ class SettingsScreen(ChoiceScreen):
                 self._resume = await resume.read()
             except Exception:
                 _LOG.exception("the resume switch could not be read")
+        early_reset = self.services.backend.early_reset_notice
+        if early_reset is None:
+            self._early_reset = None
+        else:
+            try:
+                self._early_reset = await early_reset.read()
+            except Exception:
+                _LOG.exception("the early-reset notice choice could not be read")
         rollover = self.services.backend.auto_rollover
         if rollover is None:
             self._rollover = None
@@ -388,6 +413,7 @@ class SettingsScreen(ChoiceScreen):
                 (_LIMITS_SOURCE_ROW, _limits_source_line(self._limits_source)),
                 (_CURSOR_LIMITS_ROW, _cursor_limits_line(self._cursor_limits)),
                 (_RESUME_ROW, _resume_line(self._resume)),
+                (_EARLY_RESET_ROW, _early_reset_line(self._early_reset)),
                 (_ROLLOVER_ROW, _rollover_line(self._rollover)),
                 (_RESTART_RESUME_ROW, _restart_resume_line(self._restart_resume)),
                 (_THEME_ROW, f"{THEME_TITLE} · {THEME_LABELS.get(self._theme, self._theme)}"),
@@ -438,6 +464,9 @@ class SettingsScreen(ChoiceScreen):
             return
         if key == _RESUME_ROW:
             await self.flip_resume()
+            return
+        if key == _EARLY_RESET_ROW:
+            await self.advance_early_reset()
             return
         if key == _ROLLOVER_ROW:
             await self.flip_rollover()
@@ -604,6 +633,33 @@ class SettingsScreen(ChoiceScreen):
                 self.set_status(f"{ROLLOVER_TITLE} is now {word}.")
             else:
                 self.announce(f"{ROLLOVER_TITLE} could not be changed; it is still {word}.")
+
+    async def advance_early_reset(self) -> None:
+        """One press: read, advance by one, write, read back -- `advance_limits_source`'s shape."""
+        port = self.services.backend.early_reset_notice
+        if port is None or self.tui.busy:
+            return
+        async with self.holding_the_guard():
+            try:
+                async with self.awaiting(f"Changing {EARLY_RESET_TITLE}…"):
+                    intended = next_early_reset_notice(await port.read())
+                    await port.write(intended)
+                    self._early_reset = await port.read()
+            except Exception as error:
+                _LOG.exception("the early-reset notice choice could not be changed")
+                self.announce(
+                    f"{EARLY_RESET_TITLE} could not be confirmed: {error} "
+                    "Reopen Settings to see what it says."
+                )
+                return
+            if not self.showing:
+                return
+            self._draw_settings_rows()
+            word = EARLY_RESET_LABELS.get(self._early_reset, self._early_reset)
+            if self._early_reset == intended:
+                self.set_status(f"{EARLY_RESET_TITLE} is now {word}.")
+            else:
+                self.announce(f"{EARLY_RESET_TITLE} could not be changed; it is still {word}.")
 
     async def flip_restart_resume(self) -> None:
         """One press: read, flip, write, read back, say what it now is -- `flip_resume`'s shape."""

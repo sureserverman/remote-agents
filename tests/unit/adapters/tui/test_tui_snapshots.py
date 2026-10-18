@@ -461,6 +461,11 @@ class _CursorLimitsSource:
         return "off"
 
 
+class _EarlyResetNotice:
+    async def read(self) -> str:
+        return "1h"
+
+
 class _Switch:
     """A stored on/off Settings switch, answering the default production reads on a fresh
     config: `resume_after_limit` and `resume_interrupted` on, `auto_rollover` off."""
@@ -622,6 +627,7 @@ def _settings_context() -> TuiContext:
             # The three stored switches, for the same rule: production wires each one
             # unconditionally (`composition/backend.py`), so `unavailable` is never its row.
             resume_after_limit=_Switch(True),
+            early_reset_notice=_EarlyResetNotice(),
             auto_rollover=_Switch(False),
             resume_interrupted=_Switch(True),
         ),

@@ -37,6 +37,8 @@ NOW = datetime(2026, 9, 18, 14, 0, tzinfo=UTC)
 CLAUDE = ProfileId("claude")
 AHEAD = NOW + timedelta(hours=3)
 """A reset instant comfortably ahead of `NOW` -- the shape every positive case needs."""
+FRESH = timedelta(hours=8)
+"""How far ahead a wiped window's new reset lies: a new window, ending after the old one."""
 
 
 def _reading(
@@ -126,7 +128,7 @@ def test_one_window_dropping_while_its_reset_was_still_ahead_is_reported() -> No
     """The whole feature, in its smallest form: 91% to 2% with three hours still to run."""
     results = detect(
         _reading(_window("5h", 91.0)),
-        _reading(_window("5h", 2.0), minute=5),
+        _reading(_window("5h", 2.0, resets_in=FRESH), minute=5),
         now=NOW,
     )
 
@@ -145,7 +147,9 @@ def test_two_windows_of_one_provider_come_back_in_one_result() -> None:
     """
     results = detect(
         _reading(_window("5h", 91.0), _window("week", 64.0)),
-        _reading(_window("5h", 2.0), _window("week", 0.0), minute=5),
+        _reading(
+            _window("5h", 2.0, resets_in=FRESH), _window("week", 0.0, resets_in=FRESH), minute=5
+        ),
         now=NOW,
     )
 
@@ -160,7 +164,7 @@ def test_a_window_whose_drop_is_exactly_the_threshold_is_reported() -> None:
     """Ten points is news; the boundary is stated by a case rather than by the constant."""
     results = detect(
         _reading(_window("5h", 30.0)),
-        _reading(_window("5h", 20.0), minute=5),
+        _reading(_window("5h", 20.0, resets_in=FRESH), minute=5),
         now=NOW,
     )
 
@@ -179,7 +183,7 @@ def test_a_scheduled_rollover_is_not_news() -> None:
     """
     results = detect(
         _reading(_window("5h", 91.0, resets_in=timedelta(minutes=-1))),
-        _reading(_window("5h", 2.0), minute=5),
+        _reading(_window("5h", 2.0, resets_in=FRESH), minute=5),
         now=NOW,
     )
 
@@ -195,7 +199,7 @@ def test_a_reset_inside_the_grace_is_not_news() -> None:
     """
     results = detect(
         _reading(_window("5h", 91.0, resets_in=timedelta(minutes=4))),
-        _reading(_window("5h", 2.0), minute=5),
+        _reading(_window("5h", 2.0, resets_in=FRESH), minute=5),
         now=NOW,
     )
 
@@ -210,7 +214,7 @@ def test_the_grace_boundary_itself_is_not_news() -> None:
     """
     results = detect(
         _reading(_window("5h", 91.0, resets_in=EARLY_RESET_GRACE)),
-        _reading(_window("5h", 2.0), minute=5),
+        _reading(_window("5h", 2.0, resets_in=FRESH), minute=5),
         now=NOW,
     )
 
@@ -225,11 +229,49 @@ def test_a_drop_one_point_short_of_the_threshold_is_not_news() -> None:
     """
     results = detect(
         _reading(_window("5h", 30.0)),
-        _reading(_window("5h", 21.0), minute=5),
+        _reading(_window("5h", 21.0, resets_in=FRESH), minute=5),
         now=NOW,
     )
 
     assert results == ()
+
+
+def test_a_drop_that_kept_its_reset_instant_is_not_news() -> None:
+    """A stale copy of the same window, not a wipe: the reset instant did not move.
+
+    The real case, from this host's Codex rollouts on 2026-09-12: `5h 66%`, then a session's
+    first `token_count` after a start reading `17%` against the same `resets_at`, then `66%`
+    again four seconds later. A wipe starts a new window, and a new window ends later.
+    """
+    results = detect(
+        _reading(_window("5h", 66.0)),
+        _reading(_window("5h", 17.0), minute=5),
+        now=NOW,
+    )
+
+    assert results == ()
+
+
+def test_a_reset_instant_that_moved_only_inside_the_grace_is_not_news() -> None:
+    """The same instant read twice can differ by seconds; a few minutes is still the same."""
+    results = detect(
+        _reading(_window("5h", 66.0)),
+        _reading(_window("5h", 17.0, resets_in=timedelta(hours=3) + EARLY_RESET_GRACE), minute=5),
+        now=NOW,
+    )
+
+    assert results == ()
+
+
+def test_a_wiped_window_that_states_no_reset_yet_is_reported() -> None:
+    """A provider may leave an unstarted window undated, which is what a wiped meter looks like."""
+    results = detect(
+        _reading(_window("5h", 91.0)),
+        _reading(_window("5h", 0.0, resets_in=None), minute=5),
+        now=NOW,
+    )
+
+    assert [result.label for result in results] == ["5h"]
 
 
 def test_a_window_with_no_recorded_reset_is_not_news() -> None:
@@ -241,7 +283,7 @@ def test_a_window_with_no_recorded_reset_is_not_news() -> None:
     """
     results = detect(
         _reading(_window("5h", 91.0, resets_in=None)),
-        _reading(_window("5h", 2.0), minute=5),
+        _reading(_window("5h", 2.0, resets_in=FRESH), minute=5),
         now=NOW,
     )
 
@@ -258,7 +300,7 @@ def test_readings_from_different_sources_are_not_compared() -> None:
     """
     results = detect(
         _reading(_window("5h", 91.0), source="status line"),
-        _reading(_window("5h", 2.0), minute=5, source="usage API"),
+        _reading(_window("5h", 2.0, resets_in=FRESH), minute=5, source="usage API"),
         now=NOW,
     )
 
@@ -274,7 +316,7 @@ def test_an_unstamped_reading_is_not_compared_with_a_stamped_one() -> None:
     """
     results = detect(
         _reading(_window("5h", 91.0), source=None),
-        _reading(_window("5h", 2.0), minute=5, source="status line"),
+        _reading(_window("5h", 2.0, resets_in=FRESH), minute=5, source="status line"),
         now=NOW,
     )
 
@@ -292,7 +334,7 @@ def test_a_no_reading_absence_on_either_side_is_not_compared(side: str) -> None:
     """
     absent = _reading(minute=5 if side == "current" else 0, absence=LimitsAbsence.NO_READING)
     present_previous = _reading(_window("5h", 91.0))
-    present_current = _reading(_window("5h", 2.0), minute=5)
+    present_current = _reading(_window("5h", 2.0, resets_in=FRESH), minute=5)
 
     results = detect(
         absent if side == "previous" else present_previous,
@@ -319,7 +361,13 @@ def test_a_reading_that_declares_an_absence_is_refused_even_carrying_figures(sid
     """
     contradictory = AgentLimits(
         CLAUDE,
-        (_window("5h", 2.0 if side == "current" else 91.0),),
+        (
+            _window(
+                "5h",
+                2.0 if side == "current" else 91.0,
+                resets_in=FRESH if side == "current" else timedelta(hours=3),
+            ),
+        ),
         observed_at=NOW + timedelta(minutes=5 if side == "current" else 0),
         stale_source="status line",
         absence=LimitsAbsence.NO_READING,
@@ -327,7 +375,9 @@ def test_a_reading_that_declares_an_absence_is_refused_even_carrying_figures(sid
 
     results = detect(
         contradictory if side == "previous" else _reading(_window("5h", 91.0)),
-        contradictory if side == "current" else _reading(_window("5h", 2.0), minute=5),
+        contradictory
+        if side == "current"
+        else _reading(_window("5h", 2.0, resets_in=FRESH), minute=5),
         now=NOW,
     )
 
@@ -346,7 +396,7 @@ def test_a_reading_that_did_not_advance_is_not_compared(minute: int) -> None:
     """
     results = detect(
         _reading(_window("5h", 91.0)),
-        _reading(_window("5h", 2.0), minute=minute),
+        _reading(_window("5h", 2.0, resets_in=FRESH), minute=minute),
         now=NOW,
     )
 
@@ -365,14 +415,20 @@ def test_an_undated_reading_is_not_compared(side: str) -> None:
     """
     undated = AgentLimits(
         CLAUDE,
-        (_window("5h", 91.0 if side == "previous" else 2.0),),
+        (
+            _window(
+                "5h",
+                91.0 if side == "previous" else 2.0,
+                resets_in=timedelta(hours=3) if side == "previous" else FRESH,
+            ),
+        ),
         observed_at=None,
         stale_source="status line",
     )
 
     results = detect(
         undated if side == "previous" else _reading(_window("5h", 91.0)),
-        undated if side == "current" else _reading(_window("5h", 2.0), minute=5),
+        undated if side == "current" else _reading(_window("5h", 2.0, resets_in=FRESH), minute=5),
         now=NOW,
     )
 
@@ -388,7 +444,7 @@ def test_a_label_present_on_only_one_side_is_not_compared(side: str) -> None:
     """
     results = detect(
         _reading(_window("5h" if side == "previous" else "week", 91.0)),
-        _reading(_window("week" if side == "previous" else "5h", 2.0), minute=5),
+        _reading(_window("week" if side == "previous" else "5h", 2.0, resets_in=FRESH), minute=5),
         now=NOW,
     )
 
@@ -404,7 +460,7 @@ def test_a_label_repeated_within_one_reading_is_not_compared() -> None:
     """
     results = detect(
         _reading(_window("5h", 91.0), _window("5h", 90.0)),
-        _reading(_window("5h", 2.0), minute=5),
+        _reading(_window("5h", 2.0, resets_in=FRESH), minute=5),
         now=NOW,
     )
 
@@ -422,7 +478,7 @@ def test_two_providers_readings_are_never_compared() -> None:
         _reading(_window("5h", 91.0)),
         AgentLimits(
             ProfileId("codex"),
-            (_window("5h", 2.0),),
+            (_window("5h", 2.0, resets_in=FRESH),),
             observed_at=NOW + timedelta(minutes=5),
             stale_source="status line",
         ),
@@ -438,7 +494,7 @@ def test_the_first_reading_after_a_start_reports_nothing() -> None:
     The accepted cost of holding the baseline in memory (design, 2026-09-18): an early reset
     in the minutes around a restart is missed. Missed, never invented.
     """
-    assert detect(None, _reading(_window("5h", 2.0), minute=5), now=NOW) == ()
+    assert detect(None, _reading(_window("5h", 2.0, resets_in=FRESH), minute=5), now=NOW) == ()
 
 
 # Totality -----------------------------------------------------------------------------
@@ -459,7 +515,7 @@ def test_mixed_awareness_stamps_are_silent_rather_than_fatal() -> None:
         stale_source="status line",
     )
 
-    assert detect(naive, _reading(_window("5h", 2.0), minute=5), now=NOW) == ()
+    assert detect(naive, _reading(_window("5h", 2.0, resets_in=FRESH), minute=5), now=NOW) == ()
 
 
 def test_an_offset_aware_stamp_in_another_zone_is_compared_normally() -> None:
@@ -472,7 +528,7 @@ def test_an_offset_aware_stamp_in_another_zone_is_compared_normally() -> None:
         stale_source="status line",
     )
 
-    results = detect(previous, _reading(_window("5h", 2.0), minute=5), now=NOW)
+    results = detect(previous, _reading(_window("5h", 2.0, resets_in=FRESH), minute=5), now=NOW)
 
     assert [result.label for result in results] == ["5h"]
 
@@ -494,9 +550,11 @@ def test_the_detector_never_raises_over_the_whole_table() -> None:
         _reading(absence=LimitsAbsence.NOT_REPORTED),
         _reading(_window("5h", 91.0)),
         _reading(_window("5h", 91.0, resets_in=None)),
-        _reading(_window("5h", 0.0), minute=5),
+        _reading(_window("5h", 0.0, resets_in=FRESH), minute=5),
         _reading(_window("5h", 100.0), minute=-5, source=None),
-        _reading(_window("5h", 2.0), _window("week", 0.0), minute=5),
+        _reading(
+            _window("5h", 2.0, resets_in=FRESH), _window("week", 0.0, resets_in=FRESH), minute=5
+        ),
         AgentLimits(CLAUDE, (UsageWindow("5h", 91.0, datetime(2026, 9, 18, 17, 0)),)),
         AgentLimits(ProfileId("codex"), (_window("week", 50.0),), observed_at=NOW),
     ]

@@ -712,6 +712,12 @@ predecessor preserved*, or *Rollover stop failed: …*. A completed rollover is 
 redraws. A message Telegram refuses is retried for ten minutes, and lost if the service stops
 first. The row note is the standing record.
 
+**The message deletes itself** (0.66.0). It goes once the rollover is resolved, or an hour
+after it was sent, whichever comes first. Resolved means the session it names has stopped, or a
+newer rollover of that session has opened. A `predecessor-gone` failure is removed by time or a
+newer rollover only, since its session was already stopped when the message was sent. The message
+ids are kept in the UI store (`expiring_notices`), so a restart still removes them on time.
+
 **Force stop stays manual** (DEC-007). A rollover never force-stops. After `STOP_FAILED`, the
 owner stops or force-stops the old session.
 
@@ -1678,6 +1684,22 @@ the usage API on its own, so DEC-087's opt-in remains the only thing that decide
 Codex has no equivalent gap: its figures are asked of `codex app-server` on each pass, so they
 move whether or not a Codex session has run.
 
+**A drop counts only if the window was replaced** (0.66.0). The new reading's reset instant
+must be more than the five-minute grace later than the old one, or unstated. A wipe starts a new
+window, and a new window ends later. A drop that keeps the old instant is a stale copy of the
+same window. Codex writes one into a session's first `token_count` after a start or resume, then
+corrects it seconds later (`5h 66% → 17% → 66%`). The rollout-file fallback and the status-line
+hop can both read such a copy, and before 0.66.0 either could report it as an early reset.
+Every detection now writes a journal line, `early limits reset detected for <provider> (source
+…): <window> <from>% -> <to>% (was to reset <instant>)`, so a message can be checked afterwards.
+
+**How long the message stays is a Settings choice**, *Early limits reset notice*, on either
+surface: `off`, `for 1 hour` (the default) or `for 6 hours`. It is `limits.early_reset_notice`
+in `config.toml` (`"off"`, `"1h"`, `"6h"`). With it off the watch still runs and journals what
+it finds, and sends nothing. A sent message deletes itself after the chosen time, and a newer
+early reset for the same provider replaces it. Like the rollover message, its id survives a
+restart.
+
 ## Local terminal visual baselines
 
 Every position the terminal wizard can be in has a committed SVG baseline under
@@ -2514,7 +2536,10 @@ so `serve`, `tui` and `add-project` would all fail to start. A host that never t
 switch has neither key and needs nothing. **Rolling back to 0.58.0 or earlier: delete the `[rollover]`
 table first**, for the same reason. The auto-rollover Settings switch adds it on first use.
 **Rolling back to 0.64.1 or earlier: delete the `[restart]` table first** (`resume_interrupted`),
-for the same reason. The *Resume after restart* switch adds it on first use. The database needs nothing either: an older version
+for the same reason. The *Resume after restart* switch adds it on first use.
+**Rolling back to 0.65.8 or earlier: delete `early_reset_notice` from `[limits]` first**, for the
+same reason. The *Early limits reset notice* choice adds it on first use. Messages sent before
+the rollback stop deleting themselves; remove those by hand. The database needs nothing either: an older version
 opens it, and its `doctor` reports `database_ready` false, as after any release that migrated.
 **Rolling back below 0.65.0 also turns Codex rollover off.** 0.64.1 rolls over Claude sessions only and has no
 `remote-agents session-id`, so a Codex session's handoff writer writes nothing there. Let an open Codex

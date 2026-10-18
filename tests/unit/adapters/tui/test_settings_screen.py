@@ -980,9 +980,9 @@ async def test_the_screen_draws_nine_rows_in_the_declared_order(tmp_path: Path) 
         choices = app.screen.query_one("#choices", OptionList)
         drawn = [choices.get_option_at_index(i).id for i in range(choices.option_count)]
 
-        assert len(module.SETTINGS_ROWS) == 9
+        assert len(module.SETTINGS_ROWS) == 10
         assert drawn == list(module.SETTINGS_ROWS)
-        assert len(set(drawn)) == 9, "every row needs a stable id of its own"
+        assert len(set(drawn)) == 10, "every row needs a stable id of its own"
 
 
 async def test_the_limits_source_row_reads_the_hop_on_a_default_config(tmp_path: Path) -> None:

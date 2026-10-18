@@ -24,6 +24,7 @@ from remote_agents.adapters.agents.turn_markers import FileConversationMarks, Fi
 from remote_agents.adapters.sqlite.activity_store import SQLiteActivityStore
 from remote_agents.adapters.sqlite.callback_state_store import SQLiteCallbackStateStore
 from remote_agents.adapters.sqlite.chat_view_store import SQLiteChatViewStore
+from remote_agents.adapters.sqlite.expiring_notices import SQLiteExpiringNoticeStore
 from remote_agents.adapters.sqlite.interrupted_resumes import SQLiteInterruptedResumes
 from remote_agents.adapters.sqlite.limit_stop_store import SQLiteLimitStopStore
 from remote_agents.adapters.sqlite.queued_prompt_store import SQLiteQueuedPromptStore
@@ -42,6 +43,7 @@ from remote_agents.application.limit_resume import LimitResume
 from remote_agents.application.limit_stops import LimitScreenWatcher, LimitStopClassifier
 from remote_agents.application.prompt_relay import PromptRelay
 from remote_agents.application.reconcile import ReconciliationService, SessionLocks
+from remote_agents.application.rollover import rollover_notice_settled
 from remote_agents.application.schedule_times import host_zone
 from remote_agents.application.schedules import SchedulePass, limit_stopped_in, still_working_in
 from remote_agents.application.session_folders import SessionFolders
@@ -228,6 +230,11 @@ def _private_boundary(
         # Its absence is what a boundary without a trust pass looks like, so supplying it is
         # the whole of the wiring here.
         trust_store=SQLiteTrustNotificationStore(ui_connection),
+        # The early-reset and failed-rollover messages that delete themselves, remembered in
+        # the UI store so a restart cannot strand one in the chat.
+        notice_store=SQLiteExpiringNoticeStore(ui_connection),
+        # When a failed rollover's message is over before its hour: the rule is the pass's.
+        rollover_settled=rollover_notice_settled(SQLiteRolloverStore(connection), store.get),
         # The prompt relay (DEC-099): its queue lives in the UI store (DEC-090), it types only
         # through the terminal both surfaces share, and it queues only for agents whose
         # "finished" event this service drains -- all read off the one descriptor set.

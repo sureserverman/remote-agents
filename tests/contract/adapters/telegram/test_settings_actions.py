@@ -1230,3 +1230,87 @@ async def test_help_names_the_settings_screen_for_a_host_that_wired_only_restart
     await only_restart.help_command(chat.message_update("/help"), None)
 
     assert "Settings" in chat.bot_messages[0].text
+
+
+# --- The early-reset notice row ----------------------------------------------------------------
+
+
+def _bot_with_early_reset(setting: object | None) -> PrivateBotBoundary:
+    bot = _bot(None, None)
+    bot.backend = replace(bot.backend, early_reset_notice=setting)
+    return bot
+
+
+async def _press_early_reset(bot: PrivateBotBoundary, screen) -> dict[str, object]:
+    from remote_agents.application.early_reset_setting import EARLY_RESET_TITLE
+
+    token = _token(screen, _row_label(screen, EARLY_RESET_TITLE))
+    bot.callbacks.bind_pending(CHAT, 1)
+    state = bot.callbacks.resolve(token, owner_id=OWNER, chat_id=CHAT, message_id=1)
+    assert state is not None and state.action == "settings.early_reset"
+    return await bot._reply_for(state.action, state.entity_id, token=token, message_id=1)
+
+
+async def test_the_early_reset_row_reads_the_stored_choice() -> None:
+    from remote_agents.application.early_reset_setting import (
+        EARLY_RESET_LABELS,
+        EARLY_RESET_TITLE,
+    )
+
+    setting = FakeLimitsSource("1h")
+
+    screen = await _bot_with_early_reset(setting)._settings_screen()
+
+    assert (
+        _row_label(screen, EARLY_RESET_TITLE) == f"{EARLY_RESET_TITLE}: {EARLY_RESET_LABELS['1h']}"
+    )
+    assert setting.calls == ["read"], "drawing the screen reads; it must not write"
+
+
+@pytest.mark.parametrize(("before", "after"), [("off", "1h"), ("1h", "6h"), ("6h", "off")])
+async def test_pressing_the_early_reset_row_advances_it_and_reads_it_back(
+    before: str, after: str
+) -> None:
+    from remote_agents.application.early_reset_setting import (
+        EARLY_RESET_LABELS,
+        EARLY_RESET_TITLE,
+    )
+
+    setting = FakeLimitsSource(before)
+    bot = _bot_with_early_reset(setting)
+    screen = await bot._settings_screen()
+
+    result = await _press_early_reset(bot, screen)
+
+    assert setting.value == after
+    labels = [
+        unmarked(unpadded(button.text))
+        for row in result["reply_markup"].inline_keyboard
+        for button in row
+    ]
+    assert f"{EARLY_RESET_TITLE}: {EARLY_RESET_LABELS[after]}" in labels
+
+
+async def test_a_refused_early_reset_write_says_so() -> None:
+    from remote_agents.application.early_reset_setting import (
+        EARLY_RESET_LABELS,
+        EARLY_RESET_TITLE,
+    )
+
+    setting = FakeLimitsSource("1h", refuse=True)
+    bot = _bot_with_early_reset(setting)
+    screen = await bot._settings_screen()
+
+    result = await _press_early_reset(bot, screen)
+
+    said = str(result["text"])
+    assert EARLY_RESET_TITLE in said and "still" in said, said
+    assert EARLY_RESET_LABELS["1h"] in said, said
+
+
+async def test_an_unwired_early_reset_setting_says_so_rather_than_hiding_the_row() -> None:
+    from remote_agents.application.early_reset_setting import EARLY_RESET_TITLE
+
+    screen = await _bot_with_early_reset(None)._settings_screen()
+
+    assert f"{EARLY_RESET_TITLE} is unavailable." in screen.text, screen.text

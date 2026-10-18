@@ -88,6 +88,16 @@ module, `adapters.agents.cursor.usage_api`, and nowhere else in the code.
 DEFAULT_CURSOR_LIMITS_SOURCE = "off"
 """Opt-in means off until the owner says otherwise, and a file that says nothing said nothing."""
 
+EARLY_RESET_NOTICES = ("off", "1h", "6h")
+"""Whether an early limits reset is told, and how long its message stays; a closed set.
+
+`off` sends nothing. `1h` and `6h` send the message and delete it that long after it was sent:
+the figures stay on the limits screen, so the message is news and not a record.
+"""
+
+DEFAULT_EARLY_RESET_NOTICE = "1h"
+"""Told by default, as it was before the owner could choose, and gone an hour later."""
+
 DEFAULT_RESUME_AFTER_LIMIT = True
 """On unless the owner switches it off: they asked for the resume nudge after a lift by default."""
 
@@ -176,6 +186,14 @@ class AppConfig:
     lands without a restart.
     """
 
+    early_reset_notice: str = DEFAULT_EARLY_RESET_NOTICE
+    """Which of `EARLY_RESET_NOTICES` the owner chose, or an hour when they chose nothing.
+
+    Optional, in `[limits]`. Written by the Settings row on either surface through
+    `write_limits_key`. The limits watch reads it afresh through `read_early_reset_notice` on
+    every pass rather than off this field, so a flip lands without a restart.
+    """
+
     resume_after_limit: bool = DEFAULT_RESUME_AFTER_LIMIT
     """Whether the service types one resume nudge into a limit-stopped session after its lift.
 
@@ -254,6 +272,7 @@ _LIMIT_KEYS = {
     "claude_context_window",
     "claude_limits_source",
     "cursor_limits_source",
+    "early_reset_notice",
     "resume_after_limit",
 }
 
@@ -281,7 +300,13 @@ the spool drain.
 """
 
 _OPTIONAL_LIMIT_KEYS = frozenset(
-    {"claude_context_window", "claude_limits_source", "cursor_limits_source", "resume_after_limit"}
+    {
+        "claude_context_window",
+        "claude_limits_source",
+        "cursor_limits_source",
+        "early_reset_notice",
+        "resume_after_limit",
+    }
 )
 """Keys the schema accepts but does not require, and the only ones in it.
 
@@ -539,6 +564,9 @@ def load_config(path: Path) -> AppConfig:
     cursor_limits_source = _cursor_limits_source(
         limits.get("cursor_limits_source", DEFAULT_CURSOR_LIMITS_SOURCE)
     )
+    early_reset_notice = _early_reset_notice(
+        limits.get("early_reset_notice", DEFAULT_EARLY_RESET_NOTICE)
+    )
     resume_after_limit = _flag(
         limits.get("resume_after_limit", DEFAULT_RESUME_AFTER_LIMIT), "limits.resume_after_limit"
     )
@@ -566,6 +594,7 @@ def load_config(path: Path) -> AppConfig:
         path=path,
         claude_limits_source=claude_limits_source,
         cursor_limits_source=cursor_limits_source,
+        early_reset_notice=early_reset_notice,
         resume_after_limit=resume_after_limit,
         auto_rollover=auto_rollover,
         resume_interrupted=resume_interrupted,
@@ -708,6 +737,14 @@ def _limits_source(value: object) -> str:
     return value
 
 
+def _early_reset_notice(value: object) -> str:
+    """Admit one of `EARLY_RESET_NOTICES` and nothing else, naming them all on refusal."""
+    if not isinstance(value, str) or value not in EARLY_RESET_NOTICES:
+        legal = " or ".join(f'"{choice}"' for choice in EARLY_RESET_NOTICES)
+        raise ConfigError(f"limits.early_reset_notice must be {legal}")
+    return value
+
+
 def _cursor_limits_source(value: object) -> str:
     """Admit one of `CURSOR_LIMITS_SOURCES` and nothing else, naming both on refusal.
 
@@ -835,6 +872,8 @@ def render_config(
         _limits_source(values["claude_limits_source"])
     if "cursor_limits_source" in values:
         _cursor_limits_source(values["cursor_limits_source"])
+    if "early_reset_notice" in values:
+        _early_reset_notice(values["early_reset_notice"])
     # A bool is a legal value for the flag and nothing else: `_toml_value` spells one as
     # `true`, which the loader refuses for a count, so it is refused here instead.
     for key, value in values.items():
@@ -930,6 +969,21 @@ def read_cursor_limits_source(path: Path) -> str:
     limits = raw.get("limits") if isinstance(raw, dict) else None
     value = limits.get("cursor_limits_source") if isinstance(limits, dict) else None
     return value if value in CURSOR_LIMITS_SOURCES else DEFAULT_CURSOR_LIMITS_SOURCE
+
+
+def read_early_reset_notice(path: Path) -> str:
+    """The early-reset choice as the file states it right now, or the default when it cannot.
+
+    Total, like `read_cursor_limits_source`: a file that is missing, malformed, or states a
+    value outside `EARLY_RESET_NOTICES` answers the default rather than raising into a pass.
+    """
+    try:
+        raw = tomllib.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError):
+        return DEFAULT_EARLY_RESET_NOTICE
+    limits = raw.get("limits") if isinstance(raw, dict) else None
+    value = limits.get("early_reset_notice") if isinstance(limits, dict) else None
+    return value if value in EARLY_RESET_NOTICES else DEFAULT_EARLY_RESET_NOTICE
 
 
 def read_resume_after_limit(path: Path, *, when_unsure: bool = DEFAULT_RESUME_AFTER_LIMIT) -> bool:
@@ -1060,6 +1114,8 @@ def write_config_key(path: Path, table: str, key: str, value: bool | str | int) 
         rendered = _toml_value(_limits_source(value))
     elif key == "cursor_limits_source":
         rendered = _toml_value(_cursor_limits_source(value))
+    elif key == "early_reset_notice":
+        rendered = _toml_value(_early_reset_notice(value))
     elif key == "resume_after_limit":
         rendered = _toml_value(_flag(value, f"limits.{key}"))
     elif isinstance(value, bool) or not isinstance(value, int):

@@ -13,7 +13,11 @@ are told (`notification_policy.rollover_told`, DEC-031): every other move, a com
 above all, is the row's redraw (DEC-090).
 
 The schedule notices' shape (`schedule_notifications.py`): a refused message is held and tried
-again on the next tick, and given up with one journal line after `_GIVE_UP_AFTER`. **Escaped
+again on the next tick, and given up with one journal line after `_GIVE_UP_AFTER`.
+
+**A sent message deletes itself** once its rollover is resolved -- the session it names has
+stopped, or a newer rollover of that session has opened -- or `NOTICE_LIFETIME` after it was
+sent, whichever comes first. The row's note stays the standing record. **Escaped
 here, once** (DEC-014): the project's name reaches a surface that parses HTML.
 """
 
@@ -21,13 +25,14 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from html import escape
 
 from telegram.constants import ParseMode
 
+from remote_agents.adapters.telegram.expiring_notices import ExpiringMessages
 from remote_agents.adapters.telegram.flood import FloodGate
 from remote_agents.application.notification_policy import rollover_told
 from remote_agents.application.rollover import (
@@ -38,11 +43,18 @@ from remote_agents.application.rollover import (
     RolloverReport,
 )
 from remote_agents.domain.rollover import RolloverState
+from remote_agents.ports.expiring_notices import ExpiringNoticeStore
 
 _LOG = logging.getLogger(__name__)
 
 #: How long a refused notice is tried again before it is given up, as the schedules' are.
 _GIVE_UP_AFTER = timedelta(minutes=10)
+
+#: How long a sent notice stays at most; the owner's choice, 2026-10-18.
+NOTICE_LIFETIME = timedelta(hours=1)
+
+#: The kind its sent messages are remembered under (`ports.expiring_notices`).
+NOTICE_KIND = "rollover-failed"
 
 _MINUTES_IDLE = int(NOT_IDLE_PATIENCE.total_seconds() // 60)
 _MINUTES_ADOPT = int(ADOPTION_PATIENCE.total_seconds() // 60)
@@ -136,6 +148,7 @@ def rollover_message(report: RolloverReport, *, project_name: str) -> str:
 @dataclass
 class _Held:
     text: str
+    rollover_id: str
     refused_since: datetime | None = None
 
 
@@ -153,9 +166,15 @@ class RolloverNotifier:
         project_name: Callable[[str], str],
         flood: FloodGate | None = None,
         now: Callable[[], datetime] = lambda: datetime.now(UTC),
+        notices: ExpiringNoticeStore | None = None,
+        settled: Callable[[str], Awaitable[bool]] | None = None,
     ) -> None:
         self._view = view
         self._project_name = project_name
+        self._messages = ExpiringMessages(view=view, kind=NOTICE_KIND, store=notices)
+        #: Whether a rollover's notice is over before its lifetime, by rollover id
+        #: (`application.rollover.rollover_notice_settled`). None removes by time alone.
+        self._settled = settled
         self._flood = flood if flood is not None else FloodGate()
         self._now = now
         self._bot: object | None = None
@@ -176,27 +195,38 @@ class RolloverNotifier:
             report, project_name=self._project_name(str(report.rollover.project_id))
         )
         if text:
-            self._pending.append(_Held(text))
+            self._pending.append(_Held(text, report.rollover.id))
         await self.pass_once()
 
     async def pass_once(self) -> None:
-        """Send what is outstanding, oldest first, stopping at a flood hold or a refusal."""
+        """Send what is outstanding, oldest first, stopping at a flood hold or a refusal; then
+        delete the sent notices that are resolved or due."""
         if self._bot is None:
             return
         async with self._sending:
-            while self._pending:
-                if self._flood.held():
-                    return
-                held = self._pending[0]
-                try:
-                    await self._view.send_apart(  # type: ignore[attr-defined]
-                        self._bot, {"text": held.text, "parse_mode": ParseMode.HTML}
-                    )
-                except Exception:
-                    now = self._now()
-                    held.refused_since = held.refused_since or now
-                    if now - held.refused_since >= _GIVE_UP_AFTER:
-                        _LOG.warning("a rollover notice was refused for 10 minutes; dropped")
-                        self._pending.remove(held)
-                    return
-                self._pending.remove(held)
+            await self._send_pending()
+            await self._messages.sweep(self._bot, self._now(), settled=self._settled)
+
+    async def _send_pending(self) -> None:
+        while self._pending:
+            if self._flood.held():
+                return
+            held = self._pending[0]
+            try:
+                message_id = await self._view.send_apart(  # type: ignore[attr-defined]
+                    self._bot, {"text": held.text, "parse_mode": ParseMode.HTML}
+                )
+            except Exception:
+                now = self._now()
+                held.refused_since = held.refused_since or now
+                if now - held.refused_since >= _GIVE_UP_AFTER:
+                    _LOG.warning("a rollover notice was refused for 10 minutes; dropped")
+                    self._pending.remove(held)
+                return
+            self._pending.remove(held)
+            await self._messages.sent(
+                self._bot,
+                message_id,
+                subject=held.rollover_id,
+                expires_at=self._now() + NOTICE_LIFETIME,
+            )

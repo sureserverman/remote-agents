@@ -38,6 +38,7 @@ from remote_agents.config import (
     read_auto_rollover,
     read_claude_limits_source,
     read_cursor_limits_source,
+    read_early_reset_notice,
     read_resume_after_limit,
     read_resume_interrupted,
     write_config_key,
@@ -142,6 +143,34 @@ class ConfigResumeSetting:
             _LOG.warning("the resume switch could not be written to %s: %s", self._path, error)
         except Exception:
             _LOG.debug("the resume switch could not be written", exc_info=True)
+
+
+class ConfigEarlyResetSetting:
+    """`ports.early_reset_setting.EarlyResetSettingPort` over the operator's `config.toml`.
+
+    `ConfigResumeSetting`'s twin for `limits.early_reset_notice`, in this module for its
+    reason, and through the same one writer. Read afresh on every call: it is the Settings
+    rows' read and the limits watch's, which asks it on every pass.
+    """
+
+    _KEY = "early_reset_notice"
+
+    def __init__(self, path: Path) -> None:
+        self._path = path
+
+    async def read(self) -> str:
+        return await asyncio.to_thread(read_early_reset_notice, self._path)
+
+    async def write(self, value: str) -> None:
+        """Record the choice, or log why it could not be recorded. Never raises."""
+        try:
+            await asyncio.to_thread(write_limits_key, self._path, self._KEY, value)
+        except ConfigError as error:
+            _LOG.warning(
+                "the early-reset notice choice could not be written to %s: %s", self._path, error
+            )
+        except Exception:
+            _LOG.debug("the early-reset notice choice could not be written", exc_info=True)
 
 
 class ConfigRolloverSetting:

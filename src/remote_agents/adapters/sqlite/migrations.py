@@ -491,6 +491,9 @@ UI_TABLES: tuple[str, ...] = (
     # The prompt relay's queue (DEC-099), UI migration 2: born here, never moved. The bot writes
     # it and its own service pass reads it; nothing else does.
     "queued_prompts",
+    # The notifications that delete themselves, UI migration 3: born here, never moved. The two
+    # notifiers that send them share the one store.
+    "expiring_notices",
 )
 """Two candidates were removed from this set during Stage 1, each for its own reason, and both
 are recorded because the plan named six.
@@ -560,6 +563,21 @@ UI_MIGRATIONS: tuple[tuple[int, str], ...] = (
             text TEXT NOT NULL,
             queued_at TEXT NOT NULL,
             claimed_at TEXT
+        );
+        """,
+    ),
+    (
+        3,
+        # Notifications that remove themselves: an early limits reset and a failed rollover.
+        # Their message ids outlive a restart here, so a restart cannot strand one in the chat.
+        """
+        CREATE TABLE expiring_notices (
+            chat_id INTEGER NOT NULL,
+            message_id INTEGER NOT NULL,
+            kind TEXT NOT NULL,
+            subject TEXT NOT NULL,
+            expires_at TEXT NOT NULL,
+            PRIMARY KEY (chat_id, message_id)
         );
         """,
     ),

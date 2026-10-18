@@ -885,6 +885,71 @@ def test_a_generated_config_refuses_a_bool_for_an_integer_limit(tmp_path: Path) 
         )
 
 
+# --- whether an early limits reset is told, and for how long --------------------------------
+
+
+def test_early_reset_notice_defaults_to_one_hour(tmp_path: Path) -> None:
+    """Told by default, as before the owner could choose (DEC-058: absent is not drift)."""
+    from remote_agents.config import describe_schema_drift, read_early_reset_notice
+
+    path = write_config(tmp_path, example(tmp_path))
+
+    assert load_config(path).early_reset_notice == "1h"
+    assert read_early_reset_notice(path) == "1h"
+    assert describe_schema_drift(path)["missing"] == []
+
+
+@pytest.mark.parametrize("value", ["off", "1h", "6h"])
+def test_early_reset_notice_loads_each_legal_value(tmp_path: Path, value: str) -> None:
+    from remote_agents.config import read_early_reset_notice
+
+    path = write_config(tmp_path, example(tmp_path) + f'early_reset_notice = "{value}"\n')
+
+    assert load_config(path).early_reset_notice == value
+    assert read_early_reset_notice(path) == value
+
+
+@pytest.mark.parametrize("value", ['"2h"', '"OFF"', '""', "1", "true"])
+def test_early_reset_notice_refuses_anything_else_by_name(tmp_path: Path, value: str) -> None:
+    """The loader refuses a value outside the set; the fresh reader answers the default."""
+    from remote_agents.config import read_early_reset_notice
+
+    path = write_config(tmp_path, example(tmp_path) + f"early_reset_notice = {value}\n")
+
+    with pytest.raises(ConfigError) as refusal:
+        load_config(path)
+
+    assert "limits.early_reset_notice" in str(refusal.value)
+    assert read_early_reset_notice(path) == "1h"
+
+
+def test_early_reset_notice_reads_the_default_from_a_file_it_cannot_read(tmp_path: Path) -> None:
+    from remote_agents.config import read_early_reset_notice
+
+    assert read_early_reset_notice(tmp_path / "absent.toml") == "1h"
+    assert read_early_reset_notice(write_config(tmp_path, "not toml [[[")) == "1h"
+
+
+def test_write_limits_key_sets_early_reset_notice_and_changes_no_other_byte(
+    tmp_path: Path,
+) -> None:
+    from remote_agents.config import read_early_reset_notice, write_limits_key
+
+    path = write_config(tmp_path, limits_source_body(tmp_path))
+    before = path.read_text(encoding="utf-8")
+
+    write_limits_key(path, "early_reset_notice", "off")
+    after = path.read_text(encoding="utf-8")
+
+    assert 'early_reset_notice = "off"' in after
+    assert read_early_reset_notice(path) == "off"
+    assert everything_but(after, "early_reset_notice") == everything_but(
+        before, "early_reset_notice"
+    )
+    with pytest.raises(ConfigError):
+        write_limits_key(path, "early_reset_notice", "2h")
+
+
 # --- the switch that says whether Cursor's limits are read at all ---------------------------
 
 

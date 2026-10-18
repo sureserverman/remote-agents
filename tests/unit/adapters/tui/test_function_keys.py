@@ -540,7 +540,7 @@ async def test_f2_opens_the_nine_row_settings_screen_from_every_surface() -> Non
             choices = app.screen.query_one("#choices", OptionList)
             drawn = [choices.get_option_at_index(index).id for index in range(choices.option_count)]
             assert drawn == list(SETTINGS_ROWS), f"{surface.__name__} drew {drawn}"
-            assert len(drawn) == 9
+            assert len(drawn) == 10
 
             await pilot.press("escape")
             await pilot.pause()

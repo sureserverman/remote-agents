@@ -258,6 +258,15 @@ class Backend:
     unavailable from `is None` (DEC-061/067). Typed `object` for the reason `sessions` is.
     """
 
+    early_reset_notice: object | None = None
+    """Whether an early limits reset is told and for how long, a `ports.early_reset_setting`.
+
+    `resume_after_limit`'s sibling: a choice in the operator's `config.toml` (off, 1 hour, 6
+    hours), an hour by default. The limits watch reads it on every pass. Optional for the same
+    reason, and its absence renders unavailable from `is None` (DEC-061/067). Typed `object`
+    for the reason `sessions` is.
+    """
+
     auto_rollover: object | None = None
     """Whether a session is rolled over when its workflow hands off, a `ports.rollover_setting`.
 

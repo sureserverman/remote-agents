@@ -6,7 +6,7 @@ import asyncio
 import io
 import logging
 import signal
-from collections.abc import Mapping, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from html import escape
@@ -77,6 +77,11 @@ from remote_agents.application.commands import (
 from remote_agents.application.conversations import (
     ConversationCatalogueQuery,
     resume_available,
+)
+from remote_agents.application.early_reset_setting import (
+    EARLY_RESET_LABELS,
+    EARLY_RESET_TITLE,
+    next_early_reset_notice,
 )
 from remote_agents.application.errors import (
     ProjectCreationError,
@@ -1565,6 +1570,7 @@ class PrivateBotBoundary:
             or self.backend.claude_limits_source is not None
             or self.backend.cursor_limits_source is not None
             or self.backend.resume_after_limit is not None
+            or self.backend.early_reset_notice is not None
             or self.backend.auto_rollover is not None
             or self.backend.resume_interrupted is not None
         ):
@@ -1875,6 +1881,8 @@ class PrivateBotBoundary:
             return await self._settings_limits_source_reply(token, message_id)
         if action == "settings.resume_after_limit":
             return await self._settings_resume_reply(token, message_id)
+        if action == "settings.early_reset":
+            return await self._settings_early_reset_reply(token, message_id)
         if action == "settings.auto_rollover":
             return await self._settings_rollover_reply(token, message_id)
         if action == "settings.resume_interrupted":
@@ -3647,6 +3655,7 @@ class PrivateBotBoundary:
         cursor_limits: str | None = None,
         rollover: bool | None = None,
         resume_interrupted: bool | None = None,
+        early_reset: str | None = None,
     ) -> RenderedMessage:
         """The rows about this machine, each reading its own source.
 
@@ -3792,6 +3801,22 @@ class PrivateBotBoundary:
                         f"{_LIMITS_EMOJI} {RESUME_TITLE}: {RESUME_LABELS[chosen_resume]}",
                         # `mutation=True`: a redelivered callback must not flip it back.
                         self._callback("settings.resume_after_limit", "service", mutation=True),
+                    ),
+                )
+            )
+        early_choice = self.backend.early_reset_notice
+        if early_choice is None:
+            lines += ["", f"{escape(EARLY_RESET_TITLE)} is unavailable."]
+        else:
+            # The caller's read-back where it has one, for the limits-source row's reason.
+            chosen_early = await early_choice.read() if early_reset is None else early_reset
+            rows.append(
+                (
+                    Button(
+                        f"{_LIMITS_EMOJI} {EARLY_RESET_TITLE}: "
+                        f"{EARLY_RESET_LABELS.get(chosen_early, chosen_early)}",
+                        # `mutation=True`: a redelivered callback must not advance it twice.
+                        self._callback("settings.early_reset", "service", mutation=True),
                     ),
                 )
             )
@@ -3996,6 +4021,36 @@ class PrivateBotBoundary:
             self._message(
                 f"{escape(ROLLOVER_TITLE)} could not be changed; it is still "
                 f"<code>{escape(ROLLOVER_LABELS[landed])}</code>.",
+                screen.keyboard,
+            )
+        )
+
+    async def _settings_early_reset_reply(self, token: str, message_id: int) -> dict[str, object]:
+        """Advance the early-reset notice choice by one press, then draw what the file says.
+
+        `_settings_limits_source_reply`'s shape: advance from a fresh read, write, and detect a
+        refused write by the read-back.
+        """
+        choice = self.backend.early_reset_notice
+        if choice is None:
+            return _reply_arguments(self._message(f"{escape(EARLY_RESET_TITLE)} is unavailable."))
+        if not self.callbacks.claim_mutation(
+            token,
+            owner_id=self.owner_user_id,
+            chat_id=self.owner_chat_id,
+            message_id=message_id,
+        ):
+            return _reply_arguments(self._message("That action has already run."))
+        intended = next_early_reset_notice(await choice.read())
+        await choice.write(intended)
+        landed = await choice.read()
+        screen = await self._settings_screen(early_reset=landed)
+        if landed == intended:
+            return _reply_arguments(screen)
+        return _reply_arguments(
+            self._message(
+                f"{escape(EARLY_RESET_TITLE)} could not be changed; it is still "
+                f"<code>{escape(EARLY_RESET_LABELS.get(landed, landed))}</code>.",
                 screen.keyboard,
             )
         )
@@ -5527,6 +5582,8 @@ def build_private_bot(
     view: LiveView | None = None,
     notifier: ActivityNotifier | None = None,
     trust_store: object | None = None,
+    notice_store: object | None = None,
+    rollover_settled: Callable[[str], Awaitable[bool]] | None = None,
     **boundary: object,
 ) -> PrivateBotBoundary:
     """Compose a working bot: the boundary, and the three collaborators it drives.
@@ -5583,6 +5640,13 @@ def build_private_bot(
                 # provider name of its own, and a test over its AST holds that.
                 name_for=bot._provider_name,  # noqa: SLF001 -- the bot's own names
                 flood=bot.flood,
+                # The owner's choice, read on every pass: off, or how long a message stays.
+                choice=(
+                    None
+                    if bot.backend.early_reset_notice is None
+                    else bot.backend.early_reset_notice.read
+                ),
+                notices=notice_store,  # type: ignore[arg-type]
             ),
         )
     if bot.backend.rollovers is not None:
@@ -5593,6 +5657,8 @@ def build_private_bot(
                 view=bot.view,
                 project_name=bot._project_name,  # noqa: SLF001 -- the cycle this factory pays
                 flood=bot.flood,
+                notices=notice_store,  # type: ignore[arg-type]
+                settled=rollover_settled,
             ),
         )
     if bot.backend.sessions is not None:
