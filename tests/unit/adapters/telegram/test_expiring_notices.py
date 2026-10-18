@@ -380,3 +380,48 @@ async def test_a_delete_that_never_reached_telegram_is_tried_again() -> None:
     await messages.sweep(object(), START)
 
     assert len(await store.standing("limit-reset")) == 1
+
+
+async def test_a_failed_delete_of_the_replaced_message_still_remembers_the_new_one() -> None:
+    class _Down(_View):
+        async def discard(self, bot: object, message_id: int) -> bool:
+            raise OSError("network down")
+
+    store = InMemoryExpiringNoticeStore()
+    messages = ExpiringMessages(view=_Down(), kind="limit-reset", store=store)
+    await store.remember(ExpiringNotice(4242, 7, "limit-reset", "codex", START))
+
+    await messages.sent(object(), 8, subject="codex", expires_at=START + timedelta(hours=1))
+
+    remembered = {notice.message_id for notice in await store.standing("limit-reset")}
+    assert remembered == {7, 8}, "the new one is remembered and the old one waits for a sweep"
+
+
+async def test_nothing_is_deleted_while_the_chat_is_under_a_flood_hold() -> None:
+    from remote_agents.adapters.telegram.flood import FloodGate
+
+    class _Held(FloodGate):
+        def held(self) -> bool:
+            return True
+
+    view = _View()
+    store = InMemoryExpiringNoticeStore()
+    messages = ExpiringMessages(view=view, kind="limit-reset", store=store, flood=_Held())
+    await store.remember(ExpiringNotice(4242, 7, "limit-reset", "codex", START))
+
+    await messages.sweep(object(), START + timedelta(hours=2))
+
+    assert view.deleted == []
+    assert len(await store.standing("limit-reset")) == 1
+
+
+async def test_a_message_remembered_in_another_chat_is_forgotten_not_deleted_here() -> None:
+    view = _View()
+    store = InMemoryExpiringNoticeStore()
+    messages = ExpiringMessages(view=view, kind="limit-reset", store=store)
+    await store.remember(ExpiringNotice(9999, 7, "limit-reset", "codex", START))
+
+    await messages.sweep(object(), START + timedelta(hours=2))
+
+    assert view.deleted == []
+    assert await store.standing("limit-reset") == ()

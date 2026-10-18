@@ -171,11 +171,13 @@ class RolloverNotifier:
     ) -> None:
         self._view = view
         self._project_name = project_name
-        self._messages = ExpiringMessages(view=view, kind=NOTICE_KIND, store=notices)
+        self._flood = flood if flood is not None else FloodGate()
+        self._messages = ExpiringMessages(
+            view=view, kind=NOTICE_KIND, store=notices, flood=self._flood
+        )
         #: Whether a rollover's notice is over before its lifetime, by rollover id
         #: (`application.rollover.rollover_notice_settled`). None removes by time alone.
         self._settled = settled
-        self._flood = flood if flood is not None else FloodGate()
         self._now = now
         self._bot: object | None = None
         #: Messages not yet delivered, oldest first.

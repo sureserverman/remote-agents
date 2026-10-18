@@ -125,7 +125,9 @@ class LimitResetNotifier:
         self._now = now
         #: The owner's early-reset choice, read on every pass; the default where none is wired.
         self._choice = choice
-        self._messages = ExpiringMessages(view=view, kind=NOTICE_KIND, store=notices)
+        self._messages = ExpiringMessages(
+            view=view, kind=NOTICE_KIND, store=notices, flood=self._flood
+        )
         self._bot: object | None = None
         #: The last reading per provider, by profile id. Replaced on every readable pass.
         self._baseline: dict[str, AgentLimits] = {}
