@@ -70,7 +70,7 @@ class ExpiringMessages:
             earlier = [
                 notice
                 for notice in await self._store.standing(self._kind)
-                if notice.subject == subject
+                if notice.subject == subject and notice.chat_id == self._chat_id()
             ]
             await self._store.remember(
                 ExpiringNotice(self._chat_id(), message_id, self._kind, subject, expires_at)
@@ -117,12 +117,12 @@ class ExpiringMessages:
             _LOG.debug("the %s messages could not be read", self._kind, exc_info=True)
             return
         for notice in standing:
-            if notice.chat_id != self._chat_id():
-                # Remembered in a chat this bot no longer speaks in. Message ids are per chat,
-                # so deleting this id here would remove some other message; forget it instead.
-                await self._store.forget(notice.chat_id, notice.message_id)
-                continue
             try:
+                if notice.chat_id != self._chat_id():
+                    # Remembered in a chat this bot no longer speaks in. Message ids are per
+                    # chat, so deleting this id here would remove some other message.
+                    await self._store.forget(notice.chat_id, notice.message_id)
+                    continue
                 due = notice.expires_at <= now
                 if not due and settled is not None:
                     due = await settled(notice.subject)
