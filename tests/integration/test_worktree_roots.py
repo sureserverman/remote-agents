@@ -30,7 +30,7 @@ def _session(connection: sqlite3.Connection, session_id: str) -> None:
     connection.commit()
 
 
-def _roots(connection: sqlite3.Connection, project: Path):
+def _roots(connection: sqlite3.Connection, project: Path, folders=None):
     rollover = build_rollover_pass(
         connection=connection,
         sessions=types.SimpleNamespace(list_sessions=None, launch=None, graceful_stop=None),
@@ -39,6 +39,7 @@ def _roots(connection: sqlite3.Connection, project: Path):
         project_paths={_PROJECT: project},
         adopt_templates={ProfileId("claude"): adopt_templates()[ProfileId("claude")]},
         worktrees=SQLiteWorktreeStore(connection),
+        folders=folders,
     )
     return rollover._worktree_roots()
 
@@ -96,3 +97,29 @@ async def test_a_binding_row_that_cannot_be_read_does_not_stop_the_others(
     connection.commit()
 
     assert await _roots(connection, tmp_path / "project") == {good: folder}
+
+
+@pytest.mark.asyncio
+async def test_a_session_bound_to_a_folder_has_that_folder_as_its_default_root(
+    tmp_path: Path,
+) -> None:
+    """A successor started outside its project (DEC-131) reads its envelopes there with no
+    report of its own; once the folder is no longer a top level it has no root at all."""
+    import subprocess
+
+    from remote_agents.adapters.sqlite.folder_bindings import SQLiteFolderBindings
+    from remote_agents.adapters.workflow.roots import acceptable_root
+
+    connection = open_database(tmp_path / "s.sqlite3")
+    folders = SQLiteFolderBindings(connection, accept=acceptable_root)
+    there = tmp_path / "there"
+    there.mkdir()
+    subprocess.run(["git", "init", "-q", "--template=", str(there)], check=True, timeout=60)
+    session = SessionId.new()
+    _session(connection, str(session))
+    assert await folders.bind(session, there)
+
+    assert await _roots(connection, tmp_path / "project", folders) == {session: there.resolve()}
+
+    (there / ".git").rename(there / "was-git")
+    assert await _roots(connection, tmp_path / "project", folders) == {session: None}

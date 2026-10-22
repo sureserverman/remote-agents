@@ -15,10 +15,12 @@ from pathlib import Path
 import pytest
 
 from remote_agents.adapters.sqlite.database import open_database
+from remote_agents.adapters.sqlite.folder_bindings import SQLiteFolderBindings
 from remote_agents.adapters.sqlite.session_store import SQLiteSessionStore
 from remote_agents.adapters.sqlite.worktree_store import SQLiteWorktreeStore
 from remote_agents.adapters.tmux.gateway import TmuxInventory
 from remote_agents.adapters.tmux.runtime import LaunchProfile, TmuxTerminal
+from remote_agents.adapters.workflow.roots import acceptable_root
 from remote_agents.application.commands import ResumeCommand
 from remote_agents.application.services import SessionService
 from remote_agents.application.session_folders import SessionFolders
@@ -68,8 +70,9 @@ class _Harness:
         connection = open_database(tmp_path / "sessions.sqlite3")
         self.sessions = SQLiteSessionStore(connection)
         self.worktrees = SQLiteWorktreeStore(connection)
+        self.folders = SQLiteFolderBindings(connection, accept=acceptable_root)
         self.gateway = _Gateway(self.intents)
-        folders = SessionFolders({_PROJECT: self.project}, self.worktrees)
+        folders = SessionFolders({_PROJECT: self.project}, self.worktrees, self.folders)
         terminal = TmuxTerminal(
             self.gateway,  # type: ignore[arg-type]
             {_PROJECT: self.project},
@@ -82,7 +85,9 @@ class _Harness:
             },
             folder_for=folders.folder_for,
         )
-        self.service = SessionService(self.sessions, terminal, worktrees=self.worktrees)
+        self.service = SessionService(
+            self.sessions, terminal, worktrees=self.worktrees, folder_bindings=self.folders
+        )
 
     async def worktree(self, path: Path, *, removed: bool = False) -> Path:
         """A worktree recorded by an earlier, ended session, as a rollover or resume finds it."""
@@ -337,3 +342,80 @@ async def test_a_folder_deleted_by_hand_is_not_offered_for_resume(tmp_path) -> N
     folders = SessionFolders({_PROJECT: harness.project}, harness.worktrees)
 
     assert await folders.worktree_folders(_PROJECT) == (kept,)
+
+
+# -- a folder outside the project (DEC-131) --------------------------------------------------
+
+
+def _git_top_level(path: Path) -> Path:
+    import subprocess
+
+    path.mkdir(parents=True)
+    subprocess.run(["git", "init", "-q", "--template=", str(path)], check=True, timeout=60)
+    return path.resolve()
+
+
+def _launchable(harness: _Harness) -> None:
+    harness.service._terminal._profile_factories[_CLAUDE] = lambda _s, _r: LaunchProfile(
+        "/usr/bin/claude", ("/usr/bin/claude",), {}, None, ("C-c",)
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_launch_with_a_folder_binds_it_before_its_pane_starts_there(tmp_path) -> None:
+    """The pane's folder is asked of the lookup, so a pane in the folder is a binding that was
+    persisted first (DEC-004); and it outlives the process, as every row does."""
+    from remote_agents.application.commands import LaunchCommand
+
+    harness = _Harness(tmp_path)
+    _launchable(harness)
+    there = _git_top_level(tmp_path / "there")
+
+    outcome = await harness.service.launch(LaunchCommand(_PROJECT, _CLAUDE, "f-1", folder=there))
+
+    assert harness.intent_cwd(outcome.record.session_id) == str(there)
+    assert await harness.folders.folder_for(outcome.record.session_id) == there
+
+
+@pytest.mark.asyncio
+async def test_a_launch_whose_folder_vanished_is_refused_not_moved(tmp_path) -> None:
+    """Never started in the project folder instead (DEC-123): no pane at all."""
+    from remote_agents.application.commands import LaunchCommand
+
+    harness = _Harness(tmp_path)
+    _launchable(harness)
+
+    outcome = await harness.service.launch(
+        LaunchCommand(_PROJECT, _CLAUDE, "f-2", folder=tmp_path / "vanished")
+    )
+
+    assert outcome.record.state is SessionState.FAILED
+    assert harness.gateway.launched == 0
+    assert not (harness.intents / f"{outcome.record.session_id}.json").exists()
+    assert not outcome.worktree_removed, "a refused folder is not a removed worktree"
+
+
+@pytest.mark.asyncio
+async def test_a_successor_of_a_folder_bound_session_gets_the_same_folder(tmp_path) -> None:
+    from remote_agents.application.commands import LaunchCommand
+
+    harness = _Harness(tmp_path)
+    _launchable(harness)
+    there = _git_top_level(tmp_path / "there")
+    first = await harness.service.launch(LaunchCommand(_PROJECT, _CLAUDE, "f-3", folder=there))
+
+    successor = await harness.service.launch(
+        LaunchCommand(_PROJECT, _CLAUDE, "f-4", reuse_folder_of=first.record.session_id)
+    )
+
+    assert await harness.folders.folder_for(successor.record.session_id) == there
+    assert harness.intent_cwd(successor.record.session_id) == str(there)
+
+
+def test_a_folder_cannot_be_combined_with_a_reused_folder_or_a_worktree() -> None:
+    from remote_agents.application.commands import LaunchCommand
+
+    with pytest.raises(ValueError):
+        LaunchCommand(_PROJECT, _CLAUDE, "f-5", folder=Path("/x"), reuse_folder_of=SessionId.new())
+    with pytest.raises(ValueError):
+        LaunchCommand(_PROJECT, _CLAUDE, "f-6", folder=Path("/x"), mode="worktree")

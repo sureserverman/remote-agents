@@ -40,6 +40,7 @@ _WHY_SKIPPED = {
     "no-conversation": "no conversation was recorded for it",
     "superseded": "a newer session had already opened its conversation",
     "worktree_removed": "its worktree was removed",
+    "folder_bound": "it works in a folder outside its project, which a resume cannot reopen",
     "interrupted": "an earlier start may have resumed it part-way; check its sessions",
     "launch_error": "the resume failed, perhaps part-way; check its sessions",
     "launch_failed": "the resumed session did not start",

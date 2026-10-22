@@ -132,7 +132,7 @@ def _private_boundary(
         paths,
         projects.paths,
         descriptors,
-        folder_for=SessionFolders(projects.paths, worktrees.store).folder_for,
+        folder_for=SessionFolders(projects.paths, worktrees.store, worktrees.folders).folder_for,
     )
     terminal = runtime.terminal
     store = SQLiteSessionStore(connection)
@@ -363,6 +363,7 @@ def _private_boundary(
                 # The same gate `drain` shuts (DEC-046), held across each persist-and-act.
                 operation=locks.operation,
                 worktrees=worktrees.store,
+                folders=worktrees.folders,
                 # What `remote-agents session-id` recorded, by the same rule it wrote with.
                 reported=FileReportedRoots(paths.activity_directory, accept=acceptable_root),
             )
@@ -395,6 +396,9 @@ def _private_boundary(
                 outcomes=SQLiteInterruptedResumes(connection),
                 resume=backend.sessions.resume,
                 folder_of=worktrees.store.folder_for,
+                bound_folder_of=(
+                    None if worktrees.folders is None else worktrees.folders.folder_for
+                ),
                 enabled=_restart_resume_switch(config.path or paths.config_path),
                 notify=(
                     None if boundary.restart_notifier is None else boundary.restart_notifier.notify

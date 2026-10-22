@@ -106,7 +106,7 @@ class Rig:
                 record.session_id, LifecycleEvent.RECONCILED_TERMINAL_MISSING
             )
 
-    def run_pass(self, resume=None) -> InterruptedResumePass:
+    def run_pass(self, resume=None, bound_folder_of=None) -> InterruptedResumePass:
         async def recorded(command: ResumeCommand):
             self.commands.append(command)
             return await self.service.resume(command)
@@ -115,6 +115,7 @@ class Rig:
             self.outcomes,
             resume=resume or recorded,
             folder_of=self.worktrees.folder_for,
+            bound_folder_of=bound_folder_of,
             key_claimed=self.sessions.idempotency_key_claimed,
             send=self.terminal.send_prompt,
             sleep=self.sleep,
@@ -679,3 +680,29 @@ async def test_nudge_patience_is_counted_so_a_clock_stepping_back_still_gives_up
 
     assert report.outcome.endswith("; not nudged:not_ready")
     assert len(rig.sleeps) == STARTUP_RETRIES
+
+
+async def test_a_session_bound_to_a_folder_outside_its_project_is_skipped_not_moved(
+    rig: Rig, tmp_path: Path
+) -> None:
+    """A rollover successor started where its predecessor's writer reported working (DEC-131):
+    a resume binds only a worktree, so resuming it would start in the project folder. It is
+    skipped by name instead (DEC-123), and nothing is launched."""
+    import subprocess
+
+    from remote_agents.adapters.sqlite.folder_bindings import SQLiteFolderBindings
+    from remote_agents.adapters.workflow.roots import acceptable_root
+
+    folders = SQLiteFolderBindings(rig.connection, accept=acceptable_root)
+    there = tmp_path / "there"
+    there.mkdir()
+    subprocess.run(["git", "init", "-q", "--template=", str(there)], check=True, timeout=60)
+    record = await rig.running()
+    assert await folders.bind(record.session_id, there)
+    snapshot = await rig.snapshot(record)
+    await rig.end_as_reconcile_does(record)
+
+    (report,) = await rig.run_pass(bound_folder_of=folders.folder_for).run(snapshot)
+
+    assert report.outcome == "skipped:folder_bound"
+    assert rig.commands == []

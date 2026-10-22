@@ -31,7 +31,7 @@ from remote_agents.adapters.telegram.service import PrivateBotBoundary
 from remote_agents.adapters.telegram.trust_notifications import TrustNotifier
 from remote_agents.adapters.tmux.runtime import TmuxTerminal
 from remote_agents.adapters.workflow.handoff_envelopes import FileHandoffEnvelopes
-from remote_agents.adapters.workflow.roots import handoff_root
+from remote_agents.adapters.workflow.roots import acceptable_root, handoff_root
 from remote_agents.application.activity import CodexApprovalWatcher, drain_activity
 from remote_agents.application.backend import CLOSE_TIMEOUT_SECONDS, DRAIN_TIMEOUT_SECONDS
 from remote_agents.application.commands import ResumeCommand
@@ -63,6 +63,7 @@ from remote_agents.domain.models import (
     SessionState,
 )
 from remote_agents.ports.agent_activity import ActivityConfidence, ActivityKind, AgentActivity
+from remote_agents.ports.folder_bindings import FolderBindings
 from remote_agents.ports.git_checkout import GitCheckout
 from remote_agents.ports.interrupted_resumes import RESUMING, InterruptedResumes
 from remote_agents.ports.limit_stop_outcomes import LimitStopOutcomes
@@ -359,6 +360,7 @@ def build_restart_resume(
     outcomes: InterruptedResumes,
     resume: Callable[[ResumeCommand], Awaitable[ResumeOutcome]],
     folder_of: Callable[[SessionId], Awaitable[Worktree | None]],
+    bound_folder_of: Callable[[SessionId], Awaitable[Path | None]] | None = None,
     enabled: Callable[[], Awaitable[bool]],
     notify: Callable[[tuple[ResumeReport, ...], int], Awaitable[None]] | None,
     stopping: Callable[[], bool],
@@ -459,6 +461,7 @@ def build_restart_resume(
             outcomes,
             resume=resume,
             folder_of=folder_of,
+            bound_folder_of=bound_folder_of,
             key_claimed=key_claimed,
             send=send,
             stopping=stopping,
@@ -921,6 +924,7 @@ def build_rollover_pass(
     operation: Callable[[], AbstractAsyncContextManager[object]] = nullcontext,
     worktrees: WorktreeStore | None = None,
     reported: ReportedRoots | None = None,
+    folders: FolderBindings | None = None,
 ) -> RolloverPass:
     """The rollover pass `serve` runs, and only `serve` (DEC-115, DEC-015/070: built here,
     beside the loop that runs it, so no other composition has one to run).
@@ -937,7 +941,9 @@ def build_rollover_pass(
     checkout -- unless the session's writer reported a root.
 
     A session whose handoff writer reported another root reads its envelopes there (DEC-131):
-    `reported` answers through `reported_roots_reader`.
+    `reported` answers through `reported_roots_reader`. A session bound to a folder outside its
+    project (`folders`, a successor started there) has that folder as its default root while it
+    is still a git top level this user owns, and no root once it is not.
     """
 
     rollovers = SQLiteRolloverStore(connection)
@@ -951,11 +957,10 @@ def build_rollover_pass(
         return tuple(named)
 
     async def worktree_roots() -> dict[SessionId, Path | None]:
-        if worktrees is None:
-            return {}
         by_path: dict[Path, Path | None] = {}
         roots: dict[SessionId, Path | None] = {}
-        for session_id, worktree in (await worktrees.bound_folders()).items():
+        bound = {} if worktrees is None else await worktrees.bound_folders()
+        for session_id, worktree in bound.items():
             if worktree.path not in by_path:
                 folder = live_folder(worktree)
                 # The worktree's own top level, which holds its `.git` file, or none: never a
@@ -963,6 +968,9 @@ def build_rollover_pass(
                 is_checkout = folder is not None and (folder / ".git").exists()
                 by_path[worktree.path] = folder if is_checkout else None
             roots[session_id] = by_path[worktree.path]
+        if folders is not None:
+            for session_id, folder in (await folders.bound_folders()).items():
+                roots.setdefault(session_id, acceptable_root(str(folder)))
         return roots
 
     return RolloverPass(
