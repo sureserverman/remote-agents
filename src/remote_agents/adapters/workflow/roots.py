@@ -1,7 +1,8 @@
 """Where a project's handoff envelopes live: the top level of the git checkout holding it.
 
 The planning plugin writes envelopes and reads `request.json` under the repository's top level,
-whatever directory its session was started in (DEC-130). A project registered at a
+whatever directory its session was started in (the protocol's rule, staged-planning
+`docs/handoff-protocol.md`). A project registered at a
 subdirectory of a checkout therefore shares that checkout's one handoff directory, and a project
 in no checkout has none: its sessions roll over only from a root their writer reported
 (`acceptable_root`, DEC-131).

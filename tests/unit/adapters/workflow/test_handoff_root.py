@@ -1,4 +1,5 @@
-"""The handoff root is the git top level holding a project, or nothing (DEC-130)."""
+"""The handoff root is the git top level holding a project, or nothing (the protocol's rule,
+staged-planning `docs/handoff-protocol.md`)."""
 
 from __future__ import annotations
 

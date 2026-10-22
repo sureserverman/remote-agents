@@ -488,14 +488,16 @@ def _seen_calls(harness: Harness) -> list[tuple[str, str]]:
 def test_staged_planning_reported_root_reaches_the_command_with_nothing_appended(
     staged_harness: Harness, tmp_path: Path
 ) -> None:
-    """Run from a folder in repo A with `--root` repo B: every identity call (`ready`,
-    `accept`, `fail`, `request-pending`) gives the command B, resolved, as
+    """Run from a folder in repo A with `--root` a link to repo B: every identity call
+    (`ready`, `accept`, `fail`, `request-pending`) gives the command B, resolved, as
     `PLANNING_HANDOFF_ROOT`, and its argv as configured, so an older verb that refuses an
     extra argument still answers."""
     folder_a = _git_repo(tmp_path / "a") / "work"
     folder_a.mkdir()
     repo_b = _git_repo(tmp_path / "b")
     resolved_b = os.path.realpath(repo_b)
+    link_b = tmp_path / "link-b"
+    link_b.symlink_to(repo_b)
     plan = str(repo_b / "plan.md")
     ready_id, failed_id = (_new_id(staged_harness, repo_b) for _ in range(2))
     assert FileHandoffEnvelopes().write_request(repo_b, SESSION) is True
@@ -505,10 +507,10 @@ def test_staged_planning_reported_root_reaches_the_command_with_nothing_appended
         ("accept", "--handoff-id", ready_id, "--plan", plan),
         ("fail", "--handoff-id", failed_id, "--code", "branch-mismatch"),
     ):
-        result = staged_harness.run(repo_b, *argv, cwd=folder_a)
+        result = staged_harness.run(link_b, *argv, cwd=folder_a)
         assert result.returncode == 0, (argv, result.stdout, result.stderr)
         assert result.stdout.strip() != "unsupervised", (argv, result.stderr)
-    assert staged_harness.run(repo_b, "request-pending", cwd=folder_a).returncode == 0
+    assert staged_harness.run(link_b, "request-pending", cwd=folder_a).returncode == 0
 
     assert _seen_calls(staged_harness) == [(resolved_b, "session-id")] * 4
     assert not (tmp_path / "a" / ".claude").exists()

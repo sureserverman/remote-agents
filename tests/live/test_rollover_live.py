@@ -66,9 +66,13 @@ and the reconciler run on `serve`'s own loop functions (`_roll_over_periodically
 production spool; the production service does not know the session ids. Those three outlive
 the run. The Claude plan runs with the owner's real HOME, so the planning skills could in
 principle reach the owner's registers: the test fingerprints the project registry and the
-vault's Portfolio roll-ups before and after, and fails if either changed. Everything this test
-starts is torn down in `finally`: the periodic tasks, the private tmux server and every agent in
-it, the database connection and the fixture repository.
+vault's Portfolio roll-ups before and after, and fails if either changed. The verb the writer
+runs would likewise record its reported root in the owner's activity directory, so the Claude
+wrapper appends `--activity-dir` with this run's to `PLANNING_SUPERVISOR_ID_CMD`, and the
+fingerprint covers the owner's `roots/` too. This run's root is its project's default one, so it
+does not show a reported root being used; the contract test's `*reported_root*` cases do.
+Everything this test starts is torn down in `finally`: the periodic tasks, the private tmux
+server and every agent in it, the database connection and the fixture repository.
 
 **Permissions.** The sessions run in the owner's own Claude permission mode. Under a mode that
 asks before writing a file, Stage 1 waits on that question and the run fails at its deadline --
@@ -225,7 +229,8 @@ def _opted_in(config: pytest.Config) -> bool:
     )
 
 
-#: The first planning release that writes envelopes and adopts a handoff (the plugin's DEC-029).
+#: The first planning release that writes envelopes and adopts a handoff: 0.55.0 of the old
+#: Claude package (protocol v1), whose numbering staged-planning's plugin continues.
 _PLANNING_AT_LEAST = (0, 55, 0)
 
 
@@ -496,11 +501,16 @@ async def test_rollover_now_hands_a_real_plan_to_a_fresh_session(
     owners_before = _owner_fingerprint()
     try:
         repo = _fixture_repository(repo_parent)
+        activity = ProductionPaths.for_home(tmp_path / "home").activity_directory
         paths = _isolated_home(
             tmp_path / "home",
             repo,
             {
-                "claude": f"exec {shlex.quote(str(claude))} "
+                # The pane's `HOME` is the owner's, so the verb would record the root the
+                # writer reports in the owner's activity directory: point it at this run's.
+                "claude": "export PLANNING_SUPERVISOR_ID_CMD="
+                f'"$PLANNING_SUPERVISOR_ID_CMD --activity-dir {shlex.quote(str(activity))}"\n'
+                f"exec {shlex.quote(str(claude))} "
                 f'--plugin-dir {shlex.quote(str(planning))} "$@"'
             },
         )
@@ -512,7 +522,7 @@ async def test_rollover_now_hands_a_real_plan_to_a_fresh_session(
         )
         # Nothing the plan ran reached the owner's own registers.
         assert _owner_fingerprint() == owners_before, (
-            "the run changed the owner's project registry or Portfolio roll-ups"
+            "the run changed the owner's project registry, Portfolio roll-ups or root reports"
         )
     finally:
         for task in periodic:
@@ -556,7 +566,7 @@ async def test_rollover_now_hands_a_real_plan_to_a_fresh_codex_session(
             harness, repo, periodic, ProfileId("codex"), "$planning:executing-plans", socket
         )
         assert _owner_fingerprint() == owners_before, (
-            "the run changed the owner's project registry or Portfolio roll-ups"
+            "the run changed the owner's project registry, Portfolio roll-ups or root reports"
         )
         assert (codex_home / "auth.json").is_symlink(), "Codex replaced the login link"
         assert _stat(login) == login_before, "Codex rewrote the owner's auth.json"
@@ -604,12 +614,17 @@ def _stat(path: Path) -> tuple[int, int, int]:
 
 
 def _owner_fingerprint() -> dict[str, tuple[int, int]]:
-    """Size and mtime of the owner's registers the planning skills know: the project registry
-    and the vault's Portfolio roll-ups. A file absent on this host is simply not listed."""
+    """Size and mtime of the owner's registers the planning skills know (the project registry
+    and the vault's Portfolio roll-ups), and of every root report in the owner's activity
+    directory, which the Claude pane's verb would write under the owner's `HOME`. A file absent
+    on this host is simply not listed."""
     watched = [Path.home() / ".claude" / "projects-registry.yaml"]
     portfolio = Path(os.environ.get("REMOTE_AGENTS_LIVE_VAULT", "/mnt/vault")) / "Portfolio"
     if portfolio.is_dir():
         watched.extend(sorted(portfolio.glob("*.md")))
+    with contextlib.suppress(Exception):
+        roots = ProductionPaths.for_home(Path.home()).activity_directory / "roots"
+        watched.extend(sorted(roots.iterdir()))
     return {
         str(path): (path.stat().st_size, path.stat().st_mtime_ns)
         for path in watched
