@@ -662,8 +662,8 @@ it and ask for it but never act.
   that writes handoff envelopes (Claude Code's from coder-plugins; Codex's
   `planning@engineering-skills` 0.2.1 or later, which asks `remote-agents session-id` who it is).
   Which agents roll over is each one's own declaration (its adopt command); OpenCode and Cursor
-  declare none. A `ready` envelope from a running one, under `.claude/handoffs/`
-  at the project's git top level (Claude's planning plugin 0.55.0 or later), opens a rollover -- if it is
+  declare none. A `ready` envelope from a running one, under `.claude/handoffs/` at the
+  session's handoff root (Claude's planning plugin 0.55.0 or later), opens a rollover -- if it is
   seen within five minutes of being written. One written while the switch was off or `serve` was
   down is cleared, never acted on: the plugin has already told you to resume by hand. So does the
   owner's **Rollover now**: the button on the bot's session screen, or `l` on the terminal's
@@ -673,11 +673,22 @@ it and ask for it but never act.
   **Cancel rollover**
   withdraws a request while it is still only requested, on either surface (in the terminal it is
   a row of the session's detail). Once the workflow has answered, only the pass ends the
-  rollover. `request.json` is one file per checkout: a second request in the same checkout waits
+  rollover. `request.json` is one file per handoff root: a second request at the same root waits
   until the first rollover ends.
+- **The handoff root.** A session's root is the git top level its planning writer last reported,
+  else its worktree's, else its project's. A writer reports one by running the command in
+  `PLANNING_SUPERVISOR_ID_CMD` with `PLANNING_HANDOFF_ROOT` set; that is how a plan that works
+  in another repository still rolls over. Only a git top level you own is accepted. Costs, by
+  design: a forged `ready` can now name a root too, but it starts at most one session, in a top
+  level you own, and a folder never trusted waits for you; a Codex writer working in another
+  repository stays unsupervised; and **Rollover now** for a session that never reported its root
+  writes `request.json` at its project's top level, so a plan working elsewhere never sees it and
+  the request ends `request-unanswered` after 24 hours. Resume such a session by hand.
 - **The sequence.** The pass waits for the old session's pane to sit idle, for up to 10
   minutes. It then launches **one** fresh session of the same project and profile, under the
-  key `rollover:<handoff_id>`. It types that agent's fixed adopt command and nothing else --
+  key `rollover:<handoff_id>`, in the old session's folder -- or, when the old session's writer
+  reported another root, in that root. If the agent has never trusted that folder, the new
+  session waits on its trust question for you. It types that agent's fixed adopt command and nothing else --
   `/planning:executing-plans --adopt-handoff <id>` for Claude, `$planning:executing-plans
   --adopt-handoff <id>` for Codex; an envelope supplies the id, never text. The new session
   checks the handoff and has 30 minutes to write `accepted`. Only then is the old session

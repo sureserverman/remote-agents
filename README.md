@@ -1054,7 +1054,10 @@ agent, types that agent's own adopt command into it -- `/planning:executing-plan
 session only
 after the new one has accepted the handoff, and only when the old one sits idle. It never
 interrupts a turn and never force-stops. **Rollover now** (`l` in the terminal) asks the workflow
-to hand off at its next gate. Only a failure sends a message: a failed rollover keeps the old
+to hand off at its next gate. A plan that works in another repository rolls over there: its
+planning writer reports that repository's top level (`PLANNING_HANDOFF_ROOT`), and the new
+session starts in it -- answer the agent's folder-trust question once if it asks. Only a failure
+sends a message: a failed rollover keeps the old
 session, and a failed stop leaves it for you to stop. The runbook's [session
 rollover](docs/operator-runbook.md#session-rollover) section covers what the row notes mean and
 what to do after each failure.
