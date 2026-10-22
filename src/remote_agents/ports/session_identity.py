@@ -7,7 +7,8 @@ import re
 SESSION_ID_VARIABLE = "REMOTE_AGENTS_SESSION_ID"
 """One of the two variables a managed launch adds to the curated environment.
 
-The other is `SUPERVISOR_ID_COMMAND_VARIABLE`, below. This one names the session.
+The other is `SUPERVISOR_ID_COMMAND_VARIABLE`, below. This one carries the session's id into
+its own launch; a handoff writer does not trust it, and asks the command instead (DEC-128).
 
 It is a contract between two adapters that may not import each other: `adapters/tmux` writes
 it into the launch environment, and `adapters/agents` reads it to decide whether a hook
@@ -33,7 +34,8 @@ command for every session and every provider (DEC-122), and it names no session 
 
 The command's first word is an absolute path, so that no other install on the pane's `PATH`
 answers. A pane's `PATH` can lead with an older installed `remote-agents`, and the writer splits
-the value with `shlex` and runs it with no shell.
+the value with `shlex` and runs it with no shell. The interpreter runs isolated, so a module in
+the folder the writer runs it from cannot answer either.
 """
 
 

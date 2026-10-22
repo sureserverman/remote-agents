@@ -289,3 +289,15 @@ def test_a_readiness_marker_is_a_string_the_agent_actually_draws() -> None:
             "actually draws when it is ready — every launch will burn the whole startup "
             "budget and report a failure for an agent that came up fine"
         )
+
+
+def test_the_identity_command_refuses_a_relative_interpreter(monkeypatch) -> None:
+    """A relative interpreter would be looked up on the pane's `PATH`, which is what the
+    absolute path exists to avoid."""
+    monkeypatch.setattr("sys.executable", "python3")
+
+    try:
+        supervisor_id_command()
+    except ValueError:
+        return
+    raise AssertionError("a relative interpreter was accepted")

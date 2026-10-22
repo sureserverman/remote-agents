@@ -2,9 +2,11 @@
 
 The other end is the planning plugin's `handoff-envelope.py` (staged-planning, and the
 coder-plugins copy until the cutover), and the reading and writing rules here are its rules, so
-that a file one side refuses the other refuses too. The directory is inside a checkout: a test
-suite, a build script or an agent running there can put anything at any name in it, and the
-daemon reads it unattended. So:
+that a file one side refuses the other refuses too. One exception lasts until that cutover: this
+side reads both protocol ids but writes only `planning-handoff`, which the legacy writers (the
+coder-plugins copy and engineering-skills' Codex fork) do not read, so they do not see a request
+this side writes. The directory is inside a checkout: a test suite, a build script or an agent
+running there can put anything at any name in it, and the daemon reads it unattended. So:
 
 - Each component below the project -- `.claude`, `handoffs`, the file -- is opened with
   `O_NOFOLLOW` relative to its parent's descriptor. A link at any of them is refused, never

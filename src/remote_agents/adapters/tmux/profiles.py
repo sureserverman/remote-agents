@@ -236,11 +236,15 @@ def supervisor_id_command() -> str:
     It names the running interpreter by absolute path, so an older `remote-agents` earlier on
     the pane's `PATH` cannot answer. `sys.argv[0]` is not used: under pytest, and in the live
     test, it names pytest rather than this program. `python -m remote_agents` is a supported
-    entry point (`src/remote_agents/__main__.py`), so the interpreter alone is enough.
+    entry point (`src/remote_agents/__main__.py`). The interpreter runs isolated (`-I`): the
+    writer runs this from the checkout it works in, and plain `-m` would put that folder first
+    on `sys.path`, so a `remote_agents` package there would answer for this install and a
+    module named like the standard library's would break it. `-I` also ignores the pane's
+    `PYTHON*` variables and the user's site directory; this install's own packages still load.
     """
     if not Path(sys.executable).is_absolute():
         raise ValueError("the running interpreter's path must be absolute")
-    return shlex.join([sys.executable, "-m", "remote_agents", "session-id"])
+    return shlex.join([sys.executable, "-I", "-m", "remote_agents", "session-id"])
 
 
 def build_resume_profile(
