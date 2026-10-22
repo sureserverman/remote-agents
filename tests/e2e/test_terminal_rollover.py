@@ -49,21 +49,25 @@ HANDOFF = "h-0123456789abcdef0123"
 #: from the Claude vertical's `adopt_template` on purpose: the pass types the descriptor's value,
 #: so a wrong vertical string is caught here by an agent that never adopts it.
 TEMPLATE = f"/planning:executing-plans --adopt-handoff {HANDOFF}"
+#: The neutral id the planning writer stamps, and the one its installed copy still stamps until
+#: the cutover: the reader takes both.
+PROTOCOL, LEGACY_PROTOCOL = "planning-handoff", "remote-agents-handoff"
 
 _AGENT = """
-import json, os, sys, time
+import json, os, shlex, subprocess, sys, time
 from pathlib import Path
 
-HANDOFF, MODE = sys.argv[1], Path(sys.argv[2])
-ASK = len(sys.argv) > 3 and Path(sys.argv[3]).read_text() == "ask"
+HANDOFF, MODE, PROTOCOL = sys.argv[1], Path(sys.argv[2]), sys.argv[3]
+ASK = len(sys.argv) > 4 and Path(sys.argv[4]).read_text() == "ask"
 me = os.environ["REMOTE_AGENTS_SESSION_ID"]
 handoffs = Path.cwd() / ".claude" / "handoffs"
 
 
-def envelope(event, suffix, **extra):
-    handoffs.mkdir(parents=True, exist_ok=True)
+def envelope(event, suffix, under=None, **extra):
+    there = handoffs if under is None else under / ".claude" / "handoffs"
+    there.mkdir(parents=True, exist_ok=True)
     body = {
-        "protocol": "remote-agents-handoff",
+        "protocol": PROTOCOL,
         "version": 1,
         "event": event,
         "handoff_id": HANDOFF,
@@ -72,7 +76,7 @@ def envelope(event, suffix, **extra):
         "plan": "/work/plan.md",
         **extra,
     }
-    (handoffs / f"{HANDOFF}.{suffix}.json").write_text(json.dumps(body))
+    (there / f"{HANDOFF}.{suffix}.json").write_text(json.dumps(body))
 
 
 if ASK:
@@ -97,6 +101,18 @@ while True:
     print("GOT: " + line, flush=True)
     if line == "handoff":
         envelope("HANDOFF_READY", "ready")
+    elif line == "handoff-elsewhere":
+        # The planning writer working in another repo: it asks the identity command who it
+        # is, telling it the root it writes under, then writes its `ready` there.
+        root = Path(os.environ["FAKE_ELSEWHERE"])
+        subprocess.run(
+            shlex.split(os.environ["PLANNING_SUPERVISOR_ID_CMD"]),
+            env=dict(os.environ, PLANNING_HANDOFF_ROOT=str(root)),
+            stdin=subprocess.DEVNULL, capture_output=True, timeout=30, check=True,
+        )
+        envelope("HANDOFF_READY", "ready", under=root)
+    elif line == "unreported-handoff-elsewhere":
+        envelope("HANDOFF_READY", "ready", under=Path(os.environ["FAKE_ELSEWHERE"]))
     elif line == "/planning:executing-plans --adopt-handoff " + HANDOFF:
         if MODE.read_text() == "accept":
             envelope("HANDOFF_ACCEPTED", "accepted")
@@ -128,9 +144,10 @@ async def _type(terminal: TmuxTerminal, session_id: SessionId, text: str) -> Non
     raise AssertionError(f"the cue was not typed: {delivery}")
 
 
+@pytest.mark.parametrize("protocol", [PROTOCOL, LEGACY_PROTOCOL])
 @pytest.mark.parametrize("mode", ["accept", "fail"])
 async def test_a_ready_rolls_over_to_one_successor_and_stops_only_on_accept(
-    tmp_path: Path, mode: str
+    tmp_path: Path, mode: str, protocol: str
 ) -> None:
     project = tmp_path / "opaque-editor"
     (project / ".git").mkdir(parents=True)
@@ -149,7 +166,7 @@ async def test_a_ready_rolls_over_to_one_successor_and_stops_only_on_accept(
         profile_factories={
             PROFILE: lambda session_id, _remote_control: LaunchProfile(
                 sys.executable,
-                (sys.executable, str(agent), HANDOFF, str(mode_file)),
+                (sys.executable, str(agent), HANDOFF, str(mode_file), protocol),
                 {"PATH": os.environ["PATH"], SESSION_ID_VARIABLE: str(session_id)},
                 "READY",
             )
@@ -262,7 +279,7 @@ async def test_a_worktree_sessions_successor_starts_in_the_same_worktree(tmp_pat
         profile_factories={
             PROFILE: lambda session_id, _remote_control: LaunchProfile(
                 sys.executable,
-                (sys.executable, str(agent), HANDOFF, str(mode_file)),
+                (sys.executable, str(agent), HANDOFF, str(mode_file), PROTOCOL),
                 {"PATH": os.environ["PATH"], SESSION_ID_VARIABLE: str(session_id)},
                 "READY",
             )
@@ -383,7 +400,7 @@ async def test_a_trust_held_successor_is_typed_once_after_the_owner_trusts_it(
         profile_factories={
             PROFILE: lambda session_id, _remote_control: LaunchProfile(
                 sys.executable,
-                (sys.executable, str(agent), HANDOFF, str(mode_file), str(ask)),
+                (sys.executable, str(agent), HANDOFF, str(mode_file), PROTOCOL, str(ask)),
                 {"PATH": os.environ["PATH"], SESSION_ID_VARIABLE: str(session_id)},
                 "READY",
             )
@@ -665,3 +682,158 @@ async def test_a_codex_ready_rolls_over_to_a_codex_successor_typed_the_dollar_te
         )
         await killing.wait()
         connection.close()
+
+
+# -- a session whose writer works in another repo (DEC-131) ----------------------------------
+
+
+async def _pane_path(socket: str, gateway: TmuxGateway, session_id: SessionId) -> Path:
+    (pane,) = [p for p in (await gateway.inventory()).managed if p.session_id == session_id]
+    shown = await asyncio.create_subprocess_exec(
+        "tmux", "-L", socket, "display-message", "-p", "-t", pane.pane_id,
+        "#{pane_current_path}", stdout=asyncio.subprocess.PIPE,
+    )  # fmt: skip
+    out, _ = await shown.communicate()
+    return Path(out.decode().strip()).resolve()
+
+
+async def _reported_root_run(tmp_path: Path, cue: str, passes: int):
+    """Two checkouts: A is the project, B is where the writer works. The fake agent asks the
+    real identity command -- this checkout's interpreter, under a throwaway HOME -- so the root
+    it reports lands where the pass reads it."""
+    import subprocess
+
+    from remote_agents.adapters.agents.reported_roots import FileReportedRoots
+    from remote_agents.adapters.sqlite.folder_bindings import SQLiteFolderBindings
+    from remote_agents.adapters.tmux.profiles import supervisor_id_command
+    from remote_agents.adapters.workflow.roots import acceptable_root
+    from remote_agents.application.session_folders import SessionFolders
+    from remote_agents.ports.session_identity import SUPERVISOR_ID_COMMAND_VARIABLE
+    from remote_agents.production import ProductionPaths
+
+    project, elsewhere, home = tmp_path / "opaque-editor", tmp_path / "elsewhere", tmp_path / "home"
+    for repo in (project, elsewhere):
+        repo.mkdir()
+        subprocess.run(["git", "init", "-q", "--template=", str(repo)], check=True, timeout=60)
+    home.mkdir()
+    elsewhere = elsewhere.resolve()
+    agent, mode_file = tmp_path / "fake_agent.py", tmp_path / "mode"
+    agent.write_text(_AGENT, encoding="utf-8")
+    mode_file.write_text("accept", encoding="utf-8")
+    connection = open_database(tmp_path / "sessions.sqlite3")
+    store = SQLiteSessionStore(connection)
+    folders = SQLiteFolderBindings(connection, accept=acceptable_root)
+    socket = f"remote-agents-test-{uuid4().hex}"
+    gateway = TmuxGateway(socket, AsyncTmuxRunner(), intent_directory=tmp_path / "i")
+    terminal = TmuxTerminal(
+        gateway,
+        {PROJECT: project},
+        {},
+        startup_timeout=10.0,
+        profile_factories={
+            PROFILE: lambda session_id, _remote_control: LaunchProfile(
+                sys.executable,
+                (sys.executable, str(agent), HANDOFF, str(mode_file), PROTOCOL),
+                {
+                    "PATH": os.environ["PATH"],
+                    "HOME": str(home),
+                    # The other repo, named here: a path typed as a cue wraps the composer.
+                    "FAKE_ELSEWHERE": str(elsewhere),
+                    SESSION_ID_VARIABLE: str(session_id),
+                    SUPERVISOR_ID_COMMAND_VARIABLE: supervisor_id_command(),
+                },
+                "READY",
+            )
+        },
+        composers={"fake": ProviderDescriptor(PROFILE, "F", "Fake", composer=_COMPOSER)},
+        folder_for=SessionFolders({PROJECT: project}, None, folders).folder_for,
+    )
+    sessions = SessionService(store, terminal, folder_bindings=folders)
+
+    async def on() -> bool:
+        return True
+
+    rollover_pass = build_rollover_pass(
+        connection=connection,
+        sessions=sessions,
+        terminal=terminal,
+        enabled=on,
+        project_paths={PROJECT: project},
+        adopt_templates={PROFILE: adopt_templates()[ProfileId("claude")]},
+        reported=FileReportedRoots(
+            ProductionPaths.for_home(home).activity_directory, accept=acceptable_root
+        ),
+        folders=folders,
+    )
+    rollovers = SQLiteRolloverStore(connection)
+    launched: list[SessionId] = []
+    result = {}
+    try:
+        predecessor = (await sessions.launch(LaunchCommand(PROJECT, PROFILE, "pred"))).record
+        launched.append(predecessor.session_id)
+        await _type(terminal, predecessor.session_id, cue)
+        row = None
+        for _ in range(passes):
+            await rollover_pass.run_once()
+            launched.extend(
+                record.session_id
+                for record in await sessions.list_sessions()
+                if record.session_id not in launched
+            )
+            rows = rollovers._select("1 = 1", ())
+            row = rows[0] if rows else None
+            if row is not None and row.state is RolloverState.COMPLETED:
+                break
+            await asyncio.sleep(0.2)
+        states = {r.session_id: r.state for r in await sessions.list_sessions()}
+        result = {
+            "row": row,
+            "launched": list(launched),
+            "predecessor": predecessor.session_id,
+            "states": states,
+            "elsewhere": elsewhere,
+            "project": project.resolve(),
+            "successor_path": (
+                await _pane_path(socket, gateway, row.successor_session_id)
+                if row is not None and row.successor_session_id is not None
+                else None
+            ),
+        }
+    finally:
+        for session_id in launched:
+            try:
+                await gateway.destroy(session_id)
+            except RuntimeError:
+                pass
+        killing = await asyncio.create_subprocess_exec(
+            "tmux", "-L", socket, "kill-server", stderr=asyncio.subprocess.DEVNULL
+        )
+        await killing.wait()
+        connection.close()
+    return result
+
+
+async def test_a_reported_root_rolls_over_to_one_successor_started_there(tmp_path: Path) -> None:
+    """The writer worked in B and said so through the real verb: the `ready` under B opens the
+    rollover, exactly one successor starts with its pane in B, and its `accepted` under B stops
+    the predecessor."""
+    run = await _reported_root_run(tmp_path, "handoff-elsewhere", passes=60)
+
+    row = run["row"]
+    assert row is not None and row.state is RolloverState.COMPLETED, row
+    assert len(run["launched"]) == 2, "exactly one successor"
+    assert run["successor_path"] == run["elsewhere"]
+    assert run["states"][run["predecessor"]] is SessionState.ENDED
+    assert not list((run["elsewhere"] / ".claude" / "handoffs").glob(f"{HANDOFF}.*.json"))
+
+
+async def test_a_ready_under_an_unreported_root_opens_nothing(tmp_path: Path) -> None:
+    """The same `ready`, written under B by a session that never reported B: B is no root of
+    its, so nothing opens and nothing launches (DEC-115)."""
+    run = await _reported_root_run(tmp_path, "unreported-handoff-elsewhere", passes=10)
+
+    assert run["row"] is None
+    assert run["launched"] == [run["predecessor"]]
+    assert run["states"][run["predecessor"]] is SessionState.RUNNING
+    # It was there to be ignored, not missing: the fake wrote it.
+    assert (run["elsewhere"] / ".claude" / "handoffs" / f"{HANDOFF}.ready.json").is_file()

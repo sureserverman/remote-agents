@@ -1,0 +1,28 @@
+{
+ "baseline": {
+  "elapsed_s": 8.1,
+  "exit": 0,
+  "tail": "bringing up nodes...\nbringing up nodes...\n\n........................................................................ [ 83%]\n..............                                                           [100%]\n86 passed in 1.66s\n..                                                                       [100%]\n2 passed, 8 deselected in 5.92s"
+ },
+ "break_patch": "diff --git a/src/remote_agents/application/rollover.py b/src/remote_agents/application/rollover.py\nindex e47515c6..13f11ef4 100644\n--- a/src/remote_agents/application/rollover.py\n+++ b/src/remote_agents/application/rollover.py\n@@ -517,7 +517,7 @@ class RolloverPass:\n         predecessor = rollover.predecessor_session_id\n         reported = seen.roots.get(predecessor)\n         default = seen.defaults.get(predecessor)\n-        if reported is not None and (\n+        if False and reported is not None and (\n             default is None or os.path.realpath(reported) != os.path.realpath(default)\n         ):\n             return LaunchCommand(\n",
+ "build": null,
+ "created": "2026-10-22T15:21:25+00:00",
+ "fingerprint": "9e573c7b3c9da9c19a4e52e1a9fd7cd33bdf4a4108849346b7cc57ae3eaceaeb",
+ "index": 1,
+ "kind": "claim",
+ "named_break": null,
+ "no_build_reason": "python package, no build",
+ "plan": "/mnt/vault/Portfolio/ai-tools/coder-plugins/plans/2026-10-19-staged-planning-portable-sub-03-neutral-handoff-plan.md",
+ "red": {
+  "elapsed_s": 1.8,
+  "exit": 1,
+  "tail": "E       AssertionError: assert (None, Sessio...f255b34059'))) == (PosixPath('/...-repo'), None)\nE         \nE         At index 0 diff: None != PosixPath('/work/another-repo')\nE         Use -v to get more diff\n\ntests/unit/application/test_rollover_pass.py:1239: AssertionError\n____ test_a_gone_worktree_with_a_report_starts_its_successor_in_the_report _____\n[gw6] linux -- Python 3.14.4 /home/user/dev/infra/remote-agents/.venv/bin/python\n\nrooted = Rig(store=<remote_agents.adapters.sqlite.rollover_store.SQLiteRolloverStore object at 0x781596e09b50>, predecessor=Ses...6, 10, 5, 9, 0, tzinfo=datetime.timezone.utc)], out_of_order=[], idle_raises=False, reports=[], locks=None, _pass=None)\n\n    async def test_a_gone_worktree_with_a_report_starts_its_successor_in_the_report(\n        rooted: Rig,\n    ) -> None:\n        \"\"\"No default root at all, and a reported one: the successor is bound there, never sent to\n        the project folder (DEC-123).\"\"\"\n        envelopes = rooted.envelopes\n        assert isinstance(envelopes, RootedEnvelopes)\n        envelopes.by_root[REPORTED_ROOT] = [_envelope(HandoffEvent.READY, rooted.predecessor)]\n    \n        async def worktree_roots():\n            return {rooted.predecessor: None}\n    \n        async def reported():\n            return {rooted.predecessor: REPORTED_ROOT}\n    \n        await _rooted_pass(rooted, worktree_roots, reported).run_once()\n    \n        (command,) = rooted.launches\n>       assert (command.folder, command.reuse_folder_of) == (REPORTED_ROOT, None)\nE       AssertionError: assert (None, Sessio...cde1beb0ff'))) == (PosixPath('/...-repo'), None)\nE         \nE         At index 0 diff: None != PosixPath('/work/another-repo')\nE         Use -v to get more diff\n\ntests/unit/application/test_rollover_pass.py:1301: AssertionError\n=========================== short test summary info ============================\nFAILED tests/unit/application/test_rollover_pass.py::test_a_successor_starts_in_its_predecessors_reported_root\nFAILED tests/unit/application/test_rollover_pass.py::test_a_gone_worktree_with_a_report_starts_its_successor_in_the_report\n2 failed, 84 passed in 1.64s"
+ },
+ "schema": 2,
+ "task": "2.5",
+ "test": "cd /home/user/dev/infra/remote-agents && .venv/bin/python -m pytest -q -n auto tests/unit/application/test_rollover_pass.py && .venv/bin/python -m pytest -q tests/e2e/test_terminal_rollover.py -k reported_root",
+ "text": "`cd /home/user/dev/infra/remote-agents && .venv/bin/python -m pytest -q -n auto tests/unit/application/test_rollover_pass.py && .venv/bin/python -m pytest -q tests/e2e/test_terminal_rollover.py -k reported_root` (run alone: real tmux fails beside another pytest)",
+ "touched": [
+  "src/remote_agents/application/rollover.py"
+ ]
+}

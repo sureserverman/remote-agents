@@ -1074,7 +1074,7 @@ class RootedEnvelopes(Envelopes):
         ]
 
 
-def _rooted_pass(rig: Rig, worktree_roots) -> RolloverPass:
+def _rooted_pass(rig: Rig, worktree_roots, reported_roots=None) -> RolloverPass:
     return RolloverPass(
         rig.store,
         rig.envelopes,
@@ -1082,6 +1082,7 @@ def _rooted_pass(rig: Rig, worktree_roots) -> RolloverPass:
         sessions=rig.list_sessions,
         handoff_root=lambda project: ROOT if project == PROJECT else None,
         worktree_roots=worktree_roots,
+        reported_roots=reported_roots,
         enabled=rig.enabled,
         idle=rig.idle,
         launch=rig.launch,
@@ -1145,6 +1146,159 @@ async def test_a_session_whose_worktree_is_gone_is_never_rolled_over_from_the_ma
 
     assert rooted.store._select("1 = 1", ()) == ()
     assert rooted.launches == []
+
+
+# -- a root the session's writer reported (DEC-131) -------------------------------------------
+
+REPORTED_ROOT = Path("/work/another-repo")
+
+
+async def _no_worktrees():
+    return {}
+
+
+async def test_a_ready_under_a_sessions_reported_root_opens_its_rollover(rooted: Rig) -> None:
+    """The writer worked in another repo and said so: its envelopes are read there, and only
+    there -- the project's own checkout is not this session's root any more."""
+    envelopes = rooted.envelopes
+    assert isinstance(envelopes, RootedEnvelopes)
+    envelopes.by_root[REPORTED_ROOT] = [_envelope(HandoffEvent.READY, rooted.predecessor)]
+
+    async def reported():
+        return {rooted.predecessor: REPORTED_ROOT}
+
+    await _rooted_pass(rooted, _no_worktrees, reported).run_once()
+
+    (row,) = rooted.store._select("1 = 1", ())
+    assert (row.predecessor_session_id, row.handoff_id) == (rooted.predecessor, HANDOFF)
+    assert set(envelopes.read_roots) == {REPORTED_ROOT}
+
+
+async def test_a_ready_under_a_reported_root_answers_only_for_the_session_that_reported_it(
+    rooted: Rig,
+) -> None:
+    """Another session reported this root; the `ready` names one that reported nothing. Its
+    root is still its project's, so the file is someone else's and opens nothing (DEC-115)."""
+    reporter = SessionId.new()
+    rooted.sessions[reporter] = _record(reporter)
+    envelopes = rooted.envelopes
+    assert isinstance(envelopes, RootedEnvelopes)
+    envelopes.by_root[REPORTED_ROOT] = [_envelope(HandoffEvent.READY, rooted.predecessor)]
+
+    async def reported():
+        return {reporter: REPORTED_ROOT}
+
+    await _rooted_pass(rooted, _no_worktrees, reported).run_once()
+
+    assert rooted.store._select("1 = 1", ()) == ()
+    assert rooted.launches == []
+
+
+async def test_rollover_now_writes_its_request_under_the_reported_root(rooted: Rig) -> None:
+    await rooted.store.request(rooted.predecessor, project_id=PROJECT, profile_id=CLAUDE, at=NOW)
+
+    async def reported():
+        return {rooted.predecessor: REPORTED_ROOT}
+
+    await _rooted_pass(rooted, _no_worktrees, reported).run_once()
+
+    envelopes = rooted.envelopes
+    assert isinstance(envelopes, RootedEnvelopes)
+    assert envelopes.requests_at == {REPORTED_ROOT: str(rooted.predecessor)}
+
+
+async def test_a_session_with_no_reported_root_keeps_its_default_root(rooted: Rig) -> None:
+    """What the reader answers is what counts: a record that stopped being acceptable reads as
+    none, and the session's `ready` is found under its project's checkout as before."""
+    envelopes = rooted.envelopes
+    assert isinstance(envelopes, RootedEnvelopes)
+    envelopes.by_root[ROOT] = [_envelope(HandoffEvent.READY, rooted.predecessor)]
+
+    async def reported():
+        return {}
+
+    await _rooted_pass(rooted, _no_worktrees, reported).run_once()
+
+    (row,) = rooted.store._select("1 = 1", ())
+    assert row.predecessor_session_id == rooted.predecessor
+
+
+async def test_a_successor_starts_in_its_predecessors_reported_root(rooted: Rig) -> None:
+    """Its writer worked in another repo: the successor is started there, bound to it, and not
+    in the project's folder, where its adopt step would find no `ready` (DEC-131)."""
+    envelopes = rooted.envelopes
+    assert isinstance(envelopes, RootedEnvelopes)
+    envelopes.by_root[REPORTED_ROOT] = [_envelope(HandoffEvent.READY, rooted.predecessor)]
+
+    async def reported():
+        return {rooted.predecessor: REPORTED_ROOT}
+
+    await _rooted_pass(rooted, _no_worktrees, reported).run_once()
+
+    (command,) = rooted.launches
+    assert (command.folder, command.reuse_folder_of) == (REPORTED_ROOT, None)
+
+
+async def test_a_report_of_the_default_root_launches_as_before(rooted: Rig) -> None:
+    """Reporting the root it already had changes nothing: the successor reuses its
+    predecessor's folder, its worktree included, rather than being bound to a folder."""
+    envelopes = rooted.envelopes
+    assert isinstance(envelopes, RootedEnvelopes)
+    envelopes.by_root[ROOT] = [_envelope(HandoffEvent.READY, rooted.predecessor)]
+
+    async def reported():
+        return {rooted.predecessor: ROOT}
+
+    await _rooted_pass(rooted, _no_worktrees, reported).run_once()
+
+    (command,) = rooted.launches
+    assert (command.folder, command.reuse_folder_of) == (None, rooted.predecessor)
+
+
+async def test_a_report_of_the_default_root_through_a_link_launches_as_before(
+    rooted: Rig, tmp_path: Path
+) -> None:
+    """The report is a resolved path and the default may not be: the same folder reached
+    through a link is still the same root, and its worktree binding is kept."""
+    real = tmp_path / "real"
+    real.mkdir()
+    linked = tmp_path / "linked"
+    linked.symlink_to(real)
+    envelopes = rooted.envelopes
+    assert isinstance(envelopes, RootedEnvelopes)
+    envelopes.by_root[real] = [_envelope(HandoffEvent.READY, rooted.predecessor)]
+
+    async def worktree_roots():
+        return {rooted.predecessor: linked}
+
+    async def reported():
+        return {rooted.predecessor: real}
+
+    await _rooted_pass(rooted, worktree_roots, reported).run_once()
+
+    (command,) = rooted.launches
+    assert (command.folder, command.reuse_folder_of) == (None, rooted.predecessor)
+
+
+async def test_a_gone_worktree_with_a_report_starts_its_successor_in_the_report(
+    rooted: Rig,
+) -> None:
+    """No default root at all, and a reported one: the successor is bound there, never sent to
+    the project folder (DEC-123)."""
+    envelopes = rooted.envelopes
+    assert isinstance(envelopes, RootedEnvelopes)
+    envelopes.by_root[REPORTED_ROOT] = [_envelope(HandoffEvent.READY, rooted.predecessor)]
+
+    async def worktree_roots():
+        return {rooted.predecessor: None}
+
+    async def reported():
+        return {rooted.predecessor: REPORTED_ROOT}
+
+    await _rooted_pass(rooted, worktree_roots, reported).run_once()
+
+    (command,) = rooted.launches
+    assert (command.folder, command.reuse_folder_of) == (REPORTED_ROOT, None)
 
 
 async def test_a_successor_is_launched_to_reuse_its_predecessors_folder(rig: Rig) -> None:

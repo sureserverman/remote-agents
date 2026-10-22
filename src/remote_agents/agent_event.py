@@ -159,12 +159,21 @@ def resolve_session_id(
 def run_session_id(argv: list[str] | None = None) -> int:
     """Print the calling shell's managed session id alone on one line; exit 3 when it has none.
 
-    Read-only: it reads the environment, the folder and the roster file, and never the database.
-    Any failure past argument parsing exits 3, never a traceback: the writer then writes nothing,
-    which is the safe answer to a question this could not settle.
+    It writes one file: the root its caller reports. On the exit-0 path, when the caller's
+    environment carries `PLANNING_HANDOFF_ROOT`, the root it names is recorded for the session
+    under `<activity directory>/roots/` if it passes `acceptable_root`. A refused or unwritten root
+    prints one line on stderr and never changes stdout or the exit code.
+
+    Besides that one file it only reads: the environment, the folder and the roster file, and
+    never the database. Any failure past argument parsing and before the id is printed exits 3,
+    never a traceback: the writer then writes nothing, which is the safe answer to a question
+    this could not settle.
     """
     from remote_agents.adapters.agents.hook_licences import hook_licence
+    from remote_agents.adapters.agents.reported_roots import FileReportedRoots
+    from remote_agents.adapters.workflow.roots import acceptable_root
     from remote_agents.config import ConfigError
+    from remote_agents.ports.session_identity import HANDOFF_ROOT_VARIABLE
     from remote_agents.production import ProductionPaths
 
     parser = NonEchoingArgumentParser(prog="remote-agents session-id")
@@ -195,4 +204,25 @@ def run_session_id(argv: list[str] | None = None) -> int:
     except OSError:
         # A closed stdout (`BrokenPipeError`): the writer did not get the id.
         return NOT_MANAGED
+    reported = os.environ.get(HANDOFF_ROOT_VARIABLE)
+    if reported is None:
+        return 0
+    why = None
+    try:
+        root = acceptable_root(reported)
+        if root is None:
+            why = "not an absolute path to a git top level this user owns"
+        elif activity_directory is None:
+            why = "no activity directory"
+        else:
+            roots = FileReportedRoots(activity_directory, accept=acceptable_root)
+            if not roots.record(session_id, root):
+                why = "could not write it"
+    except Exception:
+        why = "could not write it"
+    if why is not None and sys.stderr is not None:
+        try:
+            print(f"session-id: root not recorded: {why}", file=sys.stderr)
+        except OSError:
+            pass
     return 0

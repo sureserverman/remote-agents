@@ -29,8 +29,8 @@ the successor verifies and writes `accepted`, and the pass stops the predecessor
 5. the predecessor's row says `continued as #N`, read through `session_views.rollover_marks`
    and `rollover_note`, as both surfaces draw it.
 
-**What is real.** The `claude` binary and the owner's own login, model and permission mode.
-The planning plugin, loaded from the coder-plugins checkout (0.55.0 or later: `--adopt-handoff`
+**What is real.** The `claude` binary and the owner's own login, model and permission mode. The
+planning plugin (staged-planning), loaded from its checkout (0.55.0 or later: `--adopt-handoff`
 and envelopes). tmux. git. The service's composition: `compose_backend`, the descriptors and
 `_local_runtime` built the way `composition/telegram.py: _private_boundary` builds them, the
 rollover pass from `composition/service.py: build_rollover_pass`, and the reconciler. The pass
@@ -51,9 +51,9 @@ and the reconciler run on `serve`'s own loop functions (`_roll_over_periodically
 - **`claude` is reached through a wrapper.** The installed planning plugin may be older than
   0.55.0, and the curated argv is a bare `claude`. So the temporary home's `.local/bin/claude`,
   the first place `_resolve_profile_executable` looks, is a two-line `sh` script. It `exec`s the
-  real binary with `--plugin-dir <checkout>/planning`, and Claude Code lets that copy override
-  the installed one for the session. The Claude pane's `HOME` is still the owner's (the curated
-  environment is read from this process), so the login is real.
+  real binary with `--plugin-dir <checkout>/plugins/claude/planning`, and Claude Code lets that
+  copy override the installed one for the session. The Claude pane's `HOME` is still the owner's
+  (the curated environment is read from this process), so the login is real.
 - **The fixture repository is trusted by the product's own answer.** When the launch comes up
   on the folder-trust dialog, the test answers it through `SessionService.answer_trust`, the
   call behind the bot's trust button. Claude records that answer for the folder, so the
@@ -73,6 +73,13 @@ it, the database connection and the fixture repository.
 **Permissions.** The sessions run in the owner's own Claude permission mode. Under a mode that
 asks before writing a file, Stage 1 waits on that question and the run fails at its deadline --
 honestly, with the panes in the diagnosis, never as a pass.
+
+**No `remote-agents` wrapper for Claude.** The Claude writer asks who it is by running the
+command in `PLANNING_SUPERVISOR_ID_CMD`, which the service sets in every managed pane: this
+process's interpreter, absolute, with `-I -m remote_agents session-id`. The service under test
+runs in this process, so that command runs this checkout's code, whatever `remote-agents` the
+pane's `PATH` reaches first. The Codex case below keeps its wrapper, because engineering-skills'
+Codex fork still runs a bare `remote-agents`.
 
 **The Codex case** (`test_rollover_now_hands_a_real_plan_to_a_fresh_codex_session`) runs the
 same drive with a real `codex` and the managed `planning@engineering-skills` plugin, typed
@@ -218,7 +225,7 @@ def _opted_in(config: pytest.Config) -> bool:
     )
 
 
-#: The first planning release that writes envelopes and adopts a handoff (coder-plugins DEC-029).
+#: The first planning release that writes envelopes and adopts a handoff (the plugin's DEC-029).
 _PLANNING_AT_LEAST = (0, 55, 0)
 
 
@@ -233,7 +240,13 @@ def _planning_checkout() -> Path:
     plugin = (
         Path(configured)
         if configured
-        else Path.home() / "dev" / "ai-tools" / "coder-plugins" / "planning"
+        else Path.home()
+        / "dev"
+        / "ai-tools"
+        / "staged-planning"
+        / "plugins"
+        / "claude"
+        / "planning"
     )
     envelope = plugin / "skills" / "executing-plans" / "scripts" / "handoff-envelope.py"
     skill = plugin / "skills" / "executing-plans" / "SKILL.md"

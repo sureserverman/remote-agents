@@ -94,7 +94,8 @@ _TABLE: dict[Site, tuple[Kind, str]] = {
     ): (
         Kind.PROJECT,
         "the project checkout's root, asked only for a session `worktree_roots` does not "
-        "answer -- a worktree session, gone or not, never reaches it",
+        "answer -- a worktree session, gone or not, never reaches it. It is the session's "
+        "default root: a root its writer reported (`reported_roots_reader`, DEC-131) replaces it",
     ),
     Site(
         "application/worktrees.py",

@@ -314,6 +314,7 @@ class InterruptedResumePass:
         resume: Callable[[ResumeCommand], Awaitable[ResumeOutcome]],
         folder_of: Callable[[SessionId], Awaitable[Worktree | None]],
         key_claimed: Callable[[str], Awaitable[bool]],
+        bound_folder_of: Callable[[SessionId], Awaitable[Path | None]] | None = None,
         send: Callable[[SessionId, str], Awaitable[PromptDelivery]],
         sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
         stopping: Callable[[], bool] = lambda: False,
@@ -322,6 +323,10 @@ class InterruptedResumePass:
         self._outcomes = outcomes
         self._resume = resume
         self._folder_of = folder_of
+        # The folder outside its project a session was bound to (DEC-131). A resume binds
+        # only a worktree, so such a session would come back in the project folder: it is
+        # skipped by name instead, never moved there (DEC-123).
+        self._bound_folder_of = bound_folder_of
         self._key_claimed = key_claimed
         self._send = send
         self._sleep = sleep
@@ -450,6 +455,11 @@ class InterruptedResumePass:
         assert decision.conversation_id is not None  # a decision that is not a skip has one
         try:
             worktree = await self._folder_of(record.session_id)
+            outside = (
+                None
+                if worktree is not None or self._bound_folder_of is None
+                else await self._bound_folder_of(record.session_id)
+            )
         except Exception:
             _LOG.exception(
                 "the folder of interrupted session %s could not be read", record.session_id
@@ -457,6 +467,8 @@ class InterruptedResumePass:
             return ResumeReport(record, DEFERRED)
         if worktree is not None and worktree.removed_at is not None:
             return await self._decide(decision, f"{SKIPPED}:worktree_removed")
+        if outside is not None:
+            return await self._decide(decision, f"{SKIPPED}:folder_bound")
         try:
             command = ResumeCommand(
                 record.project_id,

@@ -335,7 +335,8 @@ and Cursor declare none.
 - `domain/rollover.py` holds the states, the legal-move matrix, the restart table
   (`recovery_action`) and `may_stop_predecessor`, the one gate on stopping.
 - `ports/handoff_envelopes.py` and `adapters/workflow/handoff_envelopes.py` read the planning
-  plugin's envelopes and write `request.json`, under the project's git top level
+  plugin's envelopes and write `request.json` under each session's handoff root: the git top
+  level its writer last reported (DEC-131), else its worktree's, else its project's
   (`adapters/workflow/roots.py`). Every envelope is untrusted until checked.
 - `adapters/sqlite/rollover_store.py` stores rollovers and their append-only history in the
   **domain** store (migration 18), so a move wakes `StoreWatch` (DEC-090). Lineage is derived
@@ -350,11 +351,57 @@ and Cursor declare none.
 - `composition/service.py` builds the pass (`build_rollover_pass`) and runs it every 30 s in
   the bot's service only; the switch `rollover.auto_rollover`, off by default, is read each pass.
 
+### Where a session's envelopes are read, and where its successor starts (DEC-131)
+
+A plan can work in another repository than its session's project: the agent runs in the
+project's folder and every tool call changes into the other one. Its planning writer then writes
+its envelopes under that repository's top level, which nothing the service sees would name -- the
+pane's folder and every hook's `cwd` stay the project's (DEC-063). So the writer reports it.
+
+- The writer runs `$PLANNING_SUPERVISOR_ID_CMD` with `PLANNING_HANDOFF_ROOT` set to the root it
+  writes under. On exit 0 the verb records that root under `<activity dir>/roots/<session>`
+  (`adapters/agents/reported_roots.py`). Only a git top level this user owns is recorded
+  (`acceptable_root`), and the same rule is applied again when it is read.
+- Each pass reads every listed session's report (`reported_roots_reader`): a session's envelopes
+  and its `request.json` are read and written at the root it last reported, else at its worktree's
+  or project's top level. A `ready` still answers only for the session whose root it is under
+  (DEC-115). A report is forgotten once its session ends and no open rollover names it.
+- When the predecessor's reported root is not its default one, the successor is launched with
+  `LaunchCommand.folder` and bound to that folder before its pane starts (`session_folders`,
+  migration 21; `SessionFolders.folder_for` answers it, and never the project folder once it is
+  gone). A folder the agent has never trusted holds the successor on its trust dialog until the
+  owner answers (DEC-125). A restart-resume of a folder-bound session is skipped
+  (`skipped:folder_bound`): a resume binds only a worktree.
+- `request.json` is one file per root, so two sessions that report one root share its slot.
+- A reported root is held to more than a default one: its `.git` must be a real directory or a
+  worktree's `gitdir:` file, and the envelope reader opens every root without following a link.
+
+Accepted costs.
+- Naming a root takes a managed pane's environment, to run the verb, or write access to the
+  activity directory; a `ready` carries no root. A process holding either can point a session at
+  any git top level this user owns: each forged `ready` there starts one successor, and a folder
+  never trusted waits for the owner.
+- Identity is the verb's evidence, not proof (DEC-128). Any process that can claim a session's id
+  -- a nested agent working in another repository inherits `REMOTE_AGENTS_SESSION_ID`, say -- can
+  overwrite that session's report. The pass then looks in the wrong root until the session's
+  writer reports again: a quiet loss of its rollover, and a successor there for a forged `ready`.
+- A Codex writer run from another repository stays unsupervised, because the verb places a Codex
+  thread by the shell's own folder.
+- "Rollover now" for a session that never reported a root writes `request.json` under its default
+  root (its worktree's or project's top level), where a plan working elsewhere never reads it; that
+  request fails `request-unanswered` after 24 hours (DEC-119).
+- A folder-bound session is skipped by restart-resume (`skipped:folder_bound`), and the resume
+  lists, which read the project folder and its live worktrees, do not offer its conversation:
+  resume it by hand in its folder.
+
 ### The handoff writer's identity — `remote-agents session-id` (DEC-128)
 
-The writer stamps each envelope's `managed_session_id`. It learns that id by running
-`remote-agents session-id` from the folder its tool shell starts in. This is the contract an
-envelope writer depends on, the Codex planning plugin's included:
+The writer stamps each envelope's `managed_session_id`. It learns that id by running the
+command a managed pane carries in `PLANNING_SUPERVISOR_ID_CMD` -- `<this install's interpreter> -I
+-m remote_agents session-id`, so no other install on the pane's `PATH` and no module in the
+writer's folder can answer -- from the folder its tool shell starts in, with
+`PLANNING_HANDOFF_ROOT` naming the root it writes under. The Codex planning fork still runs
+`remote-agents session-id` itself. This is the contract an envelope writer depends on:
 
 | Exit | Output | Meaning |
 |---|---|---|
@@ -368,8 +415,10 @@ A writer treats every exit but 0 as "write nothing". It never passes `--activity
 exists for tests: pointed at a folder with no roster, it turns the roster checks below off.
 
 - `agent_event.py` (`resolve_session_id`, `run_session_id`) is the verb, routed in `__main__`
-  before `bootstrap` loads. It is read-only: environment, folder, and the roster file under
-  `--activity-dir` (default: the production spool). It never opens the database.
+  before `bootstrap` loads. It reads the environment, its folder and the roster file under
+  `--activity-dir` (default: the production spool). It writes one file: the root its caller
+  reports in `PLANNING_HANDOFF_ROOT`, after the id is printed and only then; a root it refuses or
+  cannot write changes neither the output nor the exit. It never opens the database.
 - A shell carrying the thread variable a `PAYLOAD_THREAD` licence declares
   (`HookLicence.thread_variable`; Codex: `CODEX_THREAD_ID`) is resolved by
   `hook_identity.resolve` against that provider's roster, as the hook drain resolves a payload.

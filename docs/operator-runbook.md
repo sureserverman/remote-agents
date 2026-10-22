@@ -659,11 +659,11 @@ it and ask for it but never act.
   back on. Rolling back to 0.58.0 or earlier needs the table deleted first; see
   [rollback](#rollback-and-local-recovery).
 - **What starts one.** Only `claude` and `codex` sessions take part: each runs a planning plugin
-  that writes handoff envelopes (Claude Code's from coder-plugins; Codex's
+  that writes handoff envelopes (Claude Code's from the planning plugin (staged-planning); Codex's
   `planning@engineering-skills` 0.2.1 or later, which asks `remote-agents session-id` who it is).
   Which agents roll over is each one's own declaration (its adopt command); OpenCode and Cursor
-  declare none. A `ready` envelope from a running one, under `.claude/handoffs/`
-  at the project's git top level (Claude's planning plugin 0.55.0 or later), opens a rollover -- if it is
+  declare none. A `ready` envelope from a running one, under `.claude/handoffs/` at the
+  session's handoff root (Claude's planning plugin 0.55.0 or later), opens a rollover -- if it is
   seen within five minutes of being written. One written while the switch was off or `serve` was
   down is cleared, never acted on: the plugin has already told you to resume by hand. So does the
   owner's **Rollover now**: the button on the bot's session screen, or `l` on the terminal's
@@ -673,11 +673,30 @@ it and ask for it but never act.
   **Cancel rollover**
   withdraws a request while it is still only requested, on either surface (in the terminal it is
   a row of the session's detail). Once the workflow has answered, only the pass ends the
-  rollover. `request.json` is one file per checkout: a second request in the same checkout waits
+  rollover. `request.json` is one file per handoff root: a second request at the same root waits
   until the first rollover ends.
+- **The handoff root.** A session's root is the git top level its planning writer last reported,
+  else its worktree's, else its project's. A writer reports one by running the command in
+  `PLANNING_SUPERVISOR_ID_CMD` with `PLANNING_HANDOFF_ROOT` set; that is how a plan that works
+  in another repository still rolls over. The service sets that variable in every managed pane,
+  to this install's own interpreter running `-I -m remote_agents session-id`, so no other
+  `remote-agents` on the pane's `PATH` answers. The planning writer runs it, split into words
+  and with no shell. The command, not the variable, names the session (DEC-128). Only a git top level you own is accepted. Costs, by
+  design: a process with a managed pane's environment can point a session at any top level you
+  own, and each forged `ready` there starts one successor (a folder never trusted waits for you);
+  a process that claims a session's id -- a nested agent in another repository, say -- can
+  overwrite that session's report, so its rollover quietly stops until its writer reports again;
+  a Codex writer working in another repository stays unsupervised; and **Rollover now** for a
+  session that never reported its root writes `request.json` at its default root, so a plan
+  working elsewhere never sees it and the request ends `request-unanswered` after 24 hours.
+  Resume such a session by hand. A session started outside its project is skipped by
+  restart-resume (*it works in a folder outside its project*) and is not in the resume lists:
+  resume it by hand in its folder.
 - **The sequence.** The pass waits for the old session's pane to sit idle, for up to 10
   minutes. It then launches **one** fresh session of the same project and profile, under the
-  key `rollover:<handoff_id>`. It types that agent's fixed adopt command and nothing else --
+  key `rollover:<handoff_id>`, in the old session's folder -- or, when the old session's writer
+  reported another root, in that root. If the agent has never trusted that folder, the new
+  session waits on its trust question for you. It types that agent's fixed adopt command and nothing else --
   `/planning:executing-plans --adopt-handoff <id>` for Claude, `$planning:executing-plans
   --adopt-handoff <id>` for Codex; an envelope supplies the id, never text. The new session
   checks the handoff and has 30 minutes to write `accepted`. Only then is the old session
@@ -781,8 +800,9 @@ closes out instead, so cancel the pending rollover then.
   found. It is left open. Fix what it names, stop it, then ask again.
 - **`not-rollable`** — the session's agent writes no envelopes. Only `claude` and `codex`
   sessions roll over.
-- **`no-handoff-root`** — the project is in no git checkout, so there is nowhere for envelopes.
-  Rollover needs the project inside a git repository.
+- **`no-handoff-root`** — the project is in no git checkout and the session's writer never
+  reported a root, so there is nowhere for envelopes. Rollover needs the project inside a git
+  repository, or a planning writer that reports where it works.
 - **`request-unwritten`** — `request.json` could not be written. Check that `.claude/handoffs/`
   at the checkout's top level is writable, then ask again.
 - **`request-lost`** — the written request was gone, or named another session, before the

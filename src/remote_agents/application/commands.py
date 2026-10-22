@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Literal
 
 from remote_agents.domain.conversations import ResolvedConversation
@@ -33,18 +34,28 @@ class LaunchCommand:
     """How long a launch whose agent shares the Codex daemon waits for its guard."""
     reuse_folder_of: SessionId | None = None
     """A session whose worktree this launch works in, when it has one: a rollover successor
-    names its predecessor, so it carries on in the same folder (BL-116, amending DEC-115). A
+    names its predecessor, so it carries on in the same folder (BL-116, amending DEC-115) --
+    unless the predecessor's writer reported another root, when it names that `folder` instead. A
     named session with no worktree leaves this an ordinary launch in the project folder."""
     mode: Literal["regular", "worktree"] = "regular"
     """`worktree` gives the new session its own branch and folder before its pane starts
     (BL-116). Only the owner chooses it, when it was offered at the time they were asked; a
     successor reuses rather than makes."""
+    folder: Path | None = None
+    """A folder outside the project the new session works in: a rollover successor of a session
+    whose handoff writer reported another git top level starts there (DEC-131). Bound before the
+    pane starts, and only if the acceptance rule passes it; refused, the launch fails rather
+    than starting in the project folder."""
 
     def __post_init__(self) -> None:
         if self.mode not in ("regular", "worktree"):
             raise ValueError(f"unknown launch mode: {self.mode!r}")
         if self.mode == "worktree" and self.reuse_folder_of is not None:
             raise ValueError("a launch reusing a folder cannot also make its own worktree")
+        if self.folder is not None and (
+            self.mode == "worktree" or self.reuse_folder_of is not None
+        ):
+            raise ValueError("a launch into a folder cannot also reuse or make another")
 
 
 @dataclass(frozen=True, slots=True)

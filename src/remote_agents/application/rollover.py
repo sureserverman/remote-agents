@@ -36,7 +36,8 @@ code it is recorded under:
 - `FAILED: id-mismatch`, `FAILED: no-ready`, `FAILED: cwd-mismatch`,
   `FAILED: branch-mismatch`, `FAILED: plan-missing` -- the successor's own `failed` envelope
 - `FAILED: not-rollable` -- the owner asked for a session whose agent writes no envelopes
-- `FAILED: no-handoff-root` -- the owner asked for a session whose project is in no checkout
+- `FAILED: no-handoff-root` -- the owner asked for a session with no root: its project is in no
+  checkout and its writer reported none
 - `FAILED: request-unwritten` -- the owner's request could not be written for the workflow
 - `FAILED: request-lost` -- the written request is gone, or names another session, before the
   workflow answered it; it is never written again (DEC-004)
@@ -64,6 +65,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from contextlib import AbstractAsyncContextManager, nullcontext
 from dataclasses import dataclass
@@ -184,11 +186,17 @@ class _Seen:
 
     Keyed by session, not project (BL-116): a session in its own worktree writes its envelopes
     under that worktree's top level, so two sessions of one project can have two roots. A
-    session with no root here -- no checkout, or a worktree that is gone -- is never rolled
-    over, and never read under the project's main checkout instead."""
+    session whose writer reported another root works there, and its envelopes are read there
+    (DEC-131). A session with no root here -- no checkout and no report, or a worktree that is
+    gone and no report -- is never rolled over, and never read under the project's main
+    checkout instead.
+
+    `defaults` is the root each session would have had with no report: its worktree's or its
+    project's, where it has one."""
 
     sessions: dict[SessionId, SessionRecord]
     roots: dict[SessionId, Path]
+    defaults: dict[SessionId, Path]
 
     def running(self, session_id: SessionId | None) -> bool:
         record = None if session_id is None else self.sessions.get(session_id)
@@ -196,8 +204,9 @@ class _Seen:
 
     def root_of(self, rollover: Rollover) -> Path | None:
         """The checkout a rollover's envelopes live in: its predecessor's, which its successor
-        shares by reusing the folder. Read off the successor once the predecessor is no longer
-        listed, so a successor's `accepted` is still found and the envelopes still cleaned."""
+        shares -- reusing the folder, or bound to the root the predecessor's writer reported.
+        Read off the successor once the predecessor is no longer listed, so a successor's
+        `accepted` is still found and the envelopes still cleaned."""
         root = self.roots.get(rollover.predecessor_session_id)
         if root is None and rollover.successor_session_id is not None:
             root = self.roots.get(rollover.successor_session_id)
@@ -226,6 +235,7 @@ class RolloverPass:
         sessions: Callable[[], Awaitable[Sequence[SessionRecord]]],
         handoff_root: Callable[[ProjectId], Path | None],
         worktree_roots: Callable[[], Awaitable[Mapping[SessionId, Path | None]]] | None = None,
+        reported_roots: Callable[[], Awaitable[Mapping[SessionId, Path]]] | None = None,
         enabled: Callable[[], Awaitable[bool]],
         idle: Callable[[SessionId], Awaitable[bool]],
         launch: Callable[[LaunchCommand], Awaitable[object]],
@@ -249,6 +259,10 @@ class RolloverPass:
         #: for one whose worktree is gone. A session absent from it is regular and uses its
         #: project's root.
         self._worktree_roots = worktree_roots
+        #: The root each session's handoff writer last reported, read once per pass (DEC-131).
+        #: Only roots the one acceptance rule passes reach here; a session absent from it keeps
+        #: its default root.
+        self._reported_roots = reported_roots
         self._enabled = enabled
         self._idle = idle
         self._launch = launch
@@ -343,8 +357,10 @@ class RolloverPass:
     async def _look(self) -> _Seen:
         sessions = {record.session_id: record for record in await self._sessions()}
         bound = {} if self._worktree_roots is None else await self._worktree_roots()
+        reported = {} if self._reported_roots is None else await self._reported_roots()
         project_roots: dict[ProjectId, Path | None] = {}
         roots: dict[SessionId, Path] = {}
+        defaults: dict[SessionId, Path] = {}
         for record in sessions.values():
             if record.profile_id not in self._rollable:
                 continue
@@ -355,8 +371,15 @@ class RolloverPass:
                     project_roots[record.project_id] = self._handoff_root(record.project_id)
                 root = project_roots[record.project_id]
             if root is not None:
+                defaults[record.session_id] = root
+            # The writer's own report, when it made one, is where it works (DEC-131) -- also for
+            # a session whose worktree is gone: it has no default, and the report is a root of
+            # its own. Bounded as any report is: a `ready` there answers only for this session
+            # (DEC-115), and only a git top level this user owns is ever reported.
+            root = reported.get(record.session_id, root)
+            if root is not None:
                 roots[record.session_id] = root
-        return _Seen(sessions, roots)
+        return _Seen(sessions, roots, defaults)
 
     # -- envelopes ---------------------------------------------------------------------------
 
@@ -378,6 +401,8 @@ class RolloverPass:
                 continue
             predecessor = _session_id(ready.managed_session_id)
             record = None if predecessor is None else seen.sessions.get(predecessor)
+            # A `ready` answers only under its session's one root -- reported, worktree or project
+            # -- so a file in a root another session reported never speaks for this one (DEC-115).
             if (
                 record is None
                 or seen.roots.get(record.session_id) != root
@@ -481,6 +506,37 @@ class RolloverPass:
             return
         await self._store.note(rollover.id, detail, at=self._now())
 
+    def _successor_launch(self, rollover: Rollover, seen: _Seen) -> LaunchCommand:
+        """The successor carries on where its predecessor worked. Its predecessor's folder --
+        the same worktree when it has one (BL-116, amending DEC-115) -- unless the predecessor's
+        writer reported another root: then it starts there, bound to that folder, because its
+        adopt step resolves its repo root from its own folder and finds the `ready` only there
+        (DEC-131). A folder not yet trusted holds it on its trust dialog (DEC-125).
+
+        The two roots are compared resolved: a report is a resolved path and a default may be
+        reached through a link, and the same folder must keep its worktree binding."""
+        assert rollover.handoff_id is not None  # HANDOFF_READY is opened from a `ready` only
+        predecessor = rollover.predecessor_session_id
+        reported = seen.roots.get(predecessor)
+        default = seen.defaults.get(predecessor)
+        if reported is not None and (
+            default is None or os.path.realpath(reported) != os.path.realpath(default)
+        ):
+            return LaunchCommand(
+                rollover.project_id,
+                rollover.profile_id,
+                f"rollover:{rollover.handoff_id}",
+                guard_wait=UNATTENDED_LAUNCH_WAIT_SECONDS,
+                folder=reported,
+            )
+        return LaunchCommand(
+            rollover.project_id,
+            rollover.profile_id,
+            f"rollover:{rollover.handoff_id}",
+            guard_wait=UNATTENDED_LAUNCH_WAIT_SECONDS,
+            reuse_folder_of=predecessor,
+        )
+
     async def _start_successor(self, rollover: Rollover, seen: _Seen) -> None:
         if rollover.successor_session_id is not None:
             # Recorded only once SUCCESSOR_STARTING is persisted, so one here is a contradiction;
@@ -498,17 +554,7 @@ class RolloverPass:
         async with self._operation():
             starting = await self._store.advance(rollover.id, _S.SUCCESSOR_STARTING, at=self._now())
             try:
-                outcome = await self._launch(
-                    LaunchCommand(
-                        rollover.project_id,
-                        rollover.profile_id,
-                        f"rollover:{rollover.handoff_id}",
-                        guard_wait=UNATTENDED_LAUNCH_WAIT_SECONDS,
-                        # The successor carries on in its predecessor's folder: the same
-                        # worktree when it has one (BL-116, amending DEC-115).
-                        reuse_folder_of=rollover.predecessor_session_id,
-                    )
-                )
+                outcome = await self._launch(self._successor_launch(rollover, seen))
             except DuplicateCommandError:
                 await self._fail(
                     starting, seen, SUCCESSOR_UNKNOWN, "the launch key was already claimed"

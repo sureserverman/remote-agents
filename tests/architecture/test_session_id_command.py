@@ -115,3 +115,91 @@ def test_session_id_command_has_a_thread_variable_for_every_payload_thread_licen
         if licence.identity is HookIdentity.PAYLOAD_THREAD and not licence.thread_variable
     )
     assert not missing, missing
+
+
+# --- Task 2.2: the verb's one write is the reported root, and it never reaches the database ---
+
+#: Calls that write, create, move or remove a file, by the name they are called through.
+_WRITES = frozenset(
+    {
+        "open",
+        "write",
+        "write_text",
+        "write_bytes",
+        "replace",
+        "rename",
+        "unlink",
+        "remove",
+        "mkdir",
+        "makedirs",
+        "touch",
+        "symlink_to",
+        "chmod",
+        "connect",
+    }
+)
+
+
+def _called_name(node: ast.Call) -> str | None:
+    if isinstance(node.func, ast.Name):
+        return node.func.id
+    if isinstance(node.func, ast.Attribute):
+        return node.func.attr
+    return None
+
+
+def test_session_id_command_never_imports_the_database() -> None:
+    found = sorted(
+        f"{_MODULE.name}:{node.lineno}: {name}"
+        for node in ast.walk(_tree())
+        for name in (
+            [alias.name for alias in node.names]
+            if isinstance(node, ast.Import)
+            else [node.module or ""]
+            if isinstance(node, ast.ImportFrom)
+            else []
+        )
+        if name == "sqlite3"
+        or name.startswith(("sqlite3.", "remote_agents.adapters.sqlite"))
+        or name == "remote_agents.adapters.sqlite"
+    )
+    assert not found, found
+
+
+def test_session_id_command_writes_only_through_the_reported_roots() -> None:
+    function = _function(_tree(), "run_session_id")
+    imported = {
+        alias.asname or alias.name
+        for node in ast.walk(function)
+        if isinstance(node, ast.ImportFrom)
+        and node.module == "remote_agents.adapters.agents.reported_roots"
+        for alias in node.names
+    }
+    assert "FileReportedRoots" in imported, "run_session_id does not import FileReportedRoots"
+    constructed = {
+        target.id
+        for node in ast.walk(function)
+        if isinstance(node, ast.Assign)
+        and isinstance(node.value, ast.Call)
+        and isinstance(node.value.func, ast.Name)
+        and node.value.func.id == "FileReportedRoots"
+        for target in node.targets
+        if isinstance(target, ast.Name)
+    }
+    assert constructed, "run_session_id never builds a FileReportedRoots"
+    stray: list[str] = []
+    recorded = False
+    for node in ast.walk(function):
+        if not isinstance(node, ast.Call):
+            continue
+        name = _called_name(node)
+        if name == "record":
+            owner = node.func.value if isinstance(node.func, ast.Attribute) else None
+            if isinstance(owner, ast.Name) and owner.id in constructed:
+                recorded = True
+                continue
+            stray.append(f"{_MODULE.name}:{node.lineno}: record on something else")
+        elif name in _WRITES:
+            stray.append(f"{_MODULE.name}:{node.lineno}: {name}")
+    assert recorded, "run_session_id never records through its FileReportedRoots"
+    assert not stray, stray

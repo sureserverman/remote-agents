@@ -116,3 +116,50 @@ async def test_the_lookup_reads_the_live_mapping_not_a_copy(tmp_path) -> None:
     paths[_PROJECT] = tmp_path
 
     assert await folders.folder_for(SessionId.new(), _PROJECT) == tmp_path
+
+
+class _Folders:
+    """The folder bindings the lookup reads after the worktree one (DEC-131)."""
+
+    def __init__(self, bound: dict[SessionId, Path]) -> None:
+        self._bound = bound
+
+    async def folder_for(self, session_id: SessionId) -> Path | None:
+        return self._bound.get(session_id)
+
+
+@pytest.mark.asyncio
+async def test_a_session_bound_to_a_folder_works_in_it(tmp_path) -> None:
+    session = SessionId.new()
+    there = tmp_path / "there"
+    there.mkdir()
+    folders = SessionFolders(
+        {_PROJECT: tmp_path / "project"}, _Store({}), _Folders({session: there})
+    )
+
+    assert await folders.folder_for(session, _PROJECT) == there
+
+
+@pytest.mark.asyncio
+async def test_a_session_whose_bound_folder_is_gone_has_no_folder(tmp_path) -> None:
+    """Never its project's folder instead: it was started elsewhere for its own work (DEC-123)."""
+    session = SessionId.new()
+    folders = SessionFolders(
+        {_PROJECT: tmp_path}, _Store({}), _Folders({session: tmp_path / "gone"})
+    )
+
+    assert await folders.folder_for(session, _PROJECT) is None
+
+
+@pytest.mark.asyncio
+async def test_a_worktree_binding_is_asked_before_a_folder_binding(tmp_path) -> None:
+    session = SessionId.new()
+    worktree = tmp_path / "worktrees" / "one"
+    worktree.mkdir(parents=True)
+    there = tmp_path / "there"
+    there.mkdir()
+    folders = SessionFolders(
+        {_PROJECT: tmp_path}, _Store({session: _worktree(worktree)}), _Folders({session: there})
+    )
+
+    assert await folders.folder_for(session, _PROJECT) == worktree

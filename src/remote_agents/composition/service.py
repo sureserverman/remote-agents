@@ -7,7 +7,7 @@ import fcntl
 import logging
 import os
 import time
-from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Iterable, Iterator, Mapping, Sequence
 from contextlib import (
     AbstractAsyncContextManager,
     AbstractContextManager,
@@ -31,7 +31,7 @@ from remote_agents.adapters.telegram.service import PrivateBotBoundary
 from remote_agents.adapters.telegram.trust_notifications import TrustNotifier
 from remote_agents.adapters.tmux.runtime import TmuxTerminal
 from remote_agents.adapters.workflow.handoff_envelopes import FileHandoffEnvelopes
-from remote_agents.adapters.workflow.roots import handoff_root
+from remote_agents.adapters.workflow.roots import acceptable_root, handoff_root
 from remote_agents.application.activity import CodexApprovalWatcher, drain_activity
 from remote_agents.application.backend import CLOSE_TIMEOUT_SECONDS, DRAIN_TIMEOUT_SECONDS
 from remote_agents.application.commands import ResumeCommand
@@ -55,12 +55,20 @@ from remote_agents.application.worktree_cleanup import WorktreeCleanupPass
 from remote_agents.application.worktrees import main_checkout
 from remote_agents.config import TelegramSecrets
 from remote_agents.domain.conversations import ProfileResumeCapability
-from remote_agents.domain.models import ProfileId, ProjectId, SessionId, SessionState
+from remote_agents.domain.models import (
+    ProfileId,
+    ProjectId,
+    SessionId,
+    SessionRecord,
+    SessionState,
+)
 from remote_agents.ports.agent_activity import ActivityConfidence, ActivityKind, AgentActivity
+from remote_agents.ports.folder_bindings import FolderBindings
 from remote_agents.ports.git_checkout import GitCheckout
 from remote_agents.ports.interrupted_resumes import RESUMING, InterruptedResumes
 from remote_agents.ports.limit_stop_outcomes import LimitStopOutcomes
 from remote_agents.ports.message_relay import MessageRelay, RelayOutcome, RelayResult
+from remote_agents.ports.reported_roots import ReportedRoots
 from remote_agents.ports.session_store import SessionStore
 from remote_agents.ports.state_events import StoreChanged
 from remote_agents.ports.terminal import PromptDelivery
@@ -352,6 +360,7 @@ def build_restart_resume(
     outcomes: InterruptedResumes,
     resume: Callable[[ResumeCommand], Awaitable[ResumeOutcome]],
     folder_of: Callable[[SessionId], Awaitable[Worktree | None]],
+    bound_folder_of: Callable[[SessionId], Awaitable[Path | None]] | None = None,
     enabled: Callable[[], Awaitable[bool]],
     notify: Callable[[tuple[ResumeReport, ...], int], Awaitable[None]] | None,
     stopping: Callable[[], bool],
@@ -452,6 +461,7 @@ def build_restart_resume(
             outcomes,
             resume=resume,
             folder_of=folder_of,
+            bound_folder_of=bound_folder_of,
             key_claimed=key_claimed,
             send=send,
             stopping=stopping,
@@ -913,6 +923,8 @@ def build_rollover_pass(
     notify: Callable[[RolloverReport], Awaitable[None]] | None = None,
     operation: Callable[[], AbstractAsyncContextManager[object]] = nullcontext,
     worktrees: WorktreeStore | None = None,
+    reported: ReportedRoots | None = None,
+    folders: FolderBindings | None = None,
 ) -> RolloverPass:
     """The rollover pass `serve` runs, and only `serve` (DEC-115, DEC-015/070: built here,
     beside the loop that runs it, so no other composition has one to run).
@@ -921,19 +933,35 @@ def build_rollover_pass(
     are the one session service's, so the pass takes the same locks every other caller does;
     typing is the terminal's guarded send (DEC-099). Envelopes are read under each project's
     git top level, where the planning plugin writes them; a project in no checkout has no root
-    and is never rolled over. `project_paths` is the live routing table, read per pass.
+    of its own, so its sessions roll over only from a root their writer reported.
+    `project_paths` is the live routing table, read per pass.
 
     A session bound to a worktree reads its envelopes under that worktree's top level instead
     (BL-116): `worktrees` answers every binding in one read per pass. A worktree that is gone
-    has no root, so its sessions are not rolled over -- never read under the main checkout.
+    has no root of its own, so its sessions are not rolled over -- never read under the main
+    checkout -- unless the session's writer reported a root.
+
+    A session whose handoff writer reported another root reads its envelopes there (DEC-131):
+    `reported` answers through `reported_roots_reader`. A session bound to a folder outside its
+    project (`folders`, a successor started there) has that folder as its default root while it
+    is still a git top level this user owns, and no root once it is not.
     """
 
+    rollovers = SQLiteRolloverStore(connection)
+
+    async def held_sessions() -> tuple[SessionId, ...]:
+        named: list[SessionId] = []
+        for rollover in await rollovers.open_rollovers():
+            named.append(rollover.predecessor_session_id)
+            if rollover.successor_session_id is not None:
+                named.append(rollover.successor_session_id)
+        return tuple(named)
+
     async def worktree_roots() -> dict[SessionId, Path | None]:
-        if worktrees is None:
-            return {}
         by_path: dict[Path, Path | None] = {}
         roots: dict[SessionId, Path | None] = {}
-        for session_id, worktree in (await worktrees.bound_folders()).items():
+        bound = {} if worktrees is None else await worktrees.bound_folders()
+        for session_id, worktree in bound.items():
             if worktree.path not in by_path:
                 folder = live_folder(worktree)
                 # The worktree's own top level, which holds its `.git` file, or none: never a
@@ -941,15 +969,23 @@ def build_rollover_pass(
                 is_checkout = folder is not None and (folder / ".git").exists()
                 by_path[worktree.path] = folder if is_checkout else None
             roots[session_id] = by_path[worktree.path]
+        if folders is not None:
+            for session_id, folder in (await folders.bound_folders()).items():
+                roots.setdefault(session_id, acceptable_root(str(folder)))
         return roots
 
     return RolloverPass(
-        SQLiteRolloverStore(connection),
+        rollovers,
         FileHandoffEnvelopes(),
         adopt_templates=adopt_templates,
         sessions=sessions.list_sessions,
         handoff_root=lambda project: handoff_root(project_paths.get(project)),
         worktree_roots=worktree_roots,
+        reported_roots=(
+            None
+            if reported is None
+            else reported_roots_reader(reported, sessions.list_sessions, held_sessions)
+        ),
         enabled=enabled,
         idle=terminal.pane_idle,
         launch=sessions.launch,
@@ -959,6 +995,43 @@ def build_rollover_pass(
         notify=notify,
         operation=operation,
     )
+
+
+def reported_roots_reader(
+    reported: ReportedRoots,
+    sessions: Callable[[], Awaitable[Sequence[SessionRecord]]],
+    held: Callable[[], Awaitable[Iterable[SessionId]]],
+) -> Callable[[], Awaitable[dict[SessionId, Path]]]:
+    """Each listed session's reported root, read once per pass (DEC-131).
+
+    Only what the store's acceptance rule passes is answered, so a root that stopped being a
+    git top level this user owns reads as no report and the session keeps its default root.
+    A session no longer listed, or ENDED, has its report forgotten, as `forget_marks` forgets
+    conversation marks: only ENDED, since an UNTRUSTED or STARTING session is live -- and
+    never while an open rollover names it (`held`). A stopped predecessor is ENDED before its
+    rollover finishes, and the successor's `accepted`, the envelopes' clean-up and the request's
+    withdrawal are all read under its root until then. A report is a file, not a row, so this
+    runs whether or not the rollover switch is on.
+    """
+
+    async def read() -> dict[SessionId, Path]:
+        named = set(await held())
+        kept = {
+            str(record.session_id): record.session_id
+            for record in await sessions()
+            if record.state is not SessionState.ENDED or record.session_id in named
+        }
+        roots: dict[SessionId, Path] = {}
+        for session in reported.sessions():
+            if session not in kept:
+                reported.forget(session)
+                continue
+            root = reported.latest(session)
+            if root is not None:
+                roots[kept[session]] = root
+        return roots
+
+    return read
 
 
 def live_session_check(store: SessionStore) -> Callable[[str], Awaitable[bool]]:

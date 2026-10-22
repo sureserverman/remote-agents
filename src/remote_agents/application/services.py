@@ -49,6 +49,7 @@ from remote_agents.domain.models import (
 from remote_agents.domain.remote_control import RemoteControlDefault, RemoteControlState
 from remote_agents.domain.state_machine import LifecycleEvent, transition
 from remote_agents.domain.trust import TrustState
+from remote_agents.ports.folder_bindings import FolderBindings
 from remote_agents.ports.host_remote_control import DaemonGuard
 from remote_agents.ports.remote_control_default import RemoteControlDefaultPort
 from remote_agents.ports.session_store import ProjectUsage, SessionStore
@@ -108,11 +109,14 @@ _BEFORE_ANY_PANE = frozenset({INVALID_INTENT, WORKTREE_REMOVED})
 
 
 class _Bound(Enum):
-    """What binding a new session to a worktree came to."""
+    """What binding a new session to a worktree, or to a folder outside its project, came to."""
 
     BOUND = "bound"
     GONE = "gone"
     FAULT = "fault"
+    REFUSED = "refused"
+    """A folder outside the project the acceptance rule refused (DEC-131): not a worktree, so
+    never worded as a removed one."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -243,8 +247,13 @@ class SessionService:
         worktrees: WorktreeStore | None = None,
         worktree_service: WorktreeService | None = None,
         before_pane: Callable[[], Awaitable[None]] | None = None,
+        folder_bindings: FolderBindings | None = None,
     ) -> None:
         self._store = store
+        # Sessions bound to a folder outside their project (DEC-131): a launch naming a folder
+        # binds it before its pane starts, and a successor carries it on. None in a composition
+        # that keeps none, where a launch naming a folder is refused.
+        self._folder_bindings = folder_bindings
         self._before_pane = before_pane
         # Makes a worktree launch's own branch and folder, and says when one is offered
         # (BL-116). None in a composition that makes none: nothing is then offered, and a
@@ -293,22 +302,47 @@ class SessionService:
             return _Bound.FAULT
         return _Bound.BOUND
 
-    async def _reuse_folder(self, session_id: SessionId, of: SessionId | None) -> _Bound:
-        """Bind a new session to the worktree `of` works in, if it works in one.
+    async def _bind_folder(self, session_id: SessionId, folder: Path) -> _Bound:
+        """Bind a new session to a folder outside its project before its pane starts (DEC-131).
 
-        `BOUND` when there is nothing to reuse -- no session named, no worktree rows, or `of`
-        is a regular session -- and when the binding was made; otherwise as `_bind_worktree`.
+        `REFUSED` when the acceptance rule refuses the folder -- no longer a git top level this
+        user owns, or gone -- and for a composition that keeps no folder bindings; `FAULT` when
+        the store could not be written. Neither is answered by starting in the project folder.
         """
-        if of is None or self._worktrees is None:
+        if self._folder_bindings is None:
+            return _Bound.REFUSED
+        try:
+            bound = await self._folder_bindings.bind(session_id, folder)
+        except Exception:
+            _LOG.exception("session %s could not be bound to its folder", session_id)
+            return _Bound.FAULT
+        return _Bound.BOUND if bound else _Bound.REFUSED
+
+    async def _reuse_folder(self, session_id: SessionId, of: SessionId | None) -> _Bound:
+        """Bind a new session to the worktree `of` works in, or to the folder outside its
+        project `of` is bound to (DEC-131), if it has either.
+
+        `BOUND` when there is nothing to reuse -- no session named, no rows, or `of` is a
+        regular session -- and when the binding was made; otherwise as `_bind_worktree` or
+        `_bind_folder`.
+        """
+        if of is None:
             return _Bound.BOUND
         try:
-            worktree = await self._worktrees.folder_for(of)
+            worktree = None if self._worktrees is None else await self._worktrees.folder_for(of)
+            folder = (
+                None
+                if worktree is not None or self._folder_bindings is None
+                else await self._folder_bindings.folder_for(of)
+            )
         except Exception:
             _LOG.exception("the folder of %s could not be read for its successor", of)
             return _Bound.FAULT
-        if worktree is None:
-            return _Bound.BOUND
-        return await self._bind_worktree(session_id, worktree.path)
+        if worktree is not None:
+            return await self._bind_worktree(session_id, worktree.path)
+        if folder is not None:
+            return await self._bind_folder(session_id, folder)
+        return _Bound.BOUND
 
     async def worktree_offered(self, project_id: ProjectId) -> bool:
         """Whether a launch on this project offers its own worktree: another session is live
@@ -395,7 +429,11 @@ class SessionService:
                             False,
                             worktree_failed=failed,
                         )
-                bound = await self._reuse_folder(session_id, command.reuse_folder_of)
+                bound = (
+                    await self._bind_folder(session_id, command.folder)
+                    if command.folder is not None
+                    else await self._reuse_folder(session_id, command.reuse_folder_of)
+                )
                 if bound is not _Bound.BOUND:
                     return LaunchOutcome(
                         await self._store.record_event(session_id, LifecycleEvent.STARTUP_ERROR),

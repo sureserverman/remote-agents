@@ -21,7 +21,7 @@ from pathlib import Path
 from uuid import uuid4
 
 import pytest
-from test_terminal_rollover import _AGENT, _COMPOSER, HANDOFF, _type
+from test_terminal_rollover import _AGENT, _COMPOSER, HANDOFF, PROTOCOL, _type
 
 from remote_agents.adapters.agents.registry import adopt_templates
 from remote_agents.adapters.git.checkout import GitCli
@@ -104,7 +104,7 @@ async def test_a_worktree_session_launches_resumes_and_rolls_over_in_its_worktre
     def profile(session_id: SessionId, *_ignored: object) -> LaunchProfile:
         return LaunchProfile(
             sys.executable,
-            (sys.executable, str(agent), HANDOFF, str(mode_file)),
+            (sys.executable, str(agent), HANDOFF, str(mode_file), PROTOCOL),
             {"PATH": os.environ["PATH"], SESSION_ID_VARIABLE: str(session_id)},
             "READY",
         )

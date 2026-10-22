@@ -1,0 +1,28 @@
+{
+ "baseline": {
+  "elapsed_s": 2.8,
+  "exit": 0,
+  "tail": "bringing up nodes...\nbringing up nodes...\n\n........................................................................ [ 79%]\n...................                                                      [100%]\n91 passed in 2.63s"
+ },
+ "break_patch": "diff --git a/src/remote_agents/application/rollover.py b/src/remote_agents/application/rollover.py\nindex eb066340..189e9548 100644\n--- a/src/remote_agents/application/rollover.py\n+++ b/src/remote_agents/application/rollover.py\n@@ -373,7 +373,7 @@ class RolloverPass:\n             # a session whose worktree is gone: it has no default, and the report is a root of\n             # its own. Bounded as any report is: a `ready` there answers only for this session\n             # (DEC-115), and only a git top level this user owns is ever reported.\n-            root = reported.get(record.session_id, root)\n+            root = reported.get(record.session_id) or next(iter(reported.values()), root)\n             if root is not None:\n                 roots[record.session_id] = root\n         return _Seen(sessions, roots, defaults)\n",
+ "build": null,
+ "created": "2026-10-22T15:06:09+00:00",
+ "fingerprint": "0146a30b2c238898ec4ef72dfdd45bafd4f801066bb50a88e2ee02eaaf532e6b",
+ "index": 1,
+ "kind": "claim",
+ "named_break": null,
+ "no_build_reason": "python package, no build",
+ "plan": "/mnt/vault/Portfolio/ai-tools/coder-plugins/plans/2026-10-19-staged-planning-portable-sub-03-neutral-handoff-plan.md",
+ "red": {
+  "elapsed_s": 2.8,
+  "exit": 1,
+  "tail": "bringing up nodes...\nbringing up nodes...\n\n.......................................................................F [ 79%]\n...................                                                      [100%]\n=================================== FAILURES ===================================\n_ test_a_ready_under_a_reported_root_answers_only_for_the_session_that_reported_it _\n[gw4] linux -- Python 3.14.4 /home/user/dev/infra/remote-agents/.venv/bin/python\n\nrooted = Rig(store=<remote_agents.adapters.sqlite.rollover_store.SQLiteRolloverStore object at 0x77e3205e9d50>, predecessor=Ses...6, 10, 5, 9, 0, tzinfo=datetime.timezone.utc)], out_of_order=[], idle_raises=False, reports=[], locks=None, _pass=None)\n\n    async def test_a_ready_under_a_reported_root_answers_only_for_the_session_that_reported_it(\n        rooted: Rig,\n    ) -> None:\n        \"\"\"Another session reported this root; the `ready` names one that reported nothing. Its\n        root is still its project's, so the file is someone else's and opens nothing (DEC-115).\"\"\"\n        reporter = SessionId.new()\n        rooted.sessions[reporter] = _record(reporter)\n        envelopes = rooted.envelopes\n        assert isinstance(envelopes, RootedEnvelopes)\n        envelopes.by_root[REPORTED_ROOT] = [_envelope(HandoffEvent.READY, rooted.predecessor)]\n    \n        async def reported():\n            return {reporter: REPORTED_ROOT}\n    \n        await _rooted_pass(rooted, _no_worktrees, reported).run_once()\n    \n>       assert rooted.store._select(\"1 = 1\", ()) == ()\nE       AssertionError: assert (Rollover(id=...mezone.utc)),) == ()\nE         \nE         Left contains one more item: Rollover(id='95746c500bb2474fa23f52f1f3699605', handoff_id='h-0123456789abcdef0123', predecessor_session_id=SessionId(... 5, 9, 0, tzinfo=datetime.timezone.utc), updated_at=datetime.datetime(2026, 10, 5, 9, 0, tzinfo=datetime.timezone.utc))\nE         Use -v to get more diff\n\ntests/unit/application/test_rollover_pass.py:1193: AssertionError\n=========================== short test summary info ============================\nFAILED tests/unit/application/test_rollover_pass.py::test_a_ready_under_a_reported_root_answers_only_for_the_session_that_reported_it\n1 failed, 90 passed in 2.62s"
+ },
+ "schema": 2,
+ "task": "2.3",
+ "test": "cd /home/user/dev/infra/remote-agents && .venv/bin/python -m pytest -q -n auto tests/unit/application/test_rollover_pass.py tests/integration/test_rollover_service.py tests/architecture/test_session_folder_readers.py",
+ "text": "`cd /home/user/dev/infra/remote-agents && .venv/bin/python -m pytest -q -n auto tests/unit/application/test_rollover_pass.py tests/integration/test_rollover_service.py tests/architecture/test_session_folder_readers.py`",
+ "touched": [
+  "src/remote_agents/application/rollover.py"
+ ]
+}

@@ -399,7 +399,7 @@ def local_context(config, connection, paths: ProductionPaths):
         paths,
         projects.paths,
         descriptors,
-        folder_for=SessionFolders(projects.paths, worktrees.store).folder_for,
+        folder_for=SessionFolders(projects.paths, worktrees.store, worktrees.folders).folder_for,
     )
 
     open_in_console = None

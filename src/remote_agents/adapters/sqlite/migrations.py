@@ -432,6 +432,22 @@ MIGRATIONS: tuple[tuple[int, str], ...] = (
         );
         """,
     ),
+    (
+        21,
+        # A session started in a folder outside its project (DEC-131): a rollover successor of
+        # a session whose handoff writer reported another git top level. Its own table, never a
+        # field on `sessions` (DEC-115's reason: a row rebuilt by position). Written before the
+        # pane starts (DEC-004), and only for a folder the one acceptance rule passes. An older
+        # build has no reader for the table, so after a rollback a folder-bound session would
+        # start in its project folder. `restore_database` refuses to put an older backup over a
+        # newer live store.
+        """
+        CREATE TABLE session_folders (
+            session_id TEXT PRIMARY KEY REFERENCES sessions(session_id),
+            folder TEXT NOT NULL
+        );
+        """,
+    ),
 )
 """Migration 14 takes the surface's bookkeeping out of the watched store.
 

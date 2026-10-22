@@ -1,14 +1,23 @@
-"""The curated launch environment, and the one variable a session adds to it."""
+"""The curated launch environment, and the two variables a session adds to it."""
 
 from __future__ import annotations
 
+import os
+import shlex
 from pathlib import Path
 
-from remote_agents.adapters.tmux.profiles import build_launch_profile, build_resume_profile
+from remote_agents.adapters.tmux.profiles import (
+    build_launch_profile,
+    build_resume_profile,
+    supervisor_id_command,
+)
 from remote_agents.domain.conversations import ProviderConversationId
 from remote_agents.domain.models import ProfileId, SessionId
-from remote_agents.domain.profiles import ProfileDefinition
-from remote_agents.ports.session_identity import SESSION_ID_VARIABLE
+from remote_agents.domain.profiles import ProfileDefinition, ProfileError, closed_profiles
+from remote_agents.ports.session_identity import (
+    SESSION_ID_VARIABLE,
+    SUPERVISOR_ID_COMMAND_VARIABLE,
+)
 
 _CURATED = {"HOME": "/home/operator", "LANG": "C.UTF-8", "PATH": "/usr/bin", "TERM": "xterm"}
 
@@ -46,15 +55,18 @@ def test_a_resume_environment_names_the_session_being_started() -> None:
     assert profile.environment[SESSION_ID_VARIABLE] == str(session_id)
 
 
-def test_the_launch_environment_gains_that_one_variable_and_no_other() -> None:
+def test_the_launch_environment_gains_those_two_variables_and_no_other() -> None:
     profile = build_launch_profile(
         _claude(), Path("/usr/bin/claude"), SessionId.new(), dict(_CURATED)
     )
 
-    assert set(profile.environment) == set(_CURATED) | {SESSION_ID_VARIABLE}
+    assert set(profile.environment) == set(_CURATED) | {
+        SESSION_ID_VARIABLE,
+        SUPERVISOR_ID_COMMAND_VARIABLE,
+    }
 
 
-def test_the_resume_environment_gains_that_one_variable_and_no_other() -> None:
+def test_the_resume_environment_gains_those_two_variables_and_no_other() -> None:
     profile = build_resume_profile(
         _claude(),
         Path("/usr/bin/claude"),
@@ -63,7 +75,54 @@ def test_the_resume_environment_gains_that_one_variable_and_no_other() -> None:
         dict(_CURATED),
     )
 
-    assert set(profile.environment) == set(_CURATED) | {SESSION_ID_VARIABLE}
+    assert set(profile.environment) == set(_CURATED) | {
+        SESSION_ID_VARIABLE,
+        SUPERVISOR_ID_COMMAND_VARIABLE,
+    }
+
+
+def test_every_profile_launch_and_resume_carries_the_supervisor_id_command() -> None:
+    """Every reviewed profile, launched or resumed, names the same identity command (DEC-128).
+
+    The command, not a variable, answers who the session is, so the value is one string for
+    every provider (DEC-122) and its first word is the running interpreter by absolute path:
+    an older `remote-agents` earlier on the pane's `PATH` must not be the one that answers.
+    The shared curated mapping is handed to every profile, so it must never gain the variable.
+    """
+    command = supervisor_id_command()
+    first_word = shlex.split(command)[0]
+    assert Path(first_word).is_absolute(), command
+    assert os.access(first_word, os.X_OK), command
+
+    curated = dict(_CURATED)
+    launches = 0
+    resumes = 0
+    for definition in closed_profiles():
+        executable = Path(f"/usr/bin/{definition.executable}")
+        profile_id = str(definition.profile_id)
+        for remote_control in (False, True):
+            launched = build_launch_profile(
+                definition, executable, SessionId.new(), curated, remote_control=remote_control
+            )
+            assert launched.environment[SUPERVISOR_ID_COMMAND_VARIABLE] == command, profile_id
+            launches += 1
+        try:
+            resumed = build_resume_profile(
+                definition,
+                executable,
+                SessionId.new(),
+                ProviderConversationId("conversation"),
+                curated,
+            )
+        except ProfileError:
+            continue
+        assert resumed.environment[SUPERVISOR_ID_COMMAND_VARIABLE] == command, profile_id
+        resumes += 1
+
+    assert launches == 2 * len(closed_profiles())
+    assert resumes >= 3
+    assert SUPERVISOR_ID_COMMAND_VARIABLE not in curated
+    assert curated == _CURATED
 
 
 def test_two_sessions_do_not_share_one_environment_mapping() -> None:
@@ -230,3 +289,15 @@ def test_a_readiness_marker_is_a_string_the_agent_actually_draws() -> None:
             "actually draws when it is ready — every launch will burn the whole startup "
             "budget and report a failure for an agent that came up fine"
         )
+
+
+def test_the_identity_command_refuses_a_relative_interpreter(monkeypatch) -> None:
+    """A relative interpreter would be looked up on the pane's `PATH`, which is what the
+    absolute path exists to avoid."""
+    monkeypatch.setattr("sys.executable", "python3")
+
+    try:
+        supervisor_id_command()
+    except ValueError:
+        return
+    raise AssertionError("a relative interpreter was accepted")

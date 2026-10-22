@@ -30,10 +30,12 @@ from remote_agents.adapters.projects.registry import load_registry
 from remote_agents.adapters.projects.registry_writer import RegistryProjectRecorder
 from remote_agents.adapters.projects.workspace import FilesystemProjectWorkspace
 from remote_agents.adapters.sqlite.database import watched_paths
+from remote_agents.adapters.sqlite.folder_bindings import SQLiteFolderBindings
 from remote_agents.adapters.sqlite.rollover_store import SQLiteRolloverStore
 from remote_agents.adapters.sqlite.schedule_store import SQLiteScheduleStore
 from remote_agents.adapters.sqlite.session_store import SQLiteSessionStore
 from remote_agents.adapters.sqlite.worktree_store import SQLiteWorktreeStore
+from remote_agents.adapters.workflow.roots import acceptable_root
 from remote_agents.application.backend import Backend
 from remote_agents.application.conversations import ConversationService
 from remote_agents.application.hook_roster import HookRosterPublisher
@@ -63,6 +65,7 @@ from remote_agents.domain.models import ProjectId, SessionId
 from remote_agents.domain.profiles import ProfileCompatibility, closed_profiles
 from remote_agents.ports.agent_activity import AgentActivity
 from remote_agents.ports.agent_usage import AgentLimits, AgentUsage, UsageQuery
+from remote_agents.ports.folder_bindings import FolderBindings
 from remote_agents.ports.git_checkout import GitCheckout, GitError, GitSummary
 from remote_agents.ports.terminal import SessionFolderLookup
 from remote_agents.ports.worktree_store import Worktree, WorktreeStore
@@ -151,11 +154,18 @@ class WorktreeParts:
 
     git: GitCheckout
     store: WorktreeStore
+    folders: FolderBindings | None = None
+    """Sessions bound to a folder outside their project (DEC-131), kept beside the worktree
+    rows because every reader asking "which folder" asks both."""
 
 
 def worktree_parts(connection) -> WorktreeParts:
-    """One pair over the domain connection, so a worktree row moves the store watcher (DEC-090)."""
-    return WorktreeParts(git=GitCli(), store=SQLiteWorktreeStore(connection))
+    """One set over the domain connection, so a binding moves the store watcher (DEC-090)."""
+    return WorktreeParts(
+        git=GitCli(),
+        store=SQLiteWorktreeStore(connection),
+        folders=SQLiteFolderBindings(connection, accept=acceptable_root),
+    )
 
 
 def _resolved_project_path(path: Path) -> Path | None:
@@ -430,7 +440,11 @@ def compose_backend(
     )
     # Which folder each session works in (BL-116), asked by the pane, the usage reader and the
     # resume lists alike, over the one set of worktree rows this process was handed.
-    folders = SessionFolders(projects.paths, worktrees.store if worktrees is not None else None)
+    folders = SessionFolders(
+        projects.paths,
+        worktrees.store if worktrees is not None else None,
+        worktrees.folders if worktrees is not None else None,
+    )
     runtime = runtime or _local_runtime(
         config, paths, projects.paths, descriptors, folder_for=folders.folder_for
     )
@@ -492,6 +506,7 @@ def compose_backend(
             daemon_guards=dict.fromkeys(daemon_profiles, daemon_guard),
             before_pane=hook_roster.publish,
             worktrees=worktrees.store if worktrees is not None else None,
+            folder_bindings=worktrees.folders if worktrees is not None else None,
             worktree_service=(
                 None
                 if worktrees is None

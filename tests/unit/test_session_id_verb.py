@@ -12,6 +12,8 @@ Exit codes are the contract Sub-plan 3's writer depends on: 0 with the id alone 
 
 from __future__ import annotations
 
+import os
+import subprocess
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -32,6 +34,7 @@ def shell(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
     """A tool shell with neither variable set, working in its own folder; returns the spool."""
     monkeypatch.delenv("REMOTE_AGENTS_SESSION_ID", raising=False)
     monkeypatch.delenv("CODEX_THREAD_ID", raising=False)
+    monkeypatch.delenv("PLANNING_HANDOFF_ROOT", raising=False)
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     monkeypatch.chdir(workspace)
@@ -337,3 +340,160 @@ def test_session_id_command_writes_nothing_to_stdout_with_stderr_closed(
     # to stdout: the contract says exit 3 prints nothing there.
     monkeypatch.setattr("sys.stderr", None)
     assert _run(shell, capsys) == (3, "")
+
+
+# --- Task 2.2: the verb records the root its caller reports, and nothing else changes ---
+
+_ROOT_VARIABLE = "PLANNING_HANDOFF_ROOT"
+_NOT_RECORDED = "session-id: root not recorded: "
+
+
+def _repo(path: Path) -> Path:
+    path.mkdir(parents=True, exist_ok=True)
+    subprocess.run(
+        ["git", "init", "-q", "--template=", str(path)], check=True, timeout=30, capture_output=True
+    )
+    return Path(os.path.realpath(path))
+
+
+def _run_both(spool: Path, capsys: pytest.CaptureFixture[str]) -> tuple[int, str, str]:
+    code = main(["session-id", "--activity-dir", str(spool)])
+    captured = capsys.readouterr()
+    return code, captured.out, captured.err
+
+
+def _recorded(spool: Path) -> dict[str, bytes]:
+    directory = spool / "roots"
+    if not directory.exists():
+        return {}
+    return {entry.name: entry.read_bytes() for entry in directory.iterdir()}
+
+
+def test_session_id_command_records_the_reported_top_level(
+    shell: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    tmp_path: Path,
+) -> None:
+    session = str(SessionId.new())
+    top = _repo(tmp_path / "other-repo")
+    monkeypatch.setenv("REMOTE_AGENTS_SESSION_ID", session)
+    monkeypatch.setenv(_ROOT_VARIABLE, str(top))
+
+    assert _run_both(shell, capsys) == (0, f"{session}\n", "")
+    assert _recorded(shell) == {session: os.fsencode(top) + b"\n"}
+
+
+def test_session_id_command_records_a_linked_top_level_as_its_target(
+    shell: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    tmp_path: Path,
+) -> None:
+    session = str(SessionId.new())
+    top = _repo(tmp_path / "other-repo")
+    link = tmp_path / "link"
+    link.symlink_to(top)
+    monkeypatch.setenv("REMOTE_AGENTS_SESSION_ID", session)
+    monkeypatch.setenv(_ROOT_VARIABLE, str(link))
+
+    assert _run_both(shell, capsys) == (0, f"{session}\n", "")
+    assert _recorded(shell) == {session: os.fsencode(top) + b"\n"}
+
+
+@pytest.mark.parametrize("shape", ["subfolder", "no-repo", "relative", "file", "empty"])
+def test_session_id_command_records_no_root_but_a_top_level_and_still_answers(
+    shell: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    tmp_path: Path,
+    shape: str,
+) -> None:
+    session = str(SessionId.new())
+    top = _repo(tmp_path / "other-repo")
+    (top / "sub").mkdir()
+    (top / "notes.txt").write_text("x", encoding="utf-8")
+    (tmp_path / "loose").mkdir()
+    value = {
+        "subfolder": str(top / "sub"),
+        "no-repo": str(tmp_path / "loose"),
+        "relative": "other-repo",
+        "file": str(top / "notes.txt"),
+        "empty": "",
+    }[shape]
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("REMOTE_AGENTS_SESSION_ID", session)
+    monkeypatch.setenv(_ROOT_VARIABLE, value)
+
+    code, out, err = _run_both(shell, capsys)
+
+    assert (code, out) == (0, f"{session}\n")
+    assert err.startswith(_NOT_RECORDED) and err.count("\n") == 1, err
+    assert _recorded(shell) == {}
+
+
+def test_session_id_command_records_no_root_another_user_owns(
+    shell: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    tmp_path: Path,
+) -> None:
+    session = str(SessionId.new())
+    top = _repo(tmp_path / "other-repo")
+    owner = os.geteuid()
+    monkeypatch.setattr(os, "geteuid", lambda: owner + 1)
+    monkeypatch.setenv("REMOTE_AGENTS_SESSION_ID", session)
+    monkeypatch.setenv(_ROOT_VARIABLE, str(top))
+
+    code, out, err = _run_both(shell, capsys)
+
+    assert (code, out) == (0, f"{session}\n")
+    assert err.startswith(_NOT_RECORDED), err
+    assert _recorded(shell) == {}
+
+
+def test_session_id_command_records_nothing_for_an_unmanaged_shell(
+    shell: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    tmp_path: Path,
+) -> None:
+    # A Codex shell whose thread no roster places, carrying an inherited session variable.
+    top = _repo(tmp_path / "other-repo")
+    monkeypatch.setenv("REMOTE_AGENTS_SESSION_ID", str(SessionId.new()))
+    monkeypatch.setenv("CODEX_THREAD_ID", _THREAD)
+    monkeypatch.setenv(_ROOT_VARIABLE, str(top))
+
+    assert _run_both(shell, capsys)[:2] == (3, "")
+    assert not (shell / "roots").exists()
+
+
+def test_session_id_command_still_answers_when_the_root_cannot_be_written(
+    shell: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    tmp_path: Path,
+) -> None:
+    session = str(SessionId.new())
+    top = _repo(tmp_path / "other-repo")
+    monkeypatch.setenv("REMOTE_AGENTS_SESSION_ID", session)
+    monkeypatch.setenv(_ROOT_VARIABLE, str(top))
+    shell.chmod(0o500)
+    try:
+        code, out, err = _run_both(shell, capsys)
+    finally:
+        shell.chmod(0o700)
+
+    assert (code, out) == (0, f"{session}\n")
+    assert err.startswith(_NOT_RECORDED) and err.count("\n") == 1, err
+    assert _recorded(shell) == {}
+
+
+def test_session_id_command_records_nothing_without_the_variable(
+    shell: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    session = str(SessionId.new())
+    monkeypatch.setenv("REMOTE_AGENTS_SESSION_ID", session)
+
+    assert _run_both(shell, capsys) == (0, f"{session}\n", "")
+    assert not (shell / "roots").exists()

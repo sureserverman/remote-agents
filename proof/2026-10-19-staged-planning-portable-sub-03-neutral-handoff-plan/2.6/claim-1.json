@@ -1,0 +1,28 @@
+{
+ "baseline": {
+  "elapsed_s": 0.0,
+  "exit": 0,
+  "tail": ""
+ },
+ "break_patch": "diff --git a/README.md b/README.md\nindex e948eb8d..d562142a 100644\n--- a/README.md\n+++ b/README.md\n@@ -1054,10 +1054,7 @@ agent, types that agent's own adopt command into it -- `/planning:executing-plan\n session only\n after the new one has accepted the handoff, and only when the old one sits idle. It never\n interrupts a turn and never force-stops. **Rollover now** (`l` in the terminal) asks the workflow\n-to hand off at its next gate. A plan that works in another repository rolls over there: its\n-planning writer reports that repository's top level (`PLANNING_HANDOFF_ROOT`), and the new\n-session starts in it -- answer the agent's folder-trust question once if it asks. Only a failure\n-sends a message: a failed rollover keeps the old\n+to hand off at its next gate. Only a failure sends a message: a failed rollover keeps the old\n session, and a failed stop leaves it for you to stop. The runbook's [session\n rollover](docs/operator-runbook.md#session-rollover) section covers what the row notes mean and\n what to do after each failure.\n",
+ "build": null,
+ "created": "2026-10-22T15:21:50+00:00",
+ "fingerprint": "b315fb27499101845ad7c414de5b2355c9678aeef22d201ba67196eee7acfb8f",
+ "index": 1,
+ "kind": "claim",
+ "named_break": null,
+ "no_build_reason": "docs only",
+ "plan": "/mnt/vault/Portfolio/ai-tools/coder-plugins/plans/2026-10-19-staged-planning-portable-sub-03-neutral-handoff-plan.md",
+ "red": {
+  "elapsed_s": 0.0,
+  "exit": 1,
+  "tail": "no root in README.md"
+ },
+ "schema": 2,
+ "task": "2.6",
+ "test": "cd /home/user/dev/infra/remote-agents && for f in docs/architecture.md docs/operator-runbook.md README.md; do grep -q PLANNING_HANDOFF_ROOT \"$f\" || { echo \"no root in $f\"; exit 1; }; done && ! git grep -nE \"is read-only\" -- docs/architecture.md",
+ "text": "`cd /home/user/dev/infra/remote-agents && for f in docs/architecture.md docs/operator-runbook.md README.md; do grep -q PLANNING_HANDOFF_ROOT \"$f\" || { echo \"no root in $f\"; exit 1; }; done && ! git grep -nE \"is read-only\" -- docs/architecture.md`",
+ "touched": [
+  "README.md"
+ ]
+}
