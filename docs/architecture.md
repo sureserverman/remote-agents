@@ -373,13 +373,26 @@ pane's folder and every hook's `cwd` stay the project's (DEC-063). So the writer
   owner answers (DEC-125). A restart-resume of a folder-bound session is skipped
   (`skipped:folder_bound`): a resume binds only a worktree.
 - `request.json` is one file per root, so two sessions that report one root share its slot.
+- A reported root is held to more than a default one: its `.git` must be a real directory or a
+  worktree's `gitdir:` file, and the envelope reader opens every root without following a link.
 
-Accepted costs. A process that can forge a `ready` can now also name a root: that launches at most
-one session, in a git top level this user owns, and a folder never trusted waits for the owner. A
-Codex writer run from another repository stays unsupervised, because the verb places a Codex
-thread by the shell's own folder. And "Rollover now" for a session that never reported a root
-writes `request.json` under its project's top level, where a plan working elsewhere never reads
-it; that request fails `request-unanswered` after 24 hours (DEC-119).
+Accepted costs.
+- Naming a root takes a managed pane's environment, to run the verb, or write access to the
+  activity directory; a `ready` carries no root. A process holding either can point a session at
+  any git top level this user owns: each forged `ready` there starts one successor, and a folder
+  never trusted waits for the owner.
+- Identity is the verb's evidence, not proof (DEC-128). Any process that can claim a session's id
+  -- a nested agent working in another repository inherits `REMOTE_AGENTS_SESSION_ID`, say -- can
+  overwrite that session's report. The pass then looks in the wrong root until the session's
+  writer reports again: a quiet loss of its rollover, and a successor there for a forged `ready`.
+- A Codex writer run from another repository stays unsupervised, because the verb places a Codex
+  thread by the shell's own folder.
+- "Rollover now" for a session that never reported a root writes `request.json` under its default
+  root (its worktree's or project's top level), where a plan working elsewhere never reads it; that
+  request fails `request-unanswered` after 24 hours (DEC-119).
+- A folder-bound session is skipped by restart-resume (`skipped:folder_bound`), and the resume
+  lists, which read the project folder and its live worktrees, do not offer its conversation:
+  resume it by hand in its folder.
 
 ### The handoff writer's identity — `remote-agents session-id` (DEC-128)
 

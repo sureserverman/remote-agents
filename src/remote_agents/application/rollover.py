@@ -36,7 +36,8 @@ code it is recorded under:
 - `FAILED: id-mismatch`, `FAILED: no-ready`, `FAILED: cwd-mismatch`,
   `FAILED: branch-mismatch`, `FAILED: plan-missing` -- the successor's own `failed` envelope
 - `FAILED: not-rollable` -- the owner asked for a session whose agent writes no envelopes
-- `FAILED: no-handoff-root` -- the owner asked for a session whose project is in no checkout
+- `FAILED: no-handoff-root` -- the owner asked for a session with no root: its project is in no
+  checkout and its writer reported none
 - `FAILED: request-unwritten` -- the owner's request could not be written for the workflow
 - `FAILED: request-lost` -- the written request is gone, or names another session, before the
   workflow answered it; it is never written again (DEC-004)

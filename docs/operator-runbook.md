@@ -679,11 +679,16 @@ it and ask for it but never act.
   else its worktree's, else its project's. A writer reports one by running the command in
   `PLANNING_SUPERVISOR_ID_CMD` with `PLANNING_HANDOFF_ROOT` set; that is how a plan that works
   in another repository still rolls over. Only a git top level you own is accepted. Costs, by
-  design: a forged `ready` can now name a root too, but it starts at most one session, in a top
-  level you own, and a folder never trusted waits for you; a Codex writer working in another
-  repository stays unsupervised; and **Rollover now** for a session that never reported its root
-  writes `request.json` at its project's top level, so a plan working elsewhere never sees it and
-  the request ends `request-unanswered` after 24 hours. Resume such a session by hand.
+  design: a process with a managed pane's environment can point a session at any top level you
+  own, and each forged `ready` there starts one successor (a folder never trusted waits for you);
+  a process that claims a session's id -- a nested agent in another repository, say -- can
+  overwrite that session's report, so its rollover quietly stops until its writer reports again;
+  a Codex writer working in another repository stays unsupervised; and **Rollover now** for a
+  session that never reported its root writes `request.json` at its default root, so a plan
+  working elsewhere never sees it and the request ends `request-unanswered` after 24 hours.
+  Resume such a session by hand. A session started outside its project is skipped by
+  restart-resume (*it works in a folder outside its project*) and is not in the resume lists:
+  resume it by hand in its folder.
 - **The sequence.** The pass waits for the old session's pane to sit idle, for up to 10
   minutes. It then launches **one** fresh session of the same project and profile, under the
   key `rollover:<handoff_id>`, in the old session's folder -- or, when the old session's writer
@@ -792,8 +797,9 @@ closes out instead, so cancel the pending rollover then.
   found. It is left open. Fix what it names, stop it, then ask again.
 - **`not-rollable`** — the session's agent writes no envelopes. Only `claude` and `codex`
   sessions roll over.
-- **`no-handoff-root`** — the project is in no git checkout, so there is nowhere for envelopes.
-  Rollover needs the project inside a git repository.
+- **`no-handoff-root`** — the project is in no git checkout and the session's writer never
+  reported a root, so there is nowhere for envelopes. Rollover needs the project inside a git
+  repository, or a planning writer that reports where it works.
 - **`request-unwritten`** — `request.json` could not be written. Check that `.claude/handoffs/`
   at the checkout's top level is writable, then ask again.
 - **`request-lost`** — the written request was gone, or named another session, before the

@@ -542,3 +542,20 @@ def test_discard_ignores_an_id_outside_the_pattern(tmp_path: Path, reader, hando
     reader.discard(tmp_path, handoff_id)
 
     assert _snapshot(tmp_path) == before
+
+
+def test_a_root_swapped_for_a_link_is_neither_read_nor_written(tmp_path: Path) -> None:
+    """Every root the pass hands in is resolved, and a reported one was chosen by a tool shell:
+    a root replaced by a link after it was accepted is refused, never followed."""
+    target = tmp_path / "target"
+    (target / ".claude" / "handoffs").mkdir(parents=True)
+    (target / ".claude" / "handoffs" / f"{HANDOFF_ID}.ready.json").write_bytes(
+        json.dumps(_body()).encode()
+    )
+    root = tmp_path / "root"
+    root.symlink_to(target)
+    adapter = FileHandoffEnvelopes()
+
+    assert adapter.events(root) == ()
+    assert adapter.write_request(root, SESSION) is False
+    assert not (target / ".claude" / "handoffs" / "request.json").exists()

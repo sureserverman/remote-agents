@@ -933,7 +933,8 @@ def build_rollover_pass(
     are the one session service's, so the pass takes the same locks every other caller does;
     typing is the terminal's guarded send (DEC-099). Envelopes are read under each project's
     git top level, where the planning plugin writes them; a project in no checkout has no root
-    and is never rolled over. `project_paths` is the live routing table, read per pass.
+    of its own, so its sessions roll over only from a root their writer reported.
+    `project_paths` is the live routing table, read per pass.
 
     A session bound to a worktree reads its envelopes under that worktree's top level instead
     (BL-116): `worktrees` answers every binding in one read per pass. A worktree that is gone

@@ -11,8 +11,11 @@ running there can put anything at any name in it, and the daemon reads it unatte
 - Each component below the project -- `.claude`, `handoffs`, the file -- is opened with
   `O_NOFOLLOW` relative to its parent's descriptor. A link at any of them is refused, never
   followed, and a component swapped between the check and the open cannot redirect the read.
-  The project directory itself is opened as given: it is configuration, not something a
-  process in the checkout chose.
+  The root itself is opened with `O_NOFOLLOW` too. Every root the pass hands in is resolved --
+  the catalogue resolves project paths, and a root a session's writer reported (DEC-131) is
+  resolved by the acceptance rule -- and a reported root was chosen by a tool shell, so one
+  replaced by a link after it was accepted is refused. Only its last component is held so; a
+  link swapped in at a folder above it is followed (same user, a moment's window).
 - A file is opened `O_NONBLOCK`, because a read-only open of a FIFO planted at an envelope's
   name otherwise waits for a writer, and the daemon waiting there stops every project's pass.
   It must then be a regular file of at most 4096 bytes, by `fstat` and by what a read returns.
@@ -186,7 +189,7 @@ def _handoff_directory(project_dir: Path, *, create: bool) -> Iterator[int | Non
     descriptors: list[int] = []
     try:
         try:
-            descriptors.append(os.open(project_dir, _DIRECTORY))
+            descriptors.append(os.open(project_dir, _CHILD_DIRECTORY))
             for name in (CLAUDE_DIRECTORY, HANDOFF_DIRECTORY):
                 descriptors.append(_child_directory(descriptors[-1], name, create=create))
         except FileNotFoundError:

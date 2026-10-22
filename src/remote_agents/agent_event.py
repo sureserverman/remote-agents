@@ -162,10 +162,12 @@ def run_session_id(argv: list[str] | None = None) -> int:
     It writes one file: the root its caller reports. On the exit-0 path, when the caller's
     environment carries `PLANNING_HANDOFF_ROOT`, the root it names is recorded for the session
     under `<activity directory>/roots/` if it passes `acceptable_root`. A refused or unwritten root
-    prints one line on stderr and never changes stdout or the exit code. Otherwise it reads the
-    environment, the folder and the roster file, and never the database.
-    Any failure past argument parsing exits 3, never a traceback: the writer then writes nothing,
-    which is the safe answer to a question this could not settle.
+    prints one line on stderr and never changes stdout or the exit code.
+
+    Besides that one file it only reads: the environment, the folder and the roster file, and
+    never the database. Any failure past argument parsing and before the id is printed exits 3,
+    never a traceback: the writer then writes nothing, which is the safe answer to a question
+    this could not settle.
     """
     from remote_agents.adapters.agents.hook_licences import hook_licence
     from remote_agents.adapters.agents.reported_roots import FileReportedRoots
