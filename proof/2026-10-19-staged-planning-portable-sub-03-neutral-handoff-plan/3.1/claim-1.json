@@ -1,0 +1,28 @@
+{
+ "baseline": {
+  "elapsed_s": 18.0,
+  "exit": 0,
+  "tail": "........................................................................ [ 97%]\n..                                                                       [100%]\n74 passed in 17.30s"
+ },
+ "break_patch": "diff --git a/src/remote_agents/adapters/workflow/handoff_envelopes.py b/src/remote_agents/adapters/workflow/handoff_envelopes.py\nindex 46da11af..347b2482 100644\n--- a/src/remote_agents/adapters/workflow/handoff_envelopes.py\n+++ b/src/remote_agents/adapters/workflow/handoff_envelopes.py\n@@ -134,7 +134,7 @@ class FileHandoffEnvelopes:\n         if session is None:\n             return False\n         body = {\n-            \"protocol\": PROTOCOL,\n+            \"protocol\": LEGACY_PROTOCOL,\n             \"version\": VERSION,\n             \"managed_session_id\": session,\n             \"requested_at\": self._clock().astimezone(UTC).strftime(TIMESTAMP_FORMAT),\n",
+ "build": null,
+ "created": "2026-10-22T17:02:16+00:00",
+ "fingerprint": "d235365cd3a5e3eb8127921d3021b6bf47d6b718909c32367dc8d8c3574f1700",
+ "index": 1,
+ "kind": "claim",
+ "named_break": null,
+ "no_build_reason": "test-only change; R's plugin is already built and checked by build --check",
+ "plan": "/mnt/vault/Portfolio/ai-tools/coder-plugins/plans/2026-10-19-staged-planning-portable-sub-03-neutral-handoff-plan.md",
+ "red": {
+  "elapsed_s": 17.4,
+  "exit": 1,
+  "tail": "\ntests/contract/test_handoff_envelope_compat.py:511: AssertionError\n7 failed, 67 passed in 17.21s"
+ },
+ "schema": 2,
+ "task": "3.1",
+ "test": "cd /home/user/dev/infra/remote-agents && out=$(RA_STAGED_PLANNING=/home/user/dev/ai-tools/staged-planning RA_CODER_PLUGINS=/home/user/dev/ai-tools/coder-plugins RA_ENGINEERING_SKILLS=/home/user/dev/ai-tools/engineering-skills .venv/bin/python -m pytest -q -rs tests/contract/test_handoff_envelope_compat.py 2>&1); rc=$?; echo \"$out\" | tail -3; [ $rc -eq 0 ] && ! echo \"$out\" | grep -q SKIPPED && .venv/bin/python -m pytest --collect-only -q tests/contract/test_handoff_envelope_compat.py -k staged | grep -q '::' && .venv/bin/python -m pytest --collect-only -q tests/contract/test_handoff_envelope_compat.py -k reported_root | grep -q '::'",
+ "text": "`cd /home/user/dev/infra/remote-agents && out=$(RA_STAGED_PLANNING=/home/user/dev/ai-tools/staged-planning RA_CODER_PLUGINS=/home/user/dev/ai-tools/coder-plugins RA_ENGINEERING_SKILLS=/home/user/dev/ai-tools/engineering-skills .venv/bin/python -m pytest -q -rs tests/contract/test_handoff_envelope_compat.py 2>&1); rc=$?; echo \"$out\" | tail -3; [ $rc -eq 0 ] && ! echo \"$out\" | grep -q SKIPPED && .venv/bin/python -m pytest --collect-only -q tests/contract/test_handoff_envelope_compat.py -k staged | grep -q '::' && .venv/bin/python -m pytest --collect-only -q tests/contract/test_handoff_envelope_compat.py -k reported_root | grep -q '::'`",
+ "touched": [
+  "src/remote_agents/adapters/workflow/handoff_envelopes.py"
+ ]
+}
