@@ -34,7 +34,8 @@ class LaunchCommand:
     """How long a launch whose agent shares the Codex daemon waits for its guard."""
     reuse_folder_of: SessionId | None = None
     """A session whose worktree this launch works in, when it has one: a rollover successor
-    names its predecessor, so it carries on in the same folder (BL-116, amending DEC-115). A
+    names its predecessor, so it carries on in the same folder (BL-116, amending DEC-115) --
+    unless the predecessor's writer reported another root, when it names that `folder` instead. A
     named session with no worktree leaves this an ordinary launch in the project folder."""
     mode: Literal["regular", "worktree"] = "regular"
     """`worktree` gives the new session its own branch and folder before its pane starts

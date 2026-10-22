@@ -1223,6 +1223,84 @@ async def test_a_session_with_no_reported_root_keeps_its_default_root(rooted: Ri
     assert row.predecessor_session_id == rooted.predecessor
 
 
+async def test_a_successor_starts_in_its_predecessors_reported_root(rooted: Rig) -> None:
+    """Its writer worked in another repo: the successor is started there, bound to it, and not
+    in the project's folder, where its adopt step would find no `ready` (DEC-131)."""
+    envelopes = rooted.envelopes
+    assert isinstance(envelopes, RootedEnvelopes)
+    envelopes.by_root[REPORTED_ROOT] = [_envelope(HandoffEvent.READY, rooted.predecessor)]
+
+    async def reported():
+        return {rooted.predecessor: REPORTED_ROOT}
+
+    await _rooted_pass(rooted, _no_worktrees, reported).run_once()
+
+    (command,) = rooted.launches
+    assert (command.folder, command.reuse_folder_of) == (REPORTED_ROOT, None)
+
+
+async def test_a_report_of_the_default_root_launches_as_before(rooted: Rig) -> None:
+    """Reporting the root it already had changes nothing: the successor reuses its
+    predecessor's folder, its worktree included, rather than being bound to a folder."""
+    envelopes = rooted.envelopes
+    assert isinstance(envelopes, RootedEnvelopes)
+    envelopes.by_root[ROOT] = [_envelope(HandoffEvent.READY, rooted.predecessor)]
+
+    async def reported():
+        return {rooted.predecessor: ROOT}
+
+    await _rooted_pass(rooted, _no_worktrees, reported).run_once()
+
+    (command,) = rooted.launches
+    assert (command.folder, command.reuse_folder_of) == (None, rooted.predecessor)
+
+
+async def test_a_report_of_the_default_root_through_a_link_launches_as_before(
+    rooted: Rig, tmp_path: Path
+) -> None:
+    """The report is a resolved path and the default may not be: the same folder reached
+    through a link is still the same root, and its worktree binding is kept."""
+    real = tmp_path / "real"
+    real.mkdir()
+    linked = tmp_path / "linked"
+    linked.symlink_to(real)
+    envelopes = rooted.envelopes
+    assert isinstance(envelopes, RootedEnvelopes)
+    envelopes.by_root[real] = [_envelope(HandoffEvent.READY, rooted.predecessor)]
+
+    async def worktree_roots():
+        return {rooted.predecessor: linked}
+
+    async def reported():
+        return {rooted.predecessor: real}
+
+    await _rooted_pass(rooted, worktree_roots, reported).run_once()
+
+    (command,) = rooted.launches
+    assert (command.folder, command.reuse_folder_of) == (None, rooted.predecessor)
+
+
+async def test_a_gone_worktree_with_a_report_starts_its_successor_in_the_report(
+    rooted: Rig,
+) -> None:
+    """No default root at all, and a reported one: the successor is bound there, never sent to
+    the project folder (DEC-123)."""
+    envelopes = rooted.envelopes
+    assert isinstance(envelopes, RootedEnvelopes)
+    envelopes.by_root[REPORTED_ROOT] = [_envelope(HandoffEvent.READY, rooted.predecessor)]
+
+    async def worktree_roots():
+        return {rooted.predecessor: None}
+
+    async def reported():
+        return {rooted.predecessor: REPORTED_ROOT}
+
+    await _rooted_pass(rooted, worktree_roots, reported).run_once()
+
+    (command,) = rooted.launches
+    assert (command.folder, command.reuse_folder_of) == (REPORTED_ROOT, None)
+
+
 async def test_a_successor_is_launched_to_reuse_its_predecessors_folder(rig: Rig) -> None:
     rig.ready()
 

@@ -64,6 +64,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from contextlib import AbstractAsyncContextManager, nullcontext
 from dataclasses import dataclass
@@ -202,8 +203,9 @@ class _Seen:
 
     def root_of(self, rollover: Rollover) -> Path | None:
         """The checkout a rollover's envelopes live in: its predecessor's, which its successor
-        shares by reusing the folder. Read off the successor once the predecessor is no longer
-        listed, so a successor's `accepted` is still found and the envelopes still cleaned."""
+        shares -- reusing the folder, or bound to the root the predecessor's writer reported.
+        Read off the successor once the predecessor is no longer listed, so a successor's
+        `accepted` is still found and the envelopes still cleaned."""
         root = self.roots.get(rollover.predecessor_session_id)
         if root is None and rollover.successor_session_id is not None:
             root = self.roots.get(rollover.successor_session_id)
@@ -503,6 +505,37 @@ class RolloverPass:
             return
         await self._store.note(rollover.id, detail, at=self._now())
 
+    def _successor_launch(self, rollover: Rollover, seen: _Seen) -> LaunchCommand:
+        """The successor carries on where its predecessor worked. Its predecessor's folder --
+        the same worktree when it has one (BL-116, amending DEC-115) -- unless the predecessor's
+        writer reported another root: then it starts there, bound to that folder, because its
+        adopt step resolves its repo root from its own folder and finds the `ready` only there
+        (DEC-131). A folder not yet trusted holds it on its trust dialog (DEC-125).
+
+        The two roots are compared resolved: a report is a resolved path and a default may be
+        reached through a link, and the same folder must keep its worktree binding."""
+        assert rollover.handoff_id is not None  # HANDOFF_READY is opened from a `ready` only
+        predecessor = rollover.predecessor_session_id
+        reported = seen.roots.get(predecessor)
+        default = seen.defaults.get(predecessor)
+        if reported is not None and (
+            default is None or os.path.realpath(reported) != os.path.realpath(default)
+        ):
+            return LaunchCommand(
+                rollover.project_id,
+                rollover.profile_id,
+                f"rollover:{rollover.handoff_id}",
+                guard_wait=UNATTENDED_LAUNCH_WAIT_SECONDS,
+                folder=reported,
+            )
+        return LaunchCommand(
+            rollover.project_id,
+            rollover.profile_id,
+            f"rollover:{rollover.handoff_id}",
+            guard_wait=UNATTENDED_LAUNCH_WAIT_SECONDS,
+            reuse_folder_of=predecessor,
+        )
+
     async def _start_successor(self, rollover: Rollover, seen: _Seen) -> None:
         if rollover.successor_session_id is not None:
             # Recorded only once SUCCESSOR_STARTING is persisted, so one here is a contradiction;
@@ -520,17 +553,7 @@ class RolloverPass:
         async with self._operation():
             starting = await self._store.advance(rollover.id, _S.SUCCESSOR_STARTING, at=self._now())
             try:
-                outcome = await self._launch(
-                    LaunchCommand(
-                        rollover.project_id,
-                        rollover.profile_id,
-                        f"rollover:{rollover.handoff_id}",
-                        guard_wait=UNATTENDED_LAUNCH_WAIT_SECONDS,
-                        # The successor carries on in its predecessor's folder: the same
-                        # worktree when it has one (BL-116, amending DEC-115).
-                        reuse_folder_of=rollover.predecessor_session_id,
-                    )
-                )
+                outcome = await self._launch(self._successor_launch(rollover, seen))
             except DuplicateCommandError:
                 await self._fail(
                     starting, seen, SUCCESSOR_UNKNOWN, "the launch key was already claimed"
