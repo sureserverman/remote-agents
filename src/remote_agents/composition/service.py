@@ -7,7 +7,7 @@ import fcntl
 import logging
 import os
 import time
-from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Iterable, Iterator, Mapping, Sequence
 from contextlib import (
     AbstractAsyncContextManager,
     AbstractContextManager,
@@ -55,12 +55,19 @@ from remote_agents.application.worktree_cleanup import WorktreeCleanupPass
 from remote_agents.application.worktrees import main_checkout
 from remote_agents.config import TelegramSecrets
 from remote_agents.domain.conversations import ProfileResumeCapability
-from remote_agents.domain.models import ProfileId, ProjectId, SessionId, SessionState
+from remote_agents.domain.models import (
+    ProfileId,
+    ProjectId,
+    SessionId,
+    SessionRecord,
+    SessionState,
+)
 from remote_agents.ports.agent_activity import ActivityConfidence, ActivityKind, AgentActivity
 from remote_agents.ports.git_checkout import GitCheckout
 from remote_agents.ports.interrupted_resumes import RESUMING, InterruptedResumes
 from remote_agents.ports.limit_stop_outcomes import LimitStopOutcomes
 from remote_agents.ports.message_relay import MessageRelay, RelayOutcome, RelayResult
+from remote_agents.ports.reported_roots import ReportedRoots
 from remote_agents.ports.session_store import SessionStore
 from remote_agents.ports.state_events import StoreChanged
 from remote_agents.ports.terminal import PromptDelivery
@@ -913,6 +920,7 @@ def build_rollover_pass(
     notify: Callable[[RolloverReport], Awaitable[None]] | None = None,
     operation: Callable[[], AbstractAsyncContextManager[object]] = nullcontext,
     worktrees: WorktreeStore | None = None,
+    reported: ReportedRoots | None = None,
 ) -> RolloverPass:
     """The rollover pass `serve` runs, and only `serve` (DEC-115, DEC-015/070: built here,
     beside the loop that runs it, so no other composition has one to run).
@@ -925,8 +933,22 @@ def build_rollover_pass(
 
     A session bound to a worktree reads its envelopes under that worktree's top level instead
     (BL-116): `worktrees` answers every binding in one read per pass. A worktree that is gone
-    has no root, so its sessions are not rolled over -- never read under the main checkout.
+    has no root of its own, so its sessions are not rolled over -- never read under the main
+    checkout -- unless the session's writer reported a root.
+
+    A session whose handoff writer reported another root reads its envelopes there (DEC-131):
+    `reported` answers through `reported_roots_reader`.
     """
+
+    rollovers = SQLiteRolloverStore(connection)
+
+    async def held_sessions() -> tuple[SessionId, ...]:
+        named: list[SessionId] = []
+        for rollover in await rollovers.open_rollovers():
+            named.append(rollover.predecessor_session_id)
+            if rollover.successor_session_id is not None:
+                named.append(rollover.successor_session_id)
+        return tuple(named)
 
     async def worktree_roots() -> dict[SessionId, Path | None]:
         if worktrees is None:
@@ -944,12 +966,17 @@ def build_rollover_pass(
         return roots
 
     return RolloverPass(
-        SQLiteRolloverStore(connection),
+        rollovers,
         FileHandoffEnvelopes(),
         adopt_templates=adopt_templates,
         sessions=sessions.list_sessions,
         handoff_root=lambda project: handoff_root(project_paths.get(project)),
         worktree_roots=worktree_roots,
+        reported_roots=(
+            None
+            if reported is None
+            else reported_roots_reader(reported, sessions.list_sessions, held_sessions)
+        ),
         enabled=enabled,
         idle=terminal.pane_idle,
         launch=sessions.launch,
@@ -959,6 +986,43 @@ def build_rollover_pass(
         notify=notify,
         operation=operation,
     )
+
+
+def reported_roots_reader(
+    reported: ReportedRoots,
+    sessions: Callable[[], Awaitable[Sequence[SessionRecord]]],
+    held: Callable[[], Awaitable[Iterable[SessionId]]],
+) -> Callable[[], Awaitable[dict[SessionId, Path]]]:
+    """Each listed session's reported root, read once per pass (DEC-131).
+
+    Only what the store's acceptance rule passes is answered, so a root that stopped being a
+    git top level this user owns reads as no report and the session keeps its default root.
+    A session no longer listed, or ENDED, has its report forgotten, as `forget_marks` forgets
+    conversation marks: only ENDED, since an UNTRUSTED or STARTING session is live -- and
+    never while an open rollover names it (`held`). A stopped predecessor is ENDED before its
+    rollover finishes, and the successor's `accepted`, the envelopes' clean-up and the request's
+    withdrawal are all read under its root until then. A report is a file, not a row, so this
+    runs whether or not the rollover switch is on.
+    """
+
+    async def read() -> dict[SessionId, Path]:
+        named = set(await held())
+        kept = {
+            str(record.session_id): record.session_id
+            for record in await sessions()
+            if record.state is not SessionState.ENDED or record.session_id in named
+        }
+        roots: dict[SessionId, Path] = {}
+        for session in reported.sessions():
+            if session not in kept:
+                reported.forget(session)
+                continue
+            root = reported.latest(session)
+            if root is not None:
+                roots[kept[session]] = root
+        return roots
+
+    return read
 
 
 def live_session_check(store: SessionStore) -> Callable[[str], Awaitable[bool]]:

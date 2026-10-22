@@ -20,6 +20,7 @@ from remote_agents.adapters.agents.registry import (
     profiles_with_finished_events,
     provider_descriptors,
 )
+from remote_agents.adapters.agents.reported_roots import FileReportedRoots
 from remote_agents.adapters.agents.turn_markers import FileConversationMarks, FileTurnMarkers
 from remote_agents.adapters.sqlite.activity_store import SQLiteActivityStore
 from remote_agents.adapters.sqlite.callback_state_store import SQLiteCallbackStateStore
@@ -37,6 +38,7 @@ from remote_agents.adapters.sqlite.standing_notification_store import (
 from remote_agents.adapters.sqlite.trust_notifications import SQLiteTrustNotificationStore
 from remote_agents.adapters.telegram import FRONTEND
 from remote_agents.adapters.telegram.service import build_private_bot
+from remote_agents.adapters.workflow.roots import acceptable_root
 from remote_agents.application.activity import CodexApprovalWatcher
 from remote_agents.application.limit_lifts import LimitLiftWatcher
 from remote_agents.application.limit_resume import LimitResume
@@ -361,6 +363,8 @@ def _private_boundary(
                 # The same gate `drain` shuts (DEC-046), held across each persist-and-act.
                 operation=locks.operation,
                 worktrees=worktrees.store,
+                # What `remote-agents session-id` recorded, by the same rule it wrote with.
+                reported=FileReportedRoots(paths.activity_directory, accept=acceptable_root),
             )
         ),
         rollover_notifier=boundary.rollover_notifier,

@@ -184,11 +184,17 @@ class _Seen:
 
     Keyed by session, not project (BL-116): a session in its own worktree writes its envelopes
     under that worktree's top level, so two sessions of one project can have two roots. A
-    session with no root here -- no checkout, or a worktree that is gone -- is never rolled
-    over, and never read under the project's main checkout instead."""
+    session whose writer reported another root works there, and its envelopes are read there
+    (DEC-131). A session with no root here -- no checkout and no report, or a worktree that is
+    gone and no report -- is never rolled over, and never read under the project's main
+    checkout instead.
+
+    `defaults` is the root each session would have had with no report: its worktree's or its
+    project's, where it has one."""
 
     sessions: dict[SessionId, SessionRecord]
     roots: dict[SessionId, Path]
+    defaults: dict[SessionId, Path]
 
     def running(self, session_id: SessionId | None) -> bool:
         record = None if session_id is None else self.sessions.get(session_id)
@@ -226,6 +232,7 @@ class RolloverPass:
         sessions: Callable[[], Awaitable[Sequence[SessionRecord]]],
         handoff_root: Callable[[ProjectId], Path | None],
         worktree_roots: Callable[[], Awaitable[Mapping[SessionId, Path | None]]] | None = None,
+        reported_roots: Callable[[], Awaitable[Mapping[SessionId, Path]]] | None = None,
         enabled: Callable[[], Awaitable[bool]],
         idle: Callable[[SessionId], Awaitable[bool]],
         launch: Callable[[LaunchCommand], Awaitable[object]],
@@ -249,6 +256,10 @@ class RolloverPass:
         #: for one whose worktree is gone. A session absent from it is regular and uses its
         #: project's root.
         self._worktree_roots = worktree_roots
+        #: The root each session's handoff writer last reported, read once per pass (DEC-131).
+        #: Only roots the one acceptance rule passes reach here; a session absent from it keeps
+        #: its default root.
+        self._reported_roots = reported_roots
         self._enabled = enabled
         self._idle = idle
         self._launch = launch
@@ -343,8 +354,10 @@ class RolloverPass:
     async def _look(self) -> _Seen:
         sessions = {record.session_id: record for record in await self._sessions()}
         bound = {} if self._worktree_roots is None else await self._worktree_roots()
+        reported = {} if self._reported_roots is None else await self._reported_roots()
         project_roots: dict[ProjectId, Path | None] = {}
         roots: dict[SessionId, Path] = {}
+        defaults: dict[SessionId, Path] = {}
         for record in sessions.values():
             if record.profile_id not in self._rollable:
                 continue
@@ -355,8 +368,15 @@ class RolloverPass:
                     project_roots[record.project_id] = self._handoff_root(record.project_id)
                 root = project_roots[record.project_id]
             if root is not None:
+                defaults[record.session_id] = root
+            # The writer's own report, when it made one, is where it works (DEC-131) -- also for
+            # a session whose worktree is gone: it has no default, and the report is a root of
+            # its own. Bounded as any report is: a `ready` there answers only for this session
+            # (DEC-115), and only a git top level this user owns is ever reported.
+            root = reported.get(record.session_id, root)
+            if root is not None:
                 roots[record.session_id] = root
-        return _Seen(sessions, roots)
+        return _Seen(sessions, roots, defaults)
 
     # -- envelopes ---------------------------------------------------------------------------
 
@@ -378,6 +398,8 @@ class RolloverPass:
                 continue
             predecessor = _session_id(ready.managed_session_id)
             record = None if predecessor is None else seen.sessions.get(predecessor)
+            # A `ready` answers only under its session's one root -- reported, worktree or project
+            # -- so a file in a root another session reported never speaks for this one (DEC-115).
             if (
                 record is None
                 or seen.roots.get(record.session_id) != root

@@ -5,12 +5,24 @@ never both launch, type or stop for one rollover."""
 from __future__ import annotations
 
 import ast
+import subprocess
+from datetime import UTC, datetime
 from pathlib import Path
 
 from remote_agents.adapters.agents.registry import adopt_templates
+from remote_agents.adapters.agents.reported_roots import FileReportedRoots
+from remote_agents.adapters.workflow.roots import acceptable_root
 from remote_agents.application.rollover import RolloverPass
 from remote_agents.application.rollover_book import RolloverBook
-from remote_agents.domain.models import ProfileId
+from remote_agents.composition.service import reported_roots_reader
+from remote_agents.domain.models import (
+    ProfileId,
+    ProjectId,
+    SessionDisplayIdentity,
+    SessionId,
+    SessionRecord,
+    SessionState,
+)
 
 SRC = Path(__file__).resolve().parents[2] / "src" / "remote_agents"
 
@@ -41,6 +53,8 @@ def test_the_bot_composition_wires_the_pass_and_both_surfaces_get_the_book(
     composition, paths, connection, ui = _composition(tmp_path, monkeypatch)
     try:
         assert isinstance(composition.rollover_pass, RolloverPass)
+        # The roots `remote-agents session-id` recorded are read by the pass (DEC-131).
+        assert composition.rollover_pass._reported_roots is not None
         assert isinstance(composition.boundary.backend.rollovers, RolloverBook)
         # The pass types what the verticals declare, and the surfaces offer Rollover now on
         # exactly the profiles it acts for: one map, read from the composition's descriptors.
@@ -80,3 +94,76 @@ def test_only_the_bot_composition_builds_or_runs_the_pass_anywhere_in_the_packag
     assert found["build_rollover_pass"], "the sweep found nothing to mean anything"
     for name, modules in found.items():
         assert modules <= allowed[name], (name, modules - allowed[name])
+
+
+# -- the roots sessions' writers reported (DEC-131) ------------------------------------------
+
+
+def _top_level(path: Path) -> Path:
+    path.mkdir(parents=True)
+    subprocess.run(["git", "init", "-q", "--template=", str(path)], check=True, timeout=60)
+    return path.resolve()
+
+
+def _listed(session_id: SessionId, state: SessionState) -> SessionRecord:
+    return SessionRecord(
+        session_id,
+        ProjectId("remote-agents"),
+        ProfileId("claude"),
+        SessionDisplayIdentity("remote-agents", "claude", "regular", 1, None),
+        state,
+        datetime(2026, 10, 22, tzinfo=UTC),
+    )
+
+
+async def test_the_pass_reads_each_listed_sessions_accepted_report_and_forgets_the_rest(
+    tmp_path,
+) -> None:
+    store = FileReportedRoots(tmp_path / "activity", accept=acceptable_root)
+    running, ended, unlisted, stale = (SessionId.new() for _ in range(4))
+    there = _top_level(tmp_path / "there")
+    gone = _top_level(tmp_path / "gone")
+    for session in (running, ended, unlisted):
+        assert store.record(str(session), there)
+    assert store.record(str(stale), gone)
+    # It stopped being a top level after it was reported: it reads as no report at all.
+    (gone / ".git").rename(gone / "was-git")
+
+    async def listed():
+        return (
+            _listed(running, SessionState.RUNNING),
+            _listed(ended, SessionState.ENDED),
+            _listed(stale, SessionState.RUNNING),
+        )
+
+    async def held():
+        return ()
+
+    roots = await reported_roots_reader(store, listed, held)()
+
+    assert roots == {running: there}
+    assert set(store.sessions()) == {str(running), str(stale)}
+
+
+async def test_an_ended_session_an_open_rollover_names_keeps_its_report(tmp_path) -> None:
+    """A stopped predecessor is ENDED while its rollover is still open: the successor's
+    `accepted` and the clean-up are read under its root, so the report stays until no open
+    rollover names it."""
+    store = FileReportedRoots(tmp_path / "activity", accept=acceptable_root)
+    predecessor, successor = SessionId.new(), SessionId.new()
+    there = _top_level(tmp_path / "there")
+    assert store.record(str(predecessor), there)
+
+    async def listed():
+        return (
+            _listed(predecessor, SessionState.ENDED),
+            _listed(successor, SessionState.RUNNING),
+        )
+
+    async def held():
+        return (predecessor, successor)
+
+    roots = await reported_roots_reader(store, listed, held)()
+
+    assert roots == {predecessor: there}
+    assert set(store.sessions()) == {str(predecessor)}
