@@ -1,9 +1,10 @@
 """The handoff envelopes in `<project>/.claude/handoffs/`, read and written without trusting them.
 
-The other end is coder-plugins' `handoff-envelope.py`, and the reading and writing rules here
-are its rules, so that a file one side refuses the other refuses too. The directory is inside
-a checkout: a test suite, a build script or an agent running there can put anything at any
-name in it, and the daemon reads it unattended. So:
+The other end is the planning plugin's `handoff-envelope.py` (staged-planning, and the
+coder-plugins copy until the cutover), and the reading and writing rules here are its rules, so
+that a file one side refuses the other refuses too. The directory is inside a checkout: a test
+suite, a build script or an agent running there can put anything at any name in it, and the
+daemon reads it unattended. So:
 
 - Each component below the project -- `.claude`, `handoffs`, the file -- is opened with
   `O_NOFOLLOW` relative to its parent's descriptor. A link at any of them is refused, never
@@ -15,10 +16,10 @@ name in it, and the daemon reads it unattended. So:
   It must then be a regular file of at most 4096 bytes, by `fstat` and by what a read returns.
 - Only names of the form `<handoff id>.<ready|accepted|failed>.json` are opened. The writer's
   `.<id>.claim` files, its `.gitignore`, its temp files and `request.json` are never events.
-- The body must be exactly the protocol's key set, version 1 as an integer (JSON `true` and
-  `1.0` compare equal to 1 in Python, and neither is the version), an event matching the
-  name's suffix, the name's own id, a session id by this service's own rule, and a UTC
-  timestamp in the one format the writer produces.
+- The body must be exactly the protocol's key set, a protocol id in ACCEPTED_PROTOCOLS,
+  version 1 as an integer (JSON `true` and `1.0` compare equal to 1 in Python, and neither is
+  the version), an event matching the name's suffix, the name's own id, a session id by this
+  service's own rule, and a UTC timestamp in the one format the writer produces.
 
 A refused file is dropped and the rest are still read; nothing here raises, and a failure
 reading one file never costs the others. A directory holding more than MAX_ENTRIES names is
@@ -56,7 +57,11 @@ from pathlib import Path
 from remote_agents.ports.handoff_envelopes import FAILURE_CODES, HandoffEnvelope, HandoffEvent
 from remote_agents.ports.session_identity import safe_session_id
 
-PROTOCOL = "remote-agents-handoff"
+PROTOCOL = "planning-handoff"
+# Read only, for the installed planning writer, until the cutover (staged-planning master
+# Sub-plan 7) drops it.
+LEGACY_PROTOCOL = "remote-agents-handoff"
+ACCEPTED_PROTOCOLS = frozenset({PROTOCOL, LEGACY_PROTOCOL})
 VERSION = 1
 CLAUDE_DIRECTORY = ".claude"
 HANDOFF_DIRECTORY = "handoffs"
@@ -92,7 +97,8 @@ _CREATE = os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | _CLOEXEC
 
 
 class FileHandoffEnvelopes:
-    """`HandoffEnvelopes` over the files coder-plugins' writer leaves in a project."""
+    """`HandoffEnvelopes` over the files the planning plugin's `handoff-envelope.py`
+    (staged-planning, and the coder-plugins copy until the cutover) leaves in a project."""
 
     def __init__(self, clock: Callable[[], datetime] = lambda: datetime.now(UTC)) -> None:
         self._clock = clock
@@ -212,7 +218,7 @@ def _requested_session(directory: int) -> str | None:
         body = json.loads(raw.decode("utf-8"), object_pairs_hook=_no_duplicate_keys)
     except Exception:
         return None
-    if not isinstance(body, dict) or body.get("protocol") != PROTOCOL:
+    if not isinstance(body, dict) or not _accepted_protocol(body.get("protocol")):
         return None
     return safe_session_id(body.get("managed_session_id"))
 
@@ -277,7 +283,7 @@ def _parsed(raw: bytes | None, name_id: str, suffix: str) -> HandoffEnvelope | N
         return None
     if set(body) != (_FAILED_KEYS if event is HandoffEvent.FAILED else _KEYS):
         return None
-    if body["protocol"] != PROTOCOL or type(body["version"]) is not int:
+    if not _accepted_protocol(body["protocol"]) or type(body["version"]) is not int:
         return None
     if body["version"] != VERSION or body["event"] != event.value:
         return None
@@ -309,6 +315,11 @@ def _parsed(raw: bytes | None, name_id: str, suffix: str) -> HandoffEnvelope | N
         plan=plan,
         failure_code=failure_code,
     )
+
+
+def _accepted_protocol(value: object) -> bool:
+    # A string first: `in` a frozenset hashes its operand, and a JSON list does not hash.
+    return isinstance(value, str) and value in ACCEPTED_PROTOCOLS
 
 
 def _showable_path(plan: str) -> bool:

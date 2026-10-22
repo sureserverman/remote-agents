@@ -49,13 +49,16 @@ HANDOFF = "h-0123456789abcdef0123"
 #: from the Claude vertical's `adopt_template` on purpose: the pass types the descriptor's value,
 #: so a wrong vertical string is caught here by an agent that never adopts it.
 TEMPLATE = f"/planning:executing-plans --adopt-handoff {HANDOFF}"
+#: The neutral id the planning writer stamps, and the one its installed copy still stamps until
+#: the cutover: the reader takes both.
+PROTOCOL, LEGACY_PROTOCOL = "planning-handoff", "remote-agents-handoff"
 
 _AGENT = """
 import json, os, sys, time
 from pathlib import Path
 
-HANDOFF, MODE = sys.argv[1], Path(sys.argv[2])
-ASK = len(sys.argv) > 3 and Path(sys.argv[3]).read_text() == "ask"
+HANDOFF, MODE, PROTOCOL = sys.argv[1], Path(sys.argv[2]), sys.argv[3]
+ASK = len(sys.argv) > 4 and Path(sys.argv[4]).read_text() == "ask"
 me = os.environ["REMOTE_AGENTS_SESSION_ID"]
 handoffs = Path.cwd() / ".claude" / "handoffs"
 
@@ -63,7 +66,7 @@ handoffs = Path.cwd() / ".claude" / "handoffs"
 def envelope(event, suffix, **extra):
     handoffs.mkdir(parents=True, exist_ok=True)
     body = {
-        "protocol": "remote-agents-handoff",
+        "protocol": PROTOCOL,
         "version": 1,
         "event": event,
         "handoff_id": HANDOFF,
@@ -128,9 +131,10 @@ async def _type(terminal: TmuxTerminal, session_id: SessionId, text: str) -> Non
     raise AssertionError(f"the cue was not typed: {delivery}")
 
 
+@pytest.mark.parametrize("protocol", [PROTOCOL, LEGACY_PROTOCOL])
 @pytest.mark.parametrize("mode", ["accept", "fail"])
 async def test_a_ready_rolls_over_to_one_successor_and_stops_only_on_accept(
-    tmp_path: Path, mode: str
+    tmp_path: Path, mode: str, protocol: str
 ) -> None:
     project = tmp_path / "opaque-editor"
     (project / ".git").mkdir(parents=True)
@@ -149,7 +153,7 @@ async def test_a_ready_rolls_over_to_one_successor_and_stops_only_on_accept(
         profile_factories={
             PROFILE: lambda session_id, _remote_control: LaunchProfile(
                 sys.executable,
-                (sys.executable, str(agent), HANDOFF, str(mode_file)),
+                (sys.executable, str(agent), HANDOFF, str(mode_file), protocol),
                 {"PATH": os.environ["PATH"], SESSION_ID_VARIABLE: str(session_id)},
                 "READY",
             )
@@ -262,7 +266,7 @@ async def test_a_worktree_sessions_successor_starts_in_the_same_worktree(tmp_pat
         profile_factories={
             PROFILE: lambda session_id, _remote_control: LaunchProfile(
                 sys.executable,
-                (sys.executable, str(agent), HANDOFF, str(mode_file)),
+                (sys.executable, str(agent), HANDOFF, str(mode_file), PROTOCOL),
                 {"PATH": os.environ["PATH"], SESSION_ID_VARIABLE: str(session_id)},
                 "READY",
             )
@@ -383,7 +387,7 @@ async def test_a_trust_held_successor_is_typed_once_after_the_owner_trusts_it(
         profile_factories={
             PROFILE: lambda session_id, _remote_control: LaunchProfile(
                 sys.executable,
-                (sys.executable, str(agent), HANDOFF, str(mode_file), str(ask)),
+                (sys.executable, str(agent), HANDOFF, str(mode_file), PROTOCOL, str(ask)),
                 {"PATH": os.environ["PATH"], SESSION_ID_VARIABLE: str(session_id)},
                 "READY",
             )
