@@ -30,7 +30,10 @@ from pathlib import Path
 
 import pytest
 
-from remote_agents.adapters.workflow.handoff_envelopes import FileHandoffEnvelopes
+from remote_agents.adapters.workflow.handoff_envelopes import (
+    LEGACY_PROTOCOL,
+    FileHandoffEnvelopes,
+)
 from remote_agents.ports.handoff_envelopes import HandoffEvent
 
 SESSION = "ra-compat_1"
@@ -52,6 +55,9 @@ class Writer:
     variable: str
     relative: str
     asks_the_verb: bool
+    #: Reads only `remote-agents-handoff`. Both writers here do, until the staged-planning
+    #: cutover (master Sub-plan 7) retires them.
+    legacy: bool = True
 
 
 _WRITERS = {
@@ -224,13 +230,27 @@ def test_a_tampered_copy_of_each_kind_is_rejected_beside_the_real_one(
     }
 
 
+def _restamp_legacy(repo: Path) -> None:
+    """Rewrite `request.json` as the installed supervisor (0.66.0) writes it: the legacy id."""
+    request = repo / ".claude" / "handoffs" / "request.json"
+    body = json.loads(request.read_bytes())
+    request.write_text(json.dumps(body | {"protocol": LEGACY_PROTOCOL}))
+
+
 def test_a_request_this_side_writes_is_one_the_planning_side_sees(
     harness: Harness, repo: Path
 ) -> None:
+    """A legacy writer does not see a request this side now writes (`planning-handoff`): the
+    interim, asserted rather than skipped. It still sees one in the legacy form the installed
+    supervisor writes, and the installed supervisor is not upgraded until the cutover replaces
+    it and these writers together."""
     adapter = FileHandoffEnvelopes()
 
     assert harness.run(repo, "request-pending").returncode == 1
     assert adapter.write_request(repo, SESSION) is True
+    if harness.writer.legacy:
+        assert harness.run(repo, "request-pending").returncode == 1
+        _restamp_legacy(repo)
     assert harness.run(repo, "request-pending").returncode == 0
     assert harness.run(repo, "request-pending", session="another-session").returncode == 1
 
@@ -243,10 +263,12 @@ def test_a_codex_writer_stamps_the_verbs_session_never_the_inherited_one(
 ) -> None:
     """A request for the daemon starter is not one for this shell, and an unmanaged shell
     (the verb exits 3) writes nothing at all (DEC-128). Codex only: the claude writer names its
-    session by the inherited variable, by design."""
+    session by the inherited variable, by design. The request carries the legacy id, the one
+    this fork reads, so the session and not the protocol is what refuses it."""
     harness = codex_harness
     adapter = FileHandoffEnvelopes()
     assert adapter.write_request(repo, DAEMON_STARTER) is True
+    _restamp_legacy(repo)
     assert harness.run(repo, "request-pending").returncode == 1
 
     handoff = _new_id(harness, repo)
