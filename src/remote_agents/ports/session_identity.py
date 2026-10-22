@@ -38,6 +38,15 @@ the value with `shlex` and runs it with no shell. The interpreter runs isolated,
 the folder the writer runs it from cannot answer either.
 """
 
+HANDOFF_ROOT_VARIABLE = "PLANNING_HANDOFF_ROOT"
+"""The root a handoff writer reports, set in the environment of the command above, never a pane's.
+
+The writer runs `SUPERVISOR_ID_COMMAND_VARIABLE`'s command with this set to the realpath of the
+git top level it writes envelopes under. It is a variable, not an argument, because an older
+`session-id` exits 2 on any extra argument and ignores an unknown variable. It names no session:
+the command resolves the session by its own rule, and only then records this root for it.
+"""
+
 
 _SAFE_SESSION_ID = re.compile(r"[A-Za-z0-9_-]{1,128}")
 

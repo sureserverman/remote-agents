@@ -1,0 +1,28 @@
+{
+ "baseline": {
+  "elapsed_s": 1.1,
+  "exit": 0,
+  "tail": "bringing up nodes...\nbringing up nodes...\n\n........................................................................ [ 84%]\n.............                                                            [100%]\n85 passed in 0.90s"
+ },
+ "break_patch": "--- a/src/remote_agents/adapters/workflow/roots.py\n+++ b/src/remote_agents/adapters/workflow/roots.py\n@@ -27,7 +27,7 @@\n         status = os.stat(resolved)\n         if not stat.S_ISDIR(status.st_mode) or status.st_uid != os.geteuid():\n             return None\n-        return resolved if handoff_root(resolved) == resolved else None\n+        return resolved\n     except (OSError, ValueError):\n         return None\n \n",
+ "build": null,
+ "created": "2026-10-22T15:00:00+00:00",
+ "fingerprint": "1584267ec4bc5fa2b249616ced7ed585b08a5b70fa5d674622810d95b7a8d14e",
+ "index": 1,
+ "kind": "claim",
+ "named_break": null,
+ "no_build_reason": "python package, no build",
+ "plan": "/mnt/vault/Portfolio/ai-tools/coder-plugins/plans/2026-10-19-staged-planning-portable-sub-03-neutral-handoff-plan.md",
+ "red": {
+  "elapsed_s": 1.1,
+  "exit": 1,
+  "tail": "        shell: Path,\n        monkeypatch: pytest.MonkeyPatch,\n        capsys: pytest.CaptureFixture[str],\n        tmp_path: Path,\n        shape: str,\n    ) -> None:\n        session = str(SessionId.new())\n        top = _repo(tmp_path / \"other-repo\")\n        (top / \"sub\").mkdir()\n        (top / \"notes.txt\").write_text(\"x\", encoding=\"utf-8\")\n        (tmp_path / \"loose\").mkdir()\n        value = {\n            \"subfolder\": str(top / \"sub\"),\n            \"no-repo\": str(tmp_path / \"loose\"),\n            \"relative\": \"other-repo\",\n            \"file\": str(top / \"notes.txt\"),\n            \"empty\": \"\",\n        }[shape]\n        monkeypatch.chdir(tmp_path)\n        monkeypatch.setenv(\"REMOTE_AGENTS_SESSION_ID\", session)\n        monkeypatch.setenv(_ROOT_VARIABLE, value)\n    \n        code, out, err = _run_both(shell, capsys)\n    \n        assert (code, out) == (0, f\"{session}\\n\")\n>       assert err.startswith(_NOT_RECORDED) and err.count(\"\\n\") == 1, err\nE       AssertionError: \nE       assert (False)\nE        +  where False = <built-in method startswith of str object at 0x16001b0>('session-id: root not recorded: ')\nE        +    where <built-in method startswith of str object at 0x16001b0> = ''.startswith\n\n/home/user/dev/infra/remote-agents/tests/unit/test_session_id_verb.py:431: AssertionError\n=========================== short test summary info ============================\nFAILED tests/unit/adapters/workflow/test_handoff_root.py::test_anything_but_a_top_level_is_not_acceptable[subfolder]\nFAILED tests/unit/adapters/agents/test_reported_roots.py::test_a_root_the_rule_refuses_is_never_written\nFAILED tests/unit/adapters/workflow/test_handoff_root.py::test_anything_but_a_top_level_is_not_acceptable[no-repo]\nFAILED tests/unit/adapters/agents/test_reported_roots.py::test_latest_refuses_content_the_rule_refuses[sub]\nFAILED tests/unit/test_session_id_verb.py::test_session_id_command_records_no_root_but_a_top_level_and_still_answers[no-repo]\nFAILED tests/unit/test_session_id_verb.py::test_session_id_command_records_no_root_but_a_top_level_and_still_answers[subfolder]\n6 failed, 79 passed in 0.90s"
+ },
+ "schema": 2,
+ "task": "2.2",
+ "test": "cd /home/user/dev/infra/remote-agents && .venv/bin/python -m pytest -q -n auto tests/unit/adapters/workflow/test_handoff_root.py tests/unit/adapters/agents/test_reported_roots.py tests/unit/test_session_id_verb.py tests/architecture/test_session_id_command.py tests/integration/test_supervisor_id_command.py",
+ "text": "`cd /home/user/dev/infra/remote-agents && .venv/bin/python -m pytest -q -n auto tests/unit/adapters/workflow/test_handoff_root.py tests/unit/adapters/agents/test_reported_roots.py tests/unit/test_session_id_verb.py tests/architecture/test_session_id_command.py tests/integration/test_supervisor_id_command.py`",
+ "touched": [
+  "src/remote_agents/adapters/workflow/roots.py"
+ ]
+}

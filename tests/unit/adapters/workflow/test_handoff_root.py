@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import os
+import subprocess
 from pathlib import Path
 
 import pytest
 
-from remote_agents.adapters.workflow.roots import handoff_root
+from remote_agents.adapters.workflow.roots import acceptable_root, handoff_root
 
 
 def test_a_project_at_the_top_level_is_its_own_root(tmp_path: Path) -> None:
@@ -37,3 +39,60 @@ def test_a_project_in_no_checkout_has_no_root(tmp_path: Path) -> None:
 
     assert handoff_root(project) is None
     assert handoff_root(None) is None
+
+
+# --- Task 2.2: the one rule a reported root must pass, on write and on read ---
+
+
+def _repo(path: Path) -> Path:
+    path.mkdir(parents=True, exist_ok=True)
+    subprocess.run(
+        ["git", "init", "-q", "--template=", str(path)], check=True, timeout=30, capture_output=True
+    )
+    return path
+
+
+def test_an_absolute_git_top_level_this_user_owns_is_acceptable(tmp_path: Path) -> None:
+    top = _repo(tmp_path / "repo")
+
+    assert acceptable_root(str(top)) == Path(os.path.realpath(top))
+
+
+def test_a_link_to_a_top_level_is_accepted_as_its_target(tmp_path: Path) -> None:
+    top = _repo(tmp_path / "repo")
+    link = tmp_path / "link"
+    link.symlink_to(top)
+
+    assert acceptable_root(str(link)) == Path(os.path.realpath(top))
+
+
+@pytest.mark.parametrize("shape", ["subfolder", "no-repo", "relative", "file", "missing"])
+def test_anything_but_a_top_level_is_not_acceptable(tmp_path: Path, shape: str) -> None:
+    top = _repo(tmp_path / "repo")
+    (top / "sub").mkdir()
+    (tmp_path / "loose").mkdir()
+    (top / "notes.txt").write_text("x", encoding="utf-8")
+    value = {
+        "subfolder": str(top / "sub"),
+        "no-repo": str(tmp_path / "loose"),
+        "relative": os.path.relpath(top),
+        "file": str(top / "notes.txt"),
+        "missing": str(tmp_path / "gone"),
+    }[shape]
+
+    assert acceptable_root(value) is None
+
+
+@pytest.mark.parametrize("value", [None, "", 7, "/tmp/\0nul"])
+def test_a_value_that_names_no_path_is_not_acceptable(value: object) -> None:
+    assert acceptable_root(value) is None
+
+
+def test_a_top_level_another_user_owns_is_not_acceptable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    top = _repo(tmp_path / "repo")
+    owner = os.geteuid()
+    monkeypatch.setattr(os, "geteuid", lambda: owner + 1)
+
+    assert acceptable_root(str(top)) is None
