@@ -1,10 +1,10 @@
 """The handoff envelopes in `<project>/.claude/handoffs/`, read and written without trusting them.
 
 The other end is the planning plugin's `handoff-envelope.py` (staged-planning, and the
-coder-plugins copy until the cutover), and the reading and writing rules here are its rules, so
+legacy Claude copy until the cutover), and the reading and writing rules here are its rules, so
 that a file one side refuses the other refuses too. One exception lasts until that cutover: this
 side reads both protocol ids but writes only `planning-handoff`, which the legacy writers (the
-coder-plugins copy and engineering-skills' Codex fork) do not read, so they do not see a request
+legacy Claude copy and engineering-skills' Codex fork) do not read, so they do not see a request
 this side writes. The directory is inside a checkout: a test suite, a build script or an agent
 running there can put anything at any name in it, and the daemon reads it unattended. So:
 
@@ -103,7 +103,7 @@ _CREATE = os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | _CLOEXEC
 
 class FileHandoffEnvelopes:
     """`HandoffEnvelopes` over the files the planning plugin's `handoff-envelope.py`
-    (staged-planning, and the coder-plugins copy until the cutover) leaves in a project."""
+    (staged-planning, and the legacy Claude copy until the cutover) leaves in a project."""
 
     def __init__(self, clock: Callable[[], datetime] = lambda: datetime.now(UTC)) -> None:
         self._clock = clock

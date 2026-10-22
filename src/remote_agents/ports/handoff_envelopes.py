@@ -1,12 +1,12 @@
 """The files a supervised plan executor leaves when it hands its work to a fresh session.
 
-The planning plugin (coder-plugins' `handoff-envelope.py`) writes one small JSON envelope per
-step of a handoff into `<project>/.claude/handoffs/`: `ready` when the old session has
-written its resume point, `accepted` when a fresh session took it, `failed` with a closed
+The planning plugin (staged-planning), through its `handoff-envelope.py`, writes one small JSON
+envelope per step of a handoff into `<project>/.claude/handoffs/`: `ready` when the old session
+has written its resume point, `accepted` when a fresh session took it, `failed` with a closed
 reason when it did not. This service reads them by project directory, which is what keeps
-DEC-063 intact: no hook changes, and nothing here learns about a handoff from inside an
-agent. The one file flowing the other way is `request.json`, by which this service asks a
-managed session to hand off.
+DEC-063 intact: no hook changes, and nothing here learns about a handoff from inside an agent.
+The one file flowing the other way is `request.json`, by which this service asks a managed
+session to hand off.
 
 "Handoff" names the plugin's envelope and nothing else. What this service does with one --
 launching a successor, stopping the predecessor -- is a *rollover*, and lives elsewhere.

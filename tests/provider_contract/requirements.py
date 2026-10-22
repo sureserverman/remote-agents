@@ -59,7 +59,7 @@ DECLARATIONS: dict[str, dict[str, tuple[Requirement, str]]] = {
         ),
         "composer": (SUPPORTED, "idle/busy/dialog patterns measured on 2.1.280, 2026-09-23"),
         "limit_screen": (SUPPORTED, "limit sentence read from the 2.1.284 bundle, 2026-09-28"),
-        "adopt_template": (SUPPORTED, "the coder-plugins planning plugin's `/` command"),
+        "adopt_template": (SUPPORTED, "the `/` command of the planning plugin (staged-planning)"),
     },
     "codex": {
         "sessions": (SUPPORTED, "rollout catalogue via the app-server client"),

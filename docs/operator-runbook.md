@@ -659,7 +659,7 @@ it and ask for it but never act.
   back on. Rolling back to 0.58.0 or earlier needs the table deleted first; see
   [rollback](#rollback-and-local-recovery).
 - **What starts one.** Only `claude` and `codex` sessions take part: each runs a planning plugin
-  that writes handoff envelopes (Claude Code's from coder-plugins; Codex's
+  that writes handoff envelopes (Claude Code's from the planning plugin (staged-planning); Codex's
   `planning@engineering-skills` 0.2.1 or later, which asks `remote-agents session-id` who it is).
   Which agents roll over is each one's own declaration (its adopt command); OpenCode and Cursor
   declare none. A `ready` envelope from a running one, under `.claude/handoffs/` at the
@@ -678,7 +678,10 @@ it and ask for it but never act.
 - **The handoff root.** A session's root is the git top level its planning writer last reported,
   else its worktree's, else its project's. A writer reports one by running the command in
   `PLANNING_SUPERVISOR_ID_CMD` with `PLANNING_HANDOFF_ROOT` set; that is how a plan that works
-  in another repository still rolls over. Only a git top level you own is accepted. Costs, by
+  in another repository still rolls over. The service sets that variable in every managed pane,
+  to this install's own interpreter running `-I -m remote_agents session-id`, so no other
+  `remote-agents` on the pane's `PATH` answers. The planning writer runs it, split into words
+  and with no shell. The command, not the variable, names the session (DEC-128). Only a git top level you own is accepted. Costs, by
   design: a process with a managed pane's environment can point a session at any top level you
   own, and each forged `ready` there starts one successor (a folder never trusted waits for you);
   a process that claims a session's id -- a nested agent in another repository, say -- can

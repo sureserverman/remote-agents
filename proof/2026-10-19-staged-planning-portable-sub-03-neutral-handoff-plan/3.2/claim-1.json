@@ -1,0 +1,28 @@
+{
+ "baseline": {
+  "elapsed_s": 2.2,
+  "exit": 0,
+  "tail": "bringing up nodes...\nbringing up nodes...\n\n.....................................................s....s............. [ 34%]\n..........s...s.....s..................s................................ [ 69%]\n..........................................s.s.................           [100%]\n=========================== short test summary info ============================\nSKIPPED [1] tests/provider_contract/kit.py:39: unsupported by declaration: no handoff writer ported to opencode (BL-123); the registry declares None [requirements.py]\nSKIPPED [1] tests/provider_contract/kit.py:39: unsupported by declaration: no handoff writer ported to cursor (BL-123); the registry declares None [requirements.py]\nSKIPPED [1] tests/provider_contract/kit.py:39: unsupported by declaration: opencode has no remote control; the registry declares None [requirements.py]\nSKIPPED [1] tests/provider_contract/kit.py:39: unsupported by declaration: cursor has no remote control; the registry declares None [requirements.py]\nSKIPPED [1] tests/provider_contract/kit.py:39: unsupported by declaration: claude's toggle is a pane action, not a host one; the registry declares None [requirements.py]\nSKIPPED [1] tests/provider_contract/kit.py:39: unsupported by declaration: no limit sentence measured for opencode; the registry declares None [requirements.py]\nSKIPPED [2] tests/provider_contract/kit.py:39: unsupported by declaration: opencode raises no folder-trust dialog at all; the registry declares None [requirements.py]\n198 passed, 8 skipped in 1.49s"
+ },
+ "break_patch": "diff --git b/src/remote_agents/adapters/workflow/roots.py a/src/remote_agents/adapters/workflow/roots.py\nindex d04ee5f7..76dc4c4e 100644\n--- b/src/remote_agents/adapters/workflow/roots.py\n+++ a/src/remote_agents/adapters/workflow/roots.py\n@@ -1,7 +1,7 @@\n \"\"\"Where a project's handoff envelopes live: the top level of the git checkout holding it.\n \n The planning plugin writes envelopes and reads `request.json` under the repository's top level,\n-whatever directory its session was started in (DEC-130). A project registered at a\n+whatever directory its session was started in (coder-plugins DEC-029). A project registered at a\n subdirectory of a checkout therefore shares that checkout's one handoff directory, and a project\n in no checkout has none: its sessions roll over only from a root their writer reported\n (`acceptable_root`, DEC-131).\n",
+ "build": null,
+ "created": "2026-10-22T16:59:55+00:00",
+ "fingerprint": "34311bd6e4b8da72043e72fb4acf6f12ff124c371fd43932109509fcc5a7709b",
+ "index": 1,
+ "kind": "claim",
+ "named_break": null,
+ "no_build_reason": "wording and a test default; no build artifact",
+ "plan": "/mnt/vault/Portfolio/ai-tools/coder-plugins/plans/2026-10-19-staged-planning-portable-sub-03-neutral-handoff-plan.md",
+ "red": {
+  "elapsed_s": 0.0,
+  "exit": 1,
+  "tail": "src/remote_agents/adapters/workflow/roots.py:4:whatever directory its session was started in (coder-plugins DEC-029). A project registered at a"
+ },
+ "schema": 2,
+ "task": "3.2",
+ "test": "cd /home/user/dev/infra/remote-agents && ! git grep -nE \"coder-plugins\" -- src tests/live tests/provider_contract tests/unit docs/architecture.md docs/operator-runbook.md README.md && git grep -q 'PLANNING_SUPERVISOR_ID_CMD' -- docs/operator-runbook.md && .venv/bin/python -m pytest -q tests/unit/adapters/workflow tests/provider_contract -n auto && .venv/bin/python -m pytest --collect-only -q tests/live/test_rollover_live.py -m live_acceptance -k 'not codex' | grep -q '::'",
+ "text": "`cd /home/user/dev/infra/remote-agents && ! git grep -nE \"coder-plugins\" -- src tests/live tests/provider_contract tests/unit docs/architecture.md docs/operator-runbook.md README.md && git grep -q 'PLANNING_SUPERVISOR_ID_CMD' -- docs/operator-runbook.md && .venv/bin/python -m pytest -q tests/unit/adapters/workflow tests/provider_contract -n auto && .venv/bin/python -m pytest --collect-only -q tests/live/test_rollover_live.py -m live_acceptance -k 'not codex' | grep -q '::'`",
+ "touched": [
+  "src/remote_agents/adapters/workflow/roots.py"
+ ]
+}

@@ -1,4 +1,4 @@
-"""The handoff root is the git top level holding a project, or nothing (coder-plugins DEC-029)."""
+"""The handoff root is the git top level holding a project, or nothing (DEC-130)."""
 
 from __future__ import annotations
 
