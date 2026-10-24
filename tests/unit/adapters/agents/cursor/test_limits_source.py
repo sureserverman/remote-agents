@@ -177,8 +177,12 @@ def test_cursor_limits_source_follows_the_config_file_through_the_descriptor(
     from remote_agents.config import read_cursor_limits_source, write_limits_key
 
     # Patched before the descriptor is built: the reader binds `_open` when it is constructed.
+    # Its clock is pinned too, as in `router()`: the fixture's billing cycle ends on a fixed
+    # date, and on the real clock the reading has no window once that date has passed.
     opener = RecordingOpener()
     monkeypatch.setattr(usage_api, "_open", opener)
+    pinned = partial(CursorUsageApiReader, now=lambda: NOW)
+    monkeypatch.setattr(cursor, "CursorUsageApiReader", pinned)
     config = tmp_path / "config.toml"
     config.write_text("[limits]\nmax_label_length = 40\n", encoding="utf-8")
     usage = cursor.descriptor(
