@@ -438,17 +438,31 @@ async def test_ten_toggles_at_a_real_client_leave_every_pane_idle(console_with_s
         await _run("tmux", "-L", host_socket, "send-keys", "-t", "host:", "C-b")
         await _run("tmux", "-L", host_socket, "send-keys", "-t", "host:", "h")
 
+    async def folding() -> bool:
+        # This test's own presses only: each runs `fold.py <console socket>` (`_fold_script`).
+        probe = await asyncio.create_subprocess_exec(
+            "pgrep",
+            "-f",
+            f"fold\\.py {console_socket}",
+            stdout=asyncio.subprocess.DEVNULL,
+        )
+        return await probe.wait() == 0
+
     async def settled(hidden: str, zoomed: str) -> tuple[str, str]:
-        # Each press is a fresh `remote-agents console panes` process that writes the option
-        # and then zooms in a second tmux call, so a loaded host can be read between the two.
-        # Wait for the pair, bounded: a fold that never lands still fails.
-        state = ("", "")
+        # Each press is a fresh fold process that writes the option and then zooms in a second
+        # tmux call, and a loaded host can be read between the two -- or while a later press
+        # still waits on the lock, in a state an earlier press left (every even press leaves
+        # ("", "0")). So the pair counts only with no press in flight, on two reads running.
+        # Bounded: a fold that never lands still fails.
+        state, held = ("", ""), 0
         for _ in range(20):
+            busy = await folding()
             state = (
                 await gateway.read_console_option(PANES_HIDDEN_OPTION),
                 await _zoomed(AsyncTmuxRunner(), console_socket),
             )
-            if state == (hidden, zoomed):
+            held = held + 1 if state == (hidden, zoomed) and not busy else 0
+            if held == 2:
                 break
             await asyncio.sleep(0.5)
         return state
