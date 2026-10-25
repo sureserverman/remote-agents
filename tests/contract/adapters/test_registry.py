@@ -49,6 +49,15 @@ projects:
     added: x
     extra: true
 """,
+        """version: 1
+projects:
+  - path: /tmp/a
+    name: a
+    area: infra
+    enabled: true
+    added: x
+    records: docs
+""",
     ],
 )
 def test_load_registry_degrades_for_unknown_versions_or_malformed_entries(
@@ -58,6 +67,29 @@ def test_load_registry_degrades_for_unknown_versions_or_malformed_entries(
     path.write_text(body, encoding="utf-8")
 
     assert load_registry(path).error is not None
+
+
+def test_load_registry_reads_an_entry_that_keeps_its_records_in_its_repo(tmp_path: Path) -> None:
+    """`records: repo` is the registry owner's one optional field (vault-portfolio's opt-out for a
+    project that keeps its plans beside its code); it says nothing about sessions."""
+    path = tmp_path / "registry.yaml"
+    path.write_text(
+        """version: 1
+projects:
+  - path: /tmp/a
+    name: a
+    area: infra
+    enabled: true
+    added: x
+    records: repo
+""",
+        encoding="utf-8",
+    )
+
+    result = load_registry(path)
+
+    assert result.error is None
+    assert [(project.name, project.area) for project in result.projects] == [("a", "infra")]
 
 
 def test_load_registry_rejects_duplicate_canonical_paths(tmp_path: Path) -> None:

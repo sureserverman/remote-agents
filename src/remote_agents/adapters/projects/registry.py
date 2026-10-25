@@ -54,8 +54,12 @@ def _parse_document(document: object) -> tuple[RegisteredProject, ...]:
         if not isinstance(entry, dict):
             raise RegistrySchemaError(f"project {index} must be a mapping")
         required = {"path", "name", "area", "enabled", "added"}
-        if set(entry) != required:
+        if not required <= set(entry) <= required | {"records"}:
             raise RegistrySchemaError(f"project {index} has unknown or missing fields")
+        # The registry owner's one optional field: vault-portfolio's per-project opt-out, which
+        # its own validator accepts only as `repo`. It places plans, not sessions.
+        if "records" in entry and entry["records"] != "repo":
+            raise RegistrySchemaError(f"project {index} records must be repo")
         if not isinstance(entry["enabled"], bool):
             raise RegistrySchemaError(f"project {index} enabled must be boolean")
         if not entry["enabled"]:
