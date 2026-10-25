@@ -438,21 +438,36 @@ async def test_ten_toggles_at_a_real_client_leave_every_pane_idle(console_with_s
         await _run("tmux", "-L", host_socket, "send-keys", "-t", "host:", "C-b")
         await _run("tmux", "-L", host_socket, "send-keys", "-t", "host:", "h")
 
+    async def settled(hidden: str, zoomed: str) -> tuple[str, str]:
+        # Each press is a fresh `remote-agents console panes` process that writes the option
+        # and then zooms in a second tmux call, so a loaded host can be read between the two.
+        # Wait for the pair, bounded: a fold that never lands still fails.
+        state = ("", "")
+        for _ in range(20):
+            state = (
+                await gateway.read_console_option(PANES_HIDDEN_OPTION),
+                await _zoomed(AsyncTmuxRunner(), console_socket),
+            )
+            if state == (hidden, zoomed):
+                break
+            await asyncio.sleep(0.5)
+        return state
+
     await press()
     await asyncio.sleep(1.0)
-    assert await gateway.read_console_option(PANES_HIDDEN_OPTION) == "1", (
+    hidden, zoomed = await settled("1", "1")
+    assert hidden == "1", (
         "the first press did not fold the column, so the binding never reached the composer"
     )
-    assert await _zoomed(AsyncTmuxRunner(), console_socket) == "1"
+    assert zoomed == "1"
 
     for _ in range(9):
         await press()
         await asyncio.sleep(1.0)
 
-    assert await gateway.read_console_option(PANES_HIDDEN_OPTION) == "", (
-        "ten toggles left the column folded; an even number must return it"
-    )
-    assert await _zoomed(AsyncTmuxRunner(), console_socket) == "0"
+    hidden, zoomed = await settled("", "0")
+    assert hidden == "", "ten toggles left the column folded; an even number must return it"
+    assert zoomed == "0"
 
     pids = (
         await _run(
