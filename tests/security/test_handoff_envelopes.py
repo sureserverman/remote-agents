@@ -26,23 +26,24 @@ OTHER_ID = "h-fedcba9876543210fedc"
 SESSION = "ra-session_1"
 STAMP = "2026-10-05T12:34:56Z"
 SUFFIX = {"HANDOFF_READY": "ready", "HANDOFF_ACCEPTED": "accepted", "HANDOFF_FAILED": "failed"}
-#: The neutral id, and the one the installed planning writer still stamps until the cutover.
-PROTOCOLS = ("planning-handoff", "remote-agents-handoff")
-#: Near an accepted id, never one: a later version, a trailing space, and not a string at all.
+PROTOCOL = "planning-handoff"
+#: The id the planning writers stamped before staged-planning, refused since remote-agents
+#: 0.67.1 (DEC-132): no installed writer emitted it and no envelope held it.
+RETIRED_PROTOCOL = "remote-agents-handoff"
+#: Near the id, never it: a later version, a trailing space, and not a string at all.
 NEAR_PROTOCOLS = [
     pytest.param("planning-handoff-v2", id="v2"),
-    pytest.param("remote-agents-handoff ", id="trailing-space"),
+    pytest.param("planning-handoff ", id="trailing-space"),
     pytest.param(1, id="number"),
     pytest.param(None, id="null"),
     pytest.param(["planning-handoff"], id="list"),
 ]
-each_protocol = pytest.mark.parametrize("protocol", PROTOCOLS)
 
 
 def _body(
     event: str = "HANDOFF_READY",
     handoff_id: str = HANDOFF_ID,
-    protocol: object = PROTOCOLS[0],
+    protocol: object = PROTOCOL,
     **changes: object,
 ) -> dict:
     body: dict[str, object] = {
@@ -93,9 +94,8 @@ def reader() -> FileHandoffEnvelopes:
     return FileHandoffEnvelopes()
 
 
-@each_protocol
-def test_a_valid_ready_envelope_reads_back_typed(tmp_path: Path, reader, protocol: str) -> None:
-    _write(_handoffs(tmp_path), _body(protocol=protocol))
+def test_a_valid_ready_envelope_reads_back_typed(tmp_path: Path, reader) -> None:
+    _write(_handoffs(tmp_path), _body())
 
     assert reader.events(tmp_path) == (
         HandoffEnvelope(
@@ -109,24 +109,20 @@ def test_a_valid_ready_envelope_reads_back_typed(tmp_path: Path, reader, protoco
     )
 
 
-@each_protocol
-def test_every_kind_reads_back_in_timestamp_order(tmp_path: Path, reader, protocol: str) -> None:
+def test_every_kind_reads_back_in_timestamp_order(tmp_path: Path, reader) -> None:
     directory = _handoffs(tmp_path)
     _write(
         directory,
         _body(
             "HANDOFF_FAILED",
             OTHER_ID,
-            protocol,
             plan=None,
             timestamp="2026-10-05T13:00:00Z",
         ),
         OTHER_ID,
     )
-    _write(
-        directory, _body("HANDOFF_ACCEPTED", protocol=protocol, timestamp="2026-10-05T12:40:00Z")
-    )
-    _write(directory, _body(protocol=protocol))
+    _write(directory, _body("HANDOFF_ACCEPTED", timestamp="2026-10-05T12:40:00Z"))
+    _write(directory, _body())
 
     events = reader.events(tmp_path)
 
@@ -234,19 +230,11 @@ _BAD_ENVELOPES = [
 ]
 
 
-def _under(protocol: str, body: dict | bytes) -> dict | bytes:
-    """`body` with the default id swapped for `protocol`; any other protocol value is kept."""
-    if isinstance(body, bytes):
-        return body.replace(b'"planning-handoff"', f'"{protocol}"'.encode())
-    return body | {"protocol": protocol} if body.get("protocol") == PROTOCOLS[0] else body
-
-
-@each_protocol
 @pytest.mark.parametrize("body", _BAD_ENVELOPES)
 def test_a_bad_envelope_is_dropped_and_left_as_it_was(
-    tmp_path: Path, reader, protocol: str, body: dict | bytes
+    tmp_path: Path, reader, body: dict | bytes
 ) -> None:
-    _write(_handoffs(tmp_path), _under(protocol, body))
+    _write(_handoffs(tmp_path), body)
     before = _snapshot(tmp_path)
 
     assert reader.events(tmp_path) == ()
@@ -261,16 +249,15 @@ def test_an_event_that_is_not_its_file_name_suffix_is_dropped(tmp_path: Path, re
     assert reader.events(tmp_path) == ()
 
 
-@each_protocol
 @pytest.mark.parametrize("bad", _BAD_ENVELOPES)
 def test_a_dropped_envelope_does_not_hide_its_valid_neighbours(
-    tmp_path: Path, reader, protocol: str, bad: dict | bytes
+    tmp_path: Path, reader, bad: dict | bytes
 ) -> None:
     """Whatever one file holds, it costs that file only: the class the unhashable
     `failure_code` belonged to, when one bad file once emptied the whole read."""
     directory = _handoffs(tmp_path)
-    _write(directory, _under(protocol, bad))
-    _write(directory, _body("HANDOFF_ACCEPTED", OTHER_ID, protocol), OTHER_ID)
+    _write(directory, bad)
+    _write(directory, _body("HANDOFF_ACCEPTED", OTHER_ID), OTHER_ID)
 
     assert [(e.event, e.handoff_id) for e in reader.events(tmp_path)] == [
         (HandoffEvent.ACCEPTED, OTHER_ID)
@@ -395,12 +382,11 @@ def test_clear_request_removes_the_request_and_is_a_no_op_when_absent(
     assert not (tmp_path / "absent").exists()
 
 
-@each_protocol
 def test_clear_request_through_a_symlinked_directory_removes_nothing(
-    tmp_path: Path, reader, protocol: str
+    tmp_path: Path, reader
 ) -> None:
     project, elsewhere = tmp_path / "project", tmp_path / "elsewhere"
-    request = {"protocol": protocol, "version": 1}
+    request = {"protocol": PROTOCOL, "version": 1}
     request |= {"managed_session_id": SESSION, "requested_at": STAMP}
     (_handoffs(elsewhere) / "request.json").write_text(json.dumps(request))
     (project / ".claude").mkdir(parents=True)
@@ -420,11 +406,8 @@ def _request(project: Path, protocol: object) -> Path:
     return path
 
 
-@each_protocol
-def test_a_request_under_either_id_is_read_and_cleared(
-    tmp_path: Path, reader, protocol: str
-) -> None:
-    request = _request(tmp_path, protocol)
+def test_a_request_under_the_id_is_read_and_cleared(tmp_path: Path, reader) -> None:
+    request = _request(tmp_path, PROTOCOL)
 
     assert reader.requested(tmp_path) == SESSION
     reader.clear_request(tmp_path, SESSION)
@@ -432,10 +415,24 @@ def test_a_request_under_either_id_is_read_and_cleared(
 
 
 @pytest.mark.parametrize("near", NEAR_PROTOCOLS)
-def test_a_protocol_near_an_accepted_id_is_refused(tmp_path: Path, reader, near: object) -> None:
-    """Only the two ids exactly: the envelope is dropped, the request is no request."""
+def test_a_protocol_near_the_id_is_refused(tmp_path: Path, reader, near: object) -> None:
+    """Only the id exactly: the envelope is dropped, the request is no request."""
     _write(_handoffs(tmp_path), _body(protocol=near))
     request = _request(tmp_path, near)
+    before = _snapshot(tmp_path)
+
+    assert reader.events(tmp_path) == ()
+    assert reader.requested(tmp_path) is None
+    reader.clear_request(tmp_path, SESSION)
+    assert request.exists()
+    assert _snapshot(tmp_path) == before
+
+
+def test_the_retired_id_is_refused_for_an_envelope_and_a_request(tmp_path: Path, reader) -> None:
+    """An envelope and a request a pre-staged-planning writer would stamp are no longer read:
+    the envelope is dropped, the request is no request and is left where it is."""
+    _write(_handoffs(tmp_path), _body(protocol=RETIRED_PROTOCOL))
+    request = _request(tmp_path, RETIRED_PROTOCOL)
     before = _snapshot(tmp_path)
 
     assert reader.events(tmp_path) == ()

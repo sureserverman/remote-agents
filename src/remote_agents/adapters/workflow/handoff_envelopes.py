@@ -1,12 +1,10 @@
 """The handoff envelopes in `<project>/.claude/handoffs/`, read and written without trusting them.
 
-The other end is the planning plugin's `handoff-envelope.py` (staged-planning, and the
-legacy Claude copy until the cutover), and the reading and writing rules here are its rules, so
-that a file one side refuses the other refuses too. One exception lasts until that cutover: this
-side reads both protocol ids but writes only `planning-handoff`, which the legacy writers (the
-legacy Claude copy and engineering-skills' Codex fork) do not read, so they do not see a request
-this side writes. The directory is inside a checkout: a test suite, a build script or an agent
-running there can put anything at any name in it, and the daemon reads it unattended. So:
+The other end is the planning plugin's `handoff-envelope.py` (staged-planning), and the reading
+and writing rules here are its rules, so that a file one side refuses the other refuses too.
+Both sides read and write only `planning-handoff`. The directory is inside a checkout: a test
+suite, a build script or an agent running there can put anything at any name in it, and the
+daemon reads it unattended. So:
 
 - Each component below the project -- `.claude`, `handoffs`, the file -- is opened with
   `O_NOFOLLOW` relative to its parent's descriptor. A link at any of them is refused, never
@@ -21,7 +19,7 @@ running there can put anything at any name in it, and the daemon reads it unatte
   It must then be a regular file of at most 4096 bytes, by `fstat` and by what a read returns.
 - Only names of the form `<handoff id>.<ready|accepted|failed>.json` are opened. The writer's
   `.<id>.claim` files, its `.gitignore`, its temp files and `request.json` are never events.
-- The body must be exactly the protocol's key set, a protocol id in ACCEPTED_PROTOCOLS,
+- The body must be exactly the protocol's key set, the protocol id PROTOCOL,
   version 1 as an integer (JSON `true` and `1.0` compare equal to 1 in Python, and neither is
   the version), an event matching the name's suffix, the name's own id, a session id by this
   service's own rule, and a UTC timestamp in the one format the writer produces.
@@ -63,10 +61,6 @@ from remote_agents.ports.handoff_envelopes import FAILURE_CODES, HandoffEnvelope
 from remote_agents.ports.session_identity import safe_session_id
 
 PROTOCOL = "planning-handoff"
-# Read only, for the installed planning writer, until the cutover (staged-planning master
-# Sub-plan 7) drops it.
-LEGACY_PROTOCOL = "remote-agents-handoff"
-ACCEPTED_PROTOCOLS = frozenset({PROTOCOL, LEGACY_PROTOCOL})
 VERSION = 1
 CLAUDE_DIRECTORY = ".claude"
 HANDOFF_DIRECTORY = "handoffs"
@@ -103,7 +97,7 @@ _CREATE = os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | _CLOEXEC
 
 class FileHandoffEnvelopes:
     """`HandoffEnvelopes` over the files the planning plugin's `handoff-envelope.py`
-    (staged-planning, and the legacy Claude copy until the cutover) leaves in a project."""
+    (staged-planning) leaves in a project."""
 
     def __init__(self, clock: Callable[[], datetime] = lambda: datetime.now(UTC)) -> None:
         self._clock = clock
@@ -323,8 +317,7 @@ def _parsed(raw: bytes | None, name_id: str, suffix: str) -> HandoffEnvelope | N
 
 
 def _accepted_protocol(value: object) -> bool:
-    # A string first: `in` a frozenset hashes its operand, and a JSON list does not hash.
-    return isinstance(value, str) and value in ACCEPTED_PROTOCOLS
+    return isinstance(value, str) and value == PROTOCOL
 
 
 def _showable_path(plan: str) -> bool:

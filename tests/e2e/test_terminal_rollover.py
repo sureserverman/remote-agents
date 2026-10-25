@@ -49,9 +49,8 @@ HANDOFF = "h-0123456789abcdef0123"
 #: from the Claude vertical's `adopt_template` on purpose: the pass types the descriptor's value,
 #: so a wrong vertical string is caught here by an agent that never adopts it.
 TEMPLATE = f"/planning:executing-plans --adopt-handoff {HANDOFF}"
-#: The neutral id the planning writer stamps, and the one its installed copy still stamps until
-#: the cutover: the reader takes both.
-PROTOCOL, LEGACY_PROTOCOL = "planning-handoff", "remote-agents-handoff"
+#: The id the planning writer stamps, and the only one the reader takes.
+PROTOCOL = "planning-handoff"
 
 _AGENT = """
 import json, os, shlex, subprocess, sys, time
@@ -144,10 +143,9 @@ async def _type(terminal: TmuxTerminal, session_id: SessionId, text: str) -> Non
     raise AssertionError(f"the cue was not typed: {delivery}")
 
 
-@pytest.mark.parametrize("protocol", [PROTOCOL, LEGACY_PROTOCOL])
 @pytest.mark.parametrize("mode", ["accept", "fail"])
 async def test_a_ready_rolls_over_to_one_successor_and_stops_only_on_accept(
-    tmp_path: Path, mode: str, protocol: str
+    tmp_path: Path, mode: str
 ) -> None:
     project = tmp_path / "opaque-editor"
     (project / ".git").mkdir(parents=True)
@@ -166,7 +164,7 @@ async def test_a_ready_rolls_over_to_one_successor_and_stops_only_on_accept(
         profile_factories={
             PROFILE: lambda session_id, _remote_control: LaunchProfile(
                 sys.executable,
-                (sys.executable, str(agent), HANDOFF, str(mode_file), protocol),
+                (sys.executable, str(agent), HANDOFF, str(mode_file), PROTOCOL),
                 {"PATH": os.environ["PATH"], SESSION_ID_VARIABLE: str(session_id)},
                 "READY",
             )
@@ -495,10 +493,10 @@ async def test_a_trust_held_successor_is_typed_once_after_the_owner_trusts_it(
 
 
 CODEX = ProfileId("codex")
-#: The managed Codex planning plugin's own spelling (`ports/codex/skills/executing-plans/SKILL.md`
-#: in engineering-skills), which the fake answers to -- kept apart from the Codex vertical's
-#: `adopt_template`, as `TEMPLATE` is from Claude's, so a wrong vertical string is a rollover
-#: that never adopts.
+#: The Codex planning plugin's own spelling (staged-planning's
+#: `plugins/codex/planning/skills/executing-plans/SKILL.md`), which the fake answers to -- kept
+#: apart from the Codex vertical's `adopt_template`, as `TEMPLATE` is from Claude's, so a wrong
+#: vertical string is a rollover that never adopts.
 CODEX_TEMPLATE = f"$planning:executing-plans --adopt-handoff {HANDOFF}"
 
 #: A fake Codex: it draws Codex's composer -- the `› ` row, its placeholder while empty, the
@@ -519,7 +517,7 @@ log = ["READY"]
 def envelope(event, suffix, **extra):
     handoffs.mkdir(parents=True, exist_ok=True)
     body = {
-        "protocol": "remote-agents-handoff",
+        "protocol": "planning-handoff",
         "version": 1,
         "event": event,
         "handoff_id": HANDOFF,

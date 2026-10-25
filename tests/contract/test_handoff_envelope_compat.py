@@ -1,33 +1,27 @@
-"""The envelope reader agrees with each planning plugin's own writer, run for real.
+"""The envelope reader agrees with the planning plugin's own writer, run for real.
 
-The protocol's writer has three implementations: staged-planning's `handoff-envelope.py`, the
-planning plugin's own; coder-plugins' copy for Claude Code; and engineering-skills' Codex fork
-of that copy. Each writes the envelopes and reads `request.json`; `adapters/workflow` does the
-reverse. Fixtures written
+The protocol's writer is staged-planning's `handoff-envelope.py`. It writes the envelopes and
+reads `request.json`; `adapters/workflow` does the reverse. Fixtures written
 by hand here would only prove the reader agrees with this file's idea of the protocol; this
 runs the other side's script into a temporary git repository and reads what it actually wrote.
 It also writes a tampered copy of every envelope kind beside the real one, so a reader that
 accepted anything shaped like JSON would fail here and not just in the security suite.
 
-Each writer is a parameter:
-- `staged-planning` runs the built
-  `staged-planning/plugins/claude/planning/skills/executing-plans/scripts/handoff-envelope.py`
-  from a checkout, never a copy in this repo. It names its session by running
-  `$PLANNING_SUPERVISOR_ID_CMD`, here an absolute stub path, with a decoy `remote-agents`
-  earlier on `PATH` that must not answer. It reads and writes only `planning-handoff`, and it
-  reports the root it writes under to that command as `PLANNING_HANDOFF_ROOT`.
-- `claude` runs coder-plugins' script, naming its session by `REMOTE_AGENTS_SESSION_ID`. It
-  stays until the cutover (staged-planning master Sub-plan 7) retires it.
-- `codex` runs engineering-skills' fork, which names its session by asking
-  `remote-agents session-id` (DEC-128): a stub of that command on `PATH` prints the id.
-For the two writers that ask a command, the shell carries a different
-`REMOTE_AGENTS_SESSION_ID` throughout -- the daemon starter's, as measured -- which they must
+The test runs the built
+`staged-planning/plugins/claude/planning/skills/executing-plans/scripts/handoff-envelope.py`
+from a checkout, never a copy in this repo. The writer names its session by running
+`$PLANNING_SUPERVISOR_ID_CMD`, here an absolute stub path, with a decoy `remote-agents` earlier
+on `PATH` that must not answer. It reads and writes only `planning-handoff`, and it reports the
+root it writes under to that command as `PLANNING_HANDOFF_ROOT`. The shell carries a different
+`REMOTE_AGENTS_SESSION_ID` throughout -- the daemon starter's, as measured -- which it must
 never stamp.
 
-A writer is skipped unless its variable names a checkout (`RA_STAGED_PLANNING`,
-`RA_CODER_PLUGINS`, `RA_ENGINEERING_SKILLS`), so CI -- which has none -- is unaffected. Set but
-pointing at no script is a failure, not a skip: a gate run with the variable set is claiming
-this test ran.
+The coder-plugins and engineering-skills writers stamped `remote-agents-handoff`. They were
+retired with that id at 0.67.1, so an envelope carrying it is one more tampered copy here.
+
+The writer is skipped unless `RA_STAGED_PLANNING` names a checkout, so CI -- which has none --
+is unaffected. Set but pointing at no script is a failure, not a skip: a gate run with the
+variable set is claiming this test ran.
 """
 
 from __future__ import annotations
@@ -44,25 +38,20 @@ import pytest
 
 from remote_agents.adapters.agents.reported_roots import FileReportedRoots
 from remote_agents.adapters.tmux.profiles import supervisor_id_command
-from remote_agents.adapters.workflow.handoff_envelopes import (
-    LEGACY_PROTOCOL,
-    PROTOCOL,
-    FileHandoffEnvelopes,
-)
+from remote_agents.adapters.workflow.handoff_envelopes import PROTOCOL, FileHandoffEnvelopes
 from remote_agents.adapters.workflow.roots import acceptable_root
 from remote_agents.domain.models import SessionId
 from remote_agents.ports.handoff_envelopes import HandoffEvent
 from remote_agents.production import ProductionPaths
 
 SESSION = "ra-compat_1"
-#: What a Codex tool shell inherits from the pane that started the shared daemon (DEC-128).
+#: What a tool shell inherits from the pane that started the shared daemon (DEC-128).
 DAEMON_STARTER = "ra-starter_9"
 
-#: The identity command a writer runs: the `remote-agents` a Codex writer finds on PATH, or
-#: the `id-stub` the staged-planning writer is told of. It prints the session it is told to, or
-#: exits as told. Each call appends what it was given to `$RA_STUB_SEEN`: the reported root
-#: (`-` when unset) and its argv, one per line. The real verb's rule is tested in this repo;
-#: here only the writer's use of it.
+#: The identity command the writer runs: the `id-stub` it is told of. It prints the session it
+#: is told to, or exits as told. Each call appends what it was given to `$RA_STUB_SEEN`: the
+#: reported root (`-` when unset) and its argv, one per line. The real verb's rule is tested in
+#: this repo; here only the writer's use of it.
 _STUB = """#!/bin/sh
 if [ -n "$RA_STUB_SEEN" ]; then
   printf 'root %s\n' "${PLANNING_HANDOFF_ROOT--}" >> "$RA_STUB_SEEN"
@@ -72,7 +61,7 @@ if [ -n "$RA_STUB_EXIT" ]; then exit "$RA_STUB_EXIT"; fi
 if [ "$1" != "session-id" ] || [ "$#" -ne 1 ]; then exit 2; fi
 printf '%s\n' "$RA_STUB_SESSION"
 """
-#: A `remote-agents` earlier on the staged-planning writer's `PATH`: a writer that looked the
+#: A `remote-agents` earlier on the writer's `PATH`: a writer that looked the
 #: verb up there, not through its command variable, would stamp this id and fail the readback.
 _DECOY = "#!/bin/sh\nprintf 'ra-decoy_0\\n'\n"
 _DECOY_SESSION = "ra-decoy_0"
@@ -85,12 +74,6 @@ class Writer:
     name: str
     variable: str
     relative: str
-    asks_the_verb: bool
-    #: Names its session by running `$PLANNING_SUPERVISOR_ID_CMD` (staged-planning's writer).
-    runs_the_id_command: bool = False
-    #: Reads only `remote-agents-handoff`. The coder-plugins and Codex writers do, until the
-    #: staged-planning cutover (master Sub-plan 7) retires them.
-    legacy: bool = True
 
 
 _WRITERS = {
@@ -98,21 +81,6 @@ _WRITERS = {
         "staged-planning",
         "RA_STAGED_PLANNING",
         "plugins/claude/planning/skills/executing-plans/scripts/handoff-envelope.py",
-        asks_the_verb=False,
-        runs_the_id_command=True,
-        legacy=False,
-    ),
-    "claude": Writer(
-        "claude",
-        "RA_CODER_PLUGINS",
-        "planning/skills/executing-plans/scripts/handoff-envelope.py",
-        asks_the_verb=False,
-    ),
-    "codex": Writer(
-        "codex",
-        "RA_ENGINEERING_SKILLS",
-        "ports/codex/skills/executing-plans/scripts/handoff-envelope.py",
-        asks_the_verb=True,
     ),
 }
 
@@ -126,7 +94,7 @@ class Harness:
 
     @property
     def stub(self) -> Path:
-        return self.stub_dir / ("id-stub" if self.writer.runs_the_id_command else "remote-agents")
+        return self.stub_dir / "id-stub"
 
     @property
     def seen(self) -> Path:
@@ -157,22 +125,16 @@ class Harness:
                 _ROOT_VARIABLE,
             }
         }
-        if self.writer.asks_the_verb or self.writer.runs_the_id_command:
-            if self.writer.asks_the_verb:
-                env["PATH"] = f"{self.stub_dir}{os.pathsep}{env.get('PATH', os.defpath)}"
-            else:
-                env["PATH"] = f"{self.decoy_dir}{os.pathsep}{env.get('PATH', os.defpath)}"
-                env[_ID_COMMAND] = shlex.join([str(self.stub), "session-id"])
-            env["REMOTE_AGENTS_SESSION_ID"] = DAEMON_STARTER
-            env["RA_STUB_SEEN"] = str(self.seen)
-            if session is None:
-                env["RA_STUB_EXIT"] = "3"
-            else:
-                env["RA_STUB_SESSION"] = session
-            if stub_exit is not None:
-                env["RA_STUB_EXIT"] = str(stub_exit)
-        elif session is not None:
-            env["REMOTE_AGENTS_SESSION_ID"] = session
+        env["PATH"] = f"{self.decoy_dir}{os.pathsep}{env.get('PATH', os.defpath)}"
+        env[_ID_COMMAND] = shlex.join([str(self.stub), "session-id"])
+        env["REMOTE_AGENTS_SESSION_ID"] = DAEMON_STARTER
+        env["RA_STUB_SEEN"] = str(self.seen)
+        if session is None:
+            env["RA_STUB_EXIT"] = "3"
+        else:
+            env["RA_STUB_SESSION"] = session
+        if stub_exit is not None:
+            env["RA_STUB_EXIT"] = str(stub_exit)
         for name, value in (overrides or {}).items():
             if value is None:
                 env.pop(name, None)
@@ -195,18 +157,8 @@ def harness(request, tmp_path: Path) -> Harness:
 
 
 @pytest.fixture
-def codex_harness(tmp_path: Path) -> Harness:
-    return _harness(_WRITERS["codex"], tmp_path)
-
-
-@pytest.fixture
 def staged_harness(tmp_path: Path) -> Harness:
     return _harness(_WRITERS["staged-planning"], tmp_path)
-
-
-@pytest.fixture(params=sorted(name for name, writer in _WRITERS.items() if writer.legacy))
-def legacy_harness(request, tmp_path: Path) -> Harness:
-    return _harness(_WRITERS[request.param], tmp_path)
 
 
 def _harness(writer: Writer, tmp_path: Path) -> Harness:
@@ -283,7 +235,7 @@ def test_what_the_planning_side_writes_reads_back_typed(harness: Harness, repo: 
     )
     assert ready.handoff_id == accepted.handoff_id == written["ready"][0]
     assert failed.handoff_id == written["failed"][0]
-    # For the Codex writer, the shell carried DAEMON_STARTER all along: only the verb names it.
+    # The shell carried DAEMON_STARTER all along: only the command names the session.
     assert {e.managed_session_id for e in events.values()} == {SESSION}
     assert ready.plan == accepted.plan == str(repo / "plan.md")
     assert failed.plan is None
@@ -295,7 +247,7 @@ def test_what_the_planning_side_writes_reads_back_typed(harness: Harness, repo: 
 _TAMPERS = {
     "version-2": lambda body: body | {"version": 2},
     "protocol": lambda body: body | {"protocol": "planning-handoff-v2"},
-    "legacy-protocol": lambda body: body | {"protocol": "remote-agents-handoff-v2"},
+    "retired-protocol": lambda body: body | {"protocol": "remote-agents-handoff"},
     "extra-key": lambda body: body | {"note": "hello"},
     "session-id": lambda body: body | {"managed_session_id": "../escape"},
     "traversal-id": lambda body: body | {"handoff_id": "h-../../x"},
@@ -326,63 +278,18 @@ def test_a_tampered_copy_of_each_kind_is_rejected_beside_the_real_one(
     }
 
 
-def _restamp_legacy(repo: Path) -> None:
-    """Rewrite `request.json` as the installed supervisor (0.66.0) writes it: the legacy id."""
-    request = repo / ".claude" / "handoffs" / "request.json"
-    body = json.loads(request.read_bytes())
-    request.write_text(json.dumps(body | {"protocol": LEGACY_PROTOCOL}))
-
-
 def test_a_request_this_side_writes_is_one_the_planning_side_sees(
     harness: Harness, repo: Path
 ) -> None:
-    """A legacy writer does not see a request this side now writes (`planning-handoff`): the
-    interim, asserted rather than skipped. It still sees one in the legacy form the installed
-    supervisor writes, and the installed supervisor is not upgraded until the cutover replaces
-    it and these writers together."""
     adapter = FileHandoffEnvelopes()
 
     assert harness.run(repo, "request-pending").returncode == 1
     assert adapter.write_request(repo, SESSION) is True
-    if harness.writer.legacy:
-        assert harness.run(repo, "request-pending").returncode == 1
-        _restamp_legacy(repo)
     assert harness.run(repo, "request-pending").returncode == 0
     assert harness.run(repo, "request-pending", session="another-session").returncode == 1
 
     adapter.clear_request(repo, SESSION)
     assert harness.run(repo, "request-pending").returncode == 1
-
-
-def test_a_legacy_writer_does_not_see_a_request_this_branch_writes(
-    legacy_harness: Harness, repo: Path
-) -> None:
-    """The interim, asserted rather than skipped: this branch stamps `planning-handoff`, which
-    the coder-plugins and Codex writers do not read. Nothing breaks, because the installed
-    supervisor is not upgraded until the cutover (staged-planning master Sub-plan 7) replaces
-    it and these two writers together."""
-    assert FileHandoffEnvelopes().write_request(repo, SESSION) is True
-    assert (
-        json.loads((repo / ".claude" / "handoffs" / "request.json").read_bytes())["protocol"]
-        == PROTOCOL
-    )
-
-    assert legacy_harness.run(repo, "request-pending").returncode == 1
-
-
-def test_a_codex_writer_stamps_the_verbs_session_never_the_inherited_one(
-    codex_harness: Harness, repo: Path
-) -> None:
-    """An unmanaged shell (the verb exits 3) writes nothing at all (DEC-128). Codex only among
-    the legacy writers: the claude writer names its session by the inherited variable, by
-    design."""
-    harness = codex_harness
-    handoff = _new_id(harness, repo)
-    result = harness.run(
-        repo, "ready", "--handoff-id", handoff, "--plan", str(repo / "plan.md"), stub_exit=3
-    )
-    assert (result.returncode, result.stdout.strip()) == (0, "unsupervised")
-    assert not (repo / ".claude" / "handoffs" / f"{handoff}.ready.json").exists()
 
 
 def test_the_planning_side_keeps_the_gitignore_this_side_wrote(
@@ -555,42 +462,3 @@ def test_staged_planning_reported_root_is_recorded_by_the_real_verb(
     assert ready.managed_session_id == session
     roots = FileReportedRoots(activity, accept=acceptable_root)
     assert roots.latest(session) == Path(os.path.realpath(repo_b))
-
-
-def test_a_legacy_writer_reports_no_reported_root(legacy_harness: Harness, tmp_path: Path) -> None:
-    """The interim, asserted rather than skipped: the coder-plugins and Codex writers report no
-    root, so a cross-repo session is resumed by hand until the cutover (staged-planning master
-    Sub-plan 7) replaces the installed supervisor and these writers together. Each still writes
-    its envelope under B; nothing is recorded, even with RA's own command set beside it."""
-    home = tmp_path / "home"
-    home.mkdir()
-    activity = ProductionPaths.for_home(home).activity_directory
-    activity.mkdir(parents=True, mode=0o700)
-    folder_a = _git_repo(tmp_path / "a")
-    repo_b = _git_repo(tmp_path / "b")
-    handoff = _new_id(legacy_harness, repo_b)
-
-    result = legacy_harness.run(
-        repo_b,
-        "ready",
-        "--handoff-id",
-        handoff,
-        "--plan",
-        str(repo_b / "plan.md"),
-        cwd=folder_a,
-        overrides={
-            "HOME": str(home),
-            _ID_COMMAND: supervisor_id_command(),
-            "CODEX_THREAD_ID": None,
-        },
-    )
-
-    assert result.returncode == 0, result.stderr
-    assert result.stdout.strip() != "unsupervised", result.stderr
-    (ready,) = FileHandoffEnvelopes().events(repo_b)
-    assert ready.managed_session_id == SESSION
-    roots = FileReportedRoots(activity, accept=acceptable_root)
-    assert roots.sessions() == ()
-    assert roots.latest(SESSION) is None
-    if legacy_harness.writer.asks_the_verb:
-        assert _seen_calls(legacy_harness) == [("-", "session-id")]

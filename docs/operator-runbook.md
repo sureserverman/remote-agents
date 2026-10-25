@@ -74,7 +74,7 @@ The same two steps without the fetched script:
 
 ```bash
 uv tool install --managed-python \
-  "remote-agents @ git+https://github.com/sureserverman/remote-agents@v0.67.0"
+  "remote-agents @ git+https://github.com/sureserverman/remote-agents@v0.67.1"
 remote-agents onboard --install-daemon
 ```
 
@@ -186,7 +186,7 @@ the repository and the version before installing anything:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/sureserverman/remote-agents/main/scripts/install.sh \
-  | REMOTE_AGENTS_VERSION=v0.67.0 bash
+  | REMOTE_AGENTS_VERSION=v0.67.1 bash
 remote-agents onboard --install-daemon
 ```
 
@@ -659,9 +659,10 @@ it and ask for it but never act.
   back on. Rolling back to 0.58.0 or earlier needs the table deleted first; see
   [rollback](#rollback-and-local-recovery).
 - **What starts one.** Only `claude` and `codex` sessions take part: each runs a planning plugin
-  that writes handoff envelopes. For Claude Code that is the planning plugin, staged-planning's or
-  the older Claude package until the cutover; for Codex, `planning@engineering-skills` 0.2.1 or
-  later, which asks `remote-agents session-id` who it is.
+  that writes handoff envelopes. On both that is staged-planning's planning plugin, which stamps
+  `planning-handoff` and learns who it is by running `PLANNING_SUPERVISOR_ID_CMD`. Envelopes
+  under the older `remote-agents-handoff` id, from the retired coder-plugins and
+  engineering-skills copies, are not read since 0.67.1.
   Which agents roll over is each one's own declaration (its adopt command); OpenCode and Cursor
   declare none. A `ready` envelope from a running one, under `.claude/handoffs/` at the
   session's handoff root (Claude's planning plugin 0.55.0 or later), opens a rollover -- if it is
