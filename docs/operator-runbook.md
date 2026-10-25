@@ -665,7 +665,7 @@ it and ask for it but never act.
   engineering-skills copies, are not read since 0.67.1.
   Which agents roll over is each one's own declaration (its adopt command); OpenCode and Cursor
   declare none. A `ready` envelope from a running one, under `.claude/handoffs/` at the
-  session's handoff root (Claude's planning plugin 0.55.0 or later), opens a rollover -- if it is
+  session's handoff root (staged-planning's planning plugin, 1.0.0 or later), opens a rollover -- if it is
   seen within five minutes of being written. One written while the switch was off or `serve` was
   down is cleared, never acted on: the plugin has already told you to resume by hand. So does the
   owner's **Rollover now**: the button on the bot's session screen, or `l` on the terminal's
@@ -685,10 +685,10 @@ it and ask for it but never act.
   `remote-agents` on the pane's `PATH` answers. The planning writer runs it, split into words
   and with no shell. The command, not the variable, names the session (DEC-128). Only a git top
   level you own is accepted. Only staged-planning's writer runs the command and reports a root.
-  Until it is the one installed (DEC-130), the older writers -- the earlier Claude package and
-  the Codex fork -- report no root and do not read a request this release writes: their own
-  handoffs still roll over, but a plan working in another repository does not, and **Rollover
-  now** never reaches them; it ends `request-unanswered` after 24 hours. Costs, by
+  The older writers -- the earlier Claude package and the Codex fork, retired 2026-10-25 --
+  stamp the old protocol id, which this reader refuses since 0.67.1 (DEC-132): their handoffs do
+  not roll over, and **Rollover now** never reaches them; a request ends `request-unanswered`
+  after 24 hours. Costs, by
   design: a process with a managed pane's environment can point a session at any top level you
   own, and each forged `ready` there starts one successor (a folder never trusted waits for you);
   a process that claims a session's id -- a nested agent in another repository, say -- can

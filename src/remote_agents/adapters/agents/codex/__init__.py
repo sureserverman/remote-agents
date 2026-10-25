@@ -114,7 +114,7 @@ def descriptor() -> ProviderDescriptor:
         # Measured 2026-09-28 (`docs/acceptance-2026-09-28-limit-screens.md`); read off the pane
         # by the limit-screen watch, because this agent reports no limit event of its own.
         limit_screen=LIMIT_SCREEN,
-        # The managed `planning@engineering-skills` plugin, reached as a `$` skill mention:
+        # staged-planning's Codex planning plugin, reached as a `$` skill mention:
         # Codex declares no command menu, so a `/` command would be refused unsent.
         adopt_template="$planning:executing-plans --adopt-handoff {handoff_id}",
     )

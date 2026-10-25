@@ -385,9 +385,9 @@ Accepted costs.
   -- a nested agent working in another repository inherits `REMOTE_AGENTS_SESSION_ID`, say -- can
   overwrite that session's report. The pass then looks in the wrong root until the session's
   writer reports again: a quiet loss of its rollover, and a successor there for a forged `ready`.
-- Until the installed planning plugin is staged-planning's (DEC-130), the older writers -- the
-  earlier Claude package and the Codex fork -- report no root and do not read a request this side
-  writes: their own handoffs still roll over, but cross-repo rollover and "Rollover now" do not.
+- The older writers -- the earlier Claude package and the Codex fork, retired 2026-10-25 -- stamp
+  the old protocol id, which the reader refuses since 0.67.1 (DEC-132): their handoffs, cross-repo
+  rollover and "Rollover now" all go unanswered, and the session is resumed by hand.
 - A Codex writer run from another repository stays unsupervised, because the verb places a Codex
   thread by the shell's own folder.
 - "Rollover now" for a session that never reported a root writes `request.json` under its default
@@ -403,9 +403,10 @@ The writer stamps each envelope's `managed_session_id`. It learns that id by run
 command a managed pane carries in `PLANNING_SUPERVISOR_ID_CMD` -- `<this install's interpreter> -I
 -m remote_agents session-id`, so no other install on the pane's `PATH` and no module in the
 writer's folder can answer -- from the folder its tool shell starts in, with
-`PLANNING_HANDOFF_ROOT` naming the root it writes under. Until the cutover (DEC-130) two older
-writers remain: the Codex planning fork runs `remote-agents session-id` itself, and the earlier
-Claude package reads `REMOTE_AGENTS_SESSION_ID`; neither reports a root. This is the contract an
+`PLANNING_HANDOFF_ROOT` naming the root it writes under. The two older writers -- the Codex
+planning fork, which ran `remote-agents session-id` itself, and the earlier Claude package, which
+read `REMOTE_AGENTS_SESSION_ID` -- reported no root and were retired at the cutover; since 0.67.1
+their envelopes are refused (DEC-132). This is the contract an
 envelope writer depends on:
 
 | Exit | Output | Meaning |
