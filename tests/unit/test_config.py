@@ -1505,3 +1505,11 @@ def test_a_waiting_writer_keeps_the_target_it_locked(tmp_path, monkeypatch):
     module.write_config_key(alias, "codex", "default_permissions", "ask")
     assert 'default_permissions = "ask"' in first.read_text()
     assert other.read_text() == example(tmp_path)
+
+
+def test_codex_permission_configuration_uses_plain_strings(tmp_path):
+    from remote_agents.config import read_codex_permissions
+
+    path = write_config(tmp_path, example(tmp_path))
+    assert type(load_config(path).codex_default_permissions) is str
+    assert type(read_codex_permissions(path)) is str

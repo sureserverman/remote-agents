@@ -23,6 +23,7 @@ async def test_each_choice_persists_and_is_reread_by_another_process(tmp_path, p
     other = PermissionSettings(ConfigPermissionSetting(path))
     await first.set(preset)
     assert await other.read() == preset
+    assert isinstance(await other.read(), PermissionPreset)
     assert read_codex_permissions(path) == preset
     assert "# keep this comment\n[limits]\nproject_page_size = 10\n" in path.read_text()
 
@@ -74,3 +75,9 @@ async def test_an_invalid_persisted_value_is_a_refusal_not_an_implicit_default(t
     path.write_text(text)
     with pytest.raises(ConfigError):
         await PermissionSettings(ConfigPermissionSetting(path)).read()
+
+
+def test_the_string_schema_and_typed_choices_have_the_same_closed_values():
+    from remote_agents.config import CODEX_PERMISSION_PRESETS
+
+    assert set(CODEX_PERMISSION_PRESETS) == {preset.value for preset in PermissionPreset}

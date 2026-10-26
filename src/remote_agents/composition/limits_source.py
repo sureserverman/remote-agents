@@ -61,7 +61,7 @@ class ConfigPermissionSetting:
         self._path = path
 
     async def read(self) -> PermissionPreset:
-        return await asyncio.to_thread(read_codex_permissions, self._path)
+        return PermissionPreset(await asyncio.to_thread(read_codex_permissions, self._path))
 
     async def write(self, value: PermissionPreset) -> None:
         await asyncio.to_thread(

@@ -11,8 +11,6 @@ from collections.abc import Mapping
 from dataclasses import KW_ONLY, dataclass, field
 from pathlib import Path
 
-from remote_agents.domain.profiles import PermissionPreset
-
 
 class ConfigError(ValueError):
     """Raised when configuration is unsafe, incomplete, or not in the closed schema."""
@@ -241,7 +239,7 @@ class AppConfig:
     path on every account read, which is what lets a Settings flip land without a restart.
     """
 
-    codex_default_permissions: PermissionPreset = PermissionPreset.APPROVE_FOR_ME
+    codex_default_permissions: str = "approve_for_me"
 
     def worktree_copy_for(self, project_path: Path) -> tuple[str, ...]:
         """The copy list for a project: its own `[worktrees.projects]` entry, else the default.
@@ -266,6 +264,7 @@ _TOP_LEVEL_KEYS = {"paths", "limits", "rollover", "restart", "worktrees", "codex
 _OPTIONAL_TOP_LEVEL_KEYS = frozenset({"rollover", "restart", "worktrees", "codex"})
 _CODEX_KEYS = {"default_permissions"}
 _OPTIONAL_CODEX_KEYS = frozenset(_CODEX_KEYS)
+CODEX_PERMISSION_PRESETS = ("approve_for_me", "ask", "full_access", "provider_default")
 """Tables the schema accepts but does not require: a host written before one existed lacks it.
 
 DEC-058 for a whole table rather than a key. `[rollover]` holds only optional keys, so a file
@@ -1066,16 +1065,13 @@ def read_resume_interrupted(path: Path, *, when_unsure: bool = DEFAULT_RESUME_IN
     return value if isinstance(value, bool) else when_unsure
 
 
-def _permission_preset(value: object) -> PermissionPreset:
-    try:
-        return PermissionPreset(value)
-    except (TypeError, ValueError):
-        raise ConfigError(
-            "codex.default_permissions must name a supported permission preset"
-        ) from None
+def _permission_preset(value: object) -> str:
+    if not isinstance(value, str) or value not in CODEX_PERMISSION_PRESETS:
+        raise ConfigError("codex.default_permissions must name a supported permission preset")
+    return value
 
 
-def read_codex_permissions(path: Path) -> PermissionPreset:
+def read_codex_permissions(path: Path) -> str:
     """Read only this default; malformed or unavailable configuration refuses a launch."""
     try:
         raw = tomllib.loads(path.read_text(encoding="utf-8"))
@@ -1084,6 +1080,9 @@ def read_codex_permissions(path: Path) -> PermissionPreset:
     section = _mapping(raw.get("codex", {}), "codex")
     _require_exact_keys(section, _CODEX_KEYS, "codex", _OPTIONAL_CODEX_KEYS)
     return _permission_preset(section.get("default_permissions", "approve_for_me"))
+
+
+_CONFIG_VALUE_VALIDATORS = {("codex", "default_permissions"): _permission_preset}
 
 
 def write_limits_key(path: Path, key: str, value: bool | str | int) -> None:
@@ -1167,10 +1166,9 @@ def _write_config_key_locked(path: Path, table: str, key: str, value: bool | str
     keeps its own mode when that is not 0600 -- an operator who chose 0644 chose it. Stdlib
     only: this is a root-layer module and may not reach for an adapter.
     """
-    if table == "codex":
-        if key not in _CODEX_KEYS:
-            raise ConfigError(f"codex.{key} is not a key this schema writes")
-        rendered = _toml_value(_permission_preset(value).value)
+    validate = _CONFIG_VALUE_VALIDATORS.get((table, key))
+    if validate is not None:
+        rendered = _toml_value(validate(value))
     elif table == "rollover":
         if key not in _ROLLOVER_KEYS:
             raise ConfigError(f"rollover.{key} is not a key this schema writes")
