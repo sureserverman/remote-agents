@@ -28,6 +28,7 @@ from remote_agents.application.errors import (
     SessionNotFoundError,
     StopNotPermittedError,
 )
+from remote_agents.application.permission_presets import SessionPermissions
 from remote_agents.application.reconcile import SessionLocks
 from remote_agents.application.session_actions import (
     CLEANUP,
@@ -46,6 +47,7 @@ from remote_agents.domain.models import (
     SessionRecord,
     SessionState,
 )
+from remote_agents.domain.profiles import PermissionPreset
 from remote_agents.domain.remote_control import RemoteControlDefault, RemoteControlState
 from remote_agents.domain.state_machine import LifecycleEvent, transition
 from remote_agents.domain.trust import TrustState
@@ -248,8 +250,10 @@ class SessionService:
         worktree_service: WorktreeService | None = None,
         before_pane: Callable[[], Awaitable[None]] | None = None,
         folder_bindings: FolderBindings | None = None,
+        permissions: SessionPermissions | None = None,
     ) -> None:
         self._store = store
+        self._permissions = permissions
         # Sessions bound to a folder outside their project (DEC-131): a launch naming a folder
         # binds it before its pane starts, and a successor carries it on. None in a composition
         # that keeps none, where a launch naming a folder is refused.
@@ -387,6 +391,11 @@ class SessionService:
             self._daemon_guard(command.profile_id, command.guard_wait),
             self._locks.operation(),
         ):
+            preset = await self._resolve_permissions(
+                command.profile_id,
+                command.permissions,
+                command.inherit_permissions_of,
+            )
             if not await self._store.claim_idempotency_key(command.idempotency_key):
                 raise DuplicateCommandError("launch callback was already handled")
             session_id = SessionId.new()
@@ -405,7 +414,7 @@ class SessionService:
                 SessionState.STARTING,
                 datetime.now(UTC),
             )
-            await self._store.save(record)
+            await self._save_with_permissions(record, preset)
             # From here the session id exists, so the per-session lock can be taken -- and
             # must be. `ReconciliationService.session_is_busy` answers "is a caller mid-flight
             # on this session", and it can only answer from a held lock. Without this, a
@@ -447,6 +456,7 @@ class SessionService:
                     command.project_id,
                     command.profile_id,
                     remote_control=remote_control,
+                    **({"permissions": preset} if preset is not None else {}),
                 )
                 if (
                     command.mode == "worktree"
@@ -530,6 +540,12 @@ class SessionService:
         existing = await self._store.get_by_resume_source(command.profile_id, source_id)
         if existing is not None:
             return ResumeOutcome(existing, created=False)
+        preset = await self._resolve_permissions(
+            command.profile_id,
+            command.permissions,
+            command.inherit_permissions_of,
+            conversation=source_id,
+        )
         if not await self._store.claim_idempotency_key(command.idempotency_key):
             raise DuplicateCommandError("resume callback was already handled")
         session_id = SessionId.new()
@@ -550,7 +566,7 @@ class SessionService:
             command.conversation.summary.profile_id,
             source_id,
         )
-        await self._store.save(record)
+        await self._save_with_permissions(record, preset)
         # The same shape as `launch`, and owed for the same reason: the id exists from here,
         # so the per-session lock is what makes this resume visible to
         # `ReconciliationService.session_is_busy` for its whole duration.
@@ -575,6 +591,7 @@ class SessionService:
                 command.project_id,
                 command.profile_id,
                 command.conversation.provider_conversation_id,
+                **({"permissions": preset} if preset is not None else {}),
             )
             record = await self._store.record_event(session_id, _event_for_launch(observation))
             if observation.detail in _BEFORE_ANY_PANE:
@@ -587,6 +604,46 @@ class SessionService:
                 created=True,
                 worktree_removed=observation.detail == WORKTREE_REMOVED,
             )
+
+    async def _resolve_permissions(
+        self,
+        profile_id: ProfileId,
+        override: PermissionPreset | None,
+        inherit: SessionId | None,
+        *,
+        conversation: str | None = None,
+    ) -> PermissionPreset | None:
+        if self._permissions is None:
+            if override is not None:
+                raise ValueError("permission presets are unavailable")
+            return None
+        return await self._permissions.resolve(
+            profile_id,
+            override,
+            inherit,
+            conversation=conversation,
+        )
+
+    async def _save_with_permissions(
+        self,
+        record: SessionRecord,
+        preset: PermissionPreset | None,
+    ) -> None:
+        if preset is None:
+            await self._store.save(record)
+        else:
+            await self._store.save(record, permissions=preset)
+
+    async def permission_preset(self, session_id: SessionId) -> PermissionPreset | None:
+        return (
+            None
+            if self._permissions is None
+            else await self._permissions.bindings.for_session(session_id)
+        )
+
+    async def remember_permissions(self) -> None:
+        if self._permissions is not None:
+            await self._permissions.remember_marks()
 
     async def list_sessions(self) -> tuple[SessionRecord, ...]:
         return tuple(await self._store.list())

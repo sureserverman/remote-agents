@@ -8,6 +8,7 @@ from typing import Literal
 
 from remote_agents.domain.conversations import ResolvedConversation
 from remote_agents.domain.models import ProfileId, ProjectId, SessionId
+from remote_agents.domain.profiles import PermissionPreset
 from remote_agents.domain.remote_control import RemoteControlState
 
 LAUNCH_WAIT_SECONDS = 2.0
@@ -47,7 +48,12 @@ class LaunchCommand:
     pane starts, and only if the acceptance rule passes it; refused, the launch fails rather
     than starting in the project folder."""
 
+    permissions: PermissionPreset | None = None
+    inherit_permissions_of: SessionId | None = None
+
     def __post_init__(self) -> None:
+        if self.permissions is not None:
+            _validate_permissions(self.permissions)
         if self.mode not in ("regular", "worktree"):
             raise ValueError(f"unknown launch mode: {self.mode!r}")
         if self.mode == "worktree" and self.reuse_folder_of is not None:
@@ -70,9 +76,21 @@ class ResumeCommand:
     label: str | None = None
     """The new session's name, as `LaunchCommand.label`; None leaves it unnamed."""
 
+    permissions: PermissionPreset | None = None
+    inherit_permissions_of: SessionId | None = None
+
     def __post_init__(self) -> None:
+        if self.permissions is not None:
+            _validate_permissions(self.permissions)
         if self.conversation.summary.profile_id != self.profile_id:
             raise ValueError("resume profile must match the resolved conversation")
+
+
+def _validate_permissions(value: object) -> None:
+    try:
+        PermissionPreset(value)
+    except (ValueError, TypeError):
+        raise ValueError("unknown permission preset") from None
 
 
 @dataclass(frozen=True, slots=True)

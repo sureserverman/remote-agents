@@ -482,6 +482,7 @@ class InterruptedResumePass:
                 f"restart:{record.session_id}",
                 guard_wait=UNATTENDED_LAUNCH_WAIT_SECONDS,
                 label=RESUMED_LABEL,
+                inherit_permissions_of=record.session_id,
             )
         except ValueError:
             # Nothing was claimed, but the same record would fail the same way on every start.

@@ -11,6 +11,7 @@ from typing import Protocol
 
 from remote_agents.domain.conversations import ProviderConversationId
 from remote_agents.domain.models import ProfileId, ProjectId, SessionId
+from remote_agents.domain.profiles import PermissionPreset
 from remote_agents.domain.remote_control import RemoteControlState
 from remote_agents.domain.trust import TrustState
 
@@ -248,6 +249,7 @@ class TerminalPort(Protocol):
         profile_id: ProfileId,
         *,
         remote_control: bool = False,
+        permissions: PermissionPreset | None = None,
     ) -> TerminalObservation: ...
     async def resume(
         self,
@@ -255,6 +257,8 @@ class TerminalPort(Protocol):
         project_id: ProjectId,
         profile_id: ProfileId,
         source_id: ProviderConversationId,
+        *,
+        permissions: PermissionPreset | None = None,
     ) -> TerminalObservation: ...
     async def copy_attach(self, session_id: SessionId) -> str | None: ...
     async def remote_control(

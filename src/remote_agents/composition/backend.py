@@ -24,6 +24,7 @@ from remote_agents.adapters.agents.registry import (
     provider_descriptors,
     usage_readers,
 )
+from remote_agents.adapters.agents.turn_markers import FileConversationMarks
 from remote_agents.adapters.git.checkout import GitCli
 from remote_agents.adapters.projects.discovery import discover_projects
 from remote_agents.adapters.projects.registry import load_registry
@@ -31,6 +32,7 @@ from remote_agents.adapters.projects.registry_writer import RegistryProjectRecor
 from remote_agents.adapters.projects.workspace import FilesystemProjectWorkspace
 from remote_agents.adapters.sqlite.database import watched_paths
 from remote_agents.adapters.sqlite.folder_bindings import SQLiteFolderBindings
+from remote_agents.adapters.sqlite.permission_bindings import SQLitePermissionBindings
 from remote_agents.adapters.sqlite.rollover_store import SQLiteRolloverStore
 from remote_agents.adapters.sqlite.schedule_store import SQLiteScheduleStore
 from remote_agents.adapters.sqlite.session_store import SQLiteSessionStore
@@ -40,7 +42,7 @@ from remote_agents.application.backend import Backend
 from remote_agents.application.conversations import ConversationService
 from remote_agents.application.hook_roster import HookRosterPublisher
 from remote_agents.application.host_remote_control import HostRemoteControlService
-from remote_agents.application.permission_presets import PermissionSettings
+from remote_agents.application.permission_presets import PermissionSettings, SessionPermissions
 from remote_agents.application.profiles import ProfileAvailability
 from remote_agents.application.project_admin import ProjectCreationService
 from remote_agents.application.project_catalog import CatalogProject, build_catalogue
@@ -493,19 +495,26 @@ def compose_backend(
     daemon_profiles = [
         descriptor.profile_id for descriptor in descriptors if descriptor.remote_control is not None
     ]
+    permission_settings = PermissionSettings(
+        ConfigPermissionSetting(config.path or paths.config_path),
+        profiles={
+            descriptor.profile_id: descriptor.permission_presets
+            for descriptor in descriptors
+            if descriptor.permission_presets is not None
+        },
+    )
     return Backend(
-        permission_presets=PermissionSettings(
-            ConfigPermissionSetting(config.path or paths.config_path),
-            profiles={
-                descriptor.profile_id: descriptor.permission_presets
-                for descriptor in descriptors
-                if descriptor.permission_presets is not None
-            },
-        ),
+        permission_presets=permission_settings,
         state_events=StoreWatch(watched_paths(paths.database_path)),
         sessions=SessionService(
             backend_store,
             runtime.terminal,
+            permissions=SessionPermissions(
+                permission_settings,
+                SQLitePermissionBindings(connection),
+                backend_store,
+                marks=FileConversationMarks(paths.activity_directory),
+            ),
             locks=backend_locks,
             hide_in_console=hide_in_console,
             # Which launches the stored default governs is **asked of the port**, not named

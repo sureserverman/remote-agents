@@ -448,6 +448,22 @@ MIGRATIONS: tuple[tuple[int, str], ...] = (
         );
         """,
     ),
+    (
+        22,
+        # Additive snapshots: old session rows remain legacy/unknown, never backfilled.
+        """
+        CREATE TABLE session_permissions (
+            session_id TEXT PRIMARY KEY REFERENCES sessions(session_id),
+            preset TEXT NOT NULL CHECK (preset IN
+                ('approve_for_me', 'ask', 'full_access', 'provider_default')),
+            conversation_id TEXT
+        );
+        CREATE INDEX session_permissions_conversation ON session_permissions(conversation_id);
+        CREATE TRIGGER session_permission_snapshot_immutable
+        BEFORE UPDATE OF preset ON session_permissions
+        BEGIN SELECT RAISE(ABORT, 'launch permission snapshot is immutable'); END;
+        """,
+    ),
 )
 """Migration 14 takes the surface's bookkeeping out of the watched store.
 

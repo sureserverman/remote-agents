@@ -528,6 +528,7 @@ class RolloverPass:
                 f"rollover:{rollover.handoff_id}",
                 guard_wait=UNATTENDED_LAUNCH_WAIT_SECONDS,
                 folder=reported,
+                inherit_permissions_of=predecessor,
             )
         return LaunchCommand(
             rollover.project_id,
@@ -535,6 +536,7 @@ class RolloverPass:
             f"rollover:{rollover.handoff_id}",
             guard_wait=UNATTENDED_LAUNCH_WAIT_SECONDS,
             reuse_folder_of=predecessor,
+            inherit_permissions_of=predecessor,
         )
 
     async def _start_successor(self, rollover: Rollover, seen: _Seen) -> None:

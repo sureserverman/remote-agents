@@ -7,6 +7,7 @@ from datetime import UTC, datetime
 from remote_agents.adapters.tmux.codec import attach_command
 from remote_agents.domain.conversations import ProviderConversationId
 from remote_agents.domain.models import ProfileId, ProjectId, SessionId
+from remote_agents.domain.profiles import PermissionPreset
 from remote_agents.domain.remote_control import RemoteControlState
 from remote_agents.domain.trust import TrustState
 from remote_agents.ports.terminal import (
@@ -63,6 +64,7 @@ class FakeTerminal:
         *,
         remote_control: bool = False,
         record_launch: bool = True,
+        permissions: PermissionPreset | None = None,
     ) -> TerminalObservation:
         """Create a live fake session without running a process.
 
@@ -107,6 +109,8 @@ class FakeTerminal:
         project_id: ProjectId,
         profile_id: ProfileId,
         source_id: ProviderConversationId,
+        *,
+        permissions: PermissionPreset | None = None,
     ) -> TerminalObservation:
         """Model a trusted provider selection without accepting Telegram arguments."""
         del source_id

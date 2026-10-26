@@ -16,6 +16,7 @@ from remote_agents.domain.models import (
     SessionRecord,
     SessionState,
 )
+from remote_agents.domain.profiles import PermissionPreset
 from remote_agents.domain.remote_control import RemoteControlState
 from remote_agents.domain.state_machine import TERMINAL_STATES, LifecycleEvent, transition
 from remote_agents.ports.session_store import ProjectUsage, SessionEvent
@@ -37,7 +38,12 @@ class SQLiteSessionStore:
         ).fetchone()
         return int(result[0]) + 1
 
-    async def save(self, record: SessionRecord) -> None:
+    async def save(
+        self,
+        record: SessionRecord,
+        *,
+        permissions: PermissionPreset | None = None,
+    ) -> None:
         """Insert a session projection using bound values rather than SQL interpolation."""
         with self._connection:
             self._connection.execute(
@@ -63,6 +69,12 @@ class SQLiteSessionStore:
                     record.remote_control_state.value if record.remote_control_state else None,
                 ),
             )
+
+            if permissions is not None:
+                self._connection.execute(
+                    "INSERT INTO session_permissions(session_id, preset) VALUES (?, ?)",
+                    (str(record.session_id), PermissionPreset(permissions).value),
+                )
 
     async def get(self, session_id: SessionId) -> SessionRecord | None:
         """Load one immutable projection by its opaque session identifier."""
