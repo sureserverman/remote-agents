@@ -3,8 +3,18 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from enum import StrEnum
 
 from remote_agents.domain.models import ProfileId
+
+
+class PermissionPreset(StrEnum):
+    """A requested launch policy, independent of later native permission changes."""
+
+    APPROVE_FOR_ME = "approve_for_me"
+    ASK = "ask"
+    FULL_ACCESS = "full_access"
+    PROVIDER_DEFAULT = "provider_default"
 
 
 class ProfileError(ValueError):

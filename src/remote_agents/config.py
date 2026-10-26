@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import fcntl
 import os
 import re
 import stat
@@ -9,6 +10,8 @@ import tomllib
 from collections.abc import Mapping
 from dataclasses import KW_ONLY, dataclass, field
 from pathlib import Path
+
+from remote_agents.domain.profiles import PermissionPreset
 
 
 class ConfigError(ValueError):
@@ -238,6 +241,8 @@ class AppConfig:
     path on every account read, which is what lets a Settings flip land without a restart.
     """
 
+    codex_default_permissions: PermissionPreset = PermissionPreset.APPROVE_FOR_ME
+
     def worktree_copy_for(self, project_path: Path) -> tuple[str, ...]:
         """The copy list for a project: its own `[worktrees.projects]` entry, else the default.
 
@@ -257,8 +262,10 @@ class AppConfig:
         return self.worktree_copy if own is None else own
 
 
-_TOP_LEVEL_KEYS = {"paths", "limits", "rollover", "restart", "worktrees"}
-_OPTIONAL_TOP_LEVEL_KEYS = frozenset({"rollover", "restart", "worktrees"})
+_TOP_LEVEL_KEYS = {"paths", "limits", "rollover", "restart", "worktrees", "codex"}
+_OPTIONAL_TOP_LEVEL_KEYS = frozenset({"rollover", "restart", "worktrees", "codex"})
+_CODEX_KEYS = {"default_permissions"}
+_OPTIONAL_CODEX_KEYS = frozenset(_CODEX_KEYS)
 """Tables the schema accepts but does not require: a host written before one existed lacks it.
 
 DEC-058 for a whole table rather than a key. `[rollover]` holds only optional keys, so a file
@@ -483,6 +490,7 @@ def _schema_sections(
         ),
         ("rollover", _ROLLOVER_KEYS, _OPTIONAL_ROLLOVER_KEYS),
         ("restart", _RESTART_KEYS, _OPTIONAL_RESTART_KEYS),
+        ("codex", _CODEX_KEYS, _OPTIONAL_CODEX_KEYS),
         ("worktrees", _WORKTREE_KEYS, _OPTIONAL_WORKTREE_KEYS),
     ):
         section = raw.get(name)
@@ -510,6 +518,9 @@ def load_config(path: Path) -> AppConfig:
             raise ConfigError(_unreadable(path, error)) from error
         raise ConfigError(_unreadable(path, error)) from None
     _require_exact_keys(raw, _TOP_LEVEL_KEYS, "root", _OPTIONAL_TOP_LEVEL_KEYS)
+    codex = _mapping(raw.get("codex", {}), "codex")
+    _require_exact_keys(codex, _CODEX_KEYS, "codex", _OPTIONAL_CODEX_KEYS)
+    permissions = _permission_preset(codex.get("default_permissions", "approve_for_me"))
     paths = _mapping(raw["paths"], "paths")
     limits = _mapping(raw["limits"], "limits")
     rollover = _mapping(raw.get("rollover", {}), "rollover")
@@ -600,6 +611,7 @@ def load_config(path: Path) -> AppConfig:
         resume_interrupted=resume_interrupted,
         worktree_copy=worktree_copy,
         worktree_copy_by_project=worktree_copy_by_project,
+        codex_default_permissions=permissions,
     )
 
 
@@ -1054,12 +1066,67 @@ def read_resume_interrupted(path: Path, *, when_unsure: bool = DEFAULT_RESUME_IN
     return value if isinstance(value, bool) else when_unsure
 
 
+def _permission_preset(value: object) -> PermissionPreset:
+    try:
+        return PermissionPreset(value)
+    except (TypeError, ValueError):
+        raise ConfigError(
+            "codex.default_permissions must name a supported permission preset"
+        ) from None
+
+
+def read_codex_permissions(path: Path) -> PermissionPreset:
+    """Read only this default; malformed or unavailable configuration refuses a launch."""
+    try:
+        raw = tomllib.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError) as error:
+        raise ConfigError("cannot read Codex launch permissions") from error
+    section = _mapping(raw.get("codex", {}), "codex")
+    _require_exact_keys(section, _CODEX_KEYS, "codex", _OPTIONAL_CODEX_KEYS)
+    return _permission_preset(section.get("default_permissions", "approve_for_me"))
+
+
 def write_limits_key(path: Path, key: str, value: bool | str | int) -> None:
     """`write_config_key` for `[limits]`, where every switch before `[rollover]` lives."""
     write_config_key(path, "limits", key, value)
 
 
 def write_config_key(path: Path, table: str, key: str, value: bool | str | int) -> None:
+    """Serialize cooperating settings writers across the complete read/replace operation.
+
+    The sibling lock is retained: unlinking it would let a waiting writer lock a different
+    inode. Resolve symlinks first so aliases of one configuration share one lock. External
+    editors need not take this advisory lock; the byte check detects edits before the
+    rename, but cannot promise compare-and-swap against an editor racing the rename itself.
+    """
+    target = Path(os.path.realpath(path))
+    descriptor = None
+    try:
+        descriptor = os.open(
+            target.parent / f".{target.name}.lock",
+            os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW | os.O_NONBLOCK,
+            0o600,
+        )
+        metadata = os.fstat(descriptor)
+        if (
+            not stat.S_ISREG(metadata.st_mode)
+            or metadata.st_uid != os.geteuid()
+            or metadata.st_nlink != 1
+            or stat.S_IMODE(metadata.st_mode) & 0o077
+        ):
+            raise ConfigError("configuration write lock is not an owner-only regular file")
+        fcntl.flock(descriptor, fcntl.LOCK_EX)
+        _write_config_key_locked(target, table, key, value)
+    except OSError as error:
+        if path.exists():
+            raise ConfigError(_unreadable(path, error)) from error
+        raise ConfigError(_unreadable(path, error)) from None
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+
+
+def _write_config_key_locked(path: Path, table: str, key: str, value: bool | str | int) -> None:
     """Rewrite one `key = value` line in `[table]` and preserve every other byte of the file.
 
     **Not a re-render.** `render_config` writes a fresh file for a host that has none; this
@@ -1100,7 +1167,11 @@ def write_config_key(path: Path, table: str, key: str, value: bool | str | int) 
     keeps its own mode when that is not 0600 -- an operator who chose 0644 chose it. Stdlib
     only: this is a root-layer module and may not reach for an adapter.
     """
-    if table == "rollover":
+    if table == "codex":
+        if key not in _CODEX_KEYS:
+            raise ConfigError(f"codex.{key} is not a key this schema writes")
+        rendered = _toml_value(_permission_preset(value).value)
+    elif table == "rollover":
         if key not in _ROLLOVER_KEYS:
             raise ConfigError(f"rollover.{key} is not a key this schema writes")
         rendered = _toml_value(_flag(value, f"rollover.{key}"))

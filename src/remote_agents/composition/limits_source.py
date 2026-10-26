@@ -37,6 +37,7 @@ from remote_agents.config import (
     ConfigError,
     read_auto_rollover,
     read_claude_limits_source,
+    read_codex_permissions,
     read_cursor_limits_source,
     read_early_reset_notice,
     read_resume_after_limit,
@@ -44,12 +45,28 @@ from remote_agents.config import (
     write_config_key,
     write_limits_key,
 )
+from remote_agents.domain.profiles import PermissionPreset
 
 _LOG = logging.getLogger(__name__)
 
 #: The one key this setting owns. Spelled once here so the writer and the reader cannot be
 #: pointed at different keys by a later edit.
 _KEY = "claude_limits_source"
+
+
+class ConfigPermissionSetting:
+    """The launch default through the existing atomic config writer."""
+
+    def __init__(self, path: Path) -> None:
+        self._path = path
+
+    async def read(self) -> PermissionPreset:
+        return await asyncio.to_thread(read_codex_permissions, self._path)
+
+    async def write(self, value: PermissionPreset) -> None:
+        await asyncio.to_thread(
+            write_config_key, self._path, "codex", "default_permissions", value.value
+        )
 
 
 class ConfigLimitsSource:

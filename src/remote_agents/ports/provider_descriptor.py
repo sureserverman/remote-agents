@@ -33,6 +33,7 @@ from dataclasses import MISSING, dataclass, fields
 from enum import Enum
 
 from remote_agents.domain.models import ProfileId
+from remote_agents.domain.profiles import PermissionPreset
 from remote_agents.ports.agent_activity import ActivityKind, ActivitySource
 from remote_agents.ports.limit_screen import LimitScreen
 
@@ -322,6 +323,9 @@ class ProviderDescriptor:
     surface keeps a table of its own. It was a literal dict inside the Telegram adapter until
     BL-101, which left every other surface to reach into that module or spell its own.
     """
+
+    permission_presets: tuple[PermissionPreset, ...] | None = None
+    """The closed launch policies this provider supports; None means unavailable."""
 
     sessions: object | None = None
     """A factory over the live project-path mapping, and optionally each project's live

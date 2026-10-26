@@ -40,6 +40,7 @@ from remote_agents.application.backend import Backend
 from remote_agents.application.conversations import ConversationService
 from remote_agents.application.hook_roster import HookRosterPublisher
 from remote_agents.application.host_remote_control import HostRemoteControlService
+from remote_agents.application.permission_presets import PermissionSettings
 from remote_agents.application.profiles import ProfileAvailability
 from remote_agents.application.project_admin import ProjectCreationService
 from remote_agents.application.project_catalog import CatalogProject, build_catalogue
@@ -56,6 +57,7 @@ from remote_agents.composition.limits_source import (
     ConfigCursorLimitsSource,
     ConfigEarlyResetSetting,
     ConfigLimitsSource,
+    ConfigPermissionSetting,
     ConfigRestartResumeSetting,
     ConfigResumeSetting,
     ConfigRolloverSetting,
@@ -492,6 +494,14 @@ def compose_backend(
         descriptor.profile_id for descriptor in descriptors if descriptor.remote_control is not None
     ]
     return Backend(
+        permission_presets=PermissionSettings(
+            ConfigPermissionSetting(config.path or paths.config_path),
+            profiles={
+                descriptor.profile_id: descriptor.permission_presets
+                for descriptor in descriptors
+                if descriptor.permission_presets is not None
+            },
+        ),
         state_events=StoreWatch(watched_paths(paths.database_path)),
         sessions=SessionService(
             backend_store,

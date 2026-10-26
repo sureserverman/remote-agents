@@ -42,6 +42,7 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 
+from remote_agents.application.permission_presets import PermissionSettings
 from remote_agents.application.profiles import ProfileAvailability
 from remote_agents.application.project_catalog import CatalogProject
 from remote_agents.application.session_views import SessionGit
@@ -98,6 +99,9 @@ class Backend:
     composition carries one. The absence is representable; it is not permitted in
     production and a test says so.
     """
+
+    permission_presets: PermissionSettings | None = None
+    """The persisted launch default shared by both control surfaces."""
 
     projects: object | None = None
     """Project creation (`application.project_admin.ProjectCreationService`).
