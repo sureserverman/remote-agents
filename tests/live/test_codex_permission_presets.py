@@ -17,7 +17,6 @@ import asyncio
 import json
 import os
 import shutil
-import signal
 import stat
 import subprocess
 import time
@@ -28,7 +27,7 @@ from pathlib import Path
 import pytest
 from _pytest.mark.expression import Expression
 from agent_panes import CODEX_OPENING, CODEX_READY, open_to_composer
-from codex_home import _running_from, short_codex_home
+from codex_home import retire_codex_home, short_codex_home
 
 from remote_agents.adapters.agents.registry import profile_composers, profile_trust_dialogs
 from remote_agents.adapters.sqlite.database import open_database
@@ -100,6 +99,7 @@ def _tmux(socket: str, *arguments: str) -> subprocess.CompletedProcess[str]:
 def _prefix(bwrap: Path, root: Path, home: Path, auth: Path) -> tuple[str, ...]:
     return (
         str(bwrap),
+        "--unshare-pid",
         "--ro-bind",
         "/",
         "/",
@@ -180,28 +180,21 @@ def _retire(
     environment: dict[str, str],
     home: Path,
 ) -> None:
-    """Stop through the same confinement; any fallback PID must still execute inside our home."""
-    try:
-        subprocess.run(
-            [*prefix, str(codex), "app-server", "daemon", "stop"],
-            env=environment,
-            capture_output=True,
-            timeout=5,
-            check=False,
-        )
-    except subprocess.TimeoutExpired:
-        pass
-    for signum in (signal.SIGTERM, signal.SIGKILL):
-        for pid in _running_from(home):
-            try:
-                os.kill(pid, signum)
-            except ProcessLookupError:
-                pass
-        deadline = time.monotonic() + 3
-        while _running_from(home) and time.monotonic() < deadline:
-            time.sleep(0.1)
-    assert not _running_from(home), "owned Codex daemon cleanup is incomplete"
-    shutil.rmtree(home)
+    """Stop through the same confinement, then use the shared attested-home cleanup."""
+
+    def stop() -> None:
+        try:
+            subprocess.run(
+                [*prefix, str(codex), "app-server", "daemon", "stop"],
+                env=environment,
+                capture_output=True,
+                timeout=5,
+                check=False,
+            )
+        except subprocess.TimeoutExpired:
+            pass
+
+    retire_codex_home(home, stop=stop)
 
 
 @pytest.mark.live_acceptance
