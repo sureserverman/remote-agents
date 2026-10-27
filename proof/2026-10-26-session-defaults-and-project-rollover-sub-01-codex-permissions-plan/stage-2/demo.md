@@ -39,3 +39,9 @@ Finding:
 - **Blocking** — Telegram’s required user route was unavailable in this isolated fixture, so the cross-surface Outcome 1 and Stage 2 goal cannot be accepted from this demonstration.
 
 The private wrapper had already exited after the final observation; I left no background work running.
+
+## Not demoed
+
+owner, 2026-10-27: "1"
+
+The owner selected option 1 from the preceding gate report: "Defer that demo to the final combined gate and continue source work." This opt-out applies only to the unavailable isolated Telegram user-route demonstration at Sub-plan 1 Stage 2 and its sub-plan close-out. The original cannot-reach verdict and final evaluator FAIL above remain unchanged; no Telegram execution or acceptance is claimed. The independent Telegram user-route demo is required at Sub-plan 3 final combined gate. Terminal Outcomes 2 and 3 retain their actual holds evidence.
