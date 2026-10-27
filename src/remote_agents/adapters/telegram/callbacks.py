@@ -6,9 +6,28 @@ import logging
 import secrets
 from dataclasses import replace
 
+from remote_agents.domain.profiles import PermissionPreset
 from remote_agents.ports.callback_state import UNBOUND, CallbackState
 
 _LOG = logging.getLogger(__name__)
+
+
+def permission_entity(entity: str, preset: PermissionPreset | None) -> str:
+    """Keep an override inside durable callback state, never in process-local flow state."""
+    return entity if preset is None else f"pp1:{preset.value}:{entity}"
+
+
+def split_permission_entity(value: str) -> tuple[str, PermissionPreset | None]:
+    """Legacy entities carry no override; a malformed new envelope is a named refusal."""
+    if not value.startswith("pp1:"):
+        return value, None
+    _, preset, entity = value.split(":", 2)
+    if not entity or entity.startswith("pp1:"):
+        raise ValueError("invalid permission selection")
+    try:
+        return entity, PermissionPreset(preset)
+    except ValueError:
+        raise ValueError("unknown permission preset") from None
 
 
 class CallbackStateStore:

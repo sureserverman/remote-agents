@@ -125,6 +125,7 @@ from remote_agents.domain.models import (
     SessionRecord,
     SessionState,
 )
+from remote_agents.domain.profiles import PermissionPreset
 from remote_agents.domain.remote_control import RemoteControlState
 from remote_agents.ports.agent_usage import ContextWindow
 from remote_agents.ports.console import StatusBarPalette
@@ -1852,6 +1853,8 @@ class RemoteAgentsTui(App[AttachRequest | None]):
         project: CatalogProject,
         profile: str,
         resolved: ResolvedConversation,
+        *,
+        permissions: PermissionPreset | None = None,
     ) -> None:
         """Start the resumed session, and hand back the attach command if it is ready.
 
@@ -1868,6 +1871,7 @@ class RemoteAgentsTui(App[AttachRequest | None]):
                         ProfileId(profile),
                         resolved,
                         _idempotency_key(),
+                        permissions=permissions,
                     )
                 )
             # `outcome.created` says whether this call started anything, which the record
@@ -2698,6 +2702,13 @@ class RemoteAgentsTui(App[AttachRequest | None]):
                         # moment the owner can see what they are naming.
                         None,
                         mode=mode,
+                        permissions=(
+                            self.selection.permissions
+                            if self._services.backend.permission_presets is not None
+                            and ProfileId(profile.profile_id)
+                            in self._services.backend.permission_presets.profiles
+                            else None
+                        ),
                     )
                 )
         except CodexRemoteControlBusy:

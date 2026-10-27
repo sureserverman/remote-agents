@@ -160,6 +160,7 @@ def _arrangements():
         LaunchModeScreen,
         LimitsPaneScreen,
         NameScreen,
+        PermissionsScreen,
         ProfilesScreen,
         ProjectChooserScreen,
         ProjectReviewScreen,
@@ -184,6 +185,10 @@ def _arrangements():
         ),
     )
     page = ConversationCataloguePage((_summary(),), 1, 1)
+
+    async def save_permission(_value) -> None:
+        pass
+
     return {
         DashboardScreen: None,  # the resting position, already on the stack
         ProfilesScreen: ProfilesScreen,
@@ -211,6 +216,7 @@ def _arrangements():
         # file or a daemon outside this process -- so it is also the newest case the Refresh
         # sweep has to get right.
         SettingsScreen: SettingsScreen,
+        PermissionsScreen: lambda: PermissionsScreen(None, save_permission, allow_inherit=True),
         ResumeProjectsScreen: ResumeProjectsScreen,
         ResumeProfilesScreen: lambda: ResumeProfilesScreen(_PROJECT, capable),
         ResumeConversationsScreen: lambda: ResumeConversationsScreen(_PROJECT, "claude", page),

@@ -35,7 +35,11 @@ from telegram.ext import (
     filters,
 )
 
-from remote_agents.adapters.telegram.callbacks import CallbackStateStore
+from remote_agents.adapters.telegram.callbacks import (
+    CallbackStateStore,
+    permission_entity,
+    split_permission_entity,
+)
 from remote_agents.adapters.telegram.flood import FloodGate
 from remote_agents.adapters.telegram.inspection import inspect_capture
 from remote_agents.adapters.telegram.limit_reset_notifications import (
@@ -106,6 +110,12 @@ from remote_agents.application.limits_source import (
     LIMITS_SOURCE_TITLE,
     next_cursor_limits_source,
     next_limits_source,
+)
+from remote_agents.application.permission_presets import (
+    PERMISSION_CHOICES,
+    PERMISSION_EFFECT,
+    PERMISSION_TITLE,
+    permission_label,
 )
 from remote_agents.application.profiles import ProfileAvailability
 from remote_agents.application.project_admin import CreateProjectCommand
@@ -204,6 +214,7 @@ from remote_agents.domain.models import (
     SessionState,
     normalize_label,
 )
+from remote_agents.domain.profiles import PermissionPreset
 from remote_agents.domain.projects import ProjectIdentity
 from remote_agents.domain.remote_control import (
     HostConnection,
@@ -1573,6 +1584,7 @@ class PrivateBotBoundary:
             or self.backend.early_reset_notice is not None
             or self.backend.auto_rollover is not None
             or self.backend.resume_interrupted is not None
+            or self.backend.permission_presets is not None
         ):
             # Conditional on a row being wired, unlike the `/settings` menu entry, and the two
             # rules are different on purpose: the menu is a door that always has something
@@ -1820,7 +1832,23 @@ class PrivateBotBoundary:
         if action == "launch.page":
             return _reply_arguments(self._project_page_reply(entity_id))
         if action == "launch.project":
-            return _reply_arguments(self._profiles_reply(entity_id))
+            return _reply_arguments(await self._profiles_reply(entity_id))
+        if action in {"launch.permissions", "resume.permissions"}:
+            return _reply_arguments(
+                await self._permission_question(action.split(".")[0], entity_id)
+            )
+        if action in {"launch.permissions.set", "resume.permissions.set"}:
+            try:
+                split_permission_entity(entity_id)
+            except ValueError:
+                return _reply_arguments(
+                    self._message("That permission choice is no longer available.")
+                )
+            return _reply_arguments(
+                await self._profiles_reply(entity_id)
+                if action.startswith("launch.")
+                else await self._resume_catalogue_reply(entity_id)
+            )
         if action == "launch.profile":
             return await self._launch_reply(entity_id, token, message_id)
         if action == "launch.mode":
@@ -1895,6 +1923,10 @@ class PrivateBotBoundary:
             return await self._settings_cursor_limits_reply(entity_id, token, message_id)
         if action == "settings.open":
             return _reply_arguments(await self._settings_screen())
+        if action == "settings.permissions.open":
+            return _reply_arguments(await self._permission_question("settings", "default"))
+        if action == "settings.permissions.set":
+            return await self._settings_permissions_reply(entity_id, token, message_id)
         # `host.remote.pair` is deliberately absent: it is handled before this dispatcher
         # runs, because its message must be *sent* rather than edited into the live view.
         if action == "session.trust":
@@ -1918,7 +1950,11 @@ class PrivateBotBoundary:
         mode when the project is contended (BL-116), else the mode that press chose."""
         if self.backend.sessions is None:
             return _reply_arguments(self._message("Launching is unavailable."))
-        project_id, profile_id = _split_launch(entity_id)
+        try:
+            launch_entity, permissions = split_permission_entity(entity_id)
+            project_id, profile_id = _split_launch(launch_entity)
+        except ValueError:
+            return _reply_arguments(self._message("That launch permission selection is invalid."))
         # Re-derived before the claim, not after. The confirmation screen checked both when it
         # drew the button, and a button now outlives the screen that drew it by any amount of
         # time -- so claiming first would burn the one-shot on a project that has since left
@@ -1933,6 +1969,13 @@ class PrivateBotBoundary:
             # Asked, not launched: the agent press spends nothing, and each mode button is a
             # fresh one-shot for the message that carries it (DEC-011).
             return _reply_arguments(self._launch_mode_question(entity_id))
+        settings = self.backend.permission_presets
+        if permissions is not None and (
+            settings is None or permissions not in settings.profiles.get(ProfileId(profile_id), ())
+        ):
+            return _reply_arguments(
+                self._message("Launch permissions are unavailable for this agent.")
+            )
         if not self.callbacks.claim_mutation(
             token,
             owner_id=self.owner_user_id,
@@ -1950,6 +1993,7 @@ class PrivateBotBoundary:
                     # is a later, optional act from the session's own menu (Task 2.3).
                     None,
                     mode="worktree" if mode == "worktree" else "regular",
+                    permissions=permissions,
                 )
             )
         except CodexRemoteControlBusy:
@@ -2113,6 +2157,10 @@ class PrivateBotBoundary:
         # `_launch_reply` records and the ordering this path did not have: claiming first
         # burns the one-shot on a conversation or a project that has since gone, and leaves
         # the owner a button that answers "already run" for something that never ran.
+        try:
+            reference_value, permissions = split_permission_entity(reference_value)
+        except ValueError:
+            return _reply_arguments(self._message("That resume permission selection is invalid."))
         resolved = await self._resolve_resume(reference_value)
         if resolved is None or resolved.summary.project_id is None:
             return _reply_arguments(self._message("That conversation is no longer available."))
@@ -2138,6 +2186,14 @@ class PrivateBotBoundary:
             for profile in self.profiles
         ):
             return _reply_arguments(self._message("That agent is unavailable."))
+        settings = self.backend.permission_presets
+        if permissions is not None and (
+            settings is None
+            or permissions not in settings.profiles.get(resolved.summary.profile_id, ())
+        ):
+            return _reply_arguments(
+                self._message("Launch permissions are unavailable for this agent.")
+            )
         if not self.callbacks.claim_mutation(
             token,
             owner_id=self.owner_user_id,
@@ -2152,6 +2208,7 @@ class PrivateBotBoundary:
                     resolved.summary.profile_id,
                     resolved,
                     token,
+                    permissions=permissions,
                 )
             )
         except CodexRemoteControlBusy:
@@ -3054,6 +3111,17 @@ class PrivateBotBoundary:
         # boundary (DEC-014), not a judgement about each string's provenance.
         parts = session_row_parts(record)
         facts: list[tuple[str, str]] = []
+        settings = self.backend.permission_presets
+        if settings is not None and record.profile_id in settings.profiles:
+            try:
+                preset = await self.backend.sessions.permission_preset(record.session_id)
+                label = (
+                    permission_label(preset) if preset is not None else "unknown (legacy session)"
+                )
+            except Exception:
+                _LOG.exception("the launch permission snapshot could not be read")
+                label = "unknown (snapshot unavailable)"
+            facts.append(("permissions", f"Launch permissions: {label} (requested at launch)"))
         for value in await self._usage_lines(record):
             facts.append(("context", value))
         facts.extend(git_facts(await self._git_read(record)))
@@ -3853,12 +3921,112 @@ class PrivateBotBoundary:
                     ),
                 )
             )
+        permissions = self.backend.permission_presets
+        if permissions is None:
+            lines += ["", f"{PERMISSION_TITLE} is unavailable."]
+        else:
+            try:
+                selected = await permissions.read()
+                rows.append(
+                    (
+                        Button(
+                            f"{PERMISSION_TITLE}: {permission_label(selected)}",
+                            self._callback("settings.permissions.open", "default"),
+                        ),
+                    )
+                )
+                lines += ["", PERMISSION_EFFECT]
+            except Exception as error:
+                lines += ["", f"Launch permissions could not be read: {escape(str(error))}"]
         return self._message(
             "\n".join(lines),
             tuple(rows),
             back=self._callback("sessions.open", "sessions"),
             back_label=_BACK_TO_SESSIONS,
         )
+
+    async def _permission_question(self, flow: str, entity_id: str) -> RenderedMessage:
+        settings = self.backend.permission_presets
+        if settings is None:
+            return self._message("Launch permissions are unavailable.")
+        try:
+            entity, selected = split_permission_entity(entity_id)
+            current = selected or await settings.read()
+        except Exception as error:
+            return self._message(f"Launch permissions could not be read: {escape(str(error))}")
+        back_action = {
+            "settings": "settings.open",
+            "launch": "launch.project",
+            "resume": "resume.page",
+        }[flow]
+        choices = tuple(
+            (
+                Button(
+                    choice.label + (" ✓" if choice.value == current else ""),
+                    self._callback(
+                        "settings.permissions.set"
+                        if flow == "settings"
+                        else f"{flow}.permissions.set",
+                        choice.value.value
+                        if flow == "settings"
+                        else permission_entity(entity, choice.value),
+                        mutation=flow == "settings",
+                    ),
+                ),
+            )
+            for choice in PERMISSION_CHOICES
+        )
+        if flow != "settings":
+            choices += (
+                (
+                    Button(
+                        "Saved preset / current default",
+                        self._callback(f"{flow}.permissions.set", entity),
+                    ),
+                ),
+            )
+        text = f"<b>{PERMISSION_TITLE}</b>\n" + (
+            PERMISSION_EFFECT
+            if flow == "settings"
+            else "Choose for this session only. The Settings default stays unchanged."
+        )
+        text += "\n\n" + "\n".join(
+            f"{escape(choice.label)}: {escape(choice.description)}" for choice in PERMISSION_CHOICES
+        )
+        return self._message(
+            text, choices, back=self._callback(back_action, entity_id), back_label="Cancel"
+        )
+
+    async def _settings_permissions_reply(
+        self,
+        value: str,
+        token: str,
+        message_id: int,
+    ) -> dict[str, object]:
+        settings = self.backend.permission_presets
+        if settings is None:
+            return _reply_arguments(self._message("Launch permissions are unavailable."))
+        try:
+            selected = PermissionPreset(value)
+        except ValueError:
+            return _reply_arguments(self._message("That permission choice is no longer available."))
+        if not self.callbacks.claim_mutation(
+            token,
+            owner_id=self.owner_user_id,
+            chat_id=self.owner_chat_id,
+            message_id=message_id,
+        ):
+            return _reply_arguments(self._message("That action has already run."))
+        try:
+            await settings.set(selected)
+        except Exception as error:
+            return _reply_arguments(
+                self._message(
+                    f"Could not save launch permissions: {escape(str(error))}",
+                    back=self._callback("settings.open", "default"),
+                )
+            )
+        return _reply_arguments(await self._settings_screen())
 
     async def _settings_limits_source_reply(self, token: str, message_id: int) -> dict[str, object]:
         """Advance where Claude's limits come from by one press, then draw what the file says.
@@ -5169,10 +5337,19 @@ class PrivateBotBoundary:
         )
 
     async def _resume_catalogue_reply(self, entity_id: str) -> RenderedMessage:
-        parsed = _split_resume_page(entity_id)
+        try:
+            entity, permissions = split_permission_entity(entity_id)
+        except ValueError:
+            return self._message("That permission choice is no longer available.")
+        parsed = _split_resume_page(entity)
         if parsed is None or self.backend.conversations is None:
             return self._message("That conversation list is no longer open.")
         project_id, profile_id, page = parsed
+        settings = self.backend.permission_presets
+        if permissions is not None and (
+            settings is None or permissions not in settings.profiles.get(ProfileId(profile_id), ())
+        ):
+            return self._message("Launch permissions are unavailable for this agent.")
         if not any(project.opaque_id == project_id for project in self.catalogue):
             return self._message("The project is no longer available.")
         try:
@@ -5204,7 +5381,11 @@ class PrivateBotBoundary:
                     # index is partial on `state <> 'ended'`, so the conversation binds again
                     # once its session has ended. An unwanted resume therefore costs a
                     # session to stop, not a conversation forever.
-                    self._callback("resume.confirm", str(summary.reference), mutation=True),
+                    self._callback(
+                        "resume.confirm",
+                        permission_entity(str(summary.reference), permissions),
+                        mutation=True,
+                    ),
                 ),
             )
             for summary in result.conversations
@@ -5215,14 +5396,24 @@ class PrivateBotBoundary:
             navigation.append(
                 Button(
                     "Previous",
-                    self._callback("resume.page", f"{project_id}|{profile_id}|{result.page - 1}"),
+                    self._callback(
+                        "resume.page",
+                        permission_entity(
+                            f"{project_id}|{profile_id}|{result.page - 1}", permissions
+                        ),
+                    ),
                 )
             )
         if result.page < result.page_count:
             navigation.append(
                 Button(
                     "Next",
-                    self._callback("resume.page", f"{project_id}|{profile_id}|{result.page + 1}"),
+                    self._callback(
+                        "resume.page",
+                        permission_entity(
+                            f"{project_id}|{profile_id}|{result.page + 1}", permissions
+                        ),
+                    ),
                 )
             )
         # Back belongs in the navigation rows `_message` appends, like every other screen,
@@ -5236,6 +5427,16 @@ class PrivateBotBoundary:
                 back=back,
             )
         rows = list(buttons)
+        settings = self.backend.permission_presets
+        if settings is not None and ProfileId(profile_id) in settings.profiles:
+            rows.append(
+                (
+                    Button(
+                        f"{PERMISSION_TITLE}: {permission_label(permissions)}",
+                        self._callback("resume.permissions", entity_id),
+                    ),
+                )
+            )
         if navigation:
             rows.append(tuple(navigation))
         return self._message(
@@ -5257,9 +5458,23 @@ class PrivateBotBoundary:
     def _provider_name(self, profile_id: str) -> str:
         return self.names.get(profile_id, "Unavailable")
 
-    def _profiles_reply(self, project_id: str) -> RenderedMessage:
+    async def _profiles_reply(self, project_id: str) -> RenderedMessage:
+        try:
+            project_id, permissions = split_permission_entity(project_id)
+        except ValueError:
+            return self._message("That permission choice is no longer available.")
         if not any(project.opaque_id == project_id for project in self.catalogue):
             return self._message("The project is no longer available.")
+        settings = self.backend.permission_presets
+        if permissions is not None and (
+            settings is None
+            or not any(
+                item.available
+                and permissions in settings.profiles.get(ProfileId(item.profile_id), ())
+                for item in self.profiles
+            )
+        ):
+            return self._message("Launch permissions are unavailable for this agent.")
         buttons = tuple(
             Button(
                 self._provider_name(profile.profile_id),
@@ -5273,7 +5488,15 @@ class PrivateBotBoundary:
                 # same correction, because assuming DEC-008 covered the first press is exactly
                 # the error that let a one-press resume ship and become a gate escalation.
                 self._callback(
-                    "launch.profile", f"{project_id}|{profile.profile_id}", mutation=True
+                    "launch.profile",
+                    permission_entity(
+                        f"{project_id}|{profile.profile_id}",
+                        permissions
+                        if settings is not None
+                        and ProfileId(profile.profile_id) in settings.profiles
+                        else None,
+                    ),
+                    mutation=True,
                 ),
             )
             for profile in self.profiles
@@ -5283,9 +5506,29 @@ class PrivateBotBoundary:
         if self.backend.schedules is not None:
             # Beside launching, not instead of it: the same agents, started later (DEC-114).
             schedule_row = ((Button("⏰ Schedule", self._callback("sched.agents", project_id)),),)
+        permission_row = ()
+        if settings is not None and any(
+            item.available and ProfileId(item.profile_id) in settings.profiles
+            for item in self.profiles
+        ):
+            try:
+                selected = permissions or await settings.read()
+            except Exception as error:
+                return self._message(f"Launch permissions could not be read: {escape(str(error))}")
+            permission_row = (
+                (
+                    Button(
+                        f"{PERMISSION_TITLE}: {permission_label(selected)}",
+                        self._callback(
+                            "launch.permissions", permission_entity(project_id, permissions)
+                        ),
+                    ),
+                ),
+            )
         return self._message(
             "<b>Select an agent</b>",
             _button_rows(buttons)
+            + permission_row
             + schedule_row
             + ((Button("Back", self._callback("launch.open", "projects")),),),
         )

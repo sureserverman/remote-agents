@@ -43,6 +43,17 @@ PERMISSION_CHOICES = (
     ),
 )
 PERMISSION_TITLE = "Codex launch permissions"
+PERMISSION_EFFECT = (
+    "Applies to future managed sessions. Existing sessions keep their launch preset."
+)
+PERMISSION_INHERIT_LABEL = "Saved preset / current default"
+
+
+def permission_label(value: PermissionPreset | None) -> str:
+    """Name a requested launch choice without claiming observed native policy."""
+    if value is None:
+        return PERMISSION_INHERIT_LABEL
+    return next(choice.label for choice in PERMISSION_CHOICES if choice.value == value)
 
 
 class PermissionSettings:
