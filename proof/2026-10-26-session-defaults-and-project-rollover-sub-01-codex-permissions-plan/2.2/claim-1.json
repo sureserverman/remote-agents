@@ -1,0 +1,28 @@
+{
+ "baseline": {
+  "elapsed_s": 0.3,
+  "exit": 0,
+  "tail": "tests/live/test_codex_permission_presets.py::test_codex_permission_presets_fresh_and_resume[approve_for_me]\ntests/live/test_codex_permission_presets.py::test_codex_permission_presets_fresh_and_resume[ask]\ntests/live/test_codex_permission_presets.py::test_codex_permission_presets_fresh_and_resume[full_access]\ntests/live/test_codex_permission_presets.py::test_codex_permission_presets_fresh_and_resume[provider_default]\n\n4 tests collected in 0.06s"
+ },
+ "break_patch": "--- a/src/remote_agents/domain/profiles.py\n+++ b/src/remote_agents/domain/profiles.py\n@@ -13,7 +13,7 @@\n \n     APPROVE_FOR_ME = \"approve_for_me\"\n     ASK = \"ask\"\n-    FULL_ACCESS = \"full_access\"\n+    REMOVED_FULL_ACCESS = \"full_access\"\n     PROVIDER_DEFAULT = \"provider_default\"\n \n \n",
+ "build": null,
+ "created": "2026-10-27T08:06:27+00:00",
+ "fingerprint": "1c9bf2946792d22d8ab5b9bec5604219d426889678e8e2224c10dcecce7c75fa",
+ "index": 1,
+ "kind": "claim",
+ "named_break": null,
+ "no_build_reason": "Collection-only preparation; dependency proof is not native qualification",
+ "plan": "/mnt/vault/Portfolio/infra/remote-agents/plans/2026-10-26-session-defaults-and-project-rollover-sub-01-codex-permissions-plan.md",
+ "red": {
+  "elapsed_s": 0.3,
+  "exit": 2,
+  "tail": "\n==================================== ERRORS ====================================\n_________ ERROR collecting tests/live/test_codex_permission_presets.py _________\ntests/live/test_codex_permission_presets.py:33: in <module>\n    from remote_agents.adapters.agents.registry import profile_composers, profile_trust_dialogs\nsrc/remote_agents/adapters/agents/registry.py:83: in <module>\n    from remote_agents.adapters.agents import claude, codex, cursor, opencode\nsrc/remote_agents/adapters/agents/claude/__init__.py:8: in <module>\n    from remote_agents.adapters.agents.claude.hooks import HOOK_LICENCE\nsrc/remote_agents/adapters/agents/claude/hooks.py:12: in <module>\n    from remote_agents.ports.provider_descriptor import EventLicence, HookLicence\nsrc/remote_agents/ports/provider_descriptor.py:36: in <module>\n    from remote_agents.domain.profiles import PermissionPreset\nsrc/remote_agents/domain/profiles.py:31: in <module>\n    PermissionPreset.FULL_ACCESS: (\"--dangerously-bypass-approvals-and-sandbox\",),\n    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nE   AttributeError: type object 'PermissionPreset' has no attribute 'FULL_ACCESS'\n=========================== short test summary info ============================\nERROR tests/live/test_codex_permission_presets.py - AttributeError: type obje...\n!!!!!!!!!!!!!!!!!!!! Interrupted: 1 error during collection !!!!!!!!!!!!!!!!!!!!\nno tests collected, 1 error in 0.08s"
+ },
+ "schema": 2,
+ "task": "2.2",
+ "test": "uv run --locked pytest tests/live/test_codex_permission_presets.py --collect-only -q",
+ "text": "Run `uv run --locked pytest tests/live/test_codex_permission_presets.py --collect-only -q`; check docs against the four tested preset mappings and precedence matrix. Native execution is owned by Sub-plan 3's final combined gate, not claimed here.",
+ "touched": [
+  "src/remote_agents/domain/profiles.py"
+ ]
+}

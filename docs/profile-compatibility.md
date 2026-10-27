@@ -26,7 +26,7 @@ otherwise carries force alone.
 | Profile | Fixed launch argv | Availability/auth/trust | Resume catalogue / selection | Readiness evidence | Fixed graceful exit |
 | --- | --- | --- | --- | --- | --- |
 | `claude` | `claude`, or `claude --remote-control ra-<uuid>` when the stored Remote Control default reads *on* | executable must be present; local auth/trust stays local | documented UUID filenames/project directories plus a bounded generated title or stored resume description; enabled when the catalogue is available | `Claude Code`; a workspace-trust dialog answers the launch as `untrusted` | `/exit`, Enter |
-| `codex` | `codex` | executable must be present; local auth/trust stays local | feature-probed app-server `thread/list` with a bounded provider title or preview when supplied | `/exit` command selection and submit | `/exit`, Enter, Enter |
+| `codex` | `codex` plus the selected curated permission flags below | executable must be present; local auth/trust stays local | feature-probed app-server `thread/list` with a bounded provider title or preview when supplied | `/exit` command selection and submit | `/exit`, Enter, Enter |
 | `opencode` | `opencode` | executable must be present; local auth/trust stays local | `session list --format json`; enabled only after its JSON contract succeeds | `Ask anything...` interactive UI | Ctrl-C |
 | `cursor-agent` | `cursor-agent` | executable must be present; local auth/trust stays local | disabled: `ls` is interactive and has no structured safe identifier catalogue | `/quit` command selection and submit | `/quit`, Enter, Enter |
 
@@ -47,8 +47,64 @@ publishes one too, with a different subject â€” the machine rather than a pane â
 described in its own section below. Reading the sentence above as "only Claude can be remote
 controlled" was the misreading this paragraph now exists to prevent.
 
-The profile arguments are defined in the closed catalogue; Telegram does not provide an
-executable, path, raw argument, prompt, keystroke, bypass, or auto-approval flag.
+The profile arguments are defined in the closed catalogue. Telegram can select a named
+permission preset; it does not accept an executable, path, raw argument or arbitrary keystroke
+as launch configuration. Full access maps only to the reviewed variant below.
+
+## Codex permission presets
+
+Both surfaces use one closed catalogue and one persisted remote-agents default. The absent-key
+default is `approve_for_me`; the setting does not edit `~/.codex/config.toml`.
+
+| Persisted value | Label | Permission arguments, fresh and selected resume |
+| --- | --- | --- |
+| `approve_for_me` | Approve for me | `--approve-for-me` alone |
+| `ask` | Ask me | `--sandbox workspace-write --ask-for-approval on-request -c approvals_reviewer="user"` |
+| `full_access` | Full access | `--dangerously-bypass-approvals-and-sandbox` |
+| `provider_default` | Use Codex configuration | None |
+
+Fresh arguments follow `codex`; resume arguments follow `codex resume <provider-thread-id>`.
+The preset adds no model/provider selection. Approve for me is not combined with sandbox,
+approval or bypass switches. Ask explicitly resets the reviewer to the user, even if the
+provider configuration normally requests automatic review. Full access is an explicit choice.
+These mappings follow the [official CLI reference](https://learn.chatgpt.com/docs/cli/reference)
+and [approval configuration](https://learn.chatgpt.com/docs/agent-approvals-security).
+
+For each new process, precedence is:
+
+| Priority | Source |
+| --- | --- |
+| 1 | Explicit per-launch/resume override |
+| 2 | Inherited source session's immutable preset, for restart/rollover |
+| 3 | Recorded managed conversation preset, for manual resume |
+| 4 | Current persisted default |
+
+An inherited legacy source without a preset falls back to the current default. An already
+running conversation is reused without changing its preset. Unknown stored metadata is shown
+as unknown; it is never displayed as a fabricated default. Invalid values or an override for
+a provider without this capability refuse before a new pane. Stale buttons re-check capability.
+
+The stored value describes the requested launch configuration. Native in-pane edits are not
+tracked, and a managed policy may constrain or refuse a requested mode. An older CLI that
+lacks a requested option is unsupported for that mode; there is no substitute argv or silent
+fallback. Existing sessions are preserved when configuration cannot be read or saved.
+
+**Native qualification: prepared, not run at this sub-plan.** Local composition, argument,
+persistence and frontend checks do not prove effective native policy. The final combined gate
+runs `tests/live/test_codex_permission_presets.py` serially with `-m live_acceptance` and
+`REMOTE_AGENTS_LIVE_ACCEPTANCE=1`. Four cases each launch and resume one disposable native
+session, observe actual `turn_context` approval policy, sandbox and reviewer, and check the
+saved snapshot after the default changes. The probe asks only for a text reply and rejects
+tool use. Collection alone is not native acceptance.
+
+The drill requires Linux bwrap, Codex, tmux and existing file authentication. Its private home
+uses a read-only bind of that auth file, not a credential copy or writable symlink. Normal
+profiles and hook trust are unchanged; writable state is confined to owned fixture directories.
+It selects no model/provider. Missing auth/CLI/support and managed-policy disagreement remain
+an open native claim, reported as BLOCKED or failed evidence. Optional
+`REMOTE_AGENTS_CODEX_PRESET_REPORT` records only version, preset and observed policy tuples
+after successful cleanup. Live fixture ownership/auth handling is audited again before the
+master's final native run.
 
 ## Local recovery
 

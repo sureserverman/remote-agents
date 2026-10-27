@@ -1043,6 +1043,42 @@ starts from the next time after now. To change a schedule, delete it and make it
 Nothing fires while the bot's service is stopped; the local terminal manages schedules but never
 starts one.
 
+## Codex launch permissions
+
+**Codex launch permissions** in Settings is shared by Telegram and the terminal. Its initial
+default is **Approve for me**. Saving a choice affects future managed Codex processes,
+including scheduled starts; existing sessions keep their recorded launch preset.
+
+| Choice | Managed launch behavior |
+| --- | --- |
+| Approve for me | Workspace write with automatic approval review. |
+| Ask me | Workspace write with approval requests reviewed by you. |
+| Full access | No sandbox or approval prompts; choose this option explicitly. |
+| Use Codex configuration | No permission flags; Codex uses its own configuration. |
+
+The setting lives in remote-agents' `config.toml`:
+
+```toml
+[codex]
+default_permissions = "approve_for_me"
+```
+
+The other closed values are `ask`, `full_access` and `provider_default`. An absent key uses
+`approve_for_me`; an invalid value is refused. Neither surface changes your Codex configuration
+or hook trust.
+
+Launch's agent list and Resume's conversation list have an optional permissions control.
+Choose there to override one new process, or leave the normal launch/resume flow unchanged.
+Cancel saves nothing. A continuation normally keeps the preset of its source managed session
+or conversation; a new Settings default does not replace that snapshot. A legacy session with
+no recorded preset uses the current default for its next process. Resuming an already running
+conversation attaches to that session and keeps its existing preset.
+
+Session detail shows the **requested launch preset**. Native permission controls inside Codex
+remain available; remote-agents does not observe those later edits or claim that its snapshot
+is the current native policy. See [the exact mappings and qualification limits](docs/profile-compatibility.md#codex-permission-presets)
+and the [continuation contracts](docs/workflows/session-continuation.md).
+
 ## Session rollover
 
 A `claude` or `codex` session executing a plan can hand its work to a fresh session at one of the
