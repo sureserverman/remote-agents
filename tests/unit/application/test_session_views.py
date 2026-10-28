@@ -232,6 +232,7 @@ _ROLLOVER_LINES: dict[RolloverState, str | None] = {
     RolloverState.FAILED: "rollover failed · predecessor preserved",
     RolloverState.STOP_FAILED: "stop failed · use force stop",
     RolloverState.CANCELLED: None,
+    RolloverState.WORKFLOW_FINISHED: "workflow complete · no successor needed",
 }
 """Literals, not the module's own table: a state added to `RolloverState` without a decision
 here fails the parametrization below with a KeyError, which is the gate this exists for."""
