@@ -87,7 +87,8 @@ class SessionFolders:
             return folder
         folder = None if self._folders is None else await self._folders.folder_for(session_id)
         if folder is not None:
-            return folder if self._folders.available(folder) else None
+            associated = await self._folders.for_project(project_id)
+            return folder if folder in associated and self._folders.available(folder) else None
         return self._project_paths[project_id]
 
     async def worktree_folders(self, project_id: ProjectId) -> tuple[Path, ...]:

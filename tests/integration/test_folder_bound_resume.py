@@ -358,3 +358,141 @@ async def test_worktree_replacement_is_refused_before_manual_or_restart_launch(r
     assert not rig.launched_folders
     assert await rig.authority.folder_for(record.session_id, PROJECT) is None
     assert await rig.authority.worktree_folders(PROJECT) == ()
+
+
+@pytest.mark.parametrize("mode", ["outside", "regular"])
+@pytest.mark.parametrize("change", ["removed", "moved", "retargeted"])
+async def test_restart_refuses_changed_registered_project_even_with_surviving_folder(
+    rig, mode, change
+):
+    record = await ended_binding(rig)
+    if mode == "regular":
+        rig.connection.execute(
+            "DELETE FROM session_folders WHERE session_id = ?", (str(record.session_id),)
+        )
+        rig.connection.commit()
+    if change == "removed":
+        del rig.authority._project_paths[PROJECT]
+    elif change == "moved":
+        rig.project.rename(rig.project.with_name("moved-project"))
+    else:
+        rig.authority._project_paths[PROJECT] = checkout(rig.project.with_name("replacement"))
+    runner = InterruptedResumePass(
+        SQLiteInterruptedResumes(rig.connection),
+        resume=rig.service.resume,
+        folder_of=rig.worktrees.folder_for,
+        bound_folder_of=rig.folders.folder_for,
+        key_claimed=rig.store.idempotency_key_claimed,
+        send=rig.terminal.send_prompt,
+        now=lambda: NOW,
+    )
+    snapshot = RestartSnapshot(
+        (SessionAtRestart(replace(record, state=SessionState.RUNNING), False),),
+        None,
+        True,
+        frozenset(),
+        {str(record.session_id): "source-123"},
+        (),
+        frozenset({CODEX}),
+    )
+    (report,) = await runner.run(snapshot)
+    assert report.outcome == "skipped:folder_unavailable"
+    assert not rig.launched_folders
+
+
+async def test_a_folder_with_multiple_recorded_project_owners_is_not_offered_or_resumed(rig):
+    record = await ended_binding(rig)
+    duplicate = replace(
+        record, session_id=SessionId.new(), project_id=OTHER, state=SessionState.ENDED
+    )
+    await rig.store.save(duplicate)
+    await rig.folders.bind(duplicate.session_id, rig.outside)
+    assert await rig.authority.worktree_folders(PROJECT) == ()
+    assert await rig.authority.worktree_folders(OTHER) == ()
+    result = await rig.service.resume(
+        ResumeCommand(PROJECT, CODEX, replace(conversation(), folder=rig.outside), "ambiguous")
+    )
+    assert result.folder_unavailable
+    assert not rig.launched_folders
+
+
+async def test_legacy_restart_without_registered_root_provenance_holds(rig):
+    record = await ended_binding(rig)
+    rig.connection.execute(
+        "DELETE FROM session_project_roots WHERE session_id = ?", (str(record.session_id),)
+    )
+    rig.connection.commit()
+    runner = InterruptedResumePass(
+        SQLiteInterruptedResumes(rig.connection),
+        resume=rig.service.resume,
+        folder_of=rig.worktrees.folder_for,
+        bound_folder_of=rig.folders.folder_for,
+        key_claimed=rig.store.idempotency_key_claimed,
+        send=rig.terminal.send_prompt,
+        now=lambda: NOW,
+    )
+    snapshot = RestartSnapshot(
+        (SessionAtRestart(replace(record, state=SessionState.RUNNING), False),),
+        None,
+        True,
+        frozenset(),
+        {str(record.session_id): "source-123"},
+        (),
+        frozenset({CODEX}),
+    )
+    (report,) = await runner.run(snapshot)
+    assert report.outcome == "skipped:folder_unavailable"
+    assert not rig.launched_folders
+    assert await rig.folders.folder_for(record.session_id) == rig.outside
+
+
+async def test_registered_root_snapshot_is_atomic_and_immutable(rig):
+    import sqlite3
+
+    record = await ended_binding(rig)
+    assert await rig.store.project_root_for(record.session_id) == rig.project
+    with pytest.raises(sqlite3.IntegrityError, match="immutable"):
+        rig.connection.execute(
+            "UPDATE session_project_roots SET project_root = ? WHERE session_id = ?",
+            (str(rig.outside), str(record.session_id)),
+        )
+    rig.connection.rollback()
+    rig.connection.execute(
+        "CREATE TRIGGER refuse_root BEFORE INSERT ON session_project_roots "
+        "BEGIN SELECT RAISE(ABORT, 'fixture root refused'); END"
+    )
+    count = rig.connection.execute("SELECT COUNT(*) FROM sessions").fetchone()[0]
+    with pytest.raises(sqlite3.IntegrityError, match="fixture root refused"):
+        await rig.service.resume(
+            ResumeCommand(PROJECT, CODEX, conversation("new-source"), "atomic")
+        )
+    assert rig.connection.execute("SELECT COUNT(*) FROM sessions").fetchone()[0] == count
+    assert not rig.launched_folders
+
+
+async def test_upgrade_adds_no_fabricated_root_provenance(tmp_path):
+    from remote_agents.adapters.sqlite.migrations import MIGRATIONS, current_version
+    from remote_agents.adapters.sqlite.session_store import SQLiteSessionStore
+
+    path = tmp_path / "legacy.sqlite3"
+    old = open_database(path, migrations=tuple(m for m in MIGRATIONS if m[0] <= 24))
+    from remote_agents.domain.models import SessionDisplayIdentity, SessionRecord
+
+    record = SessionRecord(
+        SessionId.new(),
+        PROJECT,
+        CODEX,
+        SessionDisplayIdentity(str(PROJECT), str(CODEX), "regular", 1),
+        SessionState.ENDED,
+        NOW,
+    )
+    await SQLiteSessionStore(old).save(record, permissions=PermissionPreset.ASK)
+    old.close()
+    upgraded = open_database(path)
+    try:
+        store = SQLiteSessionStore(upgraded)
+        assert current_version(upgraded) == MIGRATIONS[-1][0]
+        assert await store.get(record.session_id) == record
+        assert await store.project_root_for(record.session_id) is None
+    finally:
+        upgraded.close()

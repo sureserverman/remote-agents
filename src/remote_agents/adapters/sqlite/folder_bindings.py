@@ -58,9 +58,11 @@ class SQLiteFolderBindings:
 
     async def for_project(self, project_id: ProjectId) -> tuple[Path, ...]:
         rows = self._connection.execute(
-            "SELECT DISTINCT f.folder FROM session_folders f "
+            "SELECT f.folder FROM session_folders f "
             "JOIN sessions s ON s.session_id = f.session_id "
-            "WHERE s.project_id = ? ORDER BY f.folder",
+            "WHERE NOT EXISTS (SELECT 1 FROM worktrees w WHERE w.path = f.folder) "
+            "GROUP BY f.folder HAVING COUNT(DISTINCT s.project_id) = 1 "
+            "AND MIN(s.project_id) = ? ORDER BY f.folder",
             (str(project_id),),
         ).fetchall()
         return tuple(Path(row[0]) for row in rows)

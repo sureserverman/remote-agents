@@ -558,6 +558,18 @@ MIGRATIONS: tuple[tuple[int, str], ...] = (
         BEGIN SELECT RAISE(ABORT, 'launch handoff capabilities are immutable'); END;
         """,
     ),
+    (
+        25,
+        """
+        CREATE TABLE session_project_roots (
+            session_id TEXT PRIMARY KEY REFERENCES sessions(session_id),
+            project_root TEXT NOT NULL
+        );
+        CREATE TRIGGER session_project_roots_immutable
+        BEFORE UPDATE ON session_project_roots
+        BEGIN SELECT RAISE(ABORT, 'session project root is immutable'); END;
+        """,
+    ),
 )
 """Migration 14 takes the surface's bookkeeping out of the watched store.
 

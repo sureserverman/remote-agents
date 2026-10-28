@@ -35,8 +35,10 @@ class FolderBindings(Protocol):
     async def for_project(self, project_id: ProjectId) -> tuple[Path, ...]:
         """Distinct persisted folders associated with the session's recorded project.
 
-        Ended sessions remain provenance. Legacy outside bindings keep that association;
-        a later registry edit never rewrites historical session ownership.
+        Ended sessions remain provenance. A folder associated with multiple project IDs
+        is omitted/refused. Worktree rows have their own binding authority and cannot be
+        revived through an outside binding. Legacy outside bindings keep their recorded
+        session association; registry edits never rewrite historical ownership.
         """
         ...
 

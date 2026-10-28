@@ -6,6 +6,7 @@ import logging
 import sqlite3
 from collections.abc import Collection, Sequence
 from datetime import UTC, datetime
+from pathlib import Path
 
 from remote_agents.domain.models import (
     OrphanProvenance,
@@ -43,6 +44,7 @@ class SQLiteSessionStore:
         record: SessionRecord,
         *,
         permissions: PermissionPreset | None = None,
+        project_root: Path | None = None,
     ) -> None:
         """Insert a session projection using bound values rather than SQL interpolation."""
         with self._connection:
@@ -79,6 +81,19 @@ class SQLiteSessionStore:
                     "INSERT INTO session_permissions(session_id, preset) VALUES (?, ?)",
                     (str(record.session_id), PermissionPreset(permissions).value),
                 )
+
+            if project_root is not None:
+                self._connection.execute(
+                    "INSERT INTO session_project_roots(session_id, project_root) VALUES (?, ?)",
+                    (str(record.session_id), str(project_root)),
+                )
+
+    async def project_root_for(self, session_id: SessionId) -> Path | None:
+        row = self._connection.execute(
+            "SELECT project_root FROM session_project_roots WHERE session_id = ?",
+            (str(session_id),),
+        ).fetchone()
+        return None if row is None else Path(row[0])
 
     async def handoff_versions(self, session_id: SessionId) -> tuple[int, ...]:
         row = self._connection.execute(

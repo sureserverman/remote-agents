@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Collection, Sequence
 from dataclasses import dataclass
 from datetime import datetime
+from pathlib import Path
 from typing import Protocol
 
 from remote_agents.domain.models import ProfileId, ProjectId, SessionId, SessionRecord, SessionState
@@ -55,7 +56,9 @@ class SessionStore(Protocol):
         record: SessionRecord,
         *,
         permissions: PermissionPreset | None = None,
+        project_root: Path | None = None,
     ) -> None: ...
+    async def project_root_for(self, session_id: SessionId) -> Path | None: ...
     async def get(self, session_id: SessionId) -> SessionRecord | None: ...
     async def get_by_resume_source(
         self, profile_id: ProfileId, source_id: str

@@ -581,7 +581,7 @@ async def test_upgrade_preserves_legacy_rows_without_fabricating_snapshots(tmp_p
     from remote_agents.domain.models import SessionDisplayIdentity, SessionRecord, SessionState
 
     path = tmp_path / "upgrade.sqlite3"
-    old = open_database(path, migrations=MIGRATIONS[:-1])
+    old = open_database(path, migrations=tuple(m for m in MIGRATIONS if m[0] <= 21))
     assert current_version(old) == 21
     record = SessionRecord(
         SessionId.new(),
@@ -591,11 +591,23 @@ async def test_upgrade_preserves_legacy_rows_without_fabricating_snapshots(tmp_p
         SessionState.ENDED,
         datetime.now(UTC),
     )
-    await SQLiteSessionStore(old).save(record)
+    old.execute(
+        "INSERT INTO sessions(session_id,project_id,profile_id,display_identity,state,created_at) "
+        "VALUES(?,?,?,?,?,?)",
+        (
+            str(record.session_id),
+            str(PROJECT),
+            str(CODEX),
+            record.display.rendered,
+            record.state.value,
+            record.created_at.isoformat(),
+        ),
+    )
+    old.commit()
     old.close()
     upgraded = open_database(path)
     try:
-        assert current_version(upgraded) == 22
+        assert current_version(upgraded) == MIGRATIONS[-1][0]
         assert await SQLiteSessionStore(upgraded).get(record.session_id) == record
         assert await SQLitePermissionBindings(upgraded).for_session(record.session_id) is None
     finally:

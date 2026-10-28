@@ -33,7 +33,9 @@ def _session(connection: sqlite3.Connection, session_id: str) -> None:
 def _roots(connection: sqlite3.Connection, project: Path, folders=None):
     rollover = build_rollover_pass(
         connection=connection,
-        sessions=types.SimpleNamespace(list_sessions=None, launch=None, graceful_stop=None),
+        sessions=types.SimpleNamespace(
+            list_sessions=None, launch=None, graceful_stop=None, continuation_permissions=None
+        ),
         terminal=types.SimpleNamespace(pane_idle=None, send_prompt=None),
         enabled=None,
         project_paths={_PROJECT: project},

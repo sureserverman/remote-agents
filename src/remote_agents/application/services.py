@@ -372,6 +372,8 @@ class SessionService:
                     if not self._folder_bindings.available(folder):
                         return _Bound.REFUSED
                     return await self._bind_folder(session_id, folder)
+                if folder in (await self._folder_bindings.bound_folders()).values():
+                    return _Bound.REFUSED
         except Exception:
             _LOG.exception("resume folder ownership could not be checked")
             return _Bound.FAULT
@@ -628,11 +630,23 @@ class SessionService:
         async with self._locks.for_session(session_id):
             folder = command.conversation.folder
             root = command.conversation.project_root
+            inherited_root_missing = False
+            if command.inherit_permissions_of is not None and self._project_paths is not None:
+                source = await self._store.get(command.inherit_permissions_of)
+                root = await self._store.project_root_for(command.inherit_permissions_of)
+                inherited_root_missing = (
+                    root is None or source is None or source.project_id != command.project_id
+                )
             registered = (
                 None if self._project_paths is None else self._project_paths.get(command.project_id)
             )
-            if root is not None and (
-                registered is None or not registered.is_dir() or registered.resolve() != root
+            if (
+                inherited_root_missing
+                or (
+                    self._project_paths is not None
+                    and (registered is None or not registered.is_dir())
+                )
+                or (root is not None and (registered is None or registered.resolve() != root))
             ):
                 bound = _Bound.REFUSED
             else:
@@ -696,10 +710,16 @@ class SessionService:
         record: SessionRecord,
         preset: PermissionPreset | None,
     ) -> None:
-        if preset is None:
-            await self._store.save(record)
-        else:
-            await self._store.save(record, permissions=preset)
+        options = {}
+        if preset is not None:
+            options["permissions"] = preset
+        if self._project_paths is not None:
+            root = self._project_paths.get(record.project_id)
+            if root is not None:
+                options["project_root"] = root.resolve()
+        # Root, preset and session are one transaction; an interrupted save cannot
+        # publish a resumable session without its immutable registered-root provenance.
+        await self._store.save(record, **options)
 
     async def continuation_permissions(self, record: SessionRecord) -> PermissionPreset | None:
         """Resolve the preset now so a durable continuation can freeze it before launch."""

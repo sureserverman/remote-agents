@@ -127,6 +127,9 @@ class _Folders:
     async def folder_for(self, session_id: SessionId) -> Path | None:
         return self._bound.get(session_id)
 
+    async def for_project(self, project_id):
+        return tuple(self._bound.values())
+
     def available(self, folder: Path) -> bool:
         return folder.is_dir()
 
