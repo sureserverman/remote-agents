@@ -32,6 +32,41 @@ FAILURE_CODES = frozenset(
 """The closed set a `failed` envelope may name; anything else is not an envelope."""
 
 
+DESTINATION_FAILURE_CODES = FAILURE_CODES | frozenset(
+    {
+        "manual-continuation",
+        "destination-metadata",
+        "destination-unavailable",
+        "destination-root",
+        "master-metadata",
+        "pending-master-gate",
+        "pending-subplan",
+        "ambiguous-destination",
+        "not-executable",
+        "no-executable-work",
+        "run-not-runnable",
+        "plan-unreadable",
+        "locator-mismatch",
+        "current-subplan",
+        "plan-metadata",
+        "plan-mismatch",
+        "state-ownership",
+        "stale-destination",
+        "oversized-envelope",
+        "session-mismatch",
+    }
+)
+
+
+@dataclass(frozen=True, slots=True)
+class HandoffDestination:
+    root: Path
+    branch: str
+    plan: str
+    locator: str
+    master_plan: str | None
+
+
 class HandoffEvent(StrEnum):
     """Which step of a handoff an envelope records, spelled as on the wire."""
 
@@ -56,6 +91,14 @@ class HandoffEnvelope:
     timestamp: datetime
     plan: str | None
     failure_code: str | None
+    version: int = 1
+    source_root: Path | None = None
+    source_plan: str | None = None
+    predecessor_session_id: str | None = None
+    destination: HandoffDestination | None = None
+    selection: tuple[bool, int | None, int | None] | None = None
+    ready_sha256: str | None = None
+    content_sha256: str | None = None
 
 
 class HandoffEnvelopes(Protocol):

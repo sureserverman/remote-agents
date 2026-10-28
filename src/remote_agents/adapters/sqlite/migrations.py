@@ -464,6 +464,23 @@ MIGRATIONS: tuple[tuple[int, str], ...] = (
         BEGIN SELECT RAISE(ABORT, 'launch permission snapshot is immutable'); END;
         """,
     ),
+    (
+        23,
+        # Freeze the envelope channel and destination independently of later root reports.
+        # Legacy rows remain unset until the application can reconstruct one unique binding.
+        """
+        ALTER TABLE rollovers ADD COLUMN source_root TEXT;
+        ALTER TABLE rollovers ADD COLUMN target_json TEXT;
+        CREATE TRIGGER rollover_source_immutable
+        BEFORE UPDATE OF source_root ON rollovers
+        WHEN OLD.source_root IS NOT NULL AND NEW.source_root IS NOT OLD.source_root
+        BEGIN SELECT RAISE(ABORT, 'rollover source is immutable'); END;
+        CREATE TRIGGER rollover_target_immutable
+        BEFORE UPDATE OF target_json ON rollovers
+        WHEN OLD.target_json IS NOT NULL AND NEW.target_json IS NOT OLD.target_json
+        BEGIN SELECT RAISE(ABORT, 'rollover target is immutable'); END;
+        """,
+    ),
 )
 """Migration 14 takes the surface's bookkeeping out of the watched store.
 

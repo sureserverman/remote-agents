@@ -30,6 +30,7 @@ from remote_agents.adapters.telegram.schedule_notifications import ScheduleNotif
 from remote_agents.adapters.telegram.service import PrivateBotBoundary
 from remote_agents.adapters.telegram.trust_notifications import TrustNotifier
 from remote_agents.adapters.tmux.runtime import TmuxTerminal
+from remote_agents.adapters.workflow.destinations import destination_branch
 from remote_agents.adapters.workflow.handoff_envelopes import FileHandoffEnvelopes
 from remote_agents.adapters.workflow.roots import acceptable_root, handoff_root
 from remote_agents.application.activity import CodexApprovalWatcher, drain_activity
@@ -47,6 +48,7 @@ from remote_agents.application.limit_stops import LimitScreenWatcher, LimitStopC
 from remote_agents.application.reconcile import ReconciliationService
 from remote_agents.application.resume_flow import resume_capable
 from remote_agents.application.rollover import RolloverPass, RolloverReport
+from remote_agents.application.rollover_destinations import RolloverDestinations
 from remote_agents.application.schedules import SchedulePass
 from remote_agents.application.services import ResumeOutcome, SessionService
 from remote_agents.application.session_actions import notifiable
@@ -997,6 +999,10 @@ def build_rollover_pass(
         # Only failures are told (DEC-031); the notifier decides which, and words them.
         notify=notify,
         operation=operation,
+        resolve_destination=RolloverDestinations(
+            project_paths, destination_branch, worktrees
+        ).resolve,
+        continuation_permissions=sessions.continuation_permissions,
     )
 
 

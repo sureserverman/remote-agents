@@ -9,8 +9,10 @@ from __future__ import annotations
 import sqlite3
 from collections.abc import Sequence
 from datetime import UTC, datetime
+from pathlib import Path
 from uuid import uuid4
 
+from remote_agents.adapters.sqlite.rollover_targets import decode, encode
 from remote_agents.domain.models import ProfileId, ProjectId, SessionId
 from remote_agents.domain.rollover import NEEDS_SUCCESSOR, TERMINAL, RolloverState, is_legal
 from remote_agents.ports.rollover_store import (
@@ -19,11 +21,13 @@ from remote_agents.ports.rollover_store import (
     IllegalRolloverMove,
     Rollover,
     RolloverEvent,
+    RolloverTarget,
 )
 
 _COLUMNS = (
     "rollover_id, handoff_id, predecessor_session_id, successor_session_id, project_id,"
-    " profile_id, reason, plan, state, failure_code, failure_detail, requested_at, updated_at"
+    " profile_id, reason, plan, state, failure_code, failure_detail, requested_at, updated_at,"
+    " source_root, target_json"
 )
 _OPEN = "state NOT IN ({})".format(", ".join(f"'{state.value}'" for state in sorted(TERMINAL)))
 _HOLDING = (RolloverState.FAILED, RolloverState.STOP_FAILED)
@@ -47,6 +51,8 @@ class SQLiteRolloverStore:
         profile_id: ProfileId,
         plan: str | None,
         at: datetime,
+        source_root: Path | None = None,
+        target: RolloverTarget | None = None,
     ) -> Rollover | None:
         seen = self._select("handoff_id = ?", (handoff_id,))
         if seen:
@@ -63,8 +69,16 @@ class SQLiteRolloverStore:
                     return None
                 with self._connection:
                     self._connection.execute(
-                        "UPDATE rollovers SET handoff_id = ?, plan = ? WHERE rollover_id = ?",
-                        (handoff_id, plan, current.id),
+                        "UPDATE rollovers SET handoff_id = ?, plan = ?,"
+                        " source_root = COALESCE(source_root, ?), target_json = ?"
+                        " WHERE rollover_id = ?",
+                        (
+                            handoff_id,
+                            plan,
+                            None if source_root is None else str(source_root),
+                            encode(target),
+                            current.id,
+                        ),
                     )
                     return self._move(current, RolloverState.HANDOFF_READY, at=at)
             return self._insert(
@@ -75,6 +89,8 @@ class SQLiteRolloverStore:
                 reason="workflow",
                 plan=plan,
                 state=RolloverState.HANDOFF_READY,
+                source_root=source_root,
+                target=target,
                 at=at,
             )
         except (sqlite3.IntegrityError, IllegalRolloverMove):
@@ -82,6 +98,46 @@ class SQLiteRolloverStore:
             # above and the write: the handoff's own row, if it now exists, is the answer.
             seen = self._select("handoff_id = ?", (handoff_id,))
             return self._own(seen[0], predecessor, project_id) if seen else None
+
+    async def freeze(
+        self, rollover_id: str, source_root: Path, target: RolloverTarget | None, *, at: datetime
+    ) -> Rollover:
+        current = await self.get(rollover_id)
+        if current is None:
+            raise LookupError(rollover_id)
+        if current.state not in (RolloverState.REQUESTED, RolloverState.HANDOFF_READY):
+            raise IllegalRolloverMove("a destination must be frozen before launch")
+        if current.source_root not in (None, source_root) or (
+            current.target is not None and current.target != target
+        ):
+            raise IllegalRolloverMove("a frozen destination is never replaced")
+        with self._connection:
+            cursor = self._connection.execute(
+                "UPDATE rollovers SET source_root = COALESCE(source_root, ?),"
+                " target_json = COALESCE(target_json, ?) WHERE rollover_id = ?"
+                " AND (source_root IS NULL OR source_root = ?)"
+                " AND (target_json IS NULL OR target_json IS ?) AND state = ?",
+                (
+                    str(source_root),
+                    encode(target),
+                    rollover_id,
+                    str(source_root),
+                    encode(target),
+                    current.state.value,
+                ),
+            )
+            if cursor.rowcount != 1:
+                raise IllegalRolloverMove("the destination changed under this freeze")
+            if current.source_root is None or (current.target is None and target is not None):
+                self._append(
+                    rollover_id,
+                    current.state,
+                    current.state,
+                    None,
+                    "continuation destination frozen",
+                    _stored(at),
+                )
+        return self._select("rollover_id = ?", (rollover_id,))[0]
 
     async def record_successor(
         self, rollover_id: str, successor: SessionId, *, at: datetime, held: bool = False
@@ -225,11 +281,18 @@ class SQLiteRolloverStore:
             for from_state, to_state, failure_code, detail, created_at in rows
         )
 
-    async def latest_for(self, predecessor: SessionId) -> Rollover | None:
+    async def latest_for(
+        self, predecessor: SessionId, *, include_cancelled: bool = False
+    ) -> Rollover | None:
+        predicate = "predecessor_session_id = ?"
+        params = (str(predecessor),)
+        if not include_cancelled:
+            predicate += " AND state <> ?"
+            params += (RolloverState.CANCELLED.value,)
         row = self._connection.execute(
-            f"SELECT {_COLUMNS} FROM rollovers WHERE predecessor_session_id = ? AND state <> ?"
+            f"SELECT {_COLUMNS} FROM rollovers WHERE {predicate}"
             " ORDER BY updated_at DESC, rowid DESC LIMIT 1",
-            (str(predecessor), RolloverState.CANCELLED.value),
+            params,
         ).fetchone()
         return None if row is None else _rollover(row)
 
@@ -275,6 +338,8 @@ class SQLiteRolloverStore:
         plan: str | None,
         state: RolloverState,
         at: datetime,
+        source_root: Path | None = None,
+        target: RolloverTarget | None = None,
     ) -> Rollover | None:
         rollover_id = uuid4().hex
         stamp = _stored(at)
@@ -282,7 +347,7 @@ class SQLiteRolloverStore:
             with self._connection:
                 self._connection.execute(
                     f"INSERT INTO rollovers({_COLUMNS})"
-                    " VALUES (?, ?, ?, NULL, ?, ?, ?, ?, ?, NULL, NULL, ?, ?)",
+                    " VALUES (?, ?, ?, NULL, ?, ?, ?, ?, ?, NULL, NULL, ?, ?, ?, ?)",
                     (
                         rollover_id,
                         handoff_id,
@@ -294,6 +359,8 @@ class SQLiteRolloverStore:
                         state.value,
                         stamp,
                         stamp,
+                        None if source_root is None else str(source_root),
+                        encode(target),
                     ),
                 )
                 self._append(rollover_id, None, state, None, None, stamp)
@@ -400,6 +467,8 @@ def _rollover(row: tuple) -> Rollover:
         failure_detail,
         requested_at,
         updated_at,
+        source_root,
+        target_json,
     ) = row
     return Rollover(
         id=rollover_id,
@@ -415,6 +484,8 @@ def _rollover(row: tuple) -> Rollover:
         failure_detail=failure_detail,
         requested_at=datetime.fromisoformat(requested_at),
         updated_at=datetime.fromisoformat(updated_at),
+        source_root=None if source_root is None else Path(source_root),
+        target=decode(target_json),
     )
 
 

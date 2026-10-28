@@ -322,6 +322,27 @@ class SessionService:
             return _Bound.FAULT
         return _Bound.BOUND if bound else _Bound.REFUSED
 
+    async def _bind_launch_folder(
+        self, session_id: SessionId, project_id: ProjectId, folder: Path
+    ) -> _Bound:
+        # Reusing a destination worktree must hold its cleanup binding as well as its cwd.
+        # Otherwise cleanup could remove it once its previous session ends.
+        if self._worktrees is not None:
+            try:
+                matches = [
+                    w
+                    for w in await self._worktrees.live_for_project(project_id)
+                    if w.path.resolve() == folder.resolve()
+                ]
+            except Exception:
+                _LOG.exception("destination worktree bindings could not be read")
+                return _Bound.FAULT
+            if len(matches) > 1:
+                return _Bound.REFUSED
+            if matches:
+                return await self._bind_worktree(session_id, matches[0].path)
+        return await self._bind_folder(session_id, folder)
+
     async def _reuse_folder(self, session_id: SessionId, of: SessionId | None) -> _Bound:
         """Bind a new session to the worktree `of` works in, or to the folder outside its
         project `of` is bound to (DEC-131), if it has either.
@@ -439,7 +460,7 @@ class SessionService:
                             worktree_failed=failed,
                         )
                 bound = (
-                    await self._bind_folder(session_id, command.folder)
+                    await self._bind_launch_folder(session_id, command.project_id, command.folder)
                     if command.folder is not None
                     else await self._reuse_folder(session_id, command.reuse_folder_of)
                 )
@@ -633,6 +654,10 @@ class SessionService:
             await self._store.save(record)
         else:
             await self._store.save(record, permissions=preset)
+
+    async def continuation_permissions(self, record: SessionRecord) -> PermissionPreset | None:
+        """Resolve the preset now so a durable continuation can freeze it before launch."""
+        return await self._resolve_permissions(record.profile_id, None, record.session_id)
 
     async def permission_preset(self, session_id: SessionId) -> PermissionPreset | None:
         return (

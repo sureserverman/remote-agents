@@ -738,8 +738,12 @@ async def test_one_rollovers_fault_does_not_hold_back_another(rig: Rig) -> None:
     other = SessionId.new()
     rig.sessions[other] = _record(other)
     for predecessor, handoff in ((rig.predecessor, HANDOFF), (other, "h-ffffffffffffffffffff")):
+        ready = HandoffEnvelope(
+            HandoffEvent.READY, handoff, str(predecessor), NOW, "/abs/plan.md", None
+        )
+        rig.envelopes.files.append(ready)
         opened = await rig.store.open_for_ready(
-            predecessor, handoff, project_id=PROJECT, profile_id=CLAUDE, plan=None, at=NOW
+            predecessor, handoff, project_id=PROJECT, profile_id=CLAUDE, plan=ready.plan, at=NOW
         )
         assert opened is not None
     rig.idle_error = rig.predecessor

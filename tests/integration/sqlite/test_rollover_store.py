@@ -648,3 +648,137 @@ async def test_latest_for_is_the_newest_rollover_that_was_not_cancelled(tmp_path
     assert latest is not None and latest.id == first.id
     assert latest.state is RolloverState.FAILED
     assert await store.latest_for(SessionId.new()) is None
+
+
+async def test_migration_keeps_legacy_rows_unbound_until_an_explicit_freeze(tmp_path):
+    path = tmp_path / "legacy.sqlite3"
+    connection = sqlite3.connect(path)
+    apply_migrations(connection, migrations=MIGRATIONS[:22])
+    predecessor = SessionId.new()
+    connection.execute(
+        "INSERT INTO rollovers(rollover_id,handoff_id,predecessor_session_id,project_id,"
+        "profile_id,reason,plan,state,requested_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?)",
+        (
+            "old",
+            HANDOFF,
+            str(predecessor),
+            "remote-agents",
+            "claude",
+            "workflow",
+            "/abs/plan.md",
+            "handoff_ready",
+            NOW.isoformat(),
+            NOW.isoformat(),
+        ),
+    )
+    connection.commit()
+    connection.close()
+    connection = open_database(path)
+    try:
+        store = SQLiteRolloverStore(connection)
+        row = await store.get("old")
+        assert row.source_root is None and row.target is None
+        row = await store.freeze("old", tmp_path, None, at=NOW)
+        assert row.source_root == tmp_path and row.target is None
+        with pytest.raises(IllegalRolloverMove):
+            await store.freeze("old", tmp_path / "other", None, at=NOW)
+        with pytest.raises(sqlite3.IntegrityError, match="source is immutable"):
+            connection.execute(
+                "UPDATE rollovers SET source_root=? WHERE rollover_id=?",
+                (str(tmp_path / "other"), "old"),
+            )
+    finally:
+        connection.close()
+
+
+async def test_destination_snapshot_is_atomic_and_immutable_across_readers(tmp_path):
+    from remote_agents.domain.profiles import PermissionPreset
+    from remote_agents.ports.handoff_envelopes import HandoffDestination
+    from remote_agents.ports.rollover_store import RolloverTarget
+
+    connection = open_database(tmp_path / "rows.sqlite3")
+    try:
+        store = SQLiteRolloverStore(connection)
+        target = RolloverTarget(
+            2,
+            ProjectId("river"),
+            HandoffDestination(tmp_path / "river", "feature", "/abs/next.md", "Task 1.1", None),
+            "/abs/source.md",
+            (True, 2, 1),
+            "a" * 64,
+            PermissionPreset.ASK,
+        )
+        row = await store.open_for_ready(
+            SessionId.new(),
+            HANDOFF,
+            project_id=ProjectId("orchard"),
+            profile_id=ProfileId("codex"),
+            plan="/abs/next.md",
+            at=NOW,
+            source_root=tmp_path,
+            target=target,
+        )
+        assert (await SQLiteRolloverStore(connection).get(row.id)).target == target
+        with pytest.raises(IllegalRolloverMove):
+            await store.freeze(
+                row.id, tmp_path, replace(target, permissions=PermissionPreset.FULL_ACCESS), at=NOW
+            )
+        with pytest.raises(sqlite3.IntegrityError, match="target is immutable"):
+            connection.execute(
+                "UPDATE rollovers SET target_json=? WHERE rollover_id=?", ("{}", row.id)
+            )
+        assert (await store.get(row.id)).target == target
+    finally:
+        connection.close()
+
+
+@pytest.mark.parametrize(
+    "defect",
+    [
+        "version-string",
+        "version-bool",
+        "version-downgrade",
+        "relative-root",
+        "bad-selection",
+        "unknown-preset",
+        "extra",
+        "duplicate",
+    ],
+)
+def test_corrupt_durable_targets_are_never_downgraded_or_partially_decoded(tmp_path, defect):
+    import json
+
+    from remote_agents.adapters.sqlite.rollover_targets import decode, encode
+    from remote_agents.domain.profiles import PermissionPreset
+    from remote_agents.ports.handoff_envelopes import HandoffDestination
+    from remote_agents.ports.rollover_store import RolloverTarget
+
+    target = RolloverTarget(
+        2,
+        ProjectId("river"),
+        HandoffDestination(tmp_path / "river", "feature", "/records/next.md", "Task 1.1", None),
+        "/records/source.md",
+        (True, 2, 1),
+        "a" * 64,
+        PermissionPreset.ASK,
+    )
+    body = json.loads(encode(target))
+    if defect == "version-string":
+        body["version"] = "2"
+    elif defect == "version-bool":
+        body["version"] = True
+    elif defect == "version-downgrade":
+        body["version"] = 1
+    elif defect == "relative-root":
+        body["destination"]["root"] = "relative"
+    elif defect == "bad-selection":
+        body["selection"][1] = True
+    elif defect == "unknown-preset":
+        body["permissions"] = "unsafe-other-preset"
+    elif defect == "extra":
+        body["extra"] = True
+    encoded = json.dumps(body)
+    if defect == "duplicate":
+        encoded = encoded.replace('"version": 2', '"version": 2, "version": 2')
+    with pytest.raises(ValueError, match="invalid stored rollover target"):
+        decode(encoded)

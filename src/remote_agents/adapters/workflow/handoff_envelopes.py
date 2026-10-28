@@ -19,8 +19,8 @@ daemon reads it unattended. So:
   It must then be a regular file of at most 4096 bytes, by `fstat` and by what a read returns.
 - Only names of the form `<handoff id>.<ready|accepted|failed>.json` are opened. The writer's
   `.<id>.claim` files, its `.gitignore`, its temp files and `request.json` are never events.
-- The body must be exactly the protocol's key set, the protocol id PROTOCOL,
-  version 1 as an integer (JSON `true` and `1.0` compare equal to 1 in Python, and neither is
+- The body must be exactly its protocol version's key set, the protocol id PROTOCOL,
+  version 1 or 2 as an integer (JSON `true` and `1.0` compare equal to 1 in Python, and neither is
   the version), an event matching the name's suffix, the name's own id, a session id by this
   service's own rule, and a UTC timestamp in the one format the writer produces.
 
@@ -46,6 +46,7 @@ place, so a link planted at the target's name is replaced, never written through
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -57,7 +58,13 @@ from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
 
-from remote_agents.ports.handoff_envelopes import FAILURE_CODES, HandoffEnvelope, HandoffEvent
+from remote_agents.ports.handoff_envelopes import (
+    DESTINATION_FAILURE_CODES,
+    FAILURE_CODES,
+    HandoffDestination,
+    HandoffEnvelope,
+    HandoffEvent,
+)
 from remote_agents.ports.session_identity import safe_session_id
 
 PROTOCOL = "planning-handoff"
@@ -114,7 +121,7 @@ class FileHandoffEnvelopes:
                     if match is None:
                         continue
                     try:
-                        envelope = _parsed(_read(directory, name), match[1], match[2])
+                        envelope = _parsed(_read(directory, name), match[1], match[2], project_dir)
                     except Exception:
                         envelope = None
                     if envelope is not None:
@@ -268,7 +275,9 @@ def _no_duplicate_keys(pairs: list[tuple[str, object]]) -> dict[str, object]:
     return body
 
 
-def _parsed(raw: bytes | None, name_id: str, suffix: str) -> HandoffEnvelope | None:
+def _parsed(
+    raw: bytes | None, name_id: str, suffix: str, root: Path | None = None
+) -> HandoffEnvelope | None:
     """The envelope `raw` holds, if it passes every rule for the name it was found under."""
     if raw is None:
         return None
@@ -280,11 +289,23 @@ def _parsed(raw: bytes | None, name_id: str, suffix: str) -> HandoffEnvelope | N
     event = _EVENT_BY_SUFFIX[suffix]
     if not isinstance(body, dict):
         return None
-    if set(body) != (_FAILED_KEYS if event is HandoffEvent.FAILED else _KEYS):
+    version = body.get("version")
+    if not _accepted_protocol(body.get("protocol")) or type(version) is not int:
         return None
-    if not _accepted_protocol(body["protocol"]) or type(body["version"]) is not int:
+    if version not in (1, 2) or body.get("event") != event.value:
         return None
-    if body["version"] != VERSION or body["event"] != event.value:
+    keys = _FAILED_KEYS if event is HandoffEvent.FAILED else _KEYS
+    if version == 2:
+        keys = keys | {
+            "source_root",
+            "source_plan",
+            "predecessor_session_id",
+            "destination",
+            "selection",
+        }
+        if event is not HandoffEvent.READY:
+            keys = keys | {"ready_sha256"}
+    if set(body) != keys:
         return None
     handoff_id = body["handoff_id"]
     if not isinstance(handoff_id, str) or not _HANDOFF_ID.fullmatch(handoff_id):
@@ -303,8 +324,12 @@ def _parsed(raw: bytes | None, name_id: str, suffix: str) -> HandoffEnvelope | N
     failure_code = body.get("failure_code")
     # A string first: `in` a frozenset hashes its operand, and a JSON list does not hash.
     if event is HandoffEvent.FAILED and not (
-        isinstance(failure_code, str) and failure_code in FAILURE_CODES
+        isinstance(failure_code, str)
+        and failure_code in (FAILURE_CODES if version == 1 else DESTINATION_FAILURE_CODES)
     ):
+        return None
+    extra = {} if version == 1 else _routing(body, root, event)
+    if extra is None:
         return None
     return HandoffEnvelope(
         event=event,
@@ -313,7 +338,72 @@ def _parsed(raw: bytes | None, name_id: str, suffix: str) -> HandoffEnvelope | N
         timestamp=timestamp,
         plan=plan,
         failure_code=failure_code,
+        version=version,
+        **extra,
     )
+
+
+def _canonical_path(value: object) -> bool:
+    return isinstance(value, str) and _showable_path(value) and os.path.realpath(value) == value
+
+
+def _routing(body: dict, root: Path | None, event: HandoffEvent) -> dict | None:
+    """Validate v2 routing as data; only the writer interprets plan contents."""
+    d, s = body["destination"], body["selection"]
+    if not isinstance(d, dict) or set(d) != {"root", "branch", "plan", "locator", "master_plan"}:
+        return None
+    if not isinstance(s, dict) or set(s) != {"boundary", "subplan", "current_subplan"}:
+        return None
+    if not all(_canonical_path(body[k]) for k in ("source_root", "source_plan", "plan")):
+        return None
+    if root is None or str(root) != body["source_root"]:
+        return None
+    if (
+        not _canonical_path(d["root"])
+        or not _canonical_path(d["plan"])
+        or d["plan"] != body["plan"]
+    ):
+        return None
+    if d["master_plan"] is not None and not _canonical_path(d["master_plan"]):
+        return None
+    if (
+        not isinstance(d["branch"], str)
+        or not d["branch"]
+        or any(unicodedata.category(c) in _UNSHOWABLE for c in d["branch"])
+    ):
+        return None
+    if not isinstance(d["locator"], str) or not re.fullmatch(r"Task \d+\.\d+", d["locator"]):
+        return None
+    if type(s["boundary"]) is not bool or any(
+        value is not None and (type(value) is not int or value < 1)
+        for value in (s["subplan"], s["current_subplan"])
+    ):
+        return None
+    if not s["boundary"] and (s["subplan"] is not None or s["current_subplan"] is not None):
+        return None
+    predecessor = safe_session_id(body["predecessor_session_id"])
+    if predecessor is None or (predecessor == body["managed_session_id"]) != (
+        event is HandoffEvent.READY
+    ):
+        return None
+    digest = body.get("ready_sha256")
+    if event is not HandoffEvent.READY and (
+        not isinstance(digest, str) or not re.fullmatch(r"[0-9a-f]{64}", digest)
+    ):
+        return None
+    return {
+        "source_root": Path(body["source_root"]),
+        "source_plan": body["source_plan"],
+        "predecessor_session_id": predecessor,
+        "destination": HandoffDestination(
+            Path(d["root"]), d["branch"], d["plan"], d["locator"], d["master_plan"]
+        ),
+        "selection": (s["boundary"], s["subplan"], s["current_subplan"]),
+        "ready_sha256": digest,
+        "content_sha256": hashlib.sha256(
+            json.dumps(body, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode()
+        ).hexdigest(),
+    }
 
 
 def _accepted_protocol(value: object) -> bool:
