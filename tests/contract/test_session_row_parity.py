@@ -239,8 +239,11 @@ def _backend(book: RolloverBook):
     return backend_for(
         sessions=_Listing(),
         projects=object(),
-        catalogue=(_PROJECT,),
-        refresh_catalogue=lambda: (_PROJECT,),
+        catalogue=(_PROJECT, CatalogProject("river", "River workspace", "infra", "Registered")),
+        refresh_catalogue=lambda: (
+            _PROJECT,
+            CatalogProject("river", "River workspace", "infra", "Registered"),
+        ),
         rollovers=book,
     )
 
@@ -333,3 +336,75 @@ async def test_a_rollover_read_that_fails_costs_both_surfaces_the_notes_never_th
     assert set(bot) == set(tui) == set(_EXPECTED_NOTES), "every row still listed on both"
     for sequence, note in _EXPECTED_NOTES.items():
         assert note not in bot[sequence] and note not in tui[sequence]
+
+
+@pytest.mark.parametrize(
+    "scenario, expected",
+    [
+        ("finished", "workflow complete · no successor needed"),
+        ("route", "successor validating handoff · editor → River workspace"),
+        ("completed-route", "editor → River workspace · continued as a later session"),
+        ("held", "rollover held · original destination needs owner resolution"),
+        ("failed", "rollover failed · predecessor preserved · destination branch changed"),
+    ],
+)
+async def test_both_surfaces_draw_destination_completion_and_owner_hold(
+    tmp_path, scenario, expected
+):
+    from remote_agents.ports.handoff_envelopes import HandoffDestination
+    from remote_agents.ports.rollover_store import RolloverTarget
+
+    book = await _rolled_book(tmp_path)
+    store = SQLiteRolloverStore(open_database(tmp_path / "sessions.sqlite3"))
+    row = await store.latest_for(_LISTED[3].session_id)
+    if scenario == "finished":
+        await store.advance(row.id, RolloverState.WORKFLOW_FINISHED, at=_AT)
+    elif scenario == "failed":
+        await store.advance(row.id, RolloverState.FAILED, at=_AT, failure_code="branch-mismatch")
+    else:
+        if scenario in ("route", "completed-route"):
+            target = RolloverTarget(
+                1,
+                ProjectId("river"),
+                HandoffDestination(
+                    tmp_path,
+                    "feature",
+                    str(tmp_path / "plan.md"),
+                    "",
+                    None,
+                ),
+                None,
+                None,
+                None,
+                None,
+            )
+            row = await store.freeze(row.id, tmp_path, target, at=_AT)
+        row = await store.open_for_ready(
+            row.predecessor_session_id,
+            "h-" + "f" * 20,
+            project_id=row.project_id,
+            profile_id=row.profile_id,
+            plan=None,
+            at=_AT,
+            target=row.target,
+        )
+        await store.advance(row.id, RolloverState.SUCCESSOR_STARTING, at=_AT)
+        await store.record_successor(row.id, SessionId(UUID(int=6)), at=_AT)
+        await store.advance(row.id, RolloverState.ADOPTING, at=_AT)
+        if scenario == "completed-route":
+            for state in (
+                RolloverState.SUCCESSOR_ACCEPTED,
+                RolloverState.PREDECESSOR_STOPPING,
+                RolloverState.COMPLETED,
+            ):
+                await store.advance(row.id, state, at=_AT)
+        if scenario == "held":
+            await store.note(
+                row.id,
+                "waiting: legacy-destination-unbound; original channel needs owner resolution",
+                at=_AT,
+            )
+    bot = await _bot_notes(book)
+    tui = await _tui_rows(book)
+    assert expected in bot[4], bot[4]
+    assert expected in tui[4], tui[4]

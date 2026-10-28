@@ -2535,7 +2535,7 @@ class RemoteAgentsTui(App[AttachRequest | None]):
         backend = self._services.backend
         try:
             self._rollover_marks = await rollover_marks(
-                backend.rollovers, records, sessions=backend.sessions
+                backend.rollovers, records, sessions=backend.sessions, catalogue=self._catalogue
             )
         except Exception:
             _LOG.debug("the session rollover marks could not be read", exc_info=True)

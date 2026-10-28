@@ -600,3 +600,325 @@ async def test_valid_v1_replay_and_legacy_reconstruction_still_complete_once(rou
     assert (await rig.row()).state is RolloverState.COMPLETED
     assert len(rig.terminal.started) == 2
     assert rig.terminal.started[-1][1:3] == (ProjectId("orchard"), rig.journey.source)
+
+
+async def test_v2_adoption_prompt_carries_the_explicit_frozen_source_root(routed):
+    import shlex
+
+    rig = routed
+    await rig.pass_.run_once()
+    tokens = shlex.split(rig.terminal.prompts[-1][1])
+    assert tokens[tokens.index("--handoff-root") + 1] == str(rig.journey.source)
+
+
+async def test_real_finished_workflow_answers_only_its_request_without_launch_or_stop(routed):
+    import json
+
+    rig = routed
+    rig.journey.envelope().unlink()
+    await rig.rows.request(
+        rig.predecessor,
+        project_id=ProjectId("orchard"),
+        profile_id=ProfileId("codex"),
+        at=(await rig.sessions.get(rig.predecessor)).created_at,
+    )
+    await rig.pass_.run_once()
+    request = json.loads((rig.journey.source / ".claude/handoffs/request.json").read_text())
+    assert request["version"] == 2
+    rig.journey.complete_workflow()
+    rig.journey.run("finished")
+    await rig.build().run_once()
+    assert (await rig.row()).state.value == "workflow_finished"
+    assert len(rig.terminal.started) == 1
+    assert (await rig.sessions.get(rig.predecessor)).state is SessionState.RUNNING
+    assert not (rig.journey.source / ".claude/handoffs/request.json").exists()
+
+
+async def _workflow_request(rig):
+    import json
+
+    rig.journey.envelope().unlink()
+    requested = await rig.rows.request(
+        rig.predecessor,
+        project_id=ProjectId("orchard"),
+        profile_id=ProfileId("codex"),
+        at=(await rig.sessions.get(rig.predecessor)).created_at,
+    )
+    await rig.pass_.run_once()
+    request = rig.journey.source / ".claude/handoffs/request.json"
+    return requested, request, json.loads(request.read_bytes())
+
+
+@pytest.mark.parametrize(
+    "defect", ["session", "nonce", "time", "root", "version", "outcome", "extra"]
+)
+async def test_finished_must_correlate_with_the_outstanding_request(routed, defect):
+    import json
+
+    rig = routed
+    requested, request, original_request = await _workflow_request(rig)
+    rig.journey.complete_workflow()
+    rig.journey.run("finished")
+    path = rig.journey.source / f".claude/handoffs/{original_request['request_id']}.finished.json"
+    original = path.read_bytes()
+    body = json.loads(original)
+    if defect == "session":
+        body["managed_session_id"] = "another-managed-session"
+    elif defect == "nonce":
+        body["request_id"] = "h-" + "f" * 20
+    elif defect == "time":
+        body["requested_at"] = "2026-01-01T00:00:00Z"
+    elif defect == "root":
+        body["source_root"] = str(rig.journey.destination)
+    elif defect == "version":
+        body["version"] = 1
+    elif defect == "outcome":
+        body["outcome"] = "no-next-work"
+    else:
+        body["extra"] = True
+    path.write_text(json.dumps(body))
+    await rig.build().run_once()
+    assert (await rig.rows.get(requested.id)).state is RolloverState.REQUESTED
+    assert request.exists()
+    assert len(rig.terminal.started) == 1
+    assert (await rig.sessions.get(rig.predecessor)).state is SessionState.RUNNING
+    path.write_bytes(original)
+    await rig.build().run_once()
+    assert (await rig.row()).state is RolloverState.WORKFLOW_FINISHED
+    assert not request.exists()
+
+
+async def test_old_finished_cannot_answer_or_clear_a_newer_request(routed):
+    import json
+
+    rig = routed
+    first, path, old = await _workflow_request(rig)
+    rig.journey.complete_workflow()
+    rig.journey.run("finished")
+    await rig.rows.advance(first.id, RolloverState.CANCELLED, at=first.requested_at)
+    await rig.build().run_once()
+    second = await rig.rows.request(
+        rig.predecessor,
+        project_id=ProjectId("orchard"),
+        profile_id=ProfileId("codex"),
+        at=first.requested_at,
+    )
+    await rig.build().run_once()
+    current = json.loads(path.read_bytes())
+    assert current["request_id"] != old["request_id"]
+    await rig.build().run_once()
+    assert (await rig.rows.get(second.id)).state is RolloverState.REQUESTED
+    assert json.loads(path.read_bytes()) == current
+    # A delayed cleanup from the old process must not unlink the new request.
+    await rig.build()._finish(await rig.rows.get(first.id), await rig.build()._look())
+    assert json.loads(path.read_bytes()) == current
+    assert len(rig.terminal.started) == 1
+
+
+async def test_no_outstanding_request_cannot_be_completed_by_a_finished_file(routed):
+    rig = routed
+    rig.journey.envelope().unlink()
+    envelopes = FileHandoffEnvelopes()
+    envelopes.write_request(rig.journey.source, str(rig.predecessor), request_id="h-" + "f" * 20)
+    rig.journey.complete_workflow()
+    rig.journey.run("finished")
+    envelopes.clear_request(rig.journey.source, str(rig.predecessor), request_id="h-" + "f" * 20)
+    await rig.pass_.run_once()
+    assert await rig.row() is None
+    assert len(rig.terminal.started) == 1
+    assert (await rig.sessions.get(rig.predecessor)).state is SessionState.RUNNING
+
+
+async def test_no_next_subplan_is_not_enough_for_a_finished_workflow(routed):
+    rig = routed
+    await _workflow_request(rig)
+    rig.journey.complete_workflow()
+    # Owned state is complete, but the destination has unfinished work.
+    rig.journey.target_plan.write_text(rig.journey.target_plan.read_text().replace("[x]", "[ ]"))
+    result = rig.journey.run("finished", expected=3)
+    assert "workflow-incomplete" in result.stdout + result.stderr
+    await rig.build().run_once()
+    assert (await rig.row()).state is RolloverState.REQUESTED
+    assert len(rig.terminal.started) == 1
+
+
+@pytest.mark.parametrize("ending", ["trusted", "declined", "timeout"])
+async def test_v2_trust_hold_survives_restart_without_typing_into_the_dialog(
+    routed, monkeypatch, ending
+):
+    from dataclasses import replace
+    from datetime import timedelta
+
+    from remote_agents.domain.state_machine import LifecycleEvent
+
+    rig = routed
+    launch = rig.terminal.launch
+
+    async def held(*args, **kw):
+        return replace(await launch(*args, **kw), awaiting_trust=True)
+
+    monkeypatch.setattr(rig.terminal, "launch", held)
+    await rig.pass_.run_once()
+    row = await rig.row()
+    successor = row.successor_session_id
+    assert row.state is RolloverState.SUCCESSOR_STARTING
+    assert rig.terminal.prompts == []
+    assert rig.terminal.trust_answers == 0
+    restarted = rig.build()
+    await restarted.run_once()
+    assert rig.terminal.prompts == []
+    if ending == "timeout":
+        restarted._now = lambda: row.updated_at + timedelta(hours=3)
+    elif ending == "declined":
+        await rig.sessions.record_event(successor, LifecycleEvent.TRUST_DECLINED)
+    else:
+        await rig.sessions.record_event(successor, LifecycleEvent.READY)
+        rig.terminal.idle = False
+        await restarted.run_once()
+        assert rig.terminal.prompts == []
+        rig.terminal.idle = True
+    await restarted.run_once()
+    row = await rig.row()
+    if ending == "trusted":
+        import shlex
+
+        assert row.state is RolloverState.ADOPTING
+        assert len(rig.terminal.prompts) == 1
+        assert shlex.split(rig.terminal.prompts[0][1])[-1] == str(rig.journey.source)
+        rig.journey.state(rig.journey.destination, rig.journey.target_plan)
+        rig.journey.run("accept", session=str(successor))
+        rig.terminal.idle = False
+        await restarted.run_once()
+        assert (await rig.sessions.get(rig.predecessor)).state is SessionState.RUNNING
+        rig.terminal.idle = True
+        await rig.build().run_once()
+        assert (await rig.row()).state is RolloverState.COMPLETED
+    else:
+        assert row.state is RolloverState.FAILED
+        assert row.failure_code == (
+            "successor-untrusted" if ending == "timeout" else "successor-failed"
+        )
+        assert rig.terminal.prompts == []
+        assert (await rig.sessions.get(rig.predecessor)).state is SessionState.RUNNING
+    assert len(rig.terminal.started) == 2
+
+
+async def test_the_source_root_argument_preserves_spaces_quotes_and_shell_characters(journey):
+    import shlex
+
+    # Build a new fixture at its final path, before creating owned state.
+    special = journey.base / "source space ' $()"
+    special.mkdir()
+    nested = WriterJourney(
+        special, Path(os.environ["RA_STAGED_PLANNING"]), journey.script.parents[4].name
+    )
+    rig = RoutedRig(nested)
+    try:
+        await rig.start()
+        await rig.pass_.run_once()
+        assert shlex.split(rig.terminal.prompts[-1][1])[-1] == str(nested.source)
+    finally:
+        rig.connection.close()
+
+
+async def test_schema24_preserves_populated_legacy_state_history_order_and_constraints(tmp_path):
+    import sqlite3
+    from datetime import UTC, datetime
+
+    from remote_agents.adapters.sqlite.migrations import MIGRATIONS, apply_migrations
+    from remote_agents.domain.models import SessionId
+
+    connection = open_database(tmp_path / "old.sqlite3", migrations=MIGRATIONS[:23])
+    predecessor = SessionId.new()
+    store = SQLiteRolloverStore(connection)
+    row = await store.request(
+        predecessor,
+        project_id=ProjectId("orchard"),
+        profile_id=ProfileId("codex"),
+        at=datetime.now(UTC),
+    )
+    await store.freeze(row.id, tmp_path, None, at=row.updated_at)
+    await store.record_request(row.id, at=row.updated_at)
+    before = [tuple(r) for r in connection.execute("SELECT rowid, * FROM rollovers")]
+    events = [tuple(r) for r in connection.execute("SELECT * FROM rollover_events")]
+    apply_migrations(connection)
+    assert [tuple(r) for r in connection.execute("SELECT rowid, * FROM rollovers")] == before
+    assert [tuple(r) for r in connection.execute("SELECT * FROM rollover_events")] == events
+    assert not connection.execute("PRAGMA foreign_key_check").fetchall()
+    with pytest.raises(sqlite3.IntegrityError, match="append-only"):
+        connection.execute("UPDATE rollover_events SET detail='changed'")
+    with pytest.raises(sqlite3.IntegrityError, match="immutable"):
+        connection.execute("UPDATE rollovers SET source_root='/changed'")
+    ended = await store.advance(row.id, RolloverState.WORKFLOW_FINISHED, at=row.updated_at)
+    assert ended.successor_session_id is None
+    assert (
+        await store.request(
+            predecessor, project_id=row.project_id, profile_id=row.profile_id, at=row.updated_at
+        )
+        is not None
+    )
+    # No capability snapshot is invented for a launch predating migration24.
+    assert await SQLiteSessionStore(connection).handoff_versions(predecessor) == (1,)
+    connection.close()
+
+
+async def test_cleanup_of_a_correlated_request_cannot_unlink_a_different_live_request(routed):
+    import json
+
+    rig = routed
+    row, path, request = await _workflow_request(rig)
+    original = request.copy()
+    request["request_id"] = "h-" + "f" * 20
+    path.write_text(json.dumps(request))
+    await rig.build().run_once()
+    assert (await rig.row()).failure_code == "request-lost"
+    assert json.loads(path.read_bytes()) == request
+    FileHandoffEnvelopes().clear_request(rig.journey.source, str(rig.predecessor))
+    assert json.loads(path.read_bytes()) == request
+    assert original["request_id"] != request["request_id"]
+    assert len(rig.terminal.started) == 1
+
+
+def test_request_compare_and_remove_excludes_a_concurrent_request_writer(tmp_path, monkeypatch):
+    import concurrent.futures
+
+    from remote_agents.adapters.workflow import handoff_envelopes as wire
+
+    envelopes = FileHandoffEnvelopes()
+    first, second = "h-" + "a" * 20, "h-" + "b" * 20
+    assert envelopes.write_request(tmp_path, "session", request_id=first)
+    original = wire._requested
+    attempts = []
+
+    def racing_read(directory):
+        current = original(directory)
+        with concurrent.futures.ThreadPoolExecutor() as executor:
+            attempts.append(
+                executor.submit(
+                    envelopes.write_request, tmp_path, "session", request_id=second
+                ).result(timeout=3)
+            )
+        return current
+
+    monkeypatch.setattr(wire, "_requested", racing_read)
+    envelopes.clear_request(tmp_path, "session", request_id=first)
+    assert attempts == [False]
+    monkeypatch.setattr(wire, "_requested", original)
+    assert envelopes.write_request(tmp_path, "session", request_id=second)
+    envelopes.clear_request(tmp_path, "session", request_id=first)
+    assert envelopes.request_details(tmp_path).request_id == second
+
+
+async def test_a_matching_finished_response_takes_precedence_over_a_leftover_ready(routed):
+    rig = routed
+    ready = rig.journey.envelope().read_bytes()
+    await _workflow_request(rig)
+    rig.journey.complete_workflow()
+    rig.journey.run("finished")
+    rig.journey.envelope().write_bytes(ready)
+    await rig.build().run_once()
+    assert (await rig.row()).state is RolloverState.WORKFLOW_FINISHED
+    await rig.build().run_once()
+    assert (await rig.row()).state is RolloverState.WORKFLOW_FINISHED
+    assert len(rig.terminal.started) == 1
+    assert (await rig.sessions.get(rig.predecessor)).state is SessionState.RUNNING

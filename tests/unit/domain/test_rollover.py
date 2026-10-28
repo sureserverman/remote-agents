@@ -23,6 +23,7 @@ LEGAL_MOVES = {
     (S.REQUESTED, S.HANDOFF_READY),
     (S.REQUESTED, S.CANCELLED),
     (S.REQUESTED, S.FAILED),
+    (S.REQUESTED, S.WORKFLOW_FINISHED),
     (S.HANDOFF_READY, S.SUCCESSOR_STARTING),
     (S.HANDOFF_READY, S.FAILED),
     (S.HANDOFF_READY, S.CANCELLED),
@@ -36,11 +37,11 @@ LEGAL_MOVES = {
     (S.PREDECESSOR_STOPPING, S.STOP_FAILED),
 }
 
-EXPECTED_TERMINAL = {S.COMPLETED, S.FAILED, S.STOP_FAILED, S.CANCELLED}
+EXPECTED_TERMINAL = {S.COMPLETED, S.FAILED, S.STOP_FAILED, S.CANCELLED, S.WORKFLOW_FINISHED}
 
 
-def test_there_are_ten_states() -> None:
-    assert len(RolloverState) == 10
+def test_there_are_eleven_states() -> None:
+    assert len(RolloverState) == 11
 
 
 @pytest.mark.parametrize(
@@ -56,7 +57,7 @@ def test_every_pair_is_legal_exactly_when_the_lifecycle_says(
     assert (to_state in TRANSITIONS.get(from_state, frozenset())) is expected
 
 
-def test_derived_terminal_set_is_the_four_end_states() -> None:
+def test_derived_terminal_set_is_the_five_end_states() -> None:
     assert TERMINAL == EXPECTED_TERMINAL
 
 

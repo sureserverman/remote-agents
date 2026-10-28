@@ -70,11 +70,22 @@ class SQLiteSessionStore:
                 ),
             )
 
+            self._connection.execute(
+                "INSERT INTO session_handoff_capabilities(session_id, versions) VALUES (?, '1,2')",
+                (str(record.session_id),),
+            )
             if permissions is not None:
                 self._connection.execute(
                     "INSERT INTO session_permissions(session_id, preset) VALUES (?, ?)",
                     (str(record.session_id), PermissionPreset(permissions).value),
                 )
+
+    async def handoff_versions(self, session_id: SessionId) -> tuple[int, ...]:
+        row = self._connection.execute(
+            "SELECT versions FROM session_handoff_capabilities WHERE session_id = ?",
+            (str(session_id),),
+        ).fetchone()
+        return (1, 2) if row is not None and row[0] == "1,2" else (1,)
 
     async def get(self, session_id: SessionId) -> SessionRecord | None:
         """Load one immutable projection by its opaque session identifier."""

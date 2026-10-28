@@ -16,15 +16,14 @@ def _branch(root: Path) -> str | None:
         return None
     try:
         result = subprocess.run(
-            [
-                "git",
-                "-C",
-                str(root),
-                "rev-parse",
-                "--show-toplevel",
-                "--symbolic-full-name",
-                "HEAD",
-            ],
+            ["git", "-C", str(root), "rev-parse", "--show-toplevel"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+        )
+        branch = subprocess.run(
+            ["git", "-C", str(root), "symbolic-ref", "-q", "HEAD"],
             capture_output=True,
             text=True,
             timeout=10,
@@ -33,8 +32,9 @@ def _branch(root: Path) -> str | None:
     except (OSError, subprocess.TimeoutExpired):
         return None
     lines = result.stdout.splitlines()
-    if result.returncode != 0 or len(lines) != 2:
+    ref = branch.stdout.strip()
+    if result.returncode != 0 or branch.returncode != 0 or len(lines) != 1:
         return None
-    if Path(lines[0]).resolve() != root or not lines[1].startswith("refs/heads/"):
+    if Path(lines[0]).resolve() != root or not ref.startswith("refs/heads/"):
         return None
-    return lines[1].removeprefix("refs/heads/")
+    return ref.removeprefix("refs/heads/")

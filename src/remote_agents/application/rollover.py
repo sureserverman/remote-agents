@@ -67,6 +67,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import shlex
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from contextlib import AbstractAsyncContextManager, nullcontext
 from dataclasses import dataclass
@@ -102,6 +103,7 @@ from remote_agents.ports.handoff_envelopes import (
     HandoffEvent,
 )
 from remote_agents.ports.rollover_store import (
+    REQUEST_WRITTEN,
     TRUST_HOLD,
     TRUSTED_WAITING,
     IllegalRolloverMove,
@@ -259,9 +261,16 @@ class RolloverPass:
         operation: Callable[[], AbstractAsyncContextManager[object]] = nullcontext,
         resolve_destination: Callable[[HandoffDestination], Awaitable[ResolvedRolloverDestination]]
         | None = None,
+        resolve_legacy_destination: Callable[
+            [ProjectId, HandoffDestination], Awaitable[ResolvedRolloverDestination]
+        ]
+        | None = None,
+        handoff_versions: Callable[[SessionId], Awaitable[tuple[int, ...]]] | None = None,
         continuation_permissions: Callable[[SessionRecord], Awaitable[PermissionPreset | None]]
         | None = None,
     ) -> None:
+        self._resolve_legacy_destination = resolve_legacy_destination
+        self._handoff_versions = handoff_versions
         self._resolve_destination = resolve_destination
         self._continuation_permissions = continuation_permissions
         self._store = store
@@ -320,6 +329,9 @@ class RolloverPass:
             ]
             for root in dict.fromkeys([*seen.roots.values(), *frozen_roots]):
                 try:
+                    for pending in await self._store.open_rollovers():
+                        if pending.state is _S.REQUESTED and seen.root_of(pending) == root:
+                            await self._consume_finished(pending, seen)
                     await self._pick_up_ready(root, seen)
                 except Exception:
                     # One checkout's envelopes cost that checkout this pass, never the steps of
@@ -418,6 +430,9 @@ class RolloverPass:
         for handoff_id, group in _grouped(self._envelopes.events(root)).items():
             ready = group.get(HandoffEvent.READY)
             if ready is None:
+                if HandoffEvent.FINISHED in group:
+                    # Finished is answered only against its persisted, outstanding request.
+                    continue
                 # An `accepted` or `failed` with no `ready` belongs to no rollover this
                 # service can still act on -- one already finished, or a forgery.
                 if handoff_id not in held:
@@ -475,7 +490,10 @@ class RolloverPass:
     ) -> RolloverTarget:
         destination = ready.destination or HandoffDestination(root, "", ready.plan or "", "", None)
         project = record.project_id
-        if self._resolve_destination is not None:
+        if ready.version == 1 and self._resolve_legacy_destination is not None:
+            resolved = await self._resolve_legacy_destination(project, destination)
+            project, destination = resolved.project_id, resolved.destination
+        elif self._resolve_destination is not None:
             resolved = await self._resolve_destination(destination)
             project, destination = resolved.project_id, resolved.destination
             if ready.version == 1 and project != record.project_id:
@@ -502,7 +520,11 @@ class RolloverPass:
         if target is None:
             raise DestinationRefused("legacy-destination-unbound")
         if self._resolve_destination is not None:
-            resolved = await self._resolve_destination(target.destination)
+            resolved = (
+                await self._resolve_legacy_destination(target.project_id, target.destination)
+                if target.version == 1 and self._resolve_legacy_destination is not None
+                else await self._resolve_destination(target.destination)
+            )
             if (
                 resolved.project_id != target.project_id
                 or resolved.destination != target.destination
@@ -623,13 +645,73 @@ class RolloverPass:
             await self._note_waiting(rollover, holder)
             return
         wanted = str(rollover.predecessor_session_id)
+        versions = (
+            (1,)
+            if self._handoff_versions is None
+            else await self._handoff_versions(predecessor.session_id)
+        )
+        correlated = 2 in versions
+        nonce = _request_id(rollover)
         if await self._store.record_request(rollover.id, at=self._now()):
-            if not self._envelopes.write_request(root, wanted):
+            options = (
+                {"request_id": nonce, "requested_at": rollover.requested_at} if correlated else {}
+            )
+            if not self._envelopes.write_request(root, wanted, **options):
                 await self._fail(rollover, seen, REQUEST_UNWRITTEN)
+        elif correlated:
+            request = self._envelopes.request_details(root)
+            if (
+                request is None
+                or request.version != 2
+                or request.managed_session_id != wanted
+                or request.request_id != nonce
+                or request.requested_at != rollover.requested_at.replace(microsecond=0)
+            ):
+                await self._fail(rollover, seen, REQUEST_LOST)
+                return
         elif self._envelopes.requested(root) != wanted:
             # Recorded as written, and not there: a crash between the record and the write, or
             # the file removed or replaced by someone else. Never written twice (DEC-004).
             await self._fail(rollover, seen, REQUEST_LOST)
+
+    async def _consume_finished(self, rollover: Rollover, seen: _Seen) -> None:
+        """Only a recorded, still outstanding v2 request may finish without a successor."""
+        root = rollover.source_root
+        if root is None or rollover.reason != "owner" or self._handoff_versions is None:
+            return
+        if 2 not in await self._handoff_versions(rollover.predecessor_session_id):
+            return
+        if not any(e.detail == REQUEST_WRITTEN for e in await self._store.events(rollover.id)):
+            return
+        request = self._envelopes.request_details(root)
+        nonce, wanted = _request_id(rollover), str(rollover.predecessor_session_id)
+        if (
+            request is None
+            or request.version != 2
+            or request.request_id != nonce
+            or request.managed_session_id != wanted
+            or request.requested_at != rollover.requested_at.replace(microsecond=0)
+        ):
+            return
+        for event in self._envelopes.events(root):
+            if (
+                event.event is HandoffEvent.FINISHED
+                and event.version == 2
+                and event.request_id == nonce
+                and event.handoff_id == nonce
+                and event.managed_session_id == wanted
+                and event.source_root == root
+                and event.requested_at == request.requested_at
+            ):
+                ended = await self._store.advance(
+                    rollover.id,
+                    _S.WORKFLOW_FINISHED,
+                    at=self._now(),
+                    expected_from=_S.REQUESTED,
+                    detail="workflow completed; no successor needed",
+                )
+                await self._finish(ended, seen)
+                return
 
     async def _request_slot_holder(self, root: Path, seen: _Seen) -> Rollover | None:
         """The oldest open owner-asked rollover in a checkout. `request.json` is one file per
@@ -784,7 +866,12 @@ class RolloverPass:
             await self._fail(starting, seen, SUCCESSOR_FAILED, record.state.value)
             return
         reason = await self._type_template(
-            record.session_id, rollover.profile_id, rollover.handoff_id
+            record.session_id,
+            rollover.profile_id,
+            rollover.handoff_id,
+            source_root=rollover.source_root
+            if rollover.target and rollover.target.version == 2
+            else None,
         )
         if reason is not None:
             await self._fail(starting, seen, NOT_TYPED, reason)
@@ -792,7 +879,12 @@ class RolloverPass:
         await self._store.advance(rollover.id, _S.ADOPTING, at=self._now())
 
     async def _type_template(
-        self, session_id: SessionId, profile_id: ProfileId, handoff_id: str
+        self,
+        session_id: SessionId,
+        profile_id: ProfileId,
+        handoff_id: str,
+        *,
+        source_root: Path | None = None,
     ) -> str | None:
         """None once the template landed, else why it was not typed. Never typed twice: a send
         that may have typed is given up (DEC-099), as the schedules' first prompt is."""
@@ -800,6 +892,8 @@ class RolloverPass:
         if template is None:
             return NO_TEMPLATE
         text = template.format(handoff_id=handoff_id)
+        if source_root is not None:
+            text += " --handoff-root " + shlex.quote(str(source_root))
         retries = 0  # counted, never read off the clock (`STARTUP_RETRIES`)
         while True:
             try:
@@ -895,7 +989,12 @@ class RolloverPass:
         )
         assert adopting.handoff_id is not None  # opened from a `ready`, which names one
         reason = await self._type_template(
-            rollover.successor_session_id, rollover.profile_id, adopting.handoff_id
+            rollover.successor_session_id,
+            rollover.profile_id,
+            adopting.handoff_id,
+            source_root=rollover.source_root
+            if rollover.target and rollover.target.version == 2
+            else None,
         )
         if reason is not None:
             await self._fail(adopting, seen, NOT_TYPED, reason)
@@ -1049,7 +1148,18 @@ class RolloverPass:
             for other in await self._store.open_rollovers()
         ):
             return
-        self._envelopes.clear_request(root, str(rollover.predecessor_session_id))
+        if self._handoff_versions is not None and 2 in await self._handoff_versions(
+            rollover.predecessor_session_id
+        ):
+            self._envelopes.clear_request(
+                root,
+                str(rollover.predecessor_session_id),
+                request_id=_request_id(rollover),
+                requested_at=rollover.requested_at,
+            )
+            self._envelopes.discard(root, _request_id(rollover))
+        else:
+            self._envelopes.clear_request(root, str(rollover.predecessor_session_id))
 
     async def _withdraw_stale_requests(self, seen: _Seen) -> None:
         """A request stands only while its session's rollover is open. It is withdrawn for every
@@ -1075,6 +1185,11 @@ class RolloverPass:
                 _LOG.exception(
                     "request cleanup for %s postponed to the next pass", record.session_id
                 )
+
+
+def _request_id(rollover: Rollover) -> str:
+    # A rollover id is minted before the request, so a restart derives the same nonce.
+    return "h-" + rollover.id[:20]
 
 
 def rollover_notice_settled(

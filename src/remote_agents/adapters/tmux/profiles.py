@@ -21,8 +21,10 @@ from remote_agents.domain.profiles import (
     ProfileError,
 )
 from remote_agents.ports.session_identity import (
+    HANDOFF_VERSIONS_VARIABLE,
     SESSION_ID_VARIABLE,
     SUPERVISOR_ID_COMMAND_VARIABLE,
+    SUPPORTED_HANDOFF_VERSIONS,
 )
 from remote_agents.ports.terminal_text import probe_version_line
 
@@ -227,6 +229,7 @@ def _with_session_identity(environment: dict[str, str], session_id: SessionId) -
     launch. A copy per profile is what keeps the variables per-session.
     """
     return environment | {
+        HANDOFF_VERSIONS_VARIABLE: ",".join(map(str, SUPPORTED_HANDOFF_VERSIONS)),
         SESSION_ID_VARIABLE: str(session_id),
         SUPERVISOR_ID_COMMAND_VARIABLE: supervisor_id_command(),
     }

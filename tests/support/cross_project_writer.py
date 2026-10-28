@@ -129,8 +129,8 @@ class WriterJourney:
         assert result.returncode == 0, result.stdout + result.stderr
 
     def run(self, event="ready", *, session=None, root=None, plan=None, expected=0):
-        root = root or (self.source if event == "ready" else self.destination)
-        plan = plan or (self.source_plan if event == "ready" else self.target_plan)
+        root = root or (self.source if event in ("ready", "finished") else self.destination)
+        plan = plan or (self.source_plan if event in ("ready", "finished") else self.target_plan)
         args = [
             sys.executable,
             str(self.script),
@@ -139,12 +139,12 @@ class WriterJourney:
             str(root),
             "--plan",
             str(plan),
-            "--handoff-id",
-            self.handoff_id,
         ]
+        if event != "finished":
+            args += ["--handoff-id", self.handoff_id]
         if event == "ready":
             args += ["--next", "Task 1.1", "--sub-plan-boundary"]
-        else:
+        elif event != "finished":
             args += ["--handoff-root", str(self.source)]
         env = {k: v for k, v in os.environ.items() if not k.startswith("PLANNING_")}
         sid = session or self.predecessor
@@ -190,3 +190,33 @@ class WriterJourney:
         )
         assert result.returncode == 0, result.stdout + result.stderr
         return plan
+
+    def complete_workflow(self):
+        for plan in (self.source_plan, self.target_plan):
+            text = plan.read_text().replace("[ ]", "[x]")
+            if "**Completed:**" not in text:
+                text += "\n**Completed:** 2026-01-01 — synthetic\n"
+            plan.write_text(text)
+        text = self.master.read_text().replace("[ ]", "[x]")
+        self.master.write_text(text + "\n**Completed:** 2026-01-01 — synthetic\n")
+        self.state(
+            self.source,
+            self.source_plan,
+            "set-blocker",
+            2,
+            {
+                "disposition": "working",
+                "prevented_operation": "synthetic closeout",
+                "evidence": "synthetic workflow completed all tasks and gates",
+                "dependency": "synthetic gates resolved",
+                "remaining_work": ["synthetic closeout"],
+            },
+        )
+        self.state(self.source, self.source_plan, "transition", 3, {"phase": "closeout"})
+        self.state(
+            self.source,
+            self.source_plan,
+            "finish",
+            4,
+            {"evidence": "synthetic master and both children Completed"},
+        )

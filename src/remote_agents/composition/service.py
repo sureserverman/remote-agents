@@ -1002,6 +1002,10 @@ def build_rollover_pass(
         resolve_destination=RolloverDestinations(
             project_paths, destination_branch, worktrees
         ).resolve,
+        resolve_legacy_destination=RolloverDestinations(
+            project_paths, destination_branch, worktrees
+        ).resolve_legacy,
+        handoff_versions=SQLiteSessionStore(connection).handoff_versions,
         continuation_permissions=sessions.continuation_permissions,
     )
 

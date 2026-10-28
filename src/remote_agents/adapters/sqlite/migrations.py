@@ -481,6 +481,83 @@ MIGRATIONS: tuple[tuple[int, str], ...] = (
         BEGIN SELECT RAISE(ABORT, 'rollover target is immutable'); END;
         """,
     ),
+    (
+        24,
+        # Preserve parent/history with foreign keys enabled. Old launches have no capability
+        # row and stay v1; only launches advertising the complete v2 receiver get v2 requests.
+        """
+        CREATE TABLE rollovers_next (
+            rollover_id TEXT PRIMARY KEY,
+            handoff_id TEXT UNIQUE,
+            predecessor_session_id TEXT NOT NULL,
+            successor_session_id TEXT,
+            project_id TEXT NOT NULL,
+            profile_id TEXT NOT NULL,
+            reason TEXT NOT NULL,
+            plan TEXT,
+            state TEXT NOT NULL,
+            failure_code TEXT,
+            failure_detail TEXT,
+            requested_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            source_root TEXT,
+            target_json TEXT,
+            CHECK (state IN ('requested', 'handoff_ready', 'successor_starting', 'adopting',
+                'successor_accepted', 'predecessor_stopping', 'completed', 'failed',
+                'stop_failed', 'cancelled', 'workflow_finished')),
+            CHECK (successor_session_id IS NULL
+                OR successor_session_id <> predecessor_session_id),
+            CHECK (successor_session_id IS NOT NULL OR state NOT IN ('adopting',
+                'successor_accepted', 'predecessor_stopping', 'completed', 'stop_failed'))
+        );
+        CREATE TABLE rollover_events_next (
+            event_id INTEGER PRIMARY KEY,
+            rollover_id TEXT NOT NULL REFERENCES rollovers_next(rollover_id),
+            from_state TEXT,
+            to_state TEXT NOT NULL,
+            failure_code TEXT,
+            detail TEXT,
+            created_at TEXT NOT NULL
+        );
+        INSERT INTO rollovers_next(rowid, rollover_id, handoff_id, predecessor_session_id,
+            successor_session_id, project_id, profile_id, reason, plan, state, failure_code,
+            failure_detail, requested_at, updated_at, source_root, target_json)
+        SELECT rowid, * FROM rollovers;
+        INSERT INTO rollover_events_next SELECT * FROM rollover_events;
+        DROP TABLE rollover_events;
+        DROP TABLE rollovers;
+        ALTER TABLE rollovers_next RENAME TO rollovers;
+        ALTER TABLE rollover_events_next RENAME TO rollover_events;
+        CREATE UNIQUE INDEX rollovers_one_open ON rollovers(predecessor_session_id)
+            WHERE state NOT IN ('completed', 'failed', 'stop_failed', 'cancelled',
+                'workflow_finished');
+        CREATE INDEX rollovers_successor ON rollovers(successor_session_id);
+        CREATE TRIGGER rollover_events_no_update BEFORE UPDATE ON rollover_events
+        BEGIN
+            SELECT RAISE(ABORT, 'rollover_events is append-only');
+        END;
+        CREATE TRIGGER rollover_events_no_delete BEFORE DELETE ON rollover_events
+        BEGIN
+            SELECT RAISE(ABORT, 'rollover_events is append-only');
+        END;
+        CREATE TRIGGER rollover_source_immutable
+        BEFORE UPDATE OF source_root ON rollovers
+        WHEN OLD.source_root IS NOT NULL AND NEW.source_root IS NOT OLD.source_root
+        BEGIN SELECT RAISE(ABORT, 'rollover source is immutable'); END;
+        CREATE TRIGGER rollover_target_immutable
+        BEFORE UPDATE OF target_json ON rollovers
+        WHEN OLD.target_json IS NOT NULL AND NEW.target_json IS NOT OLD.target_json
+        BEGIN SELECT RAISE(ABORT, 'rollover target is immutable'); END;
+
+        CREATE TABLE session_handoff_capabilities (
+            session_id TEXT PRIMARY KEY REFERENCES sessions(session_id),
+            versions TEXT NOT NULL CHECK(versions IN ('1', '1,2'))
+        );
+        CREATE TRIGGER session_handoff_capabilities_immutable
+        BEFORE UPDATE ON session_handoff_capabilities
+        BEGIN SELECT RAISE(ABORT, 'launch handoff capabilities are immutable'); END;
+        """,
+    ),
 )
 """Migration 14 takes the surface's bookkeeping out of the watched store.
 

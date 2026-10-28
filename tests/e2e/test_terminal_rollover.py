@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import subprocess
 import sys
 from pathlib import Path
 from uuid import uuid4
@@ -132,6 +133,30 @@ _COMPOSER = ComposerScreen(
 )
 
 
+def _git_fixture(root: Path) -> None:
+    root.mkdir(parents=True)
+    subprocess.run(
+        ["git", "init", "-q", "--template=", "--initial-branch=main", str(root)], check=True
+    )
+    subprocess.run(
+        [
+            "git",
+            "-C",
+            str(root),
+            "-c",
+            "user.name=Fixture",
+            "-c",
+            "user.email=fixture@example.invalid",
+            "commit",
+            "-q",
+            "--allow-empty",
+            "-m",
+            "Fixture",
+        ],
+        check=True,
+    )
+
+
 async def _type(terminal: TmuxTerminal, session_id: SessionId, text: str) -> None:
     """The test's own cue, through the guarded send, tried while the agent draws its composer."""
     delivery = None
@@ -148,7 +173,7 @@ async def test_a_ready_rolls_over_to_one_successor_and_stops_only_on_accept(
     tmp_path: Path, mode: str
 ) -> None:
     project = tmp_path / "opaque-editor"
-    (project / ".git").mkdir(parents=True)
+    _git_fixture(project)
     agent, mode_file = tmp_path / "fake_agent.py", tmp_path / "mode"
     agent.write_text(_AGENT, encoding="utf-8")
     mode_file.write_text(mode, encoding="utf-8")
@@ -255,11 +280,12 @@ async def test_a_worktree_sessions_successor_starts_in_the_same_worktree(tmp_pat
     from remote_agents.ports.worktree_store import Worktree
 
     project = tmp_path / "opaque-editor"
-    (project / ".git").mkdir(parents=True)
+    _git_fixture(project)
     worktree = tmp_path / "worktrees" / "wt"
-    worktree.mkdir(parents=True)
-    # A linked worktree's top level holds a `.git` *file*, which is what makes it a root.
-    (worktree / ".git").write_text(f"gitdir: {project}/.git/worktrees/wt\n", encoding="utf-8")
+    subprocess.run(
+        ["git", "-C", str(project), "worktree", "add", "-q", "-b", "ra/wt", str(worktree)],
+        check=True,
+    )
     agent, mode_file = tmp_path / "fake_agent.py", tmp_path / "mode"
     agent.write_text(_AGENT, encoding="utf-8")
     mode_file.write_text("accept", encoding="utf-8")
@@ -383,7 +409,7 @@ async def test_a_trust_held_successor_is_typed_once_after_the_owner_trusts_it(
     profile, so the production classifier, launch settle and answer path all run on it. Claude's
     real dialog text is pinned against its capture in `tests/provider_contract`, not here."""
     project = tmp_path / "opaque-editor"
-    (project / ".git").mkdir(parents=True)
+    _git_fixture(project)
     agent, mode_file, ask = tmp_path / "fake_agent.py", tmp_path / "mode", tmp_path / "ask"
     agent.write_text(_AGENT, encoding="utf-8")
     mode_file.write_text("accept", encoding="utf-8")
@@ -578,7 +604,7 @@ async def test_a_codex_ready_rolls_over_to_a_codex_successor_typed_the_dollar_te
     on `accepted` the predecessor gets the curated `/exit Enter Enter` onto its idle composer,
     and on `failed: id-mismatch` it is left running."""
     project = tmp_path / "opaque-editor"
-    (project / ".git").mkdir(parents=True)
+    _git_fixture(project)
     agent, mode_file, exits = tmp_path / "fake_codex.py", tmp_path / "mode", tmp_path / "exits"
     agent.write_text(_CODEX_AGENT, encoding="utf-8")
     mode_file.write_text("accept" if mode == "accept" else "fail", encoding="utf-8")

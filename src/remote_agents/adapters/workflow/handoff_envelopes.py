@@ -46,6 +46,7 @@ place, so a link planted at the target's name is replaced, never written through
 
 from __future__ import annotations
 
+import fcntl
 import hashlib
 import json
 import os
@@ -64,6 +65,7 @@ from remote_agents.ports.handoff_envelopes import (
     HandoffDestination,
     HandoffEnvelope,
     HandoffEvent,
+    HandoffRequest,
 )
 from remote_agents.ports.session_identity import safe_session_id
 
@@ -82,13 +84,14 @@ MAX_ENTRIES = 4096
 TIMESTAMP_FORMAT = "%Y-%m-%dT%H:%M:%SZ"
 
 _HANDOFF_ID = re.compile(r"h-[0-9a-f]{20}")
-_ENVELOPE_NAME = re.compile(r"(h-[0-9a-f]{20})\.(ready|accepted|failed)\.json")
+_ENVELOPE_NAME = re.compile(r"(h-[0-9a-f]{20})\.(ready|accepted|failed|finished)\.json")
 _TIMESTAMP = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z")
 _UNSHOWABLE = frozenset({"Cc", "Cf", "Zl", "Zp"})
 _EVENT_BY_SUFFIX = {
     "ready": HandoffEvent.READY,
     "accepted": HandoffEvent.ACCEPTED,
     "failed": HandoffEvent.FAILED,
+    "finished": HandoffEvent.FINISHED,
 }
 _KEYS = frozenset(
     {"protocol", "version", "event", "handoff_id", "managed_session_id", "timestamp", "plan"}
@@ -130,31 +133,47 @@ class FileHandoffEnvelopes:
             return ()
         return tuple(envelope for _, _, envelope in sorted(found, key=lambda f: f[:2]))
 
-    def write_request(self, project_dir: Path, managed_session_id: str) -> bool:
+    def write_request(
+        self,
+        project_dir: Path,
+        managed_session_id: str,
+        *,
+        request_id: str | None = None,
+        requested_at: datetime | None = None,
+    ) -> bool:
         session = safe_session_id(managed_session_id)
-        if session is None:
+        if session is None or (request_id is not None and not _HANDOFF_ID.fullmatch(request_id)):
             return False
         body = {
             "protocol": PROTOCOL,
-            "version": VERSION,
+            "version": VERSION if request_id is None else 2,
             "managed_session_id": session,
-            "requested_at": self._clock().astimezone(UTC).strftime(TIMESTAMP_FORMAT),
+            "requested_at": (requested_at or self._clock())
+            .astimezone(UTC)
+            .strftime(TIMESTAMP_FORMAT),
         }
+        if request_id is not None:
+            body["request_id"] = request_id
         try:
             with _handoff_directory(project_dir, create=True) as directory:
                 if directory is None:
                     return False
-                if not _gitignore_is_ours(directory):
-                    _replace(directory, GITIGNORE, GITIGNORE_BODY)
-                _replace(directory, REQUEST, (json.dumps(body) + "\n").encode("utf-8"))
+                with _request_lock(directory):
+                    if not _gitignore_is_ours(directory):
+                        _replace(directory, GITIGNORE, GITIGNORE_BODY)
+                    _replace(directory, REQUEST, (json.dumps(body) + "\n").encode("utf-8"))
         except Exception:
             return False
         return True
 
     def requested(self, project_dir: Path) -> str | None:
+        request = self.request_details(project_dir)
+        return None if request is None else request.managed_session_id
+
+    def request_details(self, project_dir: Path) -> HandoffRequest | None:
         try:
             with _handoff_directory(project_dir, create=False) as directory:
-                return None if directory is None else _requested_session(directory)
+                return None if directory is None else _requested(directory)
         except Exception:
             return None
 
@@ -174,13 +193,55 @@ class FileHandoffEnvelopes:
         except Exception:
             pass
 
-    def clear_request(self, project_dir: Path, managed_session_id: str) -> None:
+    def clear_request(
+        self,
+        project_dir: Path,
+        managed_session_id: str,
+        *,
+        request_id: str | None = None,
+        requested_at: datetime | None = None,
+    ) -> None:
         try:
             with _handoff_directory(project_dir, create=False) as directory:
-                if directory is not None and _requested_session(directory) == managed_session_id:
+                if directory is None:
+                    return
+                with _request_lock(directory):
+                    current = _requested(directory)
+                    if current is None or current.managed_session_id != managed_session_id:
+                        return
+                    # The legacy cleanup API cannot withdraw a newer correlated request.
+                    if current.request_id != request_id:
+                        return
+                    if requested_at is not None and current.requested_at != requested_at.replace(
+                        microsecond=0
+                    ):
+                        return
                     os.unlink(REQUEST, dir_fd=directory)
         except Exception:
             pass
+
+
+@contextmanager
+def _request_lock(directory: int) -> Iterator[None]:
+    """Serialize cooperating request writers and compare/unlink cleanup without blocking.
+
+    Keep the lock file in place: removing it would let two processes lock different inodes.
+    An agent-controlled FIFO, link, or held lock is a refusal, never a hung service pass.
+    """
+    descriptor = os.open(
+        ".request.lock",
+        os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | os.O_NONBLOCK | _CLOEXEC,
+        0o600,
+        dir_fd=directory,
+    )
+    try:
+        info = os.fstat(descriptor)
+        if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid():
+            raise PermissionError("request lock is not an owned regular file")
+        fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        yield
+    finally:
+        os.close(descriptor)
 
 
 @contextmanager
@@ -215,8 +276,7 @@ def _names(directory: int) -> list[str]:
     return sorted(names)
 
 
-def _requested_session(directory: int) -> str | None:
-    """The session `request.json` names, when it is a well-formed request; else None."""
+def _requested(directory: int) -> HandoffRequest | None:
     raw = _read(directory, REQUEST)
     if raw is None:
         return None
@@ -226,7 +286,22 @@ def _requested_session(directory: int) -> str | None:
         return None
     if not isinstance(body, dict) or not _accepted_protocol(body.get("protocol")):
         return None
-    return safe_session_id(body.get("managed_session_id"))
+    version = body.get("version")
+    keys = {"protocol", "version", "managed_session_id", "requested_at"}
+    if type(version) is not int or version not in (1, 2):
+        return None
+    if version == 2:
+        keys.add("request_id")
+    if set(body) != keys:
+        return None
+    session = safe_session_id(body["managed_session_id"])
+    at = _timestamp(body["requested_at"])
+    nonce = body.get("request_id")
+    if session is None or at is None:
+        return None
+    if version == 2 and (not isinstance(nonce, str) or not _HANDOFF_ID.fullmatch(nonce)):
+        return None
+    return HandoffRequest(session, at, version, nonce)
 
 
 def _child_directory(parent: int, name: str, *, create: bool) -> int:
@@ -295,7 +370,11 @@ def _parsed(
     if version not in (1, 2) or body.get("event") != event.value:
         return None
     keys = _FAILED_KEYS if event is HandoffEvent.FAILED else _KEYS
-    if version == 2:
+    if event is HandoffEvent.FINISHED:
+        if version != 2:
+            return None
+        keys = keys | {"source_root", "request_id", "requested_at", "outcome"}
+    elif version == 2:
         keys = keys | {
             "source_root",
             "source_plan",
@@ -328,7 +407,25 @@ def _parsed(
         and failure_code in (FAILURE_CODES if version == 1 else DESTINATION_FAILURE_CODES)
     ):
         return None
-    extra = {} if version == 1 else _routing(body, root, event)
+    if event is HandoffEvent.FINISHED:
+        at = _timestamp(body["requested_at"])
+        if (
+            body["outcome"] != "completed"
+            or body["request_id"] != handoff_id
+            or at is None
+            or timestamp < at
+            or not _canonical_path(body["source_root"])
+            or root is None
+            or str(root) != body["source_root"]
+        ):
+            return None
+        extra = {
+            "source_root": Path(body["source_root"]),
+            "request_id": handoff_id,
+            "requested_at": at,
+        }
+    else:
+        extra = {} if version == 1 else _routing(body, root, event)
     if extra is None:
         return None
     return HandoffEnvelope(

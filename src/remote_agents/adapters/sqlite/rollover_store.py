@@ -30,9 +30,9 @@ _COLUMNS = (
     " source_root, target_json"
 )
 _OPEN = "state NOT IN ({})".format(", ".join(f"'{state.value}'" for state in sorted(TERMINAL)))
-_HOLDING = (RolloverState.FAILED, RolloverState.STOP_FAILED)
-"""A predecessor whose latest rollover ended in one of these opens no more from a `ready` until
-the owner asks: a forged envelope costs one extra session, never a stream of them (DEC-115)."""
+_HOLDING = (RolloverState.FAILED, RolloverState.STOP_FAILED, RolloverState.WORKFLOW_FINISHED)
+"""A failed or finished workflow opens no more from a `ready` until the owner asks. A
+leftover ready cannot launch after workflow completion; failures retain DEC-115's hold."""
 _REQUEST_WRITTEN = REQUEST_WRITTEN
 
 

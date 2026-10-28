@@ -47,3 +47,23 @@ class RolloverDestinations:
         if destination.branch and branch != destination.branch:
             raise DestinationRefused("branch-mismatch")
         return ResolvedRolloverDestination(candidates.pop(), replace(destination, branch=branch))
+
+    async def resolve_legacy(
+        self,
+        project: ProjectId,
+        destination: HandoffDestination,
+    ) -> ResolvedRolloverDestination:
+        """V1 continues in its validated source channel under the predecessor's project.
+
+        Before destination metadata existed, a writer could report a different top level
+        without registering it. That source is already bound by the pass's per-session root
+        check. It never selects a new project, and it still needs a live branch and project.
+        """
+        if project not in self._projects:
+            raise DestinationRefused("destination-unregistered")
+        branch = await self._inspect(destination.root)
+        if branch is None:
+            raise DestinationRefused("destination-root")
+        if destination.branch and destination.branch != branch:
+            raise DestinationRefused("branch-mismatch")
+        return ResolvedRolloverDestination(project, replace(destination, branch=branch))

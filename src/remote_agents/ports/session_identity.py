@@ -4,11 +4,16 @@ from __future__ import annotations
 
 import re
 
-SESSION_ID_VARIABLE = "REMOTE_AGENTS_SESSION_ID"
-"""One of the two variables a managed launch adds to the curated environment.
+HANDOFF_VERSIONS_VARIABLE = "PLANNING_HANDOFF_VERSIONS"
+SUPPORTED_HANDOFF_VERSIONS = (1, 2)
+"""Receiver versions advertised at launch, persisted independently of later upgrades."""
 
-The other is `SUPERVISOR_ID_COMMAND_VARIABLE`, below. This one carries the session's id into
-its own launch; a handoff writer does not trust it, and asks the command instead (DEC-128).
+SESSION_ID_VARIABLE = "REMOTE_AGENTS_SESSION_ID"
+"""One of the identity variables a managed launch adds to the curated environment.
+
+The command is `SUPERVISOR_ID_COMMAND_VARIABLE`, below; the launch also advertises
+`HANDOFF_VERSIONS_VARIABLE` for the complete receiver protocol. This one carries the session's
+id into its own launch; a handoff writer does not trust it, and asks the command instead (DEC-128).
 
 It is a contract between two adapters that may not import each other: `adapters/tmux` writes
 it into the launch environment, and `adapters/agents` reads it to decide whether a hook
@@ -25,7 +30,7 @@ already fired is one this service should hear about.
 """
 
 SUPERVISOR_ID_COMMAND_VARIABLE = "PLANNING_SUPERVISOR_ID_CMD"
-"""The second variable a managed launch adds: the command a handoff writer runs to ask who it is.
+"""The command variable a managed launch adds: the command a handoff writer runs to ask who it is.
 
 The command, not this variable, names the session (DEC-128). The writer runs it, and the command
 resolves the session by its provider's own rule. So an inherited copy is harmless: under a shared

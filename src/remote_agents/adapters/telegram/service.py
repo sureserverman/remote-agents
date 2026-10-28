@@ -2682,7 +2682,10 @@ class PrivateBotBoundary:
         # total as it is there: a rollover read that fails costs the notes, never the list.
         try:
             rollovers = await rollover_marks(
-                self.backend.rollovers, shown, sessions=self.backend.sessions
+                self.backend.rollovers,
+                shown,
+                sessions=self.backend.sessions,
+                catalogue=self.backend.catalogue,
             )
         except Exception:
             _LOG.debug("the session rollover marks could not be read", exc_info=True)

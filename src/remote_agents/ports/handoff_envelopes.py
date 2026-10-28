@@ -73,6 +73,7 @@ class HandoffEvent(StrEnum):
     READY = "HANDOFF_READY"
     ACCEPTED = "HANDOFF_ACCEPTED"
     FAILED = "HANDOFF_FAILED"
+    FINISHED = "HANDOFF_FINISHED"
 
 
 @dataclass(frozen=True, slots=True)
@@ -99,6 +100,16 @@ class HandoffEnvelope:
     selection: tuple[bool, int | None, int | None] | None = None
     ready_sha256: str | None = None
     content_sha256: str | None = None
+    request_id: str | None = None
+    requested_at: datetime | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class HandoffRequest:
+    managed_session_id: str
+    requested_at: datetime
+    version: int = 1
+    request_id: str | None = None
 
 
 class HandoffEnvelopes(Protocol):
@@ -109,10 +120,19 @@ class HandoffEnvelopes(Protocol):
         A project with no envelope directory has none."""
         ...
 
-    def write_request(self, project_dir: Path, managed_session_id: str) -> bool:
+    def write_request(
+        self,
+        project_dir: Path,
+        managed_session_id: str,
+        *,
+        request_id: str | None = None,
+        requested_at: datetime | None = None,
+    ) -> bool:
         """Ask the managed session `managed_session_id` to hand off. Returns whether the
         request was written; a refusal writes nothing."""
         ...
+
+    def request_details(self, project_dir: Path) -> HandoffRequest | None: ...
 
     def requested(self, project_dir: Path) -> str | None:
         """The session the project's `request.json` names, when it holds a well-formed
@@ -124,7 +144,14 @@ class HandoffEnvelopes(Protocol):
         Called once its rollover is terminal, so the directory does not fill over time."""
         ...
 
-    def clear_request(self, project_dir: Path, managed_session_id: str) -> None:
+    def clear_request(
+        self,
+        project_dir: Path,
+        managed_session_id: str,
+        *,
+        request_id: str | None = None,
+        requested_at: datetime | None = None,
+    ) -> None:
         """Withdraw the project's request if it names `managed_session_id`; nothing otherwise.
         Compared first, so ending one session's rollover never clears another's request."""
         ...
