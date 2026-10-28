@@ -92,3 +92,18 @@ could be observed.
   dashboard configuration, rather than invalid handoff input; no ready handoff, receiver
   acceptance, successor, retry, or hold can be observed without the deferred provider route.
 
+
+## Not demoed
+
+owner, 2026-10-28: "1"
+
+The exact reply above selected option 1 from the immediately preceding decision request.
+The next quotation is the selected option's text, not a transcription of the reply.
+
+owner selected option 1: "Defer it to the final combined gate and continue source work."
+
+Disposition: defer this independent Stage 1 user-route demonstration to the final combined
+gate and continue source work (canonical OD-1). All three original Outcome quotations,
+cannot-reach verdicts, initial CLI evidence and actual PTY follow-up are preserved above.
+None is relabeled holds. The same three Outcomes are now an explicit final Stage 3 gate
+obligation, alongside the separately deferred Telegram and native-provider checks.

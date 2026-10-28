@@ -4,8 +4,11 @@
 `session-defaults-project-routing`. Canonical plan: Portfolio/infra/remote-agents/plans/
 2026-10-26-session-defaults-and-project-rollover-sub-03-routing-and-recovery-plan.md.
 
-Stage 1 is **BLOCKED on the independent user-route demo**. It is not green, and Stage 2
-has not started. The implementation and local source checks are complete. Native provider
+Stage 1 has a **source gate pass with its independent user-route demo deferred by the
+owner** on 2026-10-28 (OD-1). The exact reply was "1", selecting "Defer it to the final
+combined gate and continue source work." The failed demo remains failed evidence; its
+three Outcomes must be demonstrated at the final combined gate. Stage 2 has not started
+at this checkpoint. The implementation and local source checks are complete. Native provider
 acceptance and the previously deferred Telegram demonstration remain unqualified.
 
 ## Source and verification
@@ -99,3 +102,13 @@ requires an owner decision before marking Stage 1 green or starting Stage 2.
 One remediation round was reserved for this gate, within its two-round budget. Its source
 repairs are verified; the demo is the remaining Blocking condition. This is not budget
 exhaustion, a measured context handoff, a completed sub-plan, or master completion.
+
+## Owner resolution, 2026-10-28
+
+The owner replied "1" to the two choices recorded at the previous stop, selecting
+"Defer it to the final combined gate and continue source work." This resolves the
+Stage 1 demo blocker for source continuation. It does not supply a successful demo or
+waive the final demonstration. Canonical OD-1 and the demo worksheet's Not demoed section
+retain the reply, selected option text and unchanged failed observations. The completed
+round's failed assessment remains in the owned controller history; this later owner
+resolution does not replace that receipt.
