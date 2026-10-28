@@ -9,7 +9,7 @@ from hashlib import sha256
 from pathlib import Path
 from uuid import UUID
 
-from remote_agents.adapters.agents.catalogue import project_folders
+from remote_agents.adapters.agents.catalogue import project_folders, unique_conversations
 from remote_agents.adapters.agents.claude.paths import project_directory_name
 from remote_agents.domain.conversations import (
     ConversationCataloguePage,
@@ -85,7 +85,7 @@ class ClaudeSessionCatalogue:
                     entries.append(ResolvedConversation(summary, source, worktree))
         except OSError:
             return ConversationCataloguePage((), page, 1, "catalogue_unavailable")
-        entries.sort(key=lambda entry: entry.summary.updated_at, reverse=True)
+        entries = unique_conversations(entries, self._project_paths)
         self._resolved = {entry.summary.reference: entry for entry in entries}
         return _page(entries, page, page_size)
 

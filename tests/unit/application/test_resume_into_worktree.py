@@ -92,6 +92,11 @@ class _Harness:
     async def worktree(self, path: Path, *, removed: bool = False) -> Path:
         """A worktree recorded by an earlier, ended session, as a rollover or resume finds it."""
         path.mkdir(parents=True, exist_ok=True)
+        # Production folder validation requires a surviving owned git root, including
+        # for a recorded worktree. A plain directory cannot model that premise.
+        import subprocess
+
+        subprocess.run(["git", "init", "-q", "--template=", str(path)], check=True, timeout=60)
         earlier = SessionRecord(
             SessionId.new(),
             _PROJECT,

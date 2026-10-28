@@ -39,6 +39,7 @@ _WHY_SKIPPED = {
     "already-open": "its conversation is already open",
     "no-conversation": "no conversation was recorded for it",
     "superseded": "a newer session had already opened its conversation",
+    "folder_unavailable": "its saved folder is unavailable or no longer belongs to its project",
     "worktree_removed": "its worktree was removed",
     "folder_bound": "it works in a folder outside its project, which a resume cannot reopen",
     "interrupted": "an earlier start may have resumed it part-way; check its sessions",

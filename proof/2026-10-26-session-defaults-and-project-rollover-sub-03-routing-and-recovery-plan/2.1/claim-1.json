@@ -1,0 +1,28 @@
+{
+ "baseline": {
+  "elapsed_s": 6.8,
+  "exit": 0,
+  "tail": "...............................................................          [100%]\n63 passed in 6.01s"
+ },
+ "break_patch": "--- a/src/remote_agents/application/session_folders.py\n+++ b/src/remote_agents/application/session_folders.py\n@@ -103,7 +103,7 @@\n             if (folder := live_folder(w)) is not None\n             and (self._folders is None or self._folders.available(folder))\n         ]\n-        if self._folders is not None:\n+        if False and self._folders is not None:\n             folders.extend(\n                 folder\n                 for folder in await self._folders.for_project(project_id)\n",
+ "build": null,
+ "created": "2026-10-28T18:07:16+00:00",
+ "fingerprint": "16266431ca7e6da4bd36f1e65da0fd86bb5bda259d01639e05a3d886e715b869",
+ "index": 1,
+ "kind": "claim",
+ "named_break": null,
+ "no_build_reason": "Python source is interpreted directly; no build step",
+ "plan": "/mnt/vault/Portfolio/infra/remote-agents/plans/2026-10-26-session-defaults-and-project-rollover-sub-03-routing-and-recovery-plan.md",
+ "red": {
+  "elapsed_s": 6.8,
+  "exit": 1,
+  "tail": "                    if state is not None and state.action == \"resume.confirm\":\n                        offered.add(state.entity_id)\n        else:\n            from textual.widgets import OptionList\n    \n            from remote_agents.adapters.tui.app import RemoteAgentsTui\n            from remote_agents.adapters.tui.context import TuiContext\n            from remote_agents.application.profiles import ProfileAvailability\n    \n            app = RemoteAgentsTui(\n                TuiContext(\n                    backend=backend,\n                    profiles=(ProfileAvailability(\"codex\", True),),\n                    attach_argv=lambda session: (\"tmux\", \"attach-session\", \"-t\", f\"={session}\"),\n                )\n            )\n            async with app.run_test() as pilot:\n                await app.action_resume()\n                await pilot.pause()\n                await app.screen.choose(str(PROJECT))\n                await pilot.pause()\n                await app.screen.choose(\"codex\")\n                await pilot.pause()\n                offered = {\n                    option.id\n                    for option in app.screen.query_one(\"#choices\", OptionList).options\n                    if option.id and option.id.startswith(\"c-\")\n                }\n>       assert len(offered) == 1\nE       assert 0 == 1\nE        +  where 0 = len(set())\n\ntests/integration/test_folder_bound_resume.py:266: AssertionError\n=========================== short test summary info ============================\nFAILED tests/integration/test_folder_bound_resume.py::test_ended_outside_binding_is_discovered_and_resumed_with_its_saved_preset\nFAILED tests/integration/test_folder_bound_resume.py::test_duplicate_bindings_and_provider_rows_offer_one_conversation\nFAILED tests/integration/test_folder_bound_resume.py::test_reopened_database_retains_legacy_session_project_association\nFAILED tests/integration/test_folder_bound_resume.py::test_both_resume_surfaces_offer_the_real_folder_catalogue[telegram]\nFAILED tests/integration/test_folder_bound_resume.py::test_both_resume_surfaces_offer_the_real_folder_catalogue[tui]\n5 failed, 58 passed in 5.90s"
+ },
+ "schema": 2,
+ "task": "2.1",
+ "test": "uv run --locked pytest tests/integration/test_folder_bound_resume.py tests/unit/application/test_session_folders.py tests/unit/application/test_resume_into_worktree.py tests/contract/test_resume_offer_parity.py -q",
+ "text": "`uv run --locked pytest tests/integration/test_folder_bound_resume.py tests/unit/application/test_session_folders.py tests/unit/application/test_resume_into_worktree.py tests/contract/test_resume_offer_parity.py -q` covers ended/restarted folder sessions, both resume surfaces, deduplication, removed/moved roots, legacy records, target project identity and persisted presets.",
+ "touched": [
+  "src/remote_agents/application/session_folders.py"
+ ]
+}

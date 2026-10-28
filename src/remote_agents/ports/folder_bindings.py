@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING, Protocol
 if TYPE_CHECKING:
     from pathlib import Path
 
-    from remote_agents.domain.models import SessionId
+    from remote_agents.domain.models import ProjectId, SessionId
 
 
 class FolderBindings(Protocol):
@@ -30,4 +30,16 @@ class FolderBindings(Protocol):
 
     async def bound_folders(self) -> dict[SessionId, Path]:
         """Every binding, in one read."""
+        ...
+
+    async def for_project(self, project_id: ProjectId) -> tuple[Path, ...]:
+        """Distinct persisted folders associated with the session's recorded project.
+
+        Ended sessions remain provenance. Legacy outside bindings keep that association;
+        a later registry edit never rewrites historical session ownership.
+        """
+        ...
+
+    def available(self, folder: Path) -> bool:
+        """Whether the exact persisted root still passes the binding acceptance rule."""
         ...

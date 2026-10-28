@@ -103,7 +103,10 @@ from remote_agents.application.session_actions import (
     remote_control_available,
     remote_control_refusal,
 )
-from remote_agents.application.session_folders import WORKTREE_REMOVED_SENTENCE
+from remote_agents.application.session_folders import (
+    FOLDER_UNAVAILABLE_SENTENCE,
+    WORKTREE_REMOVED_SENTENCE,
+)
 from remote_agents.application.session_views import (
     CATALOGUE_GAP_RETRY_SECONDS,
     RolloverMark,
@@ -1883,6 +1886,7 @@ class RemoteAgentsTui(App[AttachRequest | None]):
             # had not touched was the defect. Recorded here so the asymmetry reads as a
             # decision the next person can check rather than as one surface being behind.
             record = outcome.record
+            folder_unavailable = outcome.created and outcome.folder_unavailable
             worktree_removed = outcome.created and outcome.worktree_removed
         except CodexRemoteControlBusy:
             # Refused before anything was recorded (BL-037); the conversation is untouched.
@@ -1897,6 +1901,11 @@ class RemoteAgentsTui(App[AttachRequest | None]):
             screen.announce(f"The conversation was not resumed: {error}")
             return
         else:
+            if record.state is SessionState.FAILED and folder_unavailable:
+                await screen.redraw_after_failure()
+                screen.set_status("Nothing was started. Go back and try again.")
+                screen.announce(FOLDER_UNAVAILABLE_SENTENCE)
+                return
             if record.state is SessionState.FAILED and worktree_removed:
                 # Refused before any pane existed: no attach command, nothing to reach (BL-116).
                 await screen.redraw_after_failure()

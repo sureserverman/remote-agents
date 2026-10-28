@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Mapping
+from dataclasses import replace
 from pathlib import Path
 
 from remote_agents.domain.conversations import (
@@ -87,3 +88,18 @@ async def project_folders(
             (project_id, worktree.resolve(strict=False), worktree) for worktree in worktrees
         )
     return tuple(folders)
+
+
+def unique_conversations(
+    entries: list[ResolvedConversation], project_paths: Mapping[ProjectId, Path]
+) -> list[ResolvedConversation]:
+    """One row per provider conversation, newest metadata first, before pagination."""
+    seen = set()
+    result = []
+    for entry in sorted(entries, key=lambda entry: entry.summary.updated_at, reverse=True):
+        key = (entry.summary.profile_id, entry.provider_conversation_id)
+        if key not in seen:
+            seen.add(key)
+            root = project_paths.get(entry.summary.project_id)
+            result.append(replace(entry, project_root=None if root is None else root.resolve()))
+    return result

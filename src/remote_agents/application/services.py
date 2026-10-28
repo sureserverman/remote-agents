@@ -38,6 +38,7 @@ from remote_agents.application.session_actions import (
     available_actions,
     pane_is_attachable,
 )
+from remote_agents.application.session_folders import live_folder
 from remote_agents.application.worktrees import WorktreeCreateFailed, WorktreeService
 from remote_agents.domain.models import (
     ProfileId,
@@ -141,6 +142,7 @@ class ResumeOutcome:
     """The terminal refused before any pane existed: the session's worktree is gone
     (`WORKTREE_REMOVED`). The record is FAILED either way, and a surface that read only the
     record would point the owner at a pane that was never made."""
+    folder_unavailable: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -251,9 +253,11 @@ class SessionService:
         before_pane: Callable[[], Awaitable[None]] | None = None,
         folder_bindings: FolderBindings | None = None,
         permissions: SessionPermissions | None = None,
+        project_paths: Mapping[ProjectId, Path] | None = None,
     ) -> None:
         self._store = store
         self._permissions = permissions
+        self._project_paths = project_paths
         # Sessions bound to a folder outside their project (DEC-131): a launch naming a folder
         # binds it before its pane starts, and a successor carries it on. None in a composition
         # that keeps none, where a launch naming a folder is refused.
@@ -342,6 +346,36 @@ class SessionService:
             if matches:
                 return await self._bind_worktree(session_id, matches[0].path)
         return await self._bind_folder(session_id, folder)
+
+    async def _bind_resume_folder(
+        self, session_id: SessionId, project_id: ProjectId, folder: Path
+    ) -> _Bound:
+        """A selection may reopen only a folder recorded for this project.
+
+        Worktree rows retain their cleanup claim; outside rows retain their original
+        session's project association, including legacy records. Never infer ownership
+        from a supplied path or silently bind another project's worktree.
+        """
+        try:
+            if self._worktrees is not None:
+                for worktree in await self._worktrees.live_for_project(project_id):
+                    if worktree.path == folder:
+                        if live_folder(worktree) is None or (
+                            self._folder_bindings is not None
+                            and not self._folder_bindings.available(folder)
+                        ):
+                            return _Bound.GONE
+                        return await self._bind_worktree(session_id, folder)
+            if self._folder_bindings is not None:
+                recorded = await self._folder_bindings.for_project(project_id)
+                if folder in recorded:
+                    if not self._folder_bindings.available(folder):
+                        return _Bound.REFUSED
+                    return await self._bind_folder(session_id, folder)
+        except Exception:
+            _LOG.exception("resume folder ownership could not be checked")
+            return _Bound.FAULT
+        return _Bound.GONE
 
     async def _reuse_folder(self, session_id: SessionId, of: SessionId | None) -> _Bound:
         """Bind a new session to the worktree `of` works in, or to the folder outside its
@@ -593,9 +627,20 @@ class SessionService:
         # `ReconciliationService.session_is_busy` for its whole duration.
         async with self._locks.for_session(session_id):
             folder = command.conversation.folder
-            bound = (
-                _Bound.BOUND if folder is None else await self._bind_worktree(session_id, folder)
+            root = command.conversation.project_root
+            registered = (
+                None if self._project_paths is None else self._project_paths.get(command.project_id)
             )
+            if root is not None and (
+                registered is None or not registered.is_dir() or registered.resolve() != root
+            ):
+                bound = _Bound.REFUSED
+            else:
+                bound = (
+                    _Bound.BOUND
+                    if folder is None
+                    else await self._bind_resume_folder(session_id, command.project_id, folder)
+                )
             if bound is not _Bound.BOUND:
                 # Refused before any pane existed: the record stays FAILED, but lets go of the
                 # conversation, so the next press is a real attempt rather than this record
@@ -604,6 +649,7 @@ class SessionService:
                 return ResumeOutcome(
                     await self._store.release_resume_source(session_id),
                     created=True,
+                    folder_unavailable=bound is _Bound.REFUSED,
                     worktree_removed=bound is _Bound.GONE,
                 )
             await self.announce_sessions()

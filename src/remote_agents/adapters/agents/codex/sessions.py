@@ -8,7 +8,7 @@ from hashlib import sha256
 from pathlib import Path
 from typing import Protocol
 
-from remote_agents.adapters.agents.catalogue import project_folders
+from remote_agents.adapters.agents.catalogue import project_folders, unique_conversations
 from remote_agents.adapters.agents.protocols import JsonRpcProcess, ProtocolError
 from remote_agents.domain.conversations import (
     ConversationCataloguePage,
@@ -102,7 +102,7 @@ class CodexSessionCatalogue:
             entries = await self._collect(projects)
         except (OSError, ProtocolError):
             return ConversationCataloguePage((), page, 1, "catalogue_unavailable")
-        entries.sort(key=lambda entry: entry.summary.updated_at, reverse=True)
+        entries = unique_conversations(entries, self._project_paths)
         self._resolved = {entry.summary.reference: entry for entry in entries}
         return _page(entries, page, page_size)
 
@@ -135,7 +135,7 @@ class CodexSessionCatalogue:
                     break
                 cursor = next_cursor
             entries.extend(found[:_MAX_CATALOGUE_ITEMS])
-        entries.sort(key=lambda entry: entry.summary.updated_at, reverse=True)
+        entries = unique_conversations(entries, self._project_paths)
         return entries[:_MAX_CATALOGUE_ITEMS]
 
     def _projects_for(

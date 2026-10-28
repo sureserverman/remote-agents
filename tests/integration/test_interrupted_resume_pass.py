@@ -682,12 +682,10 @@ async def test_nudge_patience_is_counted_so_a_clock_stepping_back_still_gives_up
     assert len(rig.sleeps) == STARTUP_RETRIES
 
 
-async def test_a_session_bound_to_a_folder_outside_its_project_is_skipped_not_moved(
+async def test_a_session_bound_to_a_folder_outside_its_project_resumes_there(
     rig: Rig, tmp_path: Path
 ) -> None:
-    """A rollover successor started where its predecessor's writer reported working (DEC-131):
-    a resume binds only a worktree, so resuming it would start in the project folder. It is
-    skipped by name instead (DEC-123), and nothing is launched."""
+    """The durable outside binding survives restart without falling back to the project."""
     import subprocess
 
     from remote_agents.adapters.sqlite.folder_bindings import SQLiteFolderBindings
@@ -701,8 +699,10 @@ async def test_a_session_bound_to_a_folder_outside_its_project_is_skipped_not_mo
     assert await folders.bind(record.session_id, there)
     snapshot = await rig.snapshot(record)
     await rig.end_as_reconcile_does(record)
+    rig.service._folder_bindings = folders
 
     (report,) = await rig.run_pass(bound_folder_of=folders.folder_for).run(snapshot)
 
-    assert report.outcome == "skipped:folder_bound"
-    assert rig.commands == []
+    assert report.outcome.startswith("resumed:")
+    assert rig.commands[0].conversation.folder == there
+    assert await folders.folder_for(report.new_session_id) == there

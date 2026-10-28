@@ -172,7 +172,10 @@ from remote_agents.application.session_actions import (
     state_word,
     trust_available,
 )
-from remote_agents.application.session_folders import WORKTREE_REMOVED_SENTENCE
+from remote_agents.application.session_folders import (
+    FOLDER_UNAVAILABLE_SENTENCE,
+    WORKTREE_REMOVED_SENTENCE,
+)
 from remote_agents.application.session_views import (
     CATALOGUE_GAP_RETRY_SECONDS,
     SCHEDULE_PREVIEW_WIDTH,
@@ -2220,6 +2223,10 @@ class PrivateBotBoundary:
                 )
             )
         record = outcome.record
+        if outcome.created and record.state is SessionState.FAILED and outcome.folder_unavailable:
+            return _reply_arguments(
+                self._message(f"<b>Resume did not start</b>\n{FOLDER_UNAVAILABLE_SENTENCE}")
+            )
         if outcome.created and record.state is SessionState.FAILED and outcome.worktree_removed:
             # Refused before any pane existed: there is nothing to attend to locally (BL-116).
             return _reply_arguments(

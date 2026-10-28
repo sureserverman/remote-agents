@@ -509,6 +509,7 @@ def compose_backend(
         sessions=SessionService(
             backend_store,
             runtime.terminal,
+            project_paths=projects.paths,
             permissions=SessionPermissions(
                 permission_settings,
                 SQLitePermissionBindings(connection),
