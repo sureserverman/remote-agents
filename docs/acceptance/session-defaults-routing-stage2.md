@@ -39,4 +39,36 @@ cannot be replaced by these tests. Native/provider, external Telegram and indepe
 user-route acceptance remain unqualified. No installed profiles/configuration/trust,
 credentials, deployment, publishing, push or merge were changed.
 
-Final repaired-tree proof/reviews, evaluator follow-up and gate disposition are pending.
+Final planned task proof:73passed6.93s; discovery mutant5failed68passed7.10s; staged
+bytes restored. Additional root-save/startup/tmux/catalogue fix scope:92passed11.39s.
+Record audit passed all10checks with no findings. Fresh Tier2A planning:code-reviewer routing_stage2_final_a and independent Tier2B
+planning:code-reviewer routing_stage2_final_b reviewed55740ad6..aa89538d, including
+repair99fda552..aa89538d: bothAPPROVE,0Critical,0Important,0Suggestion. Original blocked
+reviews and reproductions remain evidence; no later source edits followed their approval.
+Independent demo initially hit a usage limit, then ran after owner continuation. Its
+configured public CLI/TUI route can register a project but has no provider-backed saved
+conversation to resume; its original failed attempts are preserved. No demo pass is claimed.
+The prior OD-1 deferral explicitly names Stage1; matching it at Stage2 was refused, and the
+master has no applicable Stage2 entry. Independent planning:goal-evaluator routing_stage2_demo and its two route-precision
+follow-ups retain all3Outcomes as cannot reach by the user's route. The registry fixture
+issue was resolved using public add-project and is not a product defect; both TUI and
+Telegram resume routes exist, but no authorized native conversation was demonstrated.
+
+Gate disposition: source verified; overall Stage2 NOT GREEN, awaiting owner decision.
+The active remediation assessment is round1of2; no budget exhaustion is asserted.
+Source verification does not discharge the independent demo. Stage3 remains unstarted.
+
+Dispatch:0of0 implementationYES tasks; Task2.1 inline asNO.
+Review: required Tier1 initially blocked on worktree-path validation, repaired and fresh
+Tier1 approved; both original Tier2 passes blocked on ownership/provenance, repaired within
+round1, both fresh Tier2 passes approved the final source range. Evaluator FAIL is separate.
+Residuals: provider-backed Stage2 demo, prior deferred Stage1/Telegram demonstrations,
+Stage3/final native/provider qualification and master close-out. No code review suggestions.
+No platform-specific or design verifier applies to this Python CLI stage. Local hook review
+ledger NOT RUN: this worktree has no dispatch-log.jsonl; actual installed-role results are
+retained and no hook entries were fabricated. All launched tests and agents completed;
+no running owned actors remain. Independent demo instances were timeout-bounded.
+
+The execution skill's Stop condition applies: an Outcome cannot be met or shown as written.
+OD-1 matchesStage1only, notStage2; a further owner deferral or an isolated usable native
+conversation route is required before Stage2green/Stage3. No source outcome is weakened.
