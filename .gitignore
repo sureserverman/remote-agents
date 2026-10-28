@@ -9,6 +9,7 @@ __pycache__/
 
 # ===== AI Tools =====
 .claude/
+proof/
 .claude_memory
 .cursorrules
 .cursor/

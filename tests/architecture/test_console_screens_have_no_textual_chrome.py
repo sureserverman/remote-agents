@@ -65,6 +65,7 @@ from remote_agents.adapters.tui.screens.confirm import (
     HostRemoteControlDirectionModal,
 )
 from remote_agents.adapters.tui.screens.launch import ProjectsScreen
+from remote_agents.adapters.tui.screens.permissions import PermissionsScreen
 from remote_agents.adapters.tui.screens.schedule import (
     ScheduleDeleteConfirmModal,
     ScheduleScreen,
@@ -87,6 +88,7 @@ from remote_agents.domain.models import (
     SessionRecord,
     SessionState,
 )
+from remote_agents.domain.profiles import PermissionPreset
 from remote_agents.domain.remote_control import PairingCode, RemoteControlState
 
 _PROJECT = CatalogProject("opaque-existing", "existing", "infra", "Registered")
@@ -138,6 +140,10 @@ async def _captured() -> str:
     return "some output"
 
 
+async def _save_permission(_preset: PermissionPreset | None) -> None:
+    pass
+
+
 def _context(*, console_hosted: bool) -> TuiContext:
     return replace(
         TuiContext(
@@ -184,6 +190,7 @@ _ARRANGED: dict[type[Screen], Callable[[], Screen] | None] = {
     RenameScreen: lambda: RenameScreen(str(_SESSION_ID)),
     InspectScreen: lambda: InspectScreen("some output"),
     SettingsScreen: SettingsScreen,
+    PermissionsScreen: lambda: PermissionsScreen(PermissionPreset.APPROVE_FOR_ME, _save_permission),
     ResumeProjectsScreen: ResumeProjectsScreen,
     ResumeProfilesScreen: lambda: ResumeProfilesScreen(_PROJECT, _CAPABLE),
     ResumeConversationsScreen: lambda: ResumeConversationsScreen(_PROJECT, "claude", _PAGE),
