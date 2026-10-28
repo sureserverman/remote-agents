@@ -94,6 +94,7 @@ from remote_agents.application.project_catalog import (
     order_alphabetically,
     rank_by_recent_use,
 )
+from remote_agents.application.resume_flow import RESUME_PANE_UNAVAILABLE_MESSAGE
 from remote_agents.application.session_actions import (
     ACTION_LABELS as _ACTION_LABELS,
 )
@@ -1886,6 +1887,11 @@ class RemoteAgentsTui(App[AttachRequest | None]):
             # had not touched was the defect. Recorded here so the asymmetry reads as a
             # decision the next person can check rather than as one surface being behind.
             record = outcome.record
+            if outcome.pane_unavailable:
+                await screen.redraw_after_failure()
+                screen.set_status(RESUME_PANE_UNAVAILABLE_MESSAGE, severity="warning")
+                screen.announce(RESUME_PANE_UNAVAILABLE_MESSAGE, severity="warning")
+                return
             folder_unavailable = outcome.created and outcome.folder_unavailable
             worktree_removed = outcome.created and outcome.worktree_removed
         except CodexRemoteControlBusy:

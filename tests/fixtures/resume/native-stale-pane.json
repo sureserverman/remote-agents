@@ -1,0 +1,7 @@
+{
+  "origin": "native Codex 0.165.0 Stage2 public TUI resume followed by fixture server loss",
+  "record_state": "running",
+  "terminal_observation": null,
+  "terminal_output": "no sessions",
+  "required_result": "visible hold; unchanged existing session; no second pane"
+}

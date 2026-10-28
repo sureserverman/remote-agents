@@ -619,3 +619,28 @@ async def test_a_resume_refused_for_a_removed_worktree_says_so() -> None:
     assert WORKTREE_REMOVED_SENTENCE in said, said
     assert "Attach with" not in line, line
     assert app.return_value is None
+
+
+async def test_an_existing_resume_without_a_verified_pane_stays_on_a_named_hold():
+    class HeldLauncher(_Launcher):
+        async def resume(self, command):
+            self.resumed.append(command)
+            return ResumeOutcome(self.record, created=False, pane_unavailable=True)
+
+    launcher = HeldLauncher()
+    conversations = _Conversations({1: (_summary(1),)}, caps=_capable("claude"))
+    app = RemoteAgentsTui(_context(conversations, launcher))
+    async with app.run_test() as pilot:
+        await app.action_resume()
+        await pilot.pause()
+        await app.screen.choose("opaque-existing")
+        await pilot.pause()
+        await app.screen.choose("claude")
+        await pilot.pause()
+        await app.screen.choose(str(_summary(1).reference))
+        await pilot.pause()
+        assert app.return_value is None
+        assert "resume is on hold" in _status(app).casefold()
+        assert "nothing new was started" in _status(app).casefold()
+        assert position(app) == "RESUME_CONVERSATIONS"
+    assert len(launcher.resumed) == 1

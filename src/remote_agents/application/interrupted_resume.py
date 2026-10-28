@@ -502,6 +502,8 @@ class InterruptedResumePass:
                 # It may have got part-way: decided, never tried again.
                 return await self._decide(decision, f"{SKIPPED}:launch_error")
             return ResumeReport(record, DEFERRED)
+        if outcome.pane_unavailable:
+            return await self._decide(decision, f"{SKIPPED}:pane_unavailable")
         if outcome.folder_unavailable:
             return await self._decide(decision, f"{SKIPPED}:folder_unavailable")
         if outcome.worktree_removed:

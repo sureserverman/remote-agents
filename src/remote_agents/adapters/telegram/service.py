@@ -135,7 +135,11 @@ from remote_agents.application.restart_resume_setting import (
     RESTART_RESUME_LABELS,
     RESTART_RESUME_TITLE,
 )
-from remote_agents.application.resume_flow import RESUME_PAGE_SIZE, resume_capable
+from remote_agents.application.resume_flow import (
+    RESUME_PAGE_SIZE,
+    RESUME_PANE_UNAVAILABLE_MESSAGE,
+    resume_capable,
+)
 from remote_agents.application.resume_setting import RESUME_LABELS, RESUME_TITLE
 from remote_agents.application.rollover_setting import ROLLOVER_LABELS, ROLLOVER_TITLE
 from remote_agents.application.schedule_book import ScheduleRefusal, ScheduleRefused
@@ -2223,6 +2227,8 @@ class PrivateBotBoundary:
                 )
             )
         record = outcome.record
+        if outcome.pane_unavailable:
+            return _reply_arguments(self._message(escape(RESUME_PANE_UNAVAILABLE_MESSAGE)))
         if outcome.created and record.state is SessionState.FAILED and outcome.folder_unavailable:
             return _reply_arguments(
                 self._message(f"<b>Resume did not start</b>\n{FOLDER_UNAVAILABLE_SENTENCE}")

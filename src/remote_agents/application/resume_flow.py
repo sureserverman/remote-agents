@@ -71,3 +71,9 @@ def resume_capable_profiles(
     both screens carry their own sentence for it.
     """
     return tuple(capability for capability in capabilities if resume_capable(capability))
+
+
+RESUME_PANE_UNAVAILABLE_MESSAGE = (
+    "Resume is on hold because the existing session's pane could not be verified. "
+    "Nothing new was started. Open Sessions to inspect it."
+)

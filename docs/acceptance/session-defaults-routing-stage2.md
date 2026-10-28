@@ -72,3 +72,39 @@ no running owned actors remain. Independent demo instances were timeout-bounded.
 The execution skill's Stop condition applies: an Outcome cannot be met or shown as written.
 OD-1 matchesStage1only, notStage2; a further owner deferral or an isolated usable native
 conversation route is required before Stage2green/Stage3. No source outcome is weakened.
+
+
+## Native route and conservative hold repair
+
+Owner selected option2 and confirmed "yes" to existing-login authentication through a
+read-only bind mount, disposable state and verified cleanup. Current source6fc460d5 was
+built as wheelSHA2566680f72c386636c115be5c90a122dfe6e1591b790b208860fabed6b6e4a8af1b.
+Native Codex0.165.0 completed synthetic exec and interactive CLI conversations with0toolcalls
+and on-request/workspace-write/auto_review policy. Mount metadata explicitly verifiedro;
+placeholder remained0bytes/nonsymlink. No normal profile/config/model/provider/trust change.
+
+Early demo failures were diagnosed rather than patched into the product: the exec-source
+seed was intentionally excluded by the provider's default interactive thread/list filter;
+a later genuine CLI thread was returned by that same default filter. The resume list rests
+on Back, so Enter without moving the highlight returned to the agent picker as designed.
+After selecting the actual conversation, the built public TUI created exactly one running
+managed Codex session with the right source conversation, registered folder and approve_for_me
+snapshot. Raw private captures remain in the owned temporary fixture, not public records.
+
+The dedicated fixture server later became unavailable. The durable session remained running;
+a public resume retry emitted bare 'no sessions' from attach. The cause of server loss is
+not reclassified here. This exposed a real failure to provide the required visible hold.
+The code repair inspects the existing pane before offering attach. Missing/non-live or
+unreadable evidence now returns a named hold on both frontends, preserves the exact session,
+source and preset, and launches nothing. A verified live or preserved pane stays attachable.
+Startup outcomes also distinguish pane_unavailable from already-open. No automatic ending,
+replacement, server-loss classification, or BL-136 closure is introduced.
+
+Captured facts are in tests/fixtures/resume/native-stale-pane.json. Enumeration command:
+rg -n 'get_by_resume_source|not outcome.created|ResumeOutcome\(' src/remote_agents/application/services.py src/remote_agents/adapters/tui/app.py src/remote_agents/adapters/telegram/service.py
+Consumers swept also include application/interrupted_resume.py and restart_notifications.py.
+Host capture/property and both frontend tests reproduced the missing hold; two test mechanics
+issues (missing Path import and absent Telegram fixture profile) were corrected without
+weakening assertions. The Telegram route then independently failed on the old Not resumed
+message; the TUI failed on an attach request. Final host fix-scope135PASS17.01s. This is
+pre-native repair evidence; native retry and fresh required review remain pending.

@@ -143,6 +143,8 @@ class ResumeOutcome:
     (`WORKTREE_REMOVED`). The record is FAILED either way, and a surface that read only the
     record would point the owner at a pane that was never made."""
     folder_unavailable: bool = False
+    pane_unavailable: bool = False
+    """An existing resume binding has no verified reachable pane; preserved without replacement."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -596,7 +598,17 @@ class SessionService:
         source_id = command.conversation.provider_conversation_id.value
         existing = await self._store.get_by_resume_source(command.profile_id, source_id)
         if existing is not None:
-            return ResumeOutcome(existing, created=False)
+            # A durable binding still owns the conversation after a lost server or an
+            # uncertain inventory read. Preserve it, but do not hand the owner an attach
+            # command until the pane is verified. This deliberately does not reclassify
+            # server loss, end a record, or launch a replacement (DEC-127 / BL-136).
+            try:
+                observed = await self._terminal.inspect(existing.session_id)
+            except Exception:
+                _LOG.exception("the existing resume pane could not be verified")
+                observed = None
+            available = observed is not None and (observed.live or observed.preserved)
+            return ResumeOutcome(existing, created=False, pane_unavailable=not available)
         preset = await self._resolve_permissions(
             command.profile_id,
             command.permissions,

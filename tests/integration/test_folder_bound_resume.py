@@ -3,6 +3,7 @@
 import subprocess
 from dataclasses import replace
 from datetime import UTC, datetime
+from pathlib import Path
 
 import pytest
 from test_permission_presets import CODEX, PROJECT, Rig, conversation
@@ -496,3 +497,54 @@ async def test_upgrade_adds_no_fabricated_root_provenance(tmp_path):
         assert await store.project_root_for(record.session_id) is None
     finally:
         upgraded.close()
+
+
+@pytest.mark.parametrize("evidence", ["native_capture", "not_live", "unreadable"])
+async def test_existing_resume_with_unavailable_pane_holds_and_preserves_identity(rig, evidence):
+    import json
+
+    from remote_agents.ports.terminal import TerminalObservation
+
+    original = await rig.service.resume(ResumeCommand(PROJECT, CODEX, conversation(), "first"))
+    saved = await rig.store.get(original.record.session_id)
+    before = tuple(rig.terminal.presets)
+    capture = json.loads(
+        (Path(__file__).parents[1] / "fixtures/resume/native-stale-pane.json").read_text()
+    )
+    assert capture["record_state"] == saved.state.value
+
+    async def unavailable(session):
+        if evidence == "unreadable":
+            raise RuntimeError("fixture inventory could not be read")
+        if evidence == "not_live":
+            return TerminalObservation(session, live=False, preserved=False)
+        assert capture["terminal_observation"] is None
+        return None
+
+    rig.terminal.inspect = unavailable
+    outcome = await rig.service.resume(ResumeCommand(PROJECT, CODEX, conversation(), "retry"))
+    assert getattr(outcome, "pane_unavailable", False)
+    assert not outcome.created
+    assert outcome.record == saved
+    assert await rig.store.get(saved.session_id) == saved
+    assert tuple(rig.terminal.presets) == before
+    assert len(await rig.store.list()) == 1
+
+
+@pytest.mark.parametrize("live,preserved", [(True, False), (False, True)])
+async def test_existing_verified_pane_remains_attachable_without_second_launch(
+    rig, live, preserved
+):
+    from remote_agents.ports.terminal import TerminalObservation
+
+    original = await rig.service.resume(ResumeCommand(PROJECT, CODEX, conversation(), "first"))
+
+    async def available(session):
+        return TerminalObservation(session, live=live, preserved=preserved)
+
+    rig.terminal.inspect = available
+    outcome = await rig.service.resume(ResumeCommand(PROJECT, CODEX, conversation(), "retry"))
+    assert not getattr(outcome, "pane_unavailable", False)
+    assert not outcome.created
+    assert outcome.record.session_id == original.record.session_id
+    assert len(rig.terminal.presets) == 1
