@@ -28,25 +28,33 @@ class RolloverDestinations:
         self._worktrees = worktrees
 
     async def resolve(self, destination: HandoffDestination) -> ResolvedRolloverDestination:
-        root = destination.root
-        candidates = []
-        for project, registered in tuple(self._projects.items()):
-            if registered.resolve() == root:
-                candidates.append(project)
-            if self._worktrees is not None:
-                for worktree in await self._worktrees.live_for_project(project):
-                    if worktree.path.resolve() == root:
-                        candidates.append(project)
-        if not candidates:
-            raise DestinationRefused("destination-unregistered")
-        if len(candidates) != 1:
-            raise DestinationRefused("ambiguous-destination")
-        branch = await self._inspect(root)
-        if branch is None:
-            raise DestinationRefused("destination-root")
-        if destination.branch and branch != destination.branch:
-            raise DestinationRefused("branch-mismatch")
-        return ResolvedRolloverDestination(candidates.pop(), replace(destination, branch=branch))
+        try:
+            root = destination.root
+            candidates = []
+            for project, registered in tuple(self._projects.items()):
+                if registered.resolve() == root:
+                    candidates.append(project)
+                if self._worktrees is not None:
+                    for worktree in await self._worktrees.live_for_project(project):
+                        if worktree.path.resolve() == root:
+                            candidates.append(project)
+            if not candidates:
+                raise DestinationRefused("destination-unregistered")
+            if len(candidates) != 1:
+                raise DestinationRefused("ambiguous-destination")
+            branch = await self._inspect(root)
+            if branch is None:
+                raise DestinationRefused("destination-root")
+            if destination.branch and branch != destination.branch:
+                raise DestinationRefused("branch-mismatch")
+            return ResolvedRolloverDestination(
+                candidates.pop(), replace(destination, branch=branch)
+            )
+        except (OSError, RuntimeError) as error:
+            # Path.resolve raises on unavailable paths on supported Python3.12; newer
+            # runtimes may instead return a path the Git inspector refuses. Both are
+            # input refusals, so neither may disappear into the pass's retry logger.
+            raise DestinationRefused("destination-root") from error
 
     async def resolve_legacy(
         self,
@@ -61,7 +69,10 @@ class RolloverDestinations:
         """
         if project not in self._projects:
             raise DestinationRefused("destination-unregistered")
-        branch = await self._inspect(destination.root)
+        try:
+            branch = await self._inspect(destination.root)
+        except (OSError, RuntimeError) as error:
+            raise DestinationRefused("destination-root") from error
         if branch is None:
             raise DestinationRefused("destination-root")
         if destination.branch and destination.branch != branch:

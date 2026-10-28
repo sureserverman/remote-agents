@@ -922,3 +922,73 @@ async def test_a_matching_finished_response_takes_precedence_over_a_leftover_rea
     assert (await rig.row()).state is RolloverState.WORKFLOW_FINISHED
     assert len(rig.terminal.started) == 1
     assert (await rig.sessions.get(rig.predecessor)).state is SessionState.RUNNING
+
+
+@pytest.mark.parametrize("binding", ["project", "worktree"])
+@pytest.mark.parametrize("frozen", [False, True])
+@pytest.mark.parametrize("failure", [OSError, RuntimeError])
+async def test_destination_canonicalization_failures_are_named_and_preserve_the_predecessor(
+    routed, monkeypatch, binding, frozen, failure
+):
+    from datetime import UTC, datetime
+
+    from remote_agents.ports.worktree_store import Worktree
+
+    rig = routed
+    target = rig.journey.destination
+    if binding == "worktree":
+        rig.projects[ProjectId("river")] = rig.journey.repo("river-main")
+        original_live = rig.worktrees.live_for_project
+        candidate = Worktree(
+            target, ProjectId("river"), "feature", None, "a" * 40, {}, datetime.now(UTC), None
+        )
+
+        async def live(project):
+            if project == ProjectId("river"):
+                return (candidate,)
+            return await original_live(project)
+
+        monkeypatch.setattr(rig.worktrees, "live_for_project", live)
+    if frozen:
+        rig.terminal.idle = False
+        await rig.build().run_once()
+        assert (await rig.row()).state is RolloverState.HANDOFF_READY
+    original_resolve = type(target).resolve
+
+    def unavailable(path, *args, **kwargs):
+        if path == target:
+            # Python3.12 raises RuntimeError for a symlink loop; 3.13+ suppress it
+            # with strict=False. Exercise the port's same failure contract on all hosts.
+            raise failure("destination cannot be canonicalized")
+        return original_resolve(path, *args, **kwargs)
+
+    monkeypatch.setattr(type(target), "resolve", unavailable)
+    rig.terminal.idle = True
+    await rig.build().run_once()
+    row = await rig.row()
+    assert row is not None
+    assert row.state is RolloverState.FAILED
+    assert row.failure_code == "destination-root"
+    assert (await rig.sessions.get(rig.predecessor)).state is SessionState.RUNNING
+    assert len(rig.terminal.started) == 1
+
+
+@pytest.mark.parametrize("legacy", [False, True])
+@pytest.mark.parametrize("failure", [OSError, RuntimeError])
+async def test_destination_git_inspection_failures_are_named_for_both_wire_versions(
+    routed, monkeypatch, legacy, failure
+):
+    from remote_agents.composition import service
+
+    rig = routed
+    if legacy:
+        rig.journey.legacy()
+
+    async def unavailable(root):
+        raise failure("destination inspection cannot resolve its checkout")
+
+    monkeypatch.setattr(service, "destination_branch", unavailable)
+    await rig.build().run_once()
+    assert (await rig.row()).failure_code == "destination-root"
+    assert (await rig.sessions.get(rig.predecessor)).state is SessionState.RUNNING
+    assert len(rig.terminal.started) == 1
