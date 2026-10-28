@@ -316,3 +316,43 @@ def test_a_pipe_where_the_roster_belongs_names_nobody_without_blocking(tmp_path:
         reader.join(timeout=5.0)
         pytest.fail("reading a roster that is a pipe blocked until a writer came")
     assert answer == [()]
+
+
+def test_turn_marks_cannot_establish_fresh_thread_ownership(tmp_path):
+    from remote_agents.adapters.agents.turn_markers import FileConversationMarks, FileTurnMarkers
+
+    roster = (_entry("managed", tmp_path / "source", datetime(2026, 1, 1, tzinfo=UTC)),)
+    FileConversationMarks(tmp_path).record("managed", _DRILL_THREAD)
+    FileTurnMarkers(tmp_path).start("managed", _DRILL_THREAD)
+    assert (
+        resolve(_DRILL_THREAD, None, roster, require_exact=True, activity_directory=tmp_path)
+        is None
+    )
+    # A stale conversation mark alone is insufficient after the turn ends.
+    FileTurnMarkers(tmp_path).end("managed")
+    assert (
+        resolve(
+            _DRILL_THREAD, str(tmp_path), roster, require_exact=True, activity_directory=tmp_path
+        )
+        is None
+    )
+
+
+def test_a_new_conversation_cannot_reuse_the_original_resume_binding(tmp_path):
+    from remote_agents.adapters.agents.turn_markers import FileConversationMarks, FileTurnMarkers
+
+    roster = (_entry("managed", tmp_path, datetime(2026, 1, 1, tzinfo=UTC), _INCIDENT_THREAD),)
+    FileConversationMarks(tmp_path).record("managed", _DRILL_THREAD)
+    FileTurnMarkers(tmp_path).start("managed", _DRILL_THREAD)
+    assert (
+        resolve(
+            _INCIDENT_THREAD, str(tmp_path), roster, require_exact=True, activity_directory=tmp_path
+        )
+        is None
+    )
+    assert (
+        resolve(
+            _DRILL_THREAD, "/different", roster, require_exact=True, activity_directory=tmp_path
+        )
+        is None
+    )

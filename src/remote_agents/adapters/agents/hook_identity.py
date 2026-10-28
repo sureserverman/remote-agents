@@ -104,14 +104,47 @@ def thread_created_at(thread_id: object) -> datetime | None:
     return datetime.fromtimestamp(int(digits[:12], 16) / 1000, UTC)
 
 
-def resolve(thread_id: object, cwd: object, roster: Iterable[RosterEntry]) -> str | None:
-    """The session a payload belongs to under the module's rule, or None for nobody's."""
-    if not isinstance(thread_id, str):
+def resolve(
+    thread_id: object,
+    cwd: object,
+    roster: Iterable[RosterEntry],
+    *,
+    require_exact: bool = False,
+    activity_directory: Path | None = None,
+) -> str | None:
+    """Resolve hook evidence, or an exact binding when a tool shell can change folders.
+
+    Hooks retain the folder/time bootstrap. A handoff must instead match exactly one live
+    roster entry's recorded resume id. Current marks can invalidate that binding, but cannot
+    establish one: their own hook attribution uses the same folder/time heuristic. Fresh
+    conversations without an independent binding refuse, including their first cross-repo
+    call. A report of the destination is never identity evidence.
+    """
+    if safe_session_id(thread_id) is None:
         return None
     entries = tuple(roster)
-    for entry in entries:
-        if entry.resume_source_id is not None and entry.resume_source_id == thread_id:
-            return entry.session_id
+    if require_exact:
+        from remote_agents.adapters.agents.turn_markers import (
+            FileConversationMarks,
+            FileTurnMarkers,
+        )
+
+        candidates = [entry for entry in entries if entry.resume_source_id == thread_id]
+        if len(candidates) != 1:
+            return None
+        entry = candidates[0]
+        turns = None if activity_directory is None else FileTurnMarkers(activity_directory)
+        marks = None if activity_directory is None else FileConversationMarks(activity_directory)
+        current = None if marks is None else marks.latest(entry.session_id)
+        owner = None if turns is None else turns.owner(entry.session_id)
+        # Marks are vetoes only; they cannot select one of two recorded owners. An ended
+        # turn's retained conversation can still agree with the persisted launch binding.
+        if current not in (None, thread_id) or owner not in (None, thread_id):
+            return None
+        return entry.session_id
+    resumed = [entry.session_id for entry in entries if entry.resume_source_id == thread_id]
+    if resumed:
+        return resumed[0] if len(resumed) == 1 else None
     # Absolute only: `realpath` would resolve a relative folder against the hook's own.
     if not isinstance(cwd, str) or not os.path.isabs(cwd):
         return None

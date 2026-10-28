@@ -21,12 +21,18 @@ The facts the design relies on are asserted (`-k measure`): each shell's `CODEX_
 own pane's thread, and the two differ. The wrong session variable is recorded here, not asserted:
 the design never reads it, so a later Codex that fixes it must not fail this drill.
 
-The same tool command then runs the installed `remote-agents session-id` against a roster the
+The same tool command changes into a different synthetic repository on its first call,
+reports that root and then runs the installed `remote-agents session-id` against a roster the
 drill publishes, as `serve` would (`-k verb`, DEC-128): A and B each print their own id, and a
 Codex the owner starts by hand in the project's main checkout -- sharing the daemon, so its shell
 carries A's variable -- exits 3. A and B work in the project's worktrees, as managed sessions do.
-What the verb cannot tell apart is `hook_identity`'s recorded limit, not drilled here: a Codex
-started by hand in the very folder a live managed session works in is filed under that session.
+This drill installs the real generated hooks only in its disposable home. The native feature
+claim requires each managed thread to be named without a prior root
+report. The source resolver currently refuses fresh threads without an independent recorded
+binding, so this native claim remains BLOCKED; the assertions below deliberately retain the
+required behavior. An unmanaged thread must be refused. Same-folder hook-bootstrap limits
+remain a separate
+native qualification concern; a collected drill is not a live pass.
 
 `REMOTE_AGENTS_LIVE_ACCEPTANCE=1` is required: it spends short Codex turns on the owner's
 account. Every skip says `BLOCKED:` and why.
@@ -55,6 +61,7 @@ from agent_panes import CODEX_OPENING, CODEX_READY, open_to_composer
 from codex_home import retire_codex_home, short_codex_home
 
 from remote_agents.adapters.agents.hook_identity import FileHookRoster
+from remote_agents.adapters.agents.registry import install_agent_hooks
 from remote_agents.domain.models import SessionId
 from remote_agents.ports.hook_roster import RosterSession
 from remote_agents.ports.session_identity import SESSION_ID_VARIABLE
@@ -63,12 +70,14 @@ from remote_agents.ports.session_identity import SESSION_ID_VARIABLE
 _VERB = Path(sys.executable).parent / "remote-agents"
 
 
-def _probe_script(spool: Path) -> str:
+def _probe_script(spool: Path, destination: Path) -> str:
     """What a pane's tool command runs: one `name=value` line per fact, then `done`."""
     return f"""#!/bin/sh
 {{
   printf 'session=%s\\n' "${{{SESSION_ID_VARIABLE}-}}"
   printf 'thread=%s\\n' "${{CODEX_THREAD_ID-}}"
+  cd '{destination}' || exit 1
+  export PLANNING_HANDOFF_ROOT='{destination}'
   printf 'verb=%s\\n' "$('{_VERB}' session-id --activity-dir '{spool}' 2>/dev/null)"
   '{_VERB}' session-id --activity-dir '{spool}' >/dev/null 2>&1
   printf 'verb_exit=%s\\n' "$?"
@@ -155,6 +164,7 @@ class Drill:
     socket: str
     codex_home: Path
     project: Path
+    destination: Path
     spool: Path
     roster: FileHookRoster
     sessions: list[RosterSession]
@@ -189,6 +199,10 @@ def drill(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Drill]:
     project.mkdir()
     _git(project, "init", "-q")
     _git(project, "commit", "-q", "--allow-empty", "-m", "start")
+    destination = root / "destination"
+    destination.mkdir()
+    _git(destination, "init", "-q")
+    _git(destination, "commit", "-q", "--allow-empty", "-m", "destination")
     for name in ("a", "b"):
         _git(project, "worktree", "add", "-q", "-b", name, str(root / name))
     socket = f"remote-agents-test-tool-shell-{SessionId.new().value.hex}"
@@ -201,7 +215,13 @@ def drill(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Drill]:
             "[notice]\nhide_rate_limit_model_nudge = true\n",
             encoding="utf-8",
         )
-        yield Drill(socket, codex_home, project, spool, FileHookRoster(spool), [])
+        install_agent_hooks(
+            codex_home / "hooks.json",
+            executable=Path(sys.executable),
+            activity_directory=spool,
+            provider="codex",
+        )
+        yield Drill(socket, codex_home, project, destination, spool, FileHookRoster(spool), [])
     finally:
         # Retired even when tmux does not answer: a daemon left running from the home keeps an
         # authenticated Codex alive until the host reboots (BL-133).
@@ -213,7 +233,9 @@ def drill(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Drill]:
 
 def _probed(drill: Drill, workspace: Path, session: str | None) -> Pane:
     """A Codex pane in `workspace` -- managed when given a session -- after its probe ran."""
-    (workspace / "probe.sh").write_text(_probe_script(drill.spool), encoding="utf-8")
+    (workspace / "probe.sh").write_text(
+        _probe_script(drill.spool, drill.destination), encoding="utf-8"
+    )
     if session is not None:
         # Published before the pane opens, as `serve` lists a session once its record exists.
         drill.sessions.append(RosterSession(session, workspace, datetime.now(UTC)))
