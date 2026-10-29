@@ -4,6 +4,7 @@ from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import replace
 from pathlib import Path
 
+from remote_agents.application.session_folders import live_folder
 from remote_agents.domain.models import ProjectId
 from remote_agents.ports.handoff_envelopes import HandoffDestination
 from remote_agents.ports.rollover_store import ResolvedRolloverDestination
@@ -33,23 +34,24 @@ class RolloverDestinations:
             candidates = []
             for project, registered in tuple(self._projects.items()):
                 if registered.resolve() == root:
-                    candidates.append(project)
+                    candidates.append((project, None))
                 if self._worktrees is not None:
                     for worktree in await self._worktrees.live_for_project(project):
                         if worktree.path.resolve() == root:
-                            candidates.append(project)
+                            candidates.append((project, worktree))
             if not candidates:
                 raise DestinationRefused("destination-unregistered")
             if len(candidates) != 1:
                 raise DestinationRefused("ambiguous-destination")
+            project, worktree = candidates[0]
+            if worktree is not None and live_folder(worktree) is None:
+                raise DestinationRefused("destination-root")
             branch = await self._inspect(root)
             if branch is None:
                 raise DestinationRefused("destination-root")
             if destination.branch and branch != destination.branch:
                 raise DestinationRefused("branch-mismatch")
-            return ResolvedRolloverDestination(
-                candidates.pop(), replace(destination, branch=branch)
-            )
+            return ResolvedRolloverDestination(project, replace(destination, branch=branch))
         except (OSError, RuntimeError) as error:
             # Path.resolve raises on unavailable paths on supported Python3.12; newer
             # runtimes may instead return a path the Git inspector refuses. Both are

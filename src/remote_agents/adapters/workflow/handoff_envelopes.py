@@ -205,16 +205,24 @@ class FileHandoffEnvelopes:
             with _handoff_directory(project_dir, create=False) as directory:
                 if directory is None:
                     return
+
+                def matches(current: HandoffRequest | None) -> bool:
+                    return (
+                        current is not None
+                        and current.managed_session_id == managed_session_id
+                        and current.request_id == request_id
+                        and (
+                            requested_at is None
+                            or current.requested_at == requested_at.replace(microsecond=0)
+                        )
+                    )
+
+                # A refusal must not create a lock in an invalid or foreign request tree.
+                # Recheck under the persistent lock: a newer writer may win this gap.
+                if not matches(_requested(directory)):
+                    return
                 with _request_lock(directory):
-                    current = _requested(directory)
-                    if current is None or current.managed_session_id != managed_session_id:
-                        return
-                    # The legacy cleanup API cannot withdraw a newer correlated request.
-                    if current.request_id != request_id:
-                        return
-                    if requested_at is not None and current.requested_at != requested_at.replace(
-                        microsecond=0
-                    ):
+                    if not matches(_requested(directory)):
                         return
                     os.unlink(REQUEST, dir_fd=directory)
         except Exception:

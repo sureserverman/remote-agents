@@ -316,7 +316,13 @@ def test_write_request_creates_the_request_and_an_ignore_everything_gitignore(
         "managed_session_id": SESSION,
         "requested_at": "2026-10-05T09:08:07Z",
     }
-    assert sorted(p.name for p in directory.iterdir()) == [".gitignore", "request.json"]
+    assert sorted(p.name for p in directory.iterdir()) == [
+        ".gitignore",
+        ".request.lock",
+        "request.json",
+    ]
+    assert (directory / ".request.lock").read_bytes() == b""
+    assert (directory / ".request.lock").stat().st_mode & 0o777 == 0o600
 
 
 def test_write_request_restores_a_gitignore_someone_emptied(tmp_path: Path, reader) -> None:

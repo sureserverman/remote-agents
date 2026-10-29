@@ -100,10 +100,45 @@ async def test_ended_outside_binding_is_discovered_and_resumed_with_its_saved_pr
     resumed = await rig.service.resume(ResumeCommand(PROJECT, CODEX, resolved, "manual"))
     assert resumed.record.project_id == PROJECT
     assert rig.launched_folders == [rig.outside]
+
     assert await rig.bindings.for_session(resumed.record.session_id) == PermissionPreset.ASK
     replay = await rig.service.resume(ResumeCommand(PROJECT, CODEX, resolved, "replay"))
     assert replay.record.session_id == resumed.record.session_id
     assert rig.launched_folders == [rig.outside]
+
+
+@pytest.mark.parametrize("kind", ["explicit", "reuse"])
+@pytest.mark.parametrize("change", ["alias", "retarget"])
+async def test_launch_and_rollover_reuse_refuse_noncanonical_worktree_bindings(rig, kind, change):
+    from remote_agents.application.commands import LaunchCommand
+    from remote_agents.ports.worktree_store import Worktree
+
+    owner = await rig.service.resume(ResumeCommand(PROJECT, CODEX, conversation(), "owner"))
+    recorded = rig.outside
+    if change == "alias":
+        recorded = rig.outside.with_name("worktree-link")
+        recorded.symlink_to(rig.outside, target_is_directory=True)
+    await rig.worktrees.record(
+        Worktree(recorded, PROJECT, "work", "main", "base", {}, NOW, None),
+        bound_to=owner.record.session_id,
+    )
+    if change == "retarget":
+        moved = rig.outside.with_name("moved-worktree")
+        rig.outside.rename(moved)
+        recorded.symlink_to(moved, target_is_directory=True)
+    before = list(rig.terminal.argv)
+    command = LaunchCommand(
+        PROJECT,
+        CODEX,
+        "unavailable-worktree",
+        folder=recorded if kind == "explicit" else None,
+        reuse_folder_of=owner.record.session_id if kind == "reuse" else None,
+    )
+    outcome = await rig.service.launch(command)
+    assert outcome.worktree_removed
+    assert outcome.record.state is SessionState.FAILED
+    assert rig.terminal.argv == before
+    assert await rig.worktrees.folder_for(outcome.record.session_id) is None
 
 
 @pytest.mark.parametrize("change", ["deleted", "moved", "symlink", "not-git"])

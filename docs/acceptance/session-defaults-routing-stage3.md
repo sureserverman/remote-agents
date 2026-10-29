@@ -1,6 +1,6 @@
 # Routing and recovery — final source qualification
 
-Source worktrees: remote-agents session-defaults-project-routing through902f2a9a;
+Source worktrees: remote-agents session-defaults-project-routing through82a3152c plus the final gate repair below;
 writer fix/same-root-v2-adoption through0f8af59. Original completed writer checkout
 and owned run remain unchanged. Installation/deployment/push/merge are separate.
 
@@ -75,3 +75,66 @@ Native unbound fresh Codex threads deliberately refuse; unsupported identity can
 replaced by the daemon starter or heuristic hook marks. Hook trust is an owner prerequisite,
 not silently granted by a drill. There is no authorized external Telegram send in this session.
 Local hook-ledger verification remains NOTRUN where no dispatch-log exists; no rows fabricated.
+
+
+## Final gate entry and round1 source repair
+
+Both independent Tier2 reviewers approved RA477a83e2..82a3152c and
+SPa3673b1..0f8af59, with0Critical/Important/Suggestion. Their only degradation is
+the installed catalog-path fallback recorded above. They did not claim native acceptance.
+Combined goal112PASS40.55s; full Ruff check and format776files passed.
+
+The single portable entry run returned13FAIL,9286PASS,45SKIP in212.66s;
+/tmp/routing-stage3-portable.log preserves it. Important failure classes were stale
+migration/Settings pins; direct SQL fixture deletion missing additive foreign-key rows;
+worktree alias/retarget acceptance inconsistent with the shared folder authority;
+request cleanup creating a lock while refusing invalid/foreign input; and a security
+sweep rejecting the approved curated Full access constant. All were addressed within
+active round1. The persistent request lock remains: cleanup preflights without mutation,
+then rereads/matches under lock, so a newer request cannot be unlinked. Alias and retarget
+rows are refused in both destination resolution and launch/reuse binding.
+
+Enumeration: `rg -n '_bind_worktree\(|def clear_request|clear_request\(|bypass-approvals|_PERMISSION_ARGUMENTS|DELETE FROM sessions' src tests -g '*.py'`.
+The direct-delete sibling used intentionally inconsistent foreign-keys-off cleanup data
+and was left intact. The scanner now permits only the exact AST-located Codex FULL_ACCESS
+one-flag tuple in domain/profiles.py; every other path/provider/preset/additional flag or
+literal stays prohibited. Seven original defect classes and six curated-policy controls
+remain executable.
+
+Red:6FAIL57PASS4.66s reproduced all four alias/retarget launch/reuse gaps plus scanner
+expectations. A prior malformed test string caused a collection failure and was corrected
+before that red; a sandbox run with no output was interrupted, neither counted as proof.
+First focused repair run381PASS2FAIL67.70s exposed the remaining capabilities FK fixture
+and the concurrency control's old single-read assumption. Follow-up two race timings
+bothPASS(146deselected), then the vanished-session scenario1PASS. This preserves the
+initial failures instead of claiming the full portable runner returned green. Exact
+affected folder/resume task88PASS7.79s. An accidental invocation named a nonexistent
+optional test file and collected nothing; corrected exact authored command is that88PASS.
+
+Round1: redesign — reviewed by planning:code-reviewer routing_stage3_review_a,
+APPROVE+DEGRADED(catalog fallback),0Critical/Important/Suggestion. Static redesign-only
+review read the production worktree/request guards and AST scanner, without running tests.
+Final repaired public wheel SHA25641c89a53a05f7fd2f11f78eb2a3c3afc56496f14571138ea1c6c2caf6d18de39.
+Native CLI versions: codex-cli0.165.0 and ClaudeCode2.1.312. Built writer hash remains
+23153040ddeb6879b0155accd9d959001e3decdcf47b9ad4f48eaa17008fda7d.
+
+Portable skip audit:22not-a-modal parameter cases;10nested-tmux status-bar cases explicitly
+require running alone;1ORPHANED parity special case;11unsupported-provider capability
+cases(3remote-control,1OpenCode limit,3permission mappings,2folder trust,2handoff writers);
+1temporary directory already inside checkout. Total45. None establishes native, Telegram,
+fresh identity, adoption or restart claims. Unsupported profiles are outside the promised
+Claude/Codex capability set. Unchanged status-bar cases are not substituted for a routing claim.
+Serial e2e and the final native/user-route checks are still pending in this checkpoint.
+
+
+Final serial e2e239PASS6warnings183.02s, /tmp/routing-stage3-serial-e2e.log;
+no other pytest ran during it. Existing worktree creation/cleanup/root/launch controls
+80PASS7.98s, /tmp/routing-stage3-worktree-fixscope.log. Full source Ruff check and
+format776files passed after repairs. Native artifact has not run yet at this checkpoint.
+
+
+Final decisions-conformance sweep also found stale current descriptions in architecture.md
+and operator-runbook.md. Enumeration: `rg -n 'skipped:folder_bound|thread by the shell|stays unsupervised|do not offer its conversation' README.md docs -g '*.md'`.
+Those two current guides now describe DEC134 frozen source/destination identity, canonical
+folder recovery, exact Codex binding and explicit native limits; historical acceptance
+captures remain preserved. Task3.2 documentation scope therefore also includes these guides.

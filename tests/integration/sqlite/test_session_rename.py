@@ -222,9 +222,15 @@ async def test_renaming_a_vanished_session_through_the_real_service_is_recoverab
     )
     await boundary.callback(chat.press(rename_button), None)
 
-    # The session leaves the store while the input box is open.
-    store._connection.execute("DELETE FROM sessions WHERE session_id = ?", (str(_SESSION),))
-    store._connection.commit()
+    # The session and its additive provenance leave the store while input is open.
+    with store._connection:
+        store._connection.execute(
+            "DELETE FROM session_project_roots WHERE session_id = ?", (str(_SESSION),)
+        )
+        store._connection.execute(
+            "DELETE FROM session_handoff_capabilities WHERE session_id = ?", (str(_SESSION),)
+        )
+        store._connection.execute("DELETE FROM sessions WHERE session_id = ?", (str(_SESSION),))
 
     await boundary.text(chat.message_update("too late"), None)
 

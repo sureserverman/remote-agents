@@ -346,6 +346,8 @@ class SessionService:
             if len(matches) > 1:
                 return _Bound.REFUSED
             if matches:
+                if live_folder(matches[0]) is None:
+                    return _Bound.GONE
                 return await self._bind_worktree(session_id, matches[0].path)
         return await self._bind_folder(session_id, folder)
 
@@ -402,6 +404,8 @@ class SessionService:
             _LOG.exception("the folder of %s could not be read for its successor", of)
             return _Bound.FAULT
         if worktree is not None:
+            if live_folder(worktree) is None:
+                return _Bound.GONE
             return await self._bind_worktree(session_id, worktree.path)
         if folder is not None:
             return await self._bind_folder(session_id, folder)

@@ -2,16 +2,16 @@
  "baseline": {
   "elapsed_s": 0.3,
   "exit": 0,
-  "tail": "...........                                                              [100%]\n11 passed in 0.04s"
+  "tail": "...........                                                              [100%]\n11 passed in 0.05s"
  },
  "break_patch": "--- a/docs/profile-compatibility.md\n+++ b/docs/profile-compatibility.md\n@@ -24,7 +24,7 @@\n are unconfirmed too (DEC-018), but it is the only ending offered from a state whose stop policy\n otherwise carries force alone.\n \n-| Profile | Fixed launch argv | Availability/auth/trust | Resume catalogue / selection | Readiness evidence | Fixed graceful exit |\n+| Profile | Fixed launch argv | Unavailable metadata | Resume catalogue / selection | Readiness evidence | Fixed graceful exit |\n | --- | --- | --- | --- | --- | --- |\n | `claude` | `claude`, or `claude --remote-control ra-<uuid>` when the stored Remote Control default reads *on* | executable must be present; local auth/trust stays local | documented UUID filenames/project directories plus a bounded generated title or stored resume description; enabled when the catalogue is available | `Claude Code`; a workspace-trust dialog answers the launch as `untrusted` | `/exit`, Enter |\n | `codex` | `codex` plus the selected curated permission flags below | executable must be present; local auth/trust stays local | feature-probed app-server `thread/list` with a bounded provider title or preview when supplied | `/exit` command selection and submit | `/exit`, Enter, Enter |\n",
  "build": null,
- "created": "2026-10-29T08:19:11+00:00",
- "fingerprint": "3bfb97ebaad51062e5a4f8b0c5acd474efdb9ead3f72cf6c1b9a2ff21625432b",
+ "created": "2026-10-29T08:52:34+00:00",
+ "fingerprint": "d0fc842ca665a797b28c35eac8f38a0494d5f46d05608b1d8a808a79b3802226",
  "index": 1,
  "kind": "claim",
  "named_break": null,
- "no_build_reason": "Documentation is read directly by the contract checks; workflow trace and private decision records are separately disclosed",
+ "no_build_reason": "Documentation is read directly; current architecture and operator text reconciled in the final conformance sweep",
  "plan": "/mnt/vault/Portfolio/infra/remote-agents/plans/2026-10-26-session-defaults-and-project-rollover-sub-03-routing-and-recovery-plan.md",
  "red": {
   "elapsed_s": 0.3,

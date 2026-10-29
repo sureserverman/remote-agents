@@ -33,3 +33,10 @@ Assumption: An authorized isolated Codex login route is available without changi
 Checked: Stage2 actual native public TUI observations plus lifecycle recovery scan, preserved in committed stage2demo and acceptance report.
 Result: Codex0.165.0 read-only bind mount worked; no credential copy, zero owned live processes after clients closed. Private home retained after original controller descriptor loss. This does not establish Claude, Telegram, all presets, identity hooks or rollover adoption.
 Verdict: holds for the already-authorized Codex mechanism; remaining native/provider/Telegram environments not checkable here until final gate
+
+
+## Premise 4
+Assumption: The final native/provider, fresh-Codex-identity and independent Telegram routes can demonstrate the full owner journey.
+Checked: Existing Codex/Claude auth metadata (regular files, contents not read); prepared native collection12selected/13total; source capability/routing constraints and prior owner authorization.
+Result: Provider file-auth prerequisites exist, but complete native effective-policy/identity/adoption/restart behavior is unmeasured. Fresh unbound Codex writers deliberately refuse without independent managed conversation evidence. No isolated Telegram user route or external send was authorized. These are retained final-gate obligations, not source passes. Added at the final gate after Task3.1/3.2; the original pre-implementation premises and Outcomes above remain unchanged.
+Verdict: not checkable here — requires the final actual native measurements and an authorized isolated Telegram route; no test or supplied fixture substitutes for them

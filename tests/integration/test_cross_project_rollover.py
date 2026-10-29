@@ -368,7 +368,7 @@ async def test_existing_destination_worktree_keeps_project_and_cleanup_binding(
         rig.terminal.idle = True
         await rig.build().run_once()
         row = await rig.row()
-        if removed:
+        if removed or alias:
             assert row.failure_code == "destination-root"
             assert len(rig.terminal.started) == 2
         else:
@@ -879,7 +879,10 @@ async def test_cleanup_of_a_correlated_request_cannot_unlink_a_different_live_re
     assert len(rig.terminal.started) == 1
 
 
-def test_request_compare_and_remove_excludes_a_concurrent_request_writer(tmp_path, monkeypatch):
+@pytest.mark.parametrize("race_at", [1, 2])
+def test_request_compare_and_remove_preserves_a_concurrent_request_writer(
+    tmp_path, monkeypatch, race_at
+):
     import concurrent.futures
 
     from remote_agents.adapters.workflow import handoff_envelopes as wire
@@ -889,9 +892,14 @@ def test_request_compare_and_remove_excludes_a_concurrent_request_writer(tmp_pat
     assert envelopes.write_request(tmp_path, "session", request_id=first)
     original = wire._requested
     attempts = []
+    reads = 0
 
     def racing_read(directory):
+        nonlocal reads
+        reads += 1
         current = original(directory)
+        if reads != race_at:
+            return current
         with concurrent.futures.ThreadPoolExecutor() as executor:
             attempts.append(
                 executor.submit(
@@ -902,8 +910,12 @@ def test_request_compare_and_remove_excludes_a_concurrent_request_writer(tmp_pat
 
     monkeypatch.setattr(wire, "_requested", racing_read)
     envelopes.clear_request(tmp_path, "session", request_id=first)
-    assert attempts == [False]
+    assert attempts == [race_at == 1]
     monkeypatch.setattr(wire, "_requested", original)
+    if race_at == 1:
+        assert envelopes.request_details(tmp_path).request_id == second
+    else:
+        assert envelopes.request_details(tmp_path) is None
     assert envelopes.write_request(tmp_path, "session", request_id=second)
     envelopes.clear_request(tmp_path, "session", request_id=first)
     assert envelopes.request_details(tmp_path).request_id == second

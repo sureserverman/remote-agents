@@ -351,95 +351,53 @@ and Cursor declare none.
 - `composition/service.py` builds the pass (`build_rollover_pass`) and runs it every 30 s in
   the bot's service only; the switch `rollover.auto_rollover`, off by default, is read each pass.
 
-### Where a session's envelopes are read, and where its successor starts (DEC-131)
+### Frozen continuation ownership (DEC-131, amended by DEC-134)
 
-A plan can work in another repository than its session's project: the agent runs in the
-project's folder and every tool call changes into the other one. Its planning writer then writes
-its envelopes under that repository's top level, which nothing the service sees would name -- the
-pane's folder and every hook's `cwd` stay the project's (DEC-063). So the writer reports it.
+A writer reports its control-channel Git top level through `PLANNING_HANDOFF_ROOT`
+when the bounded supervisor identity command succeeds. Only an owned, acceptable Git
+root is recorded. A new v2 transaction freezes that source channel independently of
+its destination root, branch, plan and locator. Later root reports cannot move an
+in-flight transaction. The destination must resolve to exactly one registered project
+or its live canonical worktree; unavailable, alias, changed-branch and ambiguous inputs
+refuse with the predecessor preserved.
 
-- The writer runs `$PLANNING_SUPERVISOR_ID_CMD` with `PLANNING_HANDOFF_ROOT` set to the root it
-  writes under. On exit 0 the verb records that root under `<activity dir>/roots/<session>`
-  (`adapters/agents/reported_roots.py`). Only a git top level this user owns is recorded
-  (`acceptable_root`), and the same rule is applied again when it is read.
-- Each pass reads every listed session's report (`reported_roots_reader`): a session's envelopes
-  and its `request.json` are read and written at the root it last reported, else at its worktree's
-  or project's top level. A `ready` still answers only for the session whose root it is under
-  (DEC-115). A report is forgotten once its session ends and no open rollover names it.
-- When the predecessor's reported root is not its default one, the successor is launched with
-  `LaunchCommand.folder` and bound to that folder before its pane starts (`session_folders`,
-  migration 21; `SessionFolders.folder_for` answers it, and never the project folder once it is
-  gone). A folder the agent has never trusted holds the successor on its trust dialog until the
-  owner answers (DEC-125). A restart-resume of a folder-bound session is skipped
-  (`skipped:folder_bound`): a resume binds only a worktree.
-- `request.json` is one file per root, so two sessions that report one root share its slot.
-- A reported root is held to more than a default one: its `.git` must be a real directory or a
-  worktree's `gitdir:` file, and the envelope reader opens every root without following a link.
+The application persists source, destination project/root and the inherited permission
+snapshot before launch. A registered destination successor belongs to that project;
+a worktree also retains its cleanup binding. Legacy v1 retains its source project and
+validated channel rather than inferring a new project. Destination folder trust is an
+explicit hold. After the matching successor accepts, stopping still requires an idle,
+empty predecessor composer. Restart reuses recorded state; an unrecorded launch remains
+`successor-unknown` and cannot launch again. A v2 finished response must match the exact
+outstanding request identity/time and whole-workflow completion; it launches or stops
+nothing. See [session continuation contracts](workflows/session-continuation.md).
 
-Accepted costs.
-- Naming a root takes a managed pane's environment, to run the verb, or write access to the
-  activity directory; a `ready` carries no root. A process holding either can point a session at
-  any git top level this user owns: each forged `ready` there starts one successor, and a folder
-  never trusted waits for the owner.
-- Identity is the verb's evidence, not proof (DEC-128). Any process that can claim a session's id
-  -- a nested agent working in another repository inherits `REMOTE_AGENTS_SESSION_ID`, say -- can
-  overwrite that session's report. The pass then looks in the wrong root until the session's
-  writer reports again: a quiet loss of its rollover, and a successor there for a forged `ready`.
-- The older writers -- the earlier Claude package and the Codex fork, retired 2026-10-25 -- stamp
-  the old protocol id, which the reader refuses since 0.67.1 (DEC-132): their handoffs, cross-repo
-  rollover and "Rollover now" all go unanswered, and the session is resumed by hand.
-- A Codex writer run from another repository stays unsupervised, because the verb places a Codex
-  thread by the shell's own folder.
-- "Rollover now" for a session that never reported a root writes `request.json` under its default
-  root (its worktree's or project's top level), where a plan working elsewhere never reads it; that
-  request fails `request-unanswered` after 24 hours (DEC-119).
-- A folder-bound session is skipped by restart-resume (`skipped:folder_bound`), and the resume
-  lists, which read the project folder and its live worktrees, do not offer its conversation:
-  resume it by hand in its folder.
+Folder authority now includes recorded outside-folder conversations in manual and
+restart recovery. The original project association and saved preset survive. A missing,
+moved or noncanonical root, ambiguous ownership, or legacy automatic row without root
+provenance holds instead of falling back to the project's current folder. Reusing an
+existing conversation also requires a matching live/preserved pane; failure produces a
+named hold without another process. These are source contracts, not an installation claim.
 
-### The handoff writer's identity — `remote-agents session-id` (DEC-128)
+### The handoff writer's identity — `remote-agents session-id` (DEC-128, amended by DEC-134)
 
-The writer stamps each envelope's `managed_session_id`. It learns that id by running the
-command a managed pane carries in `PLANNING_SUPERVISOR_ID_CMD` -- `<this install's interpreter> -I
--m remote_agents session-id`, so no other install on the pane's `PATH` and no module in the
-writer's folder can answer -- from the folder its tool shell starts in, with
-`PLANNING_HANDOFF_ROOT` naming the root it writes under. The two older writers -- the Codex
-planning fork, which ran `remote-agents session-id` itself, and the earlier Claude package, which
-read `REMOTE_AGENTS_SESSION_ID` -- reported no root and were retired at the cutover; since 0.67.1
-their envelopes are refused (DEC-132). This is the contract an
-envelope writer depends on:
+The writer runs `PLANNING_SUPERVISOR_ID_CMD`, this install's interpreter with
+`-I -m remote_agents session-id`, with no shell. Exit0 prints the managed session id;
+exit3 prints nothing and refuses attribution; exit2 is invalid command usage. Every
+nonzero result means no supervised envelope. Older retired writer protocol identities
+remain refused (DEC-132).
 
-| Exit | Output | Meaning |
-|---|---|---|
-| 0 | the session id alone on one line | the hook's rule places this shell in that managed session |
-| 3 | nothing on stdout | no managed session owns this shell, or the verb could not tell: write no envelope |
-| 2 | argparse's usage message | usage error |
+A Codex tool shell's `CODEX_THREAD_ID` must match exactly one independently recorded
+managed conversation binding (`resume_source_id`). Its inherited daemon-starter
+`REMOTE_AGENTS_SESSION_ID`, shell folder, reported root and folder/time hook bootstrap
+cannot establish that binding. Current hook marks may veto a conflict but do not supply
+independent identity. Fresh unbound threads refuse, including their first cross-repository
+writer call; that native capability remains unqualified. Hook attribution retains its
+separate folder/time rule. Other shells use the bounded provider-specific environment
+rule, refusing a missing thread where a payload-thread roster requires it.
 
-(`-h` prints help and exits 0, as every subcommand does; a writer never passes it.)
-
-A writer treats every exit but 0 as "write nothing". It never passes `--activity-dir`, which
-exists for tests: pointed at a folder with no roster, it turns the roster checks below off.
-
-- `agent_event.py` (`resolve_session_id`, `run_session_id`) is the verb, routed in `__main__`
-  before `bootstrap` loads. It reads the environment, its folder and the roster file under
-  `--activity-dir` (default: the production spool). It writes one file: the root its caller
-  reports in `PLANNING_HANDOFF_ROOT`, after the id is printed and only then; a root it refuses or
-  cannot write changes neither the output nor the exit. It never opens the database.
-- A shell carrying the thread variable a `PAYLOAD_THREAD` licence declares
-  (`HookLicence.thread_variable`; Codex: `CODEX_THREAD_ID`) is resolved by
-  `hook_identity.resolve` against that provider's roster, as the hook drain resolves a payload.
-  Its `REMOTE_AGENTS_SESSION_ID` is never read: under Codex's shared daemon it is the daemon
-  starter's (measured, `tests/live/test_codex_tool_shell_identity.py`). No roster, or none that
-  places the thread, exits 3. The hook, with no roster, keeps the environment rule instead.
-- Any other shell is named by `REMOTE_AGENTS_SESSION_ID`, unless a payload-thread provider's
-  roster names that id (a daemon shell missing its thread variable) or exists and cannot be
-  trusted: then it exits 3. With no roster written at all (no service yet), the variable decides.
-- **Exit 0 is evidence, not proof.** The placing rule is `hook_identity`'s, with its recorded
-  limits. A Codex the owner starts by hand in the folder a managed Codex session works in is
-  placed in that session. With two managed sessions in one folder, a thread the older one opens
-  after the newer one started is placed in the newer one. The folder compared is the shell's
-  own: a writer that changes folder before asking is compared against the folder it moved to.
-  So a supervisor that stops a session on an envelope's word confirms the envelope first.
+`agent_event.py` remains the bounded composition root for the verb. It reads the roster
+and reports only an acceptable root after successful identity resolution; it does not
+open the database. No provider selection, profile mutation or hook-trust change is implied.
 
 ## DEC-127 — resuming after a restart
 
