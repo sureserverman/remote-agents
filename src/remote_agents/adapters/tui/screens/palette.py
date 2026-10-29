@@ -19,7 +19,9 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from textual.command import DiscoveryHit, Hit, Hits, Provider
+from textual import on
+from textual.command import CommandPalette, DiscoveryHit, Hit, Hits, Provider
+from textual.widgets import Button, Input
 
 if TYPE_CHECKING:
     from remote_agents.adapters.tui.app import RemoteAgentsTui
@@ -41,6 +43,31 @@ NAVIGATION_COMMANDS: tuple[tuple[str, str, str], ...] = (
     # from its own screen handler, and every other row is one press back.
     ("Settings", "This machine's settings", "settings"),
 )
+
+
+class NavigationPalette(CommandPalette):
+    """Ignore buffered input after this palette has left the screen stack.
+
+    Textual can deliver queued submissions after dismissal. Its default handler
+    then pops the underlying screen and schedules the selected command again.
+    Both execution and Escape must belong to the still-active palette.
+    """
+
+    @on(Input.Submitted)
+    @on(Button.Pressed)
+    def _select_or_command(self, event: Input.Submitted | Button.Pressed | None = None) -> None:
+        if event is not None:
+            # Dispatch otherwise also invokes the inherited decorated handler.
+            event.prevent_default()
+        if not self.is_active:
+            if event is not None:
+                event.stop()
+            return
+        super()._select_or_command(event)
+
+    def _action_escape(self) -> None:
+        if self.is_active:
+            super()._action_escape()
 
 
 class NavigationCommands(Provider):

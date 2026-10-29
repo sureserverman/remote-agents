@@ -65,6 +65,7 @@ from remote_agents.adapters.tui.screens.confirm import (
     HostRemoteControlDirectionModal,
 )
 from remote_agents.adapters.tui.screens.launch import ProjectsScreen
+from remote_agents.adapters.tui.screens.palette import NavigationPalette
 from remote_agents.adapters.tui.screens.permissions import PermissionsScreen
 from remote_agents.adapters.tui.screens.schedule import (
     ScheduleDeleteConfirmModal,
@@ -190,6 +191,7 @@ _ARRANGED: dict[type[Screen], Callable[[], Screen] | None] = {
     RenameScreen: lambda: RenameScreen(str(_SESSION_ID)),
     InspectScreen: lambda: InspectScreen("some output"),
     SettingsScreen: SettingsScreen,
+    NavigationPalette: NavigationPalette,
     PermissionsScreen: lambda: PermissionsScreen(PermissionPreset.APPROVE_FOR_ME, _save_permission),
     ResumeProjectsScreen: ResumeProjectsScreen,
     ResumeProfilesScreen: lambda: ResumeProfilesScreen(_PROJECT, _CAPABLE),

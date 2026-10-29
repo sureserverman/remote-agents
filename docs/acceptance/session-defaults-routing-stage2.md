@@ -120,3 +120,46 @@ controls now provide actual adapter ownership metadata. Focused sweep141PASS16.8
 Ruff passes. Important fixes close on fix-scope proof under the execution protocol;
 no later reviewBapproval is invented, no extra review dispatch is owed for this one-line
 repair and no new remediation round is reserved. Native rebuilt-artifact proof pending.
+
+
+## Final Stage 2 assessment — 2026-10-29
+
+Independent planning:goal-evaluator routing_stage2_demo completed all three original
+Outcomes through the built public TUI/native Codex route. Outcome1 retains the actual
+successful launch observation on6fc460d5; Outcomes2/3 were reassessed on70a4ff8d wheel
+SHA256333f42149b67c79b58b1b98ef94af118261fb6c6d403d2724214cd465be19226.
+The actual stale running record now receives the named pane-verification hold, preserves
+session/source/approve_for_me/root, and creates no second session or pane. Original failed
+observations remain in demo.md. No native full-provider/restart matrix is inferred.
+
+The evaluator also identified one Material navigation crash: bundled Ctrl-P,resume,Enter,
+Enter,Enter can deliver submissions after palette dismissal. Two host controls reproduced
+the captured Textual ScreenStackError. The shared NavigationPalette now refuses selection
+and Escape after it ceases to be active and prevents duplicate inherited message dispatch.
+Sweep: rg -n 'CommandPalette\(|action_command_palette|_action_escape|_select_or_command' src/remote_agents/adapters/tui .venv/lib/python3.14/site-packages/textual/command.py
+This covers both palette opening routes and all commands; it preserves the underlying
+screen and schedules the selected command once. Material closes on executor fix-scope,
+not a new evaluator verdict. Full palette checks21PASS5.22s, including four queued-input
+controls on resting/nested screens. Related resume/worker/architecture batch376PASS2FAIL
+69.91s identified only the new screen's missing architecture arrangement; the real
+NavigationPalette arrangement was added, and both failed controls passed0.44s. Ruff check
+and format pass for all four touched source/test files. The literal Task2.1 mutation proof
+is refreshed against the final staged tree before committing; its record contains exact
+baseline/red results. No review redispatch is required for this Material-only repair.
+
+Lifecycle: prior tool session8629 and controller3565317 ended between turns; its retained
+ownership descriptor was lost. Every evaluator client is closed. A privileged read-only
+host scan found zero live processes using the exact private CODEX_HOME and zero unreadable
+user processes. Dedicated fixture socket has no server. The private0700 home is retained,
+not removed under a fabricated original-inode attestation; its auth placeholder remains
+empty and was never copied from login credentials. Content-free recovery metadata remains
+at /tmp/ra-stage2-native-34l79izo/lifecycle-recovery.json. This is verified process cleanup
+with retained private evidence, not successful descriptor-based directory retirement.
+
+Gate: required Outcomes hold and the Material defect is repaired/proven. Dispatch0of0YES;
+Task2.1 inline asNO. Reviews retain their actual ranges/verdicts above: AAPPROVE; BImportant
+ownership omission fixed/proven, with no later Bapproval claimed. Local hook ledger NOTRUN
+(no dispatch-log), no manufactured entries. No platform/design verifier applies. Final
+record audit and owned round2 assessment follow this committed report. Stage3 remains
+unstarted; deferred Stage1/Telegram demos and final native/provider matrix/master closeout
+remain open. No production activation, profile/trust/provider change, deployment,push,merge.

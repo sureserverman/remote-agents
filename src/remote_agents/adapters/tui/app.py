@@ -67,7 +67,7 @@ from remote_agents.adapters.tui.screens.confirm import (
 )
 from remote_agents.adapters.tui.screens.dashboard import SETTINGS_KEY
 from remote_agents.adapters.tui.screens.launch import ProjectsScreen
-from remote_agents.adapters.tui.screens.palette import NavigationCommands
+from remote_agents.adapters.tui.screens.palette import NavigationCommands, NavigationPalette
 from remote_agents.adapters.tui.screens.sessions import perform_row_action
 from remote_agents.adapters.tui.screens.settings import SettingsScreen
 from remote_agents.adapters.tui.theme import (
@@ -1749,6 +1749,11 @@ class RemoteAgentsTui(App[AttachRequest | None]):
             await self.action_back()
             return
         await self.action_quit()
+
+    def action_command_palette(self) -> None:
+        """Open the shared palette with protection against queued dismissal."""
+        if self.use_command_palette and not NavigationPalette.is_open(self):
+            self.push_screen(NavigationPalette(id="--command-palette"))
 
     def action_bare_palette(self) -> None:
         """`:`: Textual's palette under a bare key, refused inside an `Input` like `?` and `q`.
