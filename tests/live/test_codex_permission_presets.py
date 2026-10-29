@@ -14,11 +14,13 @@ are never selected. Native configuration, transcripts and daemons stay isolated.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import os
 import shutil
 import stat
 import subprocess
+import tempfile
 import time
 from dataclasses import replace
 from datetime import UTC, datetime
@@ -28,6 +30,7 @@ import pytest
 from _pytest.mark.expression import Expression
 from agent_panes import CODEX_OPENING, CODEX_READY, open_to_composer
 from codex_home import retire_codex_home, short_codex_home
+from native_isolation import daemon_lock_mount
 
 from remote_agents.adapters.agents.registry import profile_composers, profile_trust_dialogs
 from remote_agents.adapters.sqlite.database import open_database
@@ -49,7 +52,7 @@ from remote_agents.domain.conversations import (
 )
 from remote_agents.domain.models import ProfileId, ProjectId, SessionId, SessionState
 from remote_agents.domain.profiles import PermissionPreset, closed_profiles
-from remote_agents.ports.terminal import PromptOutcome
+from remote_agents.ports.terminal import PromptOutcome, PromptReason
 
 CODEX = ProfileId("codex")
 PROJECT = ProjectId("permission-fixture")
@@ -97,8 +100,17 @@ def _tmux(socket: str, *arguments: str) -> subprocess.CompletedProcess[str]:
 
 
 def _prefix(bwrap: Path, root: Path, home: Path, auth: Path) -> tuple[str, ...]:
+    scratch, runtime = home / ".native-tmp", home / ".native-runtime"
+    for directory in (scratch, runtime):
+        directory.mkdir(mode=0o700)
     return (
         str(bwrap),
+        "--setenv",
+        "TMPDIR",
+        str(scratch),
+        "--setenv",
+        "XDG_RUNTIME_DIR",
+        str(runtime),
         "--unshare-pid",
         "--ro-bind",
         "/",
@@ -113,6 +125,7 @@ def _prefix(bwrap: Path, root: Path, home: Path, auth: Path) -> tuple[str, ...]:
         "--bind",
         str(home),
         str(home),
+        *daemon_lock_mount(home),
         "--ro-bind",
         str(auth),
         str(home / "auth.json"),
@@ -172,6 +185,20 @@ async def _observe(home: Path, workspace: Path, before: set[str]) -> dict:
                 return observed
         await asyncio.sleep(0.5)
     pytest.fail("BLOCKED: native policy metadata/completed text turn unavailable within 120s")
+
+
+async def _prompt_when_idle(terminal, session, text, *, timeout=30):
+    """Retry only a definitely untouched busy refusal, never an uncertain delivery."""
+    deadline = time.monotonic() + timeout
+    while True:
+        delivered = await terminal.send_prompt(session, text)
+        if (
+            delivered.outcome is not PromptOutcome.REFUSED
+            or delivered.reason is not PromptReason.BUSY
+            or time.monotonic() >= deadline
+        ):
+            return delivered
+        await asyncio.sleep(0.5)
 
 
 def _retire(
@@ -317,8 +344,11 @@ async def test_codex_permission_presets_fresh_and_resume(
             await service.refresh_readiness()
             assert (await store.get(session)).state is SessionState.RUNNING
             before = set(_turns(native_home, workspace))
-            delivered = await terminal.send_prompt(session, PROMPT)
-            assert delivered.outcome is PromptOutcome.SENT, delivered.reason
+            delivered = await _prompt_when_idle(terminal, session, PROMPT)
+            assert delivered.outcome is PromptOutcome.SENT, (
+                delivered.reason,
+                _tmux(socket, "capture-pane", "-p", "-t", pane).stdout,
+            )
             observed = await _observe(native_home, workspace, before)
             assert observed["policy"] == EXPECTED[preset], (
                 "Native permissions differ: unsupported or managed policy is not qualified.",
@@ -334,12 +364,34 @@ async def test_codex_permission_presets_fresh_and_resume(
             assert stopped.preserved, "native agent did not finish its own exit sequence"
         assert len(await store.list()) == 2
     finally:
-        _tmux(socket, "kill-server")
         try:
-            _retire(codex, prefix, environment, native_home)
+            if len(observations) != 2:
+                evidence = Path(tempfile.mkdtemp(prefix="native-failure-", dir=root))
+                with contextlib.suppress(Exception):
+                    (evidence / "pane.capture").write_text(
+                        _tmux(socket, "capture-pane", "-p", "-t", pane).stdout
+                    )
+                    (evidence / "pane.capture").chmod(0o600)
+                # Only owned fixture transcripts and native stderr, never auth.json.
+                selected = list((native_home / "sessions").glob("*/*/*/rollout-*.jsonl"))
+                selected += [native_home / "app-server-daemon/daemon.stderr.log"]
+                for source in selected:
+                    with contextlib.suppress(OSError):
+                        if source.is_symlink() or not source.resolve().is_relative_to(native_home):
+                            continue
+                        target = evidence / source.relative_to(native_home)
+                        target.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+                        shutil.copyfile(source, target)
+                        target.chmod(0o600)
         finally:
-            if connection is not None:
-                connection.close()
+            try:
+                _tmux(socket, "kill-server")
+            finally:
+                try:
+                    _retire(codex, prefix, environment, native_home)
+                finally:
+                    if connection is not None:
+                        connection.close()
     report = os.environ.get("REMOTE_AGENTS_CODEX_PRESET_REPORT")
     if report:
         descriptor = os.open(report, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)

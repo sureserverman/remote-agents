@@ -791,6 +791,13 @@ async def _until_running(harness: _Harness, session_id: SessionId):
     while True:
         records = await harness.backend.sessions.refresh_readiness()
         record = next(item for item in records if item.session_id == session_id)
+        screen = await harness.terminal.capture(session_id)
+        if "Hooks need review" in screen:
+            pytest.fail(
+                "BLOCKED: Codex hook review requires explicit owner approval", pytrace=False
+            )
+        if "Choose the text style that looks best with your terminal" in screen:
+            pytest.fail("BLOCKED: private Claude onboarding is not complete", pytrace=False)
         if record.state is SessionState.RUNNING:
             return record
         assert time.monotonic() - started < _STARTUP_SECONDS, await _diagnosis(

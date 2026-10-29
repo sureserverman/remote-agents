@@ -226,6 +226,8 @@ def drill(
             "[notice]\nhide_rate_limit_model_nudge = true\n",
             encoding="utf-8",
         )
+        _tmux(socket, "new-session", "-d", "-s", "fixture-holder", "sleep 900")
+        _tmux(socket, "set-option", "-g", "remain-on-exit", "on")
         install_agent_hooks(
             codex_home / "hooks.json",
             executable=Path(sys.executable),

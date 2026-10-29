@@ -14,6 +14,39 @@ import stat
 from pathlib import Path
 
 
+def daemon_lock_mount(home: Path) -> tuple[str, ...]:
+    """Shadow Codex's hard-coded lock directory only in this child's mount namespace."""
+    target = Path("/tmp") / f"codex-daemon-{os.getuid()}"
+    try:
+        target_info = target.lstat()
+    except FileNotFoundError:
+        # Keep the host read-only; a missing native runtime prerequisite is not
+        # permission to create an outside directory on behalf of the operator.
+        return ()
+    info = home.lstat()
+    if (
+        not stat.S_ISDIR(info.st_mode)
+        or home != home.resolve()
+        or info.st_uid != os.getuid()
+        or info.st_mode & 0o077
+        or not stat.S_ISDIR(target_info.st_mode)
+        or target_info.st_uid != os.getuid()
+        or target != target.resolve()
+    ):
+        raise RuntimeError("BLOCKED: native daemon lock mounts require exact owned directories")
+    private = home / ".native-daemon-locks"
+    private.mkdir(mode=0o700, exist_ok=True)
+    info = private.lstat()
+    if (
+        not stat.S_ISDIR(info.st_mode)
+        or private != private.resolve()
+        or info.st_uid != os.getuid()
+        or info.st_mode & 0o077
+    ):
+        raise RuntimeError("BLOCKED: native daemon lock source is not private")
+    return ("--bind", str(private), str(target))
+
+
 def confined_command(
     executable: Path,
     *,
@@ -55,8 +88,20 @@ def confined_command(
     for directory in directories:
         command += ["--bind", str(directory), str(directory)]
     command += [*mounts, "--setenv", "HOME", str(home)]
+    for variable, name in (("TMPDIR", ".native-tmp"), ("XDG_RUNTIME_DIR", ".native-runtime")):
+        directory = home / name
+        directory.mkdir(mode=0o700, exist_ok=True)
+        details = directory.lstat()
+        if (
+            not stat.S_ISDIR(details.st_mode)
+            or directory != directory.resolve()
+            or details.st_uid != os.getuid()
+            or details.st_mode & 0o077
+        ):
+            raise RuntimeError("BLOCKED: native scratch must be an exact private owned directory")
+        command += ["--setenv", variable, str(directory)]
     if codex_home is not None:
-        command += ["--setenv", "CODEX_HOME", str(codex_home)]
+        command += [*daemon_lock_mount(codex_home), "--setenv", "CODEX_HOME", str(codex_home)]
     return (*command, "--die-with-parent", "--", str(executable))
 
 

@@ -15,7 +15,6 @@ import os
 import shutil
 import signal
 import stat
-import subprocess
 import tempfile
 import time
 from collections.abc import Callable
@@ -87,11 +86,20 @@ def _belongs_to(home: Path, pid: int) -> bool:
 def _running_from(home: Path) -> list[int]:
     """Live processes attesting this fixture home, including detached installed binaries."""
     home = _private_home(home)
-    return [
-        int(entry.name)
-        for entry in Path("/proc").glob("[0-9]*")
-        if _belongs_to(home, int(entry.name))
-    ]
+    deadline = time.monotonic() + 2
+    while True:
+        try:
+            return [
+                int(entry.name)
+                for entry in Path("/proc").glob("[0-9]*")
+                if _belongs_to(home, int(entry.name))
+            ]
+        except RuntimeError as error:
+            # An exec/setuid transition may briefly hide an otherwise readable
+            # process. Retry the entire scan; never skip an unattested process.
+            if not isinstance(error.__cause__, PermissionError) or time.monotonic() >= deadline:
+                raise
+            time.sleep(0.05)
 
 
 @cache
@@ -135,19 +143,9 @@ def stop_codex_home(home: Path, *, stop: Callable[[], None] | None = None) -> No
     home = _private_home(home)
     if stop is not None:
         stop()
-    else:
-        codex = shutil.which("codex")
-        if codex is not None:
-            try:
-                subprocess.run(
-                    [codex, "app-server", "daemon", "stop"],
-                    env={**os.environ, "HOME": str(home), "CODEX_HOME": str(home)},
-                    capture_output=True,
-                    timeout=5,
-                    check=False,
-                )
-            except subprocess.TimeoutExpired:
-                pass
+    # Never invoke an unconstrained native manager: even a private CODEX_HOME
+    # can use a hard-coded host-wide runtime lock. Default cleanup relies only
+    # on the attested home and pidfd ownership checks below.
     for signum in (signal.SIGTERM, signal.SIGKILL):
         _signal(home, _running_from(home), signum)
         deadline = time.monotonic() + 3

@@ -180,6 +180,11 @@ def open_to_composer(
     unanswerable: Interstitial | None = None
     while clock() < deadline:
         text = capture()
+        if "Hooks need review" in text:
+            pytest.fail(
+                "BLOCKED: Hooks need review requires explicit owner approval\n" + text,
+                pytrace=False,
+            )
         showing = next((item for item in interstitials if item.marker in text), None)
         if showing is not None:
             if _select(text, showing.choose, press):

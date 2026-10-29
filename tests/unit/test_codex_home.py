@@ -197,7 +197,8 @@ def test_native_pid_namespace_ends_a_detached_child_even_if_it_clears_home(tmp_p
         result = []
         for entry in Path("/proc").glob("[0-9]*"):
             try:
-                if os.readlink(entry / "ns/pid") == value:
+                state = (entry / "stat").read_text().rsplit(")", 1)[1].split()[0]
+                if state not in {"Z", "X"} and os.readlink(entry / "ns/pid") == value:
                     result.append(int(entry.name))
             except OSError:
                 continue
@@ -216,6 +217,9 @@ def test_native_pid_namespace_ends_a_detached_child_even_if_it_clears_home(tmp_p
         held = os.open(f"/proc/{observed[0]}/ns/pid", os.O_RDONLY)
         stop.touch()
         assert process.wait(timeout=5) == 0
+        deadline = time.monotonic() + 2
+        while members(value) and time.monotonic() < deadline:
+            time.sleep(0.01)
         assert not members(value), "a detached daemon survived its fixture namespace"
     finally:
         if process.poll() is None:
@@ -224,3 +228,67 @@ def test_native_pid_namespace_ends_a_detached_child_even_if_it_clears_home(tmp_p
         if held is not None:
             os.close(held)
         retire_codex_home(home, stop=lambda: None)
+
+
+def test_process_scan_retries_transient_unreadability_without_skipping(monkeypatch):
+    import codex_home
+
+    home = short_codex_home()
+    attempts = []
+
+    def belongs(_home, _pid):
+        attempts.append(_pid)
+        if len(attempts) == 1:
+            try:
+                raise PermissionError("exec transition")
+            except PermissionError as error:
+                raise RuntimeError("process ownership could not be read") from error
+        return False
+
+    monkeypatch.setattr(codex_home, "_belongs_to", belongs)
+    monkeypatch.setattr(codex_home.time, "sleep", lambda _: None)
+    try:
+        assert _running_from(home) == []
+        assert len(attempts) > 1
+    finally:
+        shutil.rmtree(home)
+
+
+def test_process_scan_stays_closed_on_persistent_unreadability(monkeypatch):
+    import codex_home
+
+    home = short_codex_home()
+    ticks = iter([0, 1, 3])
+
+    def belongs(*_):
+        try:
+            raise PermissionError("unreadable")
+        except PermissionError as error:
+            raise RuntimeError("process ownership could not be read") from error
+
+    monkeypatch.setattr(codex_home, "_belongs_to", belongs)
+    monkeypatch.setattr(codex_home.time, "monotonic", lambda: next(ticks))
+    monkeypatch.setattr(codex_home.time, "sleep", lambda _: None)
+    try:
+        with pytest.raises(RuntimeError, match="ownership could not be read"):
+            _running_from(home)
+        assert home.exists()
+    finally:
+        shutil.rmtree(home)
+
+
+def test_default_retirement_never_runs_an_unconfined_native_cli(monkeypatch):
+    home = short_codex_home()
+    process, pid = child(home)
+
+    def forbidden(*_args, **_kwargs):
+        raise AssertionError("unconfined daemon management attempted")
+
+    monkeypatch.setattr(subprocess, "run", forbidden)
+    try:
+        retire_codex_home(home)
+        assert process.wait(timeout=5) != 0
+        assert not home.exists()
+    finally:
+        stop_child(process, pid)
+        shutil.rmtree(home, ignore_errors=True)

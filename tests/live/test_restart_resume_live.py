@@ -61,7 +61,6 @@ from uuid import uuid4
 
 import pytest
 import yaml
-from agent_panes import _select
 from codex_home import retire_codex_home, short_codex_home, stop_codex_home
 from native_isolation import claude_command, codex_command
 
@@ -583,35 +582,27 @@ async def _answer_trust(process: _Process, session_id: SessionId) -> None:
         await asyncio.sleep(1.0)
 
 
-#: Codex's question about the hooks this run installed, answered by keys as the other Codex drills
-#: answer it (`agent_panes.CODEX_OPENING`) -- in the disposable `CODEX_HOME` only. The product's
-#: trust answer covers the folder question, not this one.
-_HOOK_REVIEW = "Trust all and continue"
-
-
 async def _until_running(process: _Process, session_id: SessionId, socket: Path) -> None:
     started = time.monotonic()
     while True:
         records = await process.backend.sessions.refresh_readiness()
         record = next(item for item in records if item.session_id == session_id)
+        screen = await process.terminal.capture(session_id)
+        if "Hooks need review" in screen:
+            pytest.fail(
+                "BLOCKED: Codex hook review requires explicit owner approval", pytrace=False
+            )
+        if "Choose the text style that looks best with your terminal" in screen:
+            pytest.fail("BLOCKED: private Claude onboarding is not complete", pytrace=False)
         if record.state is SessionState.RUNNING:
             return
         if record.state is SessionState.UNTRUSTED:
             screen = await process.terminal.capture(session_id)
-            if _HOOK_REVIEW in screen:
-
-                def press(key: str) -> None:
-                    subprocess.run(
-                        ["tmux", "-S", str(socket), "send-keys", "-t", f"=ra-{session_id}:", key],
-                        capture_output=True,
-                        timeout=10,
-                        check=False,
-                    )
-                    time.sleep(0.5)
-
-                assert _select(screen, _HOOK_REVIEW, press), screen
-            else:
-                await _answer_trust(process, session_id)
+            if "Hooks need review" in screen:
+                pytest.fail(
+                    "BLOCKED: Codex hook review requires explicit owner approval", pytrace=False
+                )
+            await _answer_trust(process, session_id)
         assert time.monotonic() - started < _STARTUP_SECONDS, await _diagnosis(
             process, f"{session_id} is {record.state}, not running"
         )

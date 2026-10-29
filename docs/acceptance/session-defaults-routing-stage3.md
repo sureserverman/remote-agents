@@ -66,7 +66,7 @@ outside-folder/restart qualification; BL-SP-003 has both source halves proven bu
 open for final combined acceptance/close-out. BL-136/137/138 andBL-SP-025 remain out of scope.
 No source-only result removes a native or owner gate.
 
-## Outstanding final gate
+## Outstanding at the Task3.2 checkpoint (historical)
 
 Full RA plan-scope lint/format/portable/serial-e2e, both independent Tier2 reviews, final
 native/provider/preset/identity/adoption/restart evidence, deferred Stage1/Telegram user-route
@@ -138,3 +138,88 @@ and operator-runbook.md. Enumeration: `rg -n 'skipped:folder_bound|thread by the
 Those two current guides now describe DEC134 frozen source/destination identity, canonical
 folder recovery, exact Codex binding and explicit native limits; historical acceptance
 captures remain preserved. Task3.2 documentation scope therefore also includes these guides.
+
+
+## Final native attempt and blocked combined gate — 2026-10-29
+
+The exact combined native command ran once, serially:9FAIL3setupERROR1deselected821.68s,
+/tmp/routing-stage3-native-artifact.log. No passing skip or synthetic test replaces it.
+The surviving-turn case remains excluded by the approved BL137/138 scope cut.
+Actual captures show private Claude's initial text-style onboarding, explicit Codex
+hook review, a busy resume composer, and daemon socket startup failure under read-only
+confinement. Fresh unbound Codex attribution remains deliberately unsupported, not inferred
+from a hook mark or inherited daemon starter.
+
+Local fixture repairs preserve those failures. Private TMPDIR/runtime paths alone did not
+resolve startup: a no-model strace found EROFS opening a hard-coded
+/tmp/codex-daemon-1000/*.lock. The child now bind-mounts a private owned lock directory over
+that existing owned canonical target inside its own mount namespace. The host target is
+never created/chmodded/written by the overlay. Synthetic inode and source-refusal controls
+verify this boundary and read-only credential mounts. Default cleanup no longer runs an
+unconfined native manager: it uses exact owned-home, UID/start-time and pidfd attestation;
+explicit caller cleanup uses its confinement. Entire process scans retry transient exec
+unreadability for2s, never skip unknown ownership, and still retain a home on persistent
+failure. Prompt retries apply only to a definitely untouched REFUSED/BUSY outcome, never an
+uncertain delivery. Identity panes preserve dead-screen diagnostics. Owner hook review and
+private Claude onboarding now report explicit prerequisites without granting trust or
+selecting a model/provider.
+
+A Critical safety defect was discovered in the older restart fixture: it automatically
+selected `Trust all and continue`. The initial executor claim that this branch was unreached
+was wrong. Retained private config proved three generated-hook trusted_hash entries.
+The user and reviewers received that correction. Exact before/after evidence is retained in
+/tmp/routing-stage3-private-hook-trust-before.toml and
+/tmp/routing-stage3-private-hook-trust-removal.json. After a run-start-bounded scan found
+0matching actors and0unreadable identities, only those three private entries were removed
+using the owned directory descriptor. No normal profile trust was changed. The inactive
+private home remains as evidence: its original lifecycle FD belonged to the ended pytest,
+so it was not falsely attested/deleted. Three of nine homes named in the failed artifact are
+retained, each with a zero-byte nonsymlink host auth placeholder; latest bounded audit again
+found0matching actors/0unreadable identities. The earlier unconfined cleanup manager was
+removed because private HOME/CODEX_HOME alone does not isolate a hard-coded host runtime
+path. No guessed host-runtime permission baseline was restored.
+
+Safety proof:3FAIL1PASS reproduced private scratch, transient ownership and automatic hook
+selection gaps. A namespace-control race1FAIL27PASS was retained; the final control waits
+boundedly for live actors and excludes zombies. Lock-overlay red1FAIL10deselected and
+unconfined-manager red1FAIL were also retained. Final affected source controls34PASS0.82s;
+Ruff checkPASS and format776filesPASS. Whole-project automatic-selector sweep now finds
+`Trust all and continue` only in negative controls. Required Critical-fix Tier1 and both
+independent Tier2 reviewers approved the native-boundary delta vs5ce7a6cc,0Critical/Important,
+with only the installed catalog-path degradation. These static verdicts do not claim native
+acceptance. Later diagnostic-only retention/finally hardening is executor fix-scope; it
+copies only owned fixture transcripts/stderr, never auth.json, and cannot bypass cleanup.
+
+Native preset observations, in order:
+- Before lock overlay:2PASS2FAIL178.82s; approve_for_me/ask passed fresh and resume; the other
+  two had the startup refusal. Original failures retained.
+- With lock overlay:4FAIL498.56s; all started but completed policy turns were unavailable
+  within120s. No cause is invented for these timeouts.
+- One provider_default diagnostic thenPASS19.40s; the remaining three casesPASS59.37s.
+  Thus all four modes have actual fresh/resume observations on the isolation code. These
+  are individual/focused observations, not a clean combined native receipt. The unexplained
+  earlier four-case timeout remains a native reliability limit. No subsequent failure was
+  available to exercise the added diagnostic-retention branch; it stays available for the
+  next qualification, not fabricated as executed evidence.
+- One repaired identity setup explicitly stops at `Hooks need review requires explicit owner
+  approval`:1setupERROR4.21s, without a model/tool prompt or automatic trust. This is a
+  verified prerequisite refusal, not successful fresh-thread attribution.
+
+The independent Stage3 evaluator used the shipped wheel, installed declared dependencies,
+created five owned projects through the public CLI, and showed them in the dashboard.
+It showed named invalid-input refusals. Its initial no-deps installation mistake is retained
+as evaluator setup history, not a product packaging defect. All three full Outcomes remain
+unreachable. With Telegram variables absent and the isolated credential file withheld,
+public `serve --config` exits1: Telegram environment file is missing; help has no
+transport-free mode. A separate owner-supplied bot/account route is required. No normal
+bot was polled and no external Telegram message was sent. The evaluator finished with no
+owned background processes. Deferred Stage1 and Telegram demonstrations remain obligations.
+
+Both child and master owner-decision readers found no applicable Stage3 entry; childOD1
+names Stage1 only. No final waiver or private-hook approval is inferred from `carry on`.
+ARCH01/02/03/07 conformance retains curated domain argv, declared provider capability absence,
+ports/shared application policy, sibling frontends and composition-owned wiring. DEC134 and
+DECSP013 remain the owning amendments; named backlog IDs stay open. The combined gate must
+remain blocked until explicit private hook/onboarding prerequisites, isolated Telegram
+transport and independently supported fresh-Codex attribution can satisfy the original
+Outcomes. Source work and focused native observations do not close Subplan3 or the master.
