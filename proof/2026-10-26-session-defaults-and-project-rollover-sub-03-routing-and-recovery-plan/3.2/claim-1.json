@@ -1,0 +1,28 @@
+{
+ "baseline": {
+  "elapsed_s": 0.3,
+  "exit": 0,
+  "tail": "...........                                                              [100%]\n11 passed in 0.04s"
+ },
+ "break_patch": "--- a/docs/profile-compatibility.md\n+++ b/docs/profile-compatibility.md\n@@ -24,7 +24,7 @@\n are unconfirmed too (DEC-018), but it is the only ending offered from a state whose stop policy\n otherwise carries force alone.\n \n-| Profile | Fixed launch argv | Availability/auth/trust | Resume catalogue / selection | Readiness evidence | Fixed graceful exit |\n+| Profile | Fixed launch argv | Unavailable metadata | Resume catalogue / selection | Readiness evidence | Fixed graceful exit |\n | --- | --- | --- | --- | --- | --- |\n | `claude` | `claude`, or `claude --remote-control ra-<uuid>` when the stored Remote Control default reads *on* | executable must be present; local auth/trust stays local | documented UUID filenames/project directories plus a bounded generated title or stored resume description; enabled when the catalogue is available | `Claude Code`; a workspace-trust dialog answers the launch as `untrusted` | `/exit`, Enter |\n | `codex` | `codex` plus the selected curated permission flags below | executable must be present; local auth/trust stays local | feature-probed app-server `thread/list` with a bounded provider title or preview when supplied | `/exit` command selection and submit | `/exit`, Enter, Enter |\n",
+ "build": null,
+ "created": "2026-10-29T08:19:11+00:00",
+ "fingerprint": "3bfb97ebaad51062e5a4f8b0c5acd474efdb9ead3f72cf6c1b9a2ff21625432b",
+ "index": 1,
+ "kind": "claim",
+ "named_break": null,
+ "no_build_reason": "Documentation is read directly by the contract checks; workflow trace and private decision records are separately disclosed",
+ "plan": "/mnt/vault/Portfolio/infra/remote-agents/plans/2026-10-26-session-defaults-and-project-rollover-sub-03-routing-and-recovery-plan.md",
+ "red": {
+  "elapsed_s": 0.3,
+  "exit": 1,
+  "tail": "F..........                                                              [100%]\n=================================== FAILURES ===================================\n_______ test_compatibility_document_covers_the_closed_profile_catalogue ________\n\n    def test_compatibility_document_covers_the_closed_profile_catalogue() -> None:\n        document = Path(\"docs/profile-compatibility.md\").read_text(encoding=\"utf-8\")\n    \n        for profile in closed_profiles():\n            profile_id = str(profile.profile_id)\n            assert f\"`{profile_id}`\" in document\n>           assert \"Availability/auth/trust\" in document\nE           AssertionError: assert 'Availability/auth/trust' in '# Profile compatibility and local recovery\\n\\nGet the current machine-readable view with:\\n\\n```bash\\nuv run --locked...ken. `unreachable` means `codex` did not answer at all, which on a host\\nwithout it installed is every path at once.\\n'\n\ntests/contract/test_profile_docs.py:14: AssertionError\n=========================== short test summary info ============================\nFAILED tests/contract/test_profile_docs.py::test_compatibility_document_covers_the_closed_profile_catalogue\n1 failed, 10 passed in 0.06s"
+ },
+ "schema": 2,
+ "task": "3.2",
+ "test": "uv run --locked pytest tests/contract/test_profile_docs.py tests/contract/test_current_activity_docs.py -q",
+ "text": "Check each WF-CONT outcome against the e2e scenario matrix and recorded error outcomes; run `uv run --locked pytest tests/contract/test_profile_docs.py tests/contract/test_current_activity_docs.py -q`. Confirm exact backlog closure conditions from the evidence before removing any ID.",
+ "touched": [
+  "docs/profile-compatibility.md"
+ ]
+}

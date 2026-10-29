@@ -1072,7 +1072,8 @@ Choose there to override one new process, or leave the normal launch/resume flow
 Cancel saves nothing. A continuation normally keeps the preset of its source managed session
 or conversation; a new Settings default does not replace that snapshot. A legacy session with
 no recorded preset uses the current default for its next process. Resuming an already running
-conversation attaches to that session and keeps its existing preset.
+conversation attaches only after its live or preserved pane and ownership are verified. If the
+pane cannot be verified, Resume shows a hold and starts nothing; its existing preset stays intact.
 
 Session detail shows the **requested launch preset**. Native permission controls inside Codex
 remain available; remote-agents does not observe those later edits or claim that its snapshot
@@ -1081,25 +1082,40 @@ and the [continuation contracts](docs/workflows/session-continuation.md).
 
 ## Session rollover
 
-A `claude` or `codex` session executing a plan can hand its work to a fresh session at one of the
-plan's gates (DEC-115). OpenCode and Cursor sessions do not roll over: no handoff writer has been
-ported to them. It is off until you turn on *Roll over to a fresh session on handoff* in Settings,
-on either surface. With it on, the bot's service starts one new session of the same project and
-agent, types that agent's own adopt command into it -- `/planning:executing-plans --adopt-handoff
-<id>` for Claude, `$planning:executing-plans --adopt-handoff <id>` for Codex -- and stops the old
-session only
-after the new one has accepted the handoff, and only when the old one sits idle. It never
-interrupts a turn and never force-stops. **Rollover now** (`l` in the terminal) asks the workflow
-to hand off at its next gate. A Claude session whose plan works in another repository rolls over there: its
-planning writer reports that repository's top level (`PLANNING_HANDOFF_ROOT`), and the new
-session starts in it -- answer the agent's folder-trust question once if it asks. Both need
-staged-planning's planning plugin. An older one reports no root, does not read the request
-**Rollover now** writes, and since 0.67.1 its envelopes are refused, so its handoffs do not
-roll over either (DEC-132). Only a failure
-sends a message: a failed rollover keeps the old
-session, and a failed stop leaves it for you to stop. The runbook's [session
-rollover](docs/operator-runbook.md#session-rollover) section covers what the row notes mean and
-what to do after each failure.
+A managed `claude` or `codex` session can hand work to a fresh session at a plan gate.
+Turn on *Roll over to a fresh session on handoff* in Settings to allow this. **Rollover now**
+asks the workflow to hand off at its next gate; it does not interrupt a turn.
+
+A compatible planning writer can name the destination repository, branch, plan and task.
+The service resolves that folder to one registered project or recorded worktree and freezes
+the destination with the source session's permission preset. A successor belongs to that
+**destination project**, including when the plan files live in a separate records folder.
+A changed, removed, unregistered or ambiguous destination receives a named refusal and keeps
+the old session. A later folder report or Settings change cannot redirect an open handoff.
+
+The successor waits for any folder-trust question, then receives its agent's adopt command:
+`/planning:executing-plans --adopt-handoff <id>` for Claude or
+`$planning:executing-plans --adopt-handoff <id>` for Codex, with the explicit source-root locator.
+The old session stops gracefully only after the successor accepts and the old pane is idle.
+An interrupted launch with an unknown result holds for inspection; it never starts a second
+pane to guess what happened. A verified workflow-finished signal clears only its matching
+outstanding request and starts or stops no session.
+
+Both hosts need a compatible staged-planning writer. Cross-project destinations require a
+reader advertising protocol v2; existing sessions keep the capability advertised at launch.
+The reader still supports v1 and rejects the retired protocol identity. OpenCode and Cursor
+have no supported rollover writer. A fresh Codex conversation without an independent managed
+conversation binding remains unsupervised, including its first cross-repo writer call; the
+service never falls back to the shared daemon's starter identity.
+
+Resume includes appropriate persisted outside-folder conversations from ended sessions as
+well as the project and its surviving worktrees. It retains the original project association,
+folder and saved preset. Root changes or an unavailable existing pane produce a refusal or
+visible hold. Source checks and the observed native Codex resume/hold route do not establish
+the full native-provider, restart or Telegram acceptance matrix. See the
+[continuation contracts](docs/workflows/session-continuation.md) and
+[qualification and later reader-first installation](docs/profile-compatibility.md#continuation-routing-and-qualification).
+Production installation remains a separate operator action.
 
 ## Worktrees
 

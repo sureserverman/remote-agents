@@ -17,7 +17,8 @@ local operator action.
 failing (DEC-016). The owner answers from the bot, which is where the pane is *not* visible;
 the local surface shows the word and hands over the dialog itself, because the console has the
 agent's pane on screen (DEC-047). Saying *yes* is confined to the agents whose dialog this
-project can read — `claude` alone today — and is a keypress into that dialog. Saying
+project can read — `claude` and the declared Codex folder dialog — and is a keypress into that
+exact dialog. A new or unrecognised dialog holds rather than receiving guessed keys. Saying
 *no* is available for every agent, because it ends a session that never started. It takes
 effect without a confirmation step (DEC-078) — not uniquely, since Stop and close and Clean up
 are unconfirmed too (DEC-018), but it is the only ending offered from a state whose stop policy
@@ -80,7 +81,8 @@ For each new process, precedence is:
 | 4 | Current persisted default |
 
 An inherited legacy source without a preset falls back to the current default. An already
-running conversation is reused without changing its preset. Unknown stored metadata is shown
+running conversation is reused only when its pane and project/profile ownership are verified;
+unavailable or unreadable pane evidence holds without changing its preset. Unknown stored metadata is shown
 as unknown; it is never displayed as a fabricated default. Invalid values or an override for
 a provider without this capability refuse before a new pane. Stale buttons re-check capability.
 
@@ -105,6 +107,66 @@ an open native claim, reported as BLOCKED or failed evidence. Optional
 `REMOTE_AGENTS_CODEX_PRESET_REPORT` records only version, preset and observed policy tuples
 after successful cleanup. Live fixture ownership/auth handling is audited again before the
 master's final native run.
+
+## Continuation routing and qualification
+
+The v2 destination is explicit execution metadata, independent of the folder containing the
+plan records. The reader resolves exactly one registered project or recorded worktree and
+stores the source/destination identities, roots, branch, plan/task locator and preset before
+launch. Registry changes, removed roots, branch mismatches and ambiguous folder ownership
+refuse; later writer reports cannot redirect the frozen request channel or target.
+
+The same folder authority serves manual and restart resume. Ended outside-folder bindings
+remain discoverable under their recorded project, deduplicated with the provider catalogue.
+A removed worktree cannot be revived as an outside folder. Automatic legacy recovery without
+an immutable registered-root snapshot holds; explicit current catalogue selection retains
+historical session IDs and supplies its current project context. Existing presets remain
+unchanged on a hold. Ambiguous server loss and surviving-turn restart hardening are still
+separate open work (BL-136/137/138).
+
+For Codex writer attribution, only an exact independent managed conversation binding can
+establish identity. Current hook marks can reject a conflicting binding but cannot establish
+one through their folder/time heuristic. A reported destination root is not identity proof.
+Fresh unbound conversations, missing/stale evidence, ambiguity and unmanaged shells refuse;
+the daemon starter's inherited session is never a fallback. The native first cross-repo
+fresh-conversation claim remains open until that independent binding is demonstrated.
+
+A same-root stage adoption resumes its existing owned run at the actual target task and
+checks that run's latest saved handoff receipt. Different repositories retain independent
+owned runs and source-channel outcomes; copying a predecessor's state or reusing a terminal
+completed run is not destination acceptance.
+
+**Evidence scope.** The five-project source matrix runs the built Claude and Codex writers
+through A→B→B stage 2→C→D worktree→E with real application composition and SQLite, using a
+synthetic terminal. It covers frozen presets, owner/automatic requests, root refusals and
+restart/crash boundaries. Stage 2 separately observed a genuine completed Codex conversation
+resumed through the public terminal and a named hold after its owned pane became unavailable.
+That observation does not qualify every outside-folder, fresh-identity or restart case.
+The final native four-preset/identity/destination-adoption/restart tests and independent
+Stage 1/Telegram demonstrations remain separate required gates. Collection is not acceptance.
+
+**Fixture safety.** The prepared drills confine writable state to owned directories and
+mount existing credentials read-only over empty placeholders. Each uses private HOME and,
+for Codex, a private CODEX_HOME with the qualified local plugin. They do not copy normal
+provider/model choices or hook-trust state, and they never grant hook trust automatically.
+Missing authentication, unsupported provider behavior or required owner hook review is
+BLOCKED. Process cleanup verifies the exact private home, UID/start time and pidfd ownership;
+unreadable ownership or failed cleanup retains the home and reports the failure.
+
+**Later reader-first installation.** This is an operator procedure, not an action performed
+by source qualification:
+
+1. Preserve database and pending handoff evidence; pause new automatic launches before changing
+   an installed service. Keep unresolved transactions available for inspection.
+2. Install a compatible reader accepting v1/v2 before enabling a writer that emits cross-root v2.
+   Apply only additive migrations; preserve folder, root, permission and routing metadata.
+3. Install the corresponding qualified Claude/Codex writer builds and start fresh managed
+   sessions to advertise capabilities. Existing sessions keep their recorded capability;
+   a newer installed reader does not retroactively grant them v2.
+4. Resolve provider authentication/folder trust and any explicit hook review locally, then run
+   the separate native and user-route acceptance gates. An unverified install is not accepted.
+5. Before rollback, drain or explicitly cancel open v2 transactions. Keep their immutable
+   metadata and predecessor panes; do not destructively roll back the database schema.
 
 ## Local recovery
 
