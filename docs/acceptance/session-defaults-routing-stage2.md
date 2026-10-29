@@ -108,3 +108,15 @@ issues (missing Path import and absent Telegram fixture profile) were corrected 
 weakening assertions. The Telegram route then independently failed on the old Not resumed
 message; the TUI failed on an attach request. Final host fix-scope135PASS17.01s. This is
 pre-native repair evidence; native retry and fresh required review remain pending.
+
+
+Required native-hold reviewA routing_stage2_hold_review_a APPROVE0findings over
+6fc460d5..2678cebd. Independent reviewB routing_stage2_hold_review_b resumed after its
+usage reset, REQUESTCHANGES with1Important: use the established ownership-aware
+pane_is_attachable predicate instead of a local live/preserved expression. Fixed exactly
+that expression, keeping all lifetime/state behavior. Six live/preserved wrong-project,
+wrong-profile and missing-ownership cases reproduced RED before repair. Matching live
+controls now provide actual adapter ownership metadata. Focused sweep141PASS16.83s;
+Ruff passes. Important fixes close on fix-scope proof under the execution protocol;
+no later reviewBapproval is invented, no extra review dispatch is owed for this one-line
+repair and no new remediation round is reserved. Native rebuilt-artifact proof pending.

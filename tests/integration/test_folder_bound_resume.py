@@ -540,11 +540,45 @@ async def test_existing_verified_pane_remains_attachable_without_second_launch(
     original = await rig.service.resume(ResumeCommand(PROJECT, CODEX, conversation(), "first"))
 
     async def available(session):
-        return TerminalObservation(session, live=live, preserved=preserved)
+        return TerminalObservation(
+            session, live=live, preserved=preserved, project_id=PROJECT, profile_id=CODEX
+        )
 
     rig.terminal.inspect = available
     outcome = await rig.service.resume(ResumeCommand(PROJECT, CODEX, conversation(), "retry"))
     assert not getattr(outcome, "pane_unavailable", False)
     assert not outcome.created
     assert outcome.record.session_id == original.record.session_id
+    assert len(rig.terminal.presets) == 1
+
+
+@pytest.mark.parametrize("live,preserved", [(True, False), (False, True)])
+@pytest.mark.parametrize("ownership", ["wrong_project", "wrong_profile", "missing"])
+async def test_existing_resume_holds_mismatched_or_missing_pane_ownership(
+    rig, live, preserved, ownership
+):
+    from remote_agents.ports.terminal import TerminalObservation
+
+    first = await rig.service.resume(ResumeCommand(PROJECT, CODEX, conversation(), "first"))
+    before = await rig.store.get(first.record.session_id)
+
+    async def observed(session):
+        return TerminalObservation(
+            session,
+            live=live,
+            preserved=preserved,
+            project_id=OTHER
+            if ownership == "wrong_project"
+            else (None if ownership == "missing" else PROJECT),
+            profile_id=CODEX
+            if ownership == "wrong_project"
+            else (None if ownership == "missing" else type(CODEX)("claude")),
+        )
+
+    rig.terminal.inspect = observed
+    result = await rig.service.resume(ResumeCommand(PROJECT, CODEX, conversation(), "retry"))
+    assert result.pane_unavailable
+    assert not result.created
+    assert result.record == before
+    assert await rig.store.get(before.session_id) == before
     assert len(rig.terminal.presets) == 1

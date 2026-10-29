@@ -607,7 +607,7 @@ class SessionService:
             except Exception:
                 _LOG.exception("the existing resume pane could not be verified")
                 observed = None
-            available = observed is not None and (observed.live or observed.preserved)
+            available = pane_is_attachable(observed, existing)
             return ResumeOutcome(existing, created=False, pane_unavailable=not available)
         preset = await self._resolve_permissions(
             command.profile_id,
