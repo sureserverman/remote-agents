@@ -10,7 +10,7 @@ import time
 from pathlib import Path
 
 import pytest
-from codex_home import _running_from, retire_codex_home, short_codex_home
+from codex_home import _running_from, retire_codex_home, short_codex_home, stop_codex_home
 
 pytestmark = pytest.mark.skipif(
     sys.platform != "linux" or not Path("/proc").is_dir(),
@@ -106,6 +106,26 @@ def test_signal_rechecks_ownership_before_touching_a_stale_pid():
         stop_child(process, pid)
         shutil.rmtree(home)
         shutil.rmtree(other)
+
+
+def test_restart_stop_reaps_only_owned_processes_and_retains_home():
+    home, sibling_home = short_codex_home(), short_codex_home()
+    owned, pid = child(home)
+    sibling, sibling_pid = child(sibling_home)
+    marker = home / "conversation-evidence"
+    marker.write_text("retained")
+    try:
+        stop_codex_home(home, stop=lambda: None)
+        assert owned.wait(timeout=5) != 0
+        assert marker.read_text() == "retained"
+        assert _running_from(home) == []
+        assert sibling.poll() is None
+        assert sibling_pid in _running_from(sibling_home)
+    finally:
+        stop_child(owned, pid)
+        stop_child(sibling, sibling_pid)
+        retire_codex_home(home, stop=lambda: None)
+        retire_codex_home(sibling_home, stop=lambda: None)
 
 
 def test_failed_reaping_retains_home_and_reports_incomplete_cleanup(monkeypatch):

@@ -60,65 +60,20 @@ and the reconciler run on `serve`'s own loop functions (`_roll_over_periodically
   successor comes up trusted. With `REMOTE_AGENTS_LIVE_PROJECT_ROOT` set, the repository is made
   under that already-trusted root instead, and there is nothing to answer.
 
-**Side effects outside the temporary directories.** Claude writes its own transcript under
-`~/.claude/projects/`, and (without a trusted root) a trust entry for the throwaway folder in
-`~/.claude.json`. The owner's activity hooks may spool turns from these sessions into the
-production spool; the production service does not know the session ids. Those three outlive
-the run. The Claude plan runs with the owner's real HOME, so the planning skills could in
-principle reach the owner's registers: the test fingerprints the project registry and the
-vault's Portfolio roll-ups before and after, and fails if either changed. The verb the writer
-runs would likewise record its reported root in the owner's activity directory, so the Claude
-wrapper appends `--activity-dir` with this run's to `PLANNING_SUPERVISOR_ID_CMD`, and the
-fingerprint covers the owner's `roots/` too. This run's root is its project's default one, so it
-does not show a reported root being used; the contract test's `*reported_root*` cases do.
-Everything this test starts is torn down in `finally`: the periodic tasks, the private tmux
-server and every agent in it, the database connection and the fixture repository.
+**Owned state.** Both providers run with private HOME and a read-only host
+filesystem. Login credentials are mounted read-only; transcripts, folder trust,
+activity and planning records stay in owned fixture storage. Missing credentials,
+provider support or explicit hook review remain BLOCKED. Fixture policy is
+independent of the normal profile, and no model/provider preference is selected.
 
-**Permissions.** The sessions run in the owner's own Claude permission mode. Under a mode that
-asks before writing a file, Stage 1 waits on that question and the run fails at its deadline --
-honestly, with the panes in the diagnosis, never as a pass.
-
-**No `remote-agents` wrapper for Claude.** The Claude writer asks who it is by running the
-command in `PLANNING_SUPERVISOR_ID_CMD`, which the service sets in every managed pane: this
-process's interpreter, absolute, with `-I -m remote_agents session-id`. The service under test
-runs in this process, so that command runs this checkout's code, whatever `remote-agents` the
-pane's `PATH` reaches first. The Codex case below keeps its wrapper, because engineering-skills'
-Codex fork still runs a bare `remote-agents`.
-
-**The Codex case** (`test_rollover_now_hands_a_real_plan_to_a_fresh_codex_session`) runs the
-same drive with a real `codex` and the managed `planning@engineering-skills` plugin, typed
-`$planning:executing-plans <plan>`; the pass types Codex's own `$` adopt template. What differs:
-
-- **A short `CODEX_HOME` of its own** (`tests/support/codex_home.py`): a link to the owner's
-  `auth.json`, as every Codex drill makes, which this test never opens and Codex reads; a copy
-  of the owner's installed plugin cache, and of the three config tables that install it (its
-  marketplace, its enablement, its hooks' trusted hashes), matched by whole header; nothing
-  else of the owner's config. After the drive the test asserts the link is still a link and the
-  owner's `auth.json` is unchanged: a Codex that rewrote its login through the link, or replaced
-  the link with a refreshed copy, would leave the owner on a rotated token. Retired in `finally`
-  with the app-server daemon the TUI started there (BL-133), whatever failed before it.
-- **`HOME` is the temporary home, for `codex` and every shell it runs.** The plugin's writer runs
-  `remote-agents session-id` with no argument, and that reads the hook roster under
-  `$HOME/.local/state/remote-agents` -- the owner's real one, which names none of this run's
-  sessions. So the `codex` wrapper sets `HOME`, and puts its own folder first on `PATH`, where a
-  `remote-agents` wrapper beside it runs this checkout's code. Codex's tool shell keeps both
-  (measured 2026-10-16 on codex-cli 0.163.0). It has to be the wrapper: the pane's `PATH` leads
-  with every agent's folder, the owner's `~/.local/bin` among them, so a `PATH` set for the pane
-  reaches the installed `remote-agents` first -- which, before this release, has no
-  `session-id`, and the gate reads no request (the drill's first two runs, 2026-10-16). The
-  roster is the one this run's composition publishes. That `HOME` also holds the planning
-  skills' portfolio config, naming an empty vault beside the repository, and an empty
-  registry: with none, the decisions scan failed at Preflight and Codex stopped to ask
-  (2026-10-16).
-- **Sandboxed, never asking.** `workspace-write`, with `/tmp` and `$TMPDIR` taken out of it
-  (`exclude_slash_tmp`, `exclude_tmpdir_env_var`), and two writable roots: the repository's
-  `.git` (the sandbox makes it read-only otherwise, and the plan commits) and a `tmp` folder
-  beside the repository, which the wrapper names as `TMPDIR`. So the model can write the
-  repository and that folder, and not the rest of `/tmp`: not the owner's tmux socket, not the
-  drill's own `CODEX_HOME` (measured with `codex sandbox`, 2026-10-16). `approval_policy =
-  "never"`, so no approval dialog can stall a turn.
-- **Under `/tmp` directly**, the fixture repository, so the model line Codex draws under its
-  composer stays short.
+**The Codex case** runs the qualified local marketplace named by
+`RA_STAGED_PLANNING`, installed only in a short disposable CODEX_HOME. The
+existing login is a read-only bwrap mount over an empty non-symlink placeholder.
+Only owned fixture roots are writable; HOME, transcripts, hooks, plugin cache and
+all generated configuration stay private. No normal model/provider preference or
+hook trust is copied. Hook review is an owner prerequisite, never auto-answered.
+The source filesystem and normal profile remain read-only. Owned daemon cleanup
+uses the retained-directory and pidfd helper even if a pane or test fails.
 
 **Opt-in.** It runs only when asked: `-m` naming `live_acceptance` (as the gate command above
 does), or `REMOTE_AGENTS_LIVE_ACCEPTANCE=1` as for every other live acceptance test. A plain run
@@ -148,6 +103,8 @@ import pytest
 import yaml
 from _pytest.mark.expression import Expression
 from codex_home import retire_codex_home, short_codex_home
+from cross_project_writer import WriterJourney
+from native_isolation import claude_command, codex_command
 
 from remote_agents.adapters.agents.registry import (
     adopt_templates,
@@ -242,6 +199,8 @@ def _blocked(reason: str) -> None:
 def _planning_checkout() -> Path:
     """The planning plugin to load, which must write handoff envelopes and adopt a handoff."""
     configured = os.environ.get("REMOTE_AGENTS_PLANNING_PLUGIN_DIR")
+    if not configured and os.environ.get("RA_STAGED_PLANNING"):
+        configured = str(Path(os.environ["RA_STAGED_PLANNING"]) / "plugins/claude/planning")
     plugin = (
         Path(configured)
         if configured
@@ -276,7 +235,7 @@ def _prerequisites(config: pytest.Config) -> tuple[Path, Path]:
             "BLOCKED: not asked for; run with `-m live_acceptance` or "
             "REMOTE_AGENTS_LIVE_ACCEPTANCE=1 (a real Claude run, up to 15 minutes)"
         )
-    for needed in ("tmux", "git"):
+    for needed in ("tmux", "git", "bwrap"):
         if shutil.which(needed) is None:
             _blocked(f"executable_missing: {needed}")
     claude = _resolve_profile_executable("claude", Path.home())
@@ -378,69 +337,48 @@ def _isolated_home(root: Path, repo: Path, wrappers: dict[str, str]) -> Producti
     return paths
 
 
-#: The owner's installed Codex plugins, copied into the drill's home.
-_CODEX_PLUGINS = Path.home() / ".codex" / "plugins" / "cache" / "engineering-skills"
-
-
 def _codex_prerequisites(config: pytest.Config) -> Path:
-    """The real `codex`, logged in, with a planning plugin that writes and adopts handoffs."""
+    """Use the qualified built writer; never copy normal plugin or hook trust state."""
     if not _opted_in(config):
-        pytest.skip(
-            "BLOCKED: not asked for; run with `-m live_acceptance` or "
-            "REMOTE_AGENTS_LIVE_ACCEPTANCE=1 (a real Codex run, up to 15 minutes)"
-        )
-    for needed in ("tmux", "git"):
+        pytest.skip("BLOCKED: native acceptance was not requested")
+    for needed in ("tmux", "git", "bwrap"):
         if shutil.which(needed) is None:
             _blocked(f"executable_missing: {needed}")
     codex = _resolve_profile_executable("codex", Path.home())
     if codex is None:
         _blocked("executable_missing: codex")
-    if not (Path.home() / ".codex" / "auth.json").is_file():
-        _blocked("codex is not logged in (no ~/.codex/auth.json)")
-    skills = sorted(
-        _CODEX_PLUGINS.glob("planning/*/skills/executing-plans"),
-        key=lambda skill: tuple(
-            int(piece) if piece.isdigit() else -1 for piece in skill.parents[1].name.split(".")
-        ),
-    )
-    if not skills or not (skills[-1] / "scripts" / "handoff-envelope.py").is_file():
-        _blocked(f"no Codex planning plugin with handoff envelopes under {_CODEX_PLUGINS}")
-    if "--adopt-handoff" not in (skills[-1] / "SKILL.md").read_text(encoding="utf-8"):
-        _blocked(f"the Codex planning plugin at {skills[-1].parents[1]} cannot adopt a handoff")
-    if not (Path.home() / ".codex" / "config.toml").is_file():
-        _blocked("no ~/.codex/config.toml to copy the planning plugin's install from")
-    if "[marketplaces.engineering-skills]" not in _codex_plugin_sections():
-        _blocked("the owner's Codex config installs no engineering-skills marketplace")
+    checkout = os.environ.get("RA_STAGED_PLANNING")
+    if not checkout or not (Path(checkout) / ".agents/plugins/marketplace.json").is_file():
+        _blocked("RA_STAGED_PLANNING must name the qualified built local marketplace")
     return codex
 
 
-def _codex_plugin_sections() -> str:
-    """The tables of the owner's Codex config that install the planning plugin: its
-    marketplace, its enablement and its hooks' trusted hashes. Nothing else of the config: a
-    table is kept by its whole header, so a sub-table under one (which could carry an `env`) or
-    a look-alike name is not."""
-    keep, out = False, []
-    for line in (Path.home() / ".codex" / "config.toml").read_text(encoding="utf-8").splitlines():
-        header = line.strip()
-        if header.startswith("[") and header.endswith("]") and "=" not in header:
-            keep = header in (
-                '[plugins."planning@engineering-skills"]',
-                "[marketplaces.engineering-skills]",
-            ) or (
-                header.startswith('[hooks.state."planning@engineering-skills:')
-                and header.endswith('"]')
-            )
-        if keep:
-            out.append(line)
-    return "\n".join(out) + "\n"
+def _install_codex_plugin(command: tuple[str, ...], root: Path, codex_home: Path) -> None:
+    """Install only in the fixture, without setting hook trust or model/provider preferences."""
+    checkout = Path(os.environ["RA_STAGED_PLANNING"]).resolve()
+    for args in (
+        ("plugin", "marketplace", "add", str(checkout), "--json"),
+        ("plugin", "add", "planning@staged-planning", "--json"),
+    ):
+        result = subprocess.run(
+            [*command, *args], cwd=root, capture_output=True, text=True, timeout=30
+        )
+        if result.returncode:
+            _blocked(f"isolated local plugin setup failed: {args[:2]} exit{result.returncode}")
+    expected = checkout / "plugins/codex/planning/skills/executing-plans/scripts/handoff_v2.py"
+    installed = list((codex_home / "plugins/cache").rglob("handoff_v2.py"))
+    if not installed or any(path.read_bytes() != expected.read_bytes() for path in installed):
+        _blocked("isolated plugin cache does not match the qualified built writer")
 
 
 def _isolated_codex_home(root: Path, repo: Path, codex: Path, codex_home: Path) -> ProductionPaths:
     """`_isolated_home` for Codex: the same config and registry, a `CODEX_HOME` holding the
-    login link and the plugin, and the `codex` and `remote-agents` wrappers (module docstring)."""
+    read-only login mount and local plugin, plus isolated entry-point wrappers."""
     # Beside the repository, so it goes with it; the model's only writable folder outside it.
     scratch = repo.parent / "tmp"
     scratch.mkdir()
+    root.mkdir(mode=0o700, parents=True, exist_ok=True)
+    native_command = codex_command(codex, root, codex_home, repo.parent, operator_home=root)
     paths = _isolated_home(
         root,
         repo,
@@ -452,7 +390,7 @@ def _isolated_codex_home(root: Path, repo: Path, codex: Path, codex_home: Path) 
             "codex": f"HOME={shlex.quote(str(root))} CODEX_HOME={shlex.quote(str(codex_home))} "
             f"TMPDIR={shlex.quote(str(scratch))} "
             f'PATH={shlex.quote(str(root / ".local" / "bin"))}:"$PATH" '
-            f'exec {shlex.quote(str(codex))} "$@"',
+            f'exec {shlex.join(native_command)} "$@"',
             "remote-agents": f'exec {shlex.quote(sys.executable)} -m remote_agents "$@"',
         },
     )
@@ -468,16 +406,16 @@ def _isolated_codex_home(root: Path, repo: Path, codex: Path, codex_home: Path) 
     (root / ".claude" / "projects-registry.yaml").write_text(
         "version: 1\nprojects: []\n", encoding="utf-8"
     )
-    os.symlink(Path.home() / ".codex" / "auth.json", codex_home / "auth.json")
-    shutil.copytree(_CODEX_PLUGINS, codex_home / "plugins" / "cache" / "engineering-skills")
     (codex_home / "config.toml").write_text(
         'approval_policy = "never"\nsandbox_mode = "workspace-write"\n'
+        'cli_auth_credentials_store = "file"\n'
         "[sandbox_workspace_write]\n"
         f"writable_roots = [{json.dumps(str(repo / '.git'))}, {json.dumps(str(scratch))}]\n"
         "exclude_slash_tmp = true\nexclude_tmpdir_env_var = true\n"
-        "[notice]\nhide_rate_limit_model_nudge = true\n\n" + _codex_plugin_sections(),
+        "\n",
         encoding="utf-8",
     )
+    _install_codex_plugin(native_command, root, codex_home)
     return paths
 
 
@@ -501,7 +439,11 @@ async def test_rollover_now_hands_a_real_plan_to_a_fresh_session(
     owners_before = _owner_fingerprint()
     try:
         repo = _fixture_repository(repo_parent)
+        (tmp_path / "home").mkdir(mode=0o700, exist_ok=True)
         activity = ProductionPaths.for_home(tmp_path / "home").activity_directory
+        native_claude = claude_command(
+            claude, tmp_path / "native-claude-home", tmp_path / "home", repo
+        )
         paths = _isolated_home(
             tmp_path / "home",
             repo,
@@ -510,7 +452,7 @@ async def test_rollover_now_hands_a_real_plan_to_a_fresh_session(
                 # writer reports in the owner's activity directory: point it at this run's.
                 "claude": "export PLANNING_SUPERVISOR_ID_CMD="
                 f'"$PLANNING_SUPERVISOR_ID_CMD --activity-dir {shlex.quote(str(activity))}"\n'
-                f"exec {shlex.quote(str(claude))} "
+                f"exec {shlex.join(native_claude)} "
                 f'--plugin-dir {shlex.quote(str(planning))} "$@"'
             },
         )
@@ -568,7 +510,8 @@ async def test_rollover_now_hands_a_real_plan_to_a_fresh_codex_session(
         assert _owner_fingerprint() == owners_before, (
             "the run changed the owner's project registry, Portfolio roll-ups or root reports"
         )
-        assert (codex_home / "auth.json").is_symlink(), "Codex replaced the login link"
+        assert not (codex_home / "auth.json").is_symlink()
+        assert (codex_home / "auth.json").stat().st_size == 0, "credential placeholder was written"
         assert _stat(login) == login_before, "Codex rewrote the owner's auth.json"
     finally:
         try:
@@ -899,3 +842,156 @@ async def _diagnosis(
                 tail = (await harness.terminal.capture(record.session_id)).splitlines()[-25:]
                 lines.extend(f"  | {line}" for line in tail)
     return "\n".join(lines)
+
+
+@pytest.mark.live_acceptance
+@pytest.mark.parametrize("profile", ["claude", "codex"])
+async def test_native_destination_adoption_waits_for_trust_and_preserves_saved_preset(
+    request: pytest.FixtureRequest, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, profile: str
+) -> None:
+    """Real provider adoption at another registered project; source work is synthetic.
+
+    The parent publishes a genuine built-writer handoff for an owned native idle
+    predecessor. This measures destination trust/adoption and persisted routing,
+    separately from the native tool-shell identity drill and five-project source matrix.
+    """
+    checkout = os.environ.get("RA_STAGED_PLANNING")
+    if not _opted_in(request.config):
+        pytest.skip("BLOCKED: native acceptance was not requested")
+    if not checkout:
+        _blocked("RA_STAGED_PLANNING must name the qualified built writer")
+    if profile == "codex":
+        executable = _codex_prerequisites(request.config)
+        planning = None
+    else:
+        executable, planning = _prerequisites(request.config)
+    journey = WriterJourney(tmp_path, Path(checkout), profile)
+    # Give the native successor a complete, executable fixture plan, with external records.
+    target_text = (_FIXTURES / "fixture-plan.md").read_text()
+    target_text = target_text.replace(
+        "Date: 2026-10-05\n",
+        (
+            "Date: 2026-10-05\nMaster: ./journey-master-plan.md\n"
+            f"Execution root: `{journey.destination}`\nExecution branch: `feature`\n"
+        ),
+    )
+    journey.target_plan.write_text(target_text)
+    home = tmp_path / "home"
+    home.mkdir(mode=0o700)
+    tmux_directory = Path(tempfile.mkdtemp(prefix="ra-dest-", dir="/tmp"))
+    monkeypatch.setenv("TMUX_TMPDIR", str(tmux_directory))
+    socket = tmux_directory / f"tmux-{os.getuid()}" / "remote-agents"
+    codex_home = None
+    connection = None
+    try:
+        if profile == "codex":
+            codex_home = short_codex_home()
+            paths = _isolated_codex_home(home, journey.source, executable, codex_home)
+        else:
+            command = claude_command(executable, home, tmp_path)
+            paths = _isolated_home(
+                home,
+                journey.source,
+                {
+                    "claude": (
+                        f'exec {shlex.join(command)} --plugin-dir {shlex.quote(str(planning))} "$@"'
+                    ),
+                    "remote-agents": f'exec {shlex.quote(sys.executable)} -m remote_agents "$@"',
+                },
+            )
+        registry = yaml.safe_load((home / "registry.yaml").read_text())
+        registry["projects"].append(
+            {
+                "path": str(journey.destination),
+                "name": "destination",
+                "area": "live",
+                "enabled": True,
+                "added": str(date.today()),
+            }
+        )
+        (home / "registry.yaml").write_text(yaml.safe_dump(registry))
+        config = load_config(paths.config_path)
+        connection = open_database(paths.database_path, migrations=MIGRATIONS)
+        harness = _compose(config, connection, paths)
+        sessions = harness.backend.sessions
+        # The source is a native idle pane; its completed plan work is synthetic fixture metadata.
+        project_id = next(
+            pid for pid, path in harness.projects.paths.items() if path == journey.source
+        )
+        launched = await sessions.launch(
+            LaunchCommand(project_id, ProfileId(profile), _key("native-source"))
+        )
+        predecessor = launched.record.session_id
+        if launched.record.state is SessionState.UNTRUSTED:
+            await _answer_trust(harness, predecessor)
+        record = await _until_running(harness, predecessor)
+        preset = await sessions.permission_preset(predecessor)
+        journey.predecessor = str(predecessor)
+        journey.state(journey.destination, journey.target_plan)
+        journey.run()
+        rollover_pass = harness.composition.rollover_pass
+        assert rollover_pass is not None
+        await rollover_pass.run_once()
+        row = await harness.backend.rollovers.latest_for(predecessor)
+        assert row is not None and row.state is RolloverState.SUCCESSOR_STARTING, (
+            "BLOCKED: native destination did not present a folder trust hold"
+        )
+        successor = row.successor_session_id
+        assert successor is not None
+        assert (await SQLiteSessionStore(connection).get(predecessor)) == record
+        assert not list((journey.source / ".claude/handoffs").glob("*.accepted.json"))
+        # A retry while trust is unanswered must keep the same successor and source alive.
+        await rollover_pass.run_once()
+        assert (
+            await harness.backend.rollovers.latest_for(predecessor)
+        ).successor_session_id == successor
+        assert len(await sessions.list_sessions()) == 2
+        await _answer_trust(harness, successor)
+        started = time.monotonic()
+        while time.monotonic() - started < _DEADLINE:
+            await sessions.refresh_readiness()
+            await rollover_pass.run_once()
+            row = await harness.backend.rollovers.latest_for(predecessor)
+            if row.state in TERMINAL:
+                break
+            await asyncio.sleep(_POLL_SECONDS)
+        assert row.state is RolloverState.COMPLETED, await _diagnosis(
+            harness, journey.source, predecessor, "native destination adoption failed"
+        )
+        destination_id = next(
+            pid for pid, path in harness.projects.paths.items() if path == journey.destination
+        )
+        records = {item.session_id: item for item in await sessions.list_sessions()}
+        assert records[successor].project_id == destination_id
+        assert records[predecessor].state is SessionState.ENDED
+        assert row.target.destination.root == journey.destination
+        assert row.target.destination.branch == "feature"
+        assert row.target.destination.plan == str(journey.target_plan)
+        assert row.target.destination.locator == "Task 1.1"
+        assert await sessions.permission_preset(successor) is preset
+        assert len(records) == 2
+        history = await harness.backend.rollovers.events(row.id)
+        accepted = next(
+            n
+            for n, event in enumerate(history)
+            if event.to_state is RolloverState.SUCCESSOR_ACCEPTED
+        )
+        stopped = next(
+            n
+            for n, event in enumerate(history)
+            if event.to_state is RolloverState.PREDECESSOR_STOPPING
+        )
+        assert accepted < stopped
+        listing = subprocess.run(
+            ["tmux", "-S", str(socket), "list-panes", "-a", "-F", "#{pane_current_path}"],
+            capture_output=True,
+            text=True,
+            timeout=15,
+        )
+        assert listing.returncode == 0 and str(journey.destination) in listing.stdout.splitlines()
+    finally:
+        _kill_server(socket)
+        if connection is not None:
+            connection.close()
+        if codex_home is not None:
+            retire_codex_home(codex_home)

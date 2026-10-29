@@ -38,8 +38,8 @@ CODEX_OPENING = (
     # 0.158.0's wording, then 0.153.4-0.155.1's.
     Interstitial("Trust this folder?", "Trust and continue"),
     Interstitial("Do you trust the contents of this directory", "Yes, continue"),
-    # Hook trust, granted inside the drill's disposable CODEX_HOME only.
-    Interstitial("Hooks need review", "Trust all and continue"),
+    # Hook review requires an explicit owner decision, even in a disposable home.
+    # A drill must remain blocked here instead of granting trust automatically.
     # 0.155.1, on an account near its limit (BL-105). Measured from the shipped binary's
     # strings; keep the model the drill was configured with.
     Interstitial("Approaching rate limits", "Keep current model"),

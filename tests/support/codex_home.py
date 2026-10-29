@@ -130,8 +130,8 @@ def _signal(home: Path, pids: list[int], signum: int) -> None:
             os.close(descriptor)
 
 
-def retire_codex_home(home: Path, *, stop: Callable[[], None] | None = None) -> None:
-    """Remove only after all processes attesting the fixture home have exited."""
+def stop_codex_home(home: Path, *, stop: Callable[[], None] | None = None) -> None:
+    """Reap exactly owned processes while retaining the home for a restart drill."""
     home = _private_home(home)
     if stop is not None:
         stop()
@@ -141,7 +141,7 @@ def retire_codex_home(home: Path, *, stop: Callable[[], None] | None = None) -> 
             try:
                 subprocess.run(
                     [codex, "app-server", "daemon", "stop"],
-                    env={**os.environ, "CODEX_HOME": str(home)},
+                    env={**os.environ, "HOME": str(home), "CODEX_HOME": str(home)},
                     capture_output=True,
                     timeout=5,
                     check=False,
@@ -155,5 +155,11 @@ def retire_codex_home(home: Path, *, stop: Callable[[], None] | None = None) -> 
             time.sleep(0.1)
     if _running_from(home):
         raise RuntimeError("owned Codex processes remain; fixture home retained")
+
+
+def retire_codex_home(home: Path, *, stop: Callable[[], None] | None = None) -> None:
+    """Remove only after all processes attesting the fixture home have exited."""
+    home = _private_home(home)
+    stop_codex_home(home, stop=stop)
     shutil.rmtree(home)
     os.close(_OWNED_HOMES.pop(home)[0])

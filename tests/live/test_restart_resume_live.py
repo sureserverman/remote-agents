@@ -27,7 +27,8 @@ service's composition: `_local_runtime` and `compose_backend`, built the way
 - **The agents are reached through wrappers**, in the temporary home's `.local/bin`, the first
   place `_resolve_profile_executable` looks. `claude` gains `--settings` with this run's hooks.
   `codex` runs with a short disposable `CODEX_HOME` (`tests/support/codex_home.py`) holding a
-  link to the owner's `auth.json`, never opened here, and this run's `hooks.json`. Both hooks
+  read-only mount of the existing login over an empty host placeholder, plus this run's
+  `hooks.json`. Both hooks
   write to this run's spool, which is where the pass reads the marks.
 - **The folder is trusted by the product's own answer**, as in `test_rollover_live.py`.
 
@@ -49,7 +50,6 @@ import json
 import os
 import shlex
 import shutil
-import signal
 import subprocess
 import sys
 import tempfile
@@ -62,7 +62,8 @@ from uuid import uuid4
 import pytest
 import yaml
 from agent_panes import _select
-from codex_home import retire_codex_home, short_codex_home
+from codex_home import retire_codex_home, short_codex_home, stop_codex_home
+from native_isolation import claude_command, codex_command
 
 from remote_agents.adapters.agents.registry import install_agent_hooks, provider_descriptors
 from remote_agents.adapters.agents.turn_markers import FileConversationMarks, FileTurnMarkers
@@ -119,7 +120,7 @@ def _prerequisites() -> tuple[Path, Path]:
             "BLOCKED: not asked for; run with REMOTE_AGENTS_LIVE_ACCEPTANCE=1 "
             "(a real Claude and Codex turn each)"
         )
-    for needed in ("tmux", "git"):
+    for needed in ("tmux", "git", "bwrap"):
         if shutil.which(needed) is None:
             _blocked(f"executable_missing: {needed}")
     claude = _resolve_profile_executable("claude", Path.home())
@@ -189,7 +190,8 @@ def _isolated_home(
     settings = root / "claude-settings.json"
     settings.write_text("{}\n", encoding="utf-8")
     install_agent_hooks(settings, executable=Path(sys.executable), activity_directory=spool)
-    os.symlink(Path.home() / ".codex" / "auth.json", codex_home / "auth.json")
+    codex_argv = codex_command(codex, root, codex_home, repo, operator_home=root)
+    claude_argv = claude_command(claude, root, repo)
     (codex_home / "config.toml").write_text(
         'approval_policy = "on-request"\nsandbox_mode = "read-only"\n'
         "[notice]\nhide_rate_limit_model_nudge = true\n",
@@ -204,8 +206,8 @@ def _isolated_home(
     bin_directory = root / ".local" / "bin"
     bin_directory.mkdir(parents=True)
     wrappers = {
-        "claude": f'exec {shlex.quote(str(claude))} --settings {shlex.quote(str(settings))} "$@"',
-        "codex": f'CODEX_HOME={shlex.quote(str(codex_home))} exec {shlex.quote(str(codex))} "$@"',
+        "claude": f'exec {shlex.join(claude_argv)} --settings {shlex.quote(str(settings))} "$@"',
+        "codex": f'exec {shlex.join(codex_argv)} "$@"',
     }
     for name, line in wrappers.items():
         wrapper = bin_directory / name
@@ -434,7 +436,7 @@ _LONG_TURN = "Run the shell command `sleep 40`, then reply with exactly the word
 _SLEEP = ("sleep", "40")
 
 
-@pytest.mark.live_acceptance
+# BL-138 is outside this plan; retain its historical skip, exclude it from the live gate.
 @pytest.mark.skip(
     reason="BL-137: fails as measured 2026-10-17 -- the nudge is typed once the surviving turn "
     "ends; reading busy as 'survived' also drops a Codex boot nudge (MCP startup reads busy)"
@@ -552,21 +554,8 @@ def _key(prefix: str) -> str:
 
 
 def _stop_codex_daemon(codex: Path, home: Path) -> None:
-    """End every process running from the drill's `CODEX_HOME`, keeping the home and its
-    threads: after a reboot the daemon is gone and `codex resume` has to start a new one. The
-    daemon runs from a binary inside the home (measured, `codex_home.py`), so `/proc` finds it."""
-    with contextlib.suppress(subprocess.TimeoutExpired):
-        subprocess.run(
-            [str(codex), "app-server", "daemon", "stop"],
-            env={**os.environ, "CODEX_HOME": str(home)},
-            capture_output=True,
-            timeout=5,
-            check=False,
-        )
-    for entry in Path("/proc").glob("[0-9]*"):
-        with contextlib.suppress(OSError):
-            if os.readlink(entry / "exe").startswith(f"{home}/"):
-                os.kill(int(entry.name), signal.SIGKILL)
+    """Reap by exact private-home ownership and pidfd, retaining conversation evidence."""
+    stop_codex_home(home)
 
 
 async def _until_gone(process: _Process) -> None:
