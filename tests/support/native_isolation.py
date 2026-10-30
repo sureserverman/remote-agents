@@ -125,8 +125,18 @@ def codex_command(
     )
 
 
+def claude_first_run_approved() -> bool:
+    """The owner's approval to pass Claude's first run in a disposable home, never a default."""
+    return os.environ.get("REMOTE_AGENTS_LIVE_CLAUDE_FIRST_RUN") == "owner-approved"
+
+
 def claude_command(executable: Path, root: Path, *writable: Path) -> tuple[str, ...]:
     root.mkdir(mode=0o700, parents=True, exist_ok=True)
+    if claude_first_run_approved():
+        # In this disposable home only. Left unset, a drill stays BLOCKED at the theme screen.
+        (root / ".claude.json").write_text(
+            json.dumps({"hasCompletedOnboarding": True, "theme": "dark"})
+        )
     source = Path.home() / ".claude/.credentials.json"
     command = confined_command(
         executable,
