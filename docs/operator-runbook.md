@@ -912,11 +912,12 @@ this. The terminal never does.
   back, and one that never ran does not. Restarting only the service
   leaves the panes alive, so nothing is resumed. Killing one pane while its server runs is not a
   restart either. The record ends as before, and nothing comes back.
-  **Before the first start of 0.68.0, look for old `failed` rows.** A row from before it, with a
-  mark, whose server has restarted since, comes back at that start, even if only the service
-  restarted. List the rows with
-  `sqlite3 ~/.local/state/remote-agents/sessions.sqlite3 "select session_id from sessions where state='failed'"`.
-  A row that has a file in `activity/conversations/` will come back. Force stop any you do not want.
+  **Before you run `upgrade` to 0.68.0, look for old `failed` rows.** `upgrade` restarts the
+  service, so afterwards is too late. A row from before it, with a mark, whose server has
+  restarted since, comes back at that start, even if only the service restarted. List the rows with
+  `sqlite3 ~/.local/state/remote-agents/sessions.sqlite3 "select session_id from sessions where state='failed'"`,
+  and compare them with `ls ~/.local/state/remote-agents/activity/conversations/`. A row with a
+  file there will come back. Force stop any you do not want.
 - **What comes back.** Each interrupted session is resumed with `--resume <id>` /
   `resume <id>` of its last conversation, in its worktree if it had one, labelled *resumed after
   restart*. The conversation is the agent's own id, which the hook writes at each turn's start to

@@ -12,10 +12,13 @@ import os
 from pathlib import Path
 from uuid import uuid4
 
+import pytest
+
 from remote_agents.adapters.tmux.codec import exact_session_target
 from remote_agents.adapters.tmux.gateway import TmuxGateway
 from remote_agents.adapters.tmux.runtime import AsyncTmuxRunner
 from remote_agents.domain.models import SessionId
+from remote_agents.ports.terminal import TerminalTargetMissing
 
 
 class _Gateway(TmuxGateway):
@@ -138,5 +141,20 @@ async def test_a_live_pane_reads_only_its_screen(tmp_path: Path) -> None:
             await asyncio.sleep(0.05)
 
         assert "line-40" in lines and "line-17" not in lines
+    finally:
+        await _kill(runner, socket)
+
+
+async def test_a_pane_that_vanished_is_reported_as_gone(tmp_path: Path) -> None:
+    """The caller answers a press on a pane that went; a raw tmux error would raise into it."""
+    socket = f"remote-agents-test-{uuid4().hex}"
+    runner = AsyncTmuxRunner()
+    gateway = _Gateway(socket, runner, intent_directory=tmp_path / "intents")
+    try:
+        session_id = await _session(runner, socket, "sleep 30")
+        await runner.run("tmux", "-L", socket, "kill-session", "-t", f"=ra-{session_id}:")
+
+        with pytest.raises(TerminalTargetMissing):
+            await gateway.capture_output(session_id)
     finally:
         await _kill(runner, socket)
