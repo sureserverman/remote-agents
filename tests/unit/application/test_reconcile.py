@@ -844,6 +844,31 @@ async def test_an_untrusted_record_whose_dialog_still_stands_is_left_completely_
     assert store.events == []
 
 
+async def test_a_failed_record_whose_pane_is_gone_ends() -> None:
+    """A failed launch with no pane has nothing left to act on, and used to stay listed for ever:
+    `reconcile` already answered ENDED for it, and no lifecycle event carried that out."""
+    failed = record(SessionState.FAILED)
+    store = InMemoryStore((failed,))
+    service = ReconciliationService(store, settle_after=timedelta(0))
+
+    await service.reconcile(())
+
+    assert store.records[failed.session_id].state is SessionState.ENDED
+    assert store.events == [LifecycleEvent.RECONCILED_TERMINAL_MISSING]
+
+
+async def test_a_failed_record_whose_pane_is_dead_stays_failed() -> None:
+    """`remain-on-exit` keeps the output on screen, and the owner may want to read it."""
+    failed = record(SessionState.FAILED)
+    store = InMemoryStore((failed,))
+    service = ReconciliationService(store, settle_after=timedelta(0))
+
+    await service.reconcile((TerminalObservation(failed.session_id, live=False, preserved=True),))
+
+    assert store.records[failed.session_id].state is SessionState.FAILED
+    assert store.events == []
+
+
 async def test_an_untrusted_record_whose_pane_died_at_the_dialog_lands_in_failed() -> None:
     """`remain-on-exit` means the pane does not vanish — it dies in place.
 

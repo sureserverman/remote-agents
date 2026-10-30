@@ -1,0 +1,37 @@
+{
+ "baseline": {
+  "elapsed_s": 0.8,
+  "exit": 0,
+  "tail": "........................................................................ [ 79%]\n...................                                                      [100%]\n91 passed in 0.52s"
+ },
+ "break_patch": "--- a/src/remote_agents/application/reconcile.py\n+++ b/src/remote_agents/application/reconcile.py\n@@ -419,9 +419,6 @@ def _event_for_reconciliation(\n     if result.reason == \"terminal_missing\" and record.state in {\n         SessionState.RUNNING,\n         SessionState.STOP_REQUESTED,\n         SessionState.PRESERVED,\n-        # A failed launch with no pane has nothing left to act on. Its `pane_dead` twin has no\n-        # branch on purpose: `remain-on-exit` keeps that output on screen to be read.\n-        SessionState.FAILED,\n     }:\n         return LifecycleEvent.RECONCILED_TERMINAL_MISSING\n     if result.reason == \"ambiguous_terminal\" and record.state not in {\n",
+ "build": null,
+ "created": "2026-10-30T20:25:47+00:00",
+ "fingerprint": "00e226c8c3a42bf5a06d0556a74607e812234b03237ff0499b73dadd2eb58c53",
+ "index": 1,
+ "kind": "claim",
+ "named_break": null,
+ "no_build_reason": "python source run by uv",
+ "plan": "/mnt/vault/Portfolio/infra/remote-agents/plans/2026-10-30-claude-readiness-signal-plan.md",
+ "red": {
+  "elapsed_s": 0.9,
+  "exit": 1,
+  "tail": "\ntmp_path = PosixPath('/tmp/pytest-of-user/pytest-36/test_a_failed_session_whose_pa1')\n\n    async def test_a_failed_session_whose_pane_went_lets_its_worktree_go_to_the_cleanup(\n        tmp_path,\n    ) -> None:\n        \"\"\"While the row read FAILED it held its folder for ever, because the store's `_HELD` rule\n        keeps a folder for any session not ended.\"\"\"\n        connection = open_database(tmp_path / \"sessions.sqlite3\")\n        store = SQLiteSessionStore(connection)\n        worktrees = SQLiteWorktreeStore(connection)\n        session_id = SessionId.new()\n        await store.save(_failed(session_id))\n        folder = Worktree(\n            Path(tmp_path / \"wt\"),\n            ProjectId(\"opaque-editor\"),\n            \"agent/wt\",\n            \"main\",\n            \"0\" * 40,\n            {},\n            datetime.now(UTC),\n            None,\n        )\n        await worktrees.record(folder, bound_to=session_id)\n        assert await worktrees.removable_candidates() == ()\n    \n        await ReconciliationService(store, settle_after=timedelta(0)).reconcile(())\n    \n>       assert [item.path for item in await worktrees.removable_candidates()] == [folder.path]\nE       AssertionError: assert [] == [PosixPath('/...hose_pa1/wt')]\nE         \nE         Right contains one more item: PosixPath('/tmp/pytest-of-user/pytest-36/test_a_failed_session_whose_pa1/wt')\nE         Use -v to get more diff\n\ntests/integration/sqlite/test_terminal_reason.py:232: AssertionError\n=========================== short test summary info ============================\nFAILED tests/unit/application/test_reconcile.py::test_a_failed_record_whose_pane_is_gone_ends\nFAILED tests/integration/sqlite/test_terminal_reason.py::test_a_failed_session_whose_pane_went_keeps_why_it_ended\nFAILED tests/integration/sqlite/test_terminal_reason.py::test_a_failed_session_whose_pane_went_lets_its_worktree_go_to_the_cleanup\n3 failed, 88 passed in 0.58s"
+ },
+ "schema": 2,
+ "shell": "bash",
+ "task": "2.1",
+ "test": "uv run --locked pytest tests/unit/application/test_reconcile.py tests/integration/sqlite/test_terminal_reason.py tests/architecture/test_policy_matches_domain.py -q",
+ "text": "`uv run --locked pytest tests/unit/application/test_reconcile.py tests/integration/sqlite/test_terminal_reason.py tests/architecture/test_policy_matches_domain.py -q`, with cases: FAILED and no pane ends with `reconciled_terminal_missing`; FAILED and a dead pane stays FAILED; FAILED and a live ready pane is promoted; a FAILED bound session's worktree goes through the existing ended-session cleanup",
+ "touched": [
+  "src/remote_agents/application/reconcile.py"
+ ],
+ "touched_blobs": {
+  "src/remote_agents/application/reconcile.py": "06cacfc9b75b863157710f84bd5f02d1df0c1a3e"
+ },
+ "witness_blobs": {
+  "tests/architecture/test_policy_matches_domain.py": "90b6c6e8fe3e4504707d72bfcaff08ead6b7d2c5",
+  "tests/integration/sqlite/test_terminal_reason.py": "96dc6396e6f08aa9a2d780594d6e9df172718c84",
+  "tests/unit/application/test_reconcile.py": "412bcec56004521aedfe1e6c3f5c901e1d1ebc01"
+ }
+}
