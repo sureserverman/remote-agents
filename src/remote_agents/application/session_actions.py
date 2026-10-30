@@ -159,7 +159,7 @@ _EXPLANATIONS = {
     SessionState.STOP_REQUESTED: "A graceful stop is in progress.",
     SessionState.PRESERVED: "The agent exited; its output is preserved for inspection.",
     SessionState.FAILED: (
-        "The session did not become ready. Its pane may still exist; a later readiness "
+        "The session did not become ready. If its pane is still working, a later readiness "
         "check can still promote it."
     ),
     SessionState.UNTRUSTED: (
