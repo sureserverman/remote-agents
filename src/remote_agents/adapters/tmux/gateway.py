@@ -498,6 +498,30 @@ class TmuxGateway:
         except RuntimeError as error:
             raise _target_missing_or(error, f"ra-{session_id}") from error
 
+    async def capture_output(self, session_id: SessionId) -> str:
+        """Capture what one managed pane has to show its owner, without escape sequences.
+
+        A dead pane also gives its last line of history. tmux writes `Pane is dead` with a
+        linefeed at the bottom of the screen, which always scrolls one line away, and for an
+        agent that printed one fatal error that line is all it said. A live pane reads only its
+        screen, as `capture` does.
+        """
+        target = await self._following_target(session_id)
+        try:
+            dead = await self._runner.run(
+                *self._base_argv(), "display-message", "-p", "-t", target, "#{pane_dead}"
+            )
+            return await self._runner.run(
+                *self._base_argv(),
+                "capture-pane",
+                "-p",
+                *(("-S", "-1") if dead.strip() == "1" else ()),
+                "-t",
+                target,
+            )
+        except RuntimeError as error:
+            raise _target_missing_or(error, f"ra-{session_id}") from error
+
     async def pane_title(self, session_id: SessionId) -> str:
         """Read one managed pane's title without capturing its terminal contents."""
         target = await self._following_target(session_id)

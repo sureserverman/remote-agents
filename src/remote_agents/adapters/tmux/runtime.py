@@ -1084,7 +1084,7 @@ class TmuxTerminal:
 
     async def capture(self, session_id: SessionId) -> str:
         """Return one managed pane's output for the presentation boundary to sanitize."""
-        return await self._gateway.capture(session_id)
+        return await self._gateway.capture_output(session_id)
 
     async def pane_title(self, session_id: SessionId) -> str:
         """Return tmux metadata for one managed pane, never its captured output."""

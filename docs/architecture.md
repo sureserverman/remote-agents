@@ -443,7 +443,7 @@ exists for tests: pointed at a folder with no roster, it turns the roster checks
 
 ## DEC-127 — resuming after a restart
 
-When a reboot or a tmux crash takes the managed panes, `serve` resumes each interrupted RUNNING
+When a reboot or a tmux crash takes the managed panes, `serve` resumes each interrupted
 session once, in its own conversation, and nudges the ones that were mid-turn.
 
 - `adapters/agents/turn_markers.py` (`FileConversationMarks`) reads the conversation marks the

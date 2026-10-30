@@ -156,7 +156,7 @@ def plan_resumes(snapshot: RestartSnapshot) -> tuple[ResumeDecision, ...]:
     **Which records can count** is `may_be_interrupted`: RUNNING, and FAILED with a conversation
     mark (DEC-135, amending DEC-127), because readiness can be misjudged while the agent works.
     A FAILED record with no mark never took a turn, so it is not considered at all, and no
-    other state counts (DEC-020).
+    other state counts (DEC-020), except a session an earlier start left `resuming`.
     """
     if not snapshot.server_known:
         return ()

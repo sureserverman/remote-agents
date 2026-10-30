@@ -5,7 +5,8 @@
     "Notification",
     "SessionEnd",
     "PermissionRequest",
-    "UserPromptSubmit"
+    "UserPromptSubmit",
+    "SessionStart"
   ],
   "systemd_unit_paths": [
     ".config/systemd/user/remote-agents.service",

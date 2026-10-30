@@ -334,7 +334,7 @@ class RestartResume:
     """What `serve` needs to resume, at startup, the sessions a lost tmux server interrupted."""
 
     snapshot: Callable[[], Awaitable[RestartSnapshot | None]]
-    """Read before the first reconcile, while the lost records are still RUNNING. Never raises:
+    """Read before the first reconcile, while the lost records still read as they did. Never raises:
     None when the records themselves could not be read."""
     enabled: Callable[[], Awaitable[bool]]
     """The Settings switch, read toward off (`read_resume_interrupted(when_unsure=False)`)."""
