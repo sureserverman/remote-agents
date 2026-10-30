@@ -454,6 +454,8 @@ async def test_rollover_now_hands_a_real_plan_to_a_fresh_session(
                 "claude": "export PLANNING_SUPERVISOR_ID_CMD="
                 f'"$PLANNING_SUPERVISOR_ID_CMD --activity-dir {shlex.quote(str(activity))}"\n'
                 f"exec {shlex.join(native_claude)} "
+                # `--add-dir` takes many values, so it goes first and "$@" cannot join it.
+                f"--add-dir {shlex.quote(str(planning))} "
                 f'--plugin-dir {shlex.quote(str(planning))} "$@"'
             },
         )
@@ -902,7 +904,8 @@ async def test_native_destination_adoption_waits_for_trust_and_preserves_saved_p
                 journey.source,
                 {
                     "claude": (
-                        f'exec {shlex.join(command)} --plugin-dir {shlex.quote(str(planning))} "$@"'
+                        f"exec {shlex.join(command)} --add-dir {shlex.quote(str(planning))} "
+                        f'--plugin-dir {shlex.quote(str(planning))} "$@"'
                     ),
                     "remote-agents": f'exec {shlex.quote(sys.executable)} -m remote_agents "$@"',
                 },
@@ -941,8 +944,11 @@ async def test_native_destination_adoption_waits_for_trust_and_preserves_saved_p
         assert rollover_pass is not None
         await rollover_pass.run_once()
         row = await harness.backend.rollovers.latest_for(predecessor)
-        assert row is not None and row.state is RolloverState.SUCCESSOR_STARTING, (
-            "BLOCKED: native destination did not present a folder trust hold"
+        assert row is not None and row.state is RolloverState.SUCCESSOR_STARTING, await _diagnosis(
+            harness,
+            journey.source,
+            predecessor,
+            "BLOCKED: native destination did not present a folder trust hold",
         )
         successor = row.successor_session_id
         assert successor is not None
