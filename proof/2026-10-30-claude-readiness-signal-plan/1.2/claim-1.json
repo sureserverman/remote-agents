@@ -1,0 +1,37 @@
+{
+ "baseline": {
+  "elapsed_s": 3.1,
+  "exit": 0,
+  "tail": "Using CPython 3.14.4\nCreating virtual environment at: .venv\n   Building remote-agents @ file:///home/user/dev/infra/remote-agents/.claude/worktrees/rs-prove\n      Built remote-agents @ file:///home/user/dev/infra/remote-agents/.claude/worktrees/rs-prove\nInstalled 63 packages in 11ms\n........................................................................ [ 34%]\n........................................................................ [ 69%]\n...............................................................          [100%]\n207 passed in 1.95s"
+ },
+ "break_patch": "diff --git a/src/remote_agents/adapters/agents/activity_spool.py b/src/remote_agents/adapters/agents/activity_spool.py\nindex 14a1ebee..f36d1093 100644\n--- a/src/remote_agents/adapters/agents/activity_spool.py\n+++ b/src/remote_agents/adapters/agents/activity_spool.py\n@@ -220,7 +220,6 @@ def spool_agent_event(\n             found = licence()\n         # The agent's word that it came up, and nothing it said (DEC-135).\n         if found is not None and found.started_event is not None and event == found.started_event:\n-            FileStartedMarks(activity_directory).mark(session_id)\n             return 0\n         observed = _observed(document, session_id, now(), found)\n         if observed is not None:\n",
+ "build": null,
+ "created": "2026-10-30T19:21:48+00:00",
+ "fingerprint": "115ff41ce1f2b39695d7087e8a598cb5573426fd4dab05f9b9512cad854ca72e",
+ "index": 1,
+ "kind": "claim",
+ "named_break": null,
+ "no_build_reason": "python only",
+ "plan": "/mnt/vault/Portfolio/infra/remote-agents/plans/2026-10-30-claude-readiness-signal-plan.md",
+ "red": {
+  "elapsed_s": 2.8,
+  "exit": 1,
+  "tail": "........................................................................ [ 34%]\n...............................F........................................ [ 69%]\n...............................................................          [100%]\n=================================== FAILURES ===================================\n_______ test_a_managed_session_start_leaves_an_empty_mark_and_no_record ________\n\ntmp_path = PosixPath('/tmp/pytest-of-user/pytest-12/test_a_managed_session_start_l0')\n\n    def test_a_managed_session_start_leaves_an_empty_mark_and_no_record(tmp_path: Path) -> None:\n        directory = _spool(tmp_path)\n    \n        assert _run(_stream(_SESSION_START_PAYLOAD), directory) == 0\n    \n>       assert _started(directory).is_file()\nE       AssertionError: assert False\nE        +  where False = is_file()\nE        +    where is_file = PosixPath('/tmp/pytest-of-user/pytest-12/test_a_managed_session_start_l0/activity/started/s-42').is_file\nE        +      where PosixPath('/tmp/pytest-of-user/pytest-12/test_a_managed_session_start_l0/activity/started/s-42') = _started(PosixPath('/tmp/pytest-of-user/pytest-12/test_a_managed_session_start_l0/activity'))\n\ntests/unit/adapters/agents/test_activity_spool.py:1415: AssertionError\n=========================== short test summary info ============================\nFAILED tests/unit/adapters/agents/test_activity_spool.py::test_a_managed_session_start_leaves_an_empty_mark_and_no_record\n1 failed, 206 passed in 2.00s"
+ },
+ "schema": 2,
+ "shell": "bash",
+ "task": "1.2",
+ "test": "uv run --locked pytest tests/unit/adapters/agents/test_activity_spool.py tests/integration/test_agent_hook_install.py tests/provider_contract/per_provider/test_claude_quirks.py -q",
+ "text": "`uv run --locked pytest tests/unit/adapters/agents/test_activity_spool.py tests/integration/test_agent_hook_install.py tests/provider_contract/per_provider/test_claude_quirks.py -q`, with new cases: a managed SessionStart writes an empty mark and no spool record; an unmanaged one writes nothing; a planted symlink at the mark's name is refused; an unwritable directory exits 0; Codex's licence admits no mark",
+ "touched": [
+  "src/remote_agents/adapters/agents/activity_spool.py"
+ ],
+ "touched_blobs": {
+  "src/remote_agents/adapters/agents/activity_spool.py": "14a1ebee4f31ca944fe0c4df1143ceccebad889a"
+ },
+ "witness_blobs": {
+  "tests/integration/test_agent_hook_install.py": "d44ec760db79b17841cf32631a229c475dd68209",
+  "tests/provider_contract/per_provider/test_claude_quirks.py": "c3213498845c60f9fece708b6fe1bbad4acb0215",
+  "tests/unit/adapters/agents/test_activity_spool.py": "2841f8f620f677baf75f285640e011f4d62903e2"
+ }
+}

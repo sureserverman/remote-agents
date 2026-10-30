@@ -255,6 +255,12 @@ class HookLicence:
     that has not re-run the installer (DEC-051).
     """
 
+    started_event: str | None = None
+    """The event that means this provider's agent came up, or None for none (DEC-135).
+
+    Claude's alone. The spool answers it with the session's started mark and records nothing.
+    """
+
     paused: Callable[[Mapping[str, object]], bool] | None = None
     """A predicate naming an admitted event that only paused the agent, or None for none.
 

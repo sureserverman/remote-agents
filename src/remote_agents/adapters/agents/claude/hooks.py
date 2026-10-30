@@ -11,7 +11,14 @@ from remote_agents.adapters.agents.hook_settings import _HookProvider
 from remote_agents.ports.agent_activity import ActivityKind, ActivitySource
 from remote_agents.ports.provider_descriptor import EventLicence, HookLicence
 
-INSTALLED_EVENTS = ("Stop", "StopFailure", "Notification", "PermissionRequest", "UserPromptSubmit")
+INSTALLED_EVENTS = (
+    "Stop",
+    "StopFailure",
+    "Notification",
+    "PermissionRequest",
+    "UserPromptSubmit",
+    "SessionStart",
+)
 """`PermissionRequest` joined 2026-09-19 (DEC-098).
 
 It is what makes a Claude ask say what it is asking: the `Notification` this service already
@@ -36,6 +43,11 @@ the hook reads the event name and never the prompt. Here, unlike `PermissionRequ
 that has not re-run the installer loses nothing: with no marker the relay reads the screen alone,
 as it did before. Claude reads its hooks when a session starts, so a running session gains the
 marker only once it is relaunched.
+
+**`SessionStart` joined 2026-10-30 (DEC-135)** and leaves the session's started mark, the agent's
+own word that it came up, for a launch whose warnings hold the banner off the screen. Measured in
+`tests/live/test_claude_session_start_hook.py`. A host that has not re-run the installer loses
+nothing it had: readiness reads the screen and the conversation mark, as before.
 """
 
 RETIRED_EVENTS = ("SessionEnd",)
@@ -156,5 +168,6 @@ HOOK_LICENCE = HookLicence(
     # and the drain decides what to interpret; the retired `SessionEnd` (DEC-051) is read here.
     unlisted_events=_RECORD,
     paused=_paused_on_background_work,
+    started_event="SessionStart",
 )
 """What Claude's activity hook may record (BL-050); the descriptor's `activity` is this value."""

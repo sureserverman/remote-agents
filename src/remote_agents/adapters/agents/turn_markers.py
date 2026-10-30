@@ -39,6 +39,7 @@ from remote_agents.ports.session_identity import safe_session_id
 
 TURNS_DIRECTORY = "turns"
 CONVERSATIONS_DIRECTORY = "conversations"
+STARTED_DIRECTORY = "started"
 
 #: Non-blocking, both: a read-only open of a FIFO planted at a marker's name waits for a writer,
 #: and a hook waiting there hangs the owner's live session. On a regular file it changes nothing.
@@ -305,3 +306,58 @@ def _is_regular(entry: os.DirEntry[str]) -> bool:
         return entry.is_file(follow_symlinks=False)
     except OSError:
         return False
+
+
+class FileStartedMarks:
+    """`StartedMarks` as one empty 0600 file per session in a private directory (DEC-135).
+
+    Under the turn markers' rules, for their reasons: the name is accepted only as a session id,
+    the directory is opened through `open_private_directory`, a link planted at the name is
+    refused rather than written through, and nothing here raises.
+    """
+
+    def __init__(self, activity_directory: Path) -> None:
+        self._directory = activity_directory / STARTED_DIRECTORY
+
+    def mark(self, session_id: str) -> None:
+        name = safe_session_id(session_id)
+        if name is None:
+            return
+        directory = open_private_directory(self._directory)
+        if directory is None:
+            return
+        try:
+            os.close(os.open(directory / name, _CREATE, 0o600))
+        except OSError:
+            return
+
+    def exists(self, session_id: str) -> bool:
+        name = safe_session_id(session_id)
+        if name is None or not _is_real_directory(self._directory):
+            return False
+        try:
+            return stat.S_ISREG(os.lstat(self._directory / name).st_mode)
+        except OSError:
+            return False
+
+    def sessions(self) -> tuple[str, ...]:
+        if not _is_real_directory(self._directory):
+            return ()
+        try:
+            entries = list(os.scandir(self._directory))
+        except OSError:
+            return ()
+        return tuple(
+            entry.name
+            for entry in entries
+            if safe_session_id(entry.name) is not None and _is_regular(entry)
+        )
+
+    def forget(self, session_id: str) -> None:
+        name = safe_session_id(session_id)
+        if name is None or not _is_real_directory(self._directory):
+            return
+        try:
+            os.unlink(self._directory / name)
+        except OSError:
+            return

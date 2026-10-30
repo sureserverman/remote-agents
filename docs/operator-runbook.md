@@ -1244,7 +1244,8 @@ Trust affects only local Codex execution; Telegram cannot approve, deny, or othe
 
 With no arguments this writes to `~/.claude/settings.json` — the owner's global agent
 configuration, which this project does not own — and adds one matcherless group to each of
-`Stop`, `StopFailure`, `Notification`, `PermissionRequest` and `UserPromptSubmit` (the
+`Stop`, `StopFailure`, `Notification`, `PermissionRequest`, `UserPromptSubmit` and
+`SessionStart` (the
 `INSTALLED_EVENTS` of `adapters/agents/claude/hooks.py`), each holding one command:
 
 ```json
@@ -1265,8 +1266,8 @@ because nothing reports it. Re-run the install after moving or rebuilding that v
 is recognised by the parsed words after the interpreter, so a stale entry is replaced rather than
 joined by a second one.
 
-**It merges, and it only ever adds those five groups.** Every other key, every other event, and
-every other group under those five events is copied across untouched — including a `SessionEnd`
+**It merges, and it only ever adds those six groups.** Every other key, every other event, and
+every other group under those six events is copied across untouched — including a `SessionEnd`
 hook of your own, which is the case this host's real settings file presents. **It is idempotent:**
 a second run reports `agent hooks already current in <path>` and writes nothing. If an entry
 already runs this subcommand in a form the installer does not recognise — a wrapper, a hand-edit,
@@ -1282,7 +1283,7 @@ line 2 column 1 (char 19)); it has been left untouched
 ```
 
 The same refusal, always without writing, covers a `hooks` key that is not a JSON object, one of
-those five events whose value is not a JSON array, a file whose exact formatting cannot be
+those six events whose value is not a JSON array, a file whose exact formatting cannot be
 reproduced (so a later `--remove` would reformat the rest of it), an empty `"hooks": {}` block
 that removal could not tell apart from no `hooks` key at all, and a file that changed on disk
 while the command was preparing its edit. Each prints its reason on standard error and exits 1.
@@ -1297,13 +1298,13 @@ anywhere else in production means the hooks spool where the service does not rea
 
 ### Verifying the install
 
-Confirm the five groups are present:
+Confirm the six groups are present:
 
 ```bash
 python3 -m json.tool ~/.claude/settings.json | grep -c 'remote_agents agent-event'
 ```
 
-That must report `5` (`4` before 0.49.0, which added `UserPromptSubmit`). Then confirm the guard, which is what makes a global hook safe to install —
+That must report `6` (`5` before 0.68.0, which added `SessionStart`; `4` before 0.49.0, which added `UserPromptSubmit`). Then confirm the guard, which is what makes a global hook safe to install —
 the hook writes nothing and exits 0 when `REMOTE_AGENTS_SESSION_ID` is absent from its
 environment, so a Claude session started outside a managed pane notifies nobody (a Codex hook is
 guarded by the roster instead, below):
@@ -2556,7 +2557,9 @@ Rolling the *code* back is the upgrade path run at the earlier tag: re-run the i
 re-install them with the older version. An older `--remove` does not know the `UserPromptSubmit`
 group, so it would stay behind. It would be harmless: the older hook records the event's name
 alone, which its drain discards, and never the prompt. Removing it first just leaves nothing
-behind. **Rolling back below 0.55.0: delete `cursor_limits_source` and `resume_after_limit`
+behind. **Rolling back below 0.68.0: the same, for `SessionStart`.** Remove the hooks while 0.68.0
+is installed. Left behind, the older hook records that event's name and its drain discards it.
+**Rolling back below 0.55.0: delete `cursor_limits_source` and `resume_after_limit`
 from the `[limits]` table of `config.toml` first.** Either Settings switch writes its key there
 the first time it is used, and an older version refuses a config with a key it does not know,
 so `serve`, `tui` and `add-project` would all fail to start. A host that never touched either

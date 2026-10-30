@@ -1389,3 +1389,70 @@ def test_an_unresolved_stop_ends_no_marker_and_a_resolved_one_ends_only_its_own(
 
 def _read(path: Path) -> dict[str, Any]:
     return json.loads(path.read_text(encoding="utf-8"))
+
+
+# --- The started mark (DEC-135) -------------------------------------------------------------
+
+_SESSION_START_PAYLOAD: dict[str, Any] = {
+    "session_id": "f4020001-e712-4832-9fc8-dd28d38d5b8a",
+    "transcript_path": "/home/user/.claude/projects/infra/f4020001.jsonl",
+    "cwd": "/tmp/scratch",
+    "model": "claude-opus-5-5",
+    "source": "startup",
+    "hook_event_name": "SessionStart",
+}
+
+
+def _started(directory: Path, session_id: str = "s-42") -> Path:
+    return directory / "started" / session_id
+
+
+def test_a_managed_session_start_leaves_an_empty_mark_and_no_record(tmp_path: Path) -> None:
+    directory = _spool(tmp_path)
+
+    assert _run(_stream(_SESSION_START_PAYLOAD), directory) == 0
+
+    assert _started(directory).is_file()
+    assert _started(directory).read_bytes() == b""
+    assert stat.S_IMODE(_started(directory).stat().st_mode) == 0o600
+    assert _records(directory) == []
+
+
+def test_a_session_this_service_did_not_start_leaves_no_mark(tmp_path: Path) -> None:
+    directory = _spool(tmp_path)
+
+    assert _run(_stream(_SESSION_START_PAYLOAD), directory, session_id=None) == 0
+
+    assert not (directory / "started").exists()
+    assert _records(directory) == []
+
+
+def test_a_link_planted_at_the_mark_is_refused_rather_than_written_through(tmp_path: Path) -> None:
+    directory = _spool(tmp_path)
+    (directory / "started").mkdir(mode=0o700)
+    target = tmp_path / "elsewhere"
+    target.write_bytes(b"untouched")
+    _started(directory).symlink_to(target)
+
+    assert _run(_stream(_SESSION_START_PAYLOAD), directory) == 0
+
+    assert target.read_bytes() == b"untouched"
+    assert _records(directory) == []
+
+
+def test_a_mark_that_cannot_be_written_costs_the_agent_nothing(tmp_path: Path) -> None:
+    directory = _spool(tmp_path)
+    (directory / "started").write_bytes(b"a file where the directory belongs")
+
+    assert _run(_stream(_SESSION_START_PAYLOAD), directory) == 0
+
+    assert _records(directory) == []
+
+
+@pytest.mark.parametrize("provider", ["codex", "cursor", _UNDECLARED])
+def test_only_a_provider_that_declares_the_event_gets_a_mark(provider: str, tmp_path: Path) -> None:
+    directory = _spool(tmp_path)
+
+    assert _run(_stream(_SESSION_START_PAYLOAD), directory, provider=provider) == 0
+
+    assert not (directory / "started").exists()

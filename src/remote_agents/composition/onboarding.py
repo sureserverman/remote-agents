@@ -341,14 +341,14 @@ def _offer_the_status_line_hop(
     **The prompt names everything the yes writes, and that is the whole point of the function.**
     A Tier-1 review caught the first version describing only the status-line wrap while the call
     installs the wrap **and** the event-hook groups of
-    `adapters.agents.claude.hooks.INSTALLED_EVENTS` (five since 0.49.0: `Stop`, `StopFailure`,
-    `Notification`, `PermissionRequest`, `UserPromptSubmit`) that fire in **every** Claude session
-    on the host, not only sessions this project manages. The gate's predicate
-    (`claude_status_line_hop_installed`, which answers only about the wrap) is deliberately
-    narrower than the gate's effect, so the prose has to close that gap — an operator who says
-    yes to a rate-limit question and silently gains five always-on hooks has not consented to
-    what happened, and reversibility does not cure it because they have no reason to reverse
-    something they do not know is there.
+    `adapters.agents.claude.hooks.INSTALLED_EVENTS` (six since 0.68.0: `Stop`, `StopFailure`,
+    `Notification`, `PermissionRequest`, `UserPromptSubmit`, `SessionStart`) that fire in
+    **every** Claude session on the host, not only sessions this project manages. The gate's
+    predicate (`claude_status_line_hop_installed`, which answers only about the wrap) is
+    deliberately narrower than the gate's effect, so the prose has to close that gap — an
+    operator who says yes to a rate-limit question and silently gains six always-on hooks has
+    not consented to what happened, and reversibility does not cure it because they have no
+    reason to reverse something they do not know is there.
 
     **Three gates, and each exists for a different reason.**
 
@@ -406,12 +406,13 @@ def _offer_the_status_line_hop(
     print(f"  Installing the agent hooks would write two things into {settings_path}:")
     print("    - the status-line hop: it wraps your existing status line, records only the")
     print("      limit windows, and hands the same input on to whatever you had;")
-    print("    - five event hooks, Stop / StopFailure / Notification /")
-    print("      PermissionRequest / UserPromptSubmit, which fire in")
+    print("    - six event hooks, Stop / StopFailure / Notification /")
+    print("      PermissionRequest / UserPromptSubmit / SessionStart, which fire in")
     print("      EVERY Claude session on this host, not only ones this project started,")
     print("      and are how the bot learns an agent has finished or is waiting.")
     print("      UserPromptSubmit is handed each prompt you type; it keeps none of it, only")
     print("      that a turn started, and only in sessions this project started.")
+    print("      SessionStart keeps only that the agent came up, as an empty file, likewise.")
     print("  Both are reversible: `remote-agents install-agent-hooks --provider claude --remove`.")
     if confirm("Install them now?") is not True:
         return False
