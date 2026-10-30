@@ -1,6 +1,6 @@
 {
- "created": "2026-10-30T19:19:19+00:00",
- "fingerprint": "3f716cf34c01d6405a5fb473163578412f55362ea5ef78a50f20084964e881a1",
+ "created": "2026-10-30T19:38:53+00:00",
+ "fingerprint": "e8035379eb947cbc07978825f9f2e9570e7974b9a952cbb3a17b7a3741b90f37",
  "index": 1,
  "kind": "claim-deviation",
  "plan": "/mnt/vault/Portfolio/infra/remote-agents/plans/2026-10-30-claude-readiness-signal-plan.md",
