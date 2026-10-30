@@ -904,8 +904,8 @@ this. The terminal never does.
   false`). `serve` reads the switch once at startup, and an unreadable file counts as off. The
   Settings row reads the same file toward its default, so a file edited into a broken state
   while `serve` runs can show *on* in the row and resume nothing at the next start. With the
-  switch off, nothing is resumed and nothing is written, so conversation marks wait until a
-  start with it on.
+  switch off, nothing is resumed and nothing is written, so conversation marks and started
+  marks wait until a start with it on.
 - **What counts as interrupted.** A record still `running` whose pane is gone, **and** a tmux
   server that is gone or started after that record was created. Restarting only the service
   leaves the panes alive, so nothing is resumed. Killing one pane while its server runs is not a
@@ -1227,6 +1227,17 @@ uv run --locked remote-agents install-agent-hooks --provider cursor
 > **If you do not re-run them, nothing breaks.** No marker is written, and the relay goes on
 > reading the screen alone, as before 0.49.0. A message sent while Claude streams can then still
 > be typed into the running turn. Agents read their hooks when a session starts, so sessions
+> already running pick the hook up only once they are relaunched.
+
+> **Upgrading to 0.68.0 or later: re-run the `claude` line.** It gained a `SessionStart` hook on
+> 2026-10-30 (DEC-135). When a managed session starts it leaves an empty file,
+> `started/<session id>` in the activity spool, and keeps nothing the session said. That file is
+> how the service knows Claude came up when its own startup warnings hold the banner off the
+> screen.
+>
+> **If you do not re-run it, nothing else changes.** A launch whose banner stays off the screen
+> is recorded `failed` at 20 seconds, as before 0.68.0, and is promoted to `running` by the
+> repair pass after its first prompt. Agents read their hooks when a session starts, so sessions
 > already running pick the hook up only once they are relaunched.
 
 `--remove` takes any of them back out. For opencode that deletes the generated plugin file as
