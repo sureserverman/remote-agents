@@ -1,22 +1,22 @@
 {
  "baseline": {
-  "elapsed_s": 0.7,
+  "elapsed_s": 0.8,
   "exit": 0,
-  "tail": "........                                                                 [100%]\n8 passed in 0.48s"
+  "tail": "........                                                                 [100%]\n8 passed in 0.49s"
  },
  "break_patch": "diff --git a/src/remote_agents/adapters/tmux/runtime.py b/src/remote_agents/adapters/tmux/runtime.py\nindex 536203e8..0562125b 100644\n--- a/src/remote_agents/adapters/tmux/runtime.py\n+++ b/src/remote_agents/adapters/tmux/runtime.py\n@@ -609,12 +609,7 @@ class TmuxTerminal:\n         if profile.readiness_marker is None or profile.readiness_marker in capture:\n             return True\n         session = str(session_id)\n-        if self._started_marks is not None and self._started_marks.exists(session):\n-            return True\n-        return (\n-            self._conversation_marks is not None\n-            and self._conversation_marks.latest(session) is not None\n-        )\n+        return False\n \n     def _is_awaiting_trust(\n         self, profile: LaunchProfile, profile_id: ProfileId, capture: str\n",
  "build": null,
- "created": "2026-10-30T19:22:42+00:00",
- "fingerprint": "af9511a68945d329b08ab49caa094199bbbc85d71ef3199f53b6eb3e280c69cf",
+ "created": "2026-10-30T21:19:56+00:00",
+ "fingerprint": "48bc0fd6c6d53b12af8fa51c624b24647b8e3d4e0158e4980e74bd577a6243ea",
  "index": 1,
  "kind": "claim",
  "named_break": null,
  "no_build_reason": "python only",
  "plan": "/mnt/vault/Portfolio/infra/remote-agents/plans/2026-10-30-claude-readiness-signal-plan.md",
  "red": {
-  "elapsed_s": 1.0,
+  "elapsed_s": 1.1,
   "exit": 1,
-  "tail": "FF......                                                                 [100%]\n=================================== FAILURES ===================================\n_________________ test_no_banner_and_a_mark_is_ready[started] __________________\n\nmark = 'started'\ntmp_path = PosixPath('/tmp/pytest-of-user/pytest-17/test_no_banner_and_a_mark_is_r0')\n\n    @pytest.mark.parametrize(\"mark\", [\"started\", \"conversation\"])\n    async def test_no_banner_and_a_mark_is_ready(mark: str, tmp_path: Path) -> None:\n        session_id = SessionId.new()\n        terminal = _terminal(tmp_path, session_id, _NO_BANNER)\n        _give(tmp_path, session_id, mark)\n    \n>       assert (await _settle(terminal, session_id)).live\nE       AssertionError: assert False\nE        +  where False = TerminalObservation(session_id=SessionId(value=UUID('355859f9-8e27-430a-a06b-2150cacae991')), live=False, preserved=False, detail='startup_timeout', project_id=None, profile_id=None, host_session=None, awaiting_trust=False).live\n\ntests/unit/adapters/tmux/test_readiness_marks.py:112: AssertionError\n_______________ test_no_banner_and_a_mark_is_ready[conversation] _______________\n\nmark = 'conversation'\ntmp_path = PosixPath('/tmp/pytest-of-user/pytest-17/test_no_banner_and_a_mark_is_r1')\n\n    @pytest.mark.parametrize(\"mark\", [\"started\", \"conversation\"])\n    async def test_no_banner_and_a_mark_is_ready(mark: str, tmp_path: Path) -> None:\n        session_id = SessionId.new()\n        terminal = _terminal(tmp_path, session_id, _NO_BANNER)\n        _give(tmp_path, session_id, mark)\n    \n>       assert (await _settle(terminal, session_id)).live\nE       AssertionError: assert False\nE        +  where False = TerminalObservation(session_id=SessionId(value=UUID('3182e7b9-8d1f-4aa2-89fe-4a7d7fb843b2')), live=False, preserved=False, detail='startup_timeout', project_id=None, profile_id=None, host_session=None, awaiting_trust=False).live\n\ntests/unit/adapters/tmux/test_readiness_marks.py:112: AssertionError\n=========================== short test summary info ============================\nFAILED tests/unit/adapters/tmux/test_readiness_marks.py::test_no_banner_and_a_mark_is_ready[started]\nFAILED tests/unit/adapters/tmux/test_readiness_marks.py::test_no_banner_and_a_mark_is_ready[conversation]\n2 failed, 6 passed in 0.72s"
+  "tail": "FF......                                                                 [100%]\n=================================== FAILURES ===================================\n_________________ test_no_banner_and_a_mark_is_ready[started] __________________\n\nmark = 'started'\ntmp_path = PosixPath('/tmp/pytest-of-user/pytest-57/test_no_banner_and_a_mark_is_r0')\n\n    @pytest.mark.parametrize(\"mark\", [\"started\", \"conversation\"])\n    async def test_no_banner_and_a_mark_is_ready(mark: str, tmp_path: Path) -> None:\n        session_id = SessionId.new()\n        terminal = _terminal(tmp_path, session_id, _NO_BANNER)\n        _give(tmp_path, session_id, mark)\n    \n>       assert (await _settle(terminal, session_id)).live\nE       AssertionError: assert False\nE        +  where False = TerminalObservation(session_id=SessionId(value=UUID('4899926a-a072-4fa1-a2c9-2879f7bbe932')), live=False, preserved=False, detail='startup_timeout', project_id=None, profile_id=None, host_session=None, awaiting_trust=False).live\n\ntests/unit/adapters/tmux/test_readiness_marks.py:112: AssertionError\n_______________ test_no_banner_and_a_mark_is_ready[conversation] _______________\n\nmark = 'conversation'\ntmp_path = PosixPath('/tmp/pytest-of-user/pytest-57/test_no_banner_and_a_mark_is_r1')\n\n    @pytest.mark.parametrize(\"mark\", [\"started\", \"conversation\"])\n    async def test_no_banner_and_a_mark_is_ready(mark: str, tmp_path: Path) -> None:\n        session_id = SessionId.new()\n        terminal = _terminal(tmp_path, session_id, _NO_BANNER)\n        _give(tmp_path, session_id, mark)\n    \n>       assert (await _settle(terminal, session_id)).live\nE       AssertionError: assert False\nE        +  where False = TerminalObservation(session_id=SessionId(value=UUID('ebef022f-41d7-47ef-8141-80c2bbbe1146')), live=False, preserved=False, detail='startup_timeout', project_id=None, profile_id=None, host_session=None, awaiting_trust=False).live\n\ntests/unit/adapters/tmux/test_readiness_marks.py:112: AssertionError\n=========================== short test summary info ============================\nFAILED tests/unit/adapters/tmux/test_readiness_marks.py::test_no_banner_and_a_mark_is_ready[started]\nFAILED tests/unit/adapters/tmux/test_readiness_marks.py::test_no_banner_and_a_mark_is_ready[conversation]\n2 failed, 6 passed in 0.78s"
  },
  "schema": 2,
  "shell": "bash",
@@ -27,7 +27,7 @@
   "src/remote_agents/adapters/tmux/runtime.py"
  ],
  "touched_blobs": {
-  "src/remote_agents/adapters/tmux/runtime.py": "536203e8956d894980568efd1e763406cb87ab0c"
+  "src/remote_agents/adapters/tmux/runtime.py": "281dc3947a8363b49dbe5ff3cec36d9c822cc2c5"
  },
  "witness_blobs": {
   "tests/unit/adapters/tmux/test_readiness_marks.py": "5f526cc5b258f3d4c36e90fb6a7027073e56af50"
