@@ -906,11 +906,13 @@ this. The terminal never does.
   while `serve` runs can show *on* in the row and resume nothing at the next start. With the
   switch off, nothing is resumed and nothing is written, so conversation marks and started
   marks wait until a start with it on.
-- **What counts as interrupted.** A record still `running` whose pane is gone, **and** a tmux
-  server that is gone or started after that record was created. Restarting only the service
+- **What counts as interrupted.** A record still `running`, or a `failed` one with a readable
+  conversation mark, whose pane is gone, **and** a tmux server that is gone or started after that record was
+  created. The mark proves the agent took a turn, so a launch judged failed while it worked comes
+  back, and one that never ran does not. Restarting only the service
   leaves the panes alive, so nothing is resumed. Killing one pane while its server runs is not a
   restart either. The record ends as before, and nothing comes back.
-- **What comes back.** Each interrupted `running` session is resumed with `--resume <id>` /
+- **What comes back.** Each interrupted session is resumed with `--resume <id>` /
   `resume <id>` of its last conversation, in its worktree if it had one, labelled *resumed after
   restart*. The conversation is the agent's own id, which the hook writes at each turn's start to
   `~/.local/state/remote-agents/activity/conversations/<session>`. With no such mark, the

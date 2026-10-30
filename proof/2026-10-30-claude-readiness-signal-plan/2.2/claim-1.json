@@ -1,0 +1,35 @@
+{
+ "baseline": {
+  "elapsed_s": 0.4,
+  "exit": 0,
+  "tail": "................................................                         [100%]\n48 passed in 0.07s"
+ },
+ "break_patch": "--- a/src/remote_agents/application/interrupted_resume.py\n+++ b/src/remote_agents/application/interrupted_resume.py\n@@ -220,8 +220,7 @@\n     not count, because a resume that failed never proved a turn.\"\"\"\n     if record.state is SessionState.RUNNING:\n         return True\n-    if record.state is not SessionState.FAILED:\n-        return False\n+    return False\n     mark = marks.get(str(record.session_id))\n     if mark is None:\n         return False\n",
+ "build": null,
+ "created": "2026-10-30T20:29:58+00:00",
+ "fingerprint": "6fb7192c018d3351b2bbbccdc891a0362b5862a7d1eafdb8ba9b8a30e58187cd",
+ "index": 1,
+ "kind": "claim",
+ "named_break": null,
+ "no_build_reason": "python source run by uv",
+ "plan": "/mnt/vault/Portfolio/infra/remote-agents/plans/2026-10-30-claude-readiness-signal-plan.md",
+ "red": {
+  "elapsed_s": 0.4,
+  "exit": 1,
+  "tail": ".............F.....F............................                         [100%]\n=================================== FAILURES ===================================\n__ test_a_failed_record_that_took_a_turn_is_resumed_once_after_a_lost_server ___\n\n    def test_a_failed_record_that_took_a_turn_is_resumed_once_after_a_lost_server() -> None:\n        \"\"\"The incident: recorded failed at launch + 20 s, worked for three hours, lost at a reboot.\"\"\"\n        record = _record(state=SessionState.FAILED)\n    \n>       (decision,) = plan_resumes(_snapshot(_lost(record), marks={record: \"conv-a\"}))\n        ^^^^^^^^^^^\nE       ValueError: not enough values to unpack (expected 1, got 0)\n\ntests/unit/application/test_interrupted_resume.py:185: ValueError\n_ test_a_failed_record_whose_conversation_another_live_record_holds_is_already_open _\n\n    def test_a_failed_record_whose_conversation_another_live_record_holds_is_already_open() -> None:\n        record = _record(state=SessionState.FAILED)\n        other = _record(created=CREATED + timedelta(hours=1))\n    \n        decisions = plan_resumes(\n            _snapshot(_lost(record), _live(other), marks={record: \"conv-a\", other: \"conv-a\"})\n        )\n    \n>       assert [(item.record, item.skip) for item in decisions] == [(record, ResumeSkip.ALREADY_OPEN)]\nE       AssertionError: assert [] == [(SessionReco...ready-open'>)]\nE         \nE         Right contains one more item: (SessionRecord(session_id=SessionId(value=UUID('4ec3c687-21e4-45ab-ac92-2143f02bc4ba')), project_id=ProjectId(value='r...e, terminal_reason=None, orphan_provenance=None, remote_control_state=None), <ResumeSkip.ALREADY_OPEN: 'already-open'>)\nE         Use -v to get more diff\n\ntests/unit/application/test_interrupted_resume.py:237: AssertionError\n=========================== short test summary info ============================\nFAILED tests/unit/application/test_interrupted_resume.py::test_a_failed_record_that_took_a_turn_is_resumed_once_after_a_lost_server\nFAILED tests/unit/application/test_interrupted_resume.py::test_a_failed_record_whose_conversation_another_live_record_holds_is_already_open\n2 failed, 46 passed in 0.10s"
+ },
+ "schema": 2,
+ "shell": "bash",
+ "task": "2.2",
+ "test": "uv run --locked pytest tests/unit/application/test_interrupted_resume.py -q",
+ "text": "`uv run --locked pytest tests/unit/application/test_interrupted_resume.py -q`, with cases: FAILED with a mark after a server restart is resumed once; FAILED with no mark is not; FAILED with only `resume_source_id` is not; FAILED with a mark and a listed pane is not; FAILED held by another live record is `already-open`; UNTRUSTED, STARTING and ORPHANED with a mark are still not resumed",
+ "touched": [
+  "src/remote_agents/application/interrupted_resume.py"
+ ],
+ "touched_blobs": {
+  "src/remote_agents/application/interrupted_resume.py": "5470ff01a802ae7278ca9bcf516aa23734c796f8"
+ },
+ "witness_blobs": {
+  "tests/unit/application/test_interrupted_resume.py": "3d3ebcae9390fbe7db3b2de34c3897ad6c76b97a"
+ }
+}

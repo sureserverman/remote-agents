@@ -46,6 +46,7 @@ from remote_agents.domain.models import (
     SessionRecord,
     SessionState,
 )
+from remote_agents.domain.rollover import RolloverState
 from remote_agents.ports.terminal import TerminalObservation
 
 _SECRETS = TelegramSecrets("token", 7, 11)
@@ -91,14 +92,21 @@ class Rig:
         self.notices: list[tuple[tuple[ResumeReport, ...], int]] = []
         self.events: list[str] = []
         self.snapshots: list[object] = []
+        self.marks_during_pass: list[set[str]] = []
 
-    async def running(self, *, mid_turn: bool = False, mark: bool = True) -> SessionRecord:
+    async def running(
+        self,
+        *,
+        mid_turn: bool = False,
+        mark: bool = True,
+        state: SessionState = SessionState.RUNNING,
+    ) -> SessionRecord:
         record = SessionRecord(
             SessionId.new(),
             PROJECT,
             CLAUDE,
             SessionDisplayIdentity(str(PROJECT), str(CLAUDE), "regular", 1),
-            SessionState.RUNNING,
+            state,
             CREATED,
         )
         await self.store.save(record)
@@ -137,6 +145,7 @@ class Rig:
 
         async def spied(snapshot):
             self.snapshots.append(snapshot)
+            self.marks_during_pass.append(set(self.marks.sessions()))
             reports = await run(snapshot)
             self.events.append("resume pass returned")
             return reports
@@ -284,6 +293,86 @@ async def test_a_marks_directory_that_cannot_be_listed_resumes_nothing_and_says_
     assert rig.notices == [((), 2)]
     assert await rig.outcomes.outcomes() == {}
     assert await rig.by_state(SessionState.RUNNING) == []
+
+
+async def test_a_failed_session_that_took_a_turn_comes_back_and_is_named_in_the_notice(
+    rig: Rig,
+) -> None:
+    """Through the real resume: the first reconcile has to end the failed row before the pass
+    runs, or the conversation would still read as held by it."""
+    failed = await rig.running(state=SessionState.FAILED)
+
+    await rig.serve(rig.composition())
+
+    assert (await rig.store.get(failed.session_id)).state is SessionState.ENDED
+    (resumed,) = await rig.by_state(SessionState.RUNNING)
+    assert resumed.resume_source_id == f"conv-{failed.session_id}"
+    ((reports, unchecked),) = rig.notices
+    assert [report.record.session_id for report in reports] == [failed.session_id]
+    assert reports[0].outcome == f"resumed:{resumed.session_id}" and unchecked == 0
+    assert rig.marks_during_pass == [{str(failed.session_id)}], "the sweep waits for the pass"
+    assert rig.marks.latest(str(failed.session_id)) is None, "and then takes the ended row's mark"
+
+
+async def test_a_failed_launch_that_never_took_a_turn_clears_with_no_notice(rig: Rig) -> None:
+    failed = await rig.running(state=SessionState.FAILED, mark=False)
+
+    await rig.serve(rig.composition())
+
+    assert (await rig.store.get(failed.session_id)).state is SessionState.ENDED
+    assert await rig.by_state(SessionState.RUNNING) == []
+    assert rig.notices == [] and await rig.outcomes.outcomes() == {}
+
+
+async def test_with_the_switch_off_a_failed_session_clears_and_nothing_comes_back(
+    rig: Rig,
+) -> None:
+    failed = await rig.running(state=SessionState.FAILED)
+    rig.switch = False
+
+    await rig.serve(rig.composition())
+
+    assert (await rig.store.get(failed.session_id)).state is SessionState.ENDED
+    assert await rig.by_state(SessionState.RUNNING) == []
+    assert rig.notices == [] and await rig.outcomes.outcomes() == {}
+
+
+async def test_a_failed_session_that_handed_off_is_not_brought_back(rig: Rig) -> None:
+    """The snapshot has to read a failed record's rollover too, or the work would run twice."""
+    failed = await rig.running(state=SessionState.FAILED)
+    successor = await rig.running(mark=False, state=SessionState.ENDED)
+    rollovers = SQLiteRolloverStore(rig.connection)
+    row = await rollovers.request(
+        failed.session_id, project_id=PROJECT, profile_id=CLAUDE, at=CREATED
+    )
+    assert row is not None
+    for state in (
+        RolloverState.HANDOFF_READY,
+        RolloverState.SUCCESSOR_STARTING,
+    ):
+        await rollovers.advance(row.id, state, at=CREATED)
+    for state in (RolloverState.ADOPTING, RolloverState.SUCCESSOR_ACCEPTED):
+        await rollovers.advance(
+            row.id, state, at=CREATED, successor_session_id=successor.session_id
+        )
+
+    await rig.serve(rig.composition())
+
+    assert await rig.by_state(SessionState.RUNNING) == []
+    assert await rig.outcomes.outcomes() == {str(failed.session_id): "skipped:handed-off"}
+
+
+async def test_an_unreadable_server_counts_a_failed_session_that_took_a_turn_as_unchecked(
+    rig: Rig,
+) -> None:
+    rig.terminal.server_unreadable = True
+    await rig.running(state=SessionState.FAILED)
+    await rig.running(state=SessionState.FAILED, mark=False)
+    await rig.running()
+
+    await rig.serve(rig.composition())
+
+    assert rig.notices == [((), 2)]
 
 
 async def test_the_marks_of_sessions_no_longer_running_are_forgotten(rig: Rig) -> None:

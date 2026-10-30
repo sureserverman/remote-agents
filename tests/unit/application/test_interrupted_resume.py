@@ -167,16 +167,74 @@ def test_an_unknown_server_resumes_nothing() -> None:
         SessionState.STOP_REQUESTED,
         SessionState.UNTRUSTED,
         SessionState.STARTING,
-        SessionState.FAILED,
         SessionState.ORPHANED,
         SessionState.ENDED,
     ],
 )
-def test_only_running_records_are_resumed(state: SessionState) -> None:
+def test_no_other_state_is_resumed_even_with_a_mark(state: SessionState) -> None:
     """DEC-020: an ORPHANED record is cleared by acting, never by an unattended relaunch."""
     record = _record(state=state)
 
     assert plan_resumes(_snapshot(_lost(record), marks={record: "conv-a"})) == ()
+
+
+def test_a_failed_record_that_took_a_turn_is_resumed_once_after_a_lost_server() -> None:
+    """The incident: recorded failed at launch + 20 s, worked for three hours, lost at a reboot."""
+    record = _record(state=SessionState.FAILED)
+
+    (decision,) = plan_resumes(_snapshot(_lost(record), marks={record: "conv-a"}))
+
+    assert decision.record == record
+    assert decision.conversation_id == ProviderConversationId("conv-a")
+    assert decision.skip is None
+
+
+def test_a_failed_record_that_never_took_a_turn_is_not_considered() -> None:
+    """Absent rather than skipped: a skip is named in the notice as work that did not come back."""
+    record = _record(state=SessionState.FAILED)
+
+    assert plan_resumes(_snapshot(_lost(record))) == ()
+
+
+def test_a_failed_resume_with_only_its_source_is_not_considered() -> None:
+    """A resume that failed never proved a turn, so its source says nothing about this record."""
+    record = _record(state=SessionState.FAILED, resume_source_id="conv-a")
+
+    assert plan_resumes(_snapshot(_lost(record))) == ()
+
+
+def test_a_failed_record_whose_mark_is_not_an_identifier_is_not_considered() -> None:
+    """The source must not stand in for a mark that cannot be read as one."""
+    record = _record(state=SessionState.FAILED, resume_source_id="conv-a")
+
+    assert plan_resumes(_snapshot(_lost(record), marks={record: "not an id"})) == ()
+
+
+def test_a_failed_record_with_a_mark_and_a_listed_pane_is_not_resumed() -> None:
+    record = _record(state=SessionState.FAILED)
+
+    assert plan_resumes(_snapshot(_live(record), marks={record: "conv-a"})) == ()
+
+
+def test_a_failed_record_is_not_resumed_when_the_server_outlived_it() -> None:
+    """One pane killed under a live server is the owner's doing, for a failed row as for any."""
+    record = _record(state=SessionState.FAILED)
+    snapshot = _snapshot(
+        _lost(record), server_started_at=CREATED - timedelta(days=1), marks={record: "conv-a"}
+    )
+
+    assert plan_resumes(snapshot) == ()
+
+
+def test_a_failed_record_whose_conversation_another_live_record_holds_is_already_open() -> None:
+    record = _record(state=SessionState.FAILED)
+    other = _record(created=CREATED + timedelta(hours=1))
+
+    decisions = plan_resumes(
+        _snapshot(_lost(record), _live(other), marks={record: "conv-a", other: "conv-a"})
+    )
+
+    assert [(item.record, item.skip) for item in decisions] == [(record, ResumeSkip.ALREADY_OPEN)]
 
 
 def test_the_conversation_mark_wins_over_the_resume_source() -> None:
