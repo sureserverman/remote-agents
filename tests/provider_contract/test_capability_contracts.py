@@ -90,9 +90,10 @@ def test_hooks_contract(descriptor, tmp_path: Path) -> None:
 def test_activity_contract(descriptor) -> None:
     """The hook licence admits exactly the events the installer subscribes the hook to.
 
-    The one installed event a licence does not list is the turn-start event of a provider whose
-    hook marks turns: the spool answers it with the marker and returns before reading a record
-    (DEC-104), so listing it would license a record no path writes. A licence listing an event
+    The installed events a licence does not list are the turn-start event of a provider whose
+    hook marks turns and the event that means its agent came up: the spool answers each with a
+    mark and returns before reading a record (DEC-104, DEC-135), so listing one would license a
+    record no path writes. A licence listing an event
     nobody installs admits what never fires; one missing an installed event drops every record
     that event carries, silently, on both surfaces (BL-050).
     """
@@ -107,6 +108,8 @@ def test_activity_contract(descriptor) -> None:
     )
     installed = set(_provider(descriptor.hooks).installed_events)
     marker = {TURN_STARTED} if licence.starts_turn_marker else set()
+    if licence.started_event is not None:
+        marker.add(licence.started_event)
     assert set(licence.events) == installed - marker, (
         f"{descriptor.profile_id}'s licence admits {sorted(licence.events)} but its hook is "
         f"installed for {sorted(installed)}"
