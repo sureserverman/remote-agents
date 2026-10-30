@@ -17,7 +17,11 @@ from remote_agents.adapters.agents.registry import (
     profile_trust_dialogs,
     provider_descriptors,
 )
-from remote_agents.adapters.agents.turn_markers import FileTurnMarkers
+from remote_agents.adapters.agents.turn_markers import (
+    FileConversationMarks,
+    FileStartedMarks,
+    FileTurnMarkers,
+)
 from remote_agents.adapters.sqlite.activity_store import SQLiteActivityStore
 from remote_agents.adapters.tmux.codec import attach_argv
 from remote_agents.adapters.tmux.gateway import TmuxGateway
@@ -185,6 +189,9 @@ def _local_runtime(
         # What each managed agent's own hook said about a turn it started (BL-108, DEC-104),
         # over the spool the hook writes into -- read by the relay with the capture it judges.
         turn_markers=FileTurnMarkers(paths.activity_directory),
+        # The agent's own word that it came up (DEC-135), read beside the screen's.
+        started_marks=FileStartedMarks(paths.activity_directory),
+        conversation_marks=FileConversationMarks(paths.activity_directory),
         # Where each pane starts: the session's worktree when it has one (BL-116).
         folder_for=folder_for,
     )

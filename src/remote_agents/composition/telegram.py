@@ -21,7 +21,11 @@ from remote_agents.adapters.agents.registry import (
     provider_descriptors,
 )
 from remote_agents.adapters.agents.reported_roots import FileReportedRoots
-from remote_agents.adapters.agents.turn_markers import FileConversationMarks, FileTurnMarkers
+from remote_agents.adapters.agents.turn_markers import (
+    FileConversationMarks,
+    FileStartedMarks,
+    FileTurnMarkers,
+)
 from remote_agents.adapters.sqlite.activity_store import SQLiteActivityStore
 from remote_agents.adapters.sqlite.callback_state_store import SQLiteCallbackStateStore
 from remote_agents.adapters.sqlite.chat_view_store import SQLiteChatViewStore
@@ -391,6 +395,7 @@ def _private_boundary(
                 terminal=terminal,
                 turn_markers=turn_markers,
                 conversation_marks=FileConversationMarks(paths.activity_directory),
+                started_marks=FileStartedMarks(paths.activity_directory),
                 rollovers=SQLiteRolloverStore(connection),
                 capabilities=backend.conversations.capabilities,
                 outcomes=SQLiteInterruptedResumes(connection),

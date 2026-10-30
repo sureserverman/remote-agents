@@ -72,7 +72,7 @@ from remote_agents.ports.reported_roots import ReportedRoots
 from remote_agents.ports.session_store import SessionStore
 from remote_agents.ports.state_events import StoreChanged
 from remote_agents.ports.terminal import PromptDelivery
-from remote_agents.ports.turn_markers import ConversationMarks, TurnMarkers
+from remote_agents.ports.turn_markers import ConversationMarks, StartedMarks, TurnMarkers
 from remote_agents.ports.worktree_store import Worktree, WorktreeStore
 
 _LOG = logging.getLogger(__name__)
@@ -355,6 +355,7 @@ def build_restart_resume(
     terminal: object,
     turn_markers: TurnMarkers,
     conversation_marks: ConversationMarks,
+    started_marks: StartedMarks,
     rollovers: SQLiteRolloverStore,
     capabilities: Callable[[], Awaitable[tuple[ProfileResumeCapability, ...]]],
     outcomes: InterruptedResumes,
@@ -447,6 +448,9 @@ def build_restart_resume(
         for session in conversation_marks.sessions():
             if session not in kept and session not in pending:
                 conversation_marks.forget(session)
+        for session in started_marks.sessions():
+            if session not in kept and session not in pending:
+                started_marks.forget(session)
 
     async def key_claimed(key: str) -> bool:
         return await store.idempotency_key_claimed(key)  # type: ignore[attr-defined]

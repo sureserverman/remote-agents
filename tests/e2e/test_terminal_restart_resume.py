@@ -22,7 +22,11 @@ from uuid import uuid4
 
 import pytest
 
-from remote_agents.adapters.agents.turn_markers import FileConversationMarks, FileTurnMarkers
+from remote_agents.adapters.agents.turn_markers import (
+    FileConversationMarks,
+    FileStartedMarks,
+    FileTurnMarkers,
+)
 from remote_agents.adapters.sqlite.database import open_database
 from remote_agents.adapters.sqlite.interrupted_resumes import SQLiteInterruptedResumes
 from remote_agents.adapters.sqlite.rollover_store import SQLiteRolloverStore
@@ -119,6 +123,7 @@ class Rig:
         activity.mkdir()
         self.markers = FileTurnMarkers(activity)
         self.marks = FileConversationMarks(activity)
+        self.started = FileStartedMarks(activity)
         self.switch = True
         self.notices: list[tuple[tuple[ResumeReport, ...], int]] = []
         self.passes = 0
@@ -164,6 +169,7 @@ class Rig:
             terminal=self.terminal,
             turn_markers=self.markers,
             conversation_marks=self.marks,
+            started_marks=self.started,
             rollovers=SQLiteRolloverStore(self.connection),
             capabilities=capabilities,
             outcomes=self.outcomes,

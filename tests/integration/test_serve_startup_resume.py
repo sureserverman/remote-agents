@@ -15,7 +15,11 @@ from pathlib import Path
 
 import pytest
 
-from remote_agents.adapters.agents.turn_markers import FileConversationMarks, FileTurnMarkers
+from remote_agents.adapters.agents.turn_markers import (
+    FileConversationMarks,
+    FileStartedMarks,
+    FileTurnMarkers,
+)
 from remote_agents.adapters.sqlite.database import open_database
 from remote_agents.adapters.sqlite.interrupted_resumes import SQLiteInterruptedResumes
 from remote_agents.adapters.sqlite.rollover_store import SQLiteRolloverStore
@@ -82,6 +86,7 @@ class Rig:
         self.activity.mkdir()
         self.markers = FileTurnMarkers(self.activity)
         self.marks = FileConversationMarks(self.activity)
+        self.started = FileStartedMarks(self.activity)
         self.switch = True
         self.notices: list[tuple[tuple[ResumeReport, ...], int]] = []
         self.events: list[str] = []
@@ -118,6 +123,7 @@ class Rig:
             terminal=self.terminal,
             turn_markers=self.markers,
             conversation_marks=self.marks,
+            started_marks=self.started,
             rollovers=SQLiteRolloverStore(self.connection),
             capabilities=capabilities,
             outcomes=self.outcomes,
@@ -476,3 +482,19 @@ async def test_the_marks_of_live_sessions_that_are_not_running_are_kept(rig: Rig
 
     assert set(rig.marks.sessions()) == {str(untrusted.session_id)}
     assert rig.marks.latest(str(lost.session_id)) is None
+
+
+async def test_a_started_mark_goes_when_its_session_ends_and_stays_while_it_lives(
+    rig: Rig,
+) -> None:
+    """DEC-051's lesson: a file the hook writes has a sweep, or the directory only ever grows."""
+    lost = await rig.running()
+    alive = await rig.running()
+    rig.started.mark(str(lost.session_id))
+    rig.started.mark(str(alive.session_id))
+    rig.terminal.server_started = CREATED + timedelta(hours=1)  # the console started it
+    await rig.terminal.launch(alive.session_id, PROJECT, CLAUDE)
+
+    await rig.serve(rig.composition())
+
+    assert rig.started.sessions() == (str(alive.session_id),)
