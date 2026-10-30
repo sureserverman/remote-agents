@@ -15,6 +15,7 @@ before a pane is opened, not here.
 
 from __future__ import annotations
 
+import os
 import re
 import time
 from collections.abc import Callable
@@ -39,11 +40,29 @@ CODEX_OPENING = (
     Interstitial("Trust this folder?", "Trust and continue"),
     Interstitial("Do you trust the contents of this directory", "Yes, continue"),
     # Hook review requires an explicit owner decision, even in a disposable home.
-    # A drill must remain blocked here instead of granting trust automatically.
+    # A drill stays blocked here unless the owner set `hook_trust_approved`'s variable.
     # 0.155.1, on an account near its limit (BL-105). Measured from the shipped binary's
     # strings; keep the model the drill was configured with.
     Interstitial("Approaching rate limits", "Keep current model"),
 )
+
+
+def hook_trust_approved() -> bool:
+    """The owner's approval of hook trust for one drill's disposable home, never a default."""
+    return os.environ.get("REMOTE_AGENTS_LIVE_HOOK_TRUST") == "owner-approved"
+
+
+HOOK_TRUST_CHOICE = "Trust all and continue"
+
+
+async def answer_hook_review(terminal, session_id, screen: str) -> None:
+    """Choose hook trust in a drill's disposable home if the owner approved, else stay BLOCKED."""
+    if not hook_trust_approved():
+        pytest.fail("BLOCKED: Codex hook review requires explicit owner approval", pytrace=False)
+    keys: list[str] = []
+    _select(screen, HOOK_TRUST_CHOICE, keys.append)
+    if keys:
+        await terminal._gateway.send_keys(session_id, tuple(keys))
 
 
 @cache
@@ -181,10 +200,14 @@ def open_to_composer(
     while clock() < deadline:
         text = capture()
         if "Hooks need review" in text:
-            pytest.fail(
-                "BLOCKED: Hooks need review requires explicit owner approval\n" + text,
-                pytrace=False,
-            )
+            if not hook_trust_approved():
+                pytest.fail(
+                    "BLOCKED: Hooks need review requires explicit owner approval\n" + text,
+                    pytrace=False,
+                )
+            _select(text, HOOK_TRUST_CHOICE, press)
+            sleep(settle)
+            continue
         showing = next((item for item in interstitials if item.marker in text), None)
         if showing is not None:
             if _select(text, showing.choose, press):

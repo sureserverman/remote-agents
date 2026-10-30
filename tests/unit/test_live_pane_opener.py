@@ -81,6 +81,24 @@ def test_the_opener_answers_codex_0_155_s_rate_limit_prompt_by_its_words() -> No
     assert screens.pressed == ["Enter", "Down", "Enter"]
 
 
+def test_the_opener_grants_hook_trust_only_with_the_owners_approval(monkeypatch) -> None:
+    monkeypatch.setenv("REMOTE_AGENTS_LIVE_HOOK_TRUST", "owner-approved")
+    clock, sleep = _fake_clock()
+    screens = _Screens("Hooks need review\n› 1. Trust all and continue\n  2. Continue without")
+    with pytest.raises(pytest.fail.Exception):
+        open_to_composer(
+            screens.capture,
+            screens.press,
+            ready=CODEX_READY,
+            interstitials=CODEX_OPENING,
+            agent="codex",
+            timeout=3,
+            clock=clock,
+            sleep=sleep,
+        )
+    assert screens.pressed.count("Enter") >= 1
+
+
 def test_the_opener_does_not_grant_hook_trust_while_opening_a_fixture() -> None:
     clock, sleep = _fake_clock()
     screens = _Screens("Hooks need review\n› 1. Trust all and continue\n  2. Continue without")
