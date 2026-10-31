@@ -184,6 +184,21 @@ def test_a_mark_that_disagrees_exits_3(
     assert _named(spool, capsys) == (3, "")
 
 
+def test_another_sessions_mark_on_the_thread_is_not_a_veto(
+    spool: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Hooks guess by folder and time and can file a shared-folder thread under the wrong session.
+
+    The spent nonce outranks that guess. Owner's choice, 2026-10-31.
+    """
+    session = _bound_session(spool)
+    other = str(SessionId.new())
+    _roster(spool, (session, None), (other, None))
+    FileConversationMarks(spool).record(other, _THREAD)
+    FileTurnMarkers(spool).start(other, _THREAD)
+    assert _named(spool, capsys) == (0, f"{session}\n")
+
+
 def test_a_mark_that_agrees_keeps_the_binding(
     spool: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
