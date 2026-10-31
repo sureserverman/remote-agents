@@ -6,10 +6,14 @@ each shell holds for itself (DEC-128). So this measures what the design relies o
 launches the service really makes: every permission preset's own flags, on one daemon, with two
 plain panes around them as the control.
 
-Each preset's `!` shell writes outside its workspace, because the activity directory is outside
-it. The drill also records whether the launch joined the daemon, what its footer warns, what `/new`
-does to the thread, and whether a thread holding only a `!` command can be resumed. The result goes
-to `RA_PREMISE_OUT`. Only the control is asserted here: the results are for reading.
+Each preset's `!` shell writes to a folder beside its workspace, the way the activity directory is
+outside it. That folder is outside Codex's own sandbox and inside this drill's bwrap, so `outside_*`
+says whether Codex confines a `!` shell, and nothing about the real activity directory's path.
+`joined_daemon` reads the marker from an agent turn; it is None when the turn wrote nothing. The
+drill also records the footer's warning, whether `/new` changes the thread, and whether a thread
+holding only a `!` command can be resumed once its pane has ended. The result goes to
+`RA_PREMISE_OUT` after every launch, so a later failure keeps it. Only the control is asserted here:
+the results are for reading.
 
 `REMOTE_AGENTS_LIVE_ACCEPTANCE=1` is required: it spends short Codex turns on the owner's account.
 """
@@ -48,11 +52,11 @@ _TURN = "Run the shell command `sh token.sh seen-turn.txt`, then reply: done"
 
 def _bind_script(outside: Path) -> str:
     """What the `!` shell runs. The turn runs `token.sh`, which stays inside the workspace."""
-    return f'printf "%s" "${{CODEX_THREAD_ID-}}" > "{outside}" 2> outside-error.txt\n'
+    return f'{{ printf "%s" "${{CODEX_THREAD_ID-}}" > "{outside}"; }} 2> outside-error.txt\n'
 
 
 def _pane_state(drill: Drill, name: str) -> str:  # noqa: F811
-    """Whether the pane still runs, read when a pane produced nothing."""
+    """`0` while the pane runs, `1 <status>` once it has ended."""
     return _tmux(
         drill.socket, "list-panes", "-t", f"={name}:", "-F", "#{pane_dead} #{pane_dead_status}"
     ).stdout.strip()
@@ -90,10 +94,14 @@ def _launch(
     bang = _read_seen(workspace / "seen-bang.txt", 30.0)
     _settled(drill, pane)
     _send(drill.socket, pane, "!sh bind.sh")
-    time.sleep(2.0)
-    _settled(drill, pane)
     error = workspace / "outside-error.txt"
-    wrote = outside.is_file() and bool(outside.read_text(encoding="utf-8"))
+    deadline = time.monotonic() + 30.0
+    while time.monotonic() < deadline and not error.is_file():
+        time.sleep(0.5)
+    time.sleep(0.5)
+    _settled(drill, pane)
+    created = outside.is_file()
+    written = outside.read_text(encoding="utf-8") if created else None
     _send(drill.socket, pane, _TURN)
     turn = _read_seen(workspace / "seen-turn.txt", 60.0 if "read-only" in flags else 180.0)
     state = _pane_state(drill, name)
@@ -103,12 +111,15 @@ def _launch(
         "name": name,
         "flags": list(flags),
         "bang": bang,
-        "bang_wrote": wrote,
+        "outside_created": created,
+        "bang_wrote": bool(written),
         "bang_error": error.read_text(encoding="utf-8") if error.is_file() else None,
-        "bang_thread": outside.read_text(encoding="utf-8") if wrote else None,
+        "bang_thread": written or None,
         "turn": turn,
         "turn_thread": None if turn is None else turn["thread"],
         "daemons": _daemons(processes),
+        # The pane that carries the marker sees it whatever the daemon does: no evidence.
+        "joined_daemon": None if turn is None or session == _MARKER else turn["session"] == _MARKER,
         "marker_seen": None if turn is None else turn["session"] == _MARKER,
         "pane_state": state,
         "screen": screen,
@@ -125,11 +136,21 @@ def _after_new(drill: Drill) -> dict[str, object]:  # noqa: F811
     before = _read_seen(workspace / "before.txt", 30.0)
     _settled(drill, pane)
     _send(drill.socket, pane, "/new")
-    time.sleep(3.0)
+    # A line typed about 3 s after `/new` lost its start and reached the agent as a prompt.
+    time.sleep(15.0)
+    _settled(drill, pane)
     # Absolute: `/new` has been seen to move the pane to a Codex worktree under its home.
     _send(drill.socket, pane, f"!sh {script} {workspace / 'after.txt'}")
-    after = _read_seen(workspace / "after.txt", 30.0)
-    return {"before": before, "after": after, "screen": _screen(drill, pane)}
+    after = _read_seen(workspace / "after.txt", 60.0)
+    return {
+        "before": before,
+        "after": after,
+        # None is unmeasured, never "kept".
+        "thread_changed": None
+        if before is None or after is None
+        else before["thread"] != after["thread"],
+        "screen": _screen(drill, pane),
+    }
 
 
 def _resume_bang_only(drill: Drill) -> dict[str, object]:  # noqa: F811
@@ -141,7 +162,10 @@ def _resume_bang_only(drill: Drill) -> dict[str, object]:  # noqa: F811
     before = _read_seen(workspace / "before.txt", 30.0)
     _settled(drill, pane)
     _send(drill.socket, pane, "/exit")
-    time.sleep(3.0)
+    deadline = time.monotonic() + 30.0
+    while time.monotonic() < deadline and not _pane_state(drill, "bang-only").startswith("1"):
+        time.sleep(0.5)
+    ended = _pane_state(drill, "bang-only")
     rollouts = [
         path.name
         for path in (drill.codex_home / "sessions").glob("*/*/*/rollout-*.jsonl")
@@ -149,6 +173,7 @@ def _resume_bang_only(drill: Drill) -> dict[str, object]:  # noqa: F811
     ]
     if before is None:
         return {
+            "ended": ended,
             "before": None,
             "rollouts": rollouts,
             "resumed": None,
@@ -157,14 +182,24 @@ def _resume_bang_only(drill: Drill) -> dict[str, object]:  # noqa: F811
     command = (*drill.command, "resume", before["thread"])
     try:
         again = _open(drill.socket, "bang-resume", workspace, drill.codex_home, None, command)
-    except BaseException as error:  # noqa: BLE001 - the failure is the measurement
-        return {"before": before, "rollouts": rollouts, "resumed": False, "error": repr(error)}
+    except (Exception, pytest.fail.Exception) as error:  # the failure is the measurement
+        return {
+            "before": before,
+            "ended": ended,
+            "rollouts": rollouts,
+            "resumed": False,
+            "error": repr(error),
+        }
     _send(drill.socket, again, "!sh token.sh after.txt")
     after = _read_seen(workspace / "after.txt", 30.0)
     return {
         "before": before,
+        "ended": ended,
         "rollouts": rollouts,
-        "resumed": after is not None and after["thread"] == before["thread"],
+        # Only a pane that ended shows what a restart would find.
+        "resumed": ended.startswith("1")
+        and after is not None
+        and after["thread"] == before["thread"],
         "after": after,
         "screen": _screen(drill, again),
     }
@@ -172,31 +207,41 @@ def _resume_bang_only(drill: Drill) -> dict[str, object]:  # noqa: F811
 
 def test_measure_bang_shell_premise(drill: Drill) -> None:  # noqa: F811
     definition = next(item for item in closed_profiles() if item.profile_id == ProfileId("codex"))
-    first = _launch(drill, "plain-first", (), _MARKER)
-    presets = [
-        _launch(
-            drill, f"preset-{preset.value}".replace("_", "-"), definition.permission_argv(preset)
-        )
-        for preset in PermissionPreset
-    ]
-    read_only = _launch(drill, "read-only", ("--sandbox", "read-only"))
-    second = _launch(drill, "plain-second", ())
-    after_new = _after_new(drill)
-    resume = _resume_bang_only(drill)
-    daemons = second["daemons"]
-    result = {
-        "one_daemon": len(daemons) == 1 and first["daemons"] == daemons,
-        "control_marker_seen": second["marker_seen"] is True,
-        "first": first,
-        "presets": presets,
-        "read_only": read_only,
-        "second": second,
-        "after_new": after_new,
-        "resume_bang_only": resume,
+    result: dict[str, object] = {
+        "one_daemon": None,
+        "control_marker_seen": None,
+        "presets": [],
     }
-    out = os.environ.get("RA_PREMISE_OUT")
-    if out:
-        Path(out).parent.mkdir(parents=True, exist_ok=True)
-        Path(out).write_text(json.dumps(result, indent=2), encoding="utf-8")
-    assert result["one_daemon"], daemons
+
+    def keep() -> None:
+        out = os.environ.get("RA_PREMISE_OUT")
+        if out:
+            Path(out).parent.mkdir(parents=True, exist_ok=True)
+            Path(out).write_text(json.dumps(result, indent=2), encoding="utf-8")
+
+    def launch(name: str, flags: tuple[str, ...], session: str | None = None) -> dict[str, object]:
+        try:
+            return _launch(drill, name, flags, session)
+        except (Exception, pytest.fail.Exception) as error:
+            return {"name": name, "flags": list(flags), "failed": repr(error)}
+
+    first = result["first"] = launch("plain-first", (), _MARKER)
+    keep()
+    assert len(PermissionPreset) == 4
+    for preset in PermissionPreset:
+        name = f"preset-{preset.value}".replace("_", "-")
+        result["presets"].append(launch(name, definition.permission_argv(preset)))
+        keep()
+    result["read_only"] = launch("read-only", ("--sandbox", "read-only"))
+    keep()
+    second = result["second"] = launch("plain-second", ())
+    keep()
+    result["after_new"] = _after_new(drill)
+    keep()
+    result["resume_bang_only"] = _resume_bang_only(drill)
+    daemons = second.get("daemons")
+    result["one_daemon"] = bool(daemons) and len(daemons) == 1 and first.get("daemons") == daemons
+    result["control_marker_seen"] = second.get("joined_daemon") is True
+    keep()
+    assert result["one_daemon"], result
     assert result["control_marker_seen"], second
