@@ -924,13 +924,17 @@ def build_worktree_listing(
     ).kept
 
 
+#: A read past this leaves the pass to its stops and rollovers; a hung mount must not hold them.
+CATALOGUE_READ_TIMEOUT_SECONDS = 30.0
+
+
 class CatalogueGap:
-    """Re-read the projects when a session names one this service has not read yet.
+    """Re-read the projects when a live session or a destination names one not read yet.
 
     The pass reads envelopes under each project's folder, so a project made since the last read
     and launched from the console, another process, would be watched only once the bot happened
-    to open a picker. A failed read is logged and the pass goes on; a project that stays unknown
-    is retried at most once per `retry_seconds`, as the surfaces' own gap is.
+    to open a picker. Each cause re-reads at most once per `retry_seconds`, as the surfaces' own
+    gap does. A failed or slow read is logged and the pass goes on.
     """
 
     def __init__(
@@ -940,33 +944,48 @@ class CatalogueGap:
         clock: Callable[[], float] = time.monotonic,
         *,
         retry_seconds: float = CATALOGUE_GAP_RETRY_SECONDS,
+        read_timeout: float = CATALOGUE_READ_TIMEOUT_SECONDS,
     ) -> None:
         self._known = known
-        self._read = self.reader(refresh)
+        self._refresh = refresh
         self._clock = clock
         self._retry_seconds = retry_seconds
+        self._read_timeout = read_timeout
         self._read_at: float | None = None
+        self._destinations_read_at: dict[Path, float] = {}
 
-    @staticmethod
-    def reader(refresh: Callable[[], object]) -> Callable[[], Awaitable[None]]:
-        """`refresh` off the event loop: it walks the development root. It never raises."""
-
-        async def read() -> None:
-            try:
-                await asyncio.to_thread(refresh)
-            except Exception:
-                _LOG.exception("the project catalogue could not be re-read for a rollover")
-
-        return read
+    async def _read(self) -> None:
+        """`refresh` off the event loop, since it walks the development root. Never raises."""
+        try:
+            await asyncio.wait_for(asyncio.to_thread(self._refresh), self._read_timeout)
+        except Exception:
+            _LOG.exception("the project catalogue could not be re-read for a rollover")
 
     async def close(self, records: Iterable[SessionRecord]) -> None:
-        if all(record.project_id in self._known for record in records):
+        if all(
+            record.state is SessionState.ENDED or record.project_id in self._known
+            for record in records
+        ):
             self._read_at = None
             return
         now = self._clock()
         if self._read_at is not None and now - self._read_at < self._retry_seconds:
             return
         self._read_at = now
+        await self._read()
+
+    async def read_for(self, root: Path) -> None:
+        """A destination not found: read once for it, however many passes meet the same `ready`."""
+        now = self._clock()
+        last = self._destinations_read_at.get(root)
+        if last is not None and now - last < self._retry_seconds:
+            return
+        self._destinations_read_at = {
+            seen: at
+            for seen, at in self._destinations_read_at.items()
+            if now - at < self._retry_seconds
+        }
+        self._destinations_read_at[root] = now
         await self._read()
 
 
@@ -1008,11 +1027,11 @@ def build_rollover_pass(
 
     rollovers = SQLiteRolloverStore(connection)
     gap = None if refresh_projects is None else CatalogueGap(project_paths, refresh_projects)
-    read_projects = None if refresh_projects is None else CatalogueGap.reader(refresh_projects)
 
     async def sessions_seen() -> tuple[SessionRecord, ...]:
         records = tuple(await sessions.list_sessions())
-        if gap is not None:
+        # With the switch off the pass acts on nothing, so it has no reason to walk the disk.
+        if gap is not None and await enabled():
             await gap.close(records)
         return records
 
@@ -1062,7 +1081,10 @@ def build_rollover_pass(
         notify=notify,
         operation=operation,
         resolve_destination=RolloverDestinations(
-            project_paths, destination_branch, worktrees, refresh=read_projects
+            project_paths,
+            destination_branch,
+            worktrees,
+            refresh=None if gap is None else gap.read_for,
         ).resolve,
         resolve_legacy_destination=RolloverDestinations(
             project_paths, destination_branch, worktrees

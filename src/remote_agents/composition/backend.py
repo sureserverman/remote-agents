@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import threading
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from functools import partial
@@ -103,6 +104,9 @@ class ProjectCatalogueProvider:
         self._dev_root = dev_root
         self._paths: dict[ProjectId, Path] = {}
         self._snapshot = ProjectCatalogueSnapshot((), None)
+        # The bot and the rollover pass both refresh on worker threads: one at a time, or an
+        # older reading published last removes the project a newer one just added.
+        self._refreshing = threading.Lock()
 
     @property
     def paths(self) -> Mapping[ProjectId, Path]:
@@ -114,7 +118,14 @@ class ProjectCatalogueProvider:
         return self._snapshot
 
     def refresh(self) -> ProjectCatalogueSnapshot:
-        """Rebuild the catalogue and path mapping from the current registry and filesystem."""
+        """Rebuild the catalogue and path mapping from the current registry and filesystem.
+
+        A degraded registry read adds and never removes: it cannot say a project left, and a
+        project missing from the mapping loses its rollovers."""
+        with self._refreshing:
+            return self._refresh()
+
+    def _refresh(self) -> ProjectCatalogueSnapshot:
         registry = load_registry(self._registry_path)
         discovered = discover_projects(self._dev_root)
         resolved: dict[ProjectId, Path] = {}
@@ -131,11 +142,11 @@ class ProjectCatalogueProvider:
         catalogue = build_catalogue(registered, found, registry_error=registry.error)
         if registry.error is not None:
             _LOG.warning("project registry is degraded: %s", registry.error)
-        self._publish(resolved)
+        self._publish(resolved, prune=registry.error is None)
         self._snapshot = ProjectCatalogueSnapshot(catalogue, registry.error)
         return self._snapshot
 
-    def _publish(self, resolved: dict[ProjectId, Path]) -> None:
+    def _publish(self, resolved: dict[ProjectId, Path], *, prune: bool = True) -> None:
         """Apply the new mapping without ever hiding a project that survives the refresh.
 
         Consumers read the shared mapping without holding a lock, so clearing it first would
@@ -143,6 +154,8 @@ class ProjectCatalogueProvider:
         a surviving project is never absent; at worst a removed one lingers for an instant.
         """
         self._paths.update(resolved)
+        if not prune:
+            return
         for stale in [key for key in self._paths if key not in resolved]:
             del self._paths[stale]
 

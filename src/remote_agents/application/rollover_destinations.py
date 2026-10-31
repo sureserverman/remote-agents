@@ -24,7 +24,7 @@ class RolloverDestinations:
         inspect_branch: Callable[[Path], Awaitable[str | None]],
         worktrees: WorktreeStore | None = None,
         *,
-        refresh: Callable[[], Awaitable[None]] | None = None,
+        refresh: Callable[[Path], Awaitable[None]] | None = None,
     ) -> None:
         self._projects = projects
         self._inspect = inspect_branch
@@ -37,7 +37,7 @@ class RolloverDestinations:
             candidates = await self._candidates(root)
             if not candidates and self._refresh is not None:
                 # A project made since the catalogue was last read is not unregistered.
-                await self._refresh()
+                await self._refresh(root)
                 candidates = await self._candidates(root)
             if not candidates:
                 raise DestinationRefused("destination-unregistered")
