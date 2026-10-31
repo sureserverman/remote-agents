@@ -322,66 +322,89 @@ def _send(socket: str, pane: str, text: str) -> None:
     _tmux(socket, "send-keys", "-t", pane, "Enter")
 
 
-def _daemons(codex_home: Path) -> list[int]:
-    """The running managed daemons of this home, read from outside any pane."""
+def _processes(codex_home: Path) -> list[str]:
+    """Every process of this home as `pid ppid arguments`, read from outside any pane."""
     found = []
-    for pid in _running_from(codex_home):
+    for pid in sorted(_running_from(codex_home)):
         try:
-            arguments = Path(f"/proc/{pid}/cmdline").read_bytes().split(b"\0")
+            arguments = Path(f"/proc/{pid}/cmdline").read_bytes().replace(b"\0", b" ").decode()
+            parent = Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()[1]
         except OSError:
             continue
-        if b"--managed-daemon" in arguments:
-            found.append(pid)
-    return sorted(found)
+        # The drill's own bwrap arguments say nothing about which server this is.
+        found.append(f"{pid} {parent} {arguments.rsplit(' -- ', 1)[-1].strip()}")
+    return found
 
 
-def _token_pane(
-    drill: Drill, workspace: Path, name: str, token: str | None, marker: str | None = None
+def _daemons(processes: list[str]) -> list[int]:
+    return [int(line.split()[0]) for line in processes if "--managed-daemon" in line]
+
+
+def _footnote(socket: str, pane: str) -> str:
+    """What the footer's warning says, once the turn has settled."""
+    deadline = time.monotonic() + 30.0
+    while time.monotonic() < deadline:
+        if "esc to interrupt" not in _tmux(socket, "capture-pane", "-p", "-t", pane).stdout:
+            break
+        time.sleep(1.0)
+    _tmux(socket, "send-keys", "-t", pane, "F2")
+    time.sleep(2.0)
+    text = _tmux(socket, "capture-pane", "-p", "-t", pane).stdout
+    _tmux(socket, "send-keys", "-t", pane, "Escape")
+    return text
+
+
+def _launch_pane(
+    drill: Drill, folder: str, *flags: str, session: str | None = None
 ) -> dict[str, object]:
-    """What this pane's shells saw, through the owner's `!` command and through an agent turn."""
+    """What one launch's shells saw through `!` and a turn, and which servers then ran."""
+    workspace = drill.project.parent / folder
+    _git(drill.project, "worktree", "add", "-q", "-b", folder, str(workspace))
     (workspace / "token.sh").write_text(_TOKEN_SCRIPT, encoding="utf-8")
-    flags = (
-        () if token is None else ("-c", f'shell_environment_policy.set.RA_BINDING_PROBE="{token}"')
-    )
-    pane = _open(drill.socket, name, workspace, drill.codex_home, marker, (*drill.command, *flags))
+    pane = _open(
+        drill.socket, f"launch-{folder}", workspace, drill.codex_home, session,
+        (*drill.command, *flags),
+    )  # fmt: skip
     _send(drill.socket, pane, "!sh token.sh seen-bang.txt")
     bang = _read_seen(workspace / "seen-bang.txt", 30.0)
     _send(drill.socket, pane, "Run the shell command `sh token.sh seen-turn.txt`, then reply: done")
     turn = _read_seen(workspace / "seen-turn.txt", 180.0)
-    screen = _tmux(drill.socket, "capture-pane", "-p", "-t", pane).stdout
+    screen = _footnote(drill.socket, pane)
+    processes = _processes(drill.codex_home)
     return {
-        "expected": token,
+        "flags": flags,
         "bang": bang,
         "turn": turn,
-        "daemons": _daemons(drill.codex_home),
-        "screen": screen[-1500:],
+        "daemons": _daemons(processes),
+        "processes": processes,
+        "screen": screen,
     }
 
 
-def test_measure_launch_token_reaches_only_its_own_threads_shells(drill: Drill) -> None:
-    """Design probe: can a per-launch setting name a session, given one shared daemon?
+def _token_flag(token: str) -> tuple[str, str]:
+    return ("-c", f'shell_environment_policy.set.RA_BINDING_PROBE="{token}"')
 
-    Pane A starts the daemon, pane B attaches to it, and a third Codex carries no token. Each
-    reports its shells' view; the whole result is written to `RA_TOKEN_PROBE_OUT` for reading.
-    Only A's pane carries the session variable: an agent turn in B or the third that still sees
-    it proves those turns ran under A's daemon, so their tokens did not come from a daemon each.
+
+def test_measure_what_a_per_launch_setting_does_to_the_shared_daemon(drill: Drill) -> None:
+    """Design probe: does a launch with `-c` or `--no-daemon` join the daemon at all?
+
+    A plain Codex starts the daemon and carries a marker, and a later plain one must see that
+    marker: it proves the daemon is shared here, so a launch between them that does not see it
+    stayed out. openai/codex#24638 reports that a launch with `-c` skips the shared daemon, which
+    would make a token's isolation say nothing about a shared daemon. The result is written to
+    `RA_TOKEN_PROBE_OUT`; only the control is asserted, and the rest is for reading.
     """
-    root = drill.project.parent
-    marker = "daemon-of-pane-a"
+    marker = "marker-of-first-plain-pane"
     results = {
-        "a": _token_pane(drill, root / "a", "token-a", "token-a", marker),
-        "b": _token_pane(drill, root / "b", "token-b", "token-b"),
-        "none": _token_pane(drill, drill.project, "token-none", None),
+        "plain-first": _launch_pane(drill, "plain-first", session=marker),
+        "token-a": _launch_pane(drill, "token-a", *_token_flag("token-a")),
+        "token-b": _launch_pane(drill, "token-b", *_token_flag("token-b")),
+        "no-daemon": _launch_pane(drill, "no-daemon", "--no-daemon", session="own-session"),
+        "plain-second": _launch_pane(drill, "plain-second"),
     }
     out = os.environ.get("RA_TOKEN_PROBE_OUT")
     if out:
         Path(out).write_text(json.dumps(results, indent=2), encoding="utf-8")
-    for name, result in results.items():
-        expected = result["expected"] or ""
-        for route in ("bang", "turn"):
-            seen = result[route]
-            assert seen is not None, f"{name} {route} wrote nothing:\n{result['screen']}"
-            assert seen["token"] == expected, f"{name} {route}: {seen}"
-        assert len(result["daemons"]) == 1, f"{name}: not one daemon: {result}"
-        assert result["daemons"] == results["a"]["daemons"], f"{name}: another daemon: {result}"
-        assert result["turn"]["session"] == marker, f"{name} turn is not on A's daemon: {result}"
+    assert results["plain-first"]["turn"]["session"] == marker, results["plain-first"]
+    assert results["plain-second"]["turn"]["session"] == marker, results["plain-second"]
+    assert len(results["plain-second"]["daemons"]) == 1, results["plain-second"]
