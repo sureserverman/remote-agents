@@ -116,6 +116,7 @@ def production_doctor(
     ui_store_ready: bool | None = None,
     console_marks: tuple[tuple[str, str, bool], ...] | None = None,
     worktrees: tuple[tuple[str, str, str], ...] | None = None,
+    unbound_sessions: int | None = None,
 ) -> dict[str, object]:
     """Render the installed service's non-secret dependency health report.
 
@@ -273,6 +274,9 @@ def production_doctor(
         # the truth. A close-out evaluator hit it on the exact recovery path `install.sh` sends
         # a failed operator down. The field is right; only its name was doing the damage.
         report["service_liveness_meaning"] = liveness_meaning.value
+    if unbound_sessions is not None:
+        # A count, and never a verdict: an unbound session works, and only its handoffs refuse.
+        report["unbound_sessions"] = unbound_sessions
     if worktrees is not None:
         # Every session worktree recorded and not removed, as `path · branch · reason kept`
         # (BL-116). Reported beside `console` and for its reason: a worktree kept because its

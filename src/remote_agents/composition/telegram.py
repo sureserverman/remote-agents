@@ -270,10 +270,12 @@ def _private_boundary(
     # Beside the rollover pass that waits on it. Runs whether or not rollover is switched on: a
     # handoff the owner asks for by hand needs the binding as much.
     thread_binder = build_thread_binder(
+        connection=connection,
         store=store,
         terminal=terminal,
         descriptors=descriptors,
         activity_directory=paths.activity_directory,
+        notify=None if boundary.binding_notifier is None else boundary.binding_notifier.notify,
     )
     return ServiceComposition(
         boundary,
@@ -357,6 +359,7 @@ def _private_boundary(
         # backend has sessions, the switch and the rollover rows, which production always does;
         # the switch, read afresh each pass, is what keeps it idle until the owner turns it on.
         thread_binder=thread_binder,
+        binding_notifier=boundary.binding_notifier,
         rollover_pass=(
             None
             if backend.sessions is None

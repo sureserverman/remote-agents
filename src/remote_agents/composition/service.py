@@ -300,6 +300,9 @@ class ServiceComposition:
     """The pass that binds a fresh session's thread, or None. The bot's composition only, as
     `rollover_pass` is: one process types into panes unattended, whichever process launched."""
 
+    binding_notifier: object | None = None
+    """Where the binding pass's notices go, retried each tick while one is held, or None."""
+
     rollover_notifier: RolloverNotifier | None = None
     """Where the pass's failure notices go, retried each tick while one is held, or None."""
 
@@ -873,6 +876,11 @@ async def _bind_threads_periodically(composition: ServiceComposition, interval: 
             await composition.thread_binder.run_once()
         except Exception:
             _LOG.exception("the thread-binding pass failed; it will be retried")
+        if composition.binding_notifier is not None:
+            try:
+                await composition.binding_notifier.pass_once()
+            except Exception:
+                _LOG.exception("a held unbound notice could not be resent")
 
 
 async def _roll_over_periodically(composition: ServiceComposition, interval: float) -> None:
@@ -1038,12 +1046,20 @@ def build_thread_binder(
     terminal: TmuxTerminal,
     descriptors: tuple[ProviderDescriptor, ...],
     activity_directory: Path,
+    connection,
     notify: Callable[[SessionRecord], Awaitable[None]] | None = None,
 ) -> ThreadBinder:
     """The binding pass `serve` runs, and only `serve` (DEC-115)."""
+    rollovers = SQLiteRolloverStore(connection)
 
     async def sessions_seen() -> Sequence[SessionRecord]:
         return await store.list(tuple(SessionState))
+
+    async def successor_of_a_rollover(session_id: SessionId) -> bool:
+        return any(
+            rollover.successor_session_id == session_id
+            for rollover in await rollovers.open_rollovers()
+        )
 
     return ThreadBinder(
         FileThreadBindings(activity_directory),
@@ -1052,6 +1068,7 @@ def build_thread_binder(
         send_line=terminal.send_binding_line,
         line_for=lambda session, nonce: bind_thread_line(activity_directory, session, nonce),
         notify=notify,
+        told_elsewhere=successor_of_a_rollover,
     )
 
 

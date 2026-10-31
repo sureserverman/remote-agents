@@ -21,8 +21,10 @@ from remote_agents.adapters.agents.registry import (
     claude_status_line_hop_installed,
     default_settings_path,
     install_agent_hooks,
+    profiles_bound_by_thread,
     remove_agent_hooks,
 )
+from remote_agents.adapters.agents.thread_binding import FileThreadBindings
 from remote_agents.adapters.projects.discovery import discover_projects
 from remote_agents.adapters.projects.registry import load_registry
 from remote_agents.adapters.sqlite.database import (
@@ -96,7 +98,7 @@ from remote_agents.config import (
     load_config,
     load_secrets,
 )
-from remote_agents.domain.models import SessionId
+from remote_agents.domain.models import SessionId, SessionState
 from remote_agents.domain.profiles import closed_profiles
 from remote_agents.ports.argv_text import (
     NonEchoingArgumentParser,
@@ -805,6 +807,34 @@ def _kept_worktrees(config) -> tuple[tuple[str, str, str], ...] | None:
         return None
 
 
+def _unbound_sessions(config, paths: ProductionPaths) -> int | None:
+    """How many live sessions would be refused a handoff, for `doctor`. Read-only.
+
+    Running, of a provider that binds, not resumed, and not named by the rule `session-id` asks.
+    Sessions started before this version count too: they are refused the same. A diagnostic
+    never raises: any failure answers None, and `doctor` omits the line.
+    """
+    try:
+        if not database_is_ready(config.database_path):
+            return None
+        hooks = profiles_bound_by_thread()
+        bindings = FileThreadBindings(paths.activity_directory)
+        connection = sqlite3.connect(f"{config.database_path.resolve().as_uri()}?mode=ro", uri=True)
+        try:
+            records = asyncio.run(SQLiteSessionStore(connection).list((SessionState.RUNNING,)))
+        finally:
+            connection.close()
+        return sum(
+            1
+            for record in records
+            if str(record.profile_id) in hooks
+            and record.resume_source_id is None
+            and not bindings.names(str(record.session_id), hooks[str(record.profile_id)])
+        )
+    except Exception:  # noqa: BLE001 — a diagnostic probe reports, it never raises
+        return None
+
+
 _KEPT_WORKTREES_TIMEOUT_SECONDS = 30.0
 """Bounds the whole listing: each git read has its own bound, and a host with many kept
 worktrees must not hold `doctor` for minutes."""
@@ -851,6 +881,7 @@ def _doctor_report(paths: ProductionPaths, config, drift: dict[str, object]) -> 
         tmux_console_ready=_console_features_available(paths.home),
         console_marks=_console_marks(),
         worktrees=_kept_worktrees(config),
+        unbound_sessions=_unbound_sessions(config, paths),
         telegram_ready=_telegram_credentials_are_private(paths),
         service_ready=_command_succeeds(supervisor.liveness_command()),
         profiles=profiles,

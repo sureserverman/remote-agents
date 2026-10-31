@@ -57,6 +57,7 @@ from remote_agents.application.services import SessionService
 from remote_agents.application.session_folders import SessionFolders
 from remote_agents.application.session_views import SessionGit
 from remote_agents.application.store_watch import StoreWatch
+from remote_agents.application.thread_binding import UnboundWatch
 from remote_agents.application.worktrees import WorktreeService
 from remote_agents.composition.limits_source import (
     ConfigCursorLimitsSource,
@@ -68,7 +69,7 @@ from remote_agents.composition.limits_source import (
     ConfigRolloverSetting,
 )
 from remote_agents.config import read_claude_limits_source, read_cursor_limits_source
-from remote_agents.domain.models import ProfileId, ProjectId, SessionId
+from remote_agents.domain.models import ProfileId, ProjectId, SessionId, SessionState
 from remote_agents.domain.profiles import ProfileCompatibility, closed_profiles
 from remote_agents.ports.agent_activity import AgentActivity
 from remote_agents.ports.agent_usage import AgentLimits, AgentUsage, UsageQuery
@@ -638,6 +639,10 @@ def compose_backend(
         # reads the same row the surface wrote. Which profiles roll over is the registry's
         # answer, the same one the pass is built with, so a surface offers Rollover now exactly
         # where the pass would act on it.
+        unbound_watch=UnboundWatch(
+            FileThreadBindings(paths.activity_directory),
+            lambda: backend_store.list(tuple(SessionState)),
+        ),
         rollovers=RolloverBook(
             SQLiteRolloverStore(connection), rollable=profiles_that_roll_over(descriptors)
         ),

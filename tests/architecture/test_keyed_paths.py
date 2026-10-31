@@ -24,10 +24,6 @@ _ALLOWED: dict[tuple[str, str], tuple[int, str]] = {
         "`Escape` alone approves nothing: it dismisses the menu our own `/remote-control` opened, "
         "and at worst declines a dialog or interrupts a turn",
     ),
-    ("_deliver_binding_line", "_CLEAR_DRAFT_KEYS"): (
-        1,
-        "`C-u` only removes the service's own pasted line, and is skipped when a dialog is up",
-    ),
 }
 
 
@@ -114,6 +110,11 @@ _GUARDED: dict[tuple[str, str], tuple[str, str, str]] = {
         "on_answer",
         "anything but the cursor seen on the chosen answer -- an Enter onto the other row "
         "answered no, or trusted a declined folder (2026-10-05 live run)",
+    ),
+    ("_deliver_binding_line", "_CLEAR_DRAFT_KEYS"): (
+        "only_line",
+        "only_line",
+        "a dialog, or a composer holding anything but what is left of the service's own line",
     ),
     ("_interrupt_running_turn", "interrupt"): (
         "running",

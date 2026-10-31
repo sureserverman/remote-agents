@@ -228,7 +228,11 @@ def prune(activity_directory: Path, live_sessions: Collection[str]) -> None:
 
 
 def _pending_is_live(entry: os.DirEntry[str], live_sessions: Collection[str]) -> bool:
-    return entry.name in live_sessions
+    # A young file is kept whoever it names: the live list may have been read just before the
+    # launch that wrote it saved its record, and losing it would leave that session unbound.
+    return entry.name in live_sessions or (
+        time.time() - entry.stat(follow_symlinks=False).st_mtime <= _ABANDONED_SECONDS
+    )
 
 
 def _thread_is_live(entry: os.DirEntry[str], live_sessions: Collection[str]) -> bool:

@@ -102,3 +102,19 @@ def test_the_line_runs_this_installs_interpreter_and_names_the_store() -> None:
     assert Path(words[0]).is_absolute()
     assert words[1:5] == ["-I", "-m", "remote_agents", "bind-thread"]
     assert words[words.index("--activity-dir") + 1] == "/state/activity"
+
+
+def test_a_clear_is_never_sent_onto_what_the_owner_typed_meanwhile() -> None:
+    owner = _screen("codex", "composed_0159_warning")
+    pane = PromptPane(
+        [
+            _screen("codex", "idle_0158"),
+            _lost_start(_LINE),
+            _lost_start(_LINE),
+            _lost_start(_LINE),
+            owner,
+        ],
+        profile="codex",
+    )
+    assert _deliver(pane).outcome is PromptOutcome.UNCONFIRMED
+    assert _keys(pane) == []

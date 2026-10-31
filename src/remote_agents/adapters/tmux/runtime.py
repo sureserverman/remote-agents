@@ -88,6 +88,21 @@ _LOG = logging.getLogger(__name__)
 #: an empty composer that starts quitting the agent.
 _CLEAR_DRAFT_KEYS = ("C-u",)
 
+
+def _holds_only_this_line(capture: str, descriptor: ProviderDescriptor, line: str) -> bool:
+    """Whether the composer holds what is left of this line and nothing an owner wrote.
+
+    The line's tail, because a line that lost its start is the case being cleaned up. No dialog,
+    and shell mode or a draft that is that tail, each read off the same capture.
+    """
+    if dialog_on_screen(capture, descriptor):
+        return False
+    if in_shell_mode(capture, descriptor):
+        return shell_line_refusal(capture, descriptor, line) is None
+    draft = "".join((composer_draft(capture, descriptor) or "").split())
+    return bool(draft) and "".join(line.split()).endswith(draft)
+
+
 _REMOTE_CONTROL_ENABLE_WAIT_SECONDS = 3
 _REMOTE_CONTROL_MENU_WAIT_SECONDS = 1
 _REMOTE_CONTROL_DISABLE_WAIT_SECONDS = 2
@@ -1112,12 +1127,18 @@ class TmuxTerminal:
             return PromptDelivery(PromptOutcome.REFUSED, REFUSAL_FOR[state])
         if not steps.entered:
             reason = shell_line_refusal(steps.after_paste or "", descriptor, line)
-            if reason is not PromptReason.DIALOG:
-                # A stranded draft would refuse every later message. Never into a dialog.
-                try:
-                    await self._gateway.send_keys(session_id, _CLEAR_DRAFT_KEYS)
-                except RuntimeError:
-                    _LOG.exception("could not clear the binding line from %s", session_id)
+
+            # A stranded draft would refuse every later message. Judged and sent under one key
+            # lock, on a fresh capture, so it cannot land on a dialog or on what someone typed.
+            def only_line(capture: str) -> bool:
+                return _holds_only_this_line(capture, descriptor, line)
+
+            try:
+                await self._gateway.send_keys_when(
+                    session_id, _CLEAR_DRAFT_KEYS, only_line, between=only_line
+                )
+            except (RuntimeError, KeysBusy):
+                _LOG.exception("could not clear the binding line from %s", session_id)
             return PromptDelivery(PromptOutcome.UNCONFIRMED, reason)
         return PromptDelivery(PromptOutcome.SENT)
 

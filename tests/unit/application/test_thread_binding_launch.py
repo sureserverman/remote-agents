@@ -284,11 +284,29 @@ def test_a_store_that_cannot_be_trusted_types_nothing_and_tells_once(world: Worl
     assert world.told == [session]
 
 
-def test_a_session_gone_from_the_store_is_forgotten(world: World) -> None:
+def test_a_session_that_gave_up_as_a_successor_leaves_the_notice_to_its_rollover(
+    world: World,
+) -> None:
     session = world.session()
-    world.records.clear()
+    world.shell_runs = False
+
+    async def successor(session_id):
+        return session_id == session
+
+    world.binder._told_elsewhere = successor
     world.run()
-    assert world.bindings.state(str(session)) is PendingBinding.NONE
+    world.elapse(SEEN_PATIENCE_SECONDS)
+    world.run(2)
+    assert world.told == []
+
+
+def test_a_session_nothing_is_pending_for_costs_no_binding_read(world: World) -> None:
+    world.session(wanted=False)
+    calls = []
+    names = world.bindings.names
+    world.bindings.names = lambda *args: (calls.append(args), names(*args))[1]  # type: ignore[method-assign]
+    world.run(2)
+    assert calls == []
 
 
 def test_wait_bound_says_yes_for_a_provider_that_needs_no_binding(world: World) -> None:

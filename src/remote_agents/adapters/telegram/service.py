@@ -35,6 +35,7 @@ from telegram.ext import (
     filters,
 )
 
+from remote_agents.adapters.telegram.binding_notifications import BindingNotifier
 from remote_agents.adapters.telegram.callbacks import (
     CallbackStateStore,
     permission_entity,
@@ -882,6 +883,7 @@ class PrivateBotBoundary:
     """Says when a rollover failed or its stop did not go through, or None where the backend
     has no rollovers. Bot-only, like the schedule notices; only failures push (DEC-031)."""
     restart_notifier: RestartNotifier | None = None
+    binding_notifier: BindingNotifier | None = None
     """Says, once per restart, which interrupted sessions came back (DEC-127), or None where the
     backend has no sessions. Bot-only, like the rollover notices."""
     schedule_notifier: ScheduleNotifier | None = None
@@ -5930,6 +5932,16 @@ def build_private_bot(
                 flood=bot.flood,
             ),
         )
+    if bot.backend.sessions is not None:
+        object.__setattr__(
+            bot,
+            "binding_notifier",
+            BindingNotifier(
+                view=bot.view,
+                project_name=bot._project_name,  # noqa: SLF001 -- the cycle this factory closes
+                flood=bot.flood,
+            ),
+        )
     if bot.backend.schedules is not None:
         object.__setattr__(
             bot,
@@ -6022,6 +6034,9 @@ async def run_private_bot(
     # before the bot attached.
     if boundary.restart_notifier is not None:
         boundary.restart_notifier.attach(application.bot)
+    # And to the unbound notices, which answer no update either.
+    if boundary.binding_notifier is not None:
+        boundary.binding_notifier.attach(application.bot)
     try:
         await _sync_owner_metadata(
             application.bot, secrets.owner_chat_id, owner_commands(boundary.backend)

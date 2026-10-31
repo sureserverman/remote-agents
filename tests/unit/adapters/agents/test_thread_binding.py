@@ -258,11 +258,20 @@ def test_prune_removes_what_belongs_to_sessions_off_the_roster(spool: Path) -> N
     waiting = mint_nonce(spool, "c" * 32)
     gone_waiting = "d" * 32
     mint_nonce(spool, gone_waiting)
+    old = time.time() - 3600
+    os.utime(spool / BINDING_DIRECTORY / "pending" / gone_waiting, (old, old))
     prune(spool, {_SESSION, "c" * 32})
     assert bound_session(spool, _THREAD) == _SESSION
     assert bound_session(spool, _SECOND_THREAD) is None
     assert consume_nonce(spool, "c" * 32, waiting, "01a193e9-8545-78d2-b7c5-4750a9514be8") is None
     assert not (spool / BINDING_DIRECTORY / "pending" / gone_waiting).exists()
+
+
+def test_prune_keeps_a_young_pending_file_off_the_list_it_read(spool: Path) -> None:
+    """The list may predate the launch that wrote it, whose session would never be typed to."""
+    mint_nonce(spool, _SESSION)
+    prune(spool, set())
+    assert (spool / BINDING_DIRECTORY / "pending" / _SESSION).exists()
 
 
 def test_prune_clears_abandoned_work_files_and_keeps_fresh_ones(spool: Path) -> None:

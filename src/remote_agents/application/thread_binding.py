@@ -39,6 +39,48 @@ SEEN_PATIENCE_SECONDS = 20.0
 _WAIT_SECONDS = 1.0
 
 
+def unbound_notice(record: SessionRecord, project_name: str) -> str:
+    """The one sentence both surfaces say about a session that could not bind (DEC-091)."""
+    return (
+        f"{record.profile_id} in {project_name} #{record.display.sequence} could not bind its "
+        "thread. It keeps working, but its handoffs will refuse, so it cannot roll over."
+    )
+
+
+class UnboundWatch:
+    """Which sessions gave up their binding since this surface last looked.
+
+    The console is another process and is not told by the pass, so it reads the store. Its first
+    look only learns what is already there: a console opened later is not the moment to report an
+    old failure, which the bot has said and `doctor` still counts.
+    """
+
+    def __init__(
+        self,
+        bindings: ThreadBindings,
+        sessions: Callable[[], Awaitable[Sequence[SessionRecord]]],
+    ) -> None:
+        self._bindings = bindings
+        self._sessions = sessions
+        self._seen: set[str] | None = None
+
+    async def newly_given_up(self) -> tuple[SessionRecord, ...]:
+        records = [record for record in await self._sessions() if notifiable(record.state)]
+        given_up = []
+        for record in records:
+            state = await asyncio.to_thread(self._bindings.state, str(record.session_id))
+            if state is PendingBinding.GAVE_UP:
+                given_up.append(record)
+        keys = {str(record.session_id) for record in given_up}
+        fresh = (
+            ()
+            if self._seen is None
+            else tuple(record for record in given_up if str(record.session_id) not in self._seen)
+        )
+        self._seen = keys if self._seen is None else self._seen | keys
+        return fresh
+
+
 class BindStep(Enum):
     """What one look at a session found."""
 
@@ -71,6 +113,7 @@ class ThreadBinder:
         send_line: Callable[[SessionId, str], Awaitable[PromptDelivery]],
         line_for: Callable[[str, str], str],
         notify: Callable[[SessionRecord], Awaitable[None]] | None = None,
+        told_elsewhere: Callable[[SessionId], Awaitable[bool]] | None = None,
         now: Callable[[], datetime] = lambda: datetime.now(UTC),
         sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
     ) -> None:
@@ -81,6 +124,7 @@ class ThreadBinder:
         self._send_line = send_line
         self._line_for = line_for
         self._notify = notify
+        self._told_elsewhere = told_elsewhere
         self._now = now
         self._sleep = sleep
         self._attempts: dict[str, _Attempt] = {}
@@ -97,12 +141,29 @@ class ThreadBinder:
         for record in records:
             if record.state is not SessionState.RUNNING or record.resume_source_id is not None:
                 continue
+            key = str(record.session_id)
+            if str(record.profile_id) not in self._hooks:
+                continue
+            # The cheap reading first: this runs every few seconds for every session, and only
+            # one with a pending file or an attempt under way has anything left to do.
+            if key not in self._attempts and await asyncio.to_thread(self._bindings.state, key) in (
+                PendingBinding.NONE,
+                PendingBinding.GAVE_UP,
+            ):
+                continue
             step = await self._step(record.session_id, record.profile_id)
-            if step is BindStep.GAVE_UP and self._notify is not None:
-                try:
-                    await self._notify(record)
-                except Exception:
-                    _LOG.exception("the unbound notice for %s could not be sent", record.session_id)
+            if step is BindStep.GAVE_UP:
+                await self._tell(record)
+
+    async def _tell(self, record: SessionRecord) -> None:
+        """One notice, unless a rollover waits on this session and will report it failing."""
+        if self._notify is None:
+            return
+        try:
+            if self._told_elsewhere is None or not await self._told_elsewhere(record.session_id):
+                await self._notify(record)
+        except Exception:
+            _LOG.exception("the unbound notice for %s could not be sent", record.session_id)
 
     async def wait_bound(self, session_id: SessionId, profile_id: ProfileId) -> bool:
         """Whether this session may be typed its handoff: bound, or a provider that needs none.

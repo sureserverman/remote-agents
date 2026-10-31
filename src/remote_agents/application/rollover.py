@@ -987,6 +987,11 @@ class RolloverPass:
             # Declined ("No, exit"), stopped, or failed while it was asking.
             await self._fail(rollover, seen, SUCCESSOR_FAILED)
             return
+        # Before ADOPTING, which a restart reads as "typed", so this can still fail cleanly. And
+        # before the idle check below, so a wait here cannot make that check stale.
+        if not await self._is_bound(rollover.successor_session_id, rollover.profile_id):
+            await self._fail(rollover, seen, BINDING_FAILED)
+            return
         # The hold can last hours, and the owner may have gone back to the old session: its
         # handoff is then stale, and two sessions would work one plan. So the predecessor must
         # still be running and idle -- the launch's own condition -- before the template goes in.
@@ -1001,10 +1006,6 @@ class RolloverPass:
                 await self._store.note(rollover.id, TRUSTED_WAITING, at=self._now())
             elif self._now() - waiting_since >= NOT_IDLE_PATIENCE:
                 await self._fail(rollover, seen, PREDECESSOR_NOT_IDLE)
-            return
-        # Before ADOPTING, which a restart reads as "typed": this can still fail cleanly.
-        if not await self._is_bound(rollover.successor_session_id, rollover.profile_id):
-            await self._fail(rollover, seen, BINDING_FAILED)
             return
         adopting = await self._store.advance(
             rollover.id, _S.ADOPTING, at=self._now(), detail=TRUSTED_TYPING
