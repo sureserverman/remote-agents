@@ -1,13 +1,13 @@
 {
  "baseline": {
-  "elapsed_s": 0.3,
+  "elapsed_s": 0.4,
   "exit": 0,
-  "tail": ".                                                                        [100%]\n1 passed, 16 deselected in 0.05s"
+  "tail": ".                                                                        [100%]\n1 passed, 19 deselected in 0.20s"
  },
- "break_patch": "--- a/src/remote_agents/adapters/agents/hook_identity.py\n+++ b/src/remote_agents/adapters/agents/hook_identity.py\n@@ -140,7 +140,7 @@\n             return None\n         claimants = {entry.session_id for entry in entries if entry.resume_source_id == thread_id}\n         if any(entry.session_id == bound for entry in entries):\n-            claimants.add(bound)\n+            pass\n         if len(claimants) != 1:\n             return None\n         session_id = next(iter(claimants))\n",
+ "break_patch": "--- a/src/remote_agents/adapters/agents/hook_identity.py\n+++ b/src/remote_agents/adapters/agents/hook_identity.py\n@@ -141,7 +141,7 @@\n             return None\n         claimants = {entry.session_id for entry in entries if entry.resume_source_id == thread_id}\n         if any(entry.session_id == bound for entry in entries):\n-            claimants.add(bound)\n+            pass\n         if len(claimants) != 1:\n             return None\n         session_id = next(iter(claimants))\n",
  "build": null,
- "created": "2026-10-31T22:24:58+00:00",
- "fingerprint": "536bbf485c9a157a6e411a0463d8845c8d8719ff10f2a679a6e706b3d7dd3ebb",
+ "created": "2026-10-31T22:52:17+00:00",
+ "fingerprint": "b714490ed411b88e81513e6e0920f6b6918aab3ee9e526ea4662dee8cc4912f7",
  "index": 1,
  "kind": "claim",
  "named_break": null,
@@ -16,7 +16,7 @@
  "red": {
   "elapsed_s": 0.3,
   "exit": 1,
-  "tail": "F                                                                        [100%]\n=================================== FAILURES ===================================\n______________________ test_fresh_thread_bound_then_named ______________________\n\nspool = PosixPath('/tmp/pytest-of-user/pytest-177/test_fresh_thread_bound_then_n0/spool')\ncapsys = <_pytest.capture.CaptureFixture object at 0x7f71012e9400>\ntmp_path = PosixPath('/tmp/pytest-of-user/pytest-177/test_fresh_thread_bound_then_n0')\nmonkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7f71012228b0>\n\n    def test_fresh_thread_bound_then_named(\n        spool: Path, capsys: pytest.CaptureFixture[str], tmp_path: Path, monkeypatch: pytest.MonkeyPatch\n    ) -> None:\n        session = str(SessionId.new())\n        _roster(spool, (session, None))\n        assert _named(spool, capsys) == (3, \"\")\n        nonce = mint_nonce(spool, session)\n        capsys.readouterr()\n        assert _bind(spool, session, nonce) == 0\n        assert capsys.readouterr() == (\"\", \"\")\n>       assert _named(spool, capsys) == (0, f\"{session}\\n\")\nE       AssertionError: assert (3, '') == (0, '37105f7e...8ebc7f068c\\n')\nE         \nE         At index 0 diff: 3 != 0\nE         Use -v to get more diff\n\n/tmp/remote-agents-thread-binding/tests/unit/test_bind_thread_command.py:78: AssertionError\n=========================== short test summary info ============================\nFAILED tests/unit/test_bind_thread_command.py::test_fresh_thread_bound_then_named\n1 failed, 16 deselected in 0.07s"
+  "tail": "F                                                                        [100%]\n=================================== FAILURES ===================================\n______________________ test_fresh_thread_bound_then_named ______________________\n\nspool = PosixPath('/tmp/pytest-of-user/pytest-198/test_fresh_thread_bound_then_n0/spool')\ncapsys = <_pytest.capture.CaptureFixture object at 0x70ed05cc96a0>\ntmp_path = PosixPath('/tmp/pytest-of-user/pytest-198/test_fresh_thread_bound_then_n0')\nmonkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x70ed05c228b0>\n\n    def test_fresh_thread_bound_then_named(\n        spool: Path, capsys: pytest.CaptureFixture[str], tmp_path: Path, monkeypatch: pytest.MonkeyPatch\n    ) -> None:\n        session = str(SessionId.new())\n        _roster(spool, (session, None))\n        assert _named(spool, capsys) == (3, \"\")\n        nonce = mint_nonce(spool, session)\n        capsys.readouterr()\n        assert _bind(spool, session, nonce) == 0\n        assert capsys.readouterr() == (\"\", \"\")\n>       assert _named(spool, capsys) == (0, f\"{session}\\n\")\nE       AssertionError: assert (3, '') == (0, '5533883d...7bc6bf7916\\n')\nE         \nE         At index 0 diff: 3 != 0\nE         Use -v to get more diff\n\n/tmp/remote-agents-thread-binding/tests/unit/test_bind_thread_command.py:78: AssertionError\n=========================== short test summary info ============================\nFAILED tests/unit/test_bind_thread_command.py::test_fresh_thread_bound_then_named\n1 failed, 19 deselected in 0.07s"
  },
  "schema": 2,
  "shell": "bash",
@@ -27,9 +27,9 @@
   "src/remote_agents/adapters/agents/hook_identity.py"
  ],
  "touched_blobs": {
-  "src/remote_agents/adapters/agents/hook_identity.py": "1202f68d6853b5423891995589701685c1ebd9a3"
+  "src/remote_agents/adapters/agents/hook_identity.py": "83b7285a9843cb281f4ba2a6897c116b06abef79"
  },
  "witness_blobs": {
-  "tests/unit/test_bind_thread_command.py": "f4a3e4c6b5b4a3fce99e0d20ed773774f9ea244d"
+  "tests/unit/test_bind_thread_command.py": "14b9129b71cb052d45fc6cb975326cb91c7732cb"
  }
 }
