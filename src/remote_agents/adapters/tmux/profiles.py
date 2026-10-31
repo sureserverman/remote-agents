@@ -252,6 +252,31 @@ def supervisor_id_command() -> str:
     return shlex.join([sys.executable, "-I", "-m", "remote_agents", "session-id"])
 
 
+def bind_thread_line(activity_directory: Path, session_id: str, nonce: str) -> str:
+    """The `!` line that spends a launch's nonce, by this install's own interpreter.
+
+    `-I` for the reason `session-id`'s command gives. The directory is named, because a pane's
+    shell cannot be asked to agree with the service about where the store is.
+    """
+    if not Path(sys.executable).is_absolute():
+        raise ValueError("the running interpreter's path must be absolute")
+    return "!" + shlex.join(
+        [
+            sys.executable,
+            "-I",
+            "-m",
+            "remote_agents",
+            "bind-thread",
+            "--activity-dir",
+            str(activity_directory),
+            "--session",
+            session_id,
+            "--nonce",
+            nonce,
+        ]
+    )
+
+
 def build_resume_profile(
     definition: ProfileDefinition,
     executable: Path,

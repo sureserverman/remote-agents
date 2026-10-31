@@ -63,6 +63,7 @@ from remote_agents.composition.service import (
     ServiceComposition,
     build_restart_resume,
     build_rollover_pass,
+    build_thread_binder,
     build_worktree_cleanup,
     live_session_check,
 )
@@ -266,6 +267,14 @@ def _private_boundary(
             zone=host_zone,
         )
     )
+    # Beside the rollover pass that waits on it. Runs whether or not rollover is switched on: a
+    # handoff the owner asks for by hand needs the binding as much.
+    thread_binder = build_thread_binder(
+        store=store,
+        terminal=terminal,
+        descriptors=descriptors,
+        activity_directory=paths.activity_directory,
+    )
     return ServiceComposition(
         boundary,
         terminal,
@@ -347,6 +356,7 @@ def _private_boundary(
         # The rollover pass (DEC-115), built beside the loop that runs it. Wired only where the
         # backend has sessions, the switch and the rollover rows, which production always does;
         # the switch, read afresh each pass, is what keeps it idle until the owner turns it on.
+        thread_binder=thread_binder,
         rollover_pass=(
             None
             if backend.sessions is None
@@ -356,6 +366,7 @@ def _private_boundary(
                 connection=connection,
                 sessions=backend.sessions,
                 terminal=terminal,
+                binder=thread_binder,
                 enabled=backend.auto_rollover.read,
                 project_paths=projects.paths,
                 adopt_templates=adopt_templates(descriptors),

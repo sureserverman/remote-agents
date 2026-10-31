@@ -24,6 +24,10 @@ _ALLOWED: dict[tuple[str, str], tuple[int, str]] = {
         "`Escape` alone approves nothing: it dismisses the menu our own `/remote-control` opened, "
         "and at worst declines a dialog or interrupts a turn",
     ),
+    ("_deliver_binding_line", "_CLEAR_DRAFT_KEYS"): (
+        1,
+        "`C-u` only removes the service's own pasted line, and is skipped when a dialog is up",
+    ),
 }
 
 

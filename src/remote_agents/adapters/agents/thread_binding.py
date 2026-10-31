@@ -30,6 +30,7 @@ from pathlib import Path
 
 from remote_agents.ports.private_directory import open_private_directory
 from remote_agents.ports.session_identity import safe_session_id
+from remote_agents.ports.thread_binding import PendingBinding
 
 BINDING_DIRECTORY = "thread-binding"
 _PENDING = "pending"
@@ -42,12 +43,67 @@ _CLAIMED_PREFIX = ".claimed-"
 _ABANDONED_SECONDS = 60.0
 _MAXIMUM_FILE_BYTES = 256
 
+#: What a pending file can hold besides a nonce's hash. Neither is hexadecimal, so neither ever
+#: matches a nonce, and `_RETRY_MARK` before a hash says that hash is the launch's second try.
+_WANTED = "wanted"
+_GAVE_UP = "gave-up"
+_RETRY_MARK = "r"
+
 
 class UntrustedBinding(Exception):
     """The binding files are there and cannot be trusted. Callers refuse, never guess."""
 
 
-def mint_nonce(activity_directory: Path, session_id: str) -> str:
+def request_binding(activity_directory: Path, session_id: str) -> None:
+    """Say this launch wants a binding, before its pane starts.
+
+    Only a session that asked is ever typed into, so a session already running when this version
+    is installed never gets a line it did not expect. A launch in any process can ask; only the
+    service types.
+    """
+    _record_pending(activity_directory, session_id, _WANTED)
+
+
+def give_up(activity_directory: Path, session_id: str) -> None:
+    """Record that this session's binding did not come, so no restart tries or tells again."""
+    _record_pending(activity_directory, session_id, _GAVE_UP)
+
+
+def pending_state(activity_directory: Path, session_id: str) -> PendingBinding:
+    """Where this session's binding stands. Raises `UntrustedBinding` as `bound_session` does."""
+    if safe_session_id(session_id) is None:
+        return PendingBinding.NONE
+    pending = _directory(activity_directory, _PENDING, create=False)
+    if pending is None:
+        return PendingBinding.NONE
+    try:
+        recorded = _read_private(pending / session_id)
+    except OSError as error:
+        raise UntrustedBinding(str(error)) from error
+    if recorded is None:
+        return PendingBinding.NONE
+    if recorded == _WANTED:
+        return PendingBinding.WANTED
+    if recorded == _GAVE_UP:
+        return PendingBinding.GAVE_UP
+    return PendingBinding.RETRIED if recorded.startswith(_RETRY_MARK) else PendingBinding.TRIED
+
+
+def thread_of(activity_directory: Path, session_id: str) -> str | None:
+    """The thread bound to `session_id`, None when it has none. Creates nothing."""
+    threads = _directory(activity_directory, _THREADS, create=False)
+    if threads is None:
+        return None
+    with os.scandir(threads) as entries:
+        for entry in list(entries):
+            if entry.name.startswith(_WORK_PREFIX):
+                continue
+            if _read_private(Path(entry.path)) == session_id:
+                return entry.name
+    return None
+
+
+def mint_nonce(activity_directory: Path, session_id: str, *, retry: bool = False) -> str:
     """A fresh nonce for `session_id`, replacing any earlier one. Only its hash is kept.
 
     Hexadecimal, never URL-safe base64: that alphabet can begin with `-`, which reads as a flag
@@ -64,7 +120,7 @@ def mint_nonce(activity_directory: Path, session_id: str) -> str:
     # A new launch's conversation is not the old one, even before it binds.
     _forget_threads_of(threads, session_id)
     nonce = secrets.token_hex(32)
-    temporary = _written(pending, _hash(nonce))
+    temporary = _written(pending, (_RETRY_MARK if retry else "") + _hash(nonce))
     try:
         os.replace(temporary, pending / session_id)
     except BaseException:
@@ -97,7 +153,7 @@ def consume_nonce(
         recorded = _read_private(pending / session)
         if recorded is None:
             return "no nonce is waiting for this session"
-        if not hmac.compare_digest(recorded, _hash(nonce)):
+        if not _holds(recorded, nonce):
             return "the nonce does not match"
         threads = _directory(activity_directory, _THREADS, create=True)
         if threads is None:
@@ -112,7 +168,7 @@ def consume_nonce(
             return "no nonce is waiting for this session"
         # A new nonce can replace the old between the comparison and the claim. Compare what was
         # claimed, and give back what this shell had no right to take.
-        if not hmac.compare_digest(_read_private(claimed) or "", _hash(nonce)):
+        if not _holds(_read_private(claimed) or "", nonce):
             _give_back(claimed, pending / session)
             return "the nonce does not match"
         _unlink(claimed)
@@ -180,6 +236,24 @@ def _thread_is_live(entry: os.DirEntry[str], live_sessions: Collection[str]) -> 
         return _read_private(Path(entry.path)) in live_sessions
     except (OSError, UntrustedBinding):
         return False
+
+
+def _record_pending(activity_directory: Path, session_id: str, content: str) -> None:
+    if safe_session_id(session_id) is None:
+        raise ValueError("not a session id")
+    pending = _directory(activity_directory, _PENDING, create=True)
+    if pending is None:
+        raise UntrustedBinding("cannot make the binding directory")
+    temporary = _written(pending, content)
+    try:
+        os.replace(temporary, pending / session_id)
+    except BaseException:
+        _unlink(temporary)
+        raise
+
+
+def _holds(recorded: str, nonce: str) -> bool:
+    return hmac.compare_digest(recorded.removeprefix(_RETRY_MARK), _hash(nonce))
 
 
 def _hash(nonce: str) -> str:
@@ -300,3 +374,59 @@ def _unlink(path: Path) -> None:
         os.unlink(path)
     except OSError:
         pass
+
+
+class FileThreadBindings:
+    """The service's side of the store. Files that cannot be trusted read as no binding."""
+
+    def __init__(self, activity_directory: Path) -> None:
+        self._activity_directory = activity_directory
+
+    def request(self, session_id: str) -> None:
+        request_binding(self._activity_directory, session_id)
+
+    def state(self, session_id: str) -> PendingBinding:
+        try:
+            return pending_state(self._activity_directory, session_id)
+        except (OSError, UntrustedBinding):
+            return PendingBinding.UNTRUSTED
+
+    def mint(self, session_id: str, *, retry: bool = False) -> str:
+        return mint_nonce(self._activity_directory, session_id, retry=retry)
+
+    def give_up(self, session_id: str) -> None:
+        give_up(self._activity_directory, session_id)
+
+    def prune(self, live_sessions: Collection[str]) -> None:
+        prune(self._activity_directory, live_sessions)
+
+    def names(self, session_id: str, hook_name: str) -> bool:
+        """Whether `session-id`, in this session's bound thread, would print this session.
+
+        A thread file alone is not that answer: the session's own mark can still veto it, and the
+        roster must list it. So this asks the rule the verb asks.
+        """
+        from remote_agents.adapters.agents.hook_identity import (
+            UNTRUSTED,
+            inspect_roster,
+            resolve,
+            roster_path,
+        )
+
+        try:
+            thread = thread_of(self._activity_directory, session_id)
+            roster = inspect_roster(roster_path(self._activity_directory, hook_name))
+        except (OSError, UntrustedBinding):
+            return False
+        if thread is None or roster is None or roster is UNTRUSTED:
+            return False
+        return (
+            resolve(
+                thread,
+                None,
+                roster,
+                require_exact=True,
+                activity_directory=self._activity_directory,
+            )
+            == session_id
+        )

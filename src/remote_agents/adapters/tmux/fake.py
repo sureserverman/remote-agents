@@ -49,6 +49,7 @@ class FakeTerminal:
         #: time after a session's creation models a server restarted since.
         self.server_started: datetime | None = datetime(2000, 1, 1, tzinfo=UTC)
         self.prompt_deliveries: list[PromptDelivery] = []
+        self.binding_lines: list[tuple[SessionId, str]] = []
 
     async def server_started_at(self) -> datetime | None:
         return self.server_started
@@ -230,6 +231,10 @@ class FakeTerminal:
     async def cleanup(self, session_id: SessionId) -> None:
         """Remove a preserved fake session."""
         self._observations.pop(session_id, None)
+
+    async def send_binding_line(self, session_id: SessionId, line: str) -> PromptDelivery:
+        self.binding_lines.append((session_id, line))
+        return PromptDelivery(PromptOutcome.SENT)
 
     async def send_prompt(self, session_id: SessionId, text: str) -> PromptDelivery:
         """Record the message; answer the next armed delivery, or SENT to a live session.

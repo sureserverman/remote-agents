@@ -20,11 +20,13 @@ from remote_agents.adapters.agents.registry import (
     claude_remote_control_default,
     codex_daemon_guard,
     profile_composers,
+    profiles_bound_by_thread,
     profiles_named_by_payload,
     profiles_that_roll_over,
     provider_descriptors,
     usage_readers,
 )
+from remote_agents.adapters.agents.thread_binding import FileThreadBindings
 from remote_agents.adapters.agents.turn_markers import FileConversationMarks
 from remote_agents.adapters.git.checkout import GitCli
 from remote_agents.adapters.projects.discovery import discover_projects
@@ -66,12 +68,13 @@ from remote_agents.composition.limits_source import (
     ConfigRolloverSetting,
 )
 from remote_agents.config import read_claude_limits_source, read_cursor_limits_source
-from remote_agents.domain.models import ProjectId, SessionId
+from remote_agents.domain.models import ProfileId, ProjectId, SessionId
 from remote_agents.domain.profiles import ProfileCompatibility, closed_profiles
 from remote_agents.ports.agent_activity import AgentActivity
 from remote_agents.ports.agent_usage import AgentLimits, AgentUsage, UsageQuery
 from remote_agents.ports.folder_bindings import FolderBindings
 from remote_agents.ports.git_checkout import GitCheckout, GitError, GitSummary
+from remote_agents.ports.provider_descriptor import ProviderDescriptor
 from remote_agents.ports.terminal import SessionFolderLookup
 from remote_agents.ports.worktree_store import Worktree, WorktreeStore
 from remote_agents.production import ProductionPaths
@@ -180,6 +183,20 @@ class WorktreeParts:
     folders: FolderBindings | None = None
     """Sessions bound to a folder outside their project (DEC-131), kept beside the worktree
     rows because every reader asking "which folder" asks both."""
+
+
+def _binding_requester(
+    descriptors: tuple[ProviderDescriptor, ...], activity_directory: Path
+) -> Callable[[SessionId, ProfileId], None]:
+    """What a launch calls before its pane starts: asks only for a provider that can bind."""
+    bound = profiles_bound_by_thread(descriptors)
+    bindings = FileThreadBindings(activity_directory)
+
+    def request(session_id: SessionId, profile_id: ProfileId) -> None:
+        if str(profile_id) in bound:
+            bindings.request(str(session_id))
+
+    return request
 
 
 def worktree_parts(connection) -> WorktreeParts:
@@ -544,6 +561,7 @@ def compose_backend(
             remote_control_defaults=dict.fromkeys(claude_default.profiles, claude_default),
             daemon_guards=dict.fromkeys(daemon_profiles, daemon_guard),
             before_pane=hook_roster.publish,
+            request_binding=_binding_requester(descriptors, paths.activity_directory),
             worktrees=worktrees.store if worktrees is not None else None,
             folder_bindings=worktrees.folders if worktrees is not None else None,
             worktree_service=(

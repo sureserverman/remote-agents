@@ -157,6 +157,8 @@ PREDECESSOR_GONE = "predecessor-gone"
 LAUNCH_FAILED = "launch-failed"
 SUCCESSOR_UNTRUSTED = "successor-untrusted"
 NOT_TYPED = "not-typed"
+BINDING_FAILED = "binding-failed"
+"""The successor's thread was never bound, so its handoff would refuse. Nothing was typed."""
 ADOPTION_TIMEOUT = "adoption-timeout"
 STOP_UNCONFIRMED = "stop-unconfirmed"
 NOT_ROLLABLE = "not-rollable"
@@ -254,6 +256,7 @@ class RolloverPass:
         idle: Callable[[SessionId], Awaitable[bool]],
         launch: Callable[[LaunchCommand], Awaitable[object]],
         send: Callable[[SessionId, str], Awaitable[PromptDelivery]],
+        bound: Callable[[SessionId, ProfileId], Awaitable[bool]] | None = None,
         graceful_stop: Callable[[GracefulStopCommand], Awaitable[TerminalObservation]],
         notify: Callable[[RolloverReport], Awaitable[None]] | None = None,
         now: Callable[[], datetime] = lambda: datetime.now(UTC),
@@ -280,6 +283,7 @@ class RolloverPass:
         #: held to `^h-[0-9a-f]{20}$`; it never supplies text. Its keys are the rollable set.
         self._templates = dict(adopt_templates)
         self._rollable = frozenset(self._templates)
+        self._bound = bound
         self._sessions = sessions
         self._handoff_root = handoff_root
         #: The root of every session bound to a worktree, read once per pass (BL-126): None
@@ -865,6 +869,10 @@ class RolloverPass:
         if record.state not in _UP:
             await self._fail(starting, seen, SUCCESSOR_FAILED, record.state.value)
             return
+        # Before the template: its adoption asks `session-id`, which refuses an unbound thread.
+        if not await self._is_bound(record.session_id, rollover.profile_id):
+            await self._fail(starting, seen, BINDING_FAILED)
+            return
         reason = await self._type_template(
             record.session_id,
             rollover.profile_id,
@@ -877,6 +885,16 @@ class RolloverPass:
             await self._fail(starting, seen, NOT_TYPED, reason)
             return
         await self._store.advance(rollover.id, _S.ADOPTING, at=self._now())
+
+    async def _is_bound(self, session_id: SessionId, profile_id: ProfileId) -> bool:
+        """Whether this successor may be typed its template. Never raises into the pass."""
+        if self._bound is None:
+            return True
+        try:
+            return await self._bound(session_id, profile_id)
+        except Exception:
+            _LOG.exception("waiting for the binding of %s failed", session_id)
+            return False
 
     async def _type_template(
         self,
@@ -983,6 +1001,10 @@ class RolloverPass:
                 await self._store.note(rollover.id, TRUSTED_WAITING, at=self._now())
             elif self._now() - waiting_since >= NOT_IDLE_PATIENCE:
                 await self._fail(rollover, seen, PREDECESSOR_NOT_IDLE)
+            return
+        # Before ADOPTING, which a restart reads as "typed": this can still fail cleanly.
+        if not await self._is_bound(rollover.successor_session_id, rollover.profile_id):
+            await self._fail(rollover, seen, BINDING_FAILED)
             return
         adopting = await self._store.advance(
             rollover.id, _S.ADOPTING, at=self._now(), detail=TRUSTED_TYPING

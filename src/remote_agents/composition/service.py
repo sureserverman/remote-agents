@@ -19,6 +19,8 @@ from datetime import UTC, datetime
 from functools import partial
 from pathlib import Path
 
+from remote_agents.adapters.agents.registry import profiles_bound_by_thread
+from remote_agents.adapters.agents.thread_binding import FileThreadBindings
 from remote_agents.adapters.git.checkout import GitCli
 from remote_agents.adapters.sqlite.activity_store import SQLiteActivityStore
 from remote_agents.adapters.sqlite.rollover_store import SQLiteRolloverStore
@@ -29,6 +31,7 @@ from remote_agents.adapters.telegram.rollover_notifications import RolloverNotif
 from remote_agents.adapters.telegram.schedule_notifications import ScheduleNotifier
 from remote_agents.adapters.telegram.service import PrivateBotBoundary
 from remote_agents.adapters.telegram.trust_notifications import TrustNotifier
+from remote_agents.adapters.tmux.profiles import bind_thread_line
 from remote_agents.adapters.tmux.runtime import TmuxTerminal
 from remote_agents.adapters.workflow.destinations import destination_branch
 from remote_agents.adapters.workflow.handoff_envelopes import FileHandoffEnvelopes
@@ -55,6 +58,7 @@ from remote_agents.application.services import ResumeOutcome, SessionService
 from remote_agents.application.session_actions import notifiable
 from remote_agents.application.session_folders import live_folder
 from remote_agents.application.session_views import CATALOGUE_GAP_RETRY_SECONDS
+from remote_agents.application.thread_binding import ThreadBinder
 from remote_agents.application.worktree_cleanup import WorktreeCleanupPass
 from remote_agents.application.worktrees import main_checkout
 from remote_agents.config import TelegramSecrets
@@ -72,6 +76,7 @@ from remote_agents.ports.git_checkout import GitCheckout
 from remote_agents.ports.interrupted_resumes import RESUMING, InterruptedResumes
 from remote_agents.ports.limit_stop_outcomes import LimitStopOutcomes
 from remote_agents.ports.message_relay import MessageRelay, RelayOutcome, RelayResult
+from remote_agents.ports.provider_descriptor import ProviderDescriptor
 from remote_agents.ports.reported_roots import ReportedRoots
 from remote_agents.ports.session_store import SessionStore
 from remote_agents.ports.state_events import StoreChanged
@@ -123,6 +128,8 @@ _PRUNE_FIRST_DELAY_SECONDS = 60.0
 #: is acted on within half a minute of the gate that wrote it, and every patience the pass
 #: counts (ten minutes for an idle pane, thirty for an adoption) is many ticks long.
 _ROLLOVER_POLL_SECONDS = 30.0
+#: A fresh pane's composer comes up in seconds, and the handoff template waits on what this finds.
+_THREAD_BINDING_POLL_SECONDS = 3.0
 #: How often `serve` looks for a session worktree it may remove (BL-116). Nothing waits on a
 #: removal: a merged, ended folder that stays a minute longer costs disk, never work.
 _WORKTREE_POLL_SECONDS = 60.0
@@ -288,6 +295,10 @@ class ServiceComposition:
     writing a row, and only this process launches, types or stops for one, so the pass's
     in-memory view and the panes it acts on never belong to two processes (DEC-030).
     """
+
+    thread_binder: ThreadBinder | None = None
+    """The pass that binds a fresh session's thread, or None. The bot's composition only, as
+    `rollover_pass` is: one process types into panes unattended, whichever process launched."""
 
     rollover_notifier: RolloverNotifier | None = None
     """Where the pass's failure notices go, retried each tick while one is held, or None."""
@@ -590,6 +601,12 @@ async def _serve_with_reconciliation(
         periodic.append(
             asyncio.create_task(_fire_schedules_periodically(composition, _SCHEDULE_POLL_SECONDS))
         )
+    if composition.thread_binder is not None:
+        periodic.append(
+            asyncio.create_task(
+                _bind_threads_periodically(composition, _THREAD_BINDING_POLL_SECONDS)
+            )
+        )
     if composition.rollover_pass is not None:
         # Its own task and clock, like the schedule pass beside it: a pass that raises costs
         # one tick, and every step is taken again from what is persisted.
@@ -848,6 +865,16 @@ async def _fire_schedules_periodically(composition: ServiceComposition, interval
                 _LOG.exception("a held schedule notice could not be resent")
 
 
+async def _bind_threads_periodically(composition: ServiceComposition, interval: float) -> None:
+    """Look for sessions wanting a binding, on a clock of their own -- never raising."""
+    while True:
+        await asyncio.sleep(interval)
+        try:
+            await composition.thread_binder.run_once()
+        except Exception:
+            _LOG.exception("the thread-binding pass failed; it will be retried")
+
+
 async def _roll_over_periodically(composition: ServiceComposition, interval: float) -> None:
     """Walk envelopes and open rollovers on a clock of their own -- never raising."""
     while True:
@@ -1005,11 +1032,35 @@ class CatalogueGap:
         await self._read()
 
 
+def build_thread_binder(
+    *,
+    store: SessionStore,
+    terminal: TmuxTerminal,
+    descriptors: tuple[ProviderDescriptor, ...],
+    activity_directory: Path,
+    notify: Callable[[SessionRecord], Awaitable[None]] | None = None,
+) -> ThreadBinder:
+    """The binding pass `serve` runs, and only `serve` (DEC-115)."""
+
+    async def sessions_seen() -> Sequence[SessionRecord]:
+        return await store.list(tuple(SessionState))
+
+    return ThreadBinder(
+        FileThreadBindings(activity_directory),
+        sessions=sessions_seen,
+        hooks=profiles_bound_by_thread(descriptors),
+        send_line=terminal.send_binding_line,
+        line_for=lambda session, nonce: bind_thread_line(activity_directory, session, nonce),
+        notify=notify,
+    )
+
+
 def build_rollover_pass(
     *,
     connection,
     sessions: SessionService,
     terminal: TmuxTerminal,
+    binder: ThreadBinder | None = None,
     enabled: Callable[[], Awaitable[bool]],
     project_paths: Mapping[ProjectId, Path],
     adopt_templates: Mapping[ProfileId, str],
@@ -1092,6 +1143,7 @@ def build_rollover_pass(
         idle=terminal.pane_idle,
         launch=sessions.launch,
         send=terminal.send_prompt,
+        bound=None if binder is None else binder.wait_bound,
         graceful_stop=sessions.graceful_stop,
         # Only failures are told (DEC-031); the notifier decides which, and words them.
         notify=notify,

@@ -70,6 +70,7 @@ _WHY = {
     "successor-untrusted": f"the successor was not trusted within {_HOURS_TRUST} hours",
     "successor-failed": "the successor failed or went away",
     "not-typed": "the handoff command was not typed into the successor",
+    "binding-failed": "the successor's thread could not be bound, so its handoff would refuse",
     "adoption-timeout": f"the successor did not take over within {_MINUTES_ADOPT} minutes",
     "id-mismatch": "the successor was handed the wrong handoff",
     "no-ready": "the successor found no handoff to take over",
@@ -103,6 +104,7 @@ _PREDECESSOR_NOT_KEPT = frozenset({"predecessor-gone"})
 _SUCCESSOR_LEFT_OPEN = frozenset(
     {
         "not-typed",
+        "binding-failed",
         "successor-untrusted",
         "adoption-timeout",
         "id-mismatch",

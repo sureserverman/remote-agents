@@ -24,6 +24,7 @@ from remote_agents.adapters.tmux.composer import (
     enter_refusal,
     in_shell_mode,
     marker_is_young,
+    shell_line_refusal,
     transcript_above_box,
     turn_ended,
 )
@@ -82,6 +83,10 @@ from remote_agents.ports.terminal import (
 from remote_agents.ports.turn_markers import ConversationMarks, StartedMarks, TurnMarkers
 
 _LOG = logging.getLogger(__name__)
+
+#: Kills everything before the cursor, which sits at the end of a line just pasted. Not `C-c`: on
+#: an empty composer that starts quitting the agent.
+_CLEAR_DRAFT_KEYS = ("C-u",)
 
 _REMOTE_CONTROL_ENABLE_WAIT_SECONDS = 3
 _REMOTE_CONTROL_MENU_WAIT_SECONDS = 1
@@ -1050,6 +1055,71 @@ class TmuxTerminal:
         if composer_draft(steps.after_enter or "", descriptor) == "":
             return PromptDelivery(PromptOutcome.SENT)
         return PromptDelivery(PromptOutcome.UNCONFIRMED, PromptReason.SUBMIT_NOT_SEEN)
+
+    async def send_binding_line(self, session_id: SessionId, line: str) -> PromptDelivery:
+        """Paste the service's own one `!` line and submit it, only into an empty idle composer.
+
+        The one door past `send_prompt`'s refusal of a `!` message, so it takes nothing an owner
+        wrote: its only caller builds the line from a nonce it just minted. Pasted, never typed:
+        typed keys can answer a dialog the idle check did not read, and a pasted line cannot
+        (`thread-binding-line-routes.json`). `Enter` is pressed only on a capture showing shell
+        mode and the whole line. Otherwise the draft is cleared and nothing is submitted.
+        """
+        if not line.startswith("!") or "\n" in line:
+            return PromptDelivery(PromptOutcome.REFUSED, PromptReason.EMPTY)
+        try:
+            return await asyncio.wait_for(
+                self._deliver_binding_line(session_id, line), self._waits.prompt_bound
+            )
+        except TimeoutError:
+            return PromptDelivery(PromptOutcome.UNCONFIRMED, PromptReason.TIMEOUT)
+
+    async def _deliver_binding_line(self, session_id: SessionId, line: str) -> PromptDelivery:
+        observation = await self.inspect(session_id)
+        if observation is None or not observation.live:
+            return PromptDelivery(PromptOutcome.REFUSED, PromptReason.NOT_RUNNING)
+        descriptor = self._composers.get(str(observation.profile_id))
+        if descriptor is None or descriptor.composer is None:
+            return PromptDelivery(PromptOutcome.REFUSED, PromptReason.NO_COMPOSER)
+        judged: list[PaneState] = []
+
+        def may_paste(capture: str, title: str) -> bool:
+            judged.append(self._judged(session_id, capture, descriptor, title))
+            return judged[-1] is PaneState.IDLE
+
+        try:
+            steps = await self._gateway.deliver_prompt(
+                session_id,
+                line,
+                may_paste=may_paste,
+                may_enter=lambda capture: shell_line_refusal(capture, descriptor, line) is None,
+                settle=self._waits.prompt_settle,
+            )
+        except TerminalTargetMissing:
+            return PromptDelivery(PromptOutcome.REFUSED, PromptReason.NOT_RUNNING)
+        except PromptPartway as failure:
+            _LOG.exception("sending the binding line to %s failed partway", session_id)
+            if not failure.touched:
+                return PromptDelivery(PromptOutcome.REFUSED, PromptReason.TMUX_ERROR)
+            return PromptDelivery(PromptOutcome.UNCONFIRMED, PromptReason.TMUX_ERROR)
+        except KeysBusy:
+            return PromptDelivery(PromptOutcome.REFUSED, PromptReason.KEYS_BUSY)
+        except RuntimeError:
+            _LOG.exception("could not find %s's pane to send the binding line", session_id)
+            return PromptDelivery(PromptOutcome.REFUSED, PromptReason.TMUX_ERROR)
+        if not steps.pasted:
+            state = judged[-1] if judged else classify(steps.before, descriptor, steps.title)
+            return PromptDelivery(PromptOutcome.REFUSED, REFUSAL_FOR[state])
+        if not steps.entered:
+            reason = shell_line_refusal(steps.after_paste or "", descriptor, line)
+            if reason is not PromptReason.DIALOG:
+                # A stranded draft would refuse every later message. Never into a dialog.
+                try:
+                    await self._gateway.send_keys(session_id, _CLEAR_DRAFT_KEYS)
+                except RuntimeError:
+                    _LOG.exception("could not clear the binding line from %s", session_id)
+            return PromptDelivery(PromptOutcome.UNCONFIRMED, reason)
+        return PromptDelivery(PromptOutcome.SENT)
 
     def _judged(
         self, session_id: SessionId, capture: str, descriptor: ProviderDescriptor, title: str
