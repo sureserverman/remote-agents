@@ -20,13 +20,13 @@ or not checkable here — <why>. A false premise is a Stop condition.
 Assumption: a `!` shell holds the thread id the later turn uses, on real Codex 0.166.0.
 Checked: `run-live-checks.sh token`, `ra-live-owner-20261031T173415.log`, five panes on one home.
 Result: bang and turn thread ids are equal in all five panes.
-Verdict: holds for plain, `-c` and `--no-daemon` launches; per preset, measured by Task 1.2.
+Verdict: holds, also per preset in `ra-live-owner-20261031T182317.log`.
 
 ## Premise 2
 Assumption: a `!` shell can write outside its workspace under every preset's flags.
 Checked: `tests/live/test_codex_thread_binding_live.py`.
-Result: pending Task 1.2.
-Verdict: not checkable here - this shell cannot create a bwrap namespace; the owner runs it (OD-4).
+Result: `ra-live-owner-20261031T182317.log`: wrote under all four presets and `--sandbox read-only`, error file empty.
+Verdict: holds.
 
 ## Premise 3
 Assumption: managed launches with a preset still meet the shared daemon.

@@ -1,0 +1,231 @@
+{
+  "one_daemon": true,
+  "control_marker_seen": true,
+  "first": {
+    "name": "plain-first",
+    "flags": [],
+    "bang": {
+      "token": "",
+      "thread": "01a19333-bd18-7b11-b41a-570128a90c36",
+      "session": "marker-of-first-plain-pane",
+      "done": "1"
+    },
+    "bang_wrote": true,
+    "bang_error": "",
+    "bang_thread": "01a19333-bd18-7b11-b41a-570128a90c36",
+    "turn": {
+      "token": "",
+      "thread": "01a19333-bd18-7b11-b41a-570128a90c36",
+      "session": "marker-of-first-plain-pane",
+      "done": "1"
+    },
+    "turn_thread": "01a19333-bd18-7b11-b41a-570128a90c36",
+    "daemons": [
+      3543965
+    ],
+    "marker_seen": true,
+    "pane_state": "0",
+    "screen": "\n  >_ OpenAI Codex (v0.166.0)\n     /tmp/pytest-of-user/pytest-156/tool-shell0/plain-first\n\n\u2022 You ran sh token.sh seen-bang.txt\n  \u2514 (no output)\n\n  Worked for <1s \u2022 6:23 PM\n\n\u2022 You ran sh bind.sh\n  \u2514 (no output)\n\n  Worked for <1s \u2022 6:23 PM\n\n\n\u203a Run the shell command `sh token.sh seen-turn.txt`, then reply: done\n\n\n\u2022 I\u2019ll run the command now.\n\n\u2022 Ran sh token.sh seen-turn.txt\n  \u2514 (no output)\n\n\u2022 done\n\n  Worked for 4s \u2022 6:23 PM\n\n\n  Warnings\n\n  No warnings\n\n\n\n\n\n\n\n\n  k keep & next \u00b7 esc dismiss & close \u00b7 ^o copy \u00b7 \u2190/\u2192 warning\n"
+  },
+  "presets": [
+    {
+      "name": "preset-approve-for-me",
+      "flags": [
+        "--approve-for-me"
+      ],
+      "bang": {
+        "token": "",
+        "thread": "01a19333-f335-7903-aa32-589f746c41a6",
+        "session": "",
+        "done": "1"
+      },
+      "bang_wrote": true,
+      "bang_error": "",
+      "bang_thread": "01a19333-f335-7903-aa32-589f746c41a6",
+      "turn": {
+        "token": "",
+        "thread": "01a19333-f335-7903-aa32-589f746c41a6",
+        "session": "",
+        "done": "1"
+      },
+      "turn_thread": "01a19333-f335-7903-aa32-589f746c41a6",
+      "daemons": [
+        3543965
+      ],
+      "marker_seen": false,
+      "pane_state": "0",
+      "screen": "\n  >_ OpenAI Codex (v0.166.0)\n     /tmp/pytest-of-user/pytest-156/tool-shell0/preset-approve-for-me\n\n\u2022 You ran sh token.sh seen-bang.txt\n  \u2514 (no output)\n\n  Worked for <1s \u2022 6:23 PM\n\n\u2022 You ran sh bind.sh\n  \u2514 (no output)\n\n  Worked for <1s \u2022 6:23 PM\n\n\n\u203a Run the shell command `sh token.sh seen-turn.txt`, then reply: done\n\n\n\u2022 I\u2019ll run the command now.\n\n\u2022 Ran sh token.sh seen-turn.txt\n  \u2514 (no output)\n\n\u2022 done\n\n  Worked for 3s \u2022 6:23 PM\n\n\n  Warnings \u00b7 1 of 1 \u00b7 Startup\n\n  Running without the shared background server: command-line configuration overrides (-c, --enable, --disable, or --search) requires embedded mode.\n\n\n\n\n\n\n\n\n  k keep & next \u00b7 esc dismiss & close \u00b7 ^o copy \u00b7 \u2190/\u2192 warning\n"
+    },
+    {
+      "name": "preset-ask",
+      "flags": [
+        "--sandbox",
+        "workspace-write",
+        "--ask-for-approval",
+        "on-request",
+        "-c",
+        "approvals_reviewer=\"user\""
+      ],
+      "bang": {
+        "token": "",
+        "thread": "01a19334-20c1-7e93-8b67-52d740ba1db7",
+        "session": "",
+        "done": "1"
+      },
+      "bang_wrote": true,
+      "bang_error": "",
+      "bang_thread": "01a19334-20c1-7e93-8b67-52d740ba1db7",
+      "turn": {
+        "token": "",
+        "thread": "01a19334-20c1-7e93-8b67-52d740ba1db7",
+        "session": "",
+        "done": "1"
+      },
+      "turn_thread": "01a19334-20c1-7e93-8b67-52d740ba1db7",
+      "daemons": [
+        3543965
+      ],
+      "marker_seen": false,
+      "pane_state": "0",
+      "screen": "\n  >_ OpenAI Codex (v0.166.0)\n     /tmp/pytest-of-user/pytest-156/tool-shell0/preset-ask\n\n\u2022 You ran sh token.sh seen-bang.txt\n  \u2514 (no output)\n\n  Worked for <1s \u2022 6:23 PM\n\n\u2022 You ran sh bind.sh\n  \u2514 (no output)\n\n  Worked for <1s \u2022 6:23 PM\n\n\n\u203a Run the shell command `sh token.sh seen-turn.txt`, then reply: done\n\n\n\u2022 I\u2019ll run the command now.\n\n\u2022 Ran sh token.sh seen-turn.txt\n  \u2514 (no output)\n\n\u2022 done\n\n  Worked for 3s \u2022 6:23 PM\n\n\n  Warnings \u00b7 1 of 1 \u00b7 Startup\n\n  Running without the shared background server: command-line configuration overrides (-c, --enable, --disable, or --search) requires embedded mode.\n\n\n\n\n\n\n\n\n  k keep & next \u00b7 esc dismiss & close \u00b7 ^o copy \u00b7 \u2190/\u2192 warning\n"
+    },
+    {
+      "name": "preset-full-access",
+      "flags": [
+        "--dangerously-bypass-approvals-and-sandbox"
+      ],
+      "bang": {
+        "token": "",
+        "thread": "01a19334-4d1a-7e72-b8f9-2739ad369481",
+        "session": "marker-of-first-plain-pane",
+        "done": "1"
+      },
+      "bang_wrote": true,
+      "bang_error": "",
+      "bang_thread": "01a19334-4d1a-7e72-b8f9-2739ad369481",
+      "turn": {
+        "token": "",
+        "thread": "01a19334-4d1a-7e72-b8f9-2739ad369481",
+        "session": "marker-of-first-plain-pane",
+        "done": "1"
+      },
+      "turn_thread": "01a19334-4d1a-7e72-b8f9-2739ad369481",
+      "daemons": [
+        3543965
+      ],
+      "marker_seen": true,
+      "pane_state": "0",
+      "screen": "  >_ OpenAI Codex (v0.166.0)\n     /tmp/pytest-of-user/pytest-156/tool-shell0/preset-full-access\n  permissions: YOLO mode\n\n\u2022 You ran sh token.sh seen-bang.txt\n  \u2514 (no output)\n\n  Worked for <1s \u2022 6:24 PM\n\n\u2022 You ran sh bind.sh\n  \u2514 (no output)\n\n  Worked for <1s \u2022 6:24 PM\n\n\n\u203a Run the shell command `sh token.sh seen-turn.txt`, then reply: done\n\n\n\u2022 I\u2019ll run the command now.\n\n\u2022 Ran sh token.sh seen-turn.txt\n  \u2514 (no output)\n\n\u2022 done\n\n  Worked for 4s \u2022 6:24 PM\n\n\n  Warnings\n\n  No warnings\n\n\n\n\n\n\n\n\n  k keep & next \u00b7 esc dismiss & close \u00b7 ^o copy \u00b7 \u2190/\u2192 warning\n"
+    },
+    {
+      "name": "preset-provider-default",
+      "flags": [],
+      "bang": {
+        "token": "",
+        "thread": "01a19334-78e3-7c42-b51f-5e95f9112f83",
+        "session": "marker-of-first-plain-pane",
+        "done": "1"
+      },
+      "bang_wrote": true,
+      "bang_error": "",
+      "bang_thread": "01a19334-78e3-7c42-b51f-5e95f9112f83",
+      "turn": {
+        "token": "",
+        "thread": "01a19334-78e3-7c42-b51f-5e95f9112f83",
+        "session": "marker-of-first-plain-pane",
+        "done": "1"
+      },
+      "turn_thread": "01a19334-78e3-7c42-b51f-5e95f9112f83",
+      "daemons": [
+        3543965
+      ],
+      "marker_seen": true,
+      "pane_state": "0",
+      "screen": "\n  >_ OpenAI Codex (v0.166.0)\n     /tmp/pytest-of-user/pytest-156/tool-shell0/preset-provider-default\n\n\u2022 You ran sh token.sh seen-bang.txt\n  \u2514 (no output)\n\n  Worked for <1s \u2022 6:24 PM\n\n\u2022 You ran sh bind.sh\n  \u2514 (no output)\n\n  Worked for <1s \u2022 6:24 PM\n\n\n\u203a Run the shell command `sh token.sh seen-turn.txt`, then reply: done\n\n\n\u2022 I\u2019ll run that command now.\n\n\u2022 Ran sh token.sh seen-turn.txt\n  \u2514 (no output)\n\n\u2022 done\n\n  Worked for 3s \u2022 6:24 PM\n\n\n  Warnings\n\n  No warnings\n\n\n\n\n\n\n\n\n  k keep & next \u00b7 esc dismiss & close \u00b7 ^o copy \u00b7 \u2190/\u2192 warning\n"
+    }
+  ],
+  "read_only": {
+    "name": "read-only",
+    "flags": [
+      "--sandbox",
+      "read-only"
+    ],
+    "bang": {
+      "token": "",
+      "thread": "01a19334-a664-75b3-afe6-4a65beaecd78",
+      "session": "marker-of-first-plain-pane",
+      "done": "1"
+    },
+    "bang_wrote": true,
+    "bang_error": "",
+    "bang_thread": "01a19334-a664-75b3-afe6-4a65beaecd78",
+    "turn": null,
+    "turn_thread": null,
+    "daemons": [
+      3543965
+    ],
+    "marker_seen": null,
+    "pane_state": "0",
+    "screen": "\n  >_ OpenAI Codex (v0.166.0)\n     /tmp/pytest-of-user/pytest-156/tool-shell0/read-only\n\n\u2022 You ran sh token.sh seen-bang.txt\n  \u2514 (no output)\n\n  Worked for <1s \u2022 6:24 PM\n\n\u2022 You ran sh bind.sh\n  \u2514 (no output)\n\n  Worked for <1s \u2022 6:24 PM\n\n\n\u203a Run the shell command `sh token.sh seen-turn.txt`, then reply: done\n\n\n\u2022 I\u2019ll run the command now.\n\n\u2022 The command failed because the filesystem is read-only.\n\n  Worked for 5s \u2022 6:24 PM\n\n\n\n\n\n  Warnings\n\n  No warnings\n\n\n\n\n\n\n\n\n  k keep & next \u00b7 esc dismiss & close \u00b7 ^o copy \u00b7 \u2190/\u2192 warning\n"
+  },
+  "second": {
+    "name": "plain-second",
+    "flags": [],
+    "bang": {
+      "token": "",
+      "thread": "01a19335-ac8c-7811-aac7-ead0ccade922",
+      "session": "marker-of-first-plain-pane",
+      "done": "1"
+    },
+    "bang_wrote": true,
+    "bang_error": "",
+    "bang_thread": "01a19335-ac8c-7811-aac7-ead0ccade922",
+    "turn": {
+      "token": "",
+      "thread": "01a19335-ac8c-7811-aac7-ead0ccade922",
+      "session": "marker-of-first-plain-pane",
+      "done": "1"
+    },
+    "turn_thread": "01a19335-ac8c-7811-aac7-ead0ccade922",
+    "daemons": [
+      3543965
+    ],
+    "marker_seen": true,
+    "pane_state": "0",
+    "screen": "\n  >_ OpenAI Codex (v0.166.0)\n     /tmp/pytest-of-user/pytest-156/tool-shell0/plain-second\n\n\u2022 You ran sh token.sh seen-bang.txt\n  \u2514 (no output)\n\n  Worked for <1s \u2022 6:25 PM\n\n\u2022 You ran sh bind.sh\n  \u2514 (no output)\n\n  Worked for <1s \u2022 6:25 PM\n\n\n\u203a Run the shell command `sh token.sh seen-turn.txt`, then reply: done\n\n\n\u2022 I\u2019ll run that command now.\n\n\u2022 Ran sh token.sh seen-turn.txt\n  \u2514 (no output)\n\n\u2022 done\n\n  Worked for 4s \u2022 6:25 PM\n\n\n  Warnings\n\n  No warnings\n\n\n\n\n\n\n\n\n  k keep & next \u00b7 esc dismiss & close \u00b7 ^o copy \u00b7 \u2190/\u2192 warning\n"
+  },
+  "after_new": {
+    "before": {
+      "token": "",
+      "thread": "01a19335-dbe1-71f2-b4c8-ca2cbdc21ef1",
+      "session": "marker-of-first-plain-pane",
+      "done": "1"
+    },
+    "after": {
+      "token": "",
+      "thread": "01a19335-eee4-7bc1-9bdc-814f708f3de0",
+      "session": "marker-of-first-plain-pane",
+      "done": "1"
+    },
+    "screen": "\n  >_ OpenAI Codex (v0.166.0)\n     /tmp/pytest-of-user/pytest-156/tool-shell0/after-new\n\n\n\u203a 56/tool-shell0/after-new/token.sh /tmp/pytest-of-user/pytest-156/tool-shell0/after-new/after.txt\n\n\n\u2022 I\u2019ll check token.sh and run it with after.txt as the argument.\n\n\u2022 Ran pwd; rg --files -g 'AGENTS.md' -g 'token.sh' -g 'after.txt' -g '!node_modules'\n  \u2514 /tmp/pytest-of-user/pytest-156/tool-shell0/after-new\n    token.sh\n\n\u2022 Explored\n  \u2514 Read token.sh\n    + Show details\n\n\u2022 Ran sh /tmp/pytest-of-user/pytest-156/tool-shell0/after-new/token.sh /tmp/pytest-of-user/pytest-156/tool-shell0/after-new/after.txt\n  \u2514 (no output)\n\n\n\n\n\n\n\n\n\n\n\n\n\n\u2022 Working (5s \u2022 esc to interrupt)\n\n\n\u203a Ask Codex to do anything\n\n  GPT-6.1-Sol default \u00b7 /tmp/pytest-of-user/pytest-156/tool-shell0/after-new \u00b7 Run token.sh script\n  \u2190 for agents \u00b7 ? for shortcuts\n"
+  },
+  "resume_bang_only": {
+    "before": {
+      "token": "",
+      "thread": "01a19336-0aff-7303-bd25-7baafaea685e",
+      "session": "marker-of-first-plain-pane",
+      "done": "1"
+    },
+    "rollouts": [
+      "rollout-2026-10-31T18-25-54-01a19336-0aff-7303-bd25-7baafaea685e.jsonl"
+    ],
+    "resumed": true,
+    "after": {
+      "token": "",
+      "thread": "01a19336-0aff-7303-bd25-7baafaea685e",
+      "session": "marker-of-first-plain-pane",
+      "done": "1"
+    },
+    "screen": "\n  >_ OpenAI Codex (v0.166.0)\n     /tmp/pytest-of-user/pytest-156/tool-shell0/bang-only\n\n\u2022 You ran sh token.sh before.txt\n  \u2514 (no output)\n\n  Worked for <1s \u2022 6:25 PM\n\n\u2022 You ran sh token.sh after.txt\n  \u2514 (no output)\n\n  Worked for <1s \u2022 6:26 PM\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\u203a Ask Codex to do anything\n\n  GPT-6.1-Sol default \u00b7 /tmp/pytest-of-user/pytest-156/tool-shell0/bang-only\n  \u2190 for agents \u00b7 ? for shortcuts\n"
+  }
+}
