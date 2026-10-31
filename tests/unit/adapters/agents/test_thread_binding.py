@@ -94,6 +94,27 @@ def test_a_bound_thread_cannot_be_rebound_by_another_session(spool: Path) -> Non
     assert bound_session(spool, _THREAD) == _SESSION
 
 
+def test_a_bind_refused_for_a_taken_thread_keeps_the_nonce(spool: Path) -> None:
+    assert consume_nonce(spool, _SESSION, mint_nonce(spool, _SESSION), _THREAD) is None
+    nonce = mint_nonce(spool, _OTHER)
+    assert consume_nonce(spool, _OTHER, nonce, _THREAD) == "this thread is already bound"
+    assert consume_nonce(spool, _OTHER, nonce, _SECOND_THREAD) is None
+    assert bound_session(spool, _THREAD) == _SESSION
+
+
+def test_a_dangling_link_at_the_thread_is_untrusted_and_keeps_the_nonce(
+    spool: Path, tmp_path: Path
+) -> None:
+    nonce = mint_nonce(spool, _SESSION)
+    threads = spool / BINDING_DIRECTORY / "threads"
+    threads.mkdir(mode=0o700)
+    (threads / _THREAD).symlink_to(tmp_path / "nowhere")
+    assert consume_nonce(spool, _SESSION, nonce, _THREAD) == (
+        "the binding directory cannot be trusted"
+    )
+    assert consume_nonce(spool, _SESSION, nonce, _SECOND_THREAD) is None
+
+
 def test_only_one_of_two_racing_consumers_wins(
     spool: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

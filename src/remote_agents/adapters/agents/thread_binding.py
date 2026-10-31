@@ -101,6 +101,9 @@ def consume_nonce(
         threads = _directory(activity_directory, _THREADS, create=True)
         if threads is None:
             return "the binding directory cannot be trusted"
+        # Before the claim, so a refused bind leaves the session's nonce for its own thread.
+        if _read_private(threads / thread) is not None:
+            return "this thread is already bound"
         claimed = pending / f"{_CLAIMED_PREFIX}{session}-{secrets.token_hex(8)}"
         try:
             os.rename(pending / session, claimed)
