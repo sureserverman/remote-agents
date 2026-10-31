@@ -262,7 +262,7 @@ def _line_route(
     after_new: bool,
     flags: tuple[str, ...] = (),
 ) -> dict[str, object]:
-    """One line shaped like the real bind command. Enter only if it is whole, so no turn is spent."""
+    """One line shaped like the real bind command. Enter only if whole, so no turn is spent."""
     workspace = _workspace(drill, name)
     script = workspace / "bound.sh"
     script.write_text(_BOUND_SCRIPT, encoding="utf-8")
