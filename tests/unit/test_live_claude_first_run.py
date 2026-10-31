@@ -34,5 +34,7 @@ def test_the_opt_in_marks_only_the_disposable_home(
     monkeypatch.setenv("REMOTE_AGENTS_LIVE_CLAUDE_FIRST_RUN", "owner-approved")
     root = tmp_path / "drill"
     claude_command(Path("/bin/true"), root)
-    assert json.loads((root / ".claude.json").read_text())["hasCompletedOnboarding"] is True
+    seeded = json.loads((root / ".claude.json").read_text())
+    assert seeded["hasCompletedOnboarding"] is True
+    assert seeded["hasSeenAutoModeOutsideReadPrompt"] is True
     assert (real_home / ".claude.json").read_text() == '{"owner": true}'

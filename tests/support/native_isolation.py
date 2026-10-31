@@ -135,7 +135,14 @@ def claude_command(executable: Path, root: Path, *writable: Path) -> tuple[str, 
     if claude_first_run_approved():
         # In this disposable home only. Left unset, a drill stays BLOCKED at the theme screen.
         (root / ".claude.json").write_text(
-            json.dumps({"hasCompletedOnboarding": True, "theme": "dark"})
+            # The outside-read notice shows once; the owner's own home has already passed it.
+            json.dumps(
+                {
+                    "hasCompletedOnboarding": True,
+                    "hasSeenAutoModeOutsideReadPrompt": True,
+                    "theme": "dark",
+                }
+            )
         )
     source = Path.home() / ".claude/.credentials.json"
     command = confined_command(
