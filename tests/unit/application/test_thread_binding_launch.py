@@ -309,3 +309,46 @@ def test_a_mark_that_vetoes_the_binding_is_not_called_bound(world: World) -> Non
     session = world.session()
     FileConversationMarks(world.spool).record(str(session), "01a193e8-0e07-7bc0-a39e-1b6af05448f0")
     assert asyncio.run(world.binder.wait_bound(session, ProfileId("codex"))) is False
+
+
+async def test_a_launch_asks_before_its_pane_starts_and_a_resume_never_does(tmp_path: Path) -> None:
+    from remote_agents.adapters.sqlite.database import open_database
+    from remote_agents.adapters.sqlite.session_store import SQLiteSessionStore
+    from remote_agents.adapters.tmux.fake import FakeTerminal
+    from remote_agents.application.commands import LaunchCommand
+    from remote_agents.application.services import SessionService
+
+    class Recording(FakeTerminal):
+        async def launch(self, session_id, *args, **kwargs):
+            order.append("pane")
+            return await super().launch(session_id, *args, **kwargs)
+
+    order: list[str] = []
+    service = SessionService(
+        SQLiteSessionStore(open_database(tmp_path / "sessions.sqlite3")),
+        Recording(),
+        request_binding=lambda session_id, profile_id: order.append(f"asked {profile_id}"),
+    )
+    await service.launch(LaunchCommand(ProjectId("p"), ProfileId("codex"), "regular"))
+    assert order == ["asked codex", "pane"]
+
+
+async def test_a_binding_that_cannot_be_asked_costs_the_binding_never_the_launch(
+    tmp_path: Path,
+) -> None:
+    from remote_agents.adapters.sqlite.database import open_database
+    from remote_agents.adapters.sqlite.session_store import SQLiteSessionStore
+    from remote_agents.adapters.tmux.fake import FakeTerminal
+    from remote_agents.application.commands import LaunchCommand
+    from remote_agents.application.services import SessionService
+
+    def refuse(session_id, profile_id):
+        raise OSError("the store cannot be written")
+
+    service = SessionService(
+        SQLiteSessionStore(open_database(tmp_path / "sessions.sqlite3")),
+        FakeTerminal(),
+        request_binding=refuse,
+    )
+    outcome = await service.launch(LaunchCommand(ProjectId("p"), ProfileId("codex"), "regular"))
+    assert outcome.record.state is SessionState.RUNNING
