@@ -58,6 +58,10 @@ def mint_nonce(activity_directory: Path, session_id: str) -> str:
     pending = _directory(activity_directory, _PENDING, create=True)
     if pending is None:
         raise UntrustedBinding("cannot make the binding directory")
+    # A new launch's conversation is not the old one, even before it binds.
+    threads = _directory(activity_directory, _THREADS, create=False)
+    if threads is not None:
+        _forget_threads_of(threads, session_id)
     nonce = secrets.token_hex(32)
     temporary = _written(pending, _hash(nonce))
     try:
@@ -110,7 +114,7 @@ def consume_nonce(
         _unlink(claimed)
         why = _link_new(threads, thread, session)
         if why is None:
-            _forget_other_threads(threads, thread, session)
+            _forget_threads_of(threads, session, keep=thread)
         return why
     except (OSError, UntrustedBinding):
         return "the binding directory cannot be trusted"
@@ -194,6 +198,8 @@ def _directory(activity_directory: Path, name: str, *, create: bool) -> Path | N
         except FileNotFoundError:
             missing = missing or directory in (root, leaf)
             continue
+        except OSError as error:
+            raise UntrustedBinding("the binding directory cannot be read") from error
         if (
             not stat.S_ISDIR(status.st_mode)
             or status.st_mode & 0o077
@@ -272,11 +278,11 @@ def _give_back(claimed: Path, pending: Path) -> None:
     _unlink(claimed)
 
 
-def _forget_other_threads(threads: Path, thread: str, session: str) -> None:
+def _forget_threads_of(threads: Path, session: str, keep: str | None = None) -> None:
     """A session has one bound thread: its newest. An earlier launch's must stop naming it."""
     with os.scandir(threads) as entries:
         for entry in list(entries):
-            if entry.name == thread or entry.name.startswith(_WORK_PREFIX):
+            if entry.name == keep or entry.name.startswith(_WORK_PREFIX):
                 continue
             try:
                 if _read_private(Path(entry.path)) == session:

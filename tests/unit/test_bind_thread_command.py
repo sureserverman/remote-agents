@@ -196,13 +196,24 @@ def test_a_mark_that_agrees_keeps_the_binding(
 def test_a_binding_directory_others_can_open_fails_closed(
     spool: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    session = _bound_session(spool)
+    _bound_session(spool)
     (spool / BINDING_DIRECTORY).chmod(0o750)
     assert _named(spool, capsys) == (3, "")
-    assert _bind(spool, session, "f" * 64) == 3
 
 
-def test_a_linked_binding_directory_fails_closed(
+def test_bind_thread_refuses_a_real_nonce_in_a_store_others_can_open(
+    spool: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    session = str(SessionId.new())
+    nonce = mint_nonce(spool, session)
+    (spool / BINDING_DIRECTORY).chmod(0o750)
+    capsys.readouterr()
+    assert _bind(spool, session, nonce) == 3
+    assert "cannot be trusted" in capsys.readouterr().err
+    assert not (spool / BINDING_DIRECTORY / "threads").exists()
+
+
+def test_a_linked_binding_directory_fails_closed_for_a_resumed_thread(
     spool: Path, capsys: pytest.CaptureFixture[str], tmp_path: Path
 ) -> None:
     session = str(SessionId.new())
@@ -212,8 +223,21 @@ def test_a_linked_binding_directory_fails_closed(
     (spool / BINDING_DIRECTORY).symlink_to(elsewhere)
     _roster(spool, (session, None), (resumer, _THREAD))
     assert _named(spool, capsys) == (3, "")
-    assert _bind(spool, session, "f" * 64) == 3
-    assert list(elsewhere.iterdir()) == []
+
+
+def test_bind_thread_refuses_a_real_nonce_through_a_linked_store(
+    spool: Path, capsys: pytest.CaptureFixture[str], tmp_path: Path
+) -> None:
+    session = str(SessionId.new())
+    nonce = mint_nonce(spool, session)
+    moved = tmp_path / "moved"
+    (spool / BINDING_DIRECTORY).rename(moved)
+    (spool / BINDING_DIRECTORY).symlink_to(moved)
+    capsys.readouterr()
+    assert _bind(spool, session, nonce) == 3
+    assert "cannot be trusted" in capsys.readouterr().err
+    assert not (moved / "threads").exists()
+    assert (moved / "pending" / session).exists()
 
 
 def test_an_unknown_flag_is_a_usage_error_that_echoes_nothing(

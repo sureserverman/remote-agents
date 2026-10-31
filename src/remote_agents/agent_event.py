@@ -271,7 +271,7 @@ def run_bind_thread(argv: list[str] | None = None) -> int:
             else consume_nonce(activity_directory, arguments.session, arguments.nonce, thread)
         )
     except Exception:
-        why = "could not read the service's paths"
+        why = "could not bind"
     if why is None:
         return 0
     if sys.stderr is not None:

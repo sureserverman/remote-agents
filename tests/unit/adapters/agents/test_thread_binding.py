@@ -133,6 +133,20 @@ def test_a_nonce_replaced_before_the_claim_is_given_back(
     assert consume_nonce(spool, _SESSION, fresh[0], _THREAD) is None
 
 
+def test_a_new_launchs_nonce_ends_the_sessions_earlier_binding_before_it_binds(
+    spool: Path,
+) -> None:
+    assert consume_nonce(spool, _SESSION, mint_nonce(spool, _SESSION), _THREAD) is None
+    mint_nonce(spool, _SESSION)
+    assert bound_session(spool, _THREAD) is None
+
+
+def test_a_binding_directory_that_cannot_be_read_is_untrusted(spool: Path) -> None:
+    (spool / BINDING_DIRECTORY).write_text("", encoding="utf-8")
+    with pytest.raises(UntrustedBinding):
+        bound_session(spool, _THREAD)
+
+
 def test_binding_a_new_thread_ends_the_sessions_earlier_binding(spool: Path) -> None:
     third = "01a193e9-8545-78d2-b7c5-4750a9514be8"
     assert consume_nonce(spool, _SESSION, mint_nonce(spool, _SESSION), _THREAD) is None
