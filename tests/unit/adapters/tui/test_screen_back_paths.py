@@ -40,6 +40,7 @@ from remote_agents.adapters.tui.screens import (
     LaunchModeScreen,
     LimitsPaneScreen,
     NameScreen,
+    PermissionsScreen,
     ProfilesScreen,
     ProjectChooserScreen,
     ProjectReviewScreen,
@@ -166,6 +167,10 @@ _PAGE = ConversationCataloguePage((_summary(),), 1, 1)
 _RESOLVED = ResolvedConversation(_summary(), None)  # type: ignore[arg-type]
 
 
+async def _save_permission(_value) -> None:
+    pass
+
+
 # Screens reached by pushing an instance directly. Constructor arguments are supplied here
 # rather than defaulted on the screens themselves: a screen that cannot be built without the
 # state it renders is the point of moving the seven navigation fields onto them.
@@ -197,6 +202,7 @@ _DIRECT: dict[type[Screen], Callable[[], Screen]] = {
     # every row renders its absent capability as a reading (DEC-061), so the back path is
     # driven against the host this file already builds.
     SettingsScreen: SettingsScreen,
+    PermissionsScreen: lambda: PermissionsScreen(None, _save_permission, allow_inherit=True),
     ResumeProjectsScreen: ResumeProjectsScreen,
     ResumeProfilesScreen: lambda: ResumeProfilesScreen(_PROJECT, _CAPABLE),
     ResumeConversationsScreen: lambda: ResumeConversationsScreen(_PROJECT, "claude", _PAGE),

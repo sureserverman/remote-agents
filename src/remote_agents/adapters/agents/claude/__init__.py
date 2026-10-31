@@ -137,7 +137,8 @@ def descriptor(
             # The command menu is drawn directly above the composer's top rule, the exact
             # match first (`composed_slash.txt`); `Enter` runs that first entry.
             command_menu=(
-                r"^  (?P<first>/\S+)[^\n]*(?:\n(?:  /\S+| {10,}\S)[^\n]*)*\n─{10,}\n[❯!]"
+                r"^  (?P<first>/(?!remote-control is active\b)\S+)[^\n]*"
+                r"(?:\n(?:  /\S+| {10,}\S)[^\n]*)*\n─{10,}\n[❯!]"
             ),
             # No menu row in the run of rows directly above the composer's top rule: from the
             # last blank row (or the top) down to the rule, no row starts as a menu entry does
@@ -145,7 +146,12 @@ def descriptor(
             # `  /` row there. Measured on both real screens of a `/` command with arguments
             # (`composed_slash_arguments.txt`, `..._banded.txt`, 2.1.289) and swept over every
             # Claude fixture (`test_slash_command_arguments.py`).
-            menu_absent=r"(?:\A|\n[ \t\xa0]*\n)(?:(?!  /)(?=[^\n]*\S)[^\n]*\n)*─{10,}\n❯",
+            # Remote Control's own `  /remote-control is active` notice is no menu, in either
+            # pattern: a fresh pane with no planning band draws it right there (2.1.316).
+            menu_absent=(
+                r"(?:\A|\n[ \t\xa0]*\n)"
+                r"(?:(?!  /(?!remote-control is active\b))(?=[^\n]*\S)[^\n]*\n)*─{10,}\n❯"
+            ),
         ),
         # Read out of the 2.1.284 bundle (`docs/acceptance-2026-09-28-limit-screens.md`). Claude
         # reports the stop through `StopFailure`, so this is read for its hint, not watched for.

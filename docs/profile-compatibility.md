@@ -17,7 +17,8 @@ local operator action.
 failing (DEC-016). The owner answers from the bot, which is where the pane is *not* visible;
 the local surface shows the word and hands over the dialog itself, because the console has the
 agent's pane on screen (DEC-047). Saying *yes* is confined to the agents whose dialog this
-project can read — `claude` alone today — and is a keypress into that dialog. Saying
+project can read — `claude` and the declared Codex folder dialog — and is a keypress into that
+exact dialog. A new or unrecognised dialog holds rather than receiving guessed keys. Saying
 *no* is available for every agent, because it ends a session that never started. It takes
 effect without a confirmation step (DEC-078) — not uniquely, since Stop and close and Clean up
 are unconfirmed too (DEC-018), but it is the only ending offered from a state whose stop policy
@@ -26,7 +27,7 @@ otherwise carries force alone.
 | Profile | Fixed launch argv | Availability/auth/trust | Resume catalogue / selection | Readiness evidence | Fixed graceful exit |
 | --- | --- | --- | --- | --- | --- |
 | `claude` | `claude`, or `claude --remote-control ra-<uuid>` when the stored Remote Control default reads *on* | executable must be present; local auth/trust stays local | documented UUID filenames/project directories plus a bounded generated title or stored resume description; enabled when the catalogue is available | `Claude Code`; a workspace-trust dialog answers the launch as `untrusted` | `/exit`, Enter |
-| `codex` | `codex` | executable must be present; local auth/trust stays local | feature-probed app-server `thread/list` with a bounded provider title or preview when supplied | `/exit` command selection and submit | `/exit`, Enter, Enter |
+| `codex` | `codex` plus the selected curated permission flags below | executable must be present; local auth/trust stays local | feature-probed app-server `thread/list` with a bounded provider title or preview when supplied | `/exit` command selection and submit | `/exit`, Enter, Enter |
 | `opencode` | `opencode` | executable must be present; local auth/trust stays local | `session list --format json`; enabled only after its JSON contract succeeds | `Ask anything...` interactive UI | Ctrl-C |
 | `cursor-agent` | `cursor-agent` | executable must be present; local auth/trust stays local | disabled: `ls` is interactive and has no structured safe identifier catalogue | `/quit` command selection and submit | `/quit`, Enter, Enter |
 
@@ -47,8 +48,125 @@ publishes one too, with a different subject — the machine rather than a pane �
 described in its own section below. Reading the sentence above as "only Claude can be remote
 controlled" was the misreading this paragraph now exists to prevent.
 
-The profile arguments are defined in the closed catalogue; Telegram does not provide an
-executable, path, raw argument, prompt, keystroke, bypass, or auto-approval flag.
+The profile arguments are defined in the closed catalogue. Telegram can select a named
+permission preset; it does not accept an executable, path, raw argument or arbitrary keystroke
+as launch configuration. Full access maps only to the reviewed variant below.
+
+## Codex permission presets
+
+Both surfaces use one closed catalogue and one persisted remote-agents default. The absent-key
+default is `approve_for_me`; the setting does not edit `~/.codex/config.toml`.
+
+| Persisted value | Label | Permission arguments, fresh and selected resume |
+| --- | --- | --- |
+| `approve_for_me` | Approve for me | `--approve-for-me` alone |
+| `ask` | Ask me | `--sandbox workspace-write --ask-for-approval on-request -c approvals_reviewer="user"` |
+| `full_access` | Full access | `--dangerously-bypass-approvals-and-sandbox` |
+| `provider_default` | Use Codex configuration | None |
+
+Fresh arguments follow `codex`; resume arguments follow `codex resume <provider-thread-id>`.
+The preset adds no model/provider selection. Approve for me is not combined with sandbox,
+approval or bypass switches. Ask explicitly resets the reviewer to the user, even if the
+provider configuration normally requests automatic review. Full access is an explicit choice.
+These mappings follow the [official CLI reference](https://learn.chatgpt.com/docs/cli/reference)
+and [approval configuration](https://learn.chatgpt.com/docs/agent-approvals-security).
+
+For each new process, precedence is:
+
+| Priority | Source |
+| --- | --- |
+| 1 | Explicit per-launch/resume override |
+| 2 | Inherited source session's immutable preset, for restart/rollover |
+| 3 | Recorded managed conversation preset, for manual resume |
+| 4 | Current persisted default |
+
+An inherited legacy source without a preset falls back to the current default. An already
+running conversation is reused only when its pane and project/profile ownership are verified;
+unavailable or unreadable pane evidence holds without changing its preset. Unknown stored metadata is shown
+as unknown; it is never displayed as a fabricated default. Invalid values or an override for
+a provider without this capability refuse before a new pane. Stale buttons re-check capability.
+
+The stored value describes the requested launch configuration. Native in-pane edits are not
+tracked, and a managed policy may constrain or refuse a requested mode. An older CLI that
+lacks a requested option is unsupported for that mode; there is no substitute argv or silent
+fallback. Existing sessions are preserved when configuration cannot be read or saved.
+
+**Native qualification: prepared, not run at this sub-plan.** Local composition, argument,
+persistence and frontend checks do not prove effective native policy. The final combined gate
+runs `tests/live/test_codex_permission_presets.py` serially with `-m live_acceptance` and
+`REMOTE_AGENTS_LIVE_ACCEPTANCE=1`. Four cases each launch and resume one disposable native
+session, observe actual `turn_context` approval policy, sandbox and reviewer, and check the
+saved snapshot after the default changes. The probe asks only for a text reply and rejects
+tool use. Collection alone is not native acceptance.
+
+The drill requires Linux bwrap, Codex, tmux and existing file authentication. Its private home
+uses a read-only bind of that auth file, not a credential copy or writable symlink. Normal
+profiles and hook trust are unchanged; writable state is confined to owned fixture directories.
+It selects no model/provider. Missing auth/CLI/support and managed-policy disagreement remain
+an open native claim, reported as BLOCKED or failed evidence. Optional
+`REMOTE_AGENTS_CODEX_PRESET_REPORT` records only version, preset and observed policy tuples
+after successful cleanup. Live fixture ownership/auth handling is audited again before the
+master's final native run.
+
+## Continuation routing and qualification
+
+The v2 destination is explicit execution metadata, independent of the folder containing the
+plan records. The reader resolves exactly one registered project or recorded worktree and
+stores the source/destination identities, roots, branch, plan/task locator and preset before
+launch. Registry changes, removed roots, branch mismatches and ambiguous folder ownership
+refuse; later writer reports cannot redirect the frozen request channel or target.
+
+The same folder authority serves manual and restart resume. Ended outside-folder bindings
+remain discoverable under their recorded project, deduplicated with the provider catalogue.
+A removed worktree cannot be revived as an outside folder. Automatic legacy recovery without
+an immutable registered-root snapshot holds; explicit current catalogue selection retains
+historical session IDs and supplies its current project context. Existing presets remain
+unchanged on a hold. Ambiguous server loss and surviving-turn restart hardening are still
+separate open work (BL-136/137/138).
+
+For Codex writer attribution, only an exact independent managed conversation binding can
+establish identity. Current hook marks can reject a conflicting binding but cannot establish
+one through their folder/time heuristic. A reported destination root is not identity proof.
+Fresh unbound conversations, missing/stale evidence, ambiguity and unmanaged shells refuse;
+the daemon starter's inherited session is never a fallback. The native first cross-repo
+fresh-conversation claim remains open until that independent binding is demonstrated.
+
+A same-root stage adoption resumes its existing owned run at the actual target task and
+checks that run's latest saved handoff receipt. Different repositories retain independent
+owned runs and source-channel outcomes; copying a predecessor's state or reusing a terminal
+completed run is not destination acceptance.
+
+**Evidence scope.** The five-project source matrix runs the built Claude and Codex writers
+through A→B→B stage 2→C→D worktree→E with real application composition and SQLite, using a
+synthetic terminal. It covers frozen presets, owner/automatic requests, root refusals and
+restart/crash boundaries. Stage 2 separately observed a genuine completed Codex conversation
+resumed through the public terminal and a named hold after its owned pane became unavailable.
+That observation does not qualify every outside-folder, fresh-identity or restart case.
+The final native four-preset/identity/destination-adoption/restart tests and independent
+Stage 1/Telegram demonstrations remain separate required gates. Collection is not acceptance.
+
+**Fixture safety.** The prepared drills confine writable state to owned directories and
+mount existing credentials read-only over empty placeholders. Each uses private HOME and,
+for Codex, a private CODEX_HOME with the qualified local plugin. They do not copy normal
+provider/model choices or hook-trust state, and they never grant hook trust automatically.
+Missing authentication, unsupported provider behavior or required owner hook review is
+BLOCKED. Process cleanup verifies the exact private home, UID/start time and pidfd ownership;
+unreadable ownership or failed cleanup retains the home and reports the failure.
+
+**Later reader-first installation.** This is an operator procedure, not an action performed
+by source qualification:
+
+1. Preserve database and pending handoff evidence; pause new automatic launches before changing
+   an installed service. Keep unresolved transactions available for inspection.
+2. Install a compatible reader accepting v1/v2 before enabling a writer that emits cross-root v2.
+   Apply only additive migrations; preserve folder, root, permission and routing metadata.
+3. Install the corresponding qualified Claude/Codex writer builds and start fresh managed
+   sessions to advertise capabilities. Existing sessions keep their recorded capability;
+   a newer installed reader does not retroactively grant them v2.
+4. Resolve provider authentication/folder trust and any explicit hook review locally, then run
+   the separate native and user-route acceptance gates. An unverified install is not accepted.
+5. Before rollback, drain or explicitly cancel open v2 transactions. Keep their immutable
+   metadata and predecessor panes; do not destructively roll back the database schema.
 
 ## Local recovery
 

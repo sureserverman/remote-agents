@@ -5,9 +5,11 @@ from __future__ import annotations
 from collections.abc import Collection, Sequence
 from dataclasses import dataclass
 from datetime import datetime
+from pathlib import Path
 from typing import Protocol
 
 from remote_agents.domain.models import ProfileId, ProjectId, SessionId, SessionRecord, SessionState
+from remote_agents.domain.profiles import PermissionPreset
 from remote_agents.domain.remote_control import RemoteControlState
 from remote_agents.domain.state_machine import LifecycleEvent
 
@@ -49,7 +51,14 @@ class SessionEvent:
 
 class SessionStore(Protocol):
     async def next_sequence(self, project_id: ProjectId, profile_id: ProfileId) -> int: ...
-    async def save(self, record: SessionRecord) -> None: ...
+    async def save(
+        self,
+        record: SessionRecord,
+        *,
+        permissions: PermissionPreset | None = None,
+        project_root: Path | None = None,
+    ) -> None: ...
+    async def project_root_for(self, session_id: SessionId) -> Path | None: ...
     async def get(self, session_id: SessionId) -> SessionRecord | None: ...
     async def get_by_resume_source(
         self, profile_id: ProfileId, source_id: str

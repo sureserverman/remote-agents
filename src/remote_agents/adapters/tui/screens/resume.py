@@ -32,6 +32,7 @@ from remote_agents.adapters.tui.model import (
 )
 from remote_agents.adapters.tui.screens.base import ChoiceScreen
 from remote_agents.application.conversations import ConversationCatalogueQuery, resume_available
+from remote_agents.application.permission_presets import PERMISSION_TITLE, permission_label
 from remote_agents.application.project_catalog import CatalogProject
 from remote_agents.application.resume_flow import RESUME_PAGE_SIZE, resume_capable_profiles
 from remote_agents.domain.conversations import (
@@ -41,6 +42,7 @@ from remote_agents.domain.conversations import (
     ProfileResumeCapability,
 )
 from remote_agents.domain.models import ProfileId, ProjectId
+from remote_agents.domain.profiles import PermissionPreset
 
 _LOG = logging.getLogger(__name__)
 
@@ -279,6 +281,7 @@ class ResumeConversationsScreen(ChoiceScreen):
         #: The conversation rows currently drawn, so the highlight handler can tell a
         #: conversation from the `Back` beneath them without re-deriving the filter.
         self.offered_rows: tuple[tuple[str, str], ...] = ()
+        self.permissions: PermissionPreset | None = None
 
     @property
     def crumb(self) -> str:
@@ -349,6 +352,11 @@ class ResumeConversationsScreen(ChoiceScreen):
             self.show_choices((), trailing=((_BACK, "Back"),))
             return
         entries = list(offered)
+        settings = self.services.backend.permission_presets
+        if settings is not None and ProfileId(self.profile) in settings.profiles:
+            entries.append(
+                ("permissions", f"{PERMISSION_TITLE} · " + permission_label(self.permissions))
+            )
         entries.append((_BACK, "Back"))
         # **No paging rows (DEC-050).** The port still pages -- `RESUME_PAGE_SIZE` is shared
         # with the bot and unchanged -- but this surface reads the next page as the cursor
@@ -402,6 +410,24 @@ class ResumeConversationsScreen(ChoiceScreen):
         if key == _BACK:
             await self.tui.go_back()
             return
+        if key == "permissions":
+            from remote_agents.adapters.tui.screens.permissions import PermissionsScreen
+
+            settings = self.services.backend.permission_presets
+            if settings is None or ProfileId(self.profile) not in settings.profiles:
+                self.announce("Launch permissions are unavailable for this agent.")
+                return
+            try:
+                current = self.permissions or await settings.read()
+            except Exception as error:
+                self.announce(f"Launch permissions could not be read: {error}")
+                return
+
+            async def save(value: PermissionPreset | None) -> None:
+                self.permissions = value
+
+            await self.advance_to(PermissionsScreen(current, save, allow_inherit=True))
+            return
         # Guarded across the resolve *and* the push, matching `:113` and `:232` — the two
         # siblings of this fetch — for the reason given there. This one was the exception
         # (DEC-024), and nothing chose it: the flow was hand-rolled with the other two
@@ -443,7 +469,9 @@ class ResumeConversationsScreen(ChoiceScreen):
         # the resume (the FAILED branch, the exit) running unguarded while reading as guarded.
         # Nothing can interleave in the gap: leaving the `async with` runs no await, and
         # `issue_resume` sets `_busy` synchronously before its first one.
-        await self.tui.issue_resume(self, self.project, self.profile, resolved)
+        await self.tui.issue_resume(
+            self, self.project, self.profile, resolved, permissions=self.permissions
+        )
 
     async def on_option_list_option_highlighted(self, event: object) -> None:
         """Read the next page when the cursor comes within `load_ahead` of what is loaded.

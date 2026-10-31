@@ -196,6 +196,7 @@ _POSITIONS = (
     # `_settings_context`, which is also where the reason it needs a host of its own is -- so
     # the baseline is a picture of the screen rather than of five rows saying "unavailable".
     "SETTINGS",
+    "PERMISSIONS",
     "PROJECT_CHOOSER",
     "PROFILES",
     # Between the agent and its launch, only on contention (BL-116).
@@ -615,6 +616,16 @@ def _settings_context() -> TuiContext:
     composition either way; new call sites should prefer the parameters.
     """
     context = _context()
+    from remote_agents.application.permission_presets import PermissionSettings
+    from remote_agents.domain.profiles import PermissionPreset
+
+    class PermissionSetting:
+        async def read(self):
+            return PermissionPreset.APPROVE_FOR_ME
+
+        async def write(self, value):
+            pass
+
     return replace(
         context,
         backend=replace(
@@ -630,6 +641,9 @@ def _settings_context() -> TuiContext:
             early_reset_notice=_EarlyResetNotice(),
             auto_rollover=_Switch(False),
             resume_interrupted=_Switch(True),
+            permission_presets=PermissionSettings(
+                PermissionSetting(), profiles={ProfileId("codex"): tuple(PermissionPreset)}
+            ),
         ),
     )
 
@@ -637,7 +651,10 @@ def _settings_context() -> TuiContext:
 #: The positions whose capture needs a host `_context` does not build, by name. One today, and
 #: a mapping rather than a branch in the test so that the exception is declared beside the
 #: reason for it instead of hidden in the driver.
-_POSITION_CONTEXTS: dict[str, Callable[[], TuiContext]] = {"SETTINGS": _settings_context}
+_POSITION_CONTEXTS: dict[str, Callable[[], TuiContext]] = {
+    "SETTINGS": _settings_context,
+    "PERMISSIONS": _settings_context,
+}
 
 
 async def _captured() -> str:
@@ -705,13 +722,16 @@ async def _drive(app: RemoteAgentsTui, pilot, step: str) -> asyncio.Task[None] |
         await app.push_screen(panes[step]())
         await pilot.pause()
         return None
-    if step == "SETTINGS":
+    if step in {"SETTINGS", "PERMISSIONS"}:
         # Through the app's own entry point rather than by pushing the class, because that is
         # what the one key on every position calls -- and `show_settings` refuses to stack a
         # second copy, so a driver that pushed would be capturing a screen the surface itself
         # cannot arrive at twice.
         await app.show_settings()
         await pilot.pause()
+        if step == "PERMISSIONS":
+            await app.screen.choose("settings:codex-permissions")
+            await pilot.pause()
         return None
     if step in {"SCHEDULE", "SCHEDULES"}:
         # Through the chooser's own rows, as the launch flow is reached above.

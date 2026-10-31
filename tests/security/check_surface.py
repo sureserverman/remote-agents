@@ -43,7 +43,7 @@ def scan(root: Path) -> tuple[Finding, ...]:
     findings: list[Finding] = []
     for path in _scanned_files(root):
         source = path.read_text(encoding="utf-8")
-        findings.extend(_text_findings(path, source))
+        findings.extend(_text_findings(path, _curated_policy_text(root, path, source)))
         if path.suffix == ".py":
             findings.extend(_ast_findings(path, source))
     return tuple(findings)
@@ -59,6 +59,56 @@ def _scanned_files(root: Path) -> tuple[Path, ...]:
                 if path.is_file() and path.suffix in SCANNED_SUFFIXES
             )
     return tuple(sorted(paths))
+
+
+def _curated_policy_text(root: Path, path: Path, source: str) -> str:
+    """Mask only the approved Codex Full access literal, preserving all other scanning."""
+    if path != root / "src/remote_agents/domain/profiles.py":
+        return source
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:
+        return source
+    assignments = [
+        node
+        for node in tree.body
+        if isinstance(node, ast.Assign)
+        and len(node.targets) == 1
+        and isinstance(node.targets[0], ast.Name)
+        and node.targets[0].id == "_PERMISSION_ARGUMENTS"
+    ]
+    if len(assignments) != 1:
+        return source
+    providers = assignments[0].value
+    if not isinstance(providers, ast.Dict):
+        return source
+    policies = [
+        value
+        for key, value in zip(providers.keys, providers.values)
+        if isinstance(key, ast.Constant) and key.value == "codex"
+    ]
+    if len(policies) != 1 or not isinstance(policies[0], ast.Dict):
+        return source
+    approved = ast.parse("PermissionPreset.FULL_ACCESS", mode="eval").body
+    values = [
+        value
+        for key, value in zip(policies[0].keys, policies[0].values)
+        if key is not None and ast.dump(key) == ast.dump(approved)
+    ]
+    expected = ast.parse('("--dangerously-bypass-approvals-and-sandbox",)', mode="eval").body
+    if len(values) != 1 or ast.dump(values[0]) != ast.dump(expected):
+        return source
+    literal = values[0].elts[0]
+    # AST columns are UTF-8 byte offsets. Mask only this string token, so a second
+    # flag or a comment on the same line remains visible to the prohibited sweep.
+    lines = source.splitlines(keepends=True)
+    line = lines[literal.lineno - 1].encode("utf-8")
+    lines[literal.lineno - 1] = (
+        line[: literal.col_offset]
+        + b" " * (literal.end_col_offset - literal.col_offset)
+        + line[literal.end_col_offset :]
+    ).decode("utf-8")
+    return "".join(lines)
 
 
 def _text_findings(path: Path, source: str) -> list[Finding]:

@@ -1,4 +1,4 @@
-"""The curated launch environment, and the two variables a session adds to it."""
+"""The curated environment and the identity and capability variables added at launch."""
 
 from __future__ import annotations
 
@@ -15,6 +15,7 @@ from remote_agents.domain.conversations import ProviderConversationId
 from remote_agents.domain.models import ProfileId, SessionId
 from remote_agents.domain.profiles import ProfileDefinition, ProfileError, closed_profiles
 from remote_agents.ports.session_identity import (
+    HANDOFF_VERSIONS_VARIABLE,
     SESSION_ID_VARIABLE,
     SUPERVISOR_ID_COMMAND_VARIABLE,
 )
@@ -39,6 +40,7 @@ def test_a_launch_environment_names_the_session_being_started() -> None:
     profile = build_launch_profile(_claude(), Path("/usr/bin/claude"), session_id, dict(_CURATED))
 
     assert profile.environment[SESSION_ID_VARIABLE] == str(session_id)
+    assert profile.environment[HANDOFF_VERSIONS_VARIABLE] == "1,2"
 
 
 def test_a_resume_environment_names_the_session_being_started() -> None:
@@ -53,20 +55,22 @@ def test_a_resume_environment_names_the_session_being_started() -> None:
     )
 
     assert profile.environment[SESSION_ID_VARIABLE] == str(session_id)
+    assert profile.environment[HANDOFF_VERSIONS_VARIABLE] == "1,2"
 
 
-def test_the_launch_environment_gains_those_two_variables_and_no_other() -> None:
+def test_the_launch_environment_gains_those_three_variables_and_no_other() -> None:
     profile = build_launch_profile(
         _claude(), Path("/usr/bin/claude"), SessionId.new(), dict(_CURATED)
     )
 
     assert set(profile.environment) == set(_CURATED) | {
+        HANDOFF_VERSIONS_VARIABLE,
         SESSION_ID_VARIABLE,
         SUPERVISOR_ID_COMMAND_VARIABLE,
     }
 
 
-def test_the_resume_environment_gains_those_two_variables_and_no_other() -> None:
+def test_the_resume_environment_gains_those_three_variables_and_no_other() -> None:
     profile = build_resume_profile(
         _claude(),
         Path("/usr/bin/claude"),
@@ -76,6 +80,7 @@ def test_the_resume_environment_gains_those_two_variables_and_no_other() -> None
     )
 
     assert set(profile.environment) == set(_CURATED) | {
+        HANDOFF_VERSIONS_VARIABLE,
         SESSION_ID_VARIABLE,
         SUPERVISOR_ID_COMMAND_VARIABLE,
     }

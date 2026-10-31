@@ -127,6 +127,12 @@ class _Folders:
     async def folder_for(self, session_id: SessionId) -> Path | None:
         return self._bound.get(session_id)
 
+    async def for_project(self, project_id):
+        return tuple(self._bound.values())
+
+    def available(self, folder: Path) -> bool:
+        return folder.is_dir()
+
 
 @pytest.mark.asyncio
 async def test_a_session_bound_to_a_folder_works_in_it(tmp_path) -> None:
@@ -163,3 +169,16 @@ async def test_a_worktree_binding_is_asked_before_a_folder_binding(tmp_path) -> 
     )
 
     assert await folders.folder_for(session, _PROJECT) == worktree
+
+
+@pytest.mark.asyncio
+async def test_a_worktree_with_a_retargeted_parent_has_no_folder(tmp_path):
+    parent = tmp_path / "parent"
+    worktree = parent / "worktree"
+    worktree.mkdir(parents=True)
+    session = SessionId.new()
+    folders = SessionFolders({_PROJECT: tmp_path}, _Store({session: _worktree(worktree)}))
+    moved = tmp_path / "moved"
+    parent.rename(moved)
+    parent.symlink_to(moved, target_is_directory=True)
+    assert await folders.folder_for(session, _PROJECT) is None

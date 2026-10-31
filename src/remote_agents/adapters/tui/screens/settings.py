@@ -116,6 +116,7 @@ from remote_agents.application.limits_source import (
     next_cursor_limits_source,
     next_limits_source,
 )
+from remote_agents.application.permission_presets import PERMISSION_TITLE, permission_label
 from remote_agents.application.remote_control_default import (
     REMOTE_CONTROL_DEFAULT_TITLE,
     UNAVAILABLE,
@@ -129,6 +130,7 @@ from remote_agents.application.restart_resume_setting import (
 )
 from remote_agents.application.resume_setting import RESUME_LABELS, RESUME_TITLE
 from remote_agents.application.rollover_setting import ROLLOVER_LABELS, ROLLOVER_TITLE
+from remote_agents.domain.profiles import PermissionPreset
 from remote_agents.domain.remote_control import HostRemoteControlStatus, RemoteControlDefault
 
 _LOG = logging.getLogger(__name__)
@@ -138,6 +140,7 @@ _LOG = logging.getLogger(__name__)
 #: provider the day a third one is added.
 _CLAUDE_ROW = "settings:claude-remote-control-default"
 _CODEX_ROW = "settings:codex-remote-control"
+_PERMISSIONS_ROW = "settings:codex-permissions"
 _LIMITS_SOURCE_ROW = "settings:claude-limits-source"
 _CURSOR_LIMITS_ROW = "settings:cursor-limits-source"
 _RESUME_ROW = "settings:resume-after-limit"
@@ -157,6 +160,7 @@ _ORDER_ROW = "settings:project-order"
 SETTINGS_ROWS = (
     _CLAUDE_ROW,
     _CODEX_ROW,
+    _PERMISSIONS_ROW,
     _LIMITS_SOURCE_ROW,
     _CURSOR_LIMITS_ROW,
     _RESUME_ROW,
@@ -278,6 +282,7 @@ class SettingsScreen(ChoiceScreen):
         self._rollover: bool | None = None
         #: The stored restart-resume switch, or `None` for a composition that wired none.
         self._restart_resume: bool | None = None
+        self._permissions: PermissionPreset | None = None
         #: The two terminal preferences, as last read. Plain strings rather than `None`-able
         #: readings: `read_theme` and `read_project_order` are total and always answer one of
         #: the values this surface knows, so there is no absence for these two rows to render.
@@ -294,6 +299,9 @@ class SettingsScreen(ChoiceScreen):
         """`ctrl+r`: re-read every row and redraw, leaving the cursor where it is."""
         await self._read_every_row()
         self._draw_settings_rows()
+
+    async def on_reveal(self) -> None:
+        await self.refresh_contents()
 
     def _read_preferences(self) -> None:
         """Re-read the two rows this surface owns: what is in force, and what was remembered.
@@ -323,6 +331,13 @@ class SettingsScreen(ChoiceScreen):
         already drawn is then stale rather than wrong, which is the contract every background
         read in this surface keeps.
         """
+        permissions = self.services.backend.permission_presets
+        self._permissions = None
+        if permissions is not None:
+            try:
+                self._permissions = await permissions.read()
+            except Exception as error:
+                self.announce(f"Launch permissions could not be read: {error}")
         port = self.services.backend.claude_remote_control_default
         if port is None:
             # A declared absence, not a failure (DEC-061). Left as `None` so the row says
@@ -410,6 +425,15 @@ class SettingsScreen(ChoiceScreen):
             (
                 (_CLAUDE_ROW, remote_control_default_line(self._claude_default)),
                 (_CODEX_ROW, host_remote_control_line(self._host_status)),
+                (
+                    _PERMISSIONS_ROW,
+                    f"{PERMISSION_TITLE} · "
+                    + (
+                        permission_label(self._permissions)
+                        if self._permissions is not None
+                        else UNAVAILABLE
+                    ),
+                ),
                 (_LIMITS_SOURCE_ROW, _limits_source_line(self._limits_source)),
                 (_CURSOR_LIMITS_ROW, _cursor_limits_line(self._cursor_limits)),
                 (_RESUME_ROW, _resume_line(self._resume)),
@@ -443,6 +467,9 @@ class SettingsScreen(ChoiceScreen):
         return 0 if highlighted is None else highlighted
 
     async def choose(self, key: str) -> None:
+        if key == _PERMISSIONS_ROW:
+            await self.choose_permissions()
+            return
         """Act on the row the owner pressed.
 
         **This is the screen handler every confirmation in this tree is raised from**, reached
@@ -479,6 +506,25 @@ class SettingsScreen(ChoiceScreen):
             return
         if key == _ORDER_ROW:
             await self.advance_project_order()
+
+    async def choose_permissions(self) -> None:
+        from remote_agents.adapters.tui.screens.permissions import PermissionsScreen
+
+        settings = self.services.backend.permission_presets
+        if settings is None or self.tui.busy:
+            return
+        try:
+            current = await settings.read()
+        except Exception as error:
+            self.announce(f"Launch permissions could not be read: {error}")
+            return
+
+        async def save(value: PermissionPreset | None) -> None:
+            if value is None:
+                raise ValueError("choose a permission preset")
+            await settings.set(value)
+
+        await self.advance_to(PermissionsScreen(current, save))
 
     async def advance_limits_source(self) -> None:
         """One press: read, advance by one, write, read back, say what it now is.

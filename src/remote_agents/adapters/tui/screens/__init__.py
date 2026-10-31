@@ -31,6 +31,7 @@ from remote_agents.adapters.tui.screens.dashboard import (
 )
 from remote_agents.adapters.tui.screens.feed import FeedScreen
 from remote_agents.adapters.tui.screens.launch import LaunchModeScreen, ProfilesScreen
+from remote_agents.adapters.tui.screens.permissions import PermissionsScreen
 from remote_agents.adapters.tui.screens.project import (
     AreasScreen,
     NameScreen,
@@ -71,6 +72,7 @@ ALL_SCREENS = (
     # with the top-level positions rather than inside a flow: it is somewhere the owner goes,
     # not a step on the way anywhere.
     SettingsScreen,
+    PermissionsScreen,
     ProjectChooserScreen,
     ProfilesScreen,
     # Between the agent and its launch, only when another session works in the project.
@@ -119,4 +121,5 @@ __all__ = [
     "SessionsPaneScreen",
     "SessionsScreen",
     "SettingsScreen",
+    "PermissionsScreen",
 ]

@@ -15,6 +15,7 @@ from remote_agents.application.relative_time import age
 from remote_agents.application.session_views import selectable_area, session_lines, session_row
 from remote_agents.domain.conversations import ConversationSummary
 from remote_agents.domain.models import normalize_label
+from remote_agents.domain.profiles import PermissionPreset
 
 # Re-exported rather than re-implemented. Both of these used to be defined here *and* in
 # `adapters/telegram/service.py`, byte for byte, which is how the two surfaces rendered both
@@ -39,7 +40,8 @@ _EMPTY = "\x00empty"
 class LaunchSelection:
     """What the wizard has gathered so far, and nothing the surface has not been given.
 
-    Two fields, and it had a third: `label`, set by a launch-time step that no longer exists.
+    The optional permission override accompanies the project and agent. `label`, set by
+    a launch-time step that no longer exists, is intentionally absent.
     A `review()` method went with it — three lines of gathered summary that no caller in `src/`
     or `tests/` ever read, because the breadcrumb took over naming the project and the agent
     and the one part it could not carry was the label.
@@ -47,6 +49,7 @@ class LaunchSelection:
 
     project: CatalogProject | None = None
     profile: ProfileAvailability | None = None
+    permissions: PermissionPreset | None = None
 
 
 @dataclass(frozen=True, slots=True)

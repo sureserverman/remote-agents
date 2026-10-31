@@ -2004,8 +2004,23 @@ class SessionDetailScreen(ChoiceScreen):
         # exactly the split the breadcrumb exists to take.
         self._display = record.display.rendered
         self.show_breadcrumb()
+        permission_fact = ""
+        settings = self.services.backend.permission_presets
+        if settings is not None and record.profile_id in settings.profiles:
+            from remote_agents.application.permission_presets import permission_label
+
+            try:
+                preset = await self.services.backend.sessions.permission_preset(record.session_id)
+                label = (
+                    permission_label(preset) if preset is not None else "unknown (legacy session)"
+                )
+            except Exception:
+                _LOG.exception("the launch permission snapshot could not be read")
+                label = "unknown (snapshot unavailable)"
+            permission_fact = f" Launch permissions: {label} (requested at launch)."
         self.set_status(
             f"State: {record.state.value}. {explain_state(record.state, record.orphan_provenance)}"
+            + permission_fact
         )
         entries = self.detail_entries(record, rollover, git)
         # The git row is a fact: the cursor rests on the first row that does something, so

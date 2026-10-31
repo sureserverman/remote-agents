@@ -28,6 +28,7 @@ from remote_agents.application.errors import (
     SessionNotFoundError,
     StopNotPermittedError,
 )
+from remote_agents.application.permission_presets import SessionPermissions
 from remote_agents.application.reconcile import SessionLocks
 from remote_agents.application.session_actions import (
     CLEANUP,
@@ -37,6 +38,7 @@ from remote_agents.application.session_actions import (
     available_actions,
     pane_is_attachable,
 )
+from remote_agents.application.session_folders import live_folder
 from remote_agents.application.worktrees import WorktreeCreateFailed, WorktreeService
 from remote_agents.domain.models import (
     ProfileId,
@@ -46,6 +48,7 @@ from remote_agents.domain.models import (
     SessionRecord,
     SessionState,
 )
+from remote_agents.domain.profiles import PermissionPreset
 from remote_agents.domain.remote_control import RemoteControlDefault, RemoteControlState
 from remote_agents.domain.state_machine import LifecycleEvent, transition
 from remote_agents.domain.trust import TrustState
@@ -139,6 +142,9 @@ class ResumeOutcome:
     """The terminal refused before any pane existed: the session's worktree is gone
     (`WORKTREE_REMOVED`). The record is FAILED either way, and a surface that read only the
     record would point the owner at a pane that was never made."""
+    folder_unavailable: bool = False
+    pane_unavailable: bool = False
+    """An existing resume binding has no verified reachable pane; preserved without replacement."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -248,8 +254,12 @@ class SessionService:
         worktree_service: WorktreeService | None = None,
         before_pane: Callable[[], Awaitable[None]] | None = None,
         folder_bindings: FolderBindings | None = None,
+        permissions: SessionPermissions | None = None,
+        project_paths: Mapping[ProjectId, Path] | None = None,
     ) -> None:
         self._store = store
+        self._permissions = permissions
+        self._project_paths = project_paths
         # Sessions bound to a folder outside their project (DEC-131): a launch naming a folder
         # binds it before its pane starts, and a successor carries it on. None in a composition
         # that keeps none, where a launch naming a folder is refused.
@@ -318,6 +328,61 @@ class SessionService:
             return _Bound.FAULT
         return _Bound.BOUND if bound else _Bound.REFUSED
 
+    async def _bind_launch_folder(
+        self, session_id: SessionId, project_id: ProjectId, folder: Path
+    ) -> _Bound:
+        # Reusing a destination worktree must hold its cleanup binding as well as its cwd.
+        # Otherwise cleanup could remove it once its previous session ends.
+        if self._worktrees is not None:
+            try:
+                matches = [
+                    w
+                    for w in await self._worktrees.live_for_project(project_id)
+                    if w.path.resolve() == folder.resolve()
+                ]
+            except Exception:
+                _LOG.exception("destination worktree bindings could not be read")
+                return _Bound.FAULT
+            if len(matches) > 1:
+                return _Bound.REFUSED
+            if matches:
+                if live_folder(matches[0]) is None:
+                    return _Bound.GONE
+                return await self._bind_worktree(session_id, matches[0].path)
+        return await self._bind_folder(session_id, folder)
+
+    async def _bind_resume_folder(
+        self, session_id: SessionId, project_id: ProjectId, folder: Path
+    ) -> _Bound:
+        """A selection may reopen only a folder recorded for this project.
+
+        Worktree rows retain their cleanup claim; outside rows retain their original
+        session's project association, including legacy records. Never infer ownership
+        from a supplied path or silently bind another project's worktree.
+        """
+        try:
+            if self._worktrees is not None:
+                for worktree in await self._worktrees.live_for_project(project_id):
+                    if worktree.path == folder:
+                        if live_folder(worktree) is None or (
+                            self._folder_bindings is not None
+                            and not self._folder_bindings.available(folder)
+                        ):
+                            return _Bound.GONE
+                        return await self._bind_worktree(session_id, folder)
+            if self._folder_bindings is not None:
+                recorded = await self._folder_bindings.for_project(project_id)
+                if folder in recorded:
+                    if not self._folder_bindings.available(folder):
+                        return _Bound.REFUSED
+                    return await self._bind_folder(session_id, folder)
+                if folder in (await self._folder_bindings.bound_folders()).values():
+                    return _Bound.REFUSED
+        except Exception:
+            _LOG.exception("resume folder ownership could not be checked")
+            return _Bound.FAULT
+        return _Bound.GONE
+
     async def _reuse_folder(self, session_id: SessionId, of: SessionId | None) -> _Bound:
         """Bind a new session to the worktree `of` works in, or to the folder outside its
         project `of` is bound to (DEC-131), if it has either.
@@ -339,6 +404,8 @@ class SessionService:
             _LOG.exception("the folder of %s could not be read for its successor", of)
             return _Bound.FAULT
         if worktree is not None:
+            if live_folder(worktree) is None:
+                return _Bound.GONE
             return await self._bind_worktree(session_id, worktree.path)
         if folder is not None:
             return await self._bind_folder(session_id, folder)
@@ -387,6 +454,11 @@ class SessionService:
             self._daemon_guard(command.profile_id, command.guard_wait),
             self._locks.operation(),
         ):
+            preset = await self._resolve_permissions(
+                command.profile_id,
+                command.permissions,
+                command.inherit_permissions_of,
+            )
             if not await self._store.claim_idempotency_key(command.idempotency_key):
                 raise DuplicateCommandError("launch callback was already handled")
             session_id = SessionId.new()
@@ -405,7 +477,7 @@ class SessionService:
                 SessionState.STARTING,
                 datetime.now(UTC),
             )
-            await self._store.save(record)
+            await self._save_with_permissions(record, preset)
             # From here the session id exists, so the per-session lock can be taken -- and
             # must be. `ReconciliationService.session_is_busy` answers "is a caller mid-flight
             # on this session", and it can only answer from a held lock. Without this, a
@@ -430,7 +502,7 @@ class SessionService:
                             worktree_failed=failed,
                         )
                 bound = (
-                    await self._bind_folder(session_id, command.folder)
+                    await self._bind_launch_folder(session_id, command.project_id, command.folder)
                     if command.folder is not None
                     else await self._reuse_folder(session_id, command.reuse_folder_of)
                 )
@@ -447,6 +519,7 @@ class SessionService:
                     command.project_id,
                     command.profile_id,
                     remote_control=remote_control,
+                    **({"permissions": preset} if preset is not None else {}),
                 )
                 if (
                     command.mode == "worktree"
@@ -529,7 +602,23 @@ class SessionService:
         source_id = command.conversation.provider_conversation_id.value
         existing = await self._store.get_by_resume_source(command.profile_id, source_id)
         if existing is not None:
-            return ResumeOutcome(existing, created=False)
+            # A durable binding still owns the conversation after a lost server or an
+            # uncertain inventory read. Preserve it, but do not hand the owner an attach
+            # command until the pane is verified. This deliberately does not reclassify
+            # server loss, end a record, or launch a replacement (DEC-127 / BL-136).
+            try:
+                observed = await self._terminal.inspect(existing.session_id)
+            except Exception:
+                _LOG.exception("the existing resume pane could not be verified")
+                observed = None
+            available = pane_is_attachable(observed, existing)
+            return ResumeOutcome(existing, created=False, pane_unavailable=not available)
+        preset = await self._resolve_permissions(
+            command.profile_id,
+            command.permissions,
+            command.inherit_permissions_of,
+            conversation=source_id,
+        )
         if not await self._store.claim_idempotency_key(command.idempotency_key):
             raise DuplicateCommandError("resume callback was already handled")
         session_id = SessionId.new()
@@ -550,15 +639,38 @@ class SessionService:
             command.conversation.summary.profile_id,
             source_id,
         )
-        await self._store.save(record)
+        await self._save_with_permissions(record, preset)
         # The same shape as `launch`, and owed for the same reason: the id exists from here,
         # so the per-session lock is what makes this resume visible to
         # `ReconciliationService.session_is_busy` for its whole duration.
         async with self._locks.for_session(session_id):
             folder = command.conversation.folder
-            bound = (
-                _Bound.BOUND if folder is None else await self._bind_worktree(session_id, folder)
+            root = command.conversation.project_root
+            inherited_root_missing = False
+            if command.inherit_permissions_of is not None and self._project_paths is not None:
+                source = await self._store.get(command.inherit_permissions_of)
+                root = await self._store.project_root_for(command.inherit_permissions_of)
+                inherited_root_missing = (
+                    root is None or source is None or source.project_id != command.project_id
+                )
+            registered = (
+                None if self._project_paths is None else self._project_paths.get(command.project_id)
             )
+            if (
+                inherited_root_missing
+                or (
+                    self._project_paths is not None
+                    and (registered is None or not registered.is_dir())
+                )
+                or (root is not None and (registered is None or registered.resolve() != root))
+            ):
+                bound = _Bound.REFUSED
+            else:
+                bound = (
+                    _Bound.BOUND
+                    if folder is None
+                    else await self._bind_resume_folder(session_id, command.project_id, folder)
+                )
             if bound is not _Bound.BOUND:
                 # Refused before any pane existed: the record stays FAILED, but lets go of the
                 # conversation, so the next press is a real attempt rather than this record
@@ -567,6 +679,7 @@ class SessionService:
                 return ResumeOutcome(
                     await self._store.release_resume_source(session_id),
                     created=True,
+                    folder_unavailable=bound is _Bound.REFUSED,
                     worktree_removed=bound is _Bound.GONE,
                 )
             await self.announce_sessions()
@@ -575,6 +688,7 @@ class SessionService:
                 command.project_id,
                 command.profile_id,
                 command.conversation.provider_conversation_id,
+                **({"permissions": preset} if preset is not None else {}),
             )
             record = await self._store.record_event(session_id, _event_for_launch(observation))
             if observation.detail in _BEFORE_ANY_PANE:
@@ -587,6 +701,56 @@ class SessionService:
                 created=True,
                 worktree_removed=observation.detail == WORKTREE_REMOVED,
             )
+
+    async def _resolve_permissions(
+        self,
+        profile_id: ProfileId,
+        override: PermissionPreset | None,
+        inherit: SessionId | None,
+        *,
+        conversation: str | None = None,
+    ) -> PermissionPreset | None:
+        if self._permissions is None:
+            if override is not None:
+                raise ValueError("permission presets are unavailable")
+            return None
+        return await self._permissions.resolve(
+            profile_id,
+            override,
+            inherit,
+            conversation=conversation,
+        )
+
+    async def _save_with_permissions(
+        self,
+        record: SessionRecord,
+        preset: PermissionPreset | None,
+    ) -> None:
+        options = {}
+        if preset is not None:
+            options["permissions"] = preset
+        if self._project_paths is not None:
+            root = self._project_paths.get(record.project_id)
+            if root is not None:
+                options["project_root"] = root.resolve()
+        # Root, preset and session are one transaction; an interrupted save cannot
+        # publish a resumable session without its immutable registered-root provenance.
+        await self._store.save(record, **options)
+
+    async def continuation_permissions(self, record: SessionRecord) -> PermissionPreset | None:
+        """Resolve the preset now so a durable continuation can freeze it before launch."""
+        return await self._resolve_permissions(record.profile_id, None, record.session_id)
+
+    async def permission_preset(self, session_id: SessionId) -> PermissionPreset | None:
+        return (
+            None
+            if self._permissions is None
+            else await self._permissions.bindings.for_session(session_id)
+        )
+
+    async def remember_permissions(self) -> None:
+        if self._permissions is not None:
+            await self._permissions.remember_marks()
 
     async def list_sessions(self) -> tuple[SessionRecord, ...]:
         return tuple(await self._store.list())

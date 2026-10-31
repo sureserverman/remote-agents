@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import threading
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from functools import partial
@@ -24,6 +25,7 @@ from remote_agents.adapters.agents.registry import (
     provider_descriptors,
     usage_readers,
 )
+from remote_agents.adapters.agents.turn_markers import FileConversationMarks
 from remote_agents.adapters.git.checkout import GitCli
 from remote_agents.adapters.projects.discovery import discover_projects
 from remote_agents.adapters.projects.registry import load_registry
@@ -31,6 +33,7 @@ from remote_agents.adapters.projects.registry_writer import RegistryProjectRecor
 from remote_agents.adapters.projects.workspace import FilesystemProjectWorkspace
 from remote_agents.adapters.sqlite.database import watched_paths
 from remote_agents.adapters.sqlite.folder_bindings import SQLiteFolderBindings
+from remote_agents.adapters.sqlite.permission_bindings import SQLitePermissionBindings
 from remote_agents.adapters.sqlite.rollover_store import SQLiteRolloverStore
 from remote_agents.adapters.sqlite.schedule_store import SQLiteScheduleStore
 from remote_agents.adapters.sqlite.session_store import SQLiteSessionStore
@@ -40,6 +43,7 @@ from remote_agents.application.backend import Backend
 from remote_agents.application.conversations import ConversationService
 from remote_agents.application.hook_roster import HookRosterPublisher
 from remote_agents.application.host_remote_control import HostRemoteControlService
+from remote_agents.application.permission_presets import PermissionSettings, SessionPermissions
 from remote_agents.application.profiles import ProfileAvailability
 from remote_agents.application.project_admin import ProjectCreationService
 from remote_agents.application.project_catalog import CatalogProject, build_catalogue
@@ -56,6 +60,7 @@ from remote_agents.composition.limits_source import (
     ConfigCursorLimitsSource,
     ConfigEarlyResetSetting,
     ConfigLimitsSource,
+    ConfigPermissionSetting,
     ConfigRestartResumeSetting,
     ConfigResumeSetting,
     ConfigRolloverSetting,
@@ -99,6 +104,9 @@ class ProjectCatalogueProvider:
         self._dev_root = dev_root
         self._paths: dict[ProjectId, Path] = {}
         self._snapshot = ProjectCatalogueSnapshot((), None)
+        # The bot and the rollover pass both refresh on worker threads: one at a time, or an
+        # older reading published last removes the project a newer one just added.
+        self._refreshing = threading.Lock()
 
     @property
     def paths(self) -> Mapping[ProjectId, Path]:
@@ -109,8 +117,21 @@ class ProjectCatalogueProvider:
     def snapshot(self) -> ProjectCatalogueSnapshot:
         return self._snapshot
 
+    def add_new_projects(self) -> ProjectCatalogueSnapshot:
+        """`refresh` that removes nothing, for a caller who only wants what is new: the rollover
+        pass. A transient failure to see a project must not end that project's rollovers."""
+        with self._refreshing:
+            return self._refresh(prune=False)
+
     def refresh(self) -> ProjectCatalogueSnapshot:
-        """Rebuild the catalogue and path mapping from the current registry and filesystem."""
+        """Rebuild the catalogue and path mapping from the current registry and filesystem.
+
+        A degraded registry read adds and never removes: it cannot say a project left, and a
+        project missing from the mapping loses its rollovers."""
+        with self._refreshing:
+            return self._refresh(prune=True)
+
+    def _refresh(self, *, prune: bool) -> ProjectCatalogueSnapshot:
         registry = load_registry(self._registry_path)
         discovered = discover_projects(self._dev_root)
         resolved: dict[ProjectId, Path] = {}
@@ -127,11 +148,11 @@ class ProjectCatalogueProvider:
         catalogue = build_catalogue(registered, found, registry_error=registry.error)
         if registry.error is not None:
             _LOG.warning("project registry is degraded: %s", registry.error)
-        self._publish(resolved)
+        self._publish(resolved, prune=prune and registry.error is None)
         self._snapshot = ProjectCatalogueSnapshot(catalogue, registry.error)
         return self._snapshot
 
-    def _publish(self, resolved: dict[ProjectId, Path]) -> None:
+    def _publish(self, resolved: dict[ProjectId, Path], *, prune: bool = True) -> None:
         """Apply the new mapping without ever hiding a project that survives the refresh.
 
         Consumers read the shared mapping without holding a lock, so clearing it first would
@@ -139,6 +160,8 @@ class ProjectCatalogueProvider:
         a surviving project is never absent; at worst a removed one lingers for an instant.
         """
         self._paths.update(resolved)
+        if not prune:
+            return
         for stale in [key for key in self._paths if key not in resolved]:
             del self._paths[stale]
 
@@ -491,11 +514,27 @@ def compose_backend(
     daemon_profiles = [
         descriptor.profile_id for descriptor in descriptors if descriptor.remote_control is not None
     ]
+    permission_settings = PermissionSettings(
+        ConfigPermissionSetting(config.path or paths.config_path),
+        profiles={
+            descriptor.profile_id: descriptor.permission_presets
+            for descriptor in descriptors
+            if descriptor.permission_presets is not None
+        },
+    )
     return Backend(
+        permission_presets=permission_settings,
         state_events=StoreWatch(watched_paths(paths.database_path)),
         sessions=SessionService(
             backend_store,
             runtime.terminal,
+            project_paths=projects.paths,
+            permissions=SessionPermissions(
+                permission_settings,
+                SQLitePermissionBindings(connection),
+                backend_store,
+                marks=FileConversationMarks(paths.activity_directory),
+            ),
             locks=backend_locks,
             hide_in_console=hide_in_console,
             # Which launches the stored default governs is **asked of the port**, not named

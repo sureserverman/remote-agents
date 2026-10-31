@@ -59,12 +59,14 @@ from remote_agents.adapters.tui.screens.base import (
     ChoiceScreen,
     row_width,
 )
+from remote_agents.application.permission_presets import PERMISSION_TITLE, permission_label
 from remote_agents.application.project_catalog import (
     REGISTERED_GROUP,
     CatalogProject,
     search_catalogue,
 )
-from remote_agents.domain.models import ProjectId
+from remote_agents.domain.models import ProfileId, ProjectId
+from remote_agents.domain.profiles import PermissionPreset
 
 #: What the status line says about each order, on the positions that describe the list in
 #: their status (the dashboard puts the sessions' counts there instead). The sentence names the
@@ -501,7 +503,17 @@ class ProfilesScreen(ChoiceScreen):
 
     async def populate(self) -> None:
         self.hide_entry()
+        self._permission_default = None
+        settings = self.services.backend.permission_presets
+        if settings is not None:
+            try:
+                self._permission_default = await settings.read()
+            except Exception as error:
+                self.announce(f"Launch permissions could not be read: {error}")
         self.render_profiles()
+
+    async def on_reveal(self) -> None:
+        await self.populate()
 
     def render_profiles(self, *, resting: bool = True) -> None:
         """Draw the agents, resting the cursor on the row that commits nothing.
@@ -533,6 +545,18 @@ class ProfilesScreen(ChoiceScreen):
             )
             for profile in self.services.profiles
         )
+        settings = self.services.backend.permission_presets
+        if settings is not None and any(
+            profile.available and ProfileId(profile.profile_id) in settings.profiles
+            for profile in self.services.profiles
+        ):
+            entries += (
+                (
+                    "permissions",
+                    f"{PERMISSION_TITLE} · "
+                    + permission_label(self.tui.selection.permissions or self._permission_default),
+                ),
+            )
         self.show_choices(
             entries,
             highlight=len(entries) if resting else None,
@@ -582,6 +606,24 @@ class ProfilesScreen(ChoiceScreen):
             # Deliberately *not* fixed by holding `_busy` open: that flag means "a command is
             # in flight", and after a failed launch none is. The true statement is about the
             # cursor, so that is what is checked.
+            return
+        if key == "permissions":
+            from remote_agents.adapters.tui.screens.permissions import PermissionsScreen
+
+            settings = self.services.backend.permission_presets
+            if settings is None:
+                self.announce("Launch permissions are unavailable.")
+                return
+            try:
+                current = self.tui.selection.permissions or await settings.read()
+            except Exception as error:
+                self.announce(f"Launch permissions could not be read: {error}")
+                return
+
+            async def save(value: PermissionPreset | None) -> None:
+                self.tui.selection = replace(self.tui.selection, permissions=value)
+
+            await self.advance_to(PermissionsScreen(current, save, allow_inherit=True))
             return
         profile = next((item for item in self.services.profiles if item.profile_id == key), None)
         if profile is None or not profile.available:

@@ -112,6 +112,9 @@ class ResolvedConversation:
     """The session worktree the conversation was found in, or None for the project's own
     folder. A resume binds its new session to this folder, so it lands back where the
     conversation ran (BL-116)."""
+    project_root: Path | None = None
+    """Snapshot of the registered folder at catalogue time; refuses a stale selection
+    after a registry move. Legacy internal selections may have no snapshot."""
 
 
 @dataclass(frozen=True, slots=True)

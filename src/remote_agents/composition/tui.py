@@ -577,14 +577,24 @@ def local_context(config, connection, paths: ProductionPaths):
 
 
 def _profile_factory(definition, executable: Path, environment: dict[str, str]):
-    return lambda session_id, remote_control: build_launch_profile(
-        definition, executable, session_id, environment, remote_control=remote_control
+    return lambda session_id, remote_control, permissions=None: build_launch_profile(
+        definition,
+        executable,
+        session_id,
+        environment,
+        remote_control=remote_control,
+        permissions=permissions,
     )
 
 
 def _resume_profile_factory(definition, executable: Path, environment: dict[str, str]):
-    return lambda session_id, source_id: build_resume_profile(
-        definition, executable, session_id, source_id, environment
+    return lambda session_id, source_id, permissions=None: build_resume_profile(
+        definition,
+        executable,
+        session_id,
+        source_id,
+        environment,
+        permissions=permissions,
     )
 
 

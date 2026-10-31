@@ -15,13 +15,16 @@ from remote_agents.adapters.tmux.runtime import LaunchProfile
 from remote_agents.domain.conversations import ProviderConversationId
 from remote_agents.domain.models import SessionId
 from remote_agents.domain.profiles import (
+    PermissionPreset,
     ProfileCompatibility,
     ProfileDefinition,
     ProfileError,
 )
 from remote_agents.ports.session_identity import (
+    HANDOFF_VERSIONS_VARIABLE,
     SESSION_ID_VARIABLE,
     SUPERVISOR_ID_COMMAND_VARIABLE,
+    SUPPORTED_HANDOFF_VERSIONS,
 )
 from remote_agents.ports.terminal_text import probe_version_line
 
@@ -184,6 +187,7 @@ def build_launch_profile(
     environment: dict[str, str],
     *,
     remote_control: bool = False,
+    permissions: PermissionPreset | None = None,
 ) -> LaunchProfile:
     """Resolve a reviewed definition into a fixed tmux profile for one opaque session.
 
@@ -207,7 +211,7 @@ def build_launch_profile(
     )
     return LaunchProfile(
         str(executable),
-        argv,
+        (*argv, *definition.permission_argv(permissions)),
         _with_session_identity(environment, session_id),
         _READINESS_MARKERS[str(definition.profile_id)],
         definition.graceful_keys,
@@ -225,6 +229,7 @@ def _with_session_identity(environment: dict[str, str], session_id: SessionId) -
     launch. A copy per profile is what keeps the variables per-session.
     """
     return environment | {
+        HANDOFF_VERSIONS_VARIABLE: ",".join(map(str, SUPPORTED_HANDOFF_VERSIONS)),
         SESSION_ID_VARIABLE: str(session_id),
         SUPERVISOR_ID_COMMAND_VARIABLE: supervisor_id_command(),
     }
@@ -253,6 +258,8 @@ def build_resume_profile(
     session_id: SessionId,
     source_id: ProviderConversationId,
     environment: dict[str, str],
+    *,
+    permissions: PermissionPreset | None = None,
 ) -> LaunchProfile:
     """Resolve only a curated provider resume argv into a managed launch profile."""
     if not executable.is_absolute():
@@ -260,7 +267,7 @@ def build_resume_profile(
     arguments = _RESUME_ARGUMENTS.get(str(definition.profile_id))
     if arguments is None:
         raise ProfileError("profile has no qualified selected-resume command")
-    argv = (str(executable), *arguments, source_id.value)
+    argv = (str(executable), *arguments, source_id.value, *definition.permission_argv(permissions))
     return LaunchProfile(
         str(executable),
         argv,

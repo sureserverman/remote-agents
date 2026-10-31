@@ -32,12 +32,48 @@ FAILURE_CODES = frozenset(
 """The closed set a `failed` envelope may name; anything else is not an envelope."""
 
 
+DESTINATION_FAILURE_CODES = FAILURE_CODES | frozenset(
+    {
+        "manual-continuation",
+        "destination-metadata",
+        "destination-unavailable",
+        "destination-root",
+        "master-metadata",
+        "pending-master-gate",
+        "pending-subplan",
+        "ambiguous-destination",
+        "not-executable",
+        "no-executable-work",
+        "run-not-runnable",
+        "plan-unreadable",
+        "locator-mismatch",
+        "current-subplan",
+        "plan-metadata",
+        "plan-mismatch",
+        "state-ownership",
+        "stale-destination",
+        "oversized-envelope",
+        "session-mismatch",
+    }
+)
+
+
+@dataclass(frozen=True, slots=True)
+class HandoffDestination:
+    root: Path
+    branch: str
+    plan: str
+    locator: str
+    master_plan: str | None
+
+
 class HandoffEvent(StrEnum):
     """Which step of a handoff an envelope records, spelled as on the wire."""
 
     READY = "HANDOFF_READY"
     ACCEPTED = "HANDOFF_ACCEPTED"
     FAILED = "HANDOFF_FAILED"
+    FINISHED = "HANDOFF_FINISHED"
 
 
 @dataclass(frozen=True, slots=True)
@@ -56,6 +92,24 @@ class HandoffEnvelope:
     timestamp: datetime
     plan: str | None
     failure_code: str | None
+    version: int = 1
+    source_root: Path | None = None
+    source_plan: str | None = None
+    predecessor_session_id: str | None = None
+    destination: HandoffDestination | None = None
+    selection: tuple[bool, int | None, int | None] | None = None
+    ready_sha256: str | None = None
+    content_sha256: str | None = None
+    request_id: str | None = None
+    requested_at: datetime | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class HandoffRequest:
+    managed_session_id: str
+    requested_at: datetime
+    version: int = 1
+    request_id: str | None = None
 
 
 class HandoffEnvelopes(Protocol):
@@ -66,10 +120,19 @@ class HandoffEnvelopes(Protocol):
         A project with no envelope directory has none."""
         ...
 
-    def write_request(self, project_dir: Path, managed_session_id: str) -> bool:
+    def write_request(
+        self,
+        project_dir: Path,
+        managed_session_id: str,
+        *,
+        request_id: str | None = None,
+        requested_at: datetime | None = None,
+    ) -> bool:
         """Ask the managed session `managed_session_id` to hand off. Returns whether the
         request was written; a refusal writes nothing."""
         ...
+
+    def request_details(self, project_dir: Path) -> HandoffRequest | None: ...
 
     def requested(self, project_dir: Path) -> str | None:
         """The session the project's `request.json` names, when it holds a well-formed
@@ -81,7 +144,14 @@ class HandoffEnvelopes(Protocol):
         Called once its rollover is terminal, so the directory does not fill over time."""
         ...
 
-    def clear_request(self, project_dir: Path, managed_session_id: str) -> None:
+    def clear_request(
+        self,
+        project_dir: Path,
+        managed_session_id: str,
+        *,
+        request_id: str | None = None,
+        requested_at: datetime | None = None,
+    ) -> None:
         """Withdraw the project's request if it names `managed_session_id`; nothing otherwise.
         Compared first, so ending one session's rollover never clears another's request."""
         ...

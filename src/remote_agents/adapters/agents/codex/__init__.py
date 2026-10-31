@@ -14,6 +14,7 @@ from remote_agents.adapters.agents.codex.sessions import (
     CodexSessionCatalogue,
 )
 from remote_agents.domain.models import ProfileId, ProjectId
+from remote_agents.domain.profiles import PermissionPreset
 from remote_agents.ports.provider_descriptor import ComposerScreen, ProviderDescriptor, TrustDialog
 from remote_agents.ports.worktree_store import ProjectWorktreeFolders
 
@@ -39,6 +40,7 @@ def descriptor() -> ProviderDescriptor:
         ProfileId("codex"),
         glyph="🔷",
         name="Codex",
+        permission_presets=tuple(PermissionPreset),
         sessions=_sessions,
         # The account reader asks the app server for the plan's windows and keeps the rollout
         # reader behind it for session reads and as the fallback (sub-plan 01, DEC-061 as

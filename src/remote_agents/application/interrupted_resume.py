@@ -351,9 +351,8 @@ class InterruptedResumePass:
         self._outcomes = outcomes
         self._resume = resume
         self._folder_of = folder_of
-        # The folder outside its project a session was bound to (DEC-131). A resume binds
-        # only a worktree, so such a session would come back in the project folder: it is
-        # skipped by name instead, never moved there (DEC-123).
+        # Retain the exact persisted outside folder; SessionService revalidates its
+        # recorded project association and root before starting the resumed pane.
         self._bound_folder_of = bound_folder_of
         self._key_claimed = key_claimed
         self._send = send
@@ -495,8 +494,6 @@ class InterruptedResumePass:
             return ResumeReport(record, DEFERRED)
         if worktree is not None and worktree.removed_at is not None:
             return await self._decide(decision, f"{SKIPPED}:worktree_removed")
-        if outside is not None:
-            return await self._decide(decision, f"{SKIPPED}:folder_bound")
         try:
             command = ResumeCommand(
                 record.project_id,
@@ -504,12 +501,13 @@ class InterruptedResumePass:
                 _resolved(
                     record,
                     decision.conversation_id,
-                    None if worktree is None else worktree.path,
+                    outside if worktree is None else worktree.path,
                     self._now(),
                 ),
                 f"restart:{record.session_id}",
                 guard_wait=UNATTENDED_LAUNCH_WAIT_SECONDS,
                 label=RESUMED_LABEL,
+                inherit_permissions_of=record.session_id,
             )
         except ValueError:
             # Nothing was claimed, but the same record would fail the same way on every start.
@@ -532,6 +530,10 @@ class InterruptedResumePass:
                 # It may have got part-way: decided, never tried again.
                 return await self._decide(decision, f"{SKIPPED}:launch_error")
             return ResumeReport(record, DEFERRED)
+        if outcome.pane_unavailable:
+            return await self._decide(decision, f"{SKIPPED}:pane_unavailable")
+        if outcome.folder_unavailable:
+            return await self._decide(decision, f"{SKIPPED}:folder_unavailable")
         if outcome.worktree_removed:
             return await self._decide(decision, f"{SKIPPED}:worktree_removed")
         if not outcome.created:

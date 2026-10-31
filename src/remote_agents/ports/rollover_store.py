@@ -10,13 +10,17 @@ Rows live in the domain store so a change wakes the store watcher on both surfac
 
 from __future__ import annotations
 
+import re
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime
+from pathlib import Path
 from typing import Protocol
 
 from remote_agents.domain.models import ProfileId, ProjectId, SessionId
+from remote_agents.domain.profiles import PermissionPreset
 from remote_agents.domain.rollover import RolloverState
+from remote_agents.ports.handoff_envelopes import HandoffDestination
 
 REQUEST_WRITTEN = "request written"
 """The history detail `record_request` writes: the owner's request was handed to the workflow.
@@ -38,8 +42,71 @@ class IllegalRolloverMove(ValueError):
 
 
 @dataclass(frozen=True, slots=True)
+class ResolvedRolloverDestination:
+    project_id: ProjectId
+    destination: HandoffDestination
+
+
+@dataclass(frozen=True, slots=True)
+class RolloverTarget:
+    """Immutable launch/adoption data resolved before any successor can start."""
+
+    version: int
+    project_id: ProjectId
+    destination: HandoffDestination
+    source_plan: str | None
+    selection: tuple[bool, int | None, int | None] | None
+    ready_sha256: str | None
+    permissions: PermissionPreset | None
+
+    def __post_init__(self) -> None:
+        d = self.destination
+        valid = (
+            type(self.version) is int
+            and self.version in (1, 2)
+            and isinstance(d, HandoffDestination)
+            and isinstance(d.root, Path)
+            and d.root.is_absolute()
+            and all(isinstance(v, str) for v in (d.branch, d.plan, d.locator))
+            and (
+                d.master_plan is None
+                or (isinstance(d.master_plan, str) and d.master_plan.startswith("/"))
+            )
+            and (self.source_plan is None or isinstance(self.source_plan, str))
+            and (self.permissions is None or isinstance(self.permissions, PermissionPreset))
+        )
+        if self.version == 2:
+            valid = valid and (
+                bool(d.branch)
+                and d.plan.startswith("/")
+                and re.fullmatch(r"Task \d+\.\d+", d.locator) is not None
+                and isinstance(self.source_plan, str)
+                and self.source_plan.startswith("/")
+                and isinstance(self.ready_sha256, str)
+                and re.fullmatch(r"[0-9a-f]{64}", self.ready_sha256) is not None
+                and isinstance(self.selection, tuple)
+                and len(self.selection) == 3
+                and type(self.selection[0]) is bool
+                and all(v is None or (type(v) is int and v > 0) for v in self.selection[1:])
+            )
+        elif self.version == 1:
+            valid = valid and (
+                self.source_plan is None
+                and self.selection is None
+                and self.ready_sha256 is None
+                and d.master_plan is None
+                and d.locator == ""
+            )
+        if not valid:
+            raise ValueError("invalid stored rollover target")
+
+
+@dataclass(frozen=True, slots=True)
 class Rollover:
-    """One rollover as stored. `plan` is the envelope's path, kept and shown, never opened."""
+    """One stored rollover; project_id is the source, target.project_id the destination.
+
+    `plan` is carried and shown, never opened or interpreted by the receiver.
+    """
 
     id: str
     handoff_id: str | None
@@ -56,6 +123,8 @@ class Rollover:
     failure_detail: str | None
     requested_at: datetime
     updated_at: datetime
+    source_root: Path | None = None
+    target: RolloverTarget | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -83,6 +152,8 @@ class RolloverStore(Protocol):
         profile_id: ProfileId,
         plan: str | None,
         at: datetime,
+        source_root: Path | None = None,
+        target: RolloverTarget | None = None,
     ) -> Rollover | None:
         """Open a HANDOFF_READY rollover for a `ready` envelope.
 
@@ -93,6 +164,12 @@ class RolloverStore(Protocol):
         already has a different open rollover, and None when its latest rollover FAILED or
         STOP_FAILED and the owner has not asked again: then a `ready` waits for the owner.
         """
+        ...
+
+    async def freeze(
+        self, rollover_id: str, source_root: Path, target: RolloverTarget | None, *, at: datetime
+    ) -> Rollover:
+        """Bind an unset source/target once, refusing later changes; safe for legacy holds."""
         ...
 
     async def request(
@@ -162,7 +239,9 @@ class RolloverStore(Protocol):
 
     async def events(self, rollover_id: str) -> Sequence[RolloverEvent]: ...
 
-    async def latest_for(self, predecessor: SessionId) -> Rollover | None:
+    async def latest_for(
+        self, predecessor: SessionId, *, include_cancelled: bool = False
+    ) -> Rollover | None:
         """The newest rollover of `predecessor` that was not cancelled, in any state -- the one
         whose FAILED or STOP_FAILED holds the next `ready`, so the one a row reports."""
         ...

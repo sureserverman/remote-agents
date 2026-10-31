@@ -144,3 +144,41 @@ async def test_resume_picker_renders_a_bounded_provider_title_without_its_source
         "A useful title that comfortably identifies this"
     )
     assert "provider-private-id" not in catalogue.keyboard[0][0].text
+
+
+async def test_an_existing_resume_without_a_verified_pane_reports_a_named_hold():
+    class HeldLauncher(Launcher):
+        async def resume(self, command):
+            result = await super().resume(command)
+            return ResumeOutcome(result.record, created=False, pane_unavailable=True)
+
+    project = CatalogProject("a" * 24, "opaque-editor", "writing", "Registered")
+    summary = ConversationSummary(
+        ConversationReference("c-0123456789abcdef"),
+        ProfileId("claude"),
+        ProjectId(project.opaque_id),
+        ConversationState.RESUMABLE,
+        datetime.now(UTC),
+    )
+    resolved = ResolvedConversation(summary, ProviderConversationId("provider-private-id"))
+    launcher = HeldLauncher()
+    boundary = build_private_bot(
+        7,
+        11,
+        backend=backend_for(
+            catalogue=(project,),
+            sessions=launcher,
+            conversations=ConversationService(Catalogue(resolved)),
+        ),
+        profiles=(ProfileAvailability("claude", True),),
+        names=profile_names(),
+    )
+    token = boundary.callbacks.create(
+        "resume.confirm", str(summary.reference), 7, 11, mutation=True
+    )
+    boundary.callbacks.bind_pending(11, 100)
+    reply = await boundary._resume_reply(str(summary.reference), token, 100)
+    assert "resume is on hold" in reply["text"].casefold()
+    assert "nothing new was started" in reply["text"].casefold()
+    assert "Session resumed" not in reply["text"]
+    assert len(launcher.commands) == 1

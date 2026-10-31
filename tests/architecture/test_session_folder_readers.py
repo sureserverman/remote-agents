@@ -49,6 +49,24 @@ class Site:
 
 _TABLE: dict[Site, tuple[Kind, str]] = {
     Site(
+        "application/services.py",
+        "SessionService._save_with_permissions",
+        "self._project_paths.get(record.project_id)",
+    ): (Kind.PROJECT, "atomically snapshot the registered root; never answers a bound session cwd"),
+    Site(
+        "adapters/agents/catalogue.py",
+        "unique_conversations",
+        "project_paths.get(entry.summary.project_id)",
+    ): (Kind.PROJECT, "snapshot the registered project root; not a bound session's cwd"),
+    Site(
+        "application/services.py",
+        "SessionService._resume_locked",
+        "self._project_paths.get(command.project_id)",
+    ): (
+        Kind.PROJECT,
+        "reject a registry root changed since selection; bound cwd is checked separately",
+    ),
+    Site(
         "application/session_folders.py",
         "SessionFolders.folder_for",
         "self._project_paths[project_id]",

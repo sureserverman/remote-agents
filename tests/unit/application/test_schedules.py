@@ -14,7 +14,6 @@ from datetime import timedelta
 from pathlib import Path
 
 from schedule_fakes import MemoryScheduleStore
-from test_schedule_pass import BERLIN, FIRE, Rig, _schedule
 
 from remote_agents.adapters.sqlite.database import open_database
 from remote_agents.adapters.sqlite.session_store import SQLiteSessionStore
@@ -22,6 +21,8 @@ from remote_agents.application.commands import LaunchCommand
 from remote_agents.application.schedules import FireOutcome, SchedulePass
 from remote_agents.application.services import SessionService
 from remote_agents.ports.terminal import TerminalObservation
+
+from .test_schedule_pass import BERLIN, FIRE, Rig, _schedule
 
 
 class _Contended:

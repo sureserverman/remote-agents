@@ -3,8 +3,35 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from enum import StrEnum
 
 from remote_agents.domain.models import ProfileId
+
+
+class PermissionPreset(StrEnum):
+    """A requested launch policy, independent of later native permission changes."""
+
+    APPROVE_FOR_ME = "approve_for_me"
+    ASK = "ask"
+    FULL_ACCESS = "full_access"
+    PROVIDER_DEFAULT = "provider_default"
+
+
+_PERMISSION_ARGUMENTS = {
+    "codex": {
+        PermissionPreset.APPROVE_FOR_ME: ("--approve-for-me",),
+        PermissionPreset.ASK: (
+            "--sandbox",
+            "workspace-write",
+            "--ask-for-approval",
+            "on-request",
+            "-c",
+            'approvals_reviewer="user"',
+        ),
+        PermissionPreset.FULL_ACCESS: ("--dangerously-bypass-approvals-and-sandbox",),
+        PermissionPreset.PROVIDER_DEFAULT: (),
+    },
+}
 
 
 class ProfileError(ValueError):
@@ -87,6 +114,15 @@ class ProfileDefinition:
     def version_command(self) -> tuple[str, ...]:
         """Return the fixed executable probe command, without user-controlled arguments."""
         return (self.executable, *self.version_argv)
+
+    def permission_argv(self, preset: PermissionPreset | None) -> tuple[str, ...]:
+        """Return only reviewed launch flags; None preserves an unconfigured caller."""
+        if preset is None:
+            return ()
+        try:
+            return _PERMISSION_ARGUMENTS[str(self.profile_id)][PermissionPreset(preset)]
+        except (KeyError, ValueError, TypeError):
+            raise ProfileError("permission preset is unavailable for this profile") from None
 
 
 @dataclass(frozen=True, slots=True)

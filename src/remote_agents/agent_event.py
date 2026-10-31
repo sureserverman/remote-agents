@@ -109,8 +109,8 @@ def resolve_session_id(
     """The managed session the calling tool shell belongs to, by its provider's own rule.
 
     A shell carrying the thread variable of a provider that names its sessions from the payload
-    is placed by that thread and its folder, against the roster the service publishes for the
-    provider's hook -- `hook_identity.resolve`, the rule the hook drain applies. Its session
+    is placed by an exact thread binding against the live roster through
+    `hook_identity.resolve`. Its session
     variable is never read: the shell inherits the environment of whichever pane started the
     provider's daemon, measured naming another session (DEC-128). No roster, or none that places
     the thread, is nobody's -- where the hook, with no roster, keeps the variable: a handoff
@@ -122,10 +122,10 @@ def resolve_session_id(
     lists the starter tells it apart, an untrusted one cannot, so both are nobody's. With no
     roster written at all (no service yet), the variable decides, as it does for the hook.
 
-    What this places is placed by the hook's rule, which is evidence, not proof: the limits
-    `hook_identity` records -- a Codex started by hand in a managed session's folder, two
-    sessions sharing one -- hold here too. The folder is the shell's own, not its turn's: a
-    writer that changes folder before asking is compared against the folder it moved to.
+    The exact binding is a recorded resume id. Current-turn and conversation marks may veto
+    it but cannot establish ownership: their bootstrap uses folder/time heuristics. A fresh
+    conversation without an independent binding refuses, pending native binding support.
+    The shell may change folders before asking without changing its recorded binding.
     """
     from remote_agents.adapters.agents.hook_identity import (
         UNTRUSTED,
@@ -150,7 +150,13 @@ def resolve_session_id(
         if roster is UNTRUSTED:
             return None
         if thread:
-            return resolve(thread, cwd, roster) if roster else None
+            return (
+                resolve(
+                    thread, cwd, roster, require_exact=True, activity_directory=activity_directory
+                )
+                if roster
+                else None
+            )
         if roster and any(entry.session_id == inherited for entry in roster):
             return None
     return inherited

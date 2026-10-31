@@ -14,8 +14,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
+import pytest
 from backends import SessionUseCaseDouble, tui_context_for
-from textual.command import DiscoveryHit, Hit
+from textual.command import CommandInput, DiscoveryHit, Hit
+from textual.widgets import Input
 
 from remote_agents.adapters.tui.app import RemoteAgentsTui
 from remote_agents.adapters.tui.context import TuiContext
@@ -188,6 +190,42 @@ async def test_the_palette_is_reachable_at_all() -> None:
         open_now = app.screen_stack[-1].__class__.__name__
 
     assert "Palette" in open_now or "CommandPalette" in open_now, open_now
+
+
+@pytest.mark.parametrize("queued", ["submit", "escape"])
+@pytest.mark.parametrize("nested", [False, True])
+async def test_queued_palette_input_cannot_dismiss_twice_or_repeat_a_command(
+    queued, nested
+) -> None:
+    """A buffered Enter after execution must not pop the underlying screen.
+
+    The native terminal captured this with Ctrl-P, resume and three Enters in one
+    write. Queue both standard submission messages before the first is handled,
+    after a command has been selected, to exercise that exact dismissal window.
+    """
+    app = RemoteAgentsTui(_context())
+    commands = []
+    async with app.run_test() as pilot:
+        if nested:
+            await app.action_sessions()
+            await pilot.pause()
+        resting = app.screen
+        depth = len(app.screen_stack)
+        await pilot.press("ctrl+p")
+        await pilot.pause()
+        palette = app.screen
+        command_input = palette.query_one(CommandInput)
+        palette._list_visible = False
+        palette._selected_command = Hit(1, "Resume", lambda: commands.append("resume"))
+        palette.post_message(Input.Submitted(command_input, "Resume"))
+        if queued == "submit":
+            palette.post_message(Input.Submitted(command_input, "Resume"))
+        else:
+            palette.call_later(palette._action_escape)
+        await pilot.pause()
+        assert app.screen is resting
+        assert len(app.screen_stack) == depth
+        assert commands == ["resume"]
 
 
 class _Creator:

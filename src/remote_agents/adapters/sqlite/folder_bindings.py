@@ -7,7 +7,7 @@ import sqlite3
 from collections.abc import Callable
 from pathlib import Path
 
-from remote_agents.domain.models import SessionId
+from remote_agents.domain.models import ProjectId, SessionId
 
 _LOG = logging.getLogger(__name__)
 
@@ -55,3 +55,18 @@ class SQLiteFolderBindings:
                 continue
             bound[session_id] = Path(folder)
         return bound
+
+    async def for_project(self, project_id: ProjectId) -> tuple[Path, ...]:
+        rows = self._connection.execute(
+            "SELECT f.folder FROM session_folders f "
+            "JOIN sessions s ON s.session_id = f.session_id "
+            "WHERE NOT EXISTS (SELECT 1 FROM worktrees w WHERE w.path = f.folder) "
+            "GROUP BY f.folder HAVING COUNT(DISTINCT s.project_id) = 1 "
+            "AND MIN(s.project_id) = ? ORDER BY f.folder",
+            (str(project_id),),
+        ).fetchall()
+        return tuple(Path(row[0]) for row in rows)
+
+    def available(self, folder: Path) -> bool:
+        # Replacing the path by a symlink must not retarget a saved selection.
+        return self._accept(str(folder)) == folder

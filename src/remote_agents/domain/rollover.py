@@ -27,6 +27,7 @@ class RolloverState(StrEnum):
     FAILED = "failed"
     STOP_FAILED = "stop_failed"
     CANCELLED = "cancelled"
+    WORKFLOW_FINISHED = "workflow_finished"
 
 
 SUCCESSOR_UNKNOWN = "successor-unknown"
@@ -39,7 +40,7 @@ SUCCESSOR_FAILED = "successor-failed"
 _S = RolloverState
 
 TRANSITIONS: dict[RolloverState, frozenset[RolloverState]] = {
-    _S.REQUESTED: frozenset({_S.HANDOFF_READY, _S.CANCELLED, _S.FAILED}),
+    _S.REQUESTED: frozenset({_S.HANDOFF_READY, _S.CANCELLED, _S.FAILED, _S.WORKFLOW_FINISHED}),
     # Cancelling is safe here because nothing has been launched yet; from SUCCESSOR_STARTING
     # on, a successor may exist, so the only way out short of acceptance is FAILED.
     _S.HANDOFF_READY: frozenset({_S.SUCCESSOR_STARTING, _S.FAILED, _S.CANCELLED}),

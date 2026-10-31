@@ -30,6 +30,7 @@ from remote_agents.adapters.telegram.schedule_notifications import ScheduleNotif
 from remote_agents.adapters.telegram.service import PrivateBotBoundary
 from remote_agents.adapters.telegram.trust_notifications import TrustNotifier
 from remote_agents.adapters.tmux.runtime import TmuxTerminal
+from remote_agents.adapters.workflow.destinations import destination_branch
 from remote_agents.adapters.workflow.handoff_envelopes import FileHandoffEnvelopes
 from remote_agents.adapters.workflow.roots import acceptable_root, handoff_root
 from remote_agents.application.activity import CodexApprovalWatcher, drain_activity
@@ -48,10 +49,12 @@ from remote_agents.application.limit_stops import LimitScreenWatcher, LimitStopC
 from remote_agents.application.reconcile import ReconciliationService
 from remote_agents.application.resume_flow import resume_capable
 from remote_agents.application.rollover import RolloverPass, RolloverReport
+from remote_agents.application.rollover_destinations import RolloverDestinations
 from remote_agents.application.schedules import SchedulePass
 from remote_agents.application.services import ResumeOutcome, SessionService
 from remote_agents.application.session_actions import notifiable
 from remote_agents.application.session_folders import live_folder
+from remote_agents.application.session_views import CATALOGUE_GAP_RETRY_SECONDS
 from remote_agents.application.worktree_cleanup import WorktreeCleanupPass
 from remote_agents.application.worktrees import main_checkout
 from remote_agents.config import TelegramSecrets
@@ -367,6 +370,7 @@ def build_restart_resume(
     notify: Callable[[tuple[ResumeReport, ...], int], Awaitable[None]] | None,
     stopping: Callable[[], bool],
     lock_path: Path | None = None,
+    remember_permissions: Callable[[], Awaitable[None]] | None = None,
 ) -> RestartResume:
     """The restart resume pass over the bot's stores and terminal (DEC-127)."""
 
@@ -435,6 +439,8 @@ def build_restart_resume(
         )
 
     async def forget_marks() -> None:
+        if remember_permissions is not None:
+            await remember_permissions()
         # Only ENDED, never merely not RUNNING: an UNTRUSTED or STARTING session is live, and
         # FAILED can still be promoted; their marks are what a later resume would need.
         kept = {
@@ -918,6 +924,87 @@ def build_worktree_listing(
     ).kept
 
 
+#: A session in another state gets nothing from the pass, so an unknown project there costs no read.
+_PASS_ACTS_ON = frozenset(
+    {
+        SessionState.STARTING,
+        SessionState.RUNNING,
+        SessionState.UNTRUSTED,
+        SessionState.STOP_REQUESTED,
+    }
+)
+
+#: A read past this leaves the pass to its stops and rollovers; a hung mount must not hold them.
+CATALOGUE_READ_TIMEOUT_SECONDS = 30.0
+
+
+class CatalogueGap:
+    """Re-read the projects when a live session or a destination names one not read yet.
+
+    The pass reads envelopes under each project's folder, so a project made since the last read
+    and launched from the console, another process, would be watched only once the bot happened
+    to open a picker. Each cause re-reads at most once per `retry_seconds`, as the surfaces' own
+    gap does. A failed or slow read is logged and the pass goes on.
+    """
+
+    def __init__(
+        self,
+        known: Mapping[ProjectId, Path],
+        refresh: Callable[[], object],
+        clock: Callable[[], float] = time.monotonic,
+        *,
+        retry_seconds: float = CATALOGUE_GAP_RETRY_SECONDS,
+        read_timeout: float = CATALOGUE_READ_TIMEOUT_SECONDS,
+    ) -> None:
+        self._known = known
+        self._refresh = refresh
+        self._clock = clock
+        self._retry_seconds = retry_seconds
+        self._read_timeout = read_timeout
+        self._read_at: float | None = None
+        self._running: asyncio.Future[object] | None = None
+        self._destinations_read_at: dict[Path, float] = {}
+
+    async def _read(self) -> None:
+        """`refresh` off the event loop, since it walks the development root. Never raises."""
+        # A read past its timeout keeps its thread: no second one starts while it runs, or a hung
+        # mount would park one worker per minute behind the catalogue's lock.
+        if self._running is not None and not self._running.done():
+            return
+        self._running = asyncio.ensure_future(asyncio.to_thread(self._refresh))
+        try:
+            await asyncio.wait_for(asyncio.shield(self._running), self._read_timeout)
+        except Exception:
+            _LOG.exception("the project catalogue could not be re-read for a rollover")
+
+    async def close(self, records: Iterable[SessionRecord]) -> None:
+        if all(
+            record.state not in _PASS_ACTS_ON or record.project_id in self._known
+            for record in records
+        ):
+            self._read_at = None
+            return
+        now = self._clock()
+        if self._read_at is not None and now - self._read_at < self._retry_seconds:
+            return
+        self._read_at = now
+        await self._read()
+
+    async def read_for(self, root: Path) -> None:
+        """A destination not found: read once for it, however many passes meet the same `ready`."""
+        now = self._clock()
+        last = self._destinations_read_at.get(root)
+        if last is not None and now - last < self._retry_seconds:
+            return
+        self._destinations_read_at = {
+            seen: at
+            for seen, at in self._destinations_read_at.items()
+            if now - at < self._retry_seconds
+        }
+        self._destinations_read_at[root] = now
+        await self._read()
+
+
 def build_rollover_pass(
     *,
     connection,
@@ -931,6 +1018,7 @@ def build_rollover_pass(
     worktrees: WorktreeStore | None = None,
     reported: ReportedRoots | None = None,
     folders: FolderBindings | None = None,
+    refresh_projects: Callable[[], object] | None = None,
 ) -> RolloverPass:
     """The rollover pass `serve` runs, and only `serve` (DEC-115, DEC-015/070: built here,
     beside the loop that runs it, so no other composition has one to run).
@@ -954,6 +1042,14 @@ def build_rollover_pass(
     """
 
     rollovers = SQLiteRolloverStore(connection)
+    gap = None if refresh_projects is None else CatalogueGap(project_paths, refresh_projects)
+
+    async def sessions_seen() -> tuple[SessionRecord, ...]:
+        records = tuple(await sessions.list_sessions())
+        # With the switch off the pass acts on nothing, so it has no reason to walk the disk.
+        if gap is not None and await enabled():
+            await gap.close(records)
+        return records
 
     async def held_sessions() -> tuple[SessionId, ...]:
         named: list[SessionId] = []
@@ -984,7 +1080,7 @@ def build_rollover_pass(
         rollovers,
         FileHandoffEnvelopes(),
         adopt_templates=adopt_templates,
-        sessions=sessions.list_sessions,
+        sessions=sessions_seen,
         handoff_root=lambda project: handoff_root(project_paths.get(project)),
         worktree_roots=worktree_roots,
         reported_roots=(
@@ -1000,6 +1096,17 @@ def build_rollover_pass(
         # Only failures are told (DEC-031); the notifier decides which, and words them.
         notify=notify,
         operation=operation,
+        resolve_destination=RolloverDestinations(
+            project_paths,
+            destination_branch,
+            worktrees,
+            refresh=None if gap is None else gap.read_for,
+        ).resolve,
+        resolve_legacy_destination=RolloverDestinations(
+            project_paths, destination_branch, worktrees
+        ).resolve_legacy,
+        handoff_versions=SQLiteSessionStore(connection).handoff_versions,
+        continuation_permissions=sessions.continuation_permissions,
     )
 
 

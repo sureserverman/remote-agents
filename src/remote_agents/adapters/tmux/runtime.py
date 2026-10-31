@@ -52,6 +52,7 @@ from remote_agents.adapters.tmux.trust import (
 )
 from remote_agents.domain.conversations import ProviderConversationId
 from remote_agents.domain.models import ProfileId, ProjectId, SessionId
+from remote_agents.domain.profiles import PermissionPreset
 from remote_agents.domain.remote_control import RemoteControlState
 from remote_agents.domain.trust import TrustState
 from remote_agents.ports.private_directory import open_private_directory
@@ -343,6 +344,7 @@ class TmuxTerminal:
         profile_id: ProfileId,
         *,
         remote_control: bool = False,
+        permissions: PermissionPreset | None = None,
     ) -> TerminalObservation:
         """Persist a resolved intent, launch it, then require observed pane liveness."""
         try:
@@ -353,9 +355,18 @@ class TmuxTerminal:
             # no factory to fall back to, the `KeyError` below refuses the launch -- the
             # same answer this adapter already gives a profile it cannot resolve at all.
             # Production wires `profiles={}` and resolves every launch through a factory.
-            profile = None if remote_control else self._profiles.get(profile_id)
+            profile = (
+                None
+                if remote_control or permissions is not None
+                else self._profiles.get(profile_id)
+            )
             if profile is None:
-                profile = self._profile_factories[profile_id](session_id, remote_control)
+                factory = self._profile_factories[profile_id]
+                profile = (
+                    factory(session_id, remote_control)
+                    if permissions is None
+                    else factory(session_id, remote_control, permissions)
+                )
         except KeyError:
             return TerminalObservation(
                 session_id, live=False, preserved=False, detail="invalid_intent"
@@ -368,10 +379,17 @@ class TmuxTerminal:
         project_id: ProjectId,
         profile_id: ProfileId,
         source_id: ProviderConversationId,
+        *,
+        permissions: PermissionPreset | None = None,
     ) -> TerminalObservation:
         """Launch only a curated, adapter-resolved resume profile on the owned tmux server."""
         try:
-            profile = self._resume_profile_factories[profile_id](session_id, source_id)
+            factory = self._resume_profile_factories[profile_id]
+            profile = (
+                factory(session_id, source_id)
+                if permissions is None
+                else factory(session_id, source_id, permissions)
+            )
         except KeyError:
             return TerminalObservation(
                 session_id, live=False, preserved=False, detail="invalid_intent"

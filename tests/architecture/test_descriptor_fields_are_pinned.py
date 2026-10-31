@@ -63,6 +63,7 @@ import typing
 #: nothing to adopt with, and its sessions never roll over.
 _IDENTITY_FIELDS = ("profile_id", "glyph", "name")
 _CAPABILITY_FIELDS = (
+    "permission_presets",
     "sessions",
     "usage",
     "hooks",

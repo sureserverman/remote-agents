@@ -21,6 +21,7 @@ import pytest
 
 from remote_agents.__main__ import main
 from remote_agents.adapters.agents.hook_identity import RosterEntry, roster_path, write_roster
+from remote_agents.adapters.agents.turn_markers import FileConversationMarks, FileTurnMarkers
 from remote_agents.domain.models import SessionId
 
 # A version-7 thread id minted at 2026-10-16T07:00:00Z, as Codex mints them.
@@ -47,6 +48,11 @@ def _roster(spool: Path, *entries: RosterEntry) -> None:
     write_roster(roster_path(spool, "codex"), entries)
 
 
+def _bind(spool: Path, session: str, thread: str = _THREAD) -> None:
+    FileTurnMarkers(spool).start(session, thread)
+    FileConversationMarks(spool).record(session, thread)
+
+
 def _run(spool: Path, capsys: pytest.CaptureFixture[str]) -> tuple[int, str]:
     code = main(["session-id", "--activity-dir", str(spool)])
     return code, capsys.readouterr().out
@@ -64,7 +70,10 @@ def test_session_id_command_resolves_a_codex_thread(
     shell: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     mine = str(SessionId.new())
-    _roster(shell, RosterEntry(mine, str(Path.cwd().resolve()), _MINTED - timedelta(minutes=1)))
+    _roster(
+        shell, RosterEntry(mine, str(Path.cwd().resolve()), _MINTED - timedelta(minutes=1), _THREAD)
+    )
+    _bind(shell, mine)
     monkeypatch.setenv("CODEX_THREAD_ID", _THREAD)
     assert _run(shell, capsys) == (0, f"{mine}\n")
 
@@ -74,7 +83,10 @@ def test_session_id_command_ignores_a_stale_environment_id_under_a_codex_thread(
 ) -> None:
     # The daemon's starter's id, as B's shell carried A's: the roster says who, not the variable.
     starter, mine = str(SessionId.new()), str(SessionId.new())
-    _roster(shell, RosterEntry(mine, str(Path.cwd().resolve()), _MINTED - timedelta(minutes=1)))
+    _roster(
+        shell, RosterEntry(mine, str(Path.cwd().resolve()), _MINTED - timedelta(minutes=1), _THREAD)
+    )
+    _bind(shell, mine)
     monkeypatch.setenv("REMOTE_AGENTS_SESSION_ID", starter)
     monkeypatch.setenv("CODEX_THREAD_ID", _THREAD)
     assert _run(shell, capsys) == (0, f"{mine}\n")
@@ -160,7 +172,7 @@ def test_session_id_command_places_a_resumed_thread_in_any_folder(
     assert _run(shell, capsys) == (0, f"{resumed}\n")
 
 
-def test_session_id_command_gives_a_shared_folder_thread_to_the_newest_older_session(
+def test_session_id_command_refuses_a_shared_folder_thread_without_a_binding(
     shell: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     here = str(Path.cwd().resolve())
@@ -172,16 +184,16 @@ def test_session_id_command_gives_a_shared_folder_thread_to_the_newest_older_ses
         RosterEntry(later, here, _MINTED + timedelta(minutes=1)),
     )
     monkeypatch.setenv("CODEX_THREAD_ID", _THREAD)
-    assert _run(shell, capsys) == (0, f"{newer}\n")
+    assert _run(shell, capsys) == (3, "")
 
 
-def test_session_id_command_gives_an_untimed_thread_to_the_folder_s_only_session(
+def test_session_id_command_refuses_an_unbound_thread_in_the_only_sessions_folder(
     shell: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     only = str(SessionId.new())
     _roster(shell, RosterEntry(only, str(Path.cwd().resolve()), _MINTED))
     monkeypatch.setenv("CODEX_THREAD_ID", "not-a-version-7-id")
-    assert _run(shell, capsys) == (0, f"{only}\n")
+    assert _run(shell, capsys) == (3, "")
 
 
 @pytest.mark.parametrize("spoil", ["shared", "symlink", "garbage", "bad-entry"])
@@ -243,7 +255,10 @@ def test_session_id_command_defaults_to_the_production_spool(
     spool = ProductionPaths.for_home(home).activity_directory
     spool.mkdir(parents=True, mode=0o700)
     mine = str(SessionId.new())
-    _roster(spool, RosterEntry(mine, str(Path.cwd().resolve()), _MINTED - timedelta(minutes=1)))
+    _roster(
+        spool, RosterEntry(mine, str(Path.cwd().resolve()), _MINTED - timedelta(minutes=1), _THREAD)
+    )
+    _bind(spool, mine)
     monkeypatch.setenv("CODEX_THREAD_ID", _THREAD)
     assert main(["session-id"]) == 0
     assert capsys.readouterr().out == f"{mine}\n"
@@ -285,15 +300,14 @@ def test_session_id_command_names_the_environment_session_when_no_roster_was_wri
     assert _run(shell, capsys) == (0, f"{session}\n")
 
 
-def test_session_id_command_gives_a_hand_started_thread_to_the_folder_s_managed_session(
+def test_session_id_command_refuses_a_hand_started_thread_in_a_managed_folder(
     shell: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    # hook_identity's recorded limit, pinned: a Codex started by hand in the folder a managed
-    # session works in mints a newer thread, and the time rule places it under that session.
+    # Folder/time remain hook evidence; a handoff needs an exact thread binding.
     managed = str(SessionId.new())
     _roster(shell, RosterEntry(managed, str(Path.cwd().resolve()), _MINTED - timedelta(hours=2)))
     monkeypatch.setenv("CODEX_THREAD_ID", _THREAD)
-    assert _run(shell, capsys) == (0, f"{managed}\n")
+    assert _run(shell, capsys) == (3, "")
 
 
 def test_session_id_command_exits_3_on_a_roster_too_deep_to_parse(
@@ -497,3 +511,108 @@ def test_session_id_command_records_nothing_without_the_variable(
 
     assert _run_both(shell, capsys) == (0, f"{session}\n", "")
     assert not (shell / "roots").exists()
+
+
+def test_first_cross_repo_call_uses_recorded_resume_binding_and_records_only_its_root(
+    shell, monkeypatch, capsys, tmp_path
+):
+    starter, mine = str(SessionId.new()), str(SessionId.new())
+    destination = _repo(tmp_path / "destination")
+    _roster(
+        shell,
+        RosterEntry(starter, str(Path.cwd()), _MINTED - timedelta(minutes=2)),
+        RosterEntry(mine, str(Path.cwd()), _MINTED - timedelta(minutes=1), _THREAD),
+    )
+    _bind(shell, starter, "starter-thread")
+    _bind(shell, mine)
+    monkeypatch.chdir(destination)
+    monkeypatch.setenv("REMOTE_AGENTS_SESSION_ID", starter)
+    monkeypatch.setenv("CODEX_THREAD_ID", _THREAD)
+    monkeypatch.setenv(_ROOT_VARIABLE, str(destination))
+    assert _recorded(shell) == {}
+    assert _run(shell, capsys) == (0, f"{mine}\n")
+    assert _recorded(shell) == {mine: os.fsencode(destination) + b"\n"}
+
+
+@pytest.mark.parametrize("defect", ["missing", "different-owner", "duplicate", "forged-thread"])
+def test_cross_repo_call_refuses_missing_stale_ambiguous_or_forged_binding(
+    shell, monkeypatch, capsys, tmp_path, defect
+):
+    mine, other = str(SessionId.new()), str(SessionId.new())
+    destination = _repo(tmp_path / "destination")
+    entries = [
+        RosterEntry(mine, str(Path.cwd()), _MINTED, None if defect == "missing" else _THREAD)
+    ]
+    if defect == "duplicate":
+        entries.append(RosterEntry(other, str(Path.cwd()), _MINTED, _THREAD))
+        _bind(shell, other)
+    _roster(shell, *entries)
+    if defect != "missing":
+        _bind(shell, mine)
+    if defect == "different-owner":
+        FileConversationMarks(shell).record(mine, "different-thread")
+    monkeypatch.chdir(destination)
+    monkeypatch.setenv("REMOTE_AGENTS_SESSION_ID", mine)
+    monkeypatch.setenv("CODEX_THREAD_ID", "forged-thread" if defect == "forged-thread" else _THREAD)
+    monkeypatch.setenv(_ROOT_VARIABLE, str(destination))
+    assert _run(shell, capsys) == (3, "")
+    assert _recorded(shell) == {}
+
+
+def test_duplicate_resumed_thread_does_not_choose_the_first_session(shell, monkeypatch, capsys):
+    _roster(
+        shell,
+        *(RosterEntry(str(SessionId.new()), "/elsewhere", _MINTED, _THREAD) for _ in range(2)),
+    )
+    monkeypatch.setenv("CODEX_THREAD_ID", _THREAD)
+    assert _run(shell, capsys) == (3, "")
+
+
+def test_an_unmanaged_same_folder_hook_cannot_mint_a_cross_repo_binding(shell, monkeypatch, capsys):
+    import io
+    import json
+
+    from remote_agents.adapters.agents.activity_spool import spool_agent_event
+    from remote_agents.adapters.agents.hook_licences import hook_licence
+
+    managed = str(SessionId.new())
+    _roster(shell, RosterEntry(managed, str(Path.cwd()), _MINTED - timedelta(hours=2)))
+    payload = {"session_id": _THREAD, "cwd": str(Path.cwd()), "hook_event_name": "UserPromptSubmit"}
+    assert (
+        spool_agent_event(
+            io.BytesIO(json.dumps(payload).encode()),
+            activity_directory=shell,
+            licence=lambda: hook_licence("codex"),
+            hook_name="codex",
+            environment={},
+        )
+        == 0
+    )
+    # Prove the heuristic hook really produced both marks; this is not a synthetic binding.
+    assert FileTurnMarkers(shell).owner(managed) == _THREAD
+    assert FileConversationMarks(shell).latest(managed) == _THREAD
+    monkeypatch.chdir(shell)
+    monkeypatch.setenv("CODEX_THREAD_ID", _THREAD)
+    monkeypatch.setenv("REMOTE_AGENTS_SESSION_ID", managed)
+    assert _run(shell, capsys) == (3, "")
+
+
+def test_duplicate_recorded_ownership_cannot_be_resolved_by_a_heuristic_veto(
+    shell, monkeypatch, capsys
+):
+    first, second = str(SessionId.new()), str(SessionId.new())
+    _roster(
+        shell, *(RosterEntry(sid, str(Path.cwd()), _MINTED, _THREAD) for sid in (first, second))
+    )
+    _bind(shell, first, "another-thread")
+    monkeypatch.setenv("CODEX_THREAD_ID", _THREAD)
+    assert _run(shell, capsys) == (3, "")
+
+
+def test_a_recorded_resume_binding_remains_valid_after_its_turn_ends(shell, monkeypatch, capsys):
+    mine = str(SessionId.new())
+    _roster(shell, RosterEntry(mine, str(Path.cwd()), _MINTED, _THREAD))
+    _bind(shell, mine)
+    FileTurnMarkers(shell).end(mine)
+    monkeypatch.setenv("CODEX_THREAD_ID", _THREAD)
+    assert _run(shell, capsys) == (0, f"{mine}\n")

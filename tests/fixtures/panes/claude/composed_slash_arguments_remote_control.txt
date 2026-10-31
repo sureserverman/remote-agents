@@ -1,0 +1,44 @@
+
+[38;5;174m ▐[48;5;16m▛███▛█[39m[49m   [1mClaude Code[0m [38;5;246mv2.1.316[39m
+[38;5;174m▝▜[48;5;16m█████[49m█▀[39m  [38;5;246mOpus 5.5 with high effort · Claude Max[39m
+[38;5;174m ▝▝   ▝▝ [39m  [38;5;246m~/dev/smoke-routing/k-birch · [38;5;114m/rc[39m
+
+[38;5;246m  ⎿  SessionStart:startup says: [vault-context] No vault context for this project yet. Run `/vault-context:link` to scan your vault and surface relevant pages.[39m
+
+  /remote-control is active[38;5;246m · Continue here, on your phone, or at https://claude.ai/code/session_01FIXTUREFIXTUREFIXTURE00[39m
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+[38;5;244m───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+[39m❯ [38;5;153m/planning:executing-plans[39m --adopt-handoff h-9e177cea621d4a8bf91f --handoff-root /home/user/dev/smoke-routing/k-alder
+[38;5;244m───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+[39m  [38;5;39mOpus 5.5[38;5;246m [2m|[0m[38;5;246m [38;5;73mk-birch[2m[38;5;246m@[0m[38;5;34mfeature[38;5;246m [2m|[0m[38;5;246m [38;5;216m0/1m[38;5;246m [2m([0m[38;5;34m0%[2m[38;5;246m)[0m[38;5;246m [2m|[0m[38;5;246m effort: [38;5;34mhigh[38;5;246m [2m|[0m[38;5;246m [38;5;253m5h[38;5;246m [38;5;34m23%[38;5;246m [2m@13:00[0m[38;5;246m [2m|[0m[38;5;246m [38;5;253m7d[38;5;246m [38;5;34m37%[38;5;246m [2m@Thu Nov 5, 09:00[0m[38;5;246m [2m|[0m[38;5;246m [38;5;216mv2.1.316[39m
+  [38;5;220m⏵⏵ auto mode on[38;5;246m (shift+tab to cycle)[39m

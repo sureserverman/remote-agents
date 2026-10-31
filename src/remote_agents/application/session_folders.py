@@ -23,6 +23,10 @@ from typing import Protocol
 from remote_agents.domain.models import ProjectId, SessionId
 from remote_agents.ports.worktree_store import Worktree
 
+FOLDER_UNAVAILABLE_SENTENCE = (
+    "This conversation's saved folder is unavailable or no longer belongs to this project."
+)
+
 WORKTREE_REMOVED_SENTENCE = "This session's worktree has been removed."
 """How both surfaces word a launch or resume refused with `WORKTREE_REMOVED`."""
 
@@ -31,7 +35,11 @@ def live_folder(worktree: Worktree) -> Path | None:
     """The worktree's folder while it is there to work in: not marked removed, and still a
     folder. None otherwise -- the one rule every session-meaning reader applies, so none of
     them can disagree about whether a worktree is gone."""
-    if worktree.removed_at is not None or not worktree.path.is_dir():
+    if (
+        worktree.removed_at is not None
+        or not worktree.path.is_dir()
+        or worktree.path.resolve() != worktree.path
+    ):
         return None
     return worktree.path
 
@@ -44,6 +52,10 @@ class _BoundFolders(Protocol):
 
 class _OutsideFolders(Protocol):
     async def folder_for(self, session_id: SessionId) -> Path | None: ...
+
+    async def for_project(self, project_id: ProjectId) -> tuple[Path, ...]: ...
+
+    def available(self, folder: Path) -> bool: ...
 
 
 class SessionFolders:
@@ -69,16 +81,33 @@ class SessionFolders:
         unknown project raises `KeyError`, as the mapping does."""
         worktree = None if self._store is None else await self._store.folder_for(session_id)
         if worktree is not None:
-            return live_folder(worktree)
+            folder = live_folder(worktree)
+            if folder is not None and self._folders is not None:
+                return folder if self._folders.available(folder) else None
+            return folder
         folder = None if self._folders is None else await self._folders.folder_for(session_id)
         if folder is not None:
-            return folder if folder.is_dir() else None
+            associated = await self._folders.for_project(project_id)
+            return folder if folder in associated and self._folders.available(folder) else None
         return self._project_paths[project_id]
 
     async def worktree_folders(self, project_id: ProjectId) -> tuple[Path, ...]:
-        """The project's live worktree folders, which its resume lists read beside its own
-        (`ProjectWorktreeFolders`). None of them with no store."""
-        if self._store is None:
-            return ()
-        live = (live_folder(w) for w in await self._store.live_for_project(project_id))
-        return tuple(folder for folder in live if folder is not None)
+        """Live recorded continuation folders beside the project root.
+
+        Includes outside bindings from ended sessions under their recorded project. Keep
+        the historical method name for the provider port; all providers use this authority.
+        """
+        worktrees = () if self._store is None else await self._store.live_for_project(project_id)
+        folders = [
+            folder
+            for w in worktrees
+            if (folder := live_folder(w)) is not None
+            and (self._folders is None or self._folders.available(folder))
+        ]
+        if self._folders is not None:
+            folders.extend(
+                folder
+                for folder in await self._folders.for_project(project_id)
+                if self._folders.available(folder)
+            )
+        return tuple(dict.fromkeys(folders))

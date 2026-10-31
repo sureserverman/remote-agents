@@ -45,6 +45,7 @@ CONDITIONAL_CAPABILITIES: frozenset[str] = frozenset()
 #: profile id -> capability -> declared state, with the reason a skip will carry.
 DECLARATIONS: dict[str, dict[str, tuple[Requirement, str]]] = {
     "claude": {
+        "permission_presets": (UNSUPPORTED, "no curated permission preset mapping"),
         "sessions": (SUPPORTED, "transcript catalogue over the workspace mapping"),
         "usage": (SUPPORTED, "transcript accounting plus the status-line hop's recording"),
         "hooks": (SUPPORTED, "settings.json hook groups (claude, flagless)"),
@@ -62,6 +63,7 @@ DECLARATIONS: dict[str, dict[str, tuple[Requirement, str]]] = {
         "adopt_template": (SUPPORTED, "the `/` command of the planning plugin (staged-planning)"),
     },
     "codex": {
+        "permission_presets": (SUPPORTED, "four closed launch permission presets"),
         "sessions": (SUPPORTED, "rollout catalogue via the app-server client"),
         "usage": (
             SUPPORTED,
@@ -79,6 +81,7 @@ DECLARATIONS: dict[str, dict[str, tuple[Requirement, str]]] = {
         ),
     },
     "opencode": {
+        "permission_presets": (UNSUPPORTED, "no curated permission preset mapping"),
         "sessions": (SUPPORTED, "opencode.db catalogue via the CLI runner"),
         "usage": (SUPPORTED, "opencode.db message-token accounting"),
         "hooks": (SUPPORTED, "opencode.json plugin entry plus a generated plugin (flagged)"),
@@ -102,6 +105,7 @@ DECLARATIONS: dict[str, dict[str, tuple[Requirement, str]]] = {
         ),
     },
     "cursor-agent": {
+        "permission_presets": (UNSUPPORTED, "no curated permission preset mapping"),
         "sessions": (SUPPORTED, "constant catalogue; workspace-blind by design"),
         "usage": (SUPPORTED, "constant-empty answer: publishes nothing, honestly (DEC-061)"),
         "hooks": (

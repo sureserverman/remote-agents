@@ -67,7 +67,7 @@ from remote_agents.adapters.tui.screens.confirm import (
 )
 from remote_agents.adapters.tui.screens.dashboard import SETTINGS_KEY
 from remote_agents.adapters.tui.screens.launch import ProjectsScreen
-from remote_agents.adapters.tui.screens.palette import NavigationCommands
+from remote_agents.adapters.tui.screens.palette import NavigationCommands, NavigationPalette
 from remote_agents.adapters.tui.screens.sessions import perform_row_action
 from remote_agents.adapters.tui.screens.settings import SettingsScreen
 from remote_agents.adapters.tui.theme import (
@@ -94,6 +94,7 @@ from remote_agents.application.project_catalog import (
     order_alphabetically,
     rank_by_recent_use,
 )
+from remote_agents.application.resume_flow import RESUME_PANE_UNAVAILABLE_MESSAGE
 from remote_agents.application.session_actions import (
     ACTION_LABELS as _ACTION_LABELS,
 )
@@ -103,7 +104,10 @@ from remote_agents.application.session_actions import (
     remote_control_available,
     remote_control_refusal,
 )
-from remote_agents.application.session_folders import WORKTREE_REMOVED_SENTENCE
+from remote_agents.application.session_folders import (
+    FOLDER_UNAVAILABLE_SENTENCE,
+    WORKTREE_REMOVED_SENTENCE,
+)
 from remote_agents.application.session_views import (
     CATALOGUE_GAP_RETRY_SECONDS,
     RolloverMark,
@@ -125,6 +129,7 @@ from remote_agents.domain.models import (
     SessionRecord,
     SessionState,
 )
+from remote_agents.domain.profiles import PermissionPreset
 from remote_agents.domain.remote_control import RemoteControlState
 from remote_agents.ports.agent_usage import ContextWindow
 from remote_agents.ports.console import StatusBarPalette
@@ -1745,6 +1750,11 @@ class RemoteAgentsTui(App[AttachRequest | None]):
             return
         await self.action_quit()
 
+    def action_command_palette(self) -> None:
+        """Open the shared palette with protection against queued dismissal."""
+        if self.use_command_palette and not NavigationPalette.is_open(self):
+            self.push_screen(NavigationPalette(id="--command-palette"))
+
     def action_bare_palette(self) -> None:
         """`:`: Textual's palette under a bare key, refused inside an `Input` like `?` and `q`.
 
@@ -1852,6 +1862,8 @@ class RemoteAgentsTui(App[AttachRequest | None]):
         project: CatalogProject,
         profile: str,
         resolved: ResolvedConversation,
+        *,
+        permissions: PermissionPreset | None = None,
     ) -> None:
         """Start the resumed session, and hand back the attach command if it is ready.
 
@@ -1868,6 +1880,7 @@ class RemoteAgentsTui(App[AttachRequest | None]):
                         ProfileId(profile),
                         resolved,
                         _idempotency_key(),
+                        permissions=permissions,
                     )
                 )
             # `outcome.created` says whether this call started anything, which the record
@@ -1879,6 +1892,12 @@ class RemoteAgentsTui(App[AttachRequest | None]):
             # had not touched was the defect. Recorded here so the asymmetry reads as a
             # decision the next person can check rather than as one surface being behind.
             record = outcome.record
+            if outcome.pane_unavailable:
+                await screen.redraw_after_failure()
+                screen.set_status(RESUME_PANE_UNAVAILABLE_MESSAGE, severity="warning")
+                screen.announce(RESUME_PANE_UNAVAILABLE_MESSAGE, severity="warning")
+                return
+            folder_unavailable = outcome.created and outcome.folder_unavailable
             worktree_removed = outcome.created and outcome.worktree_removed
         except CodexRemoteControlBusy:
             # Refused before anything was recorded (BL-037); the conversation is untouched.
@@ -1893,6 +1912,11 @@ class RemoteAgentsTui(App[AttachRequest | None]):
             screen.announce(f"The conversation was not resumed: {error}")
             return
         else:
+            if record.state is SessionState.FAILED and folder_unavailable:
+                await screen.redraw_after_failure()
+                screen.set_status("Nothing was started. Go back and try again.")
+                screen.announce(FOLDER_UNAVAILABLE_SENTENCE)
+                return
             if record.state is SessionState.FAILED and worktree_removed:
                 # Refused before any pane existed: no attach command, nothing to reach (BL-116).
                 await screen.redraw_after_failure()
@@ -2531,7 +2555,7 @@ class RemoteAgentsTui(App[AttachRequest | None]):
         backend = self._services.backend
         try:
             self._rollover_marks = await rollover_marks(
-                backend.rollovers, records, sessions=backend.sessions
+                backend.rollovers, records, sessions=backend.sessions, catalogue=self._catalogue
             )
         except Exception:
             _LOG.debug("the session rollover marks could not be read", exc_info=True)
@@ -2698,6 +2722,13 @@ class RemoteAgentsTui(App[AttachRequest | None]):
                         # moment the owner can see what they are naming.
                         None,
                         mode=mode,
+                        permissions=(
+                            self.selection.permissions
+                            if self._services.backend.permission_presets is not None
+                            and ProfileId(profile.profile_id)
+                            in self._services.backend.permission_presets.profiles
+                            else None
+                        ),
                     )
                 )
         except CodexRemoteControlBusy:

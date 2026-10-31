@@ -212,6 +212,9 @@ class RolloverMark:
     """A REQUESTED rollover held back behind another session's request in its checkout."""
     trust_hold: bool = False
     """A SUCCESSOR_STARTING rollover held for its successor, which is still asking (DEC-125)."""
+    route: str | None = None
+    hold_reason: str | None = None
+    failure_reason: str | None = None
     idle_wait: bool = False
     """A SUCCESSOR_STARTING rollover whose trusted successor waits for this session's idle."""
 
@@ -231,6 +234,7 @@ _ROLLOVER_NOTES: dict[RolloverState, str | None] = {
     RolloverState.STOP_FAILED: "stop failed · use force stop",
     # No line: a withdrawn request is not asking, and `rollover_marks` never reports one.
     RolloverState.CANCELLED: None,
+    RolloverState.WORKFLOW_FINISHED: "workflow complete · no successor needed",
 }
 """Every state decided (brief §31), a line or a deliberate None, indexed rather than `.get`-ed
 so a state added without a decision raises on the first row that carries it."""
@@ -248,7 +252,9 @@ _IDLE_WAIT_NOTE = "starting successor · waiting for this session to be idle"
 def rollover_note(mark: RolloverMark) -> str | None:
     """`state line[ · continued from #N][ · continued as #N]`, or None for nothing to say."""
     pieces = []
-    if mark.state is RolloverState.REQUESTED and mark.waiting:
+    if mark.hold_reason is not None:
+        pieces.append(mark.hold_reason)
+    elif mark.state is RolloverState.REQUESTED and mark.waiting:
         pieces.append(_WAITING_NOTE)
     elif mark.state is RolloverState.SUCCESSOR_STARTING and mark.idle_wait:
         pieces.append(_IDLE_WAIT_NOTE)
@@ -256,6 +262,10 @@ def rollover_note(mark: RolloverMark) -> str | None:
         pieces.append(_TRUST_HOLD_NOTE)
     elif mark.state is not None and (line := _ROLLOVER_NOTES[mark.state]) is not None:
         pieces.append(line)
+    if mark.failure_reason is not None:
+        pieces.append(mark.failure_reason)
+    if mark.route is not None:
+        pieces.append(mark.route)
     if mark.continued_from is not None:
         number = mark.continued_from.sequence
         pieces.append(
@@ -267,6 +277,23 @@ def rollover_note(mark: RolloverMark) -> str | None:
             "continued as a later session" if number is None else f"continued as #{number}"
         )
     return " · ".join(pieces) or None
+
+
+def _rollover_failure_reason(code: str) -> str:
+    return {
+        "successor-untrusted": "folder trust timed out",
+        "successor-failed": "successor exited before acceptance",
+        "adoption-timeout": "successor did not accept in time",
+        "predecessor-not-idle": "predecessor stayed busy",
+        "branch-mismatch": "destination branch changed",
+        "destination-unregistered": "destination project is not registered",
+        "ambiguous-destination": "destination matches several registrations",
+        "destination-root": "destination checkout is unavailable",
+        "stale-destination": "handoff or destination changed",
+        "id-mismatch": "handoff identity did not match",
+        "request-unanswered": "workflow did not answer the request in time",
+        "request-lost": "workflow request is no longer present",
+    }.get(code, code.replace("-", " "))
 
 
 class _RolloverReads(Protocol):
@@ -285,7 +312,9 @@ class _SessionLister(Protocol):
     async def list_sessions(self) -> Iterable[SessionRecord]: ...
 
 
-_REPORTED_ENDS = frozenset({RolloverState.FAILED, RolloverState.STOP_FAILED})
+_REPORTED_ENDS = frozenset(
+    {RolloverState.FAILED, RolloverState.STOP_FAILED, RolloverState.WORKFLOW_FINISHED}
+)
 """The terminal states a row keeps showing: each holds the session's next `ready`."""
 
 
@@ -294,6 +323,7 @@ async def rollover_marks(
     records: Iterable[SessionRecord],
     *,
     sessions: object | None = None,
+    catalogue: Iterable[CatalogProject] = (),
 ) -> dict[str, RolloverMark]:
     """Each record's rollover mark, keyed by session id as a string; only rows with one.
 
@@ -307,21 +337,41 @@ async def rollover_marks(
         return {}
     book: _RolloverReads = rollovers  # type: ignore[assignment]
     listed = tuple(records)
+    catalogue = tuple(catalogue)
+    project_ids = {r.session_id: str(r.project_id) for r in listed}
     sequences = {record.session_id: record.display.sequence for record in listed}
     found: dict[str, tuple[RolloverState | None, SessionId | None, SessionId | None]] = {}
     waiting: set[str] = set()
     held: dict[str, SessionId | None] = {}
     idle_waits: set[str] = set()
+    routes: dict[str, str] = {}
+    holds: dict[str, str] = {}
+    failures: dict[str, str] = {}
     for record in listed:
         latest = await book.latest_for(record.session_id)
         state = latest.state if latest is not None else None
         if state is not None and state in TERMINAL and state not in _REPORTED_ENDS:
             # COMPLETED: its lineage says it. CANCELLED never comes back from `latest_for`.
             state = None
-        if state in _REPORTED_ENDS and record.state is not SessionState.RUNNING:
+        if (
+            state in {RolloverState.FAILED, RolloverState.STOP_FAILED}
+            and record.state is not SessionState.RUNNING
+        ):
             # "predecessor preserved" and "use force stop" are about a running session; once it
             # has stopped since, either line would say something no longer true.
             state = None
+        key = str(record.session_id)
+        if latest is not None and (state is not None or latest.state is RolloverState.COMPLETED):
+            if latest.target is not None:
+                routes[key] = (
+                    f"{project_name(str(latest.project_id), catalogue)} → "
+                    f"{project_name(str(latest.target.project_id), catalogue)}"
+                )
+            details = {event.detail or "" for event in await book.events(latest.id)}
+            if any(d.startswith("waiting: legacy-destination-unbound") for d in details):
+                holds[key] = "rollover held · original destination needs owner resolution"
+            if state in {RolloverState.FAILED, RolloverState.STOP_FAILED} and latest.failure_code:
+                failures[key] = _rollover_failure_reason(latest.failure_code)
         if state is RolloverState.REQUESTED and latest is not None:
             details = [event.detail or "" for event in await book.events(latest.id)]
             if any(d.startswith("waiting:") for d in details) and REQUEST_WRITTEN not in details:
@@ -351,9 +401,19 @@ async def rollover_marks(
         lister: _SessionLister = sessions  # type: ignore[assignment]
         for record in await lister.list_sessions():
             if record.session_id in missing:
+                project_ids[record.session_id] = str(record.project_id)
                 sequences[record.session_id] = record.display.sequence
             if record.session_id in unlisted:
                 states[record.session_id] = record.state
+    for key, (_state, before, _after) in found.items():
+        if key not in routes and before in project_ids:
+            own = next(r for r in listed if str(r.session_id) == key)
+            source = project_ids[before]
+            if source != str(own.project_id):
+                routes[key] = (
+                    f"{project_name(source, catalogue)} → "
+                    f"{project_name(str(own.project_id), catalogue)}"
+                )
     asking = {
         key
         for key, other in held.items()
@@ -371,6 +431,9 @@ async def rollover_marks(
             waiting=key in waiting,
             trust_hold=key in asking,
             idle_wait=key in idle_waits,
+            route=routes.get(key),
+            hold_reason=holds.get(key),
+            failure_reason=failures.get(key),
         )
         for key, (state, before, after) in found.items()
     }

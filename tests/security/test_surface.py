@@ -46,3 +46,28 @@ def test_surface_sweep_rejects_every_prohibited_defect_class(
 
 def test_current_repository_exposes_only_the_approved_remote_surface() -> None:
     assert scan(Path(__file__).parents[2]) == ()
+
+
+@pytest.mark.parametrize("defect", [None, "path", "preset", "provider", "extra", "duplicate"])
+def test_only_the_exact_curated_full_access_constant_is_allowed(tmp_path, defect):
+    relative = "src/remote_agents/domain/profiles.py" if defect != "path" else "src/remote.py"
+    preset = "ASK" if defect == "preset" else "FULL_ACCESS"
+    provider = "claude" if defect == "provider" else "codex"
+    flag = '"--dangerously-bypass-approvals-and-sandbox"'
+    value = f"({flag},)" if defect != "extra" else f'({flag}, "--extra")'
+    content = (
+        '_PERMISSION_ARGUMENTS = {"'
+        + provider
+        + '": {PermissionPreset.'
+        + preset
+        + ": "
+        + value
+        + "}}\n"
+    )
+    if defect == "duplicate":
+        content += f"extra = {flag}\n"
+    path = tmp_path / relative
+    path.parent.mkdir(parents=True)
+    path.write_text(content)
+    findings = scan(tmp_path)
+    assert bool(findings) is (defect is not None)

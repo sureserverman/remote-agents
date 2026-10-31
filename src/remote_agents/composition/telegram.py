@@ -370,6 +370,7 @@ def _private_boundary(
                 folders=worktrees.folders,
                 # What `remote-agents session-id` recorded, by the same rule it wrote with.
                 reported=FileReportedRoots(paths.activity_directory, accept=acceptable_root),
+                refresh_projects=projects.add_new_projects,
             )
         ),
         rollover_notifier=boundary.rollover_notifier,
@@ -400,6 +401,7 @@ def _private_boundary(
                 capabilities=backend.conversations.capabilities,
                 outcomes=SQLiteInterruptedResumes(connection),
                 resume=backend.sessions.resume,
+                remember_permissions=backend.sessions.remember_permissions,
                 folder_of=worktrees.store.folder_for,
                 bound_folder_of=(
                     None if worktrees.folders is None else worktrees.folders.folder_for

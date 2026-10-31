@@ -552,8 +552,9 @@ def test_the_backend_capability_set_is_read_from_the_dataclass() -> None:
     both surfaces draw a Settings row for it.
     """
     fields = _backend_fields()
-    assert len(fields) == 24, (
-        f"`Backend` now declares {len(fields)} fields, not 24. That is fine — but it widens "
+    # 24 -> 25: both surfaces share the persisted permission preset use case.
+    assert len(fields) == 25, (
+        f"`Backend` now declares {len(fields)} fields, not 25. That is fine — but it widens "
         "what Rule 2 forbids probing for, so confirm the new field is a capability an adapter "
         "should read as a declared field rather than discover."
     )

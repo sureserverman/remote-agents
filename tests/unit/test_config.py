@@ -1337,3 +1337,179 @@ def test_resume_interrupted_writer_refuses_a_non_bool(tmp_path: Path, value: obj
         write_config_key(path, "restart", "resume_interrupted", value)  # type: ignore[arg-type]
 
     assert path.read_bytes() == before
+
+
+@pytest.mark.parametrize("value", ["approve_for_me", "ask", "full_access", "provider_default"])
+def test_codex_permission_defaults_load_all_closed_values(tmp_path, value):
+    path = write_config(
+        tmp_path, example(tmp_path) + f'\n[codex]\ndefault_permissions = "{value}"\n'
+    )
+    assert load_config(path).codex_default_permissions == value
+
+
+def test_codex_permission_default_is_approve_for_me_when_absent(tmp_path):
+    assert (
+        load_config(write_config(tmp_path, example(tmp_path))).codex_default_permissions
+        == "approve_for_me"
+    )
+
+
+@pytest.mark.parametrize("value", ['"invented"', "true", "123"])
+def test_invalid_codex_permission_defaults_are_refused(tmp_path, value):
+    path = write_config(tmp_path, example(tmp_path) + f"\n[codex]\ndefault_permissions = {value}\n")
+    with pytest.raises(ConfigError, match="codex.default_permissions"):
+        load_config(path)
+
+
+def test_codex_permissions_reject_unknown_keys(tmp_path):
+    path = write_config(tmp_path, example(tmp_path) + '\n[codex]\nunknown = "ask"\n')
+    with pytest.raises(ConfigError):
+        load_config(path)
+
+
+def test_permission_save_preserves_a_concurrent_edit(tmp_path, monkeypatch):
+    from remote_agents import config as module
+
+    path = write_config(tmp_path, example(tmp_path) + '\n[codex]\ndefault_permissions = "ask"\n')
+    original = module._replace_table_line
+
+    def competing_edit(text, table, key, line):
+        path.write_text(
+            path.read_text().replace("project_page_size = 10", "project_page_size = 11")
+        )
+        return original(text, table, key, line)
+
+    monkeypatch.setattr(module, "_replace_table_line", competing_edit)
+    with pytest.raises(ConfigError, match="changed since it was read"):
+        module.write_config_key(path, "codex", "default_permissions", "full_access")
+    assert "project_page_size = 11" in path.read_text()
+    assert 'default_permissions = "ask"' in path.read_text()
+    assert not list(tmp_path.glob(".config.toml.*.tmp"))
+
+
+def _save_setting_in_child(path, table, key, value, ready, release, outcome, attempting=None):
+    """Pause one independent writer precisely after its stale-byte check."""
+    from remote_agents import config as module
+
+    if attempting is not None:
+        original_flock = module.fcntl.flock
+
+        def report_lock_attempt(fd, mode):
+            attempting.set()
+            return original_flock(fd, mode)
+
+        module.fcntl.flock = report_lock_attempt
+
+    if ready is not None:
+        original_replace = module.os.replace
+
+        def wait_before_replace(source, target):
+            ready.set()
+            if not release.wait(5):
+                raise RuntimeError("parent did not release writer")
+            original_replace(source, target)
+
+        module.os.replace = wait_before_replace
+    try:
+        module.write_config_key(path, table, key, value)
+        outcome.put(None)
+    except Exception as error:
+        outcome.put(str(error))
+
+
+@pytest.mark.parametrize(
+    "table,key,value",
+    [
+        ("limits", "resume_after_limit", False),
+        ("rollover", "auto_rollover", True),
+        ("restart", "resume_interrupted", False),
+        ("codex", "default_permissions", "ask"),
+    ],
+)
+def test_independent_setting_writers_preserve_both_updates(tmp_path, table, key, value):
+    import multiprocessing
+    import tomllib
+
+    context = multiprocessing.get_context("fork")
+    ready, release, attempting = context.Event(), context.Event(), context.Event()
+    first_result, second_result = context.Queue(), context.Queue()
+    path = write_config(tmp_path, example(tmp_path))
+    first = context.Process(
+        target=_save_setting_in_child,
+        args=(
+            path,
+            "limits",
+            "project_page_size",
+            11,
+            ready,
+            release,
+            first_result,
+        ),
+    )
+    second = context.Process(
+        target=_save_setting_in_child,
+        args=(
+            path,
+            table,
+            key,
+            value,
+            None,
+            None,
+            second_result,
+            attempting,
+        ),
+    )
+    first.start()
+    try:
+        assert ready.wait(5), "first writer never reached the replace boundary"
+        second.start()
+        assert attempting.wait(5), "second writer never attempted the shared lock"
+        # A cooperating writer must wait for the first write to finish, then read its bytes.
+        # On the old writer this process finishes here, before the stale first rename.
+        second.join(0.3)
+        assert second.is_alive(), "second writer bypassed the first writer's lock"
+    finally:
+        release.set()
+        first.join(5)
+        if second.pid is not None:
+            second.join(5)
+        for process in (first, second):
+            if process.pid is not None and process.is_alive():
+                process.terminate()
+                process.join(5)
+    assert first.exitcode == second.exitcode == 0
+    assert first_result.get(timeout=1) is None
+    assert second_result.get(timeout=1) is None
+    saved = tomllib.loads(path.read_text())
+    assert saved["limits"]["project_page_size"] == 11
+    assert saved[table][key] == value
+
+
+def test_a_waiting_writer_keeps_the_target_it_locked(tmp_path, monkeypatch):
+    from remote_agents import config as module
+
+    first = tmp_path / "first.toml"
+    other = tmp_path / "other.toml"
+    first.write_text(example(tmp_path))
+    other.write_text(example(tmp_path))
+    alias = tmp_path / "alias.toml"
+    alias.symlink_to(first)
+    original_flock = module.fcntl.flock
+
+    def retarget_while_waiting(fd, mode):
+        alias.unlink()
+        alias.symlink_to(other)
+        original_flock(fd, mode)
+
+    monkeypatch.setattr(module.fcntl, "flock", retarget_while_waiting)
+    module.write_config_key(alias, "codex", "default_permissions", "ask")
+    assert 'default_permissions = "ask"' in first.read_text()
+    assert other.read_text() == example(tmp_path)
+
+
+def test_codex_permission_configuration_uses_plain_strings(tmp_path):
+    from remote_agents.config import read_codex_permissions
+
+    path = write_config(tmp_path, example(tmp_path))
+    assert type(load_config(path).codex_default_permissions) is str
+    assert type(read_codex_permissions(path)) is str

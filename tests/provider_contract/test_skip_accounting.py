@@ -52,7 +52,8 @@ def test_the_skip_count_is_fully_accounted_for() -> None:
     # for opencode and cursor-agent, which have no ported handoff writer (Sub-plan 4 Task 1.1 of
     # the codex-rollover plan). The live run, re-summed that day, reported 8 SKIPPED lines from
     # these 7 declarations, for the same opencode reason.
-    assert expected_skips() == 7, (
+    # 7 -> 10: only Codex publishes managed permission presets.
+    assert expected_skips() == 10, (
         "the kit's skip budget changed; re-derive the gate's grep expectation from this "
         "number rather than editing either side alone"
     )

@@ -6,6 +6,7 @@ import logging
 import sqlite3
 from collections.abc import Collection, Sequence
 from datetime import UTC, datetime
+from pathlib import Path
 
 from remote_agents.domain.models import (
     OrphanProvenance,
@@ -16,6 +17,7 @@ from remote_agents.domain.models import (
     SessionRecord,
     SessionState,
 )
+from remote_agents.domain.profiles import PermissionPreset
 from remote_agents.domain.remote_control import RemoteControlState
 from remote_agents.domain.state_machine import TERMINAL_STATES, LifecycleEvent, transition
 from remote_agents.ports.session_store import ProjectUsage, SessionEvent
@@ -37,7 +39,13 @@ class SQLiteSessionStore:
         ).fetchone()
         return int(result[0]) + 1
 
-    async def save(self, record: SessionRecord) -> None:
+    async def save(
+        self,
+        record: SessionRecord,
+        *,
+        permissions: PermissionPreset | None = None,
+        project_root: Path | None = None,
+    ) -> None:
         """Insert a session projection using bound values rather than SQL interpolation."""
         with self._connection:
             self._connection.execute(
@@ -63,6 +71,36 @@ class SQLiteSessionStore:
                     record.remote_control_state.value if record.remote_control_state else None,
                 ),
             )
+
+            self._connection.execute(
+                "INSERT INTO session_handoff_capabilities(session_id, versions) VALUES (?, '1,2')",
+                (str(record.session_id),),
+            )
+            if permissions is not None:
+                self._connection.execute(
+                    "INSERT INTO session_permissions(session_id, preset) VALUES (?, ?)",
+                    (str(record.session_id), PermissionPreset(permissions).value),
+                )
+
+            if project_root is not None:
+                self._connection.execute(
+                    "INSERT INTO session_project_roots(session_id, project_root) VALUES (?, ?)",
+                    (str(record.session_id), str(project_root)),
+                )
+
+    async def project_root_for(self, session_id: SessionId) -> Path | None:
+        row = self._connection.execute(
+            "SELECT project_root FROM session_project_roots WHERE session_id = ?",
+            (str(session_id),),
+        ).fetchone()
+        return None if row is None else Path(row[0])
+
+    async def handoff_versions(self, session_id: SessionId) -> tuple[int, ...]:
+        row = self._connection.execute(
+            "SELECT versions FROM session_handoff_capabilities WHERE session_id = ?",
+            (str(session_id),),
+        ).fetchone()
+        return (1, 2) if row is not None and row[0] == "1,2" else (1,)
 
     async def get(self, session_id: SessionId) -> SessionRecord | None:
         """Load one immutable projection by its opaque session identifier."""

@@ -7,7 +7,8 @@ Only sessions of a `rollable` profile -- one whose plan executor writes envelope
 - a `ready` envelope naming a RUNNING rollable session opens a rollover at HANDOFF_READY -- if
   it is first seen within `READY_FRESHNESS` of being written; an older one is cleared;
 - HANDOFF_READY waits for the predecessor's pane to be IDLE, persists SUCCESSOR_STARTING, and
-  launches the predecessor's own project and profile under the key `rollover:<handoff_id>`
+  launches the frozen destination project with the predecessor's profile under the key
+  `rollover:<handoff_id>`
   (DEC-114), recording the successor the moment the launch returns;
 - a RUNNING successor is typed its own provider's adopt template through the guarded send, with the
   schedules' retry policy (DEC-099), and moves to ADOPTING once the send is confirmed (on the
@@ -66,6 +67,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import shlex
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from contextlib import AbstractAsyncContextManager, nullcontext
 from dataclasses import dataclass
@@ -80,9 +82,11 @@ from remote_agents.application.commands import (
 from remote_agents.application.errors import DuplicateCommandError, MutationsDraining
 from remote_agents.application.notification_policy import rollover_told
 from remote_agents.application.prompt_delivery import DeliveryVerdict, delivery_verdict
+from remote_agents.application.rollover_destinations import DestinationRefused
 from remote_agents.application.schedules import RETRY_SECONDS, STARTUP_RETRIES
 from remote_agents.application.session_actions import notifiable
 from remote_agents.domain.models import ProfileId, ProjectId, SessionId, SessionRecord, SessionState
+from remote_agents.domain.profiles import PermissionPreset
 from remote_agents.domain.rollover import (
     SUCCESSOR_FAILED,
     SUCCESSOR_UNKNOWN,
@@ -92,13 +96,21 @@ from remote_agents.domain.rollover import (
     may_stop_predecessor,
     recovery_action,
 )
-from remote_agents.ports.handoff_envelopes import HandoffEnvelope, HandoffEnvelopes, HandoffEvent
+from remote_agents.ports.handoff_envelopes import (
+    HandoffDestination,
+    HandoffEnvelope,
+    HandoffEnvelopes,
+    HandoffEvent,
+)
 from remote_agents.ports.rollover_store import (
+    REQUEST_WRITTEN,
     TRUST_HOLD,
     TRUSTED_WAITING,
     IllegalRolloverMove,
+    ResolvedRolloverDestination,
     Rollover,
     RolloverStore,
+    RolloverTarget,
 )
 from remote_agents.ports.terminal import (
     NOT_IDLE,
@@ -207,6 +219,8 @@ class _Seen:
         shares -- reusing the folder, or bound to the root the predecessor's writer reported.
         Read off the successor once the predecessor is no longer listed, so a successor's
         `accepted` is still found and the envelopes still cleaned."""
+        if rollover.source_root is not None:
+            return rollover.source_root
         root = self.roots.get(rollover.predecessor_session_id)
         if root is None and rollover.successor_session_id is not None:
             root = self.roots.get(rollover.successor_session_id)
@@ -245,7 +259,20 @@ class RolloverPass:
         now: Callable[[], datetime] = lambda: datetime.now(UTC),
         sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
         operation: Callable[[], AbstractAsyncContextManager[object]] = nullcontext,
+        resolve_destination: Callable[[HandoffDestination], Awaitable[ResolvedRolloverDestination]]
+        | None = None,
+        resolve_legacy_destination: Callable[
+            [ProjectId, HandoffDestination], Awaitable[ResolvedRolloverDestination]
+        ]
+        | None = None,
+        handoff_versions: Callable[[SessionId], Awaitable[tuple[int, ...]]] | None = None,
+        continuation_permissions: Callable[[SessionRecord], Awaitable[PermissionPreset | None]]
+        | None = None,
     ) -> None:
+        self._resolve_legacy_destination = resolve_legacy_destination
+        self._handoff_versions = handoff_versions
+        self._resolve_destination = resolve_destination
+        self._continuation_permissions = continuation_permissions
         self._store = store
         self._envelopes = envelopes
         #: The only text a rollover types: the successor's own provider's template, declared
@@ -295,8 +322,16 @@ class RolloverPass:
             if not self._recovered:
                 await self._note_restart(seen)
                 self._recovered = True
-            for root in dict.fromkeys(seen.roots.values()):
+            frozen_roots = [
+                r.source_root
+                for r in await self._store.open_rollovers()
+                if r.source_root is not None
+            ]
+            for root in dict.fromkeys([*seen.roots.values(), *frozen_roots]):
                 try:
+                    for pending in await self._store.open_rollovers():
+                        if pending.state is _S.REQUESTED and seen.root_of(pending) == root:
+                            await self._consume_finished(pending, seen)
                     await self._pick_up_ready(root, seen)
                 except Exception:
                     # One checkout's envelopes cost that checkout this pass, never the steps of
@@ -386,10 +421,18 @@ class RolloverPass:
     async def _pick_up_ready(self, root: Path, seen: _Seen) -> None:
         """Open, or find again, the rollover each `ready` in this checkout names -- for a
         session whose own root this is, and no other."""
-        held = {r.handoff_id for r in await self._store.open_rollovers() if r.handoff_id}
+        opened = await self._store.open_rollovers()
+        held = {r.handoff_id for r in opened if r.handoff_id}
+        channels = {
+            r.predecessor_session_id: r.source_root for r in opened if r.source_root is not None
+        }
+        targets = {r.handoff_id: r.target for r in opened if r.target is not None}
         for handoff_id, group in _grouped(self._envelopes.events(root)).items():
             ready = group.get(HandoffEvent.READY)
             if ready is None:
+                if HandoffEvent.FINISHED in group:
+                    # Finished is answered only against its persisted, outstanding request.
+                    continue
                 # An `accepted` or `failed` with no `ready` belongs to no rollover this
                 # service can still act on -- one already finished, or a forgery.
                 if handoff_id not in held:
@@ -405,10 +448,25 @@ class RolloverPass:
             # -- so a file in a root another session reported never speaks for this one (DEC-115).
             if (
                 record is None
-                or seen.roots.get(record.session_id) != root
+                or channels.get(record.session_id, seen.roots.get(record.session_id)) != root
                 or record.profile_id not in self._rollable
                 or record.state is not SessionState.RUNNING
             ):
+                continue
+            try:
+                target = targets.get(handoff_id) or await self._target_for(ready, record, root)
+            except DestinationRefused as error:
+                refused = await self._store.open_for_ready(
+                    record.session_id,
+                    handoff_id,
+                    project_id=record.project_id,
+                    profile_id=record.profile_id,
+                    plan=ready.plan,
+                    at=self._now(),
+                    source_root=root,
+                )
+                if refused is not None and refused.state not in TERMINAL:
+                    await self._fail(refused, seen, error.code)
                 continue
             rollover = await self._store.open_for_ready(
                 record.session_id,
@@ -417,6 +475,8 @@ class RolloverPass:
                 profile_id=record.profile_id,
                 plan=ready.plan,
                 at=self._now(),
+                source_root=root,
+                target=target,
             )
             # None is not an error: another rollover is open for this predecessor, or its
             # last one failed and the `ready` waits for the owner to ask again (DEC-115).
@@ -424,6 +484,69 @@ class RolloverPass:
                 # A replayed `ready` of a finished handoff: its envelopes go, and the
                 # predecessor's request is withdrawn only if none of its rollovers is open.
                 await self._finish(rollover, seen)
+
+    async def _target_for(
+        self, ready: HandoffEnvelope, record: SessionRecord, root: Path
+    ) -> RolloverTarget:
+        destination = ready.destination or HandoffDestination(root, "", ready.plan or "", "", None)
+        project = record.project_id
+        if ready.version == 1 and self._resolve_legacy_destination is not None:
+            resolved = await self._resolve_legacy_destination(project, destination)
+            project, destination = resolved.project_id, resolved.destination
+        elif self._resolve_destination is not None:
+            resolved = await self._resolve_destination(destination)
+            project, destination = resolved.project_id, resolved.destination
+            if ready.version == 1 and project != record.project_id:
+                raise DestinationRefused("legacy-destination-unbound")
+        elif ready.version == 2:
+            raise DestinationRefused("destination-routing-unavailable")
+        permissions = (
+            None
+            if self._continuation_permissions is None
+            else await self._continuation_permissions(record)
+        )
+        return RolloverTarget(
+            ready.version,
+            project,
+            destination,
+            ready.source_plan,
+            ready.selection,
+            ready.content_sha256,
+            permissions,
+        )
+
+    async def _validate_target(self, rollover: Rollover) -> None:
+        target = rollover.target
+        if target is None:
+            raise DestinationRefused("legacy-destination-unbound")
+        if self._resolve_destination is not None:
+            resolved = (
+                await self._resolve_legacy_destination(target.project_id, target.destination)
+                if target.version == 1 and self._resolve_legacy_destination is not None
+                else await self._resolve_destination(target.destination)
+            )
+            if (
+                resolved.project_id != target.project_id
+                or resolved.destination != target.destination
+            ):
+                raise DestinationRefused("stale-destination")
+        ready = next(
+            (
+                e
+                for e in self._envelopes.events(rollover.source_root)
+                if e.event is HandoffEvent.READY and e.handoff_id == rollover.handoff_id
+            ),
+            None,
+        )
+        if (
+            ready is None
+            or ready.version != target.version
+            or ready.managed_session_id != str(rollover.predecessor_session_id)
+            or ready.plan != target.destination.plan
+        ):
+            raise DestinationRefused("stale-destination")
+        if target.version == 2 and ready.content_sha256 != target.ready_sha256:
+            raise DestinationRefused("stale-destination")
 
     def _adoption(self, rollover: Rollover, seen: _Seen) -> HandoffEnvelope | None:
         """The successor's own `accepted` or `failed` for this handoff, if it wrote one."""
@@ -438,12 +561,51 @@ class RolloverPass:
             if envelope is not None and envelope.managed_session_id == str(
                 rollover.successor_session_id
             ):
+                target = rollover.target
+                if envelope.version != (1 if target is None else target.version):
+                    continue
+                expected_plan = rollover.plan if target is None else target.destination.plan
+                if envelope.plan != expected_plan:
+                    continue
+                if (
+                    target is not None
+                    and target.version == 2
+                    and (
+                        envelope.version != 2
+                        or envelope.ready_sha256 != target.ready_sha256
+                        or envelope.destination != target.destination
+                        or envelope.source_plan != target.source_plan
+                        or envelope.selection != target.selection
+                        or envelope.predecessor_session_id != str(rollover.predecessor_session_id)
+                        or envelope.source_root != rollover.source_root
+                    )
+                ):
+                    continue
                 return envelope
         return None
 
     # -- one step ----------------------------------------------------------------------------
 
     async def _step(self, rollover: Rollover, seen: _Seen) -> None:
+        if self._resolve_destination is not None and rollover.state not in (
+            _S.REQUESTED,
+            _S.HANDOFF_READY,
+            _S.PREDECESSOR_STOPPING,
+        ):
+            if rollover.target is None:
+                # A legacy launch has no frozen destination. Its mutable/latest root cannot
+                # prove where the original adoption happened, so preserve both sessions.
+                detail = (
+                    "waiting: legacy-destination-unbound; original channel needs owner resolution"
+                )
+                if not any(e.detail == detail for e in await self._store.events(rollover.id)):
+                    await self._store.note(rollover.id, detail, at=self._now())
+                return
+            try:
+                await self._validate_target(rollover)
+            except DestinationRefused as error:
+                await self._fail(rollover, seen, error.code)
+                return
         match rollover.state:
             case _S.REQUESTED:
                 await self._signal(rollover, seen)
@@ -472,6 +634,8 @@ class RolloverPass:
         if root is None:
             await self._fail(rollover, seen, NO_HANDOFF_ROOT)
             return
+        if rollover.source_root is None:
+            rollover = await self._store.freeze(rollover.id, root, None, at=self._now())
         if self._now() - rollover.requested_at > REQUEST_PATIENCE:
             # Given up, which frees the checkout's slot; `_finish` withdraws the request.
             await self._fail(rollover, seen, REQUEST_UNANSWERED)
@@ -481,13 +645,73 @@ class RolloverPass:
             await self._note_waiting(rollover, holder)
             return
         wanted = str(rollover.predecessor_session_id)
+        versions = (
+            (1,)
+            if self._handoff_versions is None
+            else await self._handoff_versions(predecessor.session_id)
+        )
+        correlated = 2 in versions
+        nonce = _request_id(rollover)
         if await self._store.record_request(rollover.id, at=self._now()):
-            if not self._envelopes.write_request(root, wanted):
+            options = (
+                {"request_id": nonce, "requested_at": rollover.requested_at} if correlated else {}
+            )
+            if not self._envelopes.write_request(root, wanted, **options):
                 await self._fail(rollover, seen, REQUEST_UNWRITTEN)
+        elif correlated:
+            request = self._envelopes.request_details(root)
+            if (
+                request is None
+                or request.version != 2
+                or request.managed_session_id != wanted
+                or request.request_id != nonce
+                or request.requested_at != rollover.requested_at.replace(microsecond=0)
+            ):
+                await self._fail(rollover, seen, REQUEST_LOST)
+                return
         elif self._envelopes.requested(root) != wanted:
             # Recorded as written, and not there: a crash between the record and the write, or
             # the file removed or replaced by someone else. Never written twice (DEC-004).
             await self._fail(rollover, seen, REQUEST_LOST)
+
+    async def _consume_finished(self, rollover: Rollover, seen: _Seen) -> None:
+        """Only a recorded, still outstanding v2 request may finish without a successor."""
+        root = rollover.source_root
+        if root is None or rollover.reason != "owner" or self._handoff_versions is None:
+            return
+        if 2 not in await self._handoff_versions(rollover.predecessor_session_id):
+            return
+        if not any(e.detail == REQUEST_WRITTEN for e in await self._store.events(rollover.id)):
+            return
+        request = self._envelopes.request_details(root)
+        nonce, wanted = _request_id(rollover), str(rollover.predecessor_session_id)
+        if (
+            request is None
+            or request.version != 2
+            or request.request_id != nonce
+            or request.managed_session_id != wanted
+            or request.requested_at != rollover.requested_at.replace(microsecond=0)
+        ):
+            return
+        for event in self._envelopes.events(root):
+            if (
+                event.event is HandoffEvent.FINISHED
+                and event.version == 2
+                and event.request_id == nonce
+                and event.handoff_id == nonce
+                and event.managed_session_id == wanted
+                and event.source_root == root
+                and event.requested_at == request.requested_at
+            ):
+                ended = await self._store.advance(
+                    rollover.id,
+                    _S.WORKFLOW_FINISHED,
+                    at=self._now(),
+                    expected_from=_S.REQUESTED,
+                    detail="workflow completed; no successor needed",
+                )
+                await self._finish(ended, seen)
+                return
 
     async def _request_slot_holder(self, root: Path, seen: _Seen) -> Rollover | None:
         """The oldest open owner-asked rollover in a checkout. `request.json` is one file per
@@ -507,7 +731,9 @@ class RolloverPass:
         await self._store.note(rollover.id, detail, at=self._now())
 
     def _successor_launch(self, rollover: Rollover, seen: _Seen) -> LaunchCommand:
-        """The successor carries on where its predecessor worked. Its predecessor's folder --
+        """A frozen destination controls the successor project, folder and preset.
+
+        The legacy fallback carries on where its predecessor worked. Its predecessor's folder --
         the same worktree when it has one (BL-116, amending DEC-115) -- unless the predecessor's
         writer reported another root: then it starts there, bound to that folder, because its
         adopt step resolves its repo root from its own folder and finds the `ready` only there
@@ -515,6 +741,27 @@ class RolloverPass:
 
         The two roots are compared resolved: a report is a resolved path and a default may be
         reached through a link, and the same folder must keep its worktree binding."""
+        if rollover.target is not None:
+            target = rollover.target
+            folder = target.destination.root
+            default = seen.defaults.get(rollover.predecessor_session_id)
+            reuse = (
+                target.project_id == rollover.project_id
+                and default is not None
+                and os.path.realpath(folder) == os.path.realpath(default)
+            )
+            return LaunchCommand(
+                target.project_id,
+                rollover.profile_id,
+                f"rollover:{rollover.handoff_id}",
+                guard_wait=UNATTENDED_LAUNCH_WAIT_SECONDS,
+                folder=None if reuse else folder,
+                reuse_folder_of=rollover.predecessor_session_id if reuse else None,
+                permissions=target.permissions,
+                inherit_permissions_of=rollover.predecessor_session_id
+                if target.permissions is None
+                else None,
+            )
         assert rollover.handoff_id is not None  # HANDOFF_READY is opened from a `ready` only
         predecessor = rollover.predecessor_session_id
         reported = seen.roots.get(predecessor)
@@ -528,6 +775,7 @@ class RolloverPass:
                 f"rollover:{rollover.handoff_id}",
                 guard_wait=UNATTENDED_LAUNCH_WAIT_SECONDS,
                 folder=reported,
+                inherit_permissions_of=predecessor,
             )
         return LaunchCommand(
             rollover.project_id,
@@ -535,6 +783,7 @@ class RolloverPass:
             f"rollover:{rollover.handoff_id}",
             guard_wait=UNATTENDED_LAUNCH_WAIT_SECONDS,
             reuse_folder_of=predecessor,
+            inherit_permissions_of=predecessor,
         )
 
     async def _start_successor(self, rollover: Rollover, seen: _Seen) -> None:
@@ -551,6 +800,33 @@ class RolloverPass:
                 await self._fail(rollover, seen, PREDECESSOR_NOT_IDLE)
             return
         assert rollover.handoff_id is not None  # HANDOFF_READY is opened from a `ready` only
+        try:
+            if rollover.target is None:
+                root = seen.root_of(rollover)
+                record = seen.sessions.get(rollover.predecessor_session_id)
+                if root is None or record is None:
+                    raise DestinationRefused("legacy-destination-unbound")
+                ready = next(
+                    (
+                        e
+                        for e in self._envelopes.events(root)
+                        if e.event is HandoffEvent.READY and e.handoff_id == rollover.handoff_id
+                    ),
+                    None,
+                )
+                if (
+                    ready is None
+                    or ready.version != 1
+                    or ready.plan != rollover.plan
+                    or ready.managed_session_id != str(record.session_id)
+                ):
+                    raise DestinationRefused("legacy-destination-unbound")
+                target = await self._target_for(ready, record, root)
+                rollover = await self._store.freeze(rollover.id, root, target, at=self._now())
+            await self._validate_target(rollover)
+        except DestinationRefused as error:
+            await self._fail(rollover, seen, error.code)
+            return
         async with self._operation():
             starting = await self._store.advance(rollover.id, _S.SUCCESSOR_STARTING, at=self._now())
             try:
@@ -590,7 +866,12 @@ class RolloverPass:
             await self._fail(starting, seen, SUCCESSOR_FAILED, record.state.value)
             return
         reason = await self._type_template(
-            record.session_id, rollover.profile_id, rollover.handoff_id
+            record.session_id,
+            rollover.profile_id,
+            rollover.handoff_id,
+            source_root=rollover.source_root
+            if rollover.target and rollover.target.version == 2
+            else None,
         )
         if reason is not None:
             await self._fail(starting, seen, NOT_TYPED, reason)
@@ -598,7 +879,12 @@ class RolloverPass:
         await self._store.advance(rollover.id, _S.ADOPTING, at=self._now())
 
     async def _type_template(
-        self, session_id: SessionId, profile_id: ProfileId, handoff_id: str
+        self,
+        session_id: SessionId,
+        profile_id: ProfileId,
+        handoff_id: str,
+        *,
+        source_root: Path | None = None,
     ) -> str | None:
         """None once the template landed, else why it was not typed. Never typed twice: a send
         that may have typed is given up (DEC-099), as the schedules' first prompt is."""
@@ -606,6 +892,8 @@ class RolloverPass:
         if template is None:
             return NO_TEMPLATE
         text = template.format(handoff_id=handoff_id)
+        if source_root is not None:
+            text += " --handoff-root " + shlex.quote(str(source_root))
         retries = 0  # counted, never read off the clock (`STARTUP_RETRIES`)
         while True:
             try:
@@ -701,7 +989,12 @@ class RolloverPass:
         )
         assert adopting.handoff_id is not None  # opened from a `ready`, which names one
         reason = await self._type_template(
-            rollover.successor_session_id, rollover.profile_id, adopting.handoff_id
+            rollover.successor_session_id,
+            rollover.profile_id,
+            adopting.handoff_id,
+            source_root=rollover.source_root
+            if rollover.target and rollover.target.version == 2
+            else None,
         )
         if reason is not None:
             await self._fail(adopting, seen, NOT_TYPED, reason)
@@ -842,6 +1135,9 @@ class RolloverPass:
     async def _finish(self, rollover: Rollover, seen: _Seen) -> None:
         """A terminal rollover leaves nothing behind: its envelopes, and its predecessor's
         request -- unless another rollover of that predecessor is open and the request is its."""
+        if rollover.source_root is None and self._resolve_destination is not None:
+            # Unknown legacy channels are owner-held; a latest report cannot grant cleanup.
+            return
         root = seen.root_of(rollover)
         if root is None:
             return
@@ -852,7 +1148,18 @@ class RolloverPass:
             for other in await self._store.open_rollovers()
         ):
             return
-        self._envelopes.clear_request(root, str(rollover.predecessor_session_id))
+        if self._handoff_versions is not None and 2 in await self._handoff_versions(
+            rollover.predecessor_session_id
+        ):
+            self._envelopes.clear_request(
+                root,
+                str(rollover.predecessor_session_id),
+                request_id=_request_id(rollover),
+                requested_at=rollover.requested_at,
+            )
+            self._envelopes.discard(root, _request_id(rollover))
+        else:
+            self._envelopes.clear_request(root, str(rollover.predecessor_session_id))
 
     async def _withdraw_stale_requests(self, seen: _Seen) -> None:
         """A request stands only while its session's rollover is open. It is withdrawn for every
@@ -861,14 +1168,28 @@ class RolloverPass:
         move and its clean-up -- leaves none behind."""
         open_for = {r.predecessor_session_id for r in await self._store.open_rollovers()}
         for record in seen.sessions.values():
-            root = seen.roots.get(record.session_id)
-            if (
-                root is not None
-                and record.profile_id in self._rollable
-                and record.state is SessionState.RUNNING
-                and record.session_id not in open_for
-            ):
-                self._envelopes.clear_request(root, str(record.session_id))
+            if record.profile_id not in self._rollable or record.session_id in open_for:
+                continue
+            try:
+                latest = await self._store.latest_for(record.session_id, include_cancelled=True)
+                if (
+                    latest is not None
+                    and latest.state in TERMINAL
+                    and latest.source_root is not None
+                ):
+                    await self._finish(latest, seen)
+                root = seen.roots.get(record.session_id)
+                if root is not None and record.state is SessionState.RUNNING:
+                    self._envelopes.clear_request(root, str(record.session_id))
+            except Exception:
+                _LOG.exception(
+                    "request cleanup for %s postponed to the next pass", record.session_id
+                )
+
+
+def _request_id(rollover: Rollover) -> str:
+    # A rollover id is minted before the request, so a restart derives the same nonce.
+    return "h-" + rollover.id[:20]
 
 
 def rollover_notice_settled(
