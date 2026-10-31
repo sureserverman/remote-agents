@@ -1,12 +1,18 @@
 """Credential mounts reject replacement paths without opening credential contents."""
 
+import shutil
 import subprocess
 from pathlib import Path
 
 import pytest
 from native_isolation import confined_command
 
+_NEEDS_BWRAP = pytest.mark.skipif(
+    shutil.which("bwrap") is None, reason="Linux bwrap is not installed on this host"
+)
 
+
+@_NEEDS_BWRAP
 def test_native_credentials_have_empty_placeholders_and_only_read_only_mounts(tmp_path):
     source = tmp_path / "login"
     source.write_text("synthetic fixture credential")
@@ -47,6 +53,7 @@ def test_native_credentials_refuse_unowned_or_replaced_mount_paths(tmp_path, rep
     assert (tmp_path / "login").read_text() == "synthetic fixture credential"
 
 
+@_NEEDS_BWRAP
 def test_native_mounts_allow_only_owned_fixture_writes(tmp_path):
     source = tmp_path / "synthetic-login"
     source.write_text("synthetic fixture credential")
@@ -74,6 +81,7 @@ def test_native_mounts_allow_only_owned_fixture_writes(tmp_path):
     assert (home / "owned-write").read_text() == "allowed"
 
 
+@_NEEDS_BWRAP
 def test_native_scratch_and_runtime_paths_are_private_writable_directories(tmp_path):
     home = tmp_path / "home"
     home.mkdir()
@@ -145,6 +153,7 @@ async def test_native_prompt_retry_never_repeats_an_uncertain_delivery(monkeypat
     assert not replies
 
 
+@_NEEDS_BWRAP
 def test_codex_daemon_lock_overlay_is_owned_and_does_not_change_host_directory(tmp_path):
     import json
     import os
