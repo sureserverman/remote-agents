@@ -102,8 +102,16 @@ def consume_nonce(
             os.rename(pending / session, claimed)
         except FileNotFoundError:
             return "no nonce is waiting for this session"
+        # A new nonce can replace the old between the comparison and the claim. Compare what was
+        # claimed, and give back what this shell had no right to take.
+        if not hmac.compare_digest(_read_private(claimed) or "", _hash(nonce)):
+            _give_back(claimed, pending / session)
+            return "the nonce does not match"
         _unlink(claimed)
-        return _link_new(threads, thread, session)
+        why = _link_new(threads, thread, session)
+        if why is None:
+            _forget_other_threads(threads, thread, session)
+        return why
     except (OSError, UntrustedBinding):
         return "the binding directory cannot be trusted"
 
@@ -253,6 +261,28 @@ def _link_new(threads: Path, thread: str, session: str) -> str | None:
     finally:
         _unlink(temporary)
     return None
+
+
+def _give_back(claimed: Path, pending: Path) -> None:
+    """Restore a claimed file, unless a still newer nonce has taken its place."""
+    try:
+        os.link(claimed, pending)
+    except OSError:
+        pass
+    _unlink(claimed)
+
+
+def _forget_other_threads(threads: Path, thread: str, session: str) -> None:
+    """A session has one bound thread: its newest. An earlier launch's must stop naming it."""
+    with os.scandir(threads) as entries:
+        for entry in list(entries):
+            if entry.name == thread or entry.name.startswith(_WORK_PREFIX):
+                continue
+            try:
+                if _read_private(Path(entry.path)) == session:
+                    _unlink(Path(entry.path))
+            except (OSError, UntrustedBinding):
+                continue
 
 
 def _unlink(path: Path) -> None:

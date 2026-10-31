@@ -114,6 +114,40 @@ def test_only_one_of_two_racing_consumers_wins(
     assert bound_session(spool, _THREAD) is None
 
 
+def test_a_nonce_replaced_before_the_claim_is_given_back(
+    spool: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The old nonce compared equal, then a relaunch minted a new one, then the claim ran."""
+    old = mint_nonce(spool, _SESSION)
+    real_rename = os.rename
+    fresh = []
+
+    def rename_after_a_mint(source: str, target: str) -> None:
+        if not fresh:
+            fresh.append(mint_nonce(spool, _SESSION))
+        real_rename(source, target)
+
+    monkeypatch.setattr(os, "rename", rename_after_a_mint)
+    assert consume_nonce(spool, _SESSION, old, _THREAD) is not None
+    assert bound_session(spool, _THREAD) is None
+    assert consume_nonce(spool, _SESSION, fresh[0], _THREAD) is None
+
+
+def test_binding_a_new_thread_ends_the_sessions_earlier_binding(spool: Path) -> None:
+    third = "01a193e9-8545-78d2-b7c5-4750a9514be8"
+    assert consume_nonce(spool, _SESSION, mint_nonce(spool, _SESSION), _THREAD) is None
+    assert (
+        consume_nonce(
+            spool, _OTHER, mint_nonce(spool, _OTHER), "01a193e9-8545-78d2-b7c5-4750a9514be8"
+        )
+        is None
+    )
+    assert consume_nonce(spool, _SESSION, mint_nonce(spool, _SESSION), _SECOND_THREAD) is None
+    assert bound_session(spool, _THREAD) is None
+    assert bound_session(spool, _SECOND_THREAD) == _SESSION
+    assert bound_session(spool, third) == _OTHER
+
+
 @pytest.mark.parametrize("bad", ["../escape", "", "a/b", "a\nb", None])
 def test_an_unsafe_id_is_refused_before_any_path_is_built(spool: Path, bad: object) -> None:
     nonce = mint_nonce(spool, _SESSION)

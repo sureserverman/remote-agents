@@ -117,7 +117,8 @@ def resolve(
     Hooks retain the folder/time bootstrap. A handoff must instead name exactly one live roster
     entry, by its recorded resume id or by a thread that launch bound (`thread_binding`). Two
     entries claiming the thread refuse. A binding to a session off the roster claims nothing, so
-    a later session can resume that thread. Current marks can invalidate a binding, but cannot
+    a later session can resume that thread. An untrusted binding store refuses every thread, a
+    resumed one too: nothing it holds can be ruled out as a second claim. Current marks can invalidate a binding, but cannot
     establish one: their own hook attribution uses the same folder/time heuristic. Fresh
     conversations without a binding refuse, including their first cross-repo call. A report of
     the destination is never identity evidence.

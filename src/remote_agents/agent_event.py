@@ -244,7 +244,6 @@ def run_bind_thread(argv: list[str] | None = None) -> int:
     """
     from remote_agents.adapters.agents.hook_licences import hook_licence
     from remote_agents.adapters.agents.thread_binding import consume_nonce
-    from remote_agents.config import ConfigError
     from remote_agents.ports.provider_descriptor import HookIdentity
     from remote_agents.production import ProductionPaths
 
@@ -271,7 +270,7 @@ def run_bind_thread(argv: list[str] | None = None) -> int:
             if thread is None
             else consume_nonce(activity_directory, arguments.session, arguments.nonce, thread)
         )
-    except (ConfigError, RuntimeError, OSError, ValueError):
+    except Exception:
         why = "could not read the service's paths"
     if why is None:
         return 0
