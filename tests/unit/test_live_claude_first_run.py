@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import native_isolation
 import pytest
 from native_isolation import claude_command
 
@@ -16,6 +17,8 @@ def real_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     (home / ".claude/.credentials.json").write_text("{}")
     (home / ".claude.json").write_text('{"owner": true}')
     monkeypatch.setenv("HOME", str(home))
+    # Builds a command and runs nothing, so a host without bwrap can still check the seed.
+    monkeypatch.setattr(native_isolation.shutil, "which", lambda _name: "/usr/bin/bwrap")
     return home
 
 
