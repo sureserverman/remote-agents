@@ -118,3 +118,11 @@ def test_a_clear_is_never_sent_onto_what_the_owner_typed_meanwhile() -> None:
     )
     assert _deliver(pane).outcome is PromptOutcome.UNCONFIRMED
     assert _keys(pane) == []
+
+
+def test_the_whole_line_outside_shell_mode_is_refused() -> None:
+    """Shown whole, but under the agent's own prompt: `Enter` would hand it to the agent."""
+    screen = (
+        f"\n  >_ OpenAI Codex (v0.166.0)\n     /w\n\n\n\n› {_LINE}\n\n  GPT-6.1-Sol default · /w\n"
+    )
+    assert shell_line_refusal(screen, _CODEX, _LINE) is PromptReason.DRAFT_NOT_SEEN
