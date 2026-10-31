@@ -55,13 +55,14 @@ def mint_nonce(activity_directory: Path, session_id: str) -> str:
     """
     if safe_session_id(session_id) is None:
         raise ValueError("not a session id")
+    # Both made here, by the one process that mints: `open_private_directory` fails when another
+    # process creates the same level first, and two shells binding at once must not see that.
     pending = _directory(activity_directory, _PENDING, create=True)
-    if pending is None:
+    threads = _directory(activity_directory, _THREADS, create=True)
+    if pending is None or threads is None:
         raise UntrustedBinding("cannot make the binding directory")
     # A new launch's conversation is not the old one, even before it binds.
-    threads = _directory(activity_directory, _THREADS, create=False)
-    if threads is not None:
-        _forget_threads_of(threads, session_id)
+    _forget_threads_of(threads, session_id)
     nonce = secrets.token_hex(32)
     temporary = _written(pending, _hash(nonce))
     try:

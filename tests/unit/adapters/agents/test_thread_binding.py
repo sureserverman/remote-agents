@@ -46,6 +46,12 @@ def test_pending_file_holds_only_a_hash_of_the_nonce(spool: Path) -> None:
     assert stat.S_IMODE(pending.stat().st_mode) == 0o600
 
 
+def test_minting_makes_both_directories_so_no_shell_has_to(spool: Path) -> None:
+    mint_nonce(spool, _SESSION)
+    for name in ("pending", "threads"):
+        assert stat.S_IMODE((spool / BINDING_DIRECTORY / name).stat().st_mode) == 0o700
+
+
 def test_a_nonce_is_safe_to_type_after_a_flag(spool: Path) -> None:
     for _ in range(200):
         nonce = mint_nonce(spool, _SESSION)
@@ -107,7 +113,6 @@ def test_a_dangling_link_at_the_thread_is_untrusted_and_keeps_the_nonce(
 ) -> None:
     nonce = mint_nonce(spool, _SESSION)
     threads = spool / BINDING_DIRECTORY / "threads"
-    threads.mkdir(mode=0o700)
     (threads / _THREAD).symlink_to(tmp_path / "nowhere")
     assert consume_nonce(spool, _SESSION, nonce, _THREAD) == (
         "the binding directory cannot be trusted"

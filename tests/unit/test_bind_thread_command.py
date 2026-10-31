@@ -225,7 +225,7 @@ def test_bind_thread_refuses_a_real_nonce_in_a_store_others_can_open(
     capsys.readouterr()
     assert _bind(spool, session, nonce) == 3
     assert "cannot be trusted" in capsys.readouterr().err
-    assert not (spool / BINDING_DIRECTORY / "threads").exists()
+    assert list((spool / BINDING_DIRECTORY / "threads").iterdir()) == []
 
 
 def test_a_linked_binding_directory_fails_closed_for_a_resumed_thread(
@@ -251,7 +251,7 @@ def test_bind_thread_refuses_a_real_nonce_through_a_linked_store(
     capsys.readouterr()
     assert _bind(spool, session, nonce) == 3
     assert "cannot be trusted" in capsys.readouterr().err
-    assert not (moved / "threads").exists()
+    assert list((moved / "threads").iterdir()) == []
     assert (moved / "pending" / session).exists()
 
 
