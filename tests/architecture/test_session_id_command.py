@@ -203,3 +203,15 @@ def test_session_id_command_writes_only_through_the_reported_roots() -> None:
             stray.append(f"{_MODULE.name}:{node.lineno}: {name}")
     assert recorded, "run_session_id never records through its FileReportedRoots"
     assert not stray, stray
+
+
+def test_bind_thread_writes_only_through_the_binding_store() -> None:
+    function = _function(_tree(), "run_bind_thread")
+    called = {
+        name
+        for node in ast.walk(function)
+        if isinstance(node, ast.Call)
+        for name in [_called_name(node)]
+    }
+    assert "consume_nonce" in called, "run_bind_thread does not spend the nonce through the store"
+    assert not called & _WRITES, sorted(called & _WRITES)

@@ -35,6 +35,10 @@ def main(argv: list[str] | None = None) -> int:
         from remote_agents.agent_event import run_session_id
 
         return run_session_id(arguments[1:])
+    if arguments[:1] == ["bind-thread"]:
+        from remote_agents.agent_event import run_bind_thread
+
+        return run_bind_thread(arguments[1:])
 
     from remote_agents.bootstrap import main as run_service
 

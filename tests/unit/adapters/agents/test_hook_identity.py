@@ -356,3 +356,29 @@ def test_a_new_conversation_cannot_reuse_the_original_resume_binding(tmp_path):
         )
         is None
     )
+
+
+def test_a_binding_changes_nothing_on_the_hook_path(tmp_path):
+    """Only a handoff reads bindings. A hook keeps the folder-and-time rule it has (DEC-126)."""
+    from remote_agents.adapters.agents.thread_binding import consume_nonce, mint_nonce
+
+    bound = "b" * 32
+    assert consume_nonce(tmp_path, bound, mint_nonce(tmp_path, bound), _DRILL_THREAD) is None
+    roster = (
+        _entry("here", tmp_path, datetime(2026, 1, 1, tzinfo=UTC)),
+        _entry(bound, tmp_path / "elsewhere", datetime(2026, 1, 1, tzinfo=UTC)),
+    )
+    assert resolve(_DRILL_THREAD, str(tmp_path), roster, activity_directory=tmp_path) == "here"
+
+
+def test_an_exact_binding_needs_the_activity_directory(tmp_path):
+    from remote_agents.adapters.agents.thread_binding import consume_nonce, mint_nonce
+
+    bound = "b" * 32
+    assert consume_nonce(tmp_path, bound, mint_nonce(tmp_path, bound), _DRILL_THREAD) is None
+    roster = (_entry(bound, tmp_path, datetime(2026, 1, 1, tzinfo=UTC)),)
+    assert resolve(_DRILL_THREAD, None, roster, require_exact=True) is None
+    assert (
+        resolve(_DRILL_THREAD, None, roster, require_exact=True, activity_directory=tmp_path)
+        == bound
+    )

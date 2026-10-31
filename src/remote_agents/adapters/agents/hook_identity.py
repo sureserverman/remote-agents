@@ -114,34 +114,45 @@ def resolve(
 ) -> str | None:
     """Resolve hook evidence, or an exact binding when a tool shell can change folders.
 
-    Hooks retain the folder/time bootstrap. A handoff must instead match exactly one live
-    roster entry's recorded resume id. Current marks can invalidate that binding, but cannot
+    Hooks retain the folder/time bootstrap. A handoff must instead name exactly one live roster
+    entry, by its recorded resume id or by a thread that launch bound (`thread_binding`). Two
+    entries claiming the thread refuse. A binding to a session off the roster claims nothing, so
+    a later session can resume that thread. Current marks can invalidate a binding, but cannot
     establish one: their own hook attribution uses the same folder/time heuristic. Fresh
-    conversations without an independent binding refuse, including their first cross-repo
-    call. A report of the destination is never identity evidence.
+    conversations without a binding refuse, including their first cross-repo call. A report of
+    the destination is never identity evidence.
     """
     if safe_session_id(thread_id) is None:
         return None
     entries = tuple(roster)
     if require_exact:
+        from remote_agents.adapters.agents.thread_binding import UntrustedBinding, bound_session
         from remote_agents.adapters.agents.turn_markers import (
             FileConversationMarks,
             FileTurnMarkers,
         )
 
-        candidates = [entry for entry in entries if entry.resume_source_id == thread_id]
-        if len(candidates) != 1:
+        try:
+            bound = (
+                None if activity_directory is None else bound_session(activity_directory, thread_id)
+            )
+        except UntrustedBinding:
             return None
-        entry = candidates[0]
+        claimants = {entry.session_id for entry in entries if entry.resume_source_id == thread_id}
+        if any(entry.session_id == bound for entry in entries):
+            claimants.add(bound)
+        if len(claimants) != 1:
+            return None
+        session_id = next(iter(claimants))
         turns = None if activity_directory is None else FileTurnMarkers(activity_directory)
         marks = None if activity_directory is None else FileConversationMarks(activity_directory)
-        current = None if marks is None else marks.latest(entry.session_id)
-        owner = None if turns is None else turns.owner(entry.session_id)
+        current = None if marks is None else marks.latest(session_id)
+        owner = None if turns is None else turns.owner(session_id)
         # Marks are vetoes only; they cannot select one of two recorded owners. An ended
         # turn's retained conversation can still agree with the persisted launch binding.
         if current not in (None, thread_id) or owner not in (None, thread_id):
             return None
-        return entry.session_id
+        return session_id
     resumed = [entry.session_id for entry in entries if entry.resume_source_id == thread_id]
     if resumed:
         return resumed[0] if len(resumed) == 1 else None
