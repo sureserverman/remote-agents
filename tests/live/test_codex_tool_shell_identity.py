@@ -46,6 +46,7 @@ with its daemon in `finally`; workspaces under pytest's temporary directory. The
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -292,3 +293,63 @@ def test_verb_a_codex_started_by_hand_exits_3(by_hand: Pane, panes: tuple[Pane, 
     # Its shell carries A's variable, inherited from the daemon A started: never evidence.
     assert by_hand.seen["session"] == panes[0].session_id, by_hand
     assert (by_hand.seen["verb_exit"], by_hand.seen["verb"]) == ("3", ""), by_hand
+
+
+_TOKEN_SCRIPT = (
+    "#!/bin/sh\n"
+    "printf 'token=%s\\nthread=%s\\nsession=%s\\ndone=1\\n' "
+    f'"${{RA_BINDING_PROBE-}}" "${{CODEX_THREAD_ID-}}" "${{{SESSION_ID_VARIABLE}-}}" > "$1"\n'
+)
+
+
+def _read_seen(written: Path, seconds: float) -> dict[str, str] | None:
+    deadline = time.monotonic() + seconds
+    while time.monotonic() < deadline:
+        if written.is_file() and "done=1" in (text := written.read_text(encoding="utf-8")):
+            return dict(line.split("=", 1) for line in text.splitlines() if "=" in line)
+        time.sleep(0.5)
+    return None
+
+
+def _send(socket: str, pane: str, text: str) -> None:
+    _tmux(socket, "send-keys", "-t", pane, "-l", text)
+    time.sleep(0.5)
+    _tmux(socket, "send-keys", "-t", pane, "Enter")
+
+
+def _token_pane(drill: Drill, workspace: Path, name: str, token: str | None) -> dict[str, object]:
+    """What this pane's shells saw, through the owner's `!` command and through an agent turn."""
+    (workspace / "token.sh").write_text(_TOKEN_SCRIPT, encoding="utf-8")
+    flags = (
+        () if token is None else ("-c", f'shell_environment_policy.set.RA_BINDING_PROBE="{token}"')
+    )
+    pane = _open(drill.socket, name, workspace, drill.codex_home, None, (*drill.command, *flags))
+    _send(drill.socket, pane, "!sh token.sh seen-bang.txt")
+    bang = _read_seen(workspace / "seen-bang.txt", 30.0)
+    _send(drill.socket, pane, "Run the shell command `sh token.sh seen-turn.txt`, then reply: done")
+    turn = _read_seen(workspace / "seen-turn.txt", 180.0)
+    screen = _tmux(drill.socket, "capture-pane", "-p", "-t", pane).stdout
+    return {"expected": token, "bang": bang, "turn": turn, "screen": screen[-1500:]}
+
+
+def test_measure_launch_token_reaches_only_its_own_threads_shells(drill: Drill) -> None:
+    """Design probe: can a per-launch setting name a session, given one shared daemon?
+
+    Pane A starts the daemon, pane B attaches to it, and a third Codex carries no token. Each
+    reports its shells' view; the whole result is written to `RA_TOKEN_PROBE_OUT` for reading.
+    """
+    root = drill.project.parent
+    results = {
+        "a": _token_pane(drill, root / "a", "token-a", "token-a"),
+        "b": _token_pane(drill, root / "b", "token-b", "token-b"),
+        "none": _token_pane(drill, drill.project, "token-none", None),
+    }
+    out = os.environ.get("RA_TOKEN_PROBE_OUT")
+    if out:
+        Path(out).write_text(json.dumps(results, indent=2), encoding="utf-8")
+    for name, result in results.items():
+        expected = result["expected"] or ""
+        for route in ("bang", "turn"):
+            seen = result[route]
+            assert seen is not None, f"{name} {route} wrote nothing:\n{result['screen']}"
+            assert seen["token"] == expected, f"{name} {route}: {seen}"
