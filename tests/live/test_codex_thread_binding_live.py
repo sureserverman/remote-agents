@@ -245,3 +245,83 @@ def test_measure_bang_shell_premise(drill: Drill) -> None:  # noqa: F811
     keep()
     assert result["one_daemon"], result
     assert result["control_marker_seen"], second
+
+
+_BOUND_SCRIPT = 'printf "%s" "${CODEX_THREAD_ID-}" > "$(dirname "$0")/bound.txt"\n'
+
+
+def _composer_holds(screen: str, line: str) -> bool:
+    """Whether the composer shows `line` whole. Codex wraps it, so spaces say nothing."""
+    return "›" + "".join(line.split()) in "".join(screen.split())
+
+
+def _line_route(
+    drill: Drill,  # noqa: F811
+    name: str,
+    route: str,
+    after_new: bool,
+    flags: tuple[str, ...] = (),
+) -> dict[str, object]:
+    """One line shaped like the real bind command. Enter only if it is whole, so no turn is spent."""
+    workspace = _workspace(drill, name)
+    script = workspace / "bound.sh"
+    script.write_text(_BOUND_SCRIPT, encoding="utf-8")
+    (workspace / "token.sh").write_text(_TOKEN_SCRIPT, encoding="utf-8")
+    pane = _open(drill.socket, name, workspace, drill.codex_home, None, (*drill.command, *flags))
+    if after_new:
+        _send(drill.socket, pane, "!sh token.sh before.txt")
+        _read_seen(workspace / "before.txt", 30.0)
+        _settled(drill, pane)
+        _send(drill.socket, pane, "/new")
+        time.sleep(15.0)
+        _settled(drill, pane)
+    line = f"!sh {script} bind-thread --session {'a' * 32} --nonce {'b' * 43}"
+    if route == "typed":
+        _tmux(drill.socket, "send-keys", "-t", pane, "-l", line)
+    else:
+        _tmux(drill.socket, "set-buffer", "-b", name, "--", line)
+        _tmux(drill.socket, "paste-buffer", "-d", "-p", "-r", "-b", name, "-t", pane)
+    time.sleep(1.0)
+    composer = _screen(drill, pane)
+    whole = _composer_holds(composer, line)
+    bound = workspace / "bound.txt"
+    if whole:
+        _tmux(drill.socket, "send-keys", "-t", pane, "Enter")
+        deadline = time.monotonic() + 30.0
+        while time.monotonic() < deadline and not bound.is_file():
+            time.sleep(0.5)
+    return {
+        "name": name,
+        "route": route,
+        "after_new": after_new,
+        "flags": list(flags),
+        "length": len(line),
+        "whole": whole,
+        "ran": bound.is_file(),
+        "composer": composer,
+    }
+
+
+def test_measure_bang_line_routes(drill: Drill) -> None:  # noqa: F811
+    """Whether a line as long as the real one survives, typed as keys or pasted as the service does.
+
+    The first drill's short lines never lost their start, and its long lines after `/new` did. It
+    typed keys, and the service's `paste-buffer -p` was never tried. Results are for reading.
+    """
+    result: list[dict[str, object]] = []
+    out = os.environ.get("RA_PREMISE_LINE_OUT")
+
+    def measure(name: str, route: str, after_new: bool, flags: tuple[str, ...] = ()) -> None:
+        try:
+            result.append(_line_route(drill, name, route, after_new, flags))
+        except (Exception, pytest.fail.Exception) as error:
+            result.append({"name": name, "route": route, "failed": repr(error)})
+        if out:
+            Path(out).write_text(json.dumps(result, indent=2), encoding="utf-8")
+
+    for route in ("typed", "pasted"):
+        for attempt in range(3):
+            measure(f"{route}-fresh-{attempt}", route, False)
+        measure(f"{route}-embedded", route, False, ("--approve-for-me",))
+        for attempt in range(2):
+            measure(f"{route}-new-{attempt}", route, True)
