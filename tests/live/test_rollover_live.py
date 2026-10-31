@@ -506,6 +506,8 @@ async def test_rollover_now_hands_a_real_plan_to_a_fresh_codex_session(
         socket = tmux_directory / f"tmux-{os.getuid()}" / "remote-agents"
         repo_parent = Path(tempfile.mkdtemp(prefix="ra-rcx-", dir="/tmp"))
         codex_home = short_codex_home()
+        global _CODEX_HOME
+        _CODEX_HOME = codex_home
         repo = _fixture_repository(repo_parent)
         paths = _isolated_codex_home(tmp_path / "home", repo, codex, codex_home)
         config = load_config(paths.config_path)
@@ -839,12 +841,33 @@ async def _type(harness: _Harness, session_id: SessionId, text: str) -> None:
         await asyncio.sleep(_POLL_SECONDS)
 
 
+#: The running Codex case's own home, whose rollout says what the agent's scripts answered. A
+#: failed drill removes it, so the diagnosis reads it first.
+_CODEX_HOME: Path | None = None
+
+
+def _codex_commands() -> list[str]:
+    """Each rollout line naming a boundary check, the identity verb or a request."""
+    if _CODEX_HOME is None:
+        return []
+    found = []
+    for rollout in sorted(_CODEX_HOME.rglob("rollout-*.jsonl")):
+        for line in rollout.read_text(errors="replace").splitlines():
+            if any(word in line for word in ("verdict=", "context-usage", "session-id")):
+                found.append("  codex: " + line[:400])
+    return found[-30:]
+
+
 async def _diagnosis(
     harness: _Harness, repo: Path | None, predecessor: SessionId, headline: str
 ) -> str:
     """Everything a failed live run leaves to read: the rollover, its history, the failure
     notices, the envelopes seen, the sessions and the end of each pane."""
     lines = [headline]
+    lines.extend(_codex_commands())
+    with contextlib.suppress(Exception):
+        title = await harness.terminal._gateway.pane_title(predecessor)
+        lines.append(f"predecessor idle: {await harness.terminal.pane_idle(predecessor)} {title!r}")
     with contextlib.suppress(Exception):
         rollover = await harness.backend.rollovers.latest_for(predecessor)
         lines.append(f"rollover: {rollover}")
@@ -957,8 +980,18 @@ async def test_native_destination_adoption_waits_for_trust_and_preserves_saved_p
         journey.run()
         rollover_pass = harness.composition.rollover_pass
         assert rollover_pass is not None
-        await rollover_pass.run_once()
-        row = await harness.backend.rollovers.latest_for(predecessor)
+        # As `serve` does: a look that finds the pane busy waits for a later pass.
+        started = time.monotonic()
+        while True:
+            await rollover_pass.run_once()
+            row = await harness.backend.rollovers.latest_for(predecessor)
+            if (
+                row is None
+                or row.state is not RolloverState.HANDOFF_READY
+                or time.monotonic() - started > 120
+            ):
+                break
+            await asyncio.sleep(_POLL_SECONDS)
         assert row is not None and row.state is RolloverState.SUCCESSOR_STARTING, await _diagnosis(
             harness,
             journey.source,
