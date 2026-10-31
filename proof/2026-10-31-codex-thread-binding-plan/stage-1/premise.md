@@ -4,7 +4,7 @@ Goal: the owner knows, before any service code changes, that a `!` command can r
 Risk: MEDIUM - rests on undocumented `!` behaviour in one Codex version
 
 Outcomes:
-- Works: `proof/thread-binding-premise.json` shows the `!` shell's thread equals the later turn's thread, under all four presets
+- Works: `/mnt/vault/Portfolio/infra/remote-agents/recovery/thread-binding-premise.json` shows the `!` shell's thread equals the later turn's thread, under all four presets
 - A preset's `!` shell cannot write outside its workspace → the plan stops as a false premise, and the owner sees the preset and the error
 - A thread holding only a `!` command cannot be resumed → recorded, and Task 3.3 keeps the resume route to threads that had a turn
 
@@ -33,3 +33,5 @@ Assumption: managed launches with a preset still meet the shared daemon.
 Checked: `ra-live-owner-20261031T180114.log`, footer warning and marker per preset.
 Result: `approve_for_me` and `ask` run embedded; `full_access` and `provider_default` share it.
 Verdict: false as written. Owner, 2026-10-31: "Keep binding for all presets (Recommended)" and "Measure it in this plan" (OD-6, OD-7).
+
+Limit: the write target is under `/tmp`, excluded from Codex's sandbox by the drill's config. The `ask` turn stopping for approval on it, while its `!` wrote, is what shows Codex confines the turn and not the `!`. Task 4.1 repeats this with the real verb outside `/tmp`.
