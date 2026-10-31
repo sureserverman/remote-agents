@@ -58,7 +58,7 @@ from pathlib import Path
 
 import pytest
 from agent_panes import CODEX_OPENING, CODEX_READY, open_to_composer
-from codex_home import retire_codex_home, short_codex_home
+from codex_home import _running_from, retire_codex_home, short_codex_home
 from native_isolation import codex_command, live_requested
 
 from remote_agents.adapters.agents.hook_identity import FileHookRoster
@@ -220,7 +220,10 @@ def drill(
     socket = f"remote-agents-test-tool-shell-{SessionId.new().value.hex}"
     codex_home = short_codex_home()
     try:
-        command = codex_command(Path(shutil.which("codex")), root, codex_home)
+        # A PID namespace per pane hides the daemon's pid from the next pane, whose Codex may then
+        # start its own. This drill is about one daemon. Cleanup goes by home, not namespace.
+        confined = codex_command(Path(shutil.which("codex")), root, codex_home)
+        command = tuple(part for part in confined if part != "--unshare-pid")
         (codex_home / "config.toml").write_text(
             # The probe writes into its own folder, and nothing may stop to ask.
             # bwrap holds /tmp read-only, so Codex could not guard a /tmp/.git for its own sandbox.
@@ -319,6 +322,19 @@ def _send(socket: str, pane: str, text: str) -> None:
     _tmux(socket, "send-keys", "-t", pane, "Enter")
 
 
+def _daemons(codex_home: Path) -> list[int]:
+    """The running managed daemons of this home, read from outside any pane."""
+    found = []
+    for pid in _running_from(codex_home):
+        try:
+            arguments = Path(f"/proc/{pid}/cmdline").read_bytes().split(b"\0")
+        except OSError:
+            continue
+        if b"--managed-daemon" in arguments:
+            found.append(pid)
+    return sorted(found)
+
+
 def _token_pane(
     drill: Drill, workspace: Path, name: str, token: str | None, marker: str | None = None
 ) -> dict[str, object]:
@@ -333,7 +349,13 @@ def _token_pane(
     _send(drill.socket, pane, "Run the shell command `sh token.sh seen-turn.txt`, then reply: done")
     turn = _read_seen(workspace / "seen-turn.txt", 180.0)
     screen = _tmux(drill.socket, "capture-pane", "-p", "-t", pane).stdout
-    return {"expected": token, "bang": bang, "turn": turn, "screen": screen[-1500:]}
+    return {
+        "expected": token,
+        "bang": bang,
+        "turn": turn,
+        "daemons": _daemons(drill.codex_home),
+        "screen": screen[-1500:],
+    }
 
 
 def test_measure_launch_token_reaches_only_its_own_threads_shells(drill: Drill) -> None:
@@ -360,4 +382,6 @@ def test_measure_launch_token_reaches_only_its_own_threads_shells(drill: Drill) 
             seen = result[route]
             assert seen is not None, f"{name} {route} wrote nothing:\n{result['screen']}"
             assert seen["token"] == expected, f"{name} {route}: {seen}"
+        assert len(result["daemons"]) == 1, f"{name}: not one daemon: {result}"
+        assert result["daemons"] == results["a"]["daemons"], f"{name}: another daemon: {result}"
         assert result["turn"]["session"] == marker, f"{name} turn is not on A's daemon: {result}"
