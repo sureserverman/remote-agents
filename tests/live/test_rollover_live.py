@@ -125,7 +125,11 @@ from remote_agents.application.session_actions import ROLLOVER, rollover_outcome
 from remote_agents.application.session_folders import SessionFolders
 from remote_agents.application.session_views import rollover_marks, rollover_note
 from remote_agents.bootstrap import _RECONCILE_INTERVAL_SECONDS
-from remote_agents.composition.backend import ProjectCatalogueProvider, compose_backend
+from remote_agents.composition.backend import (
+    ProjectCatalogueProvider,
+    compose_backend,
+    worktree_parts,
+)
 from remote_agents.composition.service import (
     _ROLLOVER_POLL_SECONDS,
     ServiceComposition,
@@ -608,17 +612,26 @@ def _compose(config, connection, paths: ProductionPaths) -> _Harness:
         cursor_home=paths.home,
     )
     projects.refresh()
+    # As `_private_boundary`: without the folder bindings every destination is refused.
+    worktrees = worktree_parts(connection)
     runtime = _local_runtime(
         config,
         paths,
         projects.paths,
         descriptors,
-        folder_for=SessionFolders(projects.paths, None).folder_for,
+        folder_for=SessionFolders(projects.paths, worktrees.store, worktrees.folders).folder_for,
     )
     store = SQLiteSessionStore(connection)
     locks = SessionLocks()
     backend = compose_backend(
-        config, connection, paths, projects=projects, runtime=runtime, store=store, locks=locks
+        config,
+        connection,
+        paths,
+        projects=projects,
+        runtime=runtime,
+        store=store,
+        locks=locks,
+        worktrees=worktrees,
     )
     notices: list[RolloverReport] = []
 
@@ -633,6 +646,8 @@ def _compose(config, connection, paths: ProductionPaths) -> _Harness:
         project_paths=projects.paths,
         adopt_templates=adopt_templates(),
         notify=notify,
+        worktrees=worktrees.store,
+        folders=worktrees.folders,
     )
     composition = ServiceComposition(
         None,  # no bot boundary: see the module docstring
