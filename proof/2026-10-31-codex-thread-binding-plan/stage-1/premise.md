@@ -29,7 +29,7 @@ Result: pending Task 1.2.
 Verdict: not checkable here - this shell cannot create a bwrap namespace; the owner runs it (OD-4).
 
 ## Premise 3
-Assumption: managed launches with a preset still meet the shared daemon, so the binding is the fix they need.
-Checked: `src/remote_agents/domain/profiles.py`: `ask` passes `-c`, and `approve_for_me` passes `--approve-for-me`.
-Result: Codex's footer says `-c` means embedded mode. `ask` is therefore probably off the daemon, and the default preset is unknown.
-Verdict: not checkable here - Task 1.2 records `daemons`, `marker_seen` and the warning per preset. If managed presets are off the daemon, Remote Control's reach (DEC-071) and this plan's premise go to the owner.
+Assumption: managed launches with a preset still meet the shared daemon.
+Checked: `ra-live-owner-20261031T180114.log`, footer warning and marker per preset.
+Result: `approve_for_me` and `ask` run embedded; `full_access` and `provider_default` share it.
+Verdict: false as written. Owner, 2026-10-31: "Keep binding for all presets (Recommended)" and "Measure it in this plan" (OD-6, OD-7).

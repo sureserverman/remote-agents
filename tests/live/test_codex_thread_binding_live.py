@@ -46,10 +46,16 @@ _MARKER = "marker-of-first-plain-pane"
 _TURN = "Run the shell command `sh token.sh seen-turn.txt`, then reply: done"
 
 
-def _bang_script(outside: Path) -> str:
-    return (
-        f'{_TOKEN_SCRIPT}printf "%s" "${{CODEX_THREAD_ID-}}" > "{outside}" 2> outside-error.txt\n'
-    )
+def _bind_script(outside: Path) -> str:
+    """What the `!` shell runs. The turn runs `token.sh`, which stays inside the workspace."""
+    return f'printf "%s" "${{CODEX_THREAD_ID-}}" > "{outside}" 2> outside-error.txt\n'
+
+
+def _pane_state(drill: Drill, name: str) -> str:  # noqa: F811
+    """Whether the pane still runs, read when a pane produced nothing."""
+    return _tmux(
+        drill.socket, "list-panes", "-t", f"={name}:", "-F", "#{pane_dead} #{pane_dead_status}"
+    ).stdout.strip()
 
 
 def _workspace(drill: Drill, name: str) -> Path:  # noqa: F811
@@ -77,15 +83,20 @@ def _launch(
     """One launch: a `!` command that writes outside its workspace, then one agent turn."""
     workspace = _workspace(drill, name)
     outside = drill.project.parent / f"outside-{name}"
-    (workspace / "token.sh").write_text(_bang_script(outside), encoding="utf-8")
+    (workspace / "token.sh").write_text(_TOKEN_SCRIPT, encoding="utf-8")
+    (workspace / "bind.sh").write_text(_bind_script(outside), encoding="utf-8")
     pane = _open(drill.socket, name, workspace, drill.codex_home, session, (*drill.command, *flags))
     _send(drill.socket, pane, "!sh token.sh seen-bang.txt")
     bang = _read_seen(workspace / "seen-bang.txt", 30.0)
     _settled(drill, pane)
+    _send(drill.socket, pane, "!sh bind.sh")
+    time.sleep(2.0)
+    _settled(drill, pane)
     error = workspace / "outside-error.txt"
     wrote = outside.is_file() and bool(outside.read_text(encoding="utf-8"))
     _send(drill.socket, pane, _TURN)
-    turn = _read_seen(workspace / "seen-turn.txt", 180.0)
+    turn = _read_seen(workspace / "seen-turn.txt", 60.0 if "read-only" in flags else 180.0)
+    state = _pane_state(drill, name)
     screen = _footnote(drill.socket, pane)
     processes = _processes(drill.codex_home)
     return {
@@ -99,6 +110,7 @@ def _launch(
         "turn_thread": None if turn is None else turn["thread"],
         "daemons": _daemons(processes),
         "marker_seen": None if turn is None else turn["session"] == _MARKER,
+        "pane_state": state,
         "screen": screen,
     }
 
@@ -106,14 +118,16 @@ def _launch(
 def _after_new(drill: Drill) -> dict[str, object]:  # noqa: F811
     """What `/new` does to the thread a `!` shell is told."""
     workspace = _workspace(drill, "after-new")
-    (workspace / "token.sh").write_text(_TOKEN_SCRIPT, encoding="utf-8")
+    script = workspace / "token.sh"
+    script.write_text(_TOKEN_SCRIPT, encoding="utf-8")
     pane = _open(drill.socket, "after-new", workspace, drill.codex_home, None, drill.command)
-    _send(drill.socket, pane, "!sh token.sh before.txt")
+    _send(drill.socket, pane, f"!sh {script} {workspace / 'before.txt'}")
     before = _read_seen(workspace / "before.txt", 30.0)
     _settled(drill, pane)
     _send(drill.socket, pane, "/new")
     time.sleep(3.0)
-    _send(drill.socket, pane, "!sh token.sh after.txt")
+    # Absolute: `/new` has been seen to move the pane to a Codex worktree under its home.
+    _send(drill.socket, pane, f"!sh {script} {workspace / 'after.txt'}")
     after = _read_seen(workspace / "after.txt", 30.0)
     return {"before": before, "after": after, "screen": _screen(drill, pane)}
 
