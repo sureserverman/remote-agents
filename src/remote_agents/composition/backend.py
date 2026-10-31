@@ -117,15 +117,21 @@ class ProjectCatalogueProvider:
     def snapshot(self) -> ProjectCatalogueSnapshot:
         return self._snapshot
 
+    def add_new_projects(self) -> ProjectCatalogueSnapshot:
+        """`refresh` that removes nothing, for a caller who only wants what is new: the rollover
+        pass. A transient failure to see a project must not end that project's rollovers."""
+        with self._refreshing:
+            return self._refresh(prune=False)
+
     def refresh(self) -> ProjectCatalogueSnapshot:
         """Rebuild the catalogue and path mapping from the current registry and filesystem.
 
         A degraded registry read adds and never removes: it cannot say a project left, and a
         project missing from the mapping loses its rollovers."""
         with self._refreshing:
-            return self._refresh()
+            return self._refresh(prune=True)
 
-    def _refresh(self) -> ProjectCatalogueSnapshot:
+    def _refresh(self, *, prune: bool) -> ProjectCatalogueSnapshot:
         registry = load_registry(self._registry_path)
         discovered = discover_projects(self._dev_root)
         resolved: dict[ProjectId, Path] = {}
@@ -142,7 +148,7 @@ class ProjectCatalogueProvider:
         catalogue = build_catalogue(registered, found, registry_error=registry.error)
         if registry.error is not None:
             _LOG.warning("project registry is degraded: %s", registry.error)
-        self._publish(resolved, prune=registry.error is None)
+        self._publish(resolved, prune=prune and registry.error is None)
         self._snapshot = ProjectCatalogueSnapshot(catalogue, registry.error)
         return self._snapshot
 

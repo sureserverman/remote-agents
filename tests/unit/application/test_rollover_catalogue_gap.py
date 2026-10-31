@@ -187,15 +187,16 @@ def test_the_service_hands_the_pass_its_catalogue() -> None:
     ]
     assert len(calls) == 1
     handed = {keyword.arg: ast.unparse(keyword.value) for keyword in calls[0].keywords}
-    assert handed["refresh_projects"] == "projects.refresh"
+    assert handed["refresh_projects"] == "projects.add_new_projects"
 
 
-async def test_an_ended_session_on_a_removed_project_reads_nothing() -> None:
+@pytest.mark.parametrize("state", [SessionState.ENDED, SessionState.FAILED, SessionState.PRESERVED])
+async def test_a_session_the_pass_ignores_reads_nothing(state: SessionState) -> None:
     catalogue = _Catalogue({}, {})
-    ended = _record("gone")
-    ended.state = SessionState.ENDED
+    record = _record("gone")
+    record.state = state
 
-    await CatalogueGap(catalogue.paths, catalogue.refresh, _Clock()).close((ended,))
+    await CatalogueGap(catalogue.paths, catalogue.refresh, _Clock()).close((record,))
 
     assert catalogue.reads == 0
 
@@ -221,6 +222,32 @@ async def test_a_hung_read_lets_the_pass_go_on() -> None:
 
     await gap.close((_record("new"),))
     release.set()
+
+
+async def test_no_second_read_starts_while_a_hung_one_still_runs(tmp_path: Path) -> None:
+    release = threading.Event()
+    reads = [0]
+
+    def hung() -> None:
+        reads[0] += 1
+        release.wait(5)
+
+    gap = CatalogueGap({}, hung, _Clock(), read_timeout=0.01)
+    await gap.read_for(tmp_path / "a")
+    await gap.read_for(tmp_path / "b")
+
+    assert reads[0] == 1
+    release.set()
+
+
+def test_the_pass_read_removes_nothing_even_when_a_project_cannot_be_seen(tmp_path: Path) -> None:
+    provider, registry, registered = _provider(tmp_path)
+    provider.refresh()
+
+    registry.write_text("version: 1\nprojects: []\n")
+    provider.add_new_projects()
+
+    assert registered.resolve() in provider.paths.values()
 
 
 async def test_with_the_switch_off_the_pass_reads_nothing(tmp_path: Path) -> None:

@@ -924,6 +924,16 @@ def build_worktree_listing(
     ).kept
 
 
+#: A session in another state gets nothing from the pass, so an unknown project there costs no read.
+_PASS_ACTS_ON = frozenset(
+    {
+        SessionState.STARTING,
+        SessionState.RUNNING,
+        SessionState.UNTRUSTED,
+        SessionState.STOP_REQUESTED,
+    }
+)
+
 #: A read past this leaves the pass to its stops and rollovers; a hung mount must not hold them.
 CATALOGUE_READ_TIMEOUT_SECONDS = 30.0
 
@@ -952,18 +962,24 @@ class CatalogueGap:
         self._retry_seconds = retry_seconds
         self._read_timeout = read_timeout
         self._read_at: float | None = None
+        self._running: asyncio.Future[object] | None = None
         self._destinations_read_at: dict[Path, float] = {}
 
     async def _read(self) -> None:
         """`refresh` off the event loop, since it walks the development root. Never raises."""
+        # A read past its timeout keeps its thread: no second one starts while it runs, or a hung
+        # mount would park one worker per minute behind the catalogue's lock.
+        if self._running is not None and not self._running.done():
+            return
+        self._running = asyncio.ensure_future(asyncio.to_thread(self._refresh))
         try:
-            await asyncio.wait_for(asyncio.to_thread(self._refresh), self._read_timeout)
+            await asyncio.wait_for(asyncio.shield(self._running), self._read_timeout)
         except Exception:
             _LOG.exception("the project catalogue could not be re-read for a rollover")
 
     async def close(self, records: Iterable[SessionRecord]) -> None:
         if all(
-            record.state is SessionState.ENDED or record.project_id in self._known
+            record.state not in _PASS_ACTS_ON or record.project_id in self._known
             for record in records
         ):
             self._read_at = None
