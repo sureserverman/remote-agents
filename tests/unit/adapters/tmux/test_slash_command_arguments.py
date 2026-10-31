@@ -219,3 +219,40 @@ def test_only_that_exact_notice_is_let_through(row: str) -> None:
     screen = re.sub(r"(?m)^.*/remote-control is active.*$", row, _REMOTE_CONTROL)
     assert row in screen
     assert enter_refusal(screen, CLAUDE, _ADOPT) is PromptReason.MENU
+
+
+def _above_composer(*rows: str) -> str:
+    """The Remote Control screen with `rows` in place of the notice, no blank row below them."""
+    lines = unstyled(_REMOTE_CONTROL).splitlines()
+    rule = next(index for index, line in enumerate(lines) if line.startswith("─"))
+    notice = next(index for index, line in enumerate(lines) if "/remote-control is" in line)
+    return "\n".join([*lines[:notice], *rows, *lines[rule:]]) + "\n"
+
+
+@pytest.mark.parametrize(
+    "lookalike",
+    ["  /remote-control is", "  /remote-controls is active", "  /remote-control   Connect"],
+)
+def test_a_lookalike_above_a_row_the_menu_pattern_cannot_read_still_refuses(lookalike: str) -> None:
+    """Here only `menu_absent` can refuse: the unread row keeps `command_menu` from matching."""
+    screen = _above_composer(lookalike, "a row the menu pattern does not read")
+
+    assert enter_refusal(screen, CLAUDE, _ADOPT) is PromptReason.MENU
+
+
+def test_the_real_notice_above_a_row_the_menu_pattern_cannot_read_passes() -> None:
+    screen = _above_composer(
+        "  /remote-control is active · Continue here", "a row the menu pattern does not read"
+    )
+
+    assert enter_refusal(screen, CLAUDE, _ADOPT) is None
+
+
+def test_a_real_menu_under_the_notice_still_decides() -> None:
+    """The notice is skipped, not the menu: the first real row must be the command typed."""
+    notice = "  /remote-control is active · Continue here"
+    wrong = _above_composer(notice, "  /status   Show Claude Code status")
+    right = _above_composer(notice, "  /planning:executing-plans   Execute a plan")
+
+    assert enter_refusal(wrong, CLAUDE, _ADOPT) is PromptReason.MENU
+    assert enter_refusal(right, CLAUDE, _ADOPT) is None
