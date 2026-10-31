@@ -49,6 +49,33 @@ class TurnMarkers(Protocol):
         ...
 
 
+class StartedMarks(Protocol):
+    """Whether a session's agent said, through its own hook, that it came up; never raises.
+
+    An empty file: nothing the agent said, and no id (DEC-135). Written by the hook, read by the
+    readiness check. Absence says nothing, because a host that has not re-run the installer has
+    none, so a caller may promote on a mark and may never fail on a missing one.
+
+    An agent started inside a managed pane inherits the pane's id, so its hook leaves this mark
+    too. That cannot misreport: a nested agent exists only because the pane's own agent is up."""
+
+    def mark(self, session_id: str) -> None:
+        """Record that the session's agent came up; a malformed id is never written."""
+        ...
+
+    def exists(self, session_id: str) -> bool:
+        """Whether the session holds a mark. False for anything but a regular file."""
+        ...
+
+    def sessions(self) -> tuple[str, ...]:
+        """Every session holding a mark."""
+        ...
+
+    def forget(self, session_id: str) -> None:
+        """Remove the session's mark, once nothing will read it."""
+        ...
+
+
 class ConversationMarks(Protocol):
     """Each session's latest own conversation, as its agent named it at a turn's start;
     never raises.

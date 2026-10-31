@@ -79,7 +79,7 @@ from remote_agents.ports.terminal import (
     TerminalTargetMissing,
     TrustAnswer,
 )
-from remote_agents.ports.turn_markers import TurnMarkers
+from remote_agents.ports.turn_markers import ConversationMarks, StartedMarks, TurnMarkers
 
 _LOG = logging.getLogger(__name__)
 
@@ -288,6 +288,8 @@ class TmuxTerminal:
         composers: Mapping[str, ProviderDescriptor] | None = None,
         waits: TerminalWaits | None = None,
         turn_markers: TurnMarkers | None = None,
+        started_marks: StartedMarks | None = None,
+        conversation_marks: ConversationMarks | None = None,
         clock: Callable[[], float] = time.monotonic,
         folder_for: SessionFolderLookup | None = None,
     ) -> None:
@@ -311,6 +313,10 @@ class TmuxTerminal:
         # with the capture the relay judges by, under the same key-lock hold. None reads the
         # screen alone, as before the marker existed.
         self._turn_markers = turn_markers
+        # The agent's own word that it came up, for a pane whose banner never reached the screen
+        # (DEC-135). None reads the screen alone. A missing mark never fails a session.
+        self._started_marks = started_marks
+        self._conversation_marks = conversation_marks
         # Per session, the transcript last judged under a marker and since when (on `clock`), so
         # a marked turn whose screen has stood still long enough can be seen to be over.
         self._clock = clock
@@ -593,7 +599,7 @@ class TmuxTerminal:
                 ready = None
             elif self._is_awaiting_trust(profile, profile_id, capture):
                 return replace(observation, awaiting_trust=True)
-            elif profile.readiness_marker is None or profile.readiness_marker in capture:
+            elif self._has_readiness_evidence(session_id, profile, capture):
                 if profile.trust_settle_seconds <= 0.0:
                     return observation
                 if ready is None:
@@ -604,6 +610,28 @@ class TmuxTerminal:
             return ready
         return TerminalObservation(
             session_id, live=False, preserved=False, detail="startup_timeout"
+        )
+
+    def _has_readiness_evidence(
+        self, session_id: SessionId, profile: LaunchProfile, capture: str
+    ) -> bool:
+        """Whether the screen or the agent itself says it came up. Ask after the trust check.
+
+        The marker has to be on the visible screen, and an agent's own startup warnings can hold
+        it off for good: 172 allow rules in one project's settings did, on 2026-10-30, and a
+        session that worked for three hours was recorded failed (DEC-135). So a started mark
+        from `SessionStart` counts, and so does a conversation mark, which proves a turn and
+        which a host that has not re-run the installer already writes. Neither ever fails a
+        session: without them this is the marker alone, as it always was.
+        """
+        if profile.readiness_marker is None or profile.readiness_marker in capture:
+            return True
+        session = str(session_id)
+        if self._started_marks is not None and self._started_marks.exists(session):
+            return True
+        return (
+            self._conversation_marks is not None
+            and self._conversation_marks.latest(session) is not None
         )
 
     def _is_awaiting_trust(
@@ -870,7 +898,7 @@ class TmuxTerminal:
         # would answer *ready* for the one case this branch exists to name.
         if self._is_awaiting_trust(profile, profile_id, capture):
             return replace(observation, awaiting_trust=True)
-        if profile.readiness_marker is not None and profile.readiness_marker not in capture:
+        if not self._has_readiness_evidence(session_id, profile, capture):
             return TerminalObservation(session_id, live=False, preserved=False, detail="not_ready")
         return observation
 
@@ -1074,7 +1102,7 @@ class TmuxTerminal:
 
     async def capture(self, session_id: SessionId) -> str:
         """Return one managed pane's output for the presentation boundary to sanitize."""
-        return await self._gateway.capture(session_id)
+        return await self._gateway.capture_output(session_id)
 
     async def pane_title(self, session_id: SessionId) -> str:
         """Return tmux metadata for one managed pane, never its captured output."""

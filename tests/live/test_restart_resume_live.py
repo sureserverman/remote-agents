@@ -66,7 +66,11 @@ from codex_home import retire_codex_home, short_codex_home, stop_codex_home
 from native_isolation import claude_command, codex_command
 
 from remote_agents.adapters.agents.registry import install_agent_hooks, provider_descriptors
-from remote_agents.adapters.agents.turn_markers import FileConversationMarks, FileTurnMarkers
+from remote_agents.adapters.agents.turn_markers import (
+    FileConversationMarks,
+    FileStartedMarks,
+    FileTurnMarkers,
+)
 from remote_agents.adapters.sqlite.database import open_database
 from remote_agents.adapters.sqlite.interrupted_resumes import SQLiteInterruptedResumes
 from remote_agents.adapters.sqlite.migrations import MIGRATIONS
@@ -293,6 +297,7 @@ class _Process:
             terminal=self.terminal,
             turn_markers=FileTurnMarkers(self.paths.activity_directory),
             conversation_marks=FileConversationMarks(self.paths.activity_directory),
+            started_marks=FileStartedMarks(self.paths.activity_directory),
             rollovers=SQLiteRolloverStore(self.connection),
             capabilities=self.backend.conversations.capabilities,
             outcomes=SQLiteInterruptedResumes(self.connection),

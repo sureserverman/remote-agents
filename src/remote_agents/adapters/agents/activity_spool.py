@@ -42,7 +42,11 @@ from pathlib import Path
 from typing import IO, TYPE_CHECKING
 
 from remote_agents.adapters.agents.hook_identity import read_roster, resolve, roster_path
-from remote_agents.adapters.agents.turn_markers import FileConversationMarks, FileTurnMarkers
+from remote_agents.adapters.agents.turn_markers import (
+    FileConversationMarks,
+    FileStartedMarks,
+    FileTurnMarkers,
+)
 from remote_agents.ports.agent_activity import bounded_detail_line
 from remote_agents.ports.private_directory import open_private_directory
 from remote_agents.ports.session_identity import SESSION_ID_VARIABLE, safe_session_id
@@ -214,6 +218,10 @@ def spool_agent_event(
             return 0
         if event != TURN_STARTED:
             found = licence()
+        # The agent's word that it came up, and nothing it said (DEC-135).
+        if found is not None and found.started_event is not None and event == found.started_event:
+            FileStartedMarks(activity_directory).mark(session_id)
+            return 0
         observed = _observed(document, session_id, now(), found)
         if observed is not None:
             _write_privately(observed, activity_directory)

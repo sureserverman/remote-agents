@@ -1,11 +1,15 @@
 """Why a session stopped must outlive the session, not just how it stopped."""
 
-from datetime import UTC, datetime
+from dataclasses import replace
+from datetime import UTC, datetime, timedelta
+from pathlib import Path
 
 import pytest
 
 from remote_agents.adapters.sqlite.database import open_database
 from remote_agents.adapters.sqlite.session_store import SQLiteSessionStore
+from remote_agents.adapters.sqlite.worktree_store import SQLiteWorktreeStore
+from remote_agents.application.reconcile import ReconciliationService
 from remote_agents.domain.models import (
     OrphanProvenance,
     ProfileId,
@@ -16,6 +20,7 @@ from remote_agents.domain.models import (
     SessionState,
 )
 from remote_agents.domain.state_machine import TERMINAL_STATES, LifecycleEvent
+from remote_agents.ports.worktree_store import Worktree
 
 
 def _running(session_id: SessionId) -> SessionRecord:
@@ -180,3 +185,48 @@ async def test_recording_an_event_keeps_the_resume_identity_it_was_saved_with(tm
     assert updated.resume_profile_id == ProfileId("claude")
     assert updated.resume_source_id == "source-123"
     assert updated == await store.get(session_id)
+
+
+def _failed(session_id: SessionId) -> SessionRecord:
+    return replace(_running(session_id), state=SessionState.FAILED)
+
+
+async def test_a_failed_session_whose_pane_went_keeps_why_it_ended(tmp_path) -> None:
+    store = SQLiteSessionStore(open_database(tmp_path / "sessions.sqlite3"))
+    session_id = SessionId.new()
+    await store.save(_failed(session_id))
+
+    await ReconciliationService(store, settle_after=timedelta(0)).reconcile(())
+
+    updated = await store.get(session_id)
+    assert updated is not None
+    assert updated.state is SessionState.ENDED
+    assert updated.terminal_reason == "reconciled_terminal_missing"
+
+
+async def test_a_failed_session_whose_pane_went_lets_its_worktree_go_to_the_cleanup(
+    tmp_path,
+) -> None:
+    """While the row read FAILED it held its folder for ever, because the store's `_HELD` rule
+    keeps a folder for any session not ended."""
+    connection = open_database(tmp_path / "sessions.sqlite3")
+    store = SQLiteSessionStore(connection)
+    worktrees = SQLiteWorktreeStore(connection)
+    session_id = SessionId.new()
+    await store.save(_failed(session_id))
+    folder = Worktree(
+        Path(tmp_path / "wt"),
+        ProjectId("opaque-editor"),
+        "agent/wt",
+        "main",
+        "0" * 40,
+        {},
+        datetime.now(UTC),
+        None,
+    )
+    await worktrees.record(folder, bound_to=session_id)
+    assert await worktrees.removable_candidates() == ()
+
+    await ReconciliationService(store, settle_after=timedelta(0)).reconcile(())
+
+    assert [item.path for item in await worktrees.removable_candidates()] == [folder.path]

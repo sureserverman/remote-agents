@@ -420,6 +420,9 @@ def _event_for_reconciliation(
         SessionState.RUNNING,
         SessionState.STOP_REQUESTED,
         SessionState.PRESERVED,
+        # A failed launch with no pane has nothing left to act on. Its `pane_dead` twin has no
+        # branch on purpose: `remain-on-exit` keeps that output on screen to be read.
+        SessionState.FAILED,
     }:
         return LifecycleEvent.RECONCILED_TERMINAL_MISSING
     if result.reason == "ambiguous_terminal" and record.state not in {

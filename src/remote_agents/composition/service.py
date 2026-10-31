@@ -41,6 +41,7 @@ from remote_agents.application.interrupted_resume import (
     RestartSnapshot,
     ResumeReport,
     SessionAtRestart,
+    may_be_interrupted,
 )
 from remote_agents.application.limit_lifts import LimitLiftWatcher
 from remote_agents.application.limit_resume import prune_outcomes
@@ -74,7 +75,7 @@ from remote_agents.ports.reported_roots import ReportedRoots
 from remote_agents.ports.session_store import SessionStore
 from remote_agents.ports.state_events import StoreChanged
 from remote_agents.ports.terminal import PromptDelivery
-from remote_agents.ports.turn_markers import ConversationMarks, TurnMarkers
+from remote_agents.ports.turn_markers import ConversationMarks, StartedMarks, TurnMarkers
 from remote_agents.ports.worktree_store import Worktree, WorktreeStore
 
 _LOG = logging.getLogger(__name__)
@@ -335,7 +336,7 @@ class RestartResume:
     """What `serve` needs to resume, at startup, the sessions a lost tmux server interrupted."""
 
     snapshot: Callable[[], Awaitable[RestartSnapshot | None]]
-    """Read before the first reconcile, while the lost records are still RUNNING. Never raises:
+    """Read before the first reconcile, while the lost records still read as they did. Never raises:
     None when the records themselves could not be read."""
     enabled: Callable[[], Awaitable[bool]]
     """The Settings switch, read toward off (`read_resume_interrupted(when_unsure=False)`)."""
@@ -357,6 +358,7 @@ def build_restart_resume(
     terminal: object,
     turn_markers: TurnMarkers,
     conversation_marks: ConversationMarks,
+    started_marks: StartedMarks,
     rollovers: SQLiteRolloverStore,
     capabilities: Callable[[], Awaitable[tuple[ProfileResumeCapability, ...]]],
     outcomes: InterruptedResumes,
@@ -386,14 +388,9 @@ def build_restart_resume(
         resumable: frozenset[ProfileId] = frozenset()
         pending: frozenset[str] = frozenset()
         try:
-            # Raises on anything but an absent server: then nothing is resumed on a guess.
-            started = await terminal.server_started_at()  # type: ignore[attr-defined]
-            listed = {
-                str(observation.session_id)
-                for observation in await terminal.managed_observations()  # type: ignore[attr-defined]
-            }
             # Unreadable is not empty: listed as empty, every session would be skipped for good
-            # (`no-conversation`) or resumed without its nudge.
+            # (`no-conversation`) or resumed without its nudge. Read before the server, so the
+            # notice's unchecked count can still tell which FAILED records took a turn.
             if not (turn_markers.listable() and conversation_marks.listable()):
                 raise RuntimeError("the turn markers or conversation marks cannot be listed")
             markers = frozenset(turn_markers.sessions())
@@ -401,6 +398,12 @@ def build_restart_resume(
                 mark = conversation_marks.latest(session)
                 if mark is not None:
                     marks[session] = mark
+            # Raises on anything but an absent server: then nothing is resumed on a guess.
+            started = await terminal.server_started_at()  # type: ignore[attr-defined]
+            listed = {
+                str(observation.session_id)
+                for observation in await terminal.managed_observations()  # type: ignore[attr-defined]
+            }
             pending = frozenset(
                 session
                 for session, outcome in (await outcomes.outcomes()).items()
@@ -409,7 +412,7 @@ def build_restart_resume(
             for record in records:
                 # A pending session is ENDED by now, and may have handed off since it was first
                 # judged: its rollover is read on the retry too.
-                if record.state is SessionState.RUNNING or str(record.session_id) in pending:
+                if may_be_interrupted(record, marks) or str(record.session_id) in pending:
                     latest = await rollovers.latest_for(record.session_id)
                     if latest is not None:
                         handed.append(latest)
@@ -452,6 +455,9 @@ def build_restart_resume(
         for session in conversation_marks.sessions():
             if session not in kept and session not in pending:
                 conversation_marks.forget(session)
+        for session in started_marks.sessions():
+            if session not in kept and session not in pending:
+                started_marks.forget(session)
 
     async def key_claimed(key: str) -> bool:
         return await store.idempotency_key_claimed(key)  # type: ignore[attr-defined]
@@ -1400,7 +1406,8 @@ async def _resume_held(restart: RestartResume, snapshot: RestartSnapshot) -> Non
         unchecked = sum(
             1
             for session in snapshot.sessions
-            if session.record.state is SessionState.RUNNING and not session.pane_listed
+            if may_be_interrupted(session.record, snapshot.conversation_marks)
+            and not session.pane_listed
         )
     try:
         await restart.forget_marks()

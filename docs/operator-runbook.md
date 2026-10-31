@@ -74,7 +74,7 @@ The same two steps without the fetched script:
 
 ```bash
 uv tool install --managed-python \
-  "remote-agents @ git+https://github.com/sureserverman/remote-agents@v0.67.2"
+  "remote-agents @ git+https://github.com/sureserverman/remote-agents@v0.68.0"
 remote-agents onboard --install-daemon
 ```
 
@@ -186,7 +186,7 @@ the repository and the version before installing anything:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/sureserverman/remote-agents/main/scripts/install.sh \
-  | REMOTE_AGENTS_VERSION=v0.67.2 bash
+  | REMOTE_AGENTS_VERSION=v0.68.0 bash
 remote-agents onboard --install-daemon
 ```
 
@@ -904,13 +904,21 @@ this. The terminal never does.
   false`). `serve` reads the switch once at startup, and an unreadable file counts as off. The
   Settings row reads the same file toward its default, so a file edited into a broken state
   while `serve` runs can show *on* in the row and resume nothing at the next start. With the
-  switch off, nothing is resumed and nothing is written, so conversation marks wait until a
-  start with it on.
-- **What counts as interrupted.** A record still `running` whose pane is gone, **and** a tmux
-  server that is gone or started after that record was created. Restarting only the service
+  switch off, nothing is resumed and nothing is written, so conversation marks and started
+  marks wait until a start with it on.
+- **What counts as interrupted.** A record still `running`, or a `failed` one with a readable
+  conversation mark, whose pane is gone, **and** a tmux server that is gone or started after that record was
+  created. The mark proves the agent took a turn, so a launch judged failed while it worked comes
+  back, and one that never ran does not. Restarting only the service
   leaves the panes alive, so nothing is resumed. Killing one pane while its server runs is not a
   restart either. The record ends as before, and nothing comes back.
-- **What comes back.** Each interrupted `running` session is resumed with `--resume <id>` /
+  **Before you run `upgrade` to 0.68.0, look for old `failed` rows.** `upgrade` restarts the
+  service, so afterwards is too late. A row from before it, with a mark, whose server has
+  restarted since, comes back at that start, even if only the service restarted. List the rows with
+  `sqlite3 ~/.local/state/remote-agents/sessions.sqlite3 "select session_id from sessions where state='failed'"`,
+  and compare them with `ls ~/.local/state/remote-agents/activity/conversations/`. A row with a
+  file there will come back. Force stop any you do not want.
+- **What comes back.** Each interrupted session is resumed with `--resume <id>` /
   `resume <id>` of its last conversation, in its worktree if it had one, labelled *resumed after
   restart*. The conversation is the agent's own id, which the hook writes at each turn's start to
   `~/.local/state/remote-agents/activity/conversations/<session>`. With no such mark, the
@@ -937,7 +945,8 @@ this. The terminal never does.
   a folder that could not be read. The notice says *it will be tried again at the next start*.
 - **The notice.** One message per start: *Resumed N sessions after restart*, then the sessions
   not resumed with their reasons, then the ones resumed but not nudged. It also says how many
-  sessions could not be judged when tmux could not be read. It waits until the bot is attached.
+  sessions could not be judged when tmux could not be read. A `failed` session is counted there
+  only when its marks could be read. It waits until the bot is attached.
   If nothing was interrupted, nothing is sent.
 - **Once, durably.** Every decision is written to `interrupted_resumes` in `sessions.sqlite3`
   (migration 20) before the first launch. A session with a final outcome is never acted on
@@ -1229,6 +1238,17 @@ uv run --locked remote-agents install-agent-hooks --provider cursor
 > be typed into the running turn. Agents read their hooks when a session starts, so sessions
 > already running pick the hook up only once they are relaunched.
 
+> **Upgrading to 0.68.0 or later: re-run the `claude` line.** It gained a `SessionStart` hook on
+> 2026-10-30 (DEC-135). When a managed session starts it leaves an empty file,
+> `started/<session id>` in the activity spool, and keeps nothing the session said. That file is
+> how the service knows Claude came up when its own startup warnings hold the banner off the
+> screen.
+>
+> **If you do not re-run it, nothing else changes.** A launch whose banner stays off the screen
+> is recorded `failed` at 20 seconds, as before 0.68.0, and is promoted to `running` by the
+> repair pass after its first prompt. Agents read their hooks when a session starts, so sessions
+> already running pick the hook up only once they are relaunched.
+
 `--remove` takes any of them back out. For opencode that deletes the generated plugin file as
 well as its entry, and it deletes only a file carrying this project's own generated-file marker:
 anything else standing at that path is left alone. For claude the same install also wraps the
@@ -1244,7 +1264,8 @@ Trust affects only local Codex execution; Telegram cannot approve, deny, or othe
 
 With no arguments this writes to `~/.claude/settings.json` — the owner's global agent
 configuration, which this project does not own — and adds one matcherless group to each of
-`Stop`, `StopFailure`, `Notification`, `PermissionRequest` and `UserPromptSubmit` (the
+`Stop`, `StopFailure`, `Notification`, `PermissionRequest`, `UserPromptSubmit` and
+`SessionStart` (the
 `INSTALLED_EVENTS` of `adapters/agents/claude/hooks.py`), each holding one command:
 
 ```json
@@ -1265,8 +1286,8 @@ because nothing reports it. Re-run the install after moving or rebuilding that v
 is recognised by the parsed words after the interpreter, so a stale entry is replaced rather than
 joined by a second one.
 
-**It merges, and it only ever adds those five groups.** Every other key, every other event, and
-every other group under those five events is copied across untouched — including a `SessionEnd`
+**It merges, and it only ever adds those six groups.** Every other key, every other event, and
+every other group under those six events is copied across untouched — including a `SessionEnd`
 hook of your own, which is the case this host's real settings file presents. **It is idempotent:**
 a second run reports `agent hooks already current in <path>` and writes nothing. If an entry
 already runs this subcommand in a form the installer does not recognise — a wrapper, a hand-edit,
@@ -1282,7 +1303,7 @@ line 2 column 1 (char 19)); it has been left untouched
 ```
 
 The same refusal, always without writing, covers a `hooks` key that is not a JSON object, one of
-those five events whose value is not a JSON array, a file whose exact formatting cannot be
+those six events whose value is not a JSON array, a file whose exact formatting cannot be
 reproduced (so a later `--remove` would reformat the rest of it), an empty `"hooks": {}` block
 that removal could not tell apart from no `hooks` key at all, and a file that changed on disk
 while the command was preparing its edit. Each prints its reason on standard error and exits 1.
@@ -1297,13 +1318,13 @@ anywhere else in production means the hooks spool where the service does not rea
 
 ### Verifying the install
 
-Confirm the five groups are present:
+Confirm the six groups are present:
 
 ```bash
 python3 -m json.tool ~/.claude/settings.json | grep -c 'remote_agents agent-event'
 ```
 
-That must report `5` (`4` before 0.49.0, which added `UserPromptSubmit`). Then confirm the guard, which is what makes a global hook safe to install —
+That must report `6` (`5` before 0.68.0, which added `SessionStart`; `4` before 0.49.0, which added `UserPromptSubmit`). Then confirm the guard, which is what makes a global hook safe to install —
 the hook writes nothing and exits 0 when `REMOTE_AGENTS_SESSION_ID` is absent from its
 environment, so a Claude session started outside a managed pane notifies nobody (a Codex hook is
 guarded by the roster instead, below):
@@ -2556,7 +2577,9 @@ Rolling the *code* back is the upgrade path run at the earlier tag: re-run the i
 re-install them with the older version. An older `--remove` does not know the `UserPromptSubmit`
 group, so it would stay behind. It would be harmless: the older hook records the event's name
 alone, which its drain discards, and never the prompt. Removing it first just leaves nothing
-behind. **Rolling back below 0.55.0: delete `cursor_limits_source` and `resume_after_limit`
+behind. **Rolling back below 0.68.0: the same, for `SessionStart`.** Remove the hooks while 0.68.0
+is installed. Left behind, the older hook records that event's name and its drain discards it.
+**Rolling back below 0.55.0: delete `cursor_limits_source` and `resume_after_limit`
 from the `[limits]` table of `config.toml` first.** Either Settings switch writes its key there
 the first time it is used, and an older version refuses a config with a key it does not know,
 so `serve`, `tui` and `add-project` would all fail to start. A host that never touched either

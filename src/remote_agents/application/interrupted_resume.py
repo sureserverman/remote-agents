@@ -1,10 +1,10 @@
 """Resume, once, the sessions a restart interrupted (DEC-127).
 
 A host reboot or a tmux crash takes every managed pane with it, and the first reconcile then
-ends each RUNNING record as `reconciled_terminal_missing`. This module decides, from a snapshot
-taken *before* that reconcile, which of those records come back in their own conversation and
-which are skipped, and why. The decision is pure: the pass that acts on it, and the tests, read
-the same table.
+ends each RUNNING or FAILED record as `reconciled_terminal_missing`. This module decides, from a
+snapshot taken *before* that reconcile, which of those records come back in their own
+conversation and which are skipped, and why. The decision is pure: the pass that acts on it, and
+the tests, read the same table.
 """
 
 from __future__ import annotations
@@ -148,11 +148,15 @@ class ResumeDecision:
 def plan_resumes(snapshot: RestartSnapshot) -> tuple[ResumeDecision, ...]:
     """Decide every interrupted session once, oldest first.
 
-    **Interrupted means lost with its server.** A RUNNING record counts only when its pane is
-    not listed and the server is absent or started after the record was created. A
-    service-only restart leaves panes alive, and one pane killed under a live server is the
-    owner's doing, not this feature's case. Only RUNNING records count (DEC-020). There is no
-    age limit (owner ruling).
+    **Interrupted means lost with its server.** A record counts only when its pane is not
+    listed and the server is absent or started after the record was created. A service-only
+    restart leaves panes alive, and one pane killed under a live server is the owner's doing,
+    not this feature's case. There is no age limit (owner ruling).
+
+    **Which records can count** is `may_be_interrupted`: RUNNING, and FAILED with a conversation
+    mark (DEC-135, amending DEC-127), because readiness can be misjudged while the agent works.
+    A FAILED record with no mark never took a turn, so it is not considered at all, and no
+    other state counts (DEC-020), except a session an earlier start left `resuming`.
     """
     if not snapshot.server_known:
         return ()
@@ -160,7 +164,9 @@ def plan_resumes(snapshot: RestartSnapshot) -> tuple[ResumeDecision, ...]:
         (
             session.record
             for session in snapshot.sessions
-            if _interrupted(session, snapshot.server_started_at, snapshot.pending)
+            if _interrupted(
+                session, snapshot.server_started_at, snapshot.pending, snapshot.conversation_marks
+            )
         ),
         key=lambda record: (record.created_at, str(record.session_id)),
     )
@@ -206,14 +212,36 @@ def plan_resumes(snapshot: RestartSnapshot) -> tuple[ResumeDecision, ...]:
     return tuple(decisions)
 
 
+def may_be_interrupted(record: SessionRecord, marks: Mapping[str, str]) -> bool:
+    """Whether this record's state and marks let a lost server count it as interrupted.
+
+    A FAILED record needs a mark that reads as an identifier: its `resume_source_id` alone does
+    not count, because a resume that failed never proved a turn."""
+    if record.state is SessionState.RUNNING:
+        return True
+    if record.state is not SessionState.FAILED:
+        return False
+    mark = marks.get(str(record.session_id))
+    if mark is None:
+        return False
+    try:
+        ProviderConversationId(mark)
+    except ValueError:
+        return False
+    return True
+
+
 def _interrupted(
-    session: SessionAtRestart, server_started_at: datetime | None, pending: frozenset[str]
+    session: SessionAtRestart,
+    server_started_at: datetime | None,
+    pending: frozenset[str],
+    marks: Mapping[str, str],
 ) -> bool:
     if session.pane_listed:
         return False
     if str(session.record.session_id) in pending:
         return True
-    if session.record.state is not SessionState.RUNNING:
+    if not may_be_interrupted(session.record, marks):
         return False
     return (
         server_started_at is None

@@ -44,16 +44,18 @@ def test_a_failed_session_whose_pane_is_live_is_promoted_back_to_running() -> No
     assert transition(record.state, event).to_state is SessionState.RUNNING
 
 
-def test_a_failed_session_whose_pane_is_gone_stays_failed() -> None:
-    """Promotion must rest on the pane, not on optimism about it."""
+def test_a_failed_session_whose_pane_is_gone_ends_and_is_not_promoted() -> None:
+    """Promotion must rest on the pane, not on optimism about it, and with no pane the row has
+    nothing left to act on."""
     session_id = SessionId.new()
     record = _record(session_id, SessionState.FAILED)
 
     (result,) = reconcile((record,), ())
     event = _event_for_reconciliation(record, result)
 
-    assert event is None
+    assert event is LifecycleEvent.RECONCILED_TERMINAL_MISSING
     assert result.state is SessionState.ENDED
+    assert transition(record.state, event).to_state is SessionState.ENDED
 
 
 @pytest.mark.parametrize(

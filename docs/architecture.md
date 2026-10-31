@@ -401,13 +401,14 @@ open the database. No provider selection, profile mutation or hook-trust change 
 
 ## DEC-127 — resuming after a restart
 
-When a reboot or a tmux crash takes the managed panes, `serve` resumes each interrupted RUNNING
+When a reboot or a tmux crash takes the managed panes, `serve` resumes each interrupted
 session once, in its own conversation, and nudges the ones that were mid-turn.
 
 - `adapters/agents/turn_markers.py` (`FileConversationMarks`) reads the conversation marks the
   hook writes at a turn's start, only when that agent owns the session's turn marker.
 - `TerminalPort.server_started_at()` tells a lost server from a service-only restart. A record
-  was interrupted when its pane is not listed and the server is absent or newer than the record.
+  was interrupted when its pane is not listed and the server is absent or newer than the record,
+  and it is RUNNING or is FAILED with a conversation mark (`may_be_interrupted`, DEC-135).
 - `application/interrupted_resume.py`: `plan_resumes` is the pure decision over a
   `RestartSnapshot` taken before the first reconcile. `InterruptedResumePass` resumes through
   `SessionService.resume` under `restart:<session>`, then types `limit_resume.NUDGE` through
