@@ -130,6 +130,7 @@ _SWEEP = {
     "composed_slash.txt": PromptReason.MENU,
     "composed_slash_arguments.txt": None,
     "composed_slash_arguments_banded.txt": None,
+    "composed_slash_arguments_remote_control.txt": None,
     "composed_styled.txt": None,
     "dialog_after_pasted_y.txt": PromptReason.DIALOG,
     "dialog_approval.txt": PromptReason.DIALOG,
@@ -140,7 +141,7 @@ _SWEEP = {
     "idle_multiline_status.txt": None,
     "idle_narrow.txt": None,
     "idle_remote_control_disconnected.txt": None,
-    "idle_remote_control_enabled.txt": PromptReason.MENU,
+    "idle_remote_control_enabled.txt": None,
     "idle_suggestion.txt": None,
     "idle_under_plan_band.txt": None,
 }
@@ -178,3 +179,43 @@ def test_the_menu_free_check_is_linear_in_the_screen() -> None:
     enter_refusal(screen, CLAUDE, TYPED)
 
     assert time.monotonic() - started < 0.5
+
+
+_REMOTE_CONTROL = (_FIXTURES / "composed_slash_arguments_remote_control.txt").read_text(
+    encoding="utf-8"
+)
+_ADOPT = (
+    "/planning:executing-plans --adopt-handoff h-9e177cea621d4a8bf91f "
+    "--handoff-root /home/user/dev/smoke-routing/k-alder"
+)
+
+
+def test_remote_controls_own_notice_is_not_a_command_menu() -> None:
+    """Measured on the live service, 2026-10-31: a fresh destination has no plan row, so this
+    notice sits directly above the composer and every cross-project adoption was refused."""
+    assert "  /remote-control is active" in unstyled(_REMOTE_CONTROL)
+    assert enter_refusal(_REMOTE_CONTROL, CLAUDE, _ADOPT) is None
+
+
+def test_that_notice_passes_with_no_blank_row_before_the_composer_too() -> None:
+    """A shorter pane draws no blank rows between the notice and the composer's rule."""
+    screen = re.sub(r"(?m)^[ \t\xa0]*\n(?=(?:[ \t\xa0]*\n)*.*─{10,})", "", _REMOTE_CONTROL)
+    rows = unstyled(screen).splitlines()
+    rule = next(index for index, line in enumerate(rows) if line.startswith("─"))
+    assert rows[rule - 1].startswith("  /remote-control is active")
+    assert enter_refusal(screen, CLAUDE, _ADOPT) is None
+
+
+@pytest.mark.parametrize(
+    "row",
+    [
+        "  /remote-control                 Continue this session on your phone",
+        "  /remote-control is",
+        "  /remote-controls is active",
+        _STATUS_ROW,
+    ],
+)
+def test_only_that_exact_notice_is_let_through(row: str) -> None:
+    screen = re.sub(r"(?m)^.*/remote-control is active.*$", row, _REMOTE_CONTROL)
+    assert row in screen
+    assert enter_refusal(screen, CLAUDE, _ADOPT) is PromptReason.MENU
