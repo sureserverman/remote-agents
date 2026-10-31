@@ -118,10 +118,10 @@ def resolve(
     entry, by its recorded resume id or by a thread that launch bound (`thread_binding`). Two
     entries claiming the thread refuse. A binding to a session off the roster claims nothing, so
     a later session can resume that thread. An untrusted binding store refuses every thread, a
-    resumed one too: nothing it holds can be ruled out as a second claim. Current marks can invalidate a binding, but cannot
-    establish one: their own hook attribution uses the same folder/time heuristic. Fresh
-    conversations without a binding refuse, including their first cross-repo call. A report of
-    the destination is never identity evidence.
+    resumed one too: nothing it holds can be ruled out as a second claim. Current marks can
+    invalidate a binding, but cannot establish one: their own hook attribution uses the same
+    folder/time heuristic. Fresh conversations without a binding refuse, including their first
+    cross-repo call. A report of the destination is never identity evidence.
     """
     if safe_session_id(thread_id) is None:
         return None
