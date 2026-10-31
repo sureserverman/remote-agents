@@ -136,7 +136,9 @@ def _after_new(drill: Drill) -> dict[str, object]:  # noqa: F811
     before = _read_seen(workspace / "before.txt", 30.0)
     _settled(drill, pane)
     _send(drill.socket, pane, "/new")
-    # A line typed about 3 s after `/new` lost its start and reached the agent as a prompt.
+    # In a Git worktree `/new` opens a picker. Typed keys are dropped until a digit answers it: the
+    # `1` of `pytest-1…` cost the next line its first 32 characters, and the rest reached the agent
+    # as a prompt. So `after` comes from an agent turn, which still shows the new thread's id.
     time.sleep(15.0)
     _settled(drill, pane)
     # Absolute: `/new` has been seen to move the pane to a Codex worktree under its home.
@@ -251,8 +253,8 @@ _BOUND_SCRIPT = 'printf "%s" "${CODEX_THREAD_ID-}" > "$(dirname "$0")/bound.txt"
 
 
 def _composer_holds(screen: str, line: str) -> bool:
-    """Whether the composer shows `line` whole. Codex wraps it, so spaces say nothing."""
-    return "›" + "".join(line.split()) in "".join(screen.split())
+    """Whether the screen shows `line` whole. Codex wraps it and draws `! ` as its prompt."""
+    return "".join(line.split()) in "".join(screen.split())
 
 
 def _line_route(
@@ -307,6 +309,9 @@ def test_measure_bang_line_routes(drill: Drill) -> None:  # noqa: F811
 
     The first drill's short lines never lost their start, and its long lines after `/new` did. It
     typed keys, and the service's `paste-buffer -p` was never tried. Results are for reading.
+
+    Recorded 2026-10-31 with an older matcher that looked for `›!`, so `whole` read False and Enter
+    was never pressed: the recorded screens show the line, and `ran` was not measured.
     """
     result: list[dict[str, object]] = []
     out = os.environ.get("RA_PREMISE_LINE_OUT")
