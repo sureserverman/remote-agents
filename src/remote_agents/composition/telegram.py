@@ -370,6 +370,7 @@ def _private_boundary(
                 folders=worktrees.folders,
                 # What `remote-agents session-id` recorded, by the same rule it wrote with.
                 reported=FileReportedRoots(paths.activity_directory, accept=acceptable_root),
+                refresh_projects=projects.refresh,
             )
         ),
         rollover_notifier=boundary.rollover_notifier,

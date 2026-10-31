@@ -54,6 +54,7 @@ from remote_agents.application.schedules import SchedulePass
 from remote_agents.application.services import ResumeOutcome, SessionService
 from remote_agents.application.session_actions import notifiable
 from remote_agents.application.session_folders import live_folder
+from remote_agents.application.session_views import CATALOGUE_GAP_RETRY_SECONDS
 from remote_agents.application.worktree_cleanup import WorktreeCleanupPass
 from remote_agents.application.worktrees import main_checkout
 from remote_agents.config import TelegramSecrets
@@ -923,6 +924,52 @@ def build_worktree_listing(
     ).kept
 
 
+class CatalogueGap:
+    """Re-read the projects when a session names one this service has not read yet.
+
+    The pass reads envelopes under each project's folder, so a project made since the last read
+    and launched from the console, another process, would be watched only once the bot happened
+    to open a picker. A failed read is logged and the pass goes on; a project that stays unknown
+    is retried at most once per `retry_seconds`, as the surfaces' own gap is.
+    """
+
+    def __init__(
+        self,
+        known: Mapping[ProjectId, Path],
+        refresh: Callable[[], object],
+        clock: Callable[[], float] = time.monotonic,
+        *,
+        retry_seconds: float = CATALOGUE_GAP_RETRY_SECONDS,
+    ) -> None:
+        self._known = known
+        self._read = self.reader(refresh)
+        self._clock = clock
+        self._retry_seconds = retry_seconds
+        self._read_at: float | None = None
+
+    @staticmethod
+    def reader(refresh: Callable[[], object]) -> Callable[[], Awaitable[None]]:
+        """`refresh` off the event loop: it walks the development root. It never raises."""
+
+        async def read() -> None:
+            try:
+                await asyncio.to_thread(refresh)
+            except Exception:
+                _LOG.exception("the project catalogue could not be re-read for a rollover")
+
+        return read
+
+    async def close(self, records: Iterable[SessionRecord]) -> None:
+        if all(record.project_id in self._known for record in records):
+            self._read_at = None
+            return
+        now = self._clock()
+        if self._read_at is not None and now - self._read_at < self._retry_seconds:
+            return
+        self._read_at = now
+        await self._read()
+
+
 def build_rollover_pass(
     *,
     connection,
@@ -936,6 +983,7 @@ def build_rollover_pass(
     worktrees: WorktreeStore | None = None,
     reported: ReportedRoots | None = None,
     folders: FolderBindings | None = None,
+    refresh_projects: Callable[[], object] | None = None,
 ) -> RolloverPass:
     """The rollover pass `serve` runs, and only `serve` (DEC-115, DEC-015/070: built here,
     beside the loop that runs it, so no other composition has one to run).
@@ -959,6 +1007,14 @@ def build_rollover_pass(
     """
 
     rollovers = SQLiteRolloverStore(connection)
+    gap = None if refresh_projects is None else CatalogueGap(project_paths, refresh_projects)
+    read_projects = None if refresh_projects is None else CatalogueGap.reader(refresh_projects)
+
+    async def sessions_seen() -> tuple[SessionRecord, ...]:
+        records = tuple(await sessions.list_sessions())
+        if gap is not None:
+            await gap.close(records)
+        return records
 
     async def held_sessions() -> tuple[SessionId, ...]:
         named: list[SessionId] = []
@@ -989,7 +1045,7 @@ def build_rollover_pass(
         rollovers,
         FileHandoffEnvelopes(),
         adopt_templates=adopt_templates,
-        sessions=sessions.list_sessions,
+        sessions=sessions_seen,
         handoff_root=lambda project: handoff_root(project_paths.get(project)),
         worktree_roots=worktree_roots,
         reported_roots=(
@@ -1006,7 +1062,7 @@ def build_rollover_pass(
         notify=notify,
         operation=operation,
         resolve_destination=RolloverDestinations(
-            project_paths, destination_branch, worktrees
+            project_paths, destination_branch, worktrees, refresh=read_projects
         ).resolve,
         resolve_legacy_destination=RolloverDestinations(
             project_paths, destination_branch, worktrees

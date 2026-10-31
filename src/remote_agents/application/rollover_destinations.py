@@ -8,7 +8,7 @@ from remote_agents.application.session_folders import live_folder
 from remote_agents.domain.models import ProjectId
 from remote_agents.ports.handoff_envelopes import HandoffDestination
 from remote_agents.ports.rollover_store import ResolvedRolloverDestination
-from remote_agents.ports.worktree_store import WorktreeStore
+from remote_agents.ports.worktree_store import Worktree, WorktreeStore
 
 
 class DestinationRefused(ValueError):
@@ -23,22 +23,22 @@ class RolloverDestinations:
         projects: Mapping[ProjectId, Path],
         inspect_branch: Callable[[Path], Awaitable[str | None]],
         worktrees: WorktreeStore | None = None,
+        *,
+        refresh: Callable[[], Awaitable[None]] | None = None,
     ) -> None:
         self._projects = projects
         self._inspect = inspect_branch
         self._worktrees = worktrees
+        self._refresh = refresh
 
     async def resolve(self, destination: HandoffDestination) -> ResolvedRolloverDestination:
         try:
             root = destination.root
-            candidates = []
-            for project, registered in tuple(self._projects.items()):
-                if registered.resolve() == root:
-                    candidates.append((project, None))
-                if self._worktrees is not None:
-                    for worktree in await self._worktrees.live_for_project(project):
-                        if worktree.path.resolve() == root:
-                            candidates.append((project, worktree))
+            candidates = await self._candidates(root)
+            if not candidates and self._refresh is not None:
+                # A project made since the catalogue was last read is not unregistered.
+                await self._refresh()
+                candidates = await self._candidates(root)
             if not candidates:
                 raise DestinationRefused("destination-unregistered")
             if len(candidates) != 1:
@@ -57,6 +57,17 @@ class RolloverDestinations:
             # runtimes may instead return a path the Git inspector refuses. Both are
             # input refusals, so neither may disappear into the pass's retry logger.
             raise DestinationRefused("destination-root") from error
+
+    async def _candidates(self, root: Path) -> list[tuple[ProjectId, Worktree | None]]:
+        candidates: list[tuple[ProjectId, Worktree | None]] = []
+        for project, registered in tuple(self._projects.items()):
+            if registered.resolve() == root:
+                candidates.append((project, None))
+            if self._worktrees is not None:
+                for worktree in await self._worktrees.live_for_project(project):
+                    if worktree.path.resolve() == root:
+                        candidates.append((project, worktree))
+        return candidates
 
     async def resolve_legacy(
         self,
