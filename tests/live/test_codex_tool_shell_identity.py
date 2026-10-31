@@ -223,7 +223,9 @@ def drill(
         command = codex_command(Path(shutil.which("codex")), root, codex_home)
         (codex_home / "config.toml").write_text(
             # The probe writes into its own folder, and nothing may stop to ask.
+            # bwrap holds /tmp read-only, so Codex could not guard a /tmp/.git for its own sandbox.
             'approval_policy = "never"\nsandbox_mode = "workspace-write"\n'
+            "[sandbox_workspace_write]\nexclude_slash_tmp = true\nexclude_tmpdir_env_var = true\n"
             "[notice]\nhide_rate_limit_model_nudge = true\n",
             encoding="utf-8",
         )
@@ -317,13 +319,15 @@ def _send(socket: str, pane: str, text: str) -> None:
     _tmux(socket, "send-keys", "-t", pane, "Enter")
 
 
-def _token_pane(drill: Drill, workspace: Path, name: str, token: str | None) -> dict[str, object]:
+def _token_pane(
+    drill: Drill, workspace: Path, name: str, token: str | None, marker: str | None = None
+) -> dict[str, object]:
     """What this pane's shells saw, through the owner's `!` command and through an agent turn."""
     (workspace / "token.sh").write_text(_TOKEN_SCRIPT, encoding="utf-8")
     flags = (
         () if token is None else ("-c", f'shell_environment_policy.set.RA_BINDING_PROBE="{token}"')
     )
-    pane = _open(drill.socket, name, workspace, drill.codex_home, None, (*drill.command, *flags))
+    pane = _open(drill.socket, name, workspace, drill.codex_home, marker, (*drill.command, *flags))
     _send(drill.socket, pane, "!sh token.sh seen-bang.txt")
     bang = _read_seen(workspace / "seen-bang.txt", 30.0)
     _send(drill.socket, pane, "Run the shell command `sh token.sh seen-turn.txt`, then reply: done")
@@ -337,10 +341,13 @@ def test_measure_launch_token_reaches_only_its_own_threads_shells(drill: Drill) 
 
     Pane A starts the daemon, pane B attaches to it, and a third Codex carries no token. Each
     reports its shells' view; the whole result is written to `RA_TOKEN_PROBE_OUT` for reading.
+    Only A's pane carries the session variable: an agent turn in B or the third that still sees
+    it proves those turns ran under A's daemon, so their tokens did not come from a daemon each.
     """
     root = drill.project.parent
+    marker = "daemon-of-pane-a"
     results = {
-        "a": _token_pane(drill, root / "a", "token-a", "token-a"),
+        "a": _token_pane(drill, root / "a", "token-a", "token-a", marker),
         "b": _token_pane(drill, root / "b", "token-b", "token-b"),
         "none": _token_pane(drill, drill.project, "token-none", None),
     }
@@ -353,3 +360,4 @@ def test_measure_launch_token_reaches_only_its_own_threads_shells(drill: Drill) 
             seen = result[route]
             assert seen is not None, f"{name} {route} wrote nothing:\n{result['screen']}"
             assert seen["token"] == expected, f"{name} {route}: {seen}"
+        assert result["turn"]["session"] == marker, f"{name} turn is not on A's daemon: {result}"
