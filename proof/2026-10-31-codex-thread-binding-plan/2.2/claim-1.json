@@ -1,13 +1,13 @@
 {
  "baseline": {
-  "elapsed_s": 0.4,
+  "elapsed_s": 0.6,
   "exit": 0,
-  "tail": ".                                                                        [100%]\n1 passed, 19 deselected in 0.20s"
+  "tail": ".                                                                        [100%]\n1 passed, 19 deselected in 0.39s"
  },
  "break_patch": "--- a/src/remote_agents/adapters/agents/hook_identity.py\n+++ b/src/remote_agents/adapters/agents/hook_identity.py\n@@ -141,7 +141,7 @@\n             return None\n         claimants = {entry.session_id for entry in entries if entry.resume_source_id == thread_id}\n         if any(entry.session_id == bound for entry in entries):\n-            claimants.add(bound)\n+            pass\n         if len(claimants) != 1:\n             return None\n         session_id = next(iter(claimants))\n",
  "build": null,
- "created": "2026-10-31T22:52:17+00:00",
- "fingerprint": "b714490ed411b88e81513e6e0920f6b6918aab3ee9e526ea4662dee8cc4912f7",
+ "created": "2026-11-01T00:10:21+00:00",
+ "fingerprint": "46593df0c23e4168d111a513674a46fbedd4e8b0c1d29e001d377fb6de820567",
  "index": 1,
  "kind": "claim",
  "named_break": null,
@@ -16,7 +16,7 @@
  "red": {
   "elapsed_s": 0.3,
   "exit": 1,
-  "tail": "F                                                                        [100%]\n=================================== FAILURES ===================================\n______________________ test_fresh_thread_bound_then_named ______________________\n\nspool = PosixPath('/tmp/pytest-of-user/pytest-198/test_fresh_thread_bound_then_n0/spool')\ncapsys = <_pytest.capture.CaptureFixture object at 0x70ed05cc96a0>\ntmp_path = PosixPath('/tmp/pytest-of-user/pytest-198/test_fresh_thread_bound_then_n0')\nmonkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x70ed05c228b0>\n\n    def test_fresh_thread_bound_then_named(\n        spool: Path, capsys: pytest.CaptureFixture[str], tmp_path: Path, monkeypatch: pytest.MonkeyPatch\n    ) -> None:\n        session = str(SessionId.new())\n        _roster(spool, (session, None))\n        assert _named(spool, capsys) == (3, \"\")\n        nonce = mint_nonce(spool, session)\n        capsys.readouterr()\n        assert _bind(spool, session, nonce) == 0\n        assert capsys.readouterr() == (\"\", \"\")\n>       assert _named(spool, capsys) == (0, f\"{session}\\n\")\nE       AssertionError: assert (3, '') == (0, '5533883d...7bc6bf7916\\n')\nE         \nE         At index 0 diff: 3 != 0\nE         Use -v to get more diff\n\n/tmp/remote-agents-thread-binding/tests/unit/test_bind_thread_command.py:78: AssertionError\n=========================== short test summary info ============================\nFAILED tests/unit/test_bind_thread_command.py::test_fresh_thread_bound_then_named\n1 failed, 19 deselected in 0.07s"
+  "tail": "F                                                                        [100%]\n=================================== FAILURES ===================================\n______________________ test_fresh_thread_bound_then_named ______________________\n\nspool = PosixPath('/tmp/pytest-of-user/pytest-227/test_fresh_thread_bound_then_n0/spool')\ncapsys = <_pytest.capture.CaptureFixture object at 0x721a63279a90>\ntmp_path = PosixPath('/tmp/pytest-of-user/pytest-227/test_fresh_thread_bound_then_n0')\nmonkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x721a6321afd0>\n\n    def test_fresh_thread_bound_then_named(\n        spool: Path, capsys: pytest.CaptureFixture[str], tmp_path: Path, monkeypatch: pytest.MonkeyPatch\n    ) -> None:\n        session = str(SessionId.new())\n        _roster(spool, (session, None))\n        assert _named(spool, capsys) == (3, \"\")\n        nonce = mint_nonce(spool, session)\n        capsys.readouterr()\n        assert _bind(spool, session, nonce) == 0\n        assert capsys.readouterr() == (\"\", \"\")\n>       assert _named(spool, capsys) == (0, f\"{session}\\n\")\nE       AssertionError: assert (3, '') == (0, '92048f53...44b4e415f7\\n')\nE         \nE         At index 0 diff: 3 != 0\nE         Use -v to get more diff\n\n/tmp/remote-agents-thread-binding/tests/unit/test_bind_thread_command.py:78: AssertionError\n=========================== short test summary info ============================\nFAILED tests/unit/test_bind_thread_command.py::test_fresh_thread_bound_then_named\n1 failed, 19 deselected in 0.08s"
  },
  "schema": 2,
  "shell": "bash",

@@ -1,22 +1,22 @@
 {
  "baseline": {
-  "elapsed_s": 50.5,
+  "elapsed_s": 48.4,
   "exit": 0,
-  "tail": "........................................................................ [ 19%]\n........................................................................ [ 39%]\n........................................................................ [ 59%]\n........................................................................ [ 79%]\n........................................................................ [ 99%]\n...                                                                      [100%]\n363 passed in 47.69s"
+  "tail": "........................................................................ [ 19%]\n........................................................................ [ 39%]\n........................................................................ [ 59%]\n........................................................................ [ 78%]\n........................................................................ [ 98%]\n......                                                                   [100%]\n366 passed in 45.73s"
  },
  "break_patch": "--- a/src/remote_agents/adapters/tmux/composer.py\n+++ b/src/remote_agents/adapters/tmux/composer.py\n@@ -181,8 +181,6 @@\n     \"\"\"\n     if dialog_on_screen(capture, descriptor):\n         return PromptReason.DIALOG\n-    if not in_shell_mode(capture, descriptor):\n-        return PromptReason.DRAFT_NOT_SEEN\n     if \"\".join(line.split()) not in \"\".join(_normalised(capture).split()):\n         return PromptReason.DRAFT_NOT_SEEN\n     return None\n",
  "build": null,
- "created": "2026-10-31T23:17:40+00:00",
- "fingerprint": "ec61539f447eff6873c8aacf38ab4b703e8792099946c10e6f3aaa5d26be1043",
+ "created": "2026-11-01T00:11:58+00:00",
+ "fingerprint": "46593df0c23e4168d111a513674a46fbedd4e8b0c1d29e001d377fb6de820567",
  "index": 1,
  "kind": "claim",
  "named_break": null,
  "no_build_reason": "pure python, no build",
  "plan": "/mnt/vault/Portfolio/infra/remote-agents/plans/2026-10-31-codex-thread-binding-plan.md",
  "red": {
-  "elapsed_s": 49.3,
+  "elapsed_s": 48.7,
   "exit": 1,
-  "tail": "...................................F.................................... [ 19%]\n........................................................................ [ 39%]\n........................................................................ [ 59%]\n........................................................................ [ 79%]\n........................................................................ [ 99%]\n...                                                                      [100%]\n=================================== FAILURES ===================================\n______________ test_the_whole_line_outside_shell_mode_is_refused _______________\n\n    def test_the_whole_line_outside_shell_mode_is_refused() -> None:\n        \"\"\"Shown whole, but under the agent's own prompt: `Enter` would hand it to the agent.\"\"\"\n        screen = (\n            f\"\\n  >_ OpenAI Codex (v0.166.0)\\n     /w\\n\\n\\n\\n\u203a {_LINE}\\n\\n  GPT-6.1-Sol default \u00b7 /w\\n\"\n        )\n>       assert shell_line_refusal(screen, _CODEX, _LINE) is PromptReason.DRAFT_NOT_SEEN\nE       AssertionError: assert None is <PromptReason.DRAFT_NOT_SEEN: 'draft_not_seen'>\nE        +  where None = shell_line_refusal('\\n  >_ OpenAI Codex (v0.166.0)\\n     /w\\n\\n\\n\\n\u203a !/tmp/remote-agents-thread-binding/.venv/bin/python -I -m remote_age...aaaaaaaaaaaaa --nonce bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\\n\\n  GPT-6.1-Sol default \u00b7 /w\\n', ProviderDescriptor(profile_id=ProfileId(value='codex'), glyph='\ud83d\udd37', name='Codex', permission_presets=(<PermissionPreset...te_agents.adapters.agents.codex.remote_control.CodexRemoteControl object at 0x75fb4d32cad0>, reserved_keys=frozenset()), '!/tmp/remote-agents-thread-binding/.venv/bin/python -I -m remote_agents bind-thread --activity-dir /state/activity --session aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa --nonce bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb')\nE        +  and   <PromptReason.DRAFT_NOT_SEEN: 'draft_not_seen'> = PromptReason.DRAFT_NOT_SEEN\n\ntests/unit/adapters/tmux/test_binding_line.py:128: AssertionError\n=========================== short test summary info ============================\nFAILED tests/unit/adapters/tmux/test_binding_line.py::test_the_whole_line_outside_shell_mode_is_refused\n1 failed, 362 passed in 46.66s"
+  "tail": "...................................F.................................... [ 19%]\n........................................................................ [ 39%]\n........................................................................ [ 59%]\n........................................................................ [ 78%]\n........................................................................ [ 98%]\n......                                                                   [100%]\n=================================== FAILURES ===================================\n______________ test_the_whole_line_outside_shell_mode_is_refused _______________\n\n    def test_the_whole_line_outside_shell_mode_is_refused() -> None:\n        \"\"\"Shown whole, but under the agent's own prompt: `Enter` would hand it to the agent.\"\"\"\n        screen = (\n            f\"\\n  >_ OpenAI Codex (v0.166.0)\\n     /w\\n\\n\\n\\n\u203a {_LINE}\\n\\n  GPT-6.1-Sol default \u00b7 /w\\n\"\n        )\n>       assert shell_line_refusal(screen, _CODEX, _LINE) is PromptReason.DRAFT_NOT_SEEN\nE       AssertionError: assert None is <PromptReason.DRAFT_NOT_SEEN: 'draft_not_seen'>\nE        +  where None = shell_line_refusal('\\n  >_ OpenAI Codex (v0.166.0)\\n     /w\\n\\n\\n\\n\u203a !/tmp/remote-agents-thread-binding/.venv/bin/python -I -m remote_age...aaaaaaaaaaaaa --nonce bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\\n\\n  GPT-6.1-Sol default \u00b7 /w\\n', ProviderDescriptor(profile_id=ProfileId(value='codex'), glyph='\ud83d\udd37', name='Codex', permission_presets=(<PermissionPreset...te_agents.adapters.agents.codex.remote_control.CodexRemoteControl object at 0x72594ce012b0>, reserved_keys=frozenset()), '!/tmp/remote-agents-thread-binding/.venv/bin/python -I -m remote_agents bind-thread --activity-dir /state/activity --session aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa --nonce bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb')\nE        +  and   <PromptReason.DRAFT_NOT_SEEN: 'draft_not_seen'> = PromptReason.DRAFT_NOT_SEEN\n\ntests/unit/adapters/tmux/test_binding_line.py:126: AssertionError\n=========================== short test summary info ============================\nFAILED tests/unit/adapters/tmux/test_binding_line.py::test_the_whole_line_outside_shell_mode_is_refused\n1 failed, 365 passed in 46.06s"
  },
  "schema": 2,
  "shell": "bash",
@@ -27,7 +27,7 @@
   "src/remote_agents/adapters/tmux/composer.py"
  ],
  "touched_blobs": {
-  "src/remote_agents/adapters/tmux/composer.py": "49abb9ebbf9cc3f578f63630f5b93038d438d575"
+  "src/remote_agents/adapters/tmux/composer.py": "d62c3bd0f5c8f94468bf7facde20c53585b1772a"
  },
  "witness_blobs": {
   "tests/architecture/check_imports.py": "52812745fe5918684ee7d7a5e552edf0eb0a558c",
@@ -44,11 +44,11 @@
   "tests/architecture/test_every_child_process_is_bounded.py": "733ebd6a66baff43059be54b44c1ee104364dd27",
   "tests/architecture/test_every_parser_refuses_to_echo.py": "e8c966b288b93b1d8d03792ad206a48024cdb8d9",
   "tests/architecture/test_frontends_share_one_backend.py": "552089e0fc314cd8b9ebfcc5a5136934846df442",
-  "tests/architecture/test_keyed_paths.py": "68ddf326a1d1fd17076d9e23c903088b9fb8b81d",
+  "tests/architecture/test_keyed_paths.py": "739d005fc2002c932dc3d9a451f1959000659be8",
   "tests/architecture/test_policy_matches_domain.py": "90b6c6e8fe3e4504707d72bfcaff08ead6b7d2c5",
   "tests/architecture/test_provider_contract_kit_is_not_vacuous.py": "d3fc2a4b216fb5a1f9a1c043afdd2ba89bb89864",
   "tests/architecture/test_session_folder_readers.py": "ab9c07e8daab1f8815f1c70d50a69b7074bf54ec",
-  "tests/architecture/test_session_id_command.py": "579802d2402261199a01e856b6e56b3a45110d1c",
+  "tests/architecture/test_session_id_command.py": "fca6e1dee3202ac6be0ccdca615636d837250a94",
   "tests/architecture/test_sessions_redraws_keep_the_cursor.py": "de506d5400d85ca7f3faccc0c7d131af906b290f",
   "tests/architecture/test_shared_modules_name_no_provider.py": "4ac3c44c76338ded9d06ee47eec32cc42327d97b",
   "tests/architecture/test_socket_cleanup_runs_once.py": "5e571e5fbc6e4603a1f5ed9ba4fa66adf1cd5de8",
@@ -66,7 +66,7 @@
   "tests/architecture/test_the_trust_authority_is_wired_once.py": "cac5b24162b55a5c64282d7972aa5c7fa43c4e12",
   "tests/architecture/test_unattended_launch_keyed.py": "243b7dec63ccee665d77113e58eaf47a047d6628",
   "tests/architecture/test_wording_belongs_to_a_surface.py": "e77c540178539bb42314a747dd65ede72dc5b013",
-  "tests/unit/adapters/tmux/test_binding_line.py": "22fabc81a09f520865747b152144d2badf7caea7",
+  "tests/unit/adapters/tmux/test_binding_line.py": "dca8bb9f380400e48def23af76dd620819ac0b39",
   "tests/unit/application/test_thread_binding_launch.py": "8131d957cc73ff6a84a5c19ace9b29804a3ce035"
  }
 }
