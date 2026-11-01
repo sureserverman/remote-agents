@@ -188,6 +188,18 @@ def shell_line_refusal(
     return None
 
 
+def stale_shell_line(capture: str, descriptor: ProviderDescriptor, start: str) -> bool:
+    """Whether the composer is in shell mode holding a line that begins `start`.
+
+    Asked of the composer's own region, never the screen: a line that ran stays in the transcript.
+    """
+    declared = descriptor.composer
+    if declared is None or declared.shell is None or dialog_on_screen(capture, descriptor):
+        return False
+    found = re.search(declared.shell, _normalised(capture), re.MULTILINE)
+    return found is not None and "".join(start.split()) in "".join(found.group(0).split())
+
+
 TURN_GRACE_SECONDS = 2.0
 """How long a freshly started turn marker reads busy whatever the screen shows (BL-108).
 

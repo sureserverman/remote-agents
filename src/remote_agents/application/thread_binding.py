@@ -26,7 +26,7 @@ from enum import Enum
 
 from remote_agents.application.session_actions import notifiable
 from remote_agents.domain.models import ProfileId, SessionId, SessionRecord, SessionState
-from remote_agents.ports.terminal import PromptDelivery, PromptOutcome
+from remote_agents.ports.terminal import PromptDelivery, PromptOutcome, PromptReason
 from remote_agents.ports.thread_binding import PendingBinding, ThreadBindings
 
 _LOG = logging.getLogger(__name__)
@@ -35,6 +35,8 @@ _LOG = logging.getLogger(__name__)
 COMPOSER_PATIENCE_SECONDS = 60.0
 #: How long the binding may take to appear once the line was sent.
 SEEN_PATIENCE_SECONDS = 20.0
+#: The states a session can still be bound in, which are the states the hook roster lists.
+LIVE_STATES = tuple(state for state in SessionState if notifiable(state))
 #: How often a caller waiting on one binding looks again.
 _WAIT_SECONDS = 1.0
 
@@ -65,9 +67,8 @@ class UnboundWatch:
         self._seen: set[str] | None = None
 
     async def newly_given_up(self) -> tuple[SessionRecord, ...]:
-        records = [record for record in await self._sessions() if notifiable(record.state)]
         given_up = []
-        for record in records:
+        for record in await self._sessions():
             state = await asyncio.to_thread(self._bindings.state, str(record.session_id))
             if state is PendingBinding.GAVE_UP:
                 given_up.append(record)
@@ -133,7 +134,7 @@ class ThreadBinder:
     async def run_once(self) -> None:
         records = await self._sessions()
         # From a list that was read: an empty stand-in for a failed read would forget everyone.
-        live = {str(record.session_id) for record in records if notifiable(record.state)}
+        live = {str(record.session_id) for record in records}
         await asyncio.to_thread(self._bindings.prune, live)
         for key in set(self._attempts) - live:
             del self._attempts[key]
@@ -165,20 +166,32 @@ class ThreadBinder:
         except Exception:
             _LOG.exception("the unbound notice for %s could not be sent", record.session_id)
 
-    async def wait_bound(self, session_id: SessionId, profile_id: ProfileId) -> bool:
-        """Whether this session may be typed its handoff: bound, or a provider that needs none.
+    async def wait_bound(
+        self, session_id: SessionId, profile_id: ProfileId, *, tell: bool = False
+    ) -> bool:
+        """Whether this session may be typed its first work: bound, or a provider needing none.
 
-        The caller reports a failure itself, so a session given up here gets no second notice.
+        A rollover reports a failure itself, so it leaves `tell` off. A schedule still types its
+        prompt into an unbound session, so it asks for the notice. Bounded here too, because a
+        busy composer does not use up the pass's own patience.
         """
         if str(profile_id) not in self._hooks:
             return True
-        while True:
+        waited = 0.0
+        while waited < COMPOSER_PATIENCE_SECONDS + SEEN_PATIENCE_SECONDS:
             step = await self._step(session_id, profile_id)
             if step is BindStep.BOUND:
                 return True
+            if step is BindStep.GAVE_UP and tell:
+                records = await self._sessions()
+                for record in records:
+                    if record.session_id == session_id:
+                        await self._tell(record)
             if step is not BindStep.WAITING:
                 return False
             await self._sleep(_WAIT_SECONDS)
+            waited += _WAIT_SECONDS
+        return False
 
     async def _step(self, session_id: SessionId, profile_id: ProfileId) -> BindStep:
         hook = self._hooks.get(str(profile_id))
@@ -187,6 +200,8 @@ class ThreadBinder:
         key = str(session_id)
         async with self._locks.setdefault(key, asyncio.Lock()):
             if await asyncio.to_thread(self._bindings.names, key, hook):
+                # Nothing left to do, so the pass goes back to its cheap reading.
+                self._attempts.pop(key, None)
                 return BindStep.BOUND
             attempt = self._attempts.get(key)
             if attempt is not None and attempt.over:
@@ -226,6 +241,10 @@ class ThreadBinder:
             return
         if delivery.outcome is not PromptOutcome.REFUSED:
             attempt.sent_at = self._now()
+        elif delivery.reason is PromptReason.BUSY:
+            # A turn the owner started can run for an hour and says nothing against the pane.
+            # The thread is the same when it ends, so the patience starts again then.
+            attempt.started_at = self._now()
 
     async def _give_up(self, key: str, attempt: _Attempt) -> BindStep:
         attempt.over = True

@@ -873,6 +873,10 @@ class RolloverPass:
         if not await self._is_bound(record.session_id, rollover.profile_id):
             await self._fail(starting, seen, BINDING_FAILED)
             return
+        # That wait can last a minute, and two sessions must not work one plan.
+        if not await self._looks_idle(rollover.predecessor_session_id):
+            await self._fail(starting, seen, PREDECESSOR_NOT_IDLE)
+            return
         reason = await self._type_template(
             record.session_id,
             rollover.profile_id,

@@ -58,7 +58,7 @@ from remote_agents.application.services import ResumeOutcome, SessionService
 from remote_agents.application.session_actions import notifiable
 from remote_agents.application.session_folders import live_folder
 from remote_agents.application.session_views import CATALOGUE_GAP_RETRY_SECONDS
-from remote_agents.application.thread_binding import ThreadBinder
+from remote_agents.application.thread_binding import LIVE_STATES, ThreadBinder
 from remote_agents.application.worktree_cleanup import WorktreeCleanupPass
 from remote_agents.application.worktrees import main_checkout
 from remote_agents.config import TelegramSecrets
@@ -1053,7 +1053,7 @@ def build_thread_binder(
     rollovers = SQLiteRolloverStore(connection)
 
     async def sessions_seen() -> Sequence[SessionRecord]:
-        return await store.list(tuple(SessionState))
+        return await store.list(LIVE_STATES)
 
     async def successor_of_a_rollover(session_id: SessionId) -> bool:
         return any(

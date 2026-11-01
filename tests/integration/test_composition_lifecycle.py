@@ -219,6 +219,109 @@ def test_the_service_composition_wires_the_limit_stop_watch(tmp_path, monkeypatc
     assert composition.limit_screen_watcher._history is not None
 
 
+def test_the_service_composition_runs_the_binding_pass_and_tells_the_owner(
+    tmp_path, monkeypatch
+) -> None:
+    """Dropping any keyword here ships a service that never binds, with every other test green."""
+    from remote_agents.adapters.sqlite.database import open_database
+    from remote_agents.adapters.sqlite.migrations import MIGRATIONS
+    from remote_agents.adapters.telegram.binding_notifications import BindingNotifier
+    from remote_agents.application.thread_binding import ThreadBinder, UnboundWatch
+    from remote_agents.bootstrap import _private_boundary
+    from remote_agents.config import AppConfig, load_secrets
+    from remote_agents.production import ProductionPaths
+
+    monkeypatch.setenv("REMOTE_AGENTS_TELEGRAM_BOT_TOKEN", "test-token")
+    monkeypatch.setenv("REMOTE_AGENTS_OWNER_USER_ID", "7")
+    monkeypatch.setenv("REMOTE_AGENTS_OWNER_CHAT_ID", "11")
+    home = tmp_path / "home"
+    paths = ProductionPaths.for_home(home)
+    paths.ensure_directories()
+    (home / "dev").mkdir()
+    config = AppConfig(home / "dev", home / "registry.yaml", paths.database_path, 40, 10, 30)
+    connection = open_database(paths.database_path, migrations=MIGRATIONS)
+    try:
+        composition = _private_boundary(
+            config, connection, paths, load_secrets(), ui_connection=_ui(paths)
+        )
+    finally:
+        connection.close()
+
+    binder = composition.thread_binder
+    assert isinstance(binder, ThreadBinder)
+    assert binder._hooks == {"codex": "codex"}
+    assert isinstance(composition.binding_notifier, BindingNotifier)
+    assert binder._notify == composition.binding_notifier.notify
+    assert composition.rollover_pass._bound == binder.wait_bound
+    assert composition.schedule_pass._bound is not None
+    backend = composition.boundary.backend
+    assert isinstance(backend.unbound_watch, UnboundWatch)
+    assert backend.sessions._request_binding is not None
+
+
+async def test_the_serve_loop_starts_the_binding_pass() -> None:
+    """Read from the loop's own source, because `serve` needs a live bot to run."""
+    import inspect
+
+    from remote_agents.composition import service
+
+    source = inspect.getsource(service._serve_with_reconciliation)
+    assert "_bind_threads_periodically(composition" in source
+
+
+def test_doctor_counts_a_running_fresh_session_only_until_it_is_named(tmp_path) -> None:
+    import asyncio
+    from datetime import UTC, datetime
+    from types import SimpleNamespace
+
+    from remote_agents.adapters.agents.hook_identity import RosterEntry, roster_path, write_roster
+    from remote_agents.adapters.agents.thread_binding import consume_nonce, mint_nonce
+    from remote_agents.adapters.sqlite.database import open_database
+    from remote_agents.adapters.sqlite.migrations import MIGRATIONS
+    from remote_agents.adapters.sqlite.session_store import SQLiteSessionStore
+    from remote_agents.bootstrap import _unbound_sessions
+    from remote_agents.domain.models import (
+        ProfileId,
+        ProjectId,
+        SessionDisplayIdentity,
+        SessionId,
+        SessionRecord,
+        SessionState,
+    )
+
+    database = tmp_path / "sessions.sqlite3"
+    spool = tmp_path / "spool"
+    spool.mkdir(mode=0o700)
+    connection = open_database(database, migrations=MIGRATIONS)
+    store = SQLiteSessionStore(connection)
+
+    def record(profile: str, state: SessionState = SessionState.RUNNING) -> SessionRecord:
+        return SessionRecord(
+            SessionId.new(),
+            ProjectId("p"),
+            ProfileId(profile),
+            SessionDisplayIdentity("p", profile, "regular", 1),
+            state,
+            datetime.now(UTC),
+        )
+
+    fresh = record("codex")
+    for each in (fresh, record("claude"), record("codex", SessionState.ENDED)):
+        asyncio.run(store.save(each))
+    connection.close()
+    write_roster(
+        roster_path(spool, "codex"),
+        [RosterEntry(str(fresh.session_id), "/w", fresh.created_at)],
+    )
+    config = SimpleNamespace(database_path=database)
+    paths = SimpleNamespace(activity_directory=spool)
+    assert _unbound_sessions(config, paths) == 1
+    session = str(fresh.session_id)
+    thread = "01a193e7-e8c8-7272-9c5f-6ee9e7749464"
+    assert consume_nonce(spool, session, mint_nonce(spool, session), thread) is None
+    assert _unbound_sessions(config, paths) == 0
+
+
 def test_the_service_composition_lets_the_bot_step_the_console_aside(tmp_path, monkeypatch) -> None:
     """A stop from the phone must move the console *before* it destroys the pane.
 

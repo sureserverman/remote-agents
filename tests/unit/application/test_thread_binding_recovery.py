@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import os
+import time
 from pathlib import Path
 
 import pytest
@@ -16,7 +18,8 @@ from remote_agents.application.thread_binding import (
     UnboundWatch,
     unbound_notice,
 )
-from remote_agents.domain.models import SessionState
+from remote_agents.domain.models import ProfileId, SessionState
+from remote_agents.ports.terminal import PromptDelivery, PromptOutcome, PromptReason
 from remote_agents.ports.thread_binding import PendingBinding
 
 from .test_thread_binding_launch import _THREAD, World
@@ -162,13 +165,46 @@ def test_doctor_reports_the_count_and_it_never_moves_the_verdict() -> None:
     assert _report(unbound_sessions=0)["unbound_sessions"] == 0
 
 
-def test_a_console_watch_never_counts_an_ended_session(world: World) -> None:
-    ended = world.session(state=SessionState.ENDED, wanted=False)
-    world.bindings.give_up(str(ended))
+def test_a_busy_first_turn_does_not_use_up_the_patience(world: World) -> None:
+    """The owner's first turn can run for an hour. The thread is the same when it ends."""
+    session = world.session()
+    busy = PromptDelivery(PromptOutcome.REFUSED, PromptReason.BUSY)
+    world.deliveries = [busy] * 6
+    for _ in range(6):
+        world.run()
+        world.elapse(COMPOSER_PATIENCE_SECONDS / 2)
+    world.run()
+    assert world.told == []
+    assert bound_session(world.spool, _THREAD) == str(session)
 
-    async def sessions():
-        return list(world.records)
 
-    watch = UnboundWatch(world.bindings, sessions)
-    asyncio.run(watch.newly_given_up())
-    assert asyncio.run(watch.newly_given_up()) == ()
+def test_a_composer_holding_text_still_uses_up_the_patience(world: World) -> None:
+    session = world.session()
+    world.deliveries = [PromptDelivery(PromptOutcome.REFUSED, PromptReason.COMPOSING)] * 2
+    world.run()
+    world.elapse(COMPOSER_PATIENCE_SECONDS)
+    world.run()
+    assert world.told == [session]
+
+
+def test_wait_bound_is_bounded_even_while_the_pane_stays_busy(world: World) -> None:
+    session = world.session()
+    world.deliveries = [PromptDelivery(PromptOutcome.REFUSED, PromptReason.BUSY)] * 500
+    assert asyncio.run(world.binder.wait_bound(session, ProfileId("codex"))) is False
+
+
+def test_wait_bound_can_tell_the_owner_for_a_caller_that_carries_on(world: World) -> None:
+    session = world.session()
+    world.shell_runs = False
+    assert asyncio.run(world.binder.wait_bound(session, ProfileId("codex"), tell=True)) is False
+    assert world.told == [session]
+
+
+def test_a_session_gone_from_the_store_is_forgotten(world: World) -> None:
+    session = world.session()
+    pending = world.spool / "thread-binding" / "pending" / str(session)
+    old = time.time() - 3600
+    os.utime(pending, (old, old))
+    world.records.clear()
+    world.run()
+    assert world.bindings.state(str(session)) is PendingBinding.NONE

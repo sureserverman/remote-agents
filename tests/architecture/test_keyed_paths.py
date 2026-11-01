@@ -116,6 +116,11 @@ _GUARDED: dict[tuple[str, str], tuple[str, str, str]] = {
         "only_line",
         "a dialog, or a composer holding anything but what is left of the service's own line",
     ),
+    ("_clear_own_stale_line", "_CLEAR_DRAFT_KEYS"): (
+        "own_stale_line",
+        "own_stale_line",
+        "a dialog, or a composer holding anything but this session's own earlier binding line",
+    ),
     ("_interrupt_running_turn", "interrupt"): (
         "running",
         "running",

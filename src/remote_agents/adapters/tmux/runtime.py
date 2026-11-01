@@ -25,6 +25,7 @@ from remote_agents.adapters.tmux.composer import (
     in_shell_mode,
     marker_is_young,
     shell_line_refusal,
+    stale_shell_line,
     transcript_above_box,
     turn_ended,
 )
@@ -1103,6 +1104,7 @@ class TmuxTerminal:
             return judged[-1] is PaneState.IDLE
 
         try:
+            await self._clear_own_stale_line(session_id, descriptor, line)
             steps = await self._gateway.deliver_prompt(
                 session_id,
                 line,
@@ -1141,6 +1143,23 @@ class TmuxTerminal:
                 _LOG.exception("could not clear the binding line from %s", session_id)
             return PromptDelivery(PromptOutcome.UNCONFIRMED, reason)
         return PromptDelivery(PromptOutcome.SENT)
+
+    async def _clear_own_stale_line(
+        self, session_id: SessionId, descriptor: ProviderDescriptor, line: str
+    ) -> None:
+        """Clear this session's own earlier line, if a service that died left it unsubmitted.
+
+        It would read as a draft and refuse the new line for good, and its nonce is dead by now.
+        Everything up to the nonce names this session, so nothing an owner wrote can match.
+        """
+        session_part = line.rpartition("--nonce")[0]
+
+        def own_stale_line(capture: str) -> bool:
+            return bool(session_part) and stale_shell_line(capture, descriptor, session_part)
+
+        await self._gateway.send_keys_when(
+            session_id, _CLEAR_DRAFT_KEYS, own_stale_line, between=own_stale_line
+        )
 
     def _judged(
         self, session_id: SessionId, capture: str, descriptor: ProviderDescriptor, title: str

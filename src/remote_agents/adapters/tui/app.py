@@ -115,6 +115,7 @@ from remote_agents.application.session_views import (
     SessionRowParts,
     listed_sessions,
     only_listed,
+    project_name,
     rollover_marks,
     session_row_parts,
     unnamed_projects,
@@ -1142,7 +1143,8 @@ class RemoteAgentsTui(App[AttachRequest | None]):
         try:
             given_up = await self._services.backend.unbound_watch.newly_given_up()
             for record in given_up:
-                self.announce(unbound_notice(record, str(record.project_id)), severity="warning")
+                name = project_name(str(record.project_id), self._catalogue)
+                self.announce(unbound_notice(record, name), severity="warning")
         except Exception:
             _LOG.exception("could not read which sessions gave up their binding")
 

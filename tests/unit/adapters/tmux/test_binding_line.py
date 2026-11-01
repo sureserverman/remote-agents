@@ -51,7 +51,12 @@ def _keys(pane: PromptPane) -> list[str]:
 
 def test_the_line_is_pasted_and_entered_once_on_an_idle_composer() -> None:
     pane = PromptPane(
-        [_screen("codex", "idle_0158"), _shell_composer(_LINE), _screen("codex", "idle_0158")],
+        [
+            _screen("codex", "idle_0158"),
+            _screen("codex", "idle_0158"),
+            _shell_composer(_LINE),
+            _screen("codex", "idle_0158"),
+        ],
         profile="codex",
     )
     assert _deliver(pane).outcome is PromptOutcome.SENT
@@ -67,7 +72,8 @@ def test_nothing_is_pasted_over_a_composer_holding_text() -> None:
 
 
 def test_a_line_that_lost_its_start_is_not_submitted_and_is_cleared() -> None:
-    pane = PromptPane([_screen("codex", "idle_0158"), _lost_start(_LINE)], profile="codex")
+    idle = _screen("codex", "idle_0158")
+    pane = PromptPane([idle, idle, _lost_start(_LINE)], profile="codex")
     delivery = _deliver(pane)
     assert delivery.outcome is PromptOutcome.UNCONFIRMED
     assert _keys(pane) == ["C-u"]
@@ -105,17 +111,9 @@ def test_the_line_runs_this_installs_interpreter_and_names_the_store() -> None:
 
 
 def test_a_clear_is_never_sent_onto_what_the_owner_typed_meanwhile() -> None:
+    idle = _screen("codex", "idle_0158")
     owner = _screen("codex", "composed_0159_warning")
-    pane = PromptPane(
-        [
-            _screen("codex", "idle_0158"),
-            _lost_start(_LINE),
-            _lost_start(_LINE),
-            _lost_start(_LINE),
-            owner,
-        ],
-        profile="codex",
-    )
+    pane = PromptPane([idle, idle, *[_lost_start(_LINE)] * 3, owner], profile="codex")
     assert _deliver(pane).outcome is PromptOutcome.UNCONFIRMED
     assert _keys(pane) == []
 
@@ -126,3 +124,26 @@ def test_the_whole_line_outside_shell_mode_is_refused() -> None:
         f"\n  >_ OpenAI Codex (v0.166.0)\n     /w\n\n\n\n› {_LINE}\n\n  GPT-6.1-Sol default · /w\n"
     )
     assert shell_line_refusal(screen, _CODEX, _LINE) is PromptReason.DRAFT_NOT_SEEN
+
+
+def test_a_dead_services_own_line_is_cleared_before_the_new_one() -> None:
+    stale = _LINE.replace("b" * 64, "e" * 64)
+    pane = PromptPane(
+        [_shell_composer(stale), _screen("codex", "idle_0158"), _shell_composer(_LINE)],
+        profile="codex",
+    )
+    assert _deliver(pane).outcome is PromptOutcome.SENT
+    assert _keys(pane) == ["C-u", "Enter"]
+    assert pane.stdin == [_LINE]
+
+
+def test_another_sessions_line_or_a_past_run_is_not_cleared() -> None:
+    other = bind_thread_line(Path("/state/activity"), "d" * 32, "e" * 64)
+    pane = PromptPane([_shell_composer(other)], profile="codex")
+    delivery = _deliver(pane)
+    assert delivery.outcome is PromptOutcome.REFUSED, delivery
+    assert _keys(pane) == []
+    ran = "\n• You ran " + _LINE[1:] + "\n" + _screen("codex", "idle_0158")
+    pane = PromptPane([ran, ran, _shell_composer(_LINE)], profile="codex")
+    assert _deliver(pane).outcome is PromptOutcome.SENT
+    assert _keys(pane) == ["Enter"]

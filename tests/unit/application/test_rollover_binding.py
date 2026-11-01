@@ -114,3 +114,23 @@ async def test_no_binding_wired_changes_nothing(rig: Rig) -> None:  # noqa: F811
     rig.ready()
     await rig.run(passes=2)
     assert rig.sends == [(rig.successor, TEMPLATE)]
+
+
+async def test_a_predecessor_that_went_busy_during_the_wait_is_not_handed_over(
+    rig: Rig,  # noqa: F811
+) -> None:
+    from remote_agents.application.rollover import PREDECESSOR_NOT_IDLE
+
+    asked = _binding(rig, True)
+    real = rig.idle
+
+    async def idle(session_id):
+        return False if asked else await real(session_id)
+
+    rig._pass._idle = idle
+    rig.ready()
+    await rig.run(passes=2)
+    rollover = await rig.rollover()
+    assert rollover.state is RolloverState.FAILED
+    assert rollover.failure_code == PREDECESSOR_NOT_IDLE
+    assert rig.sends == []
