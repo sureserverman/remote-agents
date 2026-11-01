@@ -103,6 +103,24 @@ def _running_from(home: Path) -> list[int]:
 
 
 @cache
+def managed_daemons(home: Path) -> set[int]:
+    """The pids of this home's Codex daemons, read from outside any pane.
+
+    A process forked from a daemon holds its arguments until it execs, so a parent that is itself
+    a daemon means a fork in passing, not a second daemon.
+    """
+    found: dict[int, int] = {}
+    for pid in _running_from(home):
+        try:
+            arguments = Path(f"/proc/{pid}/cmdline").read_bytes()
+            parent = int(Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()[1])
+        except (OSError, ValueError, IndexError):
+            continue
+        if b"--managed-daemon" in arguments:
+            found[pid] = parent
+    return {pid for pid, parent in found.items() if parent not in found}
+
+
 def _pidfd_functions():
     # python-build-standalone may omit Python's pidfd wrappers even when libc provides
     # them. Resolve the native symbols; never fall back to a racy numeric-PID signal.

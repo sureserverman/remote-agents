@@ -26,13 +26,11 @@ reports that root and then runs the installed `remote-agents session-id` against
 drill publishes, as `serve` would (`-k verb`, DEC-128): A and B each print their own id, and a
 Codex the owner starts by hand in the project's main checkout -- sharing the daemon, so its shell
 carries A's variable -- exits 3. A and B work in the project's worktrees, as managed sessions do.
-This drill installs the real generated hooks only in its disposable home. The native feature
-claim requires each managed thread to be named without a prior root
-report. The source resolver currently refuses fresh threads without an independent recorded
-binding, so this native claim remains BLOCKED; the assertions below deliberately retain the
-required behavior. An unmanaged thread must be refused. Same-folder hook-bootstrap limits
-remain a separate
-native qualification concern; a collected drill is not a live pass.
+This drill installs the real generated hooks only in its disposable home. Each managed thread is
+named by the binding its pane records: the drill mints a nonce and pastes the service's own `!`
+line, as the binding pass does (DEC-138), and the store is this drill's spool. The by-hand Codex
+gets no line, so it stays refused. Same-folder hook-bootstrap limits remain a separate native
+qualification concern; a collected drill is not a live pass.
 
 `REMOTE_AGENTS_LIVE_ACCEPTANCE=1` is required: it spends short Codex turns on the owner's
 account. Every skip says `BLOCKED:` and why.
@@ -59,10 +57,12 @@ from pathlib import Path
 import pytest
 from agent_panes import CODEX_OPENING, CODEX_READY, open_to_composer
 from codex_home import _running_from, retire_codex_home, short_codex_home
-from native_isolation import codex_command, live_requested
+from native_isolation import codex_command, live_requested, sharing_daemon
 
 from remote_agents.adapters.agents.hook_identity import FileHookRoster
 from remote_agents.adapters.agents.registry import install_agent_hooks
+from remote_agents.adapters.agents.thread_binding import FileThreadBindings, thread_of
+from remote_agents.adapters.tmux.profiles import bind_thread_line
 from remote_agents.domain.models import SessionId
 from remote_agents.ports.hook_roster import RosterSession
 from remote_agents.ports.session_identity import SESSION_ID_VARIABLE
@@ -223,7 +223,7 @@ def drill(
         # A PID namespace per pane hides the daemon's pid from the next pane, whose Codex may then
         # start its own. This drill is about one daemon. Cleanup goes by home, not namespace.
         confined = codex_command(Path(shutil.which("codex")), root, codex_home)
-        command = tuple(part for part in confined if part != "--unshare-pid")
+        command = sharing_daemon(confined)
         (codex_home / "config.toml").write_text(
             # The probe writes into its own folder, and nothing may stop to ask.
             # bwrap holds /tmp read-only, so Codex could not guard a /tmp/.git for its own sandbox.
@@ -252,6 +252,30 @@ def drill(
             retire_codex_home(codex_home)
 
 
+def _bind(drill: Drill, pane: str, session: str) -> None:
+    """What the binding pass does for this session: mint, paste the real line, press Enter."""
+    line = bind_thread_line(drill.spool, session, FileThreadBindings(drill.spool).mint(session))
+    buffer = f"bind-{session}"
+    _tmux(drill.socket, "set-buffer", "-b", buffer, "--", line)
+    _tmux(drill.socket, "paste-buffer", "-d", "-p", "-r", "-b", buffer, "-t", pane)
+    time.sleep(1.0)
+    _tmux(drill.socket, "send-keys", "-t", pane, "Enter")
+    deadline = time.monotonic() + 30.0
+    while time.monotonic() < deadline:
+        if thread_of(drill.spool, session) is not None:
+            while time.monotonic() < deadline:
+                if (
+                    "esc to interrupt"
+                    not in _tmux(drill.socket, "capture-pane", "-p", "-t", pane).stdout
+                ):
+                    return
+                time.sleep(0.5)
+            return
+        time.sleep(0.5)
+    screen = _tmux(drill.socket, "capture-pane", "-p", "-t", pane).stdout
+    pytest.fail(f"the binding line recorded nothing in 30 s; the pane shows:\n{screen}")
+
+
 def _probed(drill: Drill, workspace: Path, session: str | None) -> Pane:
     """A Codex pane in `workspace` -- managed when given a session -- after its probe ran."""
     (workspace / "probe.sh").write_text(
@@ -263,6 +287,8 @@ def _probed(drill: Drill, workspace: Path, session: str | None) -> Pane:
         drill.roster.write("codex", drill.sessions)
     name = f"ra-{session}" if session is not None else f"by-hand-{SessionId.new().value.hex}"
     pane = _open(drill.socket, name, workspace, drill.codex_home, session, drill.command)
+    if session is not None:
+        _bind(drill, pane, session)
     seen = _probe(drill.socket, pane, workspace)
     return Pane(session or "", workspace, seen, _thread(drill.codex_home, workspace))
 
@@ -289,8 +315,11 @@ def test_measure_each_tool_shell_is_told_its_own_thread(panes: tuple[Pane, Pane]
     assert first.thread != second.thread
 
 
-def test_verb_each_managed_pane_prints_its_own_session(panes: tuple[Pane, Pane]) -> None:
+def test_verb_each_managed_pane_prints_its_own_session(
+    drill: Drill, panes: tuple[Pane, Pane]
+) -> None:
     for pane in panes:
+        assert thread_of(drill.spool, pane.session_id) == pane.thread, pane
         assert (pane.seen["verb_exit"], pane.seen["verb"]) == ("0", pane.session_id), pane
 
 

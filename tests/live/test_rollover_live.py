@@ -74,12 +74,18 @@ all generated configuration stay private. No normal model/provider preference or
 hook trust is copied. Hook review is an owner prerequisite, never auto-answered.
 The source filesystem and normal profile remain read-only. Owned daemon cleanup
 uses the retained-directory and pidfd helper even if a pane or test fails.
+Its panes share one daemon, as the owner's do, and the drill asserts that only one ever ran. The
+binding pass runs on `serve`'s own loop, so a fresh session is bound by the service's real line.
+
+**The binding cases** (`-k "each_preset or mangled"`) spend no model turn. They launch through the
+service under each permission preset, with the whole operator home under `~/.cache`, because the
+real activity directory is outside `/tmp` and Codex treats the two differently.
 
 **Opt-in.** It runs only when asked: `-m` naming `live_acceptance` (as the gate command above
 does), or `REMOTE_AGENTS_LIVE_ACCEPTANCE=1` as for every other live acceptance test. A plain run
 skips it, because it spends real model usage and runs for up to fifteen minutes. **Once asked
 for, a missing prerequisite FAILS, naming it** -- never a skip: the master gate reads this run,
-and a skip there would be a green that proved nothing. The gate still wants `2 passed`.
+and a skip there would be a green that proved nothing.
 """
 
 from __future__ import annotations
@@ -94,6 +100,9 @@ import subprocess
 import sys
 import tempfile
 import time
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
+from dataclasses import dataclass
 from datetime import date
 from functools import partial
 from pathlib import Path
@@ -103,18 +112,22 @@ import pytest
 import yaml
 from _pytest.mark.expression import Expression
 from agent_panes import answer_hook_review
-from codex_home import retire_codex_home, short_codex_home
+from codex_home import managed_daemons, retire_codex_home, short_codex_home
 from cross_project_writer import WriterJourney
-from native_isolation import claude_command, codex_command
+from native_isolation import claude_command, codex_command, sharing_daemon
 
+from remote_agents.adapters.agents.codex import descriptor as codex_descriptor
 from remote_agents.adapters.agents.registry import (
     adopt_templates,
     profiles_that_roll_over,
     provider_descriptors,
 )
+from remote_agents.adapters.agents.thread_binding import FileThreadBindings, thread_of
 from remote_agents.adapters.sqlite.database import open_database
 from remote_agents.adapters.sqlite.migrations import MIGRATIONS
 from remote_agents.adapters.sqlite.session_store import SQLiteSessionStore
+from remote_agents.adapters.tmux.composer import composer_draft
+from remote_agents.adapters.tmux.profiles import bind_thread_line
 from remote_agents.adapters.workflow.handoff_envelopes import FileHandoffEnvelopes
 from remote_agents.adapters.workflow.roots import handoff_root
 from remote_agents.application.commands import AnswerTrustCommand, LaunchCommand
@@ -132,17 +145,24 @@ from remote_agents.composition.backend import (
 )
 from remote_agents.composition.service import (
     _ROLLOVER_POLL_SECONDS,
+    _THREAD_BINDING_POLL_SECONDS,
     ServiceComposition,
+    _bind_threads_periodically,
     _reconcile_periodically,
     _roll_over_periodically,
     build_rollover_pass,
+    build_thread_binder,
 )
 from remote_agents.composition.tui import _local_runtime, _resolve_profile_executable
 from remote_agents.config import load_config, read_claude_limits_source, read_cursor_limits_source
 from remote_agents.domain.models import ProfileId, SessionId, SessionState
+from remote_agents.domain.profiles import PermissionPreset
 from remote_agents.domain.rollover import TERMINAL, RolloverState
 from remote_agents.domain.trust import TrustState
+from remote_agents.ports.terminal import PromptOutcome, PromptReason
 from remote_agents.production import ProductionPaths
+
+from .test_codex_tool_shell_identity import _read_seen
 
 _MARKER = "live_acceptance"
 _FIXTURES = Path(__file__).resolve().parent / "fixtures" / "rollover"
@@ -383,7 +403,9 @@ def _isolated_codex_home(root: Path, repo: Path, codex: Path, codex_home: Path) 
     scratch = repo.parent / "tmp"
     scratch.mkdir()
     root.mkdir(mode=0o700, parents=True, exist_ok=True)
-    native_command = codex_command(codex, root, codex_home, repo.parent, operator_home=root)
+    native_command = sharing_daemon(
+        codex_command(codex, root, codex_home, repo.parent, operator_home=root)
+    )
     paths = _isolated_home(
         root,
         repo,
@@ -513,9 +535,17 @@ async def test_rollover_now_hands_a_real_plan_to_a_fresh_codex_session(
         config = load_config(paths.config_path)
         connection = open_database(paths.database_path, migrations=MIGRATIONS)
         harness = _compose(config, connection, paths)
+        # A preset that shares the daemon: `approve_for_me` and `ask` run embedded (DEC-071).
         await _drive(
-            harness, repo, periodic, ProfileId("codex"), "$planning:executing-plans", socket
+            harness,
+            repo,
+            periodic,
+            ProfileId("codex"),
+            "$planning:executing-plans",
+            socket,
+            permissions=PermissionPreset.PROVIDER_DEFAULT,
         )
+        assert len(harness.daemons) == 1, f"more than one daemon ran: {harness.daemons}"
         assert _owner_fingerprint() == owners_before, (
             "the run changed the owner's project registry, Portfolio roll-ups or root reports"
         )
@@ -588,7 +618,7 @@ class _Harness:
     """The service's own composition minus Telegram, and what the test reads beside it."""
 
     def __init__(
-        self, backend, terminal, composition: ServiceComposition, projects, notices
+        self, backend, terminal, composition: ServiceComposition, projects, notices, binder
     ) -> None:
         self.backend = backend
         self.terminal = terminal
@@ -597,6 +627,9 @@ class _Harness:
         #: The failure notices the pass handed on -- what the bot would have told the owner.
         self.notices: list[RolloverReport] = notices
         self.seen: set[tuple[str, str, str]] = set()
+        self.binder = binder
+        #: Every Codex daemon seen during the run: a count at the end misses one that had died.
+        self.daemons: set[int] = set()
 
 
 def _compose(config, connection, paths: ProductionPaths) -> _Harness:
@@ -640,10 +673,18 @@ def _compose(config, connection, paths: ProductionPaths) -> _Harness:
     async def notify(report: RolloverReport) -> None:
         notices.append(report)
 
+    thread_binder = build_thread_binder(
+        connection=connection,
+        store=store,
+        terminal=runtime.terminal,
+        descriptors=descriptors,
+        activity_directory=paths.activity_directory,
+    )
     rollover_pass = build_rollover_pass(
         connection=connection,
         sessions=backend.sessions,
         terminal=runtime.terminal,
+        binder=thread_binder,
         enabled=backend.auto_rollover.read,
         project_paths=projects.paths,
         adopt_templates=adopt_templates(),
@@ -656,8 +697,9 @@ def _compose(config, connection, paths: ProductionPaths) -> _Harness:
         runtime.terminal,
         ReconciliationService(store, confirm_ready=runtime.terminal.confirm_ready, locks=locks),
         rollover_pass=rollover_pass,
+        thread_binder=thread_binder,
     )
-    return _Harness(backend, runtime.terminal, composition, projects, notices)
+    return _Harness(backend, runtime.terminal, composition, projects, notices, thread_binder)
 
 
 async def _drive(
@@ -667,6 +709,8 @@ async def _drive(
     profile: ProfileId,
     executor: str,
     socket: Path,
+    *,
+    permissions: PermissionPreset | None = None,
 ) -> None:
     """Rollover now on a `profile` session executing the fixture plan through `executor`, the
     plugin's own spelling of its executing-plans skill on that agent. `socket` is this run's
@@ -688,14 +732,30 @@ async def _drive(
             _reconcile_periodically(harness.composition, _RECONCILE_INTERVAL_SECONDS)
         )
     )
+    periodic.append(
+        asyncio.create_task(
+            _bind_threads_periodically(harness.composition, _THREAD_BINDING_POLL_SECONDS)
+        )
+    )
 
     launched = await sessions.launch(
-        LaunchCommand(project_id, profile, _key("rollover-predecessor"), "rollover-live")
+        LaunchCommand(
+            project_id,
+            profile,
+            _key("rollover-predecessor"),
+            "rollover-live",
+            permissions=permissions,
+        )
     )
     predecessor = launched.record.session_id
     if launched.record.state is SessionState.UNTRUSTED:
         await _answer_trust(harness, predecessor)
     record = await _until_running(harness, predecessor)
+    # Before the plan's first turn: the pass cannot type into a turn, and the handoff in that turn
+    # would refuse.
+    assert await harness.binder.wait_bound(predecessor, profile), await _diagnosis(
+        harness, repo, predecessor, "the predecessor never bound its thread"
+    )
 
     # Rollover now, through the call both surfaces make.
     said = await backend.rollovers.press(ROLLOVER, record, backend.auto_rollover)
@@ -722,6 +782,8 @@ async def _drive(
             harness.seen.add(
                 (envelope.event.value, envelope.handoff_id, envelope.managed_session_id)
             )
+        if _CODEX_HOME is not None:
+            harness.daemons |= managed_daemons(_CODEX_HOME)
         rollover = await backend.rollovers.latest_for(predecessor)
         if rollover is not None and rollover.state in TERMINAL:
             break
@@ -968,7 +1030,13 @@ async def test_native_destination_adoption_waits_for_trust_and_preserves_saved_p
             pid for pid, path in harness.projects.paths.items() if path == journey.source
         )
         launched = await sessions.launch(
-            LaunchCommand(project_id, ProfileId(profile), _key("native-source"))
+            LaunchCommand(
+                project_id,
+                ProfileId(profile),
+                _key("native-source"),
+                # A preset that shares the daemon, so "one daemon" means something here too.
+                permissions=PermissionPreset.PROVIDER_DEFAULT if profile == "codex" else None,
+            )
         )
         predecessor = launched.record.session_id
         if launched.record.state is SessionState.UNTRUSTED:
@@ -1013,6 +1081,8 @@ async def test_native_destination_adoption_waits_for_trust_and_preserves_saved_p
         while time.monotonic() - started < _DEADLINE:
             await sessions.refresh_readiness()
             await rollover_pass.run_once()
+            if codex_home is not None:
+                harness.daemons |= managed_daemons(codex_home)
             row = await harness.backend.rollovers.latest_for(predecessor)
             if row.state in TERMINAL:
                 break
@@ -1020,6 +1090,8 @@ async def test_native_destination_adoption_waits_for_trust_and_preserves_saved_p
         assert row.state is RolloverState.COMPLETED, await _diagnosis(
             harness, journey.source, predecessor, "native destination adoption failed"
         )
+        if codex_home is not None:
+            assert len(harness.daemons) == 1, f"more than one daemon ran: {harness.daemons}"
         destination_id = next(
             pid for pid, path in harness.projects.paths.items() if path == journey.destination
         )
@@ -1057,3 +1129,165 @@ async def test_native_destination_adoption_waits_for_trust_and_preserves_saved_p
             connection.close()
         if codex_home is not None:
             retire_codex_home(codex_home)
+
+
+@dataclass(frozen=True, slots=True)
+class _CodexService:
+    """The composed service for one real Codex, its whole operator home outside `/tmp`."""
+
+    harness: _Harness
+    paths: ProductionPaths
+    repo: Path
+    socket: Path
+    codex_home: Path
+
+
+@asynccontextmanager
+async def _codex_service(
+    config: pytest.Config, monkeypatch: pytest.MonkeyPatch
+) -> AsyncIterator[_CodexService]:
+    """Everything a binding case needs, and all of it gone afterwards. Spends no model turn."""
+    codex = _codex_prerequisites(config)
+    login = Path.home() / ".codex" / "auth.json"
+    login_before = _stat(login)
+    cache = Path.home() / ".cache"
+    cache.mkdir(mode=0o700, exist_ok=True)
+    # Under the owner's real home, where Codex's sandbox does not name it, as the real one is.
+    root = Path(tempfile.mkdtemp(prefix="ra-bind-", dir=cache)).resolve()
+    tmux_directory = Path(tempfile.mkdtemp(prefix="ra-bnd-", dir="/tmp"))
+    repo_parent = Path(tempfile.mkdtemp(prefix="ra-bnr-", dir="/tmp"))
+    monkeypatch.setenv("TMUX_TMPDIR", str(tmux_directory))
+    socket = tmux_directory / f"tmux-{os.getuid()}" / "remote-agents"
+    codex_home = short_codex_home()
+    connection = None
+    try:
+        repo = _fixture_repository(repo_parent)
+        paths = _isolated_codex_home(root / "home", repo, codex, codex_home)
+        loaded = load_config(paths.config_path)
+        connection = open_database(paths.database_path, migrations=MIGRATIONS)
+        yield _CodexService(_compose(loaded, connection, paths), paths, repo, socket, codex_home)
+        assert (codex_home / "auth.json").stat().st_size == 0, "credential placeholder was written"
+        assert _stat(login) == login_before, "Codex rewrote the owner's auth.json"
+    finally:
+        try:
+            _kill_server(socket)
+            if connection is not None:
+                connection.close()
+        finally:
+            # Whatever the retiring says: `root` is in the owner's own home.
+            try:
+                retire_codex_home(codex_home)
+            finally:
+                for made in (root, repo_parent, tmux_directory):
+                    shutil.rmtree(made, ignore_errors=True)
+
+
+async def _launched(service: _CodexService, preset: PermissionPreset) -> SessionId:
+    """One fresh session under `preset`, through the service, at its composer."""
+    harness = service.harness
+    project_id = next(pid for pid, path in harness.projects.paths.items() if path == service.repo)
+    launched = await harness.backend.sessions.launch(
+        LaunchCommand(project_id, ProfileId("codex"), _key("bind"), "bind", permissions=preset)
+    )
+    session_id = launched.record.session_id
+    if launched.record.state is SessionState.UNTRUSTED:
+        await _answer_trust(harness, session_id)
+    await _until_running(harness, session_id)
+    return session_id
+
+
+@pytest.mark.live_acceptance
+@pytest.mark.parametrize("preset", list(PermissionPreset), ids=lambda preset: preset.value)
+async def test_the_service_line_binds_a_real_codex_under_each_preset(
+    request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch, preset: PermissionPreset
+) -> None:
+    """The pass pastes its real `!/path` line, Enter runs it, and the pane's own shell is named."""
+    async with _codex_service(request.config, monkeypatch) as service:
+        harness = service.harness
+        activity = service.paths.activity_directory
+        assert not str(activity).startswith("/tmp/"), activity
+        session_id = await _launched(service, preset)
+        assert await harness.binder.wait_bound(session_id, ProfileId("codex")), await _diagnosis(
+            harness, service.repo, session_id, f"{preset} never bound its thread"
+        )
+        thread = thread_of(activity, str(session_id))
+
+        # What the handoff writer will do: ask from the pane's own shell, by the installed verb.
+        scratch = service.repo.parent / "tmp"
+        answer = scratch / "answer.txt"
+        script = scratch / "ask.sh"
+        verb = Path(sys.executable).parent / "remote-agents"
+        script.write_text(
+            'printf \'thread=%s\\n\' "${CODEX_THREAD_ID-}" > "$1"\n'
+            f"name=$({shlex.quote(str(verb))} session-id "
+            f"--activity-dir {shlex.quote(str(activity))} 2>/dev/null)\n"
+            'code=$?\nprintf \'name=%s\\ncode=%s\\ndone=1\\n\' "$name" "$code" >> "$1"\n',
+            encoding="utf-8",
+        )
+        pane = ("tmux", "-S", str(service.socket), "send-keys", "-t", f"=ra-{session_id}:")
+        for keys in (("-l", f"!sh {script} {answer}"), ("Enter",)):
+            subprocess.run([*pane, *keys], capture_output=True, timeout=_GIT_SECONDS, check=True)
+            await asyncio.sleep(1.0)
+        seen = await asyncio.to_thread(_read_seen, answer, 30.0)
+        screen = await harness.terminal.capture(session_id)
+        assert seen == {
+            "thread": thread,
+            "name": str(session_id),
+            "code": "0",
+            "done": "1",
+        }, f"{preset}: the pane's shell said {seen}, and the pane shows:\n{screen}"
+        assert screen.count("bind-thread") <= 1, f"{preset}: the line ran twice:\n{screen}"
+        if preset in (PermissionPreset.FULL_ACCESS, PermissionPreset.PROVIDER_DEFAULT):
+            daemons = managed_daemons(service.codex_home)
+            assert len(daemons) == 1, f"{preset}: {daemons}"
+
+
+@pytest.mark.live_acceptance
+async def test_a_mangled_binding_line_is_cleared_by_c_u(
+    request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A line that lost its start is never submitted, and `C-u` leaves a composer that still works.
+
+    The start is cut where it was really lost (a dialog ate the first 32 characters, drill of
+    2026-10-31), so everything after the paste is the real check on the real screen.
+    """
+    async with _codex_service(request.config, monkeypatch) as service:
+        harness = service.harness
+        terminal = harness.terminal
+        activity = service.paths.activity_directory
+        session_id = await _launched(service, PermissionPreset.PROVIDER_DEFAULT)
+        key = str(session_id)
+        bindings = FileThreadBindings(activity)
+        gateway = terminal._gateway
+        deliver = gateway.deliver_prompt
+
+        async def losing_its_start(session, text, **arguments):
+            return await deliver(session, text[32:], **arguments)
+
+        monkeypatch.setattr(gateway, "deliver_prompt", losing_its_start)
+        delivery = await terminal.send_binding_line(
+            session_id, bind_thread_line(activity, key, bindings.mint(key))
+        )
+        monkeypatch.setattr(gateway, "deliver_prompt", deliver)
+        assert delivery.outcome is PromptOutcome.UNCONFIRMED, delivery
+        assert delivery.reason is PromptReason.DRAFT_NOT_SEEN, delivery
+
+        descriptor = codex_descriptor()
+        started = time.monotonic()
+        screen = await terminal.capture(session_id)
+        while composer_draft(screen, descriptor) != "" and time.monotonic() - started < 10.0:
+            await asyncio.sleep(0.5)
+            screen = await terminal.capture(session_id)
+        assert composer_draft(screen, descriptor) == "", f"the draft stayed:\n{screen}"
+        assert "esc to interrupt" not in screen, f"it reached the agent as a prompt:\n{screen}"
+        assert thread_of(activity, key) is None, "a line that lost its start bound the thread"
+
+        # The composer still takes the real line, with a fresh nonce.
+        again = await terminal.send_binding_line(
+            session_id, bind_thread_line(activity, key, bindings.mint(key, retry=True))
+        )
+        assert again.outcome is PromptOutcome.SENT, f"{again}\n{await terminal.capture(session_id)}"
+        started = time.monotonic()
+        while thread_of(activity, key) is None and time.monotonic() - started < 30.0:
+            await asyncio.sleep(0.5)
+        assert thread_of(activity, key) is not None, await terminal.capture(session_id)
