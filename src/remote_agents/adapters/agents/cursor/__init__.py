@@ -91,7 +91,9 @@ def descriptor(
         composer=ComposerScreen(
             composer=(
                 r"^  → (?P<draft>[^\n]*(?:\n    [^\n]*)*?)"
-                r"\n(?:  (?! )[^\n]*\n){0,3}  (?! )[^\n]*·[^\n]*\Z"
+                # Build2026.10.22 draws a block separator between composer and status.
+                r"\n(?:[ \t]*[▄▀]+[ \t]*\n)?"
+                r"(?:  (?! )[^\n]*\n){0,3}  (?! )[^\n]*·[^\n]*\Z"
             ),
             placeholders=(r"Plan, search, build anything", r"Add a follow-up"),
             # While a turn runs, `ctrl+c to stop` is drawn right-aligned on the composer line

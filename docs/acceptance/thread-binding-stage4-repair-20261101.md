@@ -34,3 +34,15 @@ At report writing the owner's repeated full suite ra-plan-scope-20261101T171832.
 Owner-terminal ra-live-owner-20261101T170302.log reports5passed16deselected82.40s for the changed binding proof. This is a binding proof, not a new complete native identity/rollover/adoption/restart bundle. Prior native and installed owner-smoke evidence remains in the binding plan and stage4/demo.md with its original commit attribution.
 
 Stage4 green, binding close-out, merge/push, and the original master close-out remain pending the final gate assessment. This repair is not installed.
+
+## Completed external run and follow-up repairs
+
+Owner full suite171832 completed9failed9809passed114skipped1error in1688.99s. The subsequent owner binding-proof174644 passed5with16deselected in85.25s. The full run is not green. Its startup tree was49b0fb57; source/fix-scope work overlapped it, so no final-tree whole-suite claim is made.
+
+The executor should have serialized its tmux-backed checks. Investigation found a real harness defect: cleanup considered every new test socket its own, including another independent run's later server. Thus disappearing-socket failures during the overlap are contaminated, not proven product defects. New cleanup requires the server's inherited pytest owner marker to equal this pytest PID; uncertain/foreign ownership refuses cleanup. Real independent-child controls went1FAIL2PASS before the fix to3PASS after; own cleanup and the existing nested-child guard remain tested. Reviewer routing_stage3_final_review_b APPROVE with no findings on this delta.
+
+The owner log also retained an actual Cursor2026.10.22 idle screen whose new block separator broke the strict composer matcher. Captured verbatim as idle_20261022.txt: RED1FAIL2PASS for its matrix checks. The vertical now permits only the measured whitespace/block-glyph row before its existing footer, preserving busy/dialog predicates. Full saved-capture matrix plus ownership and status-bar checks:389PASS8.75s, serialized. The isolated status-bar file also passed64checks; neither pass substitutes for native steady-pane behavior.
+
+Remaining native failures are explicit: three Codex prompt-relay cases stopped at Hooks need review because the plain full-suite launcher omitted the already-approved disposable-home opt-in; the Cursor stop case remained at Trusting workspace; the old cleanup refused an unreadable same-user process and retained its home. Do not bypass ownership to make cleanup green. The owner's final-check script now supplies REMOTE_AGENTS_LIVE_HOOK_TRUST=owner-approved (existing recorded authorization). No hook setting or native run was changed automatically.
+
+Next verification must run from the owner's normal terminal, serially, on the committed repaired tree: ~/.cache/staged-planning-sweep-gate/run-stage4-final.sh. This agent session cannot create the required bwrap namespace. The active gate round stays reserved while awaiting that verification. No merge, push or installation is performed from a failed gate.
