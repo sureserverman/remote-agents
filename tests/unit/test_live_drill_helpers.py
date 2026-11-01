@@ -8,7 +8,6 @@ import time
 from pathlib import Path
 
 import codex_home
-import pytest
 from native_isolation import sharing_daemon
 
 
@@ -26,7 +25,6 @@ def test_sharing_a_daemon_removes_only_the_pid_namespace() -> None:
 
 
 def test_every_codex_drill_that_counts_daemons_runs_without_its_own_namespace() -> None:
-    from pathlib import Path
 
     live = Path(__file__).resolve().parents[1] / "live"
     for name in (
@@ -38,23 +36,44 @@ def test_every_codex_drill_that_counts_daemons_runs_without_its_own_namespace() 
         assert "sharing_daemon(" in source, name
 
 
-def test_counting_daemons_reads_the_processes_every_time(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
+def test_counting_daemons_reads_the_processes_every_time() -> None:
     """Each drill adds every reading up, so a remembered first one would hide a replaced daemon."""
-    daemon = subprocess.Popen(
-        [sys.executable, "-c", "import time; time.sleep(30)", "--managed-daemon"]
-    )
+    home = codex_home.short_codex_home()
+    daemon = None
     try:
-        arguments = Path(f"/proc/{daemon.pid}/cmdline")
+        assert codex_home.managed_daemons(home) == set()
+        daemon = subprocess.Popen(
+            [sys.executable, "-c", "import time; time.sleep(30)", "--managed-daemon"],
+            env={"CODEX_HOME": str(home)},
+        )
         deadline = time.monotonic() + 10
-        while b"--managed-daemon" not in arguments.read_bytes():
+        while not codex_home.managed_daemons(home):
             assert time.monotonic() < deadline
             time.sleep(0.01)
-        running = [[], [daemon.pid]]
-        monkeypatch.setattr(codex_home, "_running_from", lambda home: running.pop(0))
-        assert codex_home.managed_daemons(tmp_path) == set()
-        assert codex_home.managed_daemons(tmp_path) == {daemon.pid}
+        assert codex_home.managed_daemons(home) == {daemon.pid}
     finally:
-        daemon.kill()
-        daemon.wait()
+        if daemon is not None:
+            daemon.kill()
+            daemon.wait()
+        codex_home.retire_codex_home(home)
+
+
+def test_a_process_nobody_can_read_does_not_stop_a_count() -> None:
+    """A drill polls this, so one unreadable app must not fail a run the way cleanup refuses."""
+    home = codex_home.short_codex_home()
+    unreadable = subprocess.Popen(
+        [
+            sys.executable,
+            "-c",
+            "import ctypes, time; ctypes.CDLL(None).prctl(4, 0, 0, 0, 0); "
+            "print('ready', flush=True); time.sleep(30)",
+        ],
+        stdout=subprocess.PIPE,
+    )
+    try:
+        assert unreadable.stdout.readline().strip() == b"ready"
+        assert codex_home.managed_daemons(home) == set()
+    finally:
+        unreadable.kill()
+        unreadable.wait()
+        codex_home.retire_codex_home(home)

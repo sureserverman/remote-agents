@@ -69,16 +69,18 @@ def _started_by_an_older_app(home: Path, pid: int) -> bool:
     """Whether an unreadable process descends from a running app that predates this home.
 
     The owner's browser opens a sandboxed renderer mid-drill: same uid, newer than the home, and an
-    environment nobody can read. A fixture's processes hang off this test run, or off init or the
-    user's systemd once detached, and neither of those says anything. Every other doubt stays a
-    refusal, including a parent that vanished during the walk.
+    environment nobody can read. A fixture's processes hang off this test run, a helper it started,
+    or init or the user's systemd once detached, and none of those says anything. Every other doubt
+    stays a refusal, including a parent that vanished during the walk. Measured on one desktop:
+    bwrap, gnome-shell, systemd. Elsewhere an app under systemd itself refuses, which fails a run
+    and never deletes a home.
     """
     try:
         ancestor = _parent_and_start(pid)[0]
         while ancestor not in (0, 1, os.getpid()):
             parent, started = _parent_and_start(ancestor)
             if started < _OWNED_HOMES[home][1]:
-                return parent > 1
+                return parent not in (0, 1, os.getpid())
             ancestor = parent
     except (OSError, ValueError, IndexError):
         return False
@@ -133,17 +135,22 @@ def managed_daemons(home: Path) -> set[int]:
     """The pids of this home's Codex daemons, read from outside any pane.
 
     A process forked from a daemon holds its arguments until it execs, so a parent that is itself
-    a daemon means a fork in passing, not a second daemon.
+    a daemon means a fork in passing, not a second daemon. It reads every process's arguments first,
+    which anyone may read, because it runs on every poll of a drill: a process that is no daemon
+    must not stop one, as an unreadable environment would stop the ownership scan. A daemon whose
+    environment cannot be read is not counted, so a count of one says what was attested.
     """
+    home = _private_home(home)
     found: dict[int, int] = {}
-    for pid in _running_from(home):
+    for entry in Path("/proc").glob("[0-9]*"):
         try:
-            arguments = Path(f"/proc/{pid}/cmdline").read_bytes()
-            parent = int(Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()[1])
-        except (OSError, ValueError, IndexError):
+            if b"--managed-daemon" not in (entry / "cmdline").read_bytes():
+                continue
+            pid = int(entry.name)
+            if _belongs_to(home, pid):
+                found[pid] = _parent_and_start(pid)[0]
+        except (OSError, ValueError, IndexError, RuntimeError):
             continue
-        if b"--managed-daemon" in arguments:
-            found[pid] = parent
     return {pid for pid, parent in found.items() if parent not in found}
 
 

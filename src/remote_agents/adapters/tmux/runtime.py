@@ -162,10 +162,12 @@ class TerminalWaits:
     the 2026-10-05 live run): past this, nothing is confirmed and a later press plans again."""
 
     trust_hold: float = 0.5
-    """How long the cursor must stay on the chosen answer before `Enter`. Claude 2.1.316 takes a
-    `Down`, then puts the cursor back on "No, exit" by itself about 130 ms later, once, while it
-    finishes starting (5 of 5, 2026-11-01). A re-read cannot close that: an `Enter` sent just after
-    the reset answers no and takes the agent down, as a live drill did."""
+    """How long to wait with the cursor on the chosen answer before the last look and `Enter`.
+    Claude 2.1.316 takes a `Down`, then puts the cursor back on "No, exit" by itself about 130 ms
+    later, once, while it finishes starting (5 of 5 on one host, 2026-11-01). A re-read alone cannot
+    close that: an `Enter` sent just after the reset answers no and takes the agent down, as a live
+    drill did. This is under 4 times that one measurement, so a host that resets later than this is
+    still exposed. The wait holds no lock; the last look is what decides."""
 
     decline: float = float(_TRUST_DECLINE_WAIT_SECONDS)
     """A declined agent running its own shutdown before its pane is killed."""
@@ -1714,7 +1716,7 @@ class TmuxTerminal:
     ) -> bool:
         """Move the cursor to the chosen answer and confirm it -- `Enter` only onto that row.
 
-        Four steps, each key under the key lock: the movement keys, onto the screen they were
+        Four steps, each send under the key lock: the movement keys, onto the screen they were
         planned from; a wait, of at most `TerminalWaits.trust_cursor`, for a capture showing
         the cursor on the answer; `TerminalWaits.trust_hold`, which a dialog that puts its cursor
         back has to outlast; then `Enter`, onto a screen that still shows it. A movement

@@ -9,7 +9,7 @@ the Stage 1 gate. Every task creates one marker file; there is nothing to design
 ## Research Summary
 
 ### Online sources
-- None: the work is two empty files.
+- None: the work is two marker files.
 
 ### Vault / local docs
 - None: this repository exists only for the length of one test run.
@@ -44,7 +44,7 @@ the proof tool's breaks only edit tracked files, and never delete one.
 
 ## Stage 1: First marker file
 
-**Goal:** `stage-1.txt` exists at the repository root and is committed.
+**Goal:** `stage-1.txt` holds the line `done` at the repository root and is committed.
 **Depends on:** none
 **Blocks:** Stage 2
 **Risk:** LOW — creates one marker file
@@ -67,7 +67,7 @@ the proof tool's breaks only edit tracked files, and never delete one.
 
 ## Stage 2: Second marker file
 
-**Goal:** `stage-2.txt` exists at the repository root and is committed.
+**Goal:** `stage-2.txt` holds the line `done` at the repository root and is committed.
 **Depends on:** Stage 1 gate passing
 **Blocks:** none
 **Risk:** LOW — creates one marker file

@@ -5,7 +5,7 @@ The master plan's gate runs this on a real host:
     uv run --locked pytest tests/live/test_rollover_live.py -m live_acceptance -q
 
 **What it does.** It builds a throwaway git repository holding the two-stage fixture plan in
-`tests/live/fixtures/rollover/` (one empty file per task, a gate per stage) and launches a real
+`tests/live/fixtures/rollover/` (one marker file per task, a gate per stage) and launches a real
 `claude` in it through the service's own `SessionService.launch`. It presses Rollover now
 through `Backend.rollovers.press`, the call both surfaces make, waits for the pass to write the
 request, and only then types `/planning:executing-plans <plan>` into the pane through the
@@ -575,6 +575,7 @@ async def test_rollover_now_hands_a_real_plan_to_a_fresh_codex_session(
         finally:
             # After the panes, and whatever failed above: the daemon the TUI started outlives
             # them (BL-133).
+            _CODEX_HOME = None
             if codex_home is not None:
                 retire_codex_home(codex_home)
             for made in (repo_parent, tmux_directory):
@@ -1180,12 +1181,11 @@ async def _codex_service(
             if connection is not None:
                 connection.close()
         finally:
-            # Whatever the retiring says: `root` is in the owner's own home.
-            try:
-                retire_codex_home(codex_home)
-            finally:
-                for made in (root, repo_parent, tmux_directory):
-                    shutil.rmtree(made, ignore_errors=True)
+            # Only once nothing runs from them. A refusal keeps them all and says so, though `root`
+            # is in the owner's own home: a live Codex may still be writing there.
+            retire_codex_home(codex_home)
+            for made in (root, repo_parent, tmux_directory):
+                shutil.rmtree(made, ignore_errors=True)
 
 
 async def _launched(service: _CodexService, preset: PermissionPreset) -> SessionId:
@@ -1286,8 +1286,12 @@ async def test_a_mangled_binding_line_is_cleared_by_c_u(
         gateway = terminal._gateway
         deliver = gateway.deliver_prompt
 
+        drafts = []
+
         async def losing_its_start(session, text, **arguments):
-            return await deliver(session, text[32:], **arguments)
+            steps = await deliver(session, text[32:], **arguments)
+            drafts.append(composer_draft(steps.after_paste or "", codex_descriptor()))
+            return steps
 
         monkeypatch.setattr(gateway, "deliver_prompt", losing_its_start)
         delivery = await _sent_once_not_busy(
@@ -1303,7 +1307,11 @@ async def test_a_mangled_binding_line_is_cleared_by_c_u(
         while composer_draft(screen, descriptor) != "" and time.monotonic() - started < 10.0:
             await asyncio.sleep(0.5)
             screen = await terminal.capture(session_id)
+        assert drafts and drafts[-1], f"the cut line never reached the composer: {drafts}"
         assert composer_draft(screen, descriptor) == "", f"the draft stayed:\n{screen}"
+        # Long enough for a submitted line to show its turn.
+        await asyncio.sleep(3.0)
+        screen = await terminal.capture(session_id)
         assert "esc to interrupt" not in screen, f"it reached the agent as a prompt:\n{screen}"
         assert thread_of(activity, key) is None, "a line that lost its start bound the thread"
 

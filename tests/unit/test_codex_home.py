@@ -2,6 +2,7 @@
 
 import os
 import select
+import shlex
 import shutil
 import signal
 import subprocess
@@ -321,8 +322,12 @@ def test_an_unreadable_process_from_an_older_app_is_not_the_fixtures() -> None:
     the home that is not this test run, and a fixture's process has no such parent."""
     import codex_home
 
+    # Under a shell, so the app older than the home is not this run's own child.
     launcher = subprocess.Popen(
-        [sys.executable, "-c", _LAUNCHER], stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True
+        ["bash", "-c", f"{shlex.quote(sys.executable)} -c {shlex.quote(_LAUNCHER)}; :"],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        text=True,
     )
     time.sleep(0.2)
     home = short_codex_home()
@@ -363,6 +368,22 @@ def test_an_unreadable_orphan_still_refuses_cleanup(monkeypatch: pytest.MonkeyPa
 
     home = short_codex_home()
     chain = {50: (40, 10**12), 40: (1, 5), 1: (0, 1)}
+    monkeypatch.setattr(codex_home, "_parent_and_start", lambda pid: chain[pid])
+    try:
+        assert codex_home._started_by_an_older_app(home, 50) is False
+    finally:
+        shutil.rmtree(home)
+        os.close(codex_home._OWNED_HOMES.pop(home)[0])
+
+
+def test_a_helper_of_this_run_older_than_the_home_still_refuses(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A tmux server or helper the run started first can still hold a fixture process."""
+    import codex_home
+
+    home = short_codex_home()
+    chain = {50: (40, 10**12), 40: (os.getpid(), 5)}
     monkeypatch.setattr(codex_home, "_parent_and_start", lambda pid: chain[pid])
     try:
         assert codex_home._started_by_an_older_app(home, 50) is False
