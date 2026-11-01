@@ -402,6 +402,7 @@ def _isolated_codex_home(root: Path, repo: Path, codex: Path, codex_home: Path) 
     # Beside the repository, so it goes with it; the model's only writable folder outside it.
     scratch = repo.parent / "tmp"
     scratch.mkdir()
+    (repo / ".claude").mkdir(exist_ok=True)
     root.mkdir(mode=0o700, parents=True, exist_ok=True)
     native_command = sharing_daemon(
         codex_command(codex, root, codex_home, repo.parent, operator_home=root)
@@ -437,7 +438,10 @@ def _isolated_codex_home(root: Path, repo: Path, codex: Path, codex_home: Path) 
         'approval_policy = "never"\nsandbox_mode = "workspace-write"\n'
         'cli_auth_credentials_store = "file"\n'
         "[sandbox_workspace_write]\n"
-        f"writable_roots = [{json.dumps(str(repo / '.git'))}, {json.dumps(str(scratch))}]\n"
+        # `.claude` because a successor in another project records its acceptance here, which its
+        # own workspace does not cover. The product grants no such root (see the backlog).
+        f"writable_roots = [{json.dumps(str(repo / '.git'))}, {json.dumps(str(repo / '.claude'))}, "
+        f"{json.dumps(str(scratch))}]\n"
         "exclude_slash_tmp = true\nexclude_tmpdir_env_var = true\n"
         "\n",
         encoding="utf-8",

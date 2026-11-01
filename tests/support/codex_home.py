@@ -102,7 +102,6 @@ def _running_from(home: Path) -> list[int]:
             time.sleep(0.05)
 
 
-@cache
 def managed_daemons(home: Path) -> set[int]:
     """The pids of this home's Codex daemons, read from outside any pane.
 
@@ -121,6 +120,7 @@ def managed_daemons(home: Path) -> set[int]:
     return {pid for pid, parent in found.items() if parent not in found}
 
 
+@cache
 def _pidfd_functions():
     # python-build-standalone may omit Python's pidfd wrappers even when libc provides
     # them. Resolve the native symbols; never fall back to a racy numeric-PID signal.

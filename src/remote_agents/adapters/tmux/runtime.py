@@ -161,6 +161,12 @@ class TerminalWaits:
     draws the dialog before it takes keys, so a movement sent at once can be lost (measured on
     the 2026-10-05 live run): past this, nothing is confirmed and a later press plans again."""
 
+    trust_hold: float = 0.5
+    """How long the cursor must stay on the chosen answer before `Enter`. Claude 2.1.316 takes a
+    `Down`, then puts the cursor back on "No, exit" by itself about 130 ms later, once, while it
+    finishes starting (5 of 5, 2026-11-01). A re-read cannot close that: an `Enter` sent just after
+    the reset answers no and takes the agent down, as a live drill did."""
+
     decline: float = float(_TRUST_DECLINE_WAIT_SECONDS)
     """A declined agent running its own shutdown before its pane is killed."""
 
@@ -1708,9 +1714,10 @@ class TmuxTerminal:
     ) -> bool:
         """Move the cursor to the chosen answer and confirm it -- `Enter` only onto that row.
 
-        Three steps, each under the key lock: the movement keys, onto the screen they were
+        Four steps, each key under the key lock: the movement keys, onto the screen they were
         planned from; a wait, of at most `TerminalWaits.trust_cursor`, for a capture showing
-        the cursor on the answer; then `Enter`, onto a screen that still shows it. A movement
+        the cursor on the answer; `TerminalWaits.trust_hold`, which a dialog that puts its cursor
+        back has to outlast; then `Enter`, onto a screen that still shows it. A movement
         the agent dropped -- Claude draws the dialog before it takes keys -- leaves the cursor
         where it was, and then nothing is confirmed: the dialog stays up for a later press,
         never answered the other way. True once `Enter` went onto the chosen row.
@@ -1736,6 +1743,8 @@ class TmuxTerminal:
                 if asyncio.get_running_loop().time() >= deadline:
                     return False
                 await asyncio.sleep(0.1)
+
+        await asyncio.sleep(self._waits.trust_hold)
 
         def on_answer(now: str) -> bool:
             return trust_cursor_on(_plain(now), dialog, accept=accept)

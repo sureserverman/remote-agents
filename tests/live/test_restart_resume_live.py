@@ -100,6 +100,7 @@ from remote_agents.config import (
     read_resume_interrupted,
 )
 from remote_agents.domain.models import ProfileId, SessionId, SessionState
+from remote_agents.domain.profiles import PermissionPreset
 from remote_agents.domain.trust import TrustState
 from remote_agents.production import ProductionPaths
 
@@ -365,7 +366,15 @@ async def test_a_lost_server_brings_real_claude_and_codex_back_in_their_own_conv
         launched = {}
         for profile in (CLAUDE, CODEX):
             outcome = await first.backend.sessions.launch(
-                LaunchCommand(project_id, profile, _key(f"restart-{profile}"), "restart-live")
+                LaunchCommand(
+                    project_id,
+                    profile,
+                    _key(f"restart-{profile}"),
+                    "restart-live",
+                    # A preset that shares the daemon: the default, `approve_for_me`, runs embedded
+                    # (DEC-071), so there would be no daemon to count.
+                    permissions=PermissionPreset.PROVIDER_DEFAULT if profile == CODEX else None,
+                )
             )
             session_id = outcome.record.session_id
             if outcome.record.state is SessionState.UNTRUSTED:
