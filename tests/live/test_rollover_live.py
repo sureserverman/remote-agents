@@ -128,6 +128,7 @@ from remote_agents.adapters.sqlite.migrations import MIGRATIONS
 from remote_agents.adapters.sqlite.session_store import SQLiteSessionStore
 from remote_agents.adapters.tmux.composer import composer_draft
 from remote_agents.adapters.tmux.profiles import bind_thread_line
+from remote_agents.adapters.tmux.runtime import TmuxTerminal
 from remote_agents.adapters.workflow.handoff_envelopes import FileHandoffEnvelopes
 from remote_agents.adapters.workflow.roots import handoff_root
 from remote_agents.application.commands import AnswerTrustCommand, LaunchCommand
@@ -137,6 +138,7 @@ from remote_agents.application.rollover import RolloverReport
 from remote_agents.application.session_actions import ROLLOVER, rollover_outcome
 from remote_agents.application.session_folders import SessionFolders
 from remote_agents.application.session_views import rollover_marks, rollover_note
+from remote_agents.application.thread_binding import COMPOSER_PATIENCE_SECONDS
 from remote_agents.bootstrap import _RECONCILE_INTERVAL_SECONDS
 from remote_agents.composition.backend import (
     ProjectCatalogueProvider,
@@ -159,7 +161,7 @@ from remote_agents.domain.models import ProfileId, SessionId, SessionState
 from remote_agents.domain.profiles import PermissionPreset
 from remote_agents.domain.rollover import TERMINAL, RolloverState
 from remote_agents.domain.trust import TrustState
-from remote_agents.ports.terminal import PromptOutcome, PromptReason
+from remote_agents.ports.terminal import PromptDelivery, PromptOutcome, PromptReason
 from remote_agents.production import ProductionPaths
 
 from .test_codex_tool_shell_identity import _read_seen
@@ -1246,6 +1248,25 @@ async def test_the_service_line_binds_a_real_codex_under_each_preset(
             assert len(daemons) == 1, f"{preset}: {daemons}"
 
 
+async def _sent_once_not_busy(
+    terminal: TmuxTerminal, session_id: SessionId, line: str
+) -> PromptDelivery:
+    """The line, waiting out a pane that reads busy, as the binder's own pass does.
+
+    A fresh Codex can read busy just after its composer appears (owner run of 2026-11-01). That
+    refusal pastes nothing, so asking again is not a second send.
+    """
+    started = time.monotonic()
+    while True:
+        delivery = await terminal.send_binding_line(session_id, line)
+        if delivery.reason is not PromptReason.BUSY:
+            return delivery
+        assert time.monotonic() - started < COMPOSER_PATIENCE_SECONDS, (
+            f"busy past the binder's patience:\n{await terminal.capture(session_id)}"
+        )
+        await asyncio.sleep(1.0)
+
+
 @pytest.mark.live_acceptance
 async def test_a_mangled_binding_line_is_cleared_by_c_u(
     request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch
@@ -1269,8 +1290,8 @@ async def test_a_mangled_binding_line_is_cleared_by_c_u(
             return await deliver(session, text[32:], **arguments)
 
         monkeypatch.setattr(gateway, "deliver_prompt", losing_its_start)
-        delivery = await terminal.send_binding_line(
-            session_id, bind_thread_line(activity, key, bindings.mint(key))
+        delivery = await _sent_once_not_busy(
+            terminal, session_id, bind_thread_line(activity, key, bindings.mint(key))
         )
         monkeypatch.setattr(gateway, "deliver_prompt", deliver)
         assert delivery.outcome is PromptOutcome.UNCONFIRMED, delivery
@@ -1287,8 +1308,8 @@ async def test_a_mangled_binding_line_is_cleared_by_c_u(
         assert thread_of(activity, key) is None, "a line that lost its start bound the thread"
 
         # The composer still takes the real line, with a fresh nonce.
-        again = await terminal.send_binding_line(
-            session_id, bind_thread_line(activity, key, bindings.mint(key, retry=True))
+        again = await _sent_once_not_busy(
+            terminal, session_id, bind_thread_line(activity, key, bindings.mint(key, retry=True))
         )
         assert again.outcome is PromptOutcome.SENT, f"{again}\n{await terminal.capture(session_id)}"
         started = time.monotonic()
