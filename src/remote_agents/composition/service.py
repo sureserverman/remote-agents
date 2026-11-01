@@ -6,6 +6,7 @@ import asyncio
 import fcntl
 import logging
 import os
+import threading
 import time
 from collections.abc import Awaitable, Callable, Iterable, Iterator, Mapping, Sequence
 from contextlib import (
@@ -998,19 +999,48 @@ class CatalogueGap:
         self._read_timeout = read_timeout
         self._read_at: float | None = None
         self._running: asyncio.Future[object] | None = None
+        self._read_timed_out = False
         self._destinations_read_at: dict[Path, float] = {}
 
     async def _read(self) -> None:
-        """`refresh` off the event loop, since it walks the development root. Never raises."""
-        # A read past its timeout keeps its thread: no second one starts while it runs, or a hung
-        # mount would park one worker per minute behind the catalogue's lock.
+        """One owned daemon worker; a stuck mount cannot hold the loop or process shutdown."""
         if self._running is not None and not self._running.done():
             return
-        self._running = asyncio.ensure_future(asyncio.to_thread(self._refresh))
-        try:
-            await asyncio.wait_for(asyncio.shield(self._running), self._read_timeout)
-        except Exception:
-            _LOG.exception("the project catalogue could not be re-read for a rollover")
+        loop = asyncio.get_running_loop()
+        running = loop.create_future()
+        self._running = running
+        self._read_timed_out = False
+        # Read errors are logged by the worker even after this await timed out. Consume the
+        # future's exception too, including when nobody will await this completed read again.
+        running.add_done_callback(lambda done: None if done.cancelled() else done.exception())
+
+        def publish(value: object, error: Exception | None) -> None:
+            if running.done():
+                return
+            if error is None:
+                running.set_result(value)
+            else:
+                running.set_exception(error)
+
+        def read() -> None:
+            value, error = None, None
+            try:
+                value = self._refresh()
+            except Exception as failure:
+                error = failure
+                _LOG.exception("the project catalogue could not be re-read for a rollover")
+            try:
+                loop.call_soon_threadsafe(publish, value, error)
+            except RuntimeError:
+                # The loop has closed. The worker owns no executor that shutdown must join;
+                # its result is no longer needed, and any failure was already logged above.
+                pass
+
+        threading.Thread(target=read, name="ra-catalogue-refresh", daemon=True).start()
+        done, _ = await asyncio.wait((running,), timeout=self._read_timeout)
+        if not done:
+            self._read_timed_out = True
+            _LOG.warning("the project catalogue read timed out; its one worker remains active")
 
     async def close(self, records: Iterable[SessionRecord]) -> None:
         if all(

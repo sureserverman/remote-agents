@@ -44,7 +44,6 @@ with its daemon in `finally`; workspaces under pytest's temporary directory. The
 from __future__ import annotations
 
 import json
-import os
 import shutil
 import subprocess
 import sys
@@ -58,6 +57,7 @@ import pytest
 from agent_panes import CODEX_OPENING, CODEX_READY, open_to_composer
 from codex_home import _running_from, retire_codex_home, short_codex_home
 from native_isolation import codex_command, live_requested, sharing_daemon
+from probe_artifact import retained_probe
 
 from remote_agents.adapters.agents.hook_identity import FileHookRoster
 from remote_agents.adapters.agents.registry import install_agent_hooks
@@ -421,19 +421,22 @@ def test_measure_what_a_per_launch_setting_does_to_the_shared_daemon(drill: Dril
     marker: it proves the daemon is shared here, so a launch between them that does not see it
     stayed out. openai/codex#24638 reports that a launch with `-c` skips the shared daemon, which
     would make a token's isolation say nothing about a shared daemon. The result is written to
-    `RA_TOKEN_PROBE_OUT`; only the control is asserted, and the rest is for reading.
+    `RA_TOKEN_PROBE_OUT`, which must name an unused file before any pane is launched.
+    Each observation is flushed privately as it completes; only the control is asserted,
+    and the remaining observations are retained for reading, not claimed as assertions.
     """
     marker = "marker-of-first-plain-pane"
-    results = {
-        "plain-first": _launch_pane(drill, "plain-first", session=marker),
-        "token-a": _launch_pane(drill, "token-a", *_token_flag("token-a")),
-        "token-b": _launch_pane(drill, "token-b", *_token_flag("token-b")),
-        "no-daemon": _launch_pane(drill, "no-daemon", "--no-daemon", session="own-session"),
-        "plain-second": _launch_pane(drill, "plain-second"),
-    }
-    out = os.environ.get("RA_TOKEN_PROBE_OUT")
-    if out:
-        Path(out).write_text(json.dumps(results, indent=2), encoding="utf-8")
+    results = {}
+    with retained_probe() as record:
+        for name, flags, session in (
+            ("plain-first", (), marker),
+            ("token-a", _token_flag("token-a"), None),
+            ("token-b", _token_flag("token-b"), None),
+            ("no-daemon", ("--no-daemon",), "own-session"),
+            ("plain-second", (), None),
+        ):
+            results[name] = _launch_pane(drill, name, *flags, session=session)
+            record(name, results[name])
     assert results["plain-first"]["turn"]["session"] == marker, results["plain-first"]
     assert results["plain-second"]["turn"]["session"] == marker, results["plain-second"]
     assert len(results["plain-second"]["daemons"]) == 1, results["plain-second"]

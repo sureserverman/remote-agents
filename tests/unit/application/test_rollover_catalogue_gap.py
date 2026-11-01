@@ -7,7 +7,11 @@ and a destination created the same way would have been refused as unregistered."
 from __future__ import annotations
 
 import ast
+import asyncio
 import inspect
+import subprocess
+import sys
+import textwrap
 import threading
 import time
 from pathlib import Path
@@ -336,3 +340,50 @@ def test_refreshes_run_one_at_a_time(tmp_path: Path, monkeypatch: pytest.MonkeyP
         thread.join()
 
     assert most[0] == 1
+
+
+async def test_a_timed_out_read_logs_its_late_failure_once(caplog, tmp_path: Path) -> None:
+    release = threading.Event()
+
+    def broken_late() -> None:
+        release.wait(2)
+        raise OSError("late registry failure")
+
+    gap = CatalogueGap({}, broken_late, _Clock(), read_timeout=0.01)
+    await gap.read_for(tmp_path)
+    release.set()
+    try:
+        async with asyncio.timeout(1):
+            while not gap._running.done():
+                await asyncio.sleep(0.01)
+            await asyncio.sleep(0)
+        failures = [
+            record
+            for record in caplog.records
+            if record.exc_info and str(record.exc_info[1]) == "late registry failure"
+        ]
+        assert len(failures) == 1
+    finally:
+        if gap._running.done():
+            gap._running.exception()
+
+
+def test_a_hung_read_cannot_hold_process_shutdown() -> None:
+    # asyncio.run waits for its default executor on shutdown. A timed-out catalogue read
+    # must not make that wait infinite; the child owns no filesystem or provider state.
+    script = textwrap.dedent("""\
+        import asyncio
+        import threading
+        from pathlib import Path
+        from remote_agents.composition.service import CatalogueGap
+        async def main():
+            gap = CatalogueGap({}, lambda: threading.Event().wait(), read_timeout=0.01)
+            await gap.read_for(Path('/missing-fixture-project'))
+        asyncio.run(main())
+        print('shutdown-complete')
+    """)
+    result = subprocess.run(
+        [sys.executable, "-c", script], capture_output=True, text=True, timeout=3
+    )
+    assert result.returncode == 0, result.stderr
+    assert "shutdown-complete" in result.stdout
