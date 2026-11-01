@@ -60,6 +60,31 @@ def _private_home(home: Path) -> Path:
     return home
 
 
+def _parent_and_start(pid: int) -> tuple[int, int]:
+    fields = (Path("/proc") / str(pid) / "stat").read_text().rsplit(")", 1)[1].split()
+    return int(fields[1]), int(fields[19])
+
+
+def _started_by_an_older_app(home: Path, pid: int) -> bool:
+    """Whether an unreadable process descends from a running app that predates this home.
+
+    The owner's browser opens a sandboxed renderer mid-drill: same uid, newer than the home, and an
+    environment nobody can read. A fixture's processes hang off this test run, or off init or the
+    user's systemd once detached, and neither of those says anything. Every other doubt stays a
+    refusal, including a parent that vanished during the walk.
+    """
+    try:
+        ancestor = _parent_and_start(pid)[0]
+        while ancestor not in (0, 1, os.getpid()):
+            parent, started = _parent_and_start(ancestor)
+            if started < _OWNED_HOMES[home][1]:
+                return parent > 1
+            ancestor = parent
+    except (OSError, ValueError, IndexError):
+        return False
+    return False
+
+
 def _belongs_to(home: Path, pid: int) -> bool:
     entry = Path("/proc") / str(pid)
     try:
@@ -80,6 +105,8 @@ def _belongs_to(home: Path, pid: int) -> bool:
     except (FileNotFoundError, ProcessLookupError):
         return False
     except PermissionError as error:
+        if _started_by_an_older_app(home, pid):
+            return False
         raise RuntimeError("process ownership could not be read; fixture home retained") from error
 
 
