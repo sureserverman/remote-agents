@@ -8,7 +8,12 @@ import time
 from pathlib import Path
 
 import codex_home
+import pytest
 from native_isolation import sharing_daemon
+
+_NEEDS_PROCFS = pytest.mark.skipif(
+    not Path("/proc/uptime").is_file(), reason="process identity reads Linux procfs"
+)
 
 
 def test_sharing_a_daemon_removes_only_the_pid_namespace() -> None:
@@ -36,6 +41,7 @@ def test_every_codex_drill_that_counts_daemons_runs_without_its_own_namespace() 
         assert "sharing_daemon(" in source, name
 
 
+@_NEEDS_PROCFS
 def test_counting_daemons_reads_the_processes_every_time() -> None:
     """Each drill adds every reading up, so a remembered first one would hide a replaced daemon."""
     home = codex_home.short_codex_home()
@@ -58,6 +64,7 @@ def test_counting_daemons_reads_the_processes_every_time() -> None:
         codex_home.retire_codex_home(home)
 
 
+@_NEEDS_PROCFS
 def test_a_process_nobody_can_read_does_not_stop_a_count() -> None:
     """A drill polls this, so one unreadable app must not fail a run the way cleanup refuses."""
     home = codex_home.short_codex_home()
