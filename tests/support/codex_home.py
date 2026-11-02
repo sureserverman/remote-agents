@@ -65,22 +65,31 @@ def _parent_and_start(pid: int) -> tuple[int, int]:
     return int(fields[1]), int(fields[19])
 
 
+def _cgroup(pid: int) -> str:
+    return (Path("/proc") / str(pid) / "cgroup").read_text()
+
+
 def _started_by_an_older_app(home: Path, pid: int) -> bool:
     """Whether an unreadable process descends from a running app that predates this home.
 
     The owner's browser opens a sandboxed renderer mid-drill: same uid, newer than the home, and an
     environment nobody can read. A fixture's processes hang off this test run, a helper it started,
-    or init or the user's systemd once detached, and none of those says anything. Every other doubt
-    stays a refusal, including a parent that vanished during the walk. Measured on one desktop:
-    bwrap, gnome-shell, systemd. Elsewhere an app under systemd itself refuses, which fails a run
-    and never deletes a home.
+    or init or the user's systemd once detached, and none of those says anything. A helper that
+    detached keeps this run's cgroup, and the desktop gives each app its own, so an ancestor in
+    this run's cgroup is no app. Compare the ancestor, not the process: tmux moves its panes to a
+    scope of their own. Every other doubt stays a refusal, including a parent that vanished during
+    the walk. Measured on one desktop: bwrap, gnome-shell, systemd, and Cursor, Claude Desktop and
+    Element each in their own scope. Elsewhere an app under systemd itself refuses, and so does one
+    started from this run's terminal, which fails a run and never deletes a home.
     """
     try:
         ancestor = _parent_and_start(pid)[0]
         while ancestor not in (0, 1, os.getpid()):
             parent, started = _parent_and_start(ancestor)
             if started < _OWNED_HOMES[home][1]:
-                return parent not in (0, 1, os.getpid())
+                return parent not in (0, 1, os.getpid()) and _cgroup(ancestor) != _cgroup(
+                    os.getpid()
+                )
             ancestor = parent
     except (OSError, ValueError, IndexError):
         return False

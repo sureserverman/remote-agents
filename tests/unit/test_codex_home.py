@@ -131,6 +131,7 @@ def test_signal_leaves_a_process_it_cannot_read_to_the_next_scan(monkeypatch):
             patch.undo()
             stop_child(process, pid)
             shutil.rmtree(home)
+            os.close(codex_home._OWNED_HOMES.pop(home)[0])
 
 
 def test_signal_still_raises_what_is_not_unreadability(monkeypatch):
@@ -151,6 +152,7 @@ def test_signal_still_raises_what_is_not_unreadability(monkeypatch):
             patch.undo()
             stop_child(process, pid)
             shutil.rmtree(home)
+            os.close(codex_home._OWNED_HOMES.pop(home)[0])
 
 
 def test_an_ownership_refusal_names_the_process(monkeypatch):
@@ -385,12 +387,17 @@ def _unreadable(pid: int) -> bool:
     return False
 
 
-def test_an_unreadable_process_from_an_older_app_is_not_the_fixtures() -> None:
+def test_an_unreadable_process_from_an_older_app_is_not_the_fixtures(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """The owner's browser opened a renderer mid-drill, and cleanup refused: same uid, newer than
     the home, and an environment nobody can read (2026-11-01). Its parents reach an app older than
     the home that is not this test run, and a fixture's process has no such parent."""
     import codex_home
 
+    monkeypatch.setattr(
+        codex_home, "_cgroup", lambda pid: "terminal" if pid == os.getpid() else "app"
+    )
     # Under a shell, so the app older than the home is not this run's own child.
     launcher = subprocess.Popen(
         ["bash", "-c", f"{shlex.quote(sys.executable)} -c {shlex.quote(_LAUNCHER)}; :"],
@@ -455,6 +462,28 @@ def test_a_helper_of_this_run_older_than_the_home_still_refuses(
     chain = {50: (40, 10**12), 40: (os.getpid(), 5)}
     monkeypatch.setattr(codex_home, "_parent_and_start", lambda pid: chain[pid])
     try:
+        assert codex_home._started_by_an_older_app(home, 50) is False
+    finally:
+        shutil.rmtree(home)
+        os.close(codex_home._OWNED_HOMES.pop(home)[0])
+
+
+def test_a_detached_helper_of_this_run_still_refuses(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A tmux server the run started first detaches to the user's systemd, not to pid 1 or this
+    run. It keeps this run's cgroup, which is what tells it from an app the desktop started."""
+    import codex_home
+
+    home = short_codex_home()
+    chain = {50: (40, 10**12), 40: (3000, 5)}
+    monkeypatch.setattr(codex_home, "_parent_and_start", lambda pid: chain[pid])
+    try:
+        monkeypatch.setattr(codex_home, "_cgroup", lambda _pid: "terminal")
+        assert codex_home._started_by_an_older_app(home, 50) is False
+        monkeypatch.setattr(
+            codex_home, "_cgroup", lambda pid: "terminal" if pid == os.getpid() else "app"
+        )
+        assert codex_home._started_by_an_older_app(home, 50) is True
+        monkeypatch.setattr(codex_home, "_cgroup", lambda _pid: (_ for _ in ()).throw(OSError()))
         assert codex_home._started_by_an_older_app(home, 50) is False
     finally:
         shutil.rmtree(home)
