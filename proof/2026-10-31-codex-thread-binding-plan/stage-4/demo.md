@@ -357,3 +357,19 @@ None.
 - m3. `v0.68.0` does not hold this work: `merge-base --is-ancestor b673f8fd v0.68.0` → 1, and the head is 87 commits past it. `doctor` shows `0.68.0` for both. Plain `remote-agents upgrade` prints "already up to date" and changes nothing (`onboarding.py:979`, read, not run). `upgrade --version v0.68.0` would remove the binding. OD-2 chose no tag, so this stays true until the next one.
 - m4. This file is not tracked: `git ls-files` lists stage 1 to 3's `demo.md` but not stage 4's, and `proof/` is ignored. It needs `git add -f` to ship with the merge, and that commit's tree is the one the suite should run on.
 - m5. The tree changed under this pass: uncommitted edits at 06:39, then `0b770b1d` at 06:40:28. The owner's run should wait until the executor has stopped committing.
+
+## Final native run and short check
+
+2026-11-02, written by the executor, not the evaluator above. The owner ran each from their own terminal.
+
+Full run at `d0e5ecbc`, `run-stage4-final.sh`:
+- `ra-plan-scope-20261102T165119.log`: 2 failed, 9832 passed, 114 skipped. So plan-scope did not exit 0 at this commit, and it has not exited 0 at any commit.
+- `ra-binding-proof-20261102T171950.log`: 5 passed. `ra-live-owner-20261102T171948.log`: 12 passed, 9 deselected, the identity, rollover, adoption and restart drills. This closes M2 and the "no native drill has run" half of M1. `ra-isolation-20261102T171948.log`: 32 passed.
+
+The two failures:
+- `test_an_ownership_refusal_names_the_process`: a timing bug in the test. Popen can return before the child's `/proc` arguments settle. Reproduced under load: 7 of 400 repeats failed before, 0 of 10,000 after. Fixed in `1050a34c`, test only.
+- `test_rejected_credential_cannot_access_the_bot`: `httpx.ConnectError` during the TLS start to Telegram. It did not fail in the 4 full runs before this one, and it passed in both reruns since, in under a second. I did not find what dropped the connection, so I call it a one-off from one failure, not a cause. The test still depends on the network.
+
+The owner chose a short check over a second full run, "Short check (Recommended)". `ra-short-check-20261102T174444.log` at `1050a34c`: 33 passed, 1 skipped, isolation, ownership and Telegram tests. So the suite and the drills stand as proven at `d0e5ecbc`. `git diff d0e5ecbc 1050a34c` is 5 test lines, and `src` is unchanged.
+
+A process from another project was seen running at 17:37, after the suite and drills had ended. Whether other work ran during them is unknown.
