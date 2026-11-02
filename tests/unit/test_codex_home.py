@@ -169,6 +169,11 @@ def test_an_ownership_refusal_names_the_process(monkeypatch):
 
     process = subprocess.Popen(["sleep", "30"])
     try:
+        # Popen can return before the child's arguments settle: seen empty and seen as the parent's.
+        arguments = Path("/proc") / str(process.pid) / "cmdline"
+        deadline = time.monotonic() + 5
+        while arguments.read_bytes() != b"sleep\x0030\x00" and time.monotonic() < deadline:
+            time.sleep(0.001)
         monkeypatch.setattr(Path, "read_bytes", read_bytes)
         monkeypatch.setattr(codex_home, "_started_by_an_older_app", lambda *_: False)
         with pytest.raises(RuntimeError, match=rf"pid {process.pid} .*sleep 30"):
