@@ -182,8 +182,8 @@ The BL-147 probe, repeated, with controls:
 - `git log` shows no commit on this branch touching `systemd.py`, and the cited line blames to `d1f18593`, on `origin/main`.
 
 Check 3, quota. River's screen shows `5h 100% left · weekly 0% left`, and the rollouts agree.
-- Every rate-limit sample from 13:42 on reads primary `0.0`, secondary `100.0`, plan `plus`, `has_credits` true, `rate_limit_reached_type` null.
-- The rollouts' credit balance fell from 503.22 at 15:46:43 to 477.84 at 15:58:11, 25.38 in all. Other sessions may have spent part of that. The weekly window resets on Nov 4.
+- Every rate-limit sample from 13:42 on reads primary `0.0`, secondary `100.0`, [account plan], `has_credits` true, `rate_limit_reached_type` null.
+- The rollouts' credit balance fell from [balance] at 15:46:43 to [lower balance] at 15:58:11, 25.38 in all. Other sessions may have spent part of that. The weekly window resets on Nov 4.
 - No limit dialog and no limit stop appear. Neither session has a `limit_window` row.
 - So quota does not change this run's meaning: every turn ran and the rollover reason was not a limit. It does change the price of a repeat, which is paid from the owner's credits. An account with no credits was not tested.
 
