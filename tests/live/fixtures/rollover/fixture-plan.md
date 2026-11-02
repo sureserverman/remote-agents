@@ -4,19 +4,19 @@ Date: 2026-10-05
 This plan is a fixture. remote-agents' live rollover test
 (`tests/live/test_rollover_live.py`) copies it into a throwaway git repository and has a real
 Claude session execute it, so the owner's "Rollover now" can hand Stage 2 to a fresh session at
-the Stage 1 gate. Every task creates one empty file; there is nothing to design or research.
+the Stage 1 gate. Every task creates one marker file; there is nothing to design or research.
 
 ## Research Summary
 
 ### Online sources
-- None: the work is two empty files.
+- None: the work is two marker files.
 
 ### Vault / local docs
 - None: this repository exists only for the length of one test run.
 
 ### Project context
 - A fresh git repository on branch `rollover-fixture`, holding this plan, a `.gitignore` and
-  nothing else. No test framework: each task's test is a shell `test -f`.
+  nothing else. No test framework: each task's test is a shell `grep`.
 
 ## Decisions in force
 
@@ -32,8 +32,11 @@ that ticks these boxes: the record audit reads a ticked Preflight box with no ev
 commit as unproven. The decisions scan finds no register for this repository; that empty result is
 the expected one, not a failure.
 
+Each marker file holds the one line `done`. Its proof break is a content edit of that line, because
+the proof tool's breaks only edit tracked files, and never delete one.
+
 - [ ] Working tree clean: `git status --porcelain` prints nothing
-- [ ] Review scope declared — `review-scope: none — two tasks that each create one empty file`
+- [ ] Review scope declared — `review-scope: none — two tasks that each create one marker file`
 - [ ] Dispatch probe: skipped — the roster is `0 tasks` and the tier is below `standard`
 - [ ] Dispatch roster — `0 of 2 tasks`: `0 tasks`
 
@@ -41,18 +44,18 @@ the expected one, not a failure.
 
 ## Stage 1: First marker file
 
-**Goal:** `stage-1.txt` exists at the repository root and is committed.
+**Goal:** `stage-1.txt` holds the line `done` at the repository root and is committed.
 **Depends on:** none
 **Blocks:** Stage 2
-**Risk:** LOW — creates one empty file
+**Risk:** LOW — creates one marker file
 **Rollback:** `git rm stage-1.txt`
 
 ### Task 1.1: Create stage-1.txt
 - **Status:** [ ]
 - **Depends on:** none
 - **Blocks:** Task 2.1
-- **Dispatch:** NO (one empty file; nothing to fan out)
-- **Test:** `test -f stage-1.txt`
+- **Dispatch:** NO (one marker file; nothing to fan out)
+- **Test:** `grep -qx done stage-1.txt`
 - **Red-Green max cycles:** 3
 
 ### Stage 1 Gate
@@ -64,18 +67,18 @@ the expected one, not a failure.
 
 ## Stage 2: Second marker file
 
-**Goal:** `stage-2.txt` exists at the repository root and is committed.
+**Goal:** `stage-2.txt` holds the line `done` at the repository root and is committed.
 **Depends on:** Stage 1 gate passing
 **Blocks:** none
-**Risk:** LOW — creates one empty file
+**Risk:** LOW — creates one marker file
 **Rollback:** `git rm stage-2.txt`
 
 ### Task 2.1: Create stage-2.txt
 - **Status:** [ ]
 - **Depends on:** Task 1.1
 - **Blocks:** none
-- **Dispatch:** NO (one empty file; nothing to fan out)
-- **Test:** `test -f stage-2.txt`
+- **Dispatch:** NO (one marker file; nothing to fan out)
+- **Test:** `grep -qx done stage-2.txt`
 - **Red-Green max cycles:** 3
 
 ### Stage 2 Gate

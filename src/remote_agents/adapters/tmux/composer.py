@@ -170,6 +170,36 @@ def in_shell_mode(capture: str, descriptor: ProviderDescriptor) -> bool:
     return re.search(declared.shell, _normalised(capture), re.MULTILINE) is not None
 
 
+def shell_line_refusal(
+    capture: str, descriptor: ProviderDescriptor, line: str
+) -> PromptReason | None:
+    """Why `Enter` may not be pressed on a pasted shell `line`, or None if it may.
+
+    Shell mode, and the whole line, or it does not run as a shell command: a line that lost its
+    start would reach the agent as a prompt, and a dialog would take the `Enter` as its answer.
+    Spaces are dropped to compare, because the agent wraps a long line wherever it likes.
+    """
+    if dialog_on_screen(capture, descriptor):
+        return PromptReason.DIALOG
+    if not in_shell_mode(capture, descriptor):
+        return PromptReason.DRAFT_NOT_SEEN
+    if "".join(line.split()) not in "".join(_normalised(capture).split()):
+        return PromptReason.DRAFT_NOT_SEEN
+    return None
+
+
+def stale_shell_line(capture: str, descriptor: ProviderDescriptor, start: str) -> bool:
+    """Whether the composer is in shell mode holding a line that begins `start`.
+
+    Asked of the composer's own region, never the screen: a line that ran stays in the transcript.
+    """
+    declared = descriptor.composer
+    if declared is None or declared.shell is None or dialog_on_screen(capture, descriptor):
+        return False
+    found = re.search(declared.shell, _normalised(capture), re.MULTILINE)
+    return found is not None and "".join(start.split()) in "".join(found.group(0).split())
+
+
 TURN_GRACE_SECONDS = 2.0
 """How long a freshly started turn marker reads busy whatever the screen shows (BL-108).
 

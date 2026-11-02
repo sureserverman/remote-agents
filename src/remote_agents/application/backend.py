@@ -312,6 +312,11 @@ class Backend:
     through this field. Optional for the reason the rest are, and typed `object` for the reason
     `sessions` is."""
 
+    unbound_watch: object | None = None
+    """Which sessions gave up their thread binding (`application.thread_binding.UnboundWatch`):
+    how the console, another process, learns what the binding pass told the bot. Optional for the
+    reason the rest are, and typed `object` for the reason `sessions` is."""
+
     max_label_length: int = MAX_LABEL_LENGTH
     """The host's configured bound, clamped by `config` to 1..40 and never looser than the
     domain's.

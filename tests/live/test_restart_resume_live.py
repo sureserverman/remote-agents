@@ -62,10 +62,11 @@ from uuid import uuid4
 import pytest
 import yaml
 from agent_panes import answer_hook_review
-from codex_home import retire_codex_home, short_codex_home, stop_codex_home
-from native_isolation import claude_command, codex_command
+from codex_home import managed_daemons, retire_codex_home, short_codex_home, stop_codex_home
+from native_isolation import claude_command, codex_command, sharing_daemon
 
 from remote_agents.adapters.agents.registry import install_agent_hooks, provider_descriptors
+from remote_agents.adapters.agents.thread_binding import thread_of
 from remote_agents.adapters.agents.turn_markers import (
     FileConversationMarks,
     FileStartedMarks,
@@ -88,6 +89,7 @@ from remote_agents.composition.service import (
     ServiceComposition,
     _serve_with_reconciliation,
     build_restart_resume,
+    build_thread_binder,
 )
 from remote_agents.composition.tui import _local_runtime, _resolve_profile_executable
 from remote_agents.config import (
@@ -98,6 +100,7 @@ from remote_agents.config import (
     read_resume_interrupted,
 )
 from remote_agents.domain.models import ProfileId, SessionId, SessionState
+from remote_agents.domain.profiles import PermissionPreset
 from remote_agents.domain.trust import TrustState
 from remote_agents.production import ProductionPaths
 
@@ -194,7 +197,8 @@ def _isolated_home(
     settings = root / "claude-settings.json"
     settings.write_text("{}\n", encoding="utf-8")
     install_agent_hooks(settings, executable=Path(sys.executable), activity_directory=spool)
-    codex_argv = codex_command(codex, root, codex_home, repo, operator_home=root)
+    # One daemon, as the owner's panes share one: its own namespace would hide it from the resume.
+    codex_argv = sharing_daemon(codex_command(codex, root, codex_home, repo, operator_home=root))
     claude_argv = claude_command(claude, root, repo)
     (codex_home / "config.toml").write_text(
         'approval_policy = "on-request"\nsandbox_mode = "read-only"\n'
@@ -259,6 +263,13 @@ class _Process:
             runtime=self.runtime,
             store=self.store,
             locks=self.locks,
+        )
+        self.binder = build_thread_binder(
+            connection=connection,
+            store=self.store,
+            terminal=self.terminal,
+            descriptors=descriptors,
+            activity_directory=paths.activity_directory,
         )
         self.connection = connection
         self.paths = paths
@@ -325,6 +336,7 @@ class _Process:
             ),
             restart_resume=restart,
             drain=self.locks.drain,
+            thread_binder=self.binder,
         )
 
 
@@ -354,12 +366,23 @@ async def test_a_lost_server_brings_real_claude_and_codex_back_in_their_own_conv
         launched = {}
         for profile in (CLAUDE, CODEX):
             outcome = await first.backend.sessions.launch(
-                LaunchCommand(project_id, profile, _key(f"restart-{profile}"), "restart-live")
+                LaunchCommand(
+                    project_id,
+                    profile,
+                    _key(f"restart-{profile}"),
+                    "restart-live",
+                    # A preset that shares the daemon: the default, `approve_for_me`, runs embedded
+                    # (DEC-071), so there would be no daemon to count.
+                    permissions=PermissionPreset.PROVIDER_DEFAULT if profile == CODEX else None,
+                )
             )
             session_id = outcome.record.session_id
             if outcome.record.state is SessionState.UNTRUSTED:
                 await _answer_trust(first, session_id)
             await _until_running(first, session_id, socket)
+            assert await first.binder.wait_bound(session_id, profile), await _diagnosis(
+                first, f"{profile} never bound its thread"
+            )
             launched[profile] = session_id
         for session_id in launched.values():
             await _type(first, session_id, _TURN)
@@ -369,6 +392,9 @@ async def test_a_lost_server_brings_real_claude_and_codex_back_in_their_own_conv
             profile: await _turn_ended(first, marks, markers, session_id)
             for profile, session_id in launched.items()
         }
+        # The line ran in the shell of the thread the turn then used.
+        bound = thread_of(paths.activity_directory, str(launched[CODEX]))
+        assert bound == conversations[CODEX], (bound, conversations[CODEX])
 
         # 2. The reboot: the server and every pane on it go, and so does the Codex daemon.
         subprocess.run(["tmux", "-S", str(socket), "kill-server"], capture_output=True, timeout=30)
@@ -396,6 +422,7 @@ async def test_a_lost_server_brings_real_claude_and_codex_back_in_their_own_conv
         assert all(outcome.startswith("resumed:") for outcome in outcomes.values()), outcomes
         assert not any("not nudged" in outcome for outcome in outcomes.values()), outcomes
         assert second.sends == [], f"nothing is typed into an idle session: {second.sends}"
+        assert len(managed_daemons(codex_home)) == 1, managed_daemons(codex_home)
 
         records = await second.backend.sessions.list_sessions()
         for profile, argument in ((CLAUDE, "--resume"), (CODEX, "resume")):

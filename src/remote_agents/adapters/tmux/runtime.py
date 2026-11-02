@@ -24,6 +24,8 @@ from remote_agents.adapters.tmux.composer import (
     enter_refusal,
     in_shell_mode,
     marker_is_young,
+    shell_line_refusal,
+    stale_shell_line,
     transcript_above_box,
     turn_ended,
 )
@@ -83,6 +85,25 @@ from remote_agents.ports.turn_markers import ConversationMarks, StartedMarks, Tu
 
 _LOG = logging.getLogger(__name__)
 
+#: Kills everything before the cursor, which sits at the end of a line just pasted. Not `C-c`: on
+#: an empty composer that starts quitting the agent.
+_CLEAR_DRAFT_KEYS = ("C-u",)
+
+
+def _holds_only_this_line(capture: str, descriptor: ProviderDescriptor, line: str) -> bool:
+    """Whether the composer holds what is left of this line and nothing an owner wrote.
+
+    The line's tail, because a line that lost its start is the case being cleaned up. No dialog,
+    and shell mode or a draft that is that tail, each read off the same capture.
+    """
+    if dialog_on_screen(capture, descriptor):
+        return False
+    if in_shell_mode(capture, descriptor):
+        return shell_line_refusal(capture, descriptor, line) is None
+    draft = "".join((composer_draft(capture, descriptor) or "").split())
+    return bool(draft) and "".join(line.split()).endswith(draft)
+
+
 _REMOTE_CONTROL_ENABLE_WAIT_SECONDS = 3
 _REMOTE_CONTROL_MENU_WAIT_SECONDS = 1
 _REMOTE_CONTROL_DISABLE_WAIT_SECONDS = 2
@@ -139,6 +160,14 @@ class TerminalWaits:
     """A trust dialog's cursor arriving on the chosen answer after the movement keys. Claude
     draws the dialog before it takes keys, so a movement sent at once can be lost (measured on
     the 2026-10-05 live run): past this, nothing is confirmed and a later press plans again."""
+
+    trust_hold: float = 0.5
+    """How long to wait with the cursor on the chosen answer before the last look and `Enter`.
+    Claude 2.1.316 takes a `Down`, then puts the cursor back on "No, exit" by itself about 130 ms
+    later, once, while it finishes starting (5 of 5 on one host, 2026-11-01). A re-read alone cannot
+    close that: an `Enter` sent just after the reset answers no and takes the agent down, as a live
+    drill did. This is under 4 times that one measurement, so a host that resets later than this is
+    still exposed. The wait holds no lock; the last look is what decides."""
 
     decline: float = float(_TRUST_DECLINE_WAIT_SECONDS)
     """A declined agent running its own shutdown before its pane is killed."""
@@ -1051,6 +1080,95 @@ class TmuxTerminal:
             return PromptDelivery(PromptOutcome.SENT)
         return PromptDelivery(PromptOutcome.UNCONFIRMED, PromptReason.SUBMIT_NOT_SEEN)
 
+    async def send_binding_line(self, session_id: SessionId, line: str) -> PromptDelivery:
+        """Paste the service's own one `!` line and submit it, only into an empty idle composer.
+
+        The one door past `send_prompt`'s refusal of a `!` message, so it takes nothing an owner
+        wrote: its only caller builds the line from a nonce it just minted. Pasted, never typed:
+        typed keys can answer a dialog the idle check did not read, and a pasted line cannot
+        (`thread-binding-line-routes.json`). `Enter` is pressed only on a capture showing shell
+        mode and the whole line. Otherwise the draft is cleared and nothing is submitted.
+        """
+        if not line.startswith("!") or "\n" in line:
+            return PromptDelivery(PromptOutcome.REFUSED, PromptReason.EMPTY)
+        try:
+            return await asyncio.wait_for(
+                self._deliver_binding_line(session_id, line), self._waits.prompt_bound
+            )
+        except TimeoutError:
+            return PromptDelivery(PromptOutcome.UNCONFIRMED, PromptReason.TIMEOUT)
+
+    async def _deliver_binding_line(self, session_id: SessionId, line: str) -> PromptDelivery:
+        observation = await self.inspect(session_id)
+        if observation is None or not observation.live:
+            return PromptDelivery(PromptOutcome.REFUSED, PromptReason.NOT_RUNNING)
+        descriptor = self._composers.get(str(observation.profile_id))
+        if descriptor is None or descriptor.composer is None:
+            return PromptDelivery(PromptOutcome.REFUSED, PromptReason.NO_COMPOSER)
+        judged: list[PaneState] = []
+
+        def may_paste(capture: str, title: str) -> bool:
+            judged.append(self._judged(session_id, capture, descriptor, title))
+            return judged[-1] is PaneState.IDLE
+
+        try:
+            await self._clear_own_stale_line(session_id, descriptor, line)
+            steps = await self._gateway.deliver_prompt(
+                session_id,
+                line,
+                may_paste=may_paste,
+                may_enter=lambda capture: shell_line_refusal(capture, descriptor, line) is None,
+                settle=self._waits.prompt_settle,
+            )
+        except TerminalTargetMissing:
+            return PromptDelivery(PromptOutcome.REFUSED, PromptReason.NOT_RUNNING)
+        except PromptPartway as failure:
+            _LOG.exception("sending the binding line to %s failed partway", session_id)
+            if not failure.touched:
+                return PromptDelivery(PromptOutcome.REFUSED, PromptReason.TMUX_ERROR)
+            return PromptDelivery(PromptOutcome.UNCONFIRMED, PromptReason.TMUX_ERROR)
+        except KeysBusy:
+            return PromptDelivery(PromptOutcome.REFUSED, PromptReason.KEYS_BUSY)
+        except RuntimeError:
+            _LOG.exception("could not find %s's pane to send the binding line", session_id)
+            return PromptDelivery(PromptOutcome.REFUSED, PromptReason.TMUX_ERROR)
+        if not steps.pasted:
+            state = judged[-1] if judged else classify(steps.before, descriptor, steps.title)
+            return PromptDelivery(PromptOutcome.REFUSED, REFUSAL_FOR[state])
+        if not steps.entered:
+            reason = shell_line_refusal(steps.after_paste or "", descriptor, line)
+
+            # A stranded draft would refuse every later message. Judged and sent under one key
+            # lock, on a fresh capture, so it cannot land on a dialog or on what someone typed.
+            def only_line(capture: str) -> bool:
+                return _holds_only_this_line(capture, descriptor, line)
+
+            try:
+                await self._gateway.send_keys_when(
+                    session_id, _CLEAR_DRAFT_KEYS, only_line, between=only_line
+                )
+            except (RuntimeError, KeysBusy):
+                _LOG.exception("could not clear the binding line from %s", session_id)
+            return PromptDelivery(PromptOutcome.UNCONFIRMED, reason)
+        return PromptDelivery(PromptOutcome.SENT)
+
+    async def _clear_own_stale_line(
+        self, session_id: SessionId, descriptor: ProviderDescriptor, line: str
+    ) -> None:
+        """Clear this session's own earlier line, if a service that died left it unsubmitted.
+
+        It would read as a draft and refuse the new line for good, and its nonce is dead by now.
+        Everything up to the nonce names this session, so nothing an owner wrote can match.
+        """
+        session_part = line.rpartition("--nonce")[0]
+
+        def own_stale_line(capture: str) -> bool:
+            return bool(session_part) and stale_shell_line(capture, descriptor, session_part)
+
+        await self._gateway.send_keys_when(
+            session_id, _CLEAR_DRAFT_KEYS, own_stale_line, between=own_stale_line
+        )
+
     def _judged(
         self, session_id: SessionId, capture: str, descriptor: ProviderDescriptor, title: str
     ) -> PaneState:
@@ -1598,9 +1716,10 @@ class TmuxTerminal:
     ) -> bool:
         """Move the cursor to the chosen answer and confirm it -- `Enter` only onto that row.
 
-        Three steps, each under the key lock: the movement keys, onto the screen they were
+        Four steps, each send under the key lock: the movement keys, onto the screen they were
         planned from; a wait, of at most `TerminalWaits.trust_cursor`, for a capture showing
-        the cursor on the answer; then `Enter`, onto a screen that still shows it. A movement
+        the cursor on the answer; `TerminalWaits.trust_hold`, which a dialog that puts its cursor
+        back has to outlast; then `Enter`, onto a screen that still shows it. A movement
         the agent dropped -- Claude draws the dialog before it takes keys -- leaves the cursor
         where it was, and then nothing is confirmed: the dialog stays up for a later press,
         never answered the other way. True once `Enter` went onto the chosen row.
@@ -1626,6 +1745,8 @@ class TmuxTerminal:
                 if asyncio.get_running_loop().time() >= deadline:
                     return False
                 await asyncio.sleep(0.1)
+
+        await asyncio.sleep(self._waits.trust_hold)
 
         def on_answer(now: str) -> bool:
             return trust_cursor_on(_plain(now), dialog, accept=accept)

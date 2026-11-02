@@ -115,12 +115,14 @@ from remote_agents.application.session_views import (
     SessionRowParts,
     listed_sessions,
     only_listed,
+    project_name,
     rollover_marks,
     session_row_parts,
     unnamed_projects,
     with_project_names,
 )
 from remote_agents.application.stops import dispatch_stop, resolve_stop
+from remote_agents.application.thread_binding import unbound_notice
 from remote_agents.domain.conversations import ResolvedConversation
 from remote_agents.domain.models import (
     ProfileId,
@@ -138,6 +140,9 @@ from remote_agents.ports.state_events import StoreChanged, Unsubscribe
 from remote_agents.ports.terminal import RemoteControlRefused
 
 _LOG = logging.getLogger(__name__)
+
+#: How often the console asks whether a session gave up its thread binding.
+_UNBOUND_WATCH_SECONDS = 10.0
 
 CONTEXT_AUTO_REFRESH = 60.0
 """How often the per-row context gauges are re-read from the providers, in seconds.
@@ -925,6 +930,8 @@ class RemoteAgentsTui(App[AttachRequest | None]):
         self._context_timer = self.set_interval(
             CONTEXT_AUTO_REFRESH, self._refresh_context_windows_tick
         )
+        if self._services.backend.unbound_watch is not None:
+            self.set_interval(_UNBOUND_WATCH_SECONDS, self._tell_unbound)
         # The theme is remembered by `watch_theme`, not here: the signal is published through
         # `call_next`, a turn after the switch, and the Settings row reads the file back at once.
         self.theme_changed_signal.subscribe(self, self._restyle_console_bar)
@@ -1130,6 +1137,16 @@ class RemoteAgentsTui(App[AttachRequest | None]):
         # the pane itself, so this unwinds any pushed flow and leaves the pane in front —
         # which is what "the pane the owner opened from stays visible" means there.
         self.return_to_projects()
+
+    async def _tell_unbound(self) -> None:
+        """Say once that a session could not bind. Never raises: a notice lost costs a notice."""
+        try:
+            given_up = await self._services.backend.unbound_watch.newly_given_up()
+            for record in given_up:
+                name = project_name(str(record.project_id), self._catalogue)
+                self.announce(unbound_notice(record, name), severity="warning")
+        except Exception:
+            _LOG.exception("could not read which sessions gave up their binding")
 
     def announce(self, message: str, *, severity: SeverityLevel = "error") -> None:
         """Announce something that did not happen, without taking the position off screen.

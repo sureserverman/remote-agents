@@ -89,8 +89,9 @@ def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
 
     Every generated socket names a real server, and a test that ends without killing one
     leaves it and its socket behind for good: thousands accumulated in /tmp before this
-    existed. Only sockets absent at session start are touched, so a concurrent run — or
-    the operator's own `remote-agents` server — is never disturbed.
+    existed. A candidate must be absent at session start and its server must attest this
+    pytest's inherited owner marker. A concurrent run's later server is left alone too;
+    a name prefix and creation time cannot establish ownership.
 
     **Not from an xdist worker.** A worker's `before` is taken when *it* starts, so a server a
     sibling worker created since then looks like this run's, and a worker that finishes first
@@ -102,6 +103,20 @@ def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
         return
     before = getattr(session.config, "_remote_agents_sockets_before", set())
     for socket in _test_sockets() - before:
+        # An independent run may have started a server after our snapshot too. The
+        # server inherits its creating pytest's owner marker; age alone proves nothing.
+        try:
+            owner = subprocess.run(
+                ["tmux", "-L", socket.name, "show-environment", "-g", _SOCKET_OWNER_VARIABLE],
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=10,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            continue  # Unreadable ownership never authorizes teardown.
+        if owner.returncode or owner.stdout.strip() != f"{_SOCKET_OWNER_VARIABLE}={os.getpid()}":
+            continue
         subprocess.run(
             ["tmux", "-L", socket.name, "kill-server"],
             capture_output=True,

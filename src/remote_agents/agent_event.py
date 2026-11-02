@@ -15,7 +15,8 @@ here, so there is one implementation and not two that must agree.
 
 `session-id` lives here too, because it asks the hook's question from the other side: a handoff
 writer, run as an agent's tool command, asks which managed session it belongs to, and gets the
-answer the hook drain would give for that agent (DEC-128).
+answer the hook drain would give for that agent (DEC-128). `bind-thread` is the command that makes
+that answer possible for a fresh conversation: the service types it once into its own pane.
 """
 
 from __future__ import annotations
@@ -122,10 +123,10 @@ def resolve_session_id(
     lists the starter tells it apart, an untrusted one cannot, so both are nobody's. With no
     roster written at all (no service yet), the variable decides, as it does for the hook.
 
-    The exact binding is a recorded resume id. Current-turn and conversation marks may veto
-    it but cannot establish ownership: their bootstrap uses folder/time heuristics. A fresh
-    conversation without an independent binding refuses, pending native binding support.
-    The shell may change folders before asking without changing its recorded binding.
+    The exact binding is a recorded resume id, or a thread bound by `bind-thread`. Current-turn
+    and conversation marks may veto it but cannot establish ownership: their bootstrap uses
+    folder/time heuristics. A fresh conversation without a binding refuses. The shell may change
+    folders before asking without changing its recorded binding.
     """
     from remote_agents.adapters.agents.hook_identity import (
         UNTRUSTED,
@@ -232,3 +233,50 @@ def run_session_id(argv: list[str] | None = None) -> int:
         except OSError:
             pass
     return 0
+
+
+def run_bind_thread(argv: list[str] | None = None) -> int:
+    """Spend the launch's nonce to bind this shell's thread to the session; exit 3 when refused.
+
+    The service types this into its own pane. Success prints nothing, because the pane shows it.
+    Every refusal says why on stderr, naming no secret, and writes nothing. Both flags are optional
+    to the parser so a missing one is a refusal like any other, not a usage error.
+    """
+    from remote_agents.adapters.agents.hook_licences import hook_licence
+    from remote_agents.adapters.agents.thread_binding import consume_nonce
+    from remote_agents.ports.provider_descriptor import HookIdentity
+    from remote_agents.production import ProductionPaths
+
+    parser = NonEchoingArgumentParser(prog="remote-agents bind-thread")
+    parser.add_argument("--session")
+    parser.add_argument("--nonce")
+    parser.add_argument("--activity-dir", type=Path)
+    arguments = parser.parse_args(argv)
+    why: str | None
+    try:
+        activity_directory = (
+            arguments.activity_dir or ProductionPaths.for_home(Path.home()).activity_directory
+        )
+        thread = None
+        for hook_name in HOOK_PROVIDERS:
+            found = hook_licence(hook_name)
+            if found is None or found.identity is not HookIdentity.PAYLOAD_THREAD:
+                continue
+            if found.thread_variable is not None and os.environ.get(found.thread_variable):
+                thread = os.environ[found.thread_variable]
+                break
+        why = (
+            "this shell has no thread"
+            if thread is None
+            else consume_nonce(activity_directory, arguments.session, arguments.nonce, thread)
+        )
+    except Exception:
+        why = "could not bind"
+    if why is None:
+        return 0
+    if sys.stderr is not None:
+        try:
+            print(f"remote-agents: thread not bound: {why}", file=sys.stderr)
+        except OSError:
+            pass
+    return NOT_MANAGED

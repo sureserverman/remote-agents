@@ -105,6 +105,15 @@ def confined_command(
     return (*command, "--die-with-parent", "--", str(executable))
 
 
+def sharing_daemon(command: tuple[str, ...]) -> tuple[str, ...]:
+    """The same confinement, without the PID namespace that would hide a daemon from the next pane.
+
+    Each pane in its own namespace cannot see the pid its predecessor's daemon recorded, so it may
+    start another. A drill about the shared daemon has to run the way the owner's panes do.
+    """
+    return tuple(part for part in command if part != "--unshare-pid")
+
+
 def codex_command(
     executable: Path,
     root: Path,

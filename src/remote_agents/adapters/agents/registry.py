@@ -567,6 +567,23 @@ def profiles_named_by_payload(
     return named
 
 
+def profiles_bound_by_thread(
+    descriptors: tuple[ProviderDescriptor, ...] | None = None,
+) -> dict[str, str]:
+    """Each payload-named profile whose tool shells carry a thread variable, with its hook name.
+
+    What a launch asks a binding for: the shell has to be able to say its thread.
+    """
+    built = provider_descriptors() if descriptors is None else descriptors
+    by_provider = {str(descriptor.profile_id): descriptor for descriptor in built}
+    named = {}
+    for name, hook in profiles_named_by_payload(built).items():
+        activity = by_provider[name].activity if name in by_provider else None
+        if activity is not None and activity.thread_variable is not None:
+            named[name] = hook
+    return named
+
+
 def profiles_watched_by_title(
     descriptors: tuple[ProviderDescriptor, ...] | None = None,
 ) -> frozenset[str]:

@@ -253,6 +253,7 @@ class SessionService:
         worktrees: WorktreeStore | None = None,
         worktree_service: WorktreeService | None = None,
         before_pane: Callable[[], Awaitable[None]] | None = None,
+        request_binding: Callable[[SessionId, ProfileId], None] | None = None,
         folder_bindings: FolderBindings | None = None,
         permissions: SessionPermissions | None = None,
         project_paths: Mapping[ProjectId, Path] | None = None,
@@ -265,6 +266,9 @@ class SessionService:
         # that keeps none, where a launch naming a folder is refused.
         self._folder_bindings = folder_bindings
         self._before_pane = before_pane
+        # Asked before the pane starts, so only a session that asked is ever typed its binding
+        # line. Only a launch asks: a resumed conversation already has its exact id.
+        self._request_binding = request_binding
         # Makes a worktree launch's own branch and folder, and says when one is offered
         # (BL-116). None in a composition that makes none: nothing is then offered, and a
         # worktree launch fails by name rather than starting in the shared folder.
@@ -514,6 +518,14 @@ class SessionService:
                     )
                 remote_control = await self._remote_control_at_launch(command.profile_id)
                 await self.announce_sessions()
+                if self._request_binding is not None:
+                    try:
+                        await asyncio.to_thread(
+                            self._request_binding, session_id, command.profile_id
+                        )
+                    except Exception:
+                        # A failure costs this session's handoffs, never its launch.
+                        _LOG.exception("could not ask a binding for %s", session_id)
                 observation = await self._terminal.launch(
                     session_id,
                     command.project_id,

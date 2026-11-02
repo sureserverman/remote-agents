@@ -63,6 +63,7 @@ from remote_agents.composition.service import (
     ServiceComposition,
     build_restart_resume,
     build_rollover_pass,
+    build_thread_binder,
     build_worktree_cleanup,
     live_session_check,
 )
@@ -248,6 +249,16 @@ def _private_boundary(
         relayable=frozenset(profile_composers(descriptors)),
     )
     limit_stops = SQLiteLimitStopStore(connection)
+    # Beside the rollover pass that waits on it. Runs whether or not rollover is switched on: a
+    # handoff the owner asks for by hand needs the binding as much.
+    thread_binder = build_thread_binder(
+        connection=connection,
+        store=store,
+        terminal=terminal,
+        descriptors=descriptors,
+        activity_directory=paths.activity_directory,
+        notify=None if boundary.binding_notifier is None else boundary.binding_notifier.notify,
+    )
     # The fire pass (DEC-114): launches through the one session use case, types through the
     # terminal's guarded send, and tells the owner through the boundary's notifier. Wired only
     # where the backend manages schedules, which `compose_backend` always does in production.
@@ -260,6 +271,11 @@ def _private_boundary(
             SQLiteScheduleStore(connection),
             launch=backend.sessions.launch,
             send=terminal.send_prompt,
+            # Before its prompt: a first turn running for minutes could not be bound until it
+            # ended, and a handoff inside that turn would refuse.
+            bound=lambda session_id, profile_id: thread_binder.wait_bound(
+                session_id, profile_id, tell=True
+            ),
             limit_stopped=limit_stopped_in(store, limit_stops),
             working=still_working_in(store, turn_markers),
             notify=boundary.schedule_notifier.notify,
@@ -347,6 +363,8 @@ def _private_boundary(
         # The rollover pass (DEC-115), built beside the loop that runs it. Wired only where the
         # backend has sessions, the switch and the rollover rows, which production always does;
         # the switch, read afresh each pass, is what keeps it idle until the owner turns it on.
+        thread_binder=thread_binder,
+        binding_notifier=boundary.binding_notifier,
         rollover_pass=(
             None
             if backend.sessions is None
@@ -356,6 +374,7 @@ def _private_boundary(
                 connection=connection,
                 sessions=backend.sessions,
                 terminal=terminal,
+                binder=thread_binder,
                 enabled=backend.auto_rollover.read,
                 project_paths=projects.paths,
                 adopt_templates=adopt_templates(descriptors),

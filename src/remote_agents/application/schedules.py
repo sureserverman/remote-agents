@@ -123,6 +123,7 @@ class SchedulePass:
         *,
         launch: Callable[[LaunchCommand], Awaitable[object]],
         send: Callable[[SessionId, str], Awaitable[PromptDelivery]],
+        bound: Callable[[SessionId, ProfileId], Awaitable[bool]] | None = None,
         limit_stopped: Callable[[ProfileId], Awaitable[bool]],
         working: Callable[[str], Awaitable[bool]],
         notify: Callable[[FireReport], Awaitable[None]],
@@ -133,6 +134,7 @@ class SchedulePass:
         self._store = store
         self._launch = launch
         self._send = send
+        self._bound = bound
         self._limit_stopped = limit_stopped
         self._working = working
         self._notify = notify
@@ -208,10 +210,16 @@ class SchedulePass:
     async def _delivered(self, report: FireReport) -> FireReport:
         """Type a started session's prompt, and say what that came to. Never raises: a fault
         here may have typed, so it is reported unconfirmed and never tried again."""
+        session_id = SessionId.parse(str(report.session_id))
+        if self._bound is not None:
+            # Its answer changes nothing here: an unbound session can still do the owner's work,
+            # and the owner has been told its handoffs will refuse.
+            try:
+                await self._bound(session_id, report.schedule.profile_id)
+            except Exception:
+                _LOG.exception("waiting for the binding of %s failed", session_id)
         try:
-            reason = await self._first_prompt(
-                SessionId.parse(str(report.session_id)), report.schedule
-            )
+            reason = await self._first_prompt(session_id, report.schedule)
         except Exception:
             _LOG.exception("typing schedule %s's prompt failed", report.schedule.id)
             reason = DeliveryVerdict.UNCONFIRMED.value

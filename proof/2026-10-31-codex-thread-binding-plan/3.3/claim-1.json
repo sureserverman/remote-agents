@@ -1,0 +1,36 @@
+{
+ "baseline": {
+  "elapsed_s": 0.7,
+  "exit": 0,
+  "tail": "..................................                                       [100%]\n34 passed in 0.34s"
+ },
+ "break_patch": "--- a/src/remote_agents/application/doctor.py\n+++ b/src/remote_agents/application/doctor.py\n@@ -276,7 +276,7 @@\n         report[\"service_liveness_meaning\"] = liveness_meaning.value\n     if unbound_sessions is not None:\n         # A count, and never a verdict: an unbound session works, and only its handoffs refuse.\n-        report[\"unbound_sessions\"] = unbound_sessions\n+        pass\n     if worktrees is not None:\n         # Every session worktree recorded and not removed, as `path \u00b7 branch \u00b7 reason kept`\n         # (BL-116). Reported beside `console` and for its reason: a worktree kept because its\n",
+ "build": null,
+ "created": "2026-11-01T00:12:02+00:00",
+ "fingerprint": "46593df0c23e4168d111a513674a46fbedd4e8b0c1d29e001d377fb6de820567",
+ "index": 1,
+ "kind": "claim",
+ "named_break": null,
+ "no_build_reason": "pure python, no build",
+ "plan": "/mnt/vault/Portfolio/infra/remote-agents/plans/2026-10-31-codex-thread-binding-plan.md",
+ "red": {
+  "elapsed_s": 0.7,
+  "exit": 1,
+  "tail": "......F...........................                                       [100%]\n=================================== FAILURES ===================================\n_________ test_doctor_reports_the_count_and_it_never_moves_the_verdict _________\n\n    def test_doctor_reports_the_count_and_it_never_moves_the_verdict() -> None:\n        bare = _report()\n        counted = _report(unbound_sessions=2)\n        assert \"unbound_sessions\" not in bare\n>       assert counted[\"unbound_sessions\"] == 2\n               ^^^^^^^^^^^^^^^^^^^^^^^^^^^\nE       KeyError: 'unbound_sessions'\n\ntests/unit/application/test_thread_binding_recovery.py:163: KeyError\n=========================== short test summary info ============================\nFAILED tests/unit/application/test_thread_binding_recovery.py::test_doctor_reports_the_count_and_it_never_moves_the_verdict\n1 failed, 33 passed in 0.33s"
+ },
+ "schema": 2,
+ "shell": "bash",
+ "task": "3.3",
+ "test": "uv run --locked pytest tests/unit/application/test_thread_binding_recovery.py tests/unit/application/test_doctor.py -q",
+ "text": "`uv run --locked pytest tests/unit/application/test_thread_binding_recovery.py tests/unit/application/test_doctor.py -q`: bound after a trust answer, one retry after a restart, one notice per session on both surfaces, doctor reports unbound live Codex sessions by count",
+ "touched": [
+  "src/remote_agents/application/doctor.py"
+ ],
+ "touched_blobs": {
+  "src/remote_agents/application/doctor.py": "41db48a0e22c249006e2d3e50913026912a4f53d"
+ },
+ "witness_blobs": {
+  "tests/unit/application/test_doctor.py": "24486ef47c3778d91044f485d6ee5a45ff6fa3e0",
+  "tests/unit/application/test_thread_binding_recovery.py": "142ab327b3ef678ade41f8e81685ac73efc96312"
+ }
+}

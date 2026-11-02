@@ -60,6 +60,42 @@ def _private_home(home: Path) -> Path:
     return home
 
 
+def _parent_and_start(pid: int) -> tuple[int, int]:
+    fields = (Path("/proc") / str(pid) / "stat").read_text().rsplit(")", 1)[1].split()
+    return int(fields[1]), int(fields[19])
+
+
+def _cgroup(pid: int) -> str:
+    return (Path("/proc") / str(pid) / "cgroup").read_text()
+
+
+def _started_by_an_older_app(home: Path, pid: int) -> bool:
+    """Whether an unreadable process descends from a running app that predates this home.
+
+    The owner's browser opens a sandboxed renderer mid-drill: same uid, newer than the home, and an
+    environment nobody can read. A fixture's processes hang off this test run, a helper it started,
+    or init or the user's systemd once detached, and none of those says anything. A helper that
+    detached keeps this run's cgroup, and the desktop gives each app its own, so an ancestor in
+    this run's cgroup is no app. Compare the ancestor, not the process: tmux moves its panes to a
+    scope of their own. Every other doubt stays a refusal, including a parent that vanished during
+    the walk. Measured on one desktop: bwrap, gnome-shell, systemd, and Cursor, Claude Desktop and
+    Element each in their own scope. Elsewhere an app under systemd itself refuses, and so does one
+    started from this run's terminal, which fails a run and never deletes a home.
+    """
+    try:
+        ancestor = _parent_and_start(pid)[0]
+        while ancestor not in (0, 1, os.getpid()):
+            parent, started = _parent_and_start(ancestor)
+            if started < _OWNED_HOMES[home][1]:
+                return parent not in (0, 1, os.getpid()) and _cgroup(ancestor) != _cgroup(
+                    os.getpid()
+                )
+            ancestor = parent
+    except (OSError, ValueError, IndexError):
+        return False
+    return False
+
+
 def _belongs_to(home: Path, pid: int) -> bool:
     entry = Path("/proc") / str(pid)
     try:
@@ -80,7 +116,15 @@ def _belongs_to(home: Path, pid: int) -> bool:
     except (FileNotFoundError, ProcessLookupError):
         return False
     except PermissionError as error:
-        raise RuntimeError("process ownership could not be read; fixture home retained") from error
+        if _started_by_an_older_app(home, pid):
+            return False
+        try:
+            command = (entry / "cmdline").read_bytes().replace(b"\0", b" ").decode(errors="replace")
+        except OSError:
+            command = "(gone)"
+        raise RuntimeError(
+            f"process ownership could not be read; fixture home retained: pid {pid} {command}"
+        ) from error
 
 
 def _running_from(home: Path) -> list[int]:
@@ -100,6 +144,29 @@ def _running_from(home: Path) -> list[int]:
             if not isinstance(error.__cause__, PermissionError) or time.monotonic() >= deadline:
                 raise
             time.sleep(0.05)
+
+
+def managed_daemons(home: Path) -> set[int]:
+    """The pids of this home's Codex daemons, read from outside any pane.
+
+    A process forked from a daemon holds its arguments until it execs, so a parent that is itself
+    a daemon means a fork in passing, not a second daemon. It reads every process's arguments first,
+    which anyone may read, because it runs on every poll of a drill: a process that is no daemon
+    must not stop one, as an unreadable environment would stop the ownership scan. A daemon whose
+    environment cannot be read is not counted, so a count of one says what was attested.
+    """
+    home = _private_home(home)
+    found: dict[int, int] = {}
+    for entry in Path("/proc").glob("[0-9]*"):
+        try:
+            if b"--managed-daemon" not in (entry / "cmdline").read_bytes():
+                continue
+            pid = int(entry.name)
+            if _belongs_to(home, pid):
+                found[pid] = _parent_and_start(pid)[0]
+        except (OSError, ValueError, IndexError, RuntimeError):
+            continue
+    return {pid for pid, parent in found.items() if parent not in found}
 
 
 @cache
@@ -130,7 +197,15 @@ def _signal(home: Path, pids: list[int], signum: int) -> None:
                 continue
             raise OSError(error, os.strerror(error))
         try:
-            if _belongs_to(home, pid) and sent(descriptor, signum, None, 0) < 0:
+            try:
+                owned = _belongs_to(home, pid)
+            except RuntimeError as refusal:
+                # Scanned as owned, unreadable now. Not attested, so no signal, and the scan
+                # that follows retries it and still refuses one that stays unreadable.
+                if not isinstance(refusal.__cause__, PermissionError):
+                    raise
+                continue
+            if owned and sent(descriptor, signum, None, 0) < 0:
                 error = ctypes.get_errno()
                 if error != errno.ESRCH:
                     raise OSError(error, os.strerror(error))

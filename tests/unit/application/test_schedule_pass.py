@@ -315,7 +315,7 @@ async def test_a_one_shot_is_done_after_its_fire_whatever_the_zone_says_now() ->
 
     store = MemoryScheduleStore(_schedule(when=Once(datetime(2026, 10, 2, 9, 0))))
     rig = Rig()
-    schedule_pass = rig.pass_for(store, FIRE)
+    schedule_pass = rig.pass_for(store, FIRE + timedelta(seconds=20))
     schedule_pass._zone = lambda: ZoneInfo("America/Los_Angeles")  # noqa: SLF001
 
     await schedule_pass.run()
@@ -625,3 +625,23 @@ async def test_deliver_typing_goes_on_while_another_fires_notice_is_held() -> No
         "slow": FireOutcome.STARTED,
         "held": FireOutcome.SKIPPED_PREVIOUS,
     }
+
+
+@pytest.mark.parametrize("answer", [True, False, RuntimeError("the store went away")])
+async def test_the_first_prompt_waits_for_the_binding_and_is_typed_whatever_it_answers(
+    answer,
+) -> None:
+    store, rig = MemoryScheduleStore(_schedule()), Rig()
+    fire_pass = rig.pass_for(store, FIRE + timedelta(seconds=20))
+    asked = []
+
+    async def bound(session_id, profile_id):
+        asked.append(list(rig.sends))
+        if isinstance(answer, Exception):
+            raise answer
+        return answer
+
+    fire_pass._bound = bound
+    await fire_pass.run()
+    assert asked == [[]], "asked once, before anything was typed"
+    assert len(rig.sends) == 1

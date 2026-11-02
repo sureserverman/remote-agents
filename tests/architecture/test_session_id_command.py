@@ -203,3 +203,32 @@ def test_session_id_command_writes_only_through_the_reported_roots() -> None:
             stray.append(f"{_MODULE.name}:{node.lineno}: {name}")
     assert recorded, "run_session_id never records through its FileReportedRoots"
     assert not stray, stray
+
+
+def test_bind_thread_writes_only_through_the_binding_store() -> None:
+    function = _function(_tree(), "run_bind_thread")
+    called = {
+        name
+        for node in ast.walk(function)
+        if isinstance(node, ast.Call)
+        for name in [_called_name(node)]
+    }
+    assert "consume_nonce" in called, "run_bind_thread does not spend the nonce through the store"
+    assert not called & _WRITES, sorted(called & _WRITES)
+
+
+def test_only_the_binding_pass_is_handed_the_door_past_a_shell_refusal() -> None:
+    """`send_binding_line` takes any one-line `!` text, so who may reach it is what limits it."""
+    found = sorted(
+        str(path.relative_to(_SOURCE))
+        for path in _SOURCE.rglob("*.py")
+        if "send_binding_line" in path.read_text(encoding="utf-8")
+    )
+    assert found == [
+        "adapters/tmux/fake.py",
+        "adapters/tmux/runtime.py",
+        "composition/service.py",
+        "ports/terminal.py",
+    ]
+    service = (_SOURCE / "composition" / "service.py").read_text(encoding="utf-8")
+    assert service.count("send_binding_line") == 1

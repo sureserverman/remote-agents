@@ -2,6 +2,7 @@
 
 import os
 import select
+import shlex
 import shutil
 import signal
 import subprocess
@@ -106,6 +107,82 @@ def test_signal_rechecks_ownership_before_touching_a_stale_pid():
         stop_child(process, pid)
         shutil.rmtree(home)
         shutil.rmtree(other)
+
+
+def test_signal_leaves_a_process_it_cannot_read_to_the_next_scan(monkeypatch):
+    """Scanned as owned, then unreadable: no signal and no verdict here. The scan decides."""
+    import codex_home
+
+    home = short_codex_home()
+    process, pid = child(home)
+
+    def belongs(*_):
+        try:
+            raise PermissionError("unreadable since the scan")
+        except PermissionError as error:
+            raise RuntimeError("process ownership could not be read") from error
+
+    with monkeypatch.context() as patch:
+        patch.setattr(codex_home, "_belongs_to", belongs)
+        try:
+            codex_home._signal(home, [pid], signal.SIGTERM)
+            assert process.poll() is None, "an unattested process must not be signalled"
+        finally:
+            patch.undo()
+            stop_child(process, pid)
+            shutil.rmtree(home)
+            os.close(codex_home._OWNED_HOMES.pop(home)[0])
+
+
+def test_signal_still_raises_what_is_not_unreadability(monkeypatch):
+    import codex_home
+
+    home = short_codex_home()
+    process, pid = child(home)
+
+    def belongs(*_):
+        raise RuntimeError("something else")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(codex_home, "_belongs_to", belongs)
+        try:
+            with pytest.raises(RuntimeError, match="something else"):
+                codex_home._signal(home, [pid], signal.SIGTERM)
+        finally:
+            patch.undo()
+            stop_child(process, pid)
+            shutil.rmtree(home)
+            os.close(codex_home._OWNED_HOMES.pop(home)[0])
+
+
+def test_an_ownership_refusal_names_the_process(monkeypatch):
+    """The cleanup error came back three runs with its process gone and nothing naming it."""
+    import codex_home
+
+    home = short_codex_home()
+    real_read_bytes = Path.read_bytes
+
+    def read_bytes(path):
+        if path.name == "environ":
+            raise PermissionError("unreadable")
+        return real_read_bytes(path)
+
+    process = subprocess.Popen(["sleep", "30"])
+    try:
+        # Popen can return before the child's arguments settle: seen empty and seen as the parent's.
+        arguments = Path("/proc") / str(process.pid) / "cmdline"
+        deadline = time.monotonic() + 5
+        while arguments.read_bytes() != b"sleep\x0030\x00" and time.monotonic() < deadline:
+            time.sleep(0.001)
+        monkeypatch.setattr(Path, "read_bytes", read_bytes)
+        monkeypatch.setattr(codex_home, "_started_by_an_older_app", lambda *_: False)
+        with pytest.raises(RuntimeError, match=rf"pid {process.pid} .*sleep 30"):
+            codex_home._belongs_to(home, process.pid)
+    finally:
+        monkeypatch.undo()
+        process.kill()
+        process.wait()
+        shutil.rmtree(home)
 
 
 def test_restart_stop_reaps_only_owned_processes_and_retains_home():
@@ -292,3 +369,127 @@ def test_default_retirement_never_runs_an_unconfined_native_cli(monkeypatch):
     finally:
         stop_child(process, pid)
         shutil.rmtree(home, ignore_errors=True)
+
+
+_UNREADABLE = (
+    "import ctypes, time; ctypes.CDLL(None).prctl(4, 0, 0, 0, 0); print('ready', flush=True); "
+    "time.sleep(30)"
+)
+#: Waits for a line, then starts one process whose environment this user cannot read.
+_LAUNCHER = (
+    "import subprocess, sys; sys.stdin.readline(); "
+    f"child = subprocess.Popen([sys.executable, '-c', {_UNREADABLE!r}], stdout=subprocess.PIPE); "
+    "print(child.pid, flush=True); child.stdout.readline(); print('up', flush=True); "
+    "sys.stdin.readline(); child.kill(); child.wait()"
+)
+
+
+def _unreadable(pid: int) -> bool:
+    try:
+        Path(f"/proc/{pid}/environ").read_bytes()
+    except PermissionError:
+        return True
+    return False
+
+
+def test_an_unreadable_process_from_an_older_app_is_not_the_fixtures(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The owner's browser opened a renderer mid-drill, and cleanup refused: same uid, newer than
+    the home, and an environment nobody can read (2026-11-01). Its parents reach an app older than
+    the home that is not this test run, and a fixture's process has no such parent."""
+    import codex_home
+
+    monkeypatch.setattr(
+        codex_home, "_cgroup", lambda pid: "terminal" if pid == os.getpid() else "app"
+    )
+    # Under a shell, so the app older than the home is not this run's own child.
+    launcher = subprocess.Popen(
+        ["bash", "-c", f"{shlex.quote(sys.executable)} -c {shlex.quote(_LAUNCHER)}; :"],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        text=True,
+    )
+    time.sleep(0.2)
+    home = short_codex_home()
+    try:
+        launcher.stdin.write("go\n")
+        launcher.stdin.flush()
+        child = int(launcher.stdout.readline())
+        assert launcher.stdout.readline().strip() == "up"
+        assert _unreadable(child)
+        assert codex_home._belongs_to(home, child) is False
+    finally:
+        launcher.stdin.write("stop\n")
+        launcher.stdin.close()
+        launcher.wait(10)
+        retire_codex_home(home)
+
+
+def test_an_unreadable_child_of_this_run_still_refuses_cleanup() -> None:
+    import codex_home
+
+    home = short_codex_home()
+    child = subprocess.Popen([sys.executable, "-c", _UNREADABLE], stdout=subprocess.PIPE)
+    try:
+        assert child.stdout.readline().strip() == b"ready"
+        assert _unreadable(child.pid)
+        with pytest.raises(RuntimeError, match="ownership could not be read"):
+            codex_home._belongs_to(home, child.pid)
+    finally:
+        child.kill()
+        child.wait()
+        shutil.rmtree(home)
+        os.close(codex_home._OWNED_HOMES.pop(home)[0])
+
+
+def test_an_unreadable_orphan_still_refuses_cleanup(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A daemon that detached hangs off init or the user's systemd, so those decide nothing."""
+    import codex_home
+
+    home = short_codex_home()
+    chain = {50: (40, 10**12), 40: (1, 5), 1: (0, 1)}
+    monkeypatch.setattr(codex_home, "_parent_and_start", lambda pid: chain[pid])
+    try:
+        assert codex_home._started_by_an_older_app(home, 50) is False
+    finally:
+        shutil.rmtree(home)
+        os.close(codex_home._OWNED_HOMES.pop(home)[0])
+
+
+def test_a_helper_of_this_run_older_than_the_home_still_refuses(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A tmux server or helper the run started first can still hold a fixture process."""
+    import codex_home
+
+    home = short_codex_home()
+    chain = {50: (40, 10**12), 40: (os.getpid(), 5)}
+    monkeypatch.setattr(codex_home, "_parent_and_start", lambda pid: chain[pid])
+    try:
+        assert codex_home._started_by_an_older_app(home, 50) is False
+    finally:
+        shutil.rmtree(home)
+        os.close(codex_home._OWNED_HOMES.pop(home)[0])
+
+
+def test_a_detached_helper_of_this_run_still_refuses(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A tmux server the run started first detaches to the user's systemd, not to pid 1 or this
+    run. It keeps this run's cgroup, which is what tells it from an app the desktop started."""
+    import codex_home
+
+    home = short_codex_home()
+    chain = {50: (40, 10**12), 40: (3000, 5)}
+    monkeypatch.setattr(codex_home, "_parent_and_start", lambda pid: chain[pid])
+    try:
+        monkeypatch.setattr(codex_home, "_cgroup", lambda _pid: "terminal")
+        assert codex_home._started_by_an_older_app(home, 50) is False
+        monkeypatch.setattr(
+            codex_home, "_cgroup", lambda pid: "terminal" if pid == os.getpid() else "app"
+        )
+        assert codex_home._started_by_an_older_app(home, 50) is True
+        monkeypatch.setattr(codex_home, "_cgroup", lambda _pid: (_ for _ in ()).throw(OSError()))
+        assert codex_home._started_by_an_older_app(home, 50) is False
+    finally:
+        shutil.rmtree(home)
+        os.close(codex_home._OWNED_HOMES.pop(home)[0])

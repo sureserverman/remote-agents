@@ -26,13 +26,11 @@ reports that root and then runs the installed `remote-agents session-id` against
 drill publishes, as `serve` would (`-k verb`, DEC-128): A and B each print their own id, and a
 Codex the owner starts by hand in the project's main checkout -- sharing the daemon, so its shell
 carries A's variable -- exits 3. A and B work in the project's worktrees, as managed sessions do.
-This drill installs the real generated hooks only in its disposable home. The native feature
-claim requires each managed thread to be named without a prior root
-report. The source resolver currently refuses fresh threads without an independent recorded
-binding, so this native claim remains BLOCKED; the assertions below deliberately retain the
-required behavior. An unmanaged thread must be refused. Same-folder hook-bootstrap limits
-remain a separate
-native qualification concern; a collected drill is not a live pass.
+This drill installs the real generated hooks only in its disposable home. Each managed thread is
+named by the binding its pane records: the drill mints a nonce and pastes the service's own `!`
+line, as the binding pass does (DEC-138), and the store is this drill's spool. The by-hand Codex
+gets no line, so it stays refused. Same-folder hook-bootstrap limits remain a separate native
+qualification concern; a collected drill is not a live pass.
 
 `REMOTE_AGENTS_LIVE_ACCEPTANCE=1` is required: it spends short Codex turns on the owner's
 account. Every skip says `BLOCKED:` and why.
@@ -57,11 +55,14 @@ from pathlib import Path
 
 import pytest
 from agent_panes import CODEX_OPENING, CODEX_READY, open_to_composer
-from codex_home import retire_codex_home, short_codex_home
-from native_isolation import codex_command, live_requested
+from codex_home import _running_from, retire_codex_home, short_codex_home
+from native_isolation import codex_command, live_requested, sharing_daemon
+from probe_artifact import retained_probe
 
 from remote_agents.adapters.agents.hook_identity import FileHookRoster
 from remote_agents.adapters.agents.registry import install_agent_hooks
+from remote_agents.adapters.agents.thread_binding import FileThreadBindings, thread_of
+from remote_agents.adapters.tmux.profiles import bind_thread_line
 from remote_agents.domain.models import SessionId
 from remote_agents.ports.hook_roster import RosterSession
 from remote_agents.ports.session_identity import SESSION_ID_VARIABLE
@@ -219,10 +220,15 @@ def drill(
     socket = f"remote-agents-test-tool-shell-{SessionId.new().value.hex}"
     codex_home = short_codex_home()
     try:
-        command = codex_command(Path(shutil.which("codex")), root, codex_home)
+        # A PID namespace per pane hides the daemon's pid from the next pane, whose Codex may then
+        # start its own. This drill is about one daemon. Cleanup goes by home, not namespace.
+        confined = codex_command(Path(shutil.which("codex")), root, codex_home)
+        command = sharing_daemon(confined)
         (codex_home / "config.toml").write_text(
             # The probe writes into its own folder, and nothing may stop to ask.
+            # bwrap holds /tmp read-only, so Codex could not guard a /tmp/.git for its own sandbox.
             'approval_policy = "never"\nsandbox_mode = "workspace-write"\n'
+            "[sandbox_workspace_write]\nexclude_slash_tmp = true\nexclude_tmpdir_env_var = true\n"
             "[notice]\nhide_rate_limit_model_nudge = true\n",
             encoding="utf-8",
         )
@@ -246,6 +252,30 @@ def drill(
             retire_codex_home(codex_home)
 
 
+def _bind(drill: Drill, pane: str, session: str) -> None:
+    """What the binding pass does for this session: mint, paste the real line, press Enter."""
+    line = bind_thread_line(drill.spool, session, FileThreadBindings(drill.spool).mint(session))
+    buffer = f"bind-{session}"
+    _tmux(drill.socket, "set-buffer", "-b", buffer, "--", line)
+    _tmux(drill.socket, "paste-buffer", "-d", "-p", "-r", "-b", buffer, "-t", pane)
+    time.sleep(1.0)
+    _tmux(drill.socket, "send-keys", "-t", pane, "Enter")
+    deadline = time.monotonic() + 30.0
+    while time.monotonic() < deadline:
+        if thread_of(drill.spool, session) is not None:
+            while time.monotonic() < deadline:
+                if (
+                    "esc to interrupt"
+                    not in _tmux(drill.socket, "capture-pane", "-p", "-t", pane).stdout
+                ):
+                    return
+                time.sleep(0.5)
+            return
+        time.sleep(0.5)
+    screen = _tmux(drill.socket, "capture-pane", "-p", "-t", pane).stdout
+    pytest.fail(f"the binding line recorded nothing in 30 s; the pane shows:\n{screen}")
+
+
 def _probed(drill: Drill, workspace: Path, session: str | None) -> Pane:
     """A Codex pane in `workspace` -- managed when given a session -- after its probe ran."""
     (workspace / "probe.sh").write_text(
@@ -257,6 +287,8 @@ def _probed(drill: Drill, workspace: Path, session: str | None) -> Pane:
         drill.roster.write("codex", drill.sessions)
     name = f"ra-{session}" if session is not None else f"by-hand-{SessionId.new().value.hex}"
     pane = _open(drill.socket, name, workspace, drill.codex_home, session, drill.command)
+    if session is not None:
+        _bind(drill, pane, session)
     seen = _probe(drill.socket, pane, workspace)
     return Pane(session or "", workspace, seen, _thread(drill.codex_home, workspace))
 
@@ -283,8 +315,11 @@ def test_measure_each_tool_shell_is_told_its_own_thread(panes: tuple[Pane, Pane]
     assert first.thread != second.thread
 
 
-def test_verb_each_managed_pane_prints_its_own_session(panes: tuple[Pane, Pane]) -> None:
+def test_verb_each_managed_pane_prints_its_own_session(
+    drill: Drill, panes: tuple[Pane, Pane]
+) -> None:
     for pane in panes:
+        assert thread_of(drill.spool, pane.session_id) == pane.thread, pane
         assert (pane.seen["verb_exit"], pane.seen["verb"]) == ("0", pane.session_id), pane
 
 
@@ -292,3 +327,116 @@ def test_verb_a_codex_started_by_hand_exits_3(by_hand: Pane, panes: tuple[Pane, 
     # Its shell carries A's variable, inherited from the daemon A started: never evidence.
     assert by_hand.seen["session"] == panes[0].session_id, by_hand
     assert (by_hand.seen["verb_exit"], by_hand.seen["verb"]) == ("3", ""), by_hand
+
+
+_TOKEN_SCRIPT = (
+    "#!/bin/sh\n"
+    "printf 'token=%s\\nthread=%s\\nsession=%s\\ndone=1\\n' "
+    f'"${{RA_BINDING_PROBE-}}" "${{CODEX_THREAD_ID-}}" "${{{SESSION_ID_VARIABLE}-}}" > "$1"\n'
+)
+
+
+def _read_seen(written: Path, seconds: float) -> dict[str, str] | None:
+    deadline = time.monotonic() + seconds
+    while time.monotonic() < deadline:
+        if written.is_file() and "done=1" in (text := written.read_text(encoding="utf-8")):
+            return dict(line.split("=", 1) for line in text.splitlines() if "=" in line)
+        time.sleep(0.5)
+    return None
+
+
+def _send(socket: str, pane: str, text: str) -> None:
+    _tmux(socket, "send-keys", "-t", pane, "-l", text)
+    time.sleep(0.5)
+    _tmux(socket, "send-keys", "-t", pane, "Enter")
+
+
+def _processes(codex_home: Path) -> list[str]:
+    """Every process of this home as `pid ppid arguments`, read from outside any pane."""
+    found = []
+    for pid in sorted(_running_from(codex_home)):
+        try:
+            arguments = Path(f"/proc/{pid}/cmdline").read_bytes().replace(b"\0", b" ").decode()
+            parent = Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()[1]
+        except OSError:
+            continue
+        # The drill's own bwrap arguments say nothing about which server this is.
+        found.append(f"{pid} {parent} {arguments.rsplit(' -- ', 1)[-1].strip()}")
+    return found
+
+
+def _daemons(processes: list[str]) -> list[int]:
+    return [int(line.split()[0]) for line in processes if "--managed-daemon" in line]
+
+
+def _footnote(socket: str, pane: str) -> str:
+    """What the footer's warning says, once the turn has settled."""
+    deadline = time.monotonic() + 30.0
+    while time.monotonic() < deadline:
+        if "esc to interrupt" not in _tmux(socket, "capture-pane", "-p", "-t", pane).stdout:
+            break
+        time.sleep(1.0)
+    _tmux(socket, "send-keys", "-t", pane, "F2")
+    time.sleep(2.0)
+    text = _tmux(socket, "capture-pane", "-p", "-t", pane).stdout
+    _tmux(socket, "send-keys", "-t", pane, "Escape")
+    return text
+
+
+def _launch_pane(
+    drill: Drill, folder: str, *flags: str, session: str | None = None
+) -> dict[str, object]:
+    """What one launch's shells saw through `!` and a turn, and which servers then ran."""
+    workspace = drill.project.parent / folder
+    _git(drill.project, "worktree", "add", "-q", "-b", folder, str(workspace))
+    (workspace / "token.sh").write_text(_TOKEN_SCRIPT, encoding="utf-8")
+    pane = _open(
+        drill.socket, f"launch-{folder}", workspace, drill.codex_home, session,
+        (*drill.command, *flags),
+    )  # fmt: skip
+    _send(drill.socket, pane, "!sh token.sh seen-bang.txt")
+    bang = _read_seen(workspace / "seen-bang.txt", 30.0)
+    _send(drill.socket, pane, "Run the shell command `sh token.sh seen-turn.txt`, then reply: done")
+    turn = _read_seen(workspace / "seen-turn.txt", 180.0)
+    screen = _footnote(drill.socket, pane)
+    processes = _processes(drill.codex_home)
+    return {
+        "flags": flags,
+        "bang": bang,
+        "turn": turn,
+        "daemons": _daemons(processes),
+        "processes": processes,
+        "screen": screen,
+    }
+
+
+def _token_flag(token: str) -> tuple[str, str]:
+    return ("-c", f'shell_environment_policy.set.RA_BINDING_PROBE="{token}"')
+
+
+def test_measure_what_a_per_launch_setting_does_to_the_shared_daemon(drill: Drill) -> None:
+    """Design probe: does a launch with `-c` or `--no-daemon` join the daemon at all?
+
+    A plain Codex starts the daemon and carries a marker, and a later plain one must see that
+    marker: it proves the daemon is shared here, so a launch between them that does not see it
+    stayed out. openai/codex#24638 reports that a launch with `-c` skips the shared daemon, which
+    would make a token's isolation say nothing about a shared daemon. The result is written to
+    `RA_TOKEN_PROBE_OUT`, which must name an unused file before any pane is launched.
+    Each observation is flushed privately as it completes; only the control is asserted,
+    and the remaining observations are retained for reading, not claimed as assertions.
+    """
+    marker = "marker-of-first-plain-pane"
+    results = {}
+    with retained_probe() as record:
+        for name, flags, session in (
+            ("plain-first", (), marker),
+            ("token-a", _token_flag("token-a"), None),
+            ("token-b", _token_flag("token-b"), None),
+            ("no-daemon", ("--no-daemon",), "own-session"),
+            ("plain-second", (), None),
+        ):
+            results[name] = _launch_pane(drill, name, *flags, session=session)
+            record(name, results[name])
+    assert results["plain-first"]["turn"]["session"] == marker, results["plain-first"]
+    assert results["plain-second"]["turn"]["session"] == marker, results["plain-second"]
+    assert len(results["plain-second"]["daemons"]) == 1, results["plain-second"]

@@ -79,3 +79,47 @@ def test_a_child_pytest_leaves_a_server_started_during_its_session_alone(
 
     alive = subprocess.run(["tmux", "-L", socket, "has-session"], capture_output=True, check=False)
     assert alive.returncode == 0, "the child's session finish killed a server it did not start"
+
+
+@pytest.mark.parametrize("foreign", [True, False])
+def test_an_independent_run_cleans_only_servers_with_its_owner(
+    socket: str, tmp_path: Path, foreign: bool
+) -> None:
+    plugin = """import os
+import subprocess
+
+def pytest_collection_finish(session):
+    environment = dict(os.environ)
+    if FOREIGN:
+        environment["REMOTE_AGENTS_TEST_SOCKET_OWNER"] = "another-independent-run"
+    subprocess.run(
+        ["tmux", "-L", SOCKET, "new-session", "-d", "-s", "sibling", "sleep 600"],
+        env=environment, check=True,
+    )
+""".replace("FOREIGN", repr(foreign)).replace("SOCKET,", repr(socket) + ",")
+    (tmp_path / "independent_plugin.py").write_text(plugin, encoding="utf-8")
+    environment = os.environ | {"PYTHONPATH": str(tmp_path)}
+    # This child is a separate pytest owner, not a nested run protected by BL-100.
+    environment.pop("REMOTE_AGENTS_TEST_SOCKET_OWNER", None)
+    child = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "pytest",
+            "tests/unit/test_package.py",
+            "--collect-only",
+            "-q",
+            "-p",
+            "independent_plugin",
+            "-p",
+            "no:xdist",
+        ],
+        cwd=_REPOSITORY,
+        env=environment,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert child.returncode == 0, child.stdout + child.stderr
+    alive = subprocess.run(["tmux", "-L", socket, "has-session"], capture_output=True)
+    assert (alive.returncode == 0) is foreign

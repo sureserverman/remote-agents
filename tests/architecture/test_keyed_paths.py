@@ -111,6 +111,16 @@ _GUARDED: dict[tuple[str, str], tuple[str, str, str]] = {
         "anything but the cursor seen on the chosen answer -- an Enter onto the other row "
         "answered no, or trusted a declined folder (2026-10-05 live run)",
     ),
+    ("_deliver_binding_line", "_CLEAR_DRAFT_KEYS"): (
+        "only_line",
+        "only_line",
+        "a dialog, or a composer holding anything but what is left of the service's own line",
+    ),
+    ("_clear_own_stale_line", "_CLEAR_DRAFT_KEYS"): (
+        "own_stale_line",
+        "own_stale_line",
+        "a dialog, or a composer holding anything but this session's own earlier binding line",
+    ),
     ("_interrupt_running_turn", "interrupt"): (
         "running",
         "running",
