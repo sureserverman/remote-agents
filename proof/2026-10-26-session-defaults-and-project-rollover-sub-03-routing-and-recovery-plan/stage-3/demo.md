@@ -219,3 +219,7 @@ Background jobs: none started.
 ## Executor fix-scope note: OD-4 recovery repair
 
 This note is by the executor, not a changed evaluator verdict. The round5 Important claim-publication crash finding is repaired and tested at source fix scope (658affected checks and137security checks passed; exact review findings closed). Native receipts still refer to the pre-fix application base; no paid native rerun is claimed. The independent evaluator's cannot-reach verdicts and actual Telegram evidence gaps remain unchanged. Full source repair evidence is docs/acceptance/session-defaults-round5-crash-recovery.md.
+
+## Executor note: separate architecture judgment completed
+
+The evaluator's original Material architecture-not-run finding remains preserved above. A separate independent cumulative source review by recovery_boundary_review now passes 477a83e2..78f0501d against ARCH-01/02/03/07 and DEC-133/134/137/138, with no Critical/Important architecture finding. Its actual returned result is retained in docs/acceptance/session-defaults-round5-architecture-review.md. This addresses only that source judgment; the evaluator's user-route cannot-reach verdicts, the remaining Telegram observations and the final evidence judgment are unchanged.
