@@ -109,7 +109,13 @@ def _belongs_to(home: Path, pid: int) -> bool:
     except PermissionError as error:
         if _started_by_an_older_app(home, pid):
             return False
-        raise RuntimeError("process ownership could not be read; fixture home retained") from error
+        try:
+            command = (entry / "cmdline").read_bytes().replace(b"\0", b" ").decode(errors="replace")
+        except OSError:
+            command = "(gone)"
+        raise RuntimeError(
+            f"process ownership could not be read; fixture home retained: pid {pid} {command}"
+        ) from error
 
 
 def _running_from(home: Path) -> list[int]:
@@ -182,7 +188,15 @@ def _signal(home: Path, pids: list[int], signum: int) -> None:
                 continue
             raise OSError(error, os.strerror(error))
         try:
-            if _belongs_to(home, pid) and sent(descriptor, signum, None, 0) < 0:
+            try:
+                owned = _belongs_to(home, pid)
+            except RuntimeError as refusal:
+                # Scanned as owned, unreadable now. Not attested, so no signal, and the scan
+                # that follows retries it and still refuses one that stays unreadable.
+                if not isinstance(refusal.__cause__, PermissionError):
+                    raise
+                continue
+            if owned and sent(descriptor, signum, None, 0) < 0:
                 error = ctypes.get_errno()
                 if error != errno.ESRCH:
                     raise OSError(error, os.strerror(error))

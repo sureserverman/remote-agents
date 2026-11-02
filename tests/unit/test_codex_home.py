@@ -109,6 +109,75 @@ def test_signal_rechecks_ownership_before_touching_a_stale_pid():
         shutil.rmtree(other)
 
 
+def test_signal_leaves_a_process_it_cannot_read_to_the_next_scan(monkeypatch):
+    """Scanned as owned, then unreadable: no signal and no verdict here. The scan decides."""
+    import codex_home
+
+    home = short_codex_home()
+    process, pid = child(home)
+
+    def belongs(*_):
+        try:
+            raise PermissionError("unreadable since the scan")
+        except PermissionError as error:
+            raise RuntimeError("process ownership could not be read") from error
+
+    with monkeypatch.context() as patch:
+        patch.setattr(codex_home, "_belongs_to", belongs)
+        try:
+            codex_home._signal(home, [pid], signal.SIGTERM)
+            assert process.poll() is None, "an unattested process must not be signalled"
+        finally:
+            patch.undo()
+            stop_child(process, pid)
+            shutil.rmtree(home)
+
+
+def test_signal_still_raises_what_is_not_unreadability(monkeypatch):
+    import codex_home
+
+    home = short_codex_home()
+    process, pid = child(home)
+
+    def belongs(*_):
+        raise RuntimeError("something else")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(codex_home, "_belongs_to", belongs)
+        try:
+            with pytest.raises(RuntimeError, match="something else"):
+                codex_home._signal(home, [pid], signal.SIGTERM)
+        finally:
+            patch.undo()
+            stop_child(process, pid)
+            shutil.rmtree(home)
+
+
+def test_an_ownership_refusal_names_the_process(monkeypatch):
+    """The cleanup error came back three runs with its process gone and nothing naming it."""
+    import codex_home
+
+    home = short_codex_home()
+    real_read_bytes = Path.read_bytes
+
+    def read_bytes(path):
+        if path.name == "environ":
+            raise PermissionError("unreadable")
+        return real_read_bytes(path)
+
+    process = subprocess.Popen(["sleep", "30"])
+    try:
+        monkeypatch.setattr(Path, "read_bytes", read_bytes)
+        monkeypatch.setattr(codex_home, "_started_by_an_older_app", lambda *_: False)
+        with pytest.raises(RuntimeError, match=rf"pid {process.pid} .*sleep 30"):
+            codex_home._belongs_to(home, process.pid)
+    finally:
+        monkeypatch.undo()
+        process.kill()
+        process.wait()
+        shutil.rmtree(home)
+
+
 def test_restart_stop_reaps_only_owned_processes_and_retains_home():
     home, sibling_home = short_codex_home(), short_codex_home()
     owned, pid = child(home)
