@@ -2769,6 +2769,11 @@ class RemoteAgentsTui(App[AttachRequest | None]):
                 status="Nothing was started. Launch again, or go back to change the selection.",
                 explanation=f"Its worktree could not be made: {outcome.worktree_failed}",
             )
+        if record.state is SessionState.FAILED and outcome.folder_unavailable:
+            return LaunchFailure(
+                status="Nothing was started. Launch again, or go back to change the selection.",
+                explanation=FOLDER_UNAVAILABLE_SENTENCE,
+            )
         if record.state is SessionState.FAILED and outcome.worktree_removed:
             # Refused before any pane existed, so there is no attach command to hand over and
             # no pane that "may still exist" (BL-116).

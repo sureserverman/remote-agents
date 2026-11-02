@@ -127,6 +127,9 @@ INVALID_INTENT = "invalid_intent"
 """The terminal could not resolve what to start (profile, folder, intent file) and started
 nothing: no intent was written for a pane and no pane exists."""
 
+FOLDER_UNAVAILABLE = "folder_unavailable"
+"""The selected folder could not be resolved to a usable directory; no pane was started."""
+
 WORKTREE_REMOVED = "worktree_removed"
 """A launch or resume was refused because the session is bound to a worktree that is gone.
 
@@ -138,8 +141,9 @@ one, and an agent landing there would carry on in the folder it was meant to sta
 SessionFolderLookup = Callable[[SessionId, ProjectId], Awaitable[Path | None]]
 """The folder a session works in: its worktree when bound, else its project's folder.
 
-None means bound to a worktree that is gone (`WORKTREE_REMOVED`). An unknown project raises
-`KeyError`, as a read of the project mapping does.
+None means bound to a worktree that is gone (`WORKTREE_REMOVED`). An unknown project or
+unavailable outside-folder binding raises `KeyError` (`FOLDER_UNAVAILABLE`); neither falls
+back to the project folder.
 """
 
 

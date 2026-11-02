@@ -63,6 +63,7 @@ from remote_agents.ports.provider_descriptor import ProviderDescriptor, TrustDia
 from remote_agents.ports.terminal import (
     AGENT_ASKING,
     COMPOSER_HOLDS_TEXT,
+    FOLDER_UNAVAILABLE,
     GRACEFUL_TIMEOUT,
     KEYS_BUSY,
     NOT_AWAITING_TRUST,
@@ -437,7 +438,7 @@ class TmuxTerminal:
             folder = await self._folder_for(session_id, project_id)
         except KeyError:
             return TerminalObservation(
-                session_id, live=False, preserved=False, detail="invalid_intent"
+                session_id, live=False, preserved=False, detail=FOLDER_UNAVAILABLE
             )
         except Exception:
             # The lookup reads the worktree rows in the domain store. A locked or unreadable
@@ -455,9 +456,11 @@ class TmuxTerminal:
             )
         try:
             cwd = folder.resolve(strict=True)
-        except OSError:
+            if not cwd.is_dir():
+                raise NotADirectoryError(cwd)
+        except (OSError, RuntimeError):
             return TerminalObservation(
-                session_id, live=False, preserved=False, detail="invalid_intent"
+                session_id, live=False, preserved=False, detail=FOLDER_UNAVAILABLE
             )
         intent_directory = self._gateway.intent_directory
         if open_private_directory(intent_directory) is None:

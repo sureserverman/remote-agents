@@ -223,3 +223,9 @@ This note is by the executor, not a changed evaluator verdict. The round5 Import
 ## Executor note: separate architecture judgment completed
 
 The evaluator's original Material architecture-not-run finding remains preserved above. A separate independent cumulative source review by recovery_boundary_review now passes 477a83e2..78f0501d against ARCH-01/02/03/07 and DEC-133/134/137/138, with no Critical/Important architecture finding. Its actual returned result is retained in docs/acceptance/session-defaults-round5-architecture-review.md. This addresses only that source judgment; the evaluator's user-route cannot-reach verdicts, the remaining Telegram observations and the final evidence judgment are unchanged.
+
+## Executor note: OD-5 unavailable-folder refusal repair
+
+Owner-operated Telegram acceptance exposed a generic readiness/pane warning for a known unavailable folder. The actual failure is retained in canonical recovery captures. The independently observed trust-hold native interruption plus one explicit Telegram fresh-launch retry passed with exactly one new session/pane in the same folder and preset; it does not measure daemon restart or claim-publication crash.
+
+OD-5 approved a bounded source repair within the existing fifth round. Missing/unknown/non-directory/unresolvable folders now keep their pre-pane reason through the application to both interfaces; 875 affected checks pass, both focused reviews approve. Source report: docs/acceptance/session-defaults-round5-folder-refusal.md. This source fix is not installed and the actual Telegram refusal rerun/final evidence judgment remain open. This executor note does not change the evaluator's preserved cannot-reach verdicts or convert the observed failure into a pass.

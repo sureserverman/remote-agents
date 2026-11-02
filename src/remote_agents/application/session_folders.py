@@ -24,7 +24,7 @@ from remote_agents.domain.models import ProjectId, SessionId
 from remote_agents.ports.worktree_store import Worktree
 
 FOLDER_UNAVAILABLE_SENTENCE = (
-    "This conversation's saved folder is unavailable or no longer belongs to this project."
+    "The selected folder is unavailable or no longer belongs to this project. No pane was started."
 )
 
 WORKTREE_REMOVED_SENTENCE = "This session's worktree has been removed."
@@ -77,8 +77,9 @@ class SessionFolders:
 
     async def folder_for(self, session_id: SessionId, project_id: ProjectId) -> Path | None:
         """In order: the worktree when bound (None when it is gone); the folder outside the
-        project when bound (None when it is no longer a folder); else the project's folder. An
-        unknown project raises `KeyError`, as the mapping does."""
+        project when bound; else the project's folder. An unknown project or unavailable
+        outside-folder binding raises `KeyError`; neither falls back to the project's folder.
+        Only a removed worktree returns None, preserving its distinct refusal reason."""
         worktree = None if self._store is None else await self._store.folder_for(session_id)
         if worktree is not None:
             folder = live_folder(worktree)
@@ -88,7 +89,9 @@ class SessionFolders:
         folder = None if self._folders is None else await self._folders.folder_for(session_id)
         if folder is not None:
             associated = await self._folders.for_project(project_id)
-            return folder if folder in associated and self._folders.available(folder) else None
+            if folder not in associated or not self._folders.available(folder):
+                raise KeyError("saved folder unavailable")
+            return folder
         return self._project_paths[project_id]
 
     async def worktree_folders(self, project_id: ProjectId) -> tuple[Path, ...]:

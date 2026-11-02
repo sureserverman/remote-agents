@@ -398,6 +398,7 @@ async def test_a_launch_whose_folder_vanished_is_refused_not_moved(tmp_path) -> 
     assert harness.gateway.launched == 0
     assert not (harness.intents / f"{outcome.record.session_id}.json").exists()
     assert not outcome.worktree_removed, "a refused folder is not a removed worktree"
+    assert getattr(outcome, "folder_unavailable", False)
 
 
 @pytest.mark.asyncio
@@ -424,3 +425,72 @@ def test_a_folder_cannot_be_combined_with_a_reused_folder_or_a_worktree() -> Non
         LaunchCommand(_PROJECT, _CLAUDE, "f-5", folder=Path("/x"), reuse_folder_of=SessionId.new())
     with pytest.raises(ValueError):
         LaunchCommand(_PROJECT, _CLAUDE, "f-6", folder=Path("/x"), mode="worktree")
+
+
+@pytest.mark.parametrize("operation", ["launch", "resume"])
+@pytest.mark.parametrize("target", ["missing", "file"])
+async def test_unavailable_regular_folder_survives_into_outcome_and_allows_retry(
+    tmp_path, operation, target
+):
+    from remote_agents.application.commands import LaunchCommand
+
+    harness = _Harness(tmp_path)
+    _launchable(harness)
+    existing = SessionRecord(
+        SessionId.new(),
+        _PROJECT,
+        _CLAUDE,
+        SessionDisplayIdentity("editor", "claude", "regular", 1),
+        SessionState.RUNNING,
+        datetime(2026, 10, 10, tzinfo=UTC),
+    )
+    await harness.sessions.save(existing)
+    harness.project.rmdir()
+    if target == "file":
+        harness.project.write_text("not a directory")
+
+    async def attempt(key):
+        if operation == "launch":
+            return await harness.service.launch(LaunchCommand(_PROJECT, _CLAUDE, key))
+        return await harness.resume(None, key, conversation_of="91")
+
+    first = await attempt("91")
+    again = await attempt("92")
+    for outcome in (first, again):
+        assert getattr(outcome, "folder_unavailable", False)
+        assert not outcome.worktree_removed
+        assert outcome.record.state is SessionState.FAILED
+        if operation == "resume":
+            assert outcome.created
+            assert outcome.record.resume_source_id is None
+    assert first.record.session_id != again.record.session_id
+    assert await harness.sessions.get(existing.session_id) == existing
+    assert harness.gateway.launched == 0
+    assert not harness.intents.exists()
+
+
+async def test_gone_outside_binding_is_not_reported_as_a_removed_worktree(tmp_path):
+    import shutil
+
+    harness = _Harness(tmp_path)
+    _launchable(harness)
+    there = _git_top_level(tmp_path / "outside")
+    sid = SessionId.new()
+    await harness.sessions.save(
+        SessionRecord(
+            sid,
+            _PROJECT,
+            _CLAUDE,
+            SessionDisplayIdentity("editor", "claude", "regular", 1),
+            SessionState.STARTING,
+            datetime(2026, 10, 10, tzinfo=UTC),
+        )
+    )
+    assert await harness.folders.bind(sid, there)
+    shutil.rmtree(there)
+
+    observation = await harness.service._terminal.launch(sid, _PROJECT, _CLAUDE)
+
+    assert observation.detail == "folder_unavailable"
+    assert harness.gateway.launched == 0
+    assert not harness.intents.exists()

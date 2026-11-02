@@ -169,3 +169,30 @@ async def test_a_queued_enter_after_a_failed_worktree_launch_starts_nothing_more
         await _choose(app, pilot, "regular")
 
     assert len(launcher.commands) == 1
+
+
+async def test_an_unavailable_folder_is_named_and_offers_no_attach_command():
+    from remote_agents.application.session_folders import FOLDER_UNAVAILABLE_SENTENCE
+
+    class FolderRefused(_Launcher):
+        async def launch(self, command):
+            self.commands.append(command)
+            return LaunchOutcome(
+                _Record(SessionId.new(), SessionState.FAILED),
+                False,
+                folder_unavailable=True,
+            )
+
+    launcher = FolderRefused(offered=False)
+    app = _app(launcher)
+    async with app.run_test() as pilot:
+        await _to_profiles(app, pilot)
+        await _choose(app, pilot, "claude")
+        line, toasts = status(app), announcements(app)
+
+    assert len(launcher.commands) == 1
+    assert "Nothing was started" in line
+    assert "Attach with" not in line
+    assert FOLDER_UNAVAILABLE_SENTENCE in " ".join(toasts)
+    assert "No pane was started." in " ".join(toasts)
+    assert "pane may still exist" not in " ".join(toasts)

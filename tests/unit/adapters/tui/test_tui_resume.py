@@ -644,3 +644,36 @@ async def test_an_existing_resume_without_a_verified_pane_stays_on_a_named_hold(
         assert "nothing new was started" in _status(app).casefold()
         assert position(app) == "RESUME_CONVERSATIONS"
     assert len(launcher.resumed) == 1
+
+
+async def test_an_unavailable_resume_folder_is_named_and_offers_no_attach_command():
+    from remote_agents.application.session_folders import FOLDER_UNAVAILABLE_SENTENCE
+
+    class FolderRefused(_Launcher):
+        async def resume(self, command):
+            self.resumed.append(command)
+            return ResumeOutcome(
+                replace(self.record, state=SessionState.FAILED),
+                created=True,
+                folder_unavailable=True,
+            )
+
+    conversations = _Conversations({1: (_summary(1),)}, caps=_capable("claude"))
+    launcher = FolderRefused()
+    app = RemoteAgentsTui(_context(conversations, launcher))
+    async with app.run_test() as pilot:
+        await app.action_resume()
+        await pilot.pause()
+        await app.screen.choose("opaque-existing")
+        await pilot.pause()
+        await app.screen.choose("claude")
+        await pilot.pause()
+        await app.screen.choose(str(_summary(1).reference))
+        await pilot.pause()
+        said, line = " ".join(announcements(app)), str(_status(app))
+
+    assert len(launcher.resumed) == 1
+    assert FOLDER_UNAVAILABLE_SENTENCE in said
+    assert "No pane was started." in said
+    assert "Attach with" not in line
+    assert app.return_value is None

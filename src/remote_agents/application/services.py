@@ -59,6 +59,7 @@ from remote_agents.ports.session_store import ProjectUsage, SessionStore
 from remote_agents.ports.terminal import (
     AGENT_ASKING,
     COMPOSER_HOLDS_TEXT,
+    FOLDER_UNAVAILABLE,
     INVALID_INTENT,
     KEYS_BUSY,
     NOT_AWAITING_TRUST,
@@ -107,8 +108,8 @@ _STOP_EVENTS: dict[str, LifecycleEvent] = {
 
 
 #: The terminal's answers that mean it started nothing: no pane exists (adapters/tmux/runtime.py
-#: returns both only before `gateway.launch`).
-_BEFORE_ANY_PANE = frozenset({INVALID_INTENT, WORKTREE_REMOVED})
+#: returns these only before `gateway.launch`).
+_BEFORE_ANY_PANE = frozenset({INVALID_INTENT, WORKTREE_REMOVED, FOLDER_UNAVAILABLE})
 
 
 class _Bound(Enum):
@@ -170,6 +171,8 @@ class LaunchOutcome:
     worktree_failed: str | None = None
     """A worktree launch whose worktree could not be made: git's one-line reason. The session
     is FAILED and no pane was started (BL-116)."""
+    folder_unavailable: bool = False
+    """The selected folder was refused before any pane was started."""
 
 
 #: The states a fresh capture of the pane can still change the answer for, and **only** those.
@@ -515,6 +518,7 @@ class SessionService:
                         await self._store.record_event(session_id, LifecycleEvent.STARTUP_ERROR),
                         False,
                         worktree_removed=bound is _Bound.GONE,
+                        folder_unavailable=bound is _Bound.REFUSED,
                     )
                 remote_control = await self._remote_control_at_launch(command.profile_id)
                 await self.announce_sessions()
@@ -550,6 +554,7 @@ class SessionService:
                     await self._store.record_event(session_id, _event_for_launch(observation)),
                     remote_control,
                     worktree_removed=observation.detail == WORKTREE_REMOVED,
+                    folder_unavailable=observation.detail == FOLDER_UNAVAILABLE,
                 )
 
     async def announce_sessions(self) -> None:
@@ -712,6 +717,7 @@ class SessionService:
                 record,
                 created=True,
                 worktree_removed=observation.detail == WORKTREE_REMOVED,
+                folder_unavailable=observation.detail == FOLDER_UNAVAILABLE,
             )
 
     async def _resolve_permissions(

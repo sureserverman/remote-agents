@@ -2048,6 +2048,20 @@ class PrivateBotBoundary:
                     ),
                 )
             )
+        if record.state is SessionState.FAILED and outcome.folder_unavailable:
+            return _reply_arguments(
+                self._message(
+                    f"<b>Session did not start</b>\n{escape(record.display.rendered)}\n"
+                    f"{FOLDER_UNAVAILABLE_SENTENCE}",
+                    (
+                        (
+                            Button(
+                                "Details", self._callback("session.detail", str(record.session_id))
+                            ),
+                        ),
+                    ),
+                )
+            )
         if record.state is SessionState.FAILED and outcome.worktree_removed:
             # Refused before any pane existed, so "its pane may still exist" would send the
             # owner looking for one (BL-116).

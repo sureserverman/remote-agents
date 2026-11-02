@@ -154,7 +154,8 @@ async def test_a_session_whose_bound_folder_is_gone_has_no_folder(tmp_path) -> N
         {_PROJECT: tmp_path}, _Store({}), _Folders({session: tmp_path / "gone"})
     )
 
-    assert await folders.folder_for(session, _PROJECT) is None
+    with pytest.raises(KeyError):
+        await folders.folder_for(session, _PROJECT)
 
 
 @pytest.mark.asyncio

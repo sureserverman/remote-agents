@@ -1370,3 +1370,37 @@ async def test_a_resume_refused_for_a_removed_worktree_says_so() -> None:
 
     assert WORKTREE_REMOVED_SENTENCE in text
     assert "after local attention" not in text
+
+
+@pytest.mark.parametrize("operation", ["launch", "resume"])
+async def test_an_unavailable_folder_names_the_refusal_without_a_pane_warning(operation):
+    from remote_agents.application.session_folders import FOLDER_UNAVAILABLE_SENTENCE
+
+    class FolderRefused(_RemovedWorktreeLauncher):
+        async def launch(self, _command):
+            return LaunchOutcome(self.record, False, folder_unavailable=True)
+
+        async def resume(self, _command):
+            return ResumeOutcome(self.record, created=True, folder_unavailable=True)
+
+    boundary = _removed_worktree_boundary()
+    boundary.backend = replace(
+        boundary.backend,
+        sessions=FolderRefused(replace(_record(), state=SessionState.FAILED)),
+    )
+    entity = f"{PROJECT.opaque_id}|claude" if operation == "launch" else "c-0123456789abcdef"
+    token = boundary._callback(
+        "launch.profile" if operation == "launch" else "resume.confirm", entity, mutation=True
+    )
+    boundary.callbacks.bind_pending(CHAT, 1)
+    reply = (
+        await boundary._launch_reply(entity, token, 1)
+        if operation == "launch"
+        else await boundary._resume_reply(entity, token, 1)
+    )
+    text = str(reply["text"])
+    assert FOLDER_UNAVAILABLE_SENTENCE in text
+    assert "No pane was started." in text
+    assert "pane may still exist" not in text
+    assert "after local attention" not in text
+    assert "worktree" not in text
