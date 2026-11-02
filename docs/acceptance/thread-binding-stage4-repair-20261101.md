@@ -46,3 +46,9 @@ The owner log also retained an actual Cursor2026.10.22 idle screen whose new blo
 Remaining native failures are explicit: three Codex prompt-relay cases stopped at Hooks need review because the plain full-suite launcher omitted the already-approved disposable-home opt-in; the Cursor stop case remained at Trusting workspace; the old cleanup refused an unreadable same-user process and retained its home. Do not bypass ownership to make cleanup green. The owner's final-check script now supplies REMOTE_AGENTS_LIVE_HOOK_TRUST=owner-approved (existing recorded authorization). No hook setting or native run was changed automatically.
 
 Next verification must run from the owner's normal terminal, serially, on the committed repaired tree: ~/.cache/staged-planning-sweep-gate/run-stage4-final.sh. This agent session cannot create the required bwrap namespace. The active gate round stays reserved while awaiting that verification. No merge, push or installation is performed from a failed gate.
+
+## Clean owner run at 7cdcdebf
+
+With nothing else running: 3 failed, 9826 passed, 114 skipped, no errors, binding proof 5 passed, isolation 28 passed. Every failure in the earlier live, e2e and status-bar set passed, including real Codex and Cursor turns.
+
+The three failures were in the tests, not the product. `conftest` now reads a server's owner marker, and one architecture test's fake `subprocess.run` gave it none. Two cases that assert the refusal without the owner's hook-trust opt-in read it from the environment, and the owner's runner now sets it for the whole suite. Those two now clear it themselves. Sweep: `grep -rn "hook_trust_approved\|answer_hook_review\|HOOK_TRUST" tests` and `grep -rln "pytest_sessionfinish" tests`; no other member. The three files pass with the opt-in set and unset.

@@ -98,6 +98,8 @@ def test_native_scratch_and_runtime_paths_are_private_writable_directories(tmp_p
 
 
 async def test_restart_hook_review_refuses_without_selecting_any_option(monkeypatch):
+    # The owner's runner sets this for the whole suite; this case is the one without it.
+    monkeypatch.delenv("REMOTE_AGENTS_LIVE_HOOK_TRUST", raising=False)
     import runpy
     from types import SimpleNamespace
 

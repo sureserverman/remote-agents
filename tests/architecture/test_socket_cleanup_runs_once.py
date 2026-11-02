@@ -16,6 +16,7 @@ owns nothing. `tests/contract/test_nested_pytest_spares_sibling_servers.py` driv
 from __future__ import annotations
 
 import importlib.util
+import os
 import subprocess
 from pathlib import Path
 from types import SimpleNamespace
@@ -35,10 +36,12 @@ def _finish(config, monkeypatch, tmp_path) -> list[list[str]]:
     socket = tmp_path / "remote-agents-test-live"
     monkeypatch.setattr(module, "_test_sockets", lambda: {socket})
     calls: list[list[str]] = []
+    # Every server here attests this run: `conftest` kills only a server that does.
+    attested = f"{module._SOCKET_OWNER_VARIABLE}={os.getpid()}\n"
     monkeypatch.setattr(
         module.subprocess,
         "run",
-        lambda argv, **_: calls.append(argv) or subprocess.CompletedProcess(argv, 0),
+        lambda argv, **_: calls.append(argv) or subprocess.CompletedProcess(argv, 0, attested),
     )
     module.pytest_sessionfinish(SimpleNamespace(config=config), 0)
     return calls
@@ -54,7 +57,8 @@ def test_the_controller_or_a_plain_run_kills_this_runs_servers(monkeypatch, tmp_
         _remote_agents_sockets_before=set(), _remote_agents_owns_sockets=True
     )
     calls = _finish(controller, monkeypatch, tmp_path)
-    assert calls == [["tmux", "-L", "remote-agents-test-live", "kill-server"]]
+    assert calls[-1] == ["tmux", "-L", "remote-agents-test-live", "kill-server"]
+    assert [call for call in calls if "kill-server" in call] == [calls[-1]]
 
 
 def test_a_child_pytest_kills_no_server_at_its_finish(monkeypatch, tmp_path) -> None:

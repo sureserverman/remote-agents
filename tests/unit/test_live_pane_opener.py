@@ -99,7 +99,9 @@ def test_the_opener_grants_hook_trust_only_with_the_owners_approval(monkeypatch)
     assert screens.pressed.count("Enter") >= 1
 
 
-def test_the_opener_does_not_grant_hook_trust_while_opening_a_fixture() -> None:
+def test_the_opener_does_not_grant_hook_trust_while_opening_a_fixture(monkeypatch) -> None:
+    # The owner's runner sets this for the whole suite; this case is the one without it.
+    monkeypatch.delenv("REMOTE_AGENTS_LIVE_HOOK_TRUST", raising=False)
     clock, sleep = _fake_clock()
     screens = _Screens("Hooks need review\n› 1. Trust all and continue\n  2. Continue without")
     with pytest.raises(pytest.fail.Exception, match="Hooks need review"):
