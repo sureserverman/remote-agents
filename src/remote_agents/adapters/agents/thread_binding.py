@@ -5,8 +5,10 @@ opened it. So the service mints a nonce for each launch, keeps only its hash, an
 carrying it into its own pane. That command's shell knows its thread, so spending the nonce records
 which thread is the session's:
 
-    <activity directory>/thread-binding/pending/<session>   the nonce's hash, until it is spent
+    <activity directory>/thread-binding/pending/<session>   nonce hash and bounded retry state
+    <activity directory>/thread-binding/pending/.claimed-*  a recoverable in-flight attempt
     <activity directory>/thread-binding/threads/<thread>    the session that thread belongs to
+    <activity directory>/thread-binding/.lock               private writer transaction lock
 
 This guards against misattribution, not a hostile agent. An agent running as the same user can read
 this directory and its own pane. What it rules out is a thread being filed under a session because
@@ -18,14 +20,17 @@ Nothing here names a provider (DEC-122). Ids hold no secrets and folders never a
 
 from __future__ import annotations
 
+import fcntl
 import hashlib
 import hmac
 import os
 import secrets
 import stat
 import tempfile
+import threading
 import time
-from collections.abc import Collection
+from collections.abc import Collection, Iterator
+from contextlib import contextmanager
 from pathlib import Path
 
 from remote_agents.ports.private_directory import open_private_directory
@@ -39,9 +44,12 @@ _THREADS = "threads"
 #: Work files start with this, and no id does (`safe_session_id`), so they never read as records.
 _WORK_PREFIX = "."
 _CLAIMED_PREFIX = ".claimed-"
-#: A claim lives for one call. One this old belongs to a process that died.
+#: Old work files may be pruned; a live session's recoverable claim survives this age.
 _ABANDONED_SECONDS = 60.0
 _MAXIMUM_FILE_BYTES = 256
+_LOCK = ".lock"
+_PROCESS_LOCK = threading.RLock()
+_TRANSACTION_FDS: dict[tuple[int, int], int] = {}
 
 #: What a pending file can hold besides a nonce's hash. Neither is hexadecimal, so neither ever
 #: matches a nonce, and `_RETRY_MARK` before a hash says that hash is the launch's second try.
@@ -52,6 +60,96 @@ _RETRY_MARK = "r"
 
 class UntrustedBinding(Exception):
     """The binding files are there and cannot be trusted. Callers refuse, never guess."""
+
+
+@contextmanager
+def _transaction(pending: Path) -> Iterator[None]:
+    """Serialize store mutations, including replacement versus an in-flight publisher.
+
+    The process lock is reentrant for same-thread callers. The OS releases the private
+    flock on process exit; every session in this store shares that transaction.
+    """
+    with _PROCESS_LOCK:
+        descriptor = None
+        try:
+            descriptor = os.open(
+                pending.parent / _LOCK,
+                os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | os.O_CLOEXEC | os.O_NONBLOCK,
+                0o600,
+            )
+            status = os.fstat(descriptor)
+            if (
+                not stat.S_ISREG(status.st_mode)
+                or status.st_uid != os.geteuid()
+                or stat.S_IMODE(status.st_mode) != 0o600
+                or status.st_nlink != 1
+            ):
+                raise UntrustedBinding("the binding transaction lock is not private")
+            identity = (status.st_dev, status.st_ino)
+            if identity in _TRANSACTION_FDS:
+                os.close(descriptor)
+                descriptor = None
+                yield
+                return
+            fcntl.flock(descriptor, fcntl.LOCK_EX)
+            _TRANSACTION_FDS[identity] = descriptor
+            try:
+                yield
+            finally:
+                del _TRANSACTION_FDS[identity]
+                fcntl.flock(descriptor, fcntl.LOCK_UN)
+        except OSError as error:
+            raise UntrustedBinding("the binding transaction lock cannot be trusted") from error
+        finally:
+            if descriptor is not None:
+                os.close(descriptor)
+
+
+def _claimed_record(pending: Path, session: str) -> str | None:
+    """Recover one exact attempt; multiple claims never choose by scan order or age."""
+    prefix = f"{_CLAIMED_PREFIX}{session}-"
+    claims = list(pending.glob(prefix + "*"))
+    if not claims:
+        return None
+    if len(claims) != 1:
+        raise UntrustedBinding("more than one binding claim names this session")
+    claim = claims[0]
+    suffix = claim.name[len(prefix) :]
+    recorded = _read_private(claim)
+    hashed = "" if recorded is None else recorded.removeprefix(_RETRY_MARK)
+    if (
+        len(suffix) != 16
+        or any(c not in "0123456789abcdef" for c in suffix)
+        or len(hashed) != 64
+        or any(c not in "0123456789abcdef" for c in hashed)
+    ):
+        raise UntrustedBinding("a binding claim is malformed")
+    return recorded
+
+
+def _claim_was_published(activity_directory: Path, session: str) -> bool:
+    threads = _directory(activity_directory, _THREADS, create=False)
+    if threads is None:
+        return False
+    matches = []
+    with os.scandir(threads) as entries:
+        for entry in entries:
+            if entry.name.startswith(_WORK_PREFIX):
+                continue
+            if _read_private(Path(entry.path)) == session:
+                if safe_session_id(entry.name) is None:
+                    raise UntrustedBinding("a published binding names no thread")
+                matches.append(entry.name)
+    if len(matches) > 1:
+        raise UntrustedBinding("more than one published thread names this session")
+    return bool(matches)
+
+
+def _retire_claims(pending: Path, session: str) -> None:
+    # Called after this transaction publishes a new canonical pending record or verifies a commit.
+    _claimed_record(pending, session)
+    for claim in pending.glob(f"{_CLAIMED_PREFIX}{session}-*"):
+        _unlink(claim)
 
 
 def request_binding(activity_directory: Path, session_id: str) -> None:
@@ -76,17 +174,26 @@ def pending_state(activity_directory: Path, session_id: str) -> PendingBinding:
     pending = _directory(activity_directory, _PENDING, create=False)
     if pending is None:
         return PendingBinding.NONE
-    try:
-        recorded = _read_private(pending / session_id)
-    except OSError as error:
-        raise UntrustedBinding(str(error)) from error
-    if recorded is None:
-        return PendingBinding.NONE
-    if recorded == _WANTED:
-        return PendingBinding.WANTED
-    if recorded == _GAVE_UP:
-        return PendingBinding.GAVE_UP
-    return PendingBinding.RETRIED if recorded.startswith(_RETRY_MARK) else PendingBinding.TRIED
+    with _transaction(pending):
+        try:
+            claimed = _claimed_record(pending, session_id)
+            recorded = _read_private(pending / session_id)
+            if recorded is None:
+                recorded = claimed
+                if recorded is not None and _claim_was_published(activity_directory, session_id):
+                    # Publication committed even if a roster/mark currently vetoes names().
+                    # That veto must never turn a successful bind into another typed attempt.
+                    _retire_claims(pending, session_id)
+                    return PendingBinding.NONE
+        except OSError as error:
+            raise UntrustedBinding(str(error)) from error
+        if recorded is None:
+            return PendingBinding.NONE
+        if recorded == _WANTED:
+            return PendingBinding.WANTED
+        if recorded == _GAVE_UP:
+            return PendingBinding.GAVE_UP
+        return PendingBinding.RETRIED if recorded.startswith(_RETRY_MARK) else PendingBinding.TRIED
 
 
 def thread_of(activity_directory: Path, session_id: str) -> str | None:
@@ -117,16 +224,19 @@ def mint_nonce(activity_directory: Path, session_id: str, *, retry: bool = False
     threads = _directory(activity_directory, _THREADS, create=True)
     if pending is None or threads is None:
         raise UntrustedBinding("cannot make the binding directory")
-    # A new launch's conversation is not the old one, even before it binds.
-    _forget_threads_of(threads, session_id)
-    nonce = secrets.token_hex(32)
-    temporary = _written(pending, (_RETRY_MARK if retry else "") + _hash(nonce))
-    try:
-        os.replace(temporary, pending / session_id)
-    except BaseException:
-        _unlink(temporary)
-        raise
-    return nonce
+    with _transaction(pending):
+        _claimed_record(pending, session_id)
+        # A new launch's conversation is not the old one, even before it binds.
+        _forget_threads_of(threads, session_id)
+        nonce = secrets.token_hex(32)
+        temporary = _written(pending, (_RETRY_MARK if retry else "") + _hash(nonce))
+        try:
+            os.replace(temporary, pending / session_id)
+        except BaseException:
+            _unlink(temporary)
+            raise
+        _retire_claims(pending, session_id)
+        return nonce
 
 
 def consume_nonce(
@@ -135,8 +245,8 @@ def consume_nonce(
     """Bind `thread_id` to `session_id`. None on success, otherwise why not, naming no secret.
 
     The pending file is claimed by rename before the thread is written, so of two shells holding
-    one nonce exactly one proceeds. A wrong nonce spends nothing. A crash after the claim loses
-    the nonce and binds nothing, which the service sees as a binding that never came.
+    one nonce exactly one proceeds. A wrong nonce spends nothing. The claim remains until
+    publication: a crashed shell leaves the attempt's original retry state for the service.
     """
     session = safe_session_id(session_id)
     thread = safe_session_id(thread_id)
@@ -150,32 +260,34 @@ def consume_nonce(
         pending = _directory(activity_directory, _PENDING, create=False)
         if pending is None:
             return "no nonce is waiting for this session"
-        recorded = _read_private(pending / session)
-        if recorded is None:
-            return "no nonce is waiting for this session"
-        if not _holds(recorded, nonce):
-            return "the nonce does not match"
-        threads = _directory(activity_directory, _THREADS, create=True)
-        if threads is None:
-            return "the binding directory cannot be trusted"
-        # Before the claim, so a refused bind leaves the session's nonce for its own thread.
-        if _read_private(threads / thread) is not None:
-            return "this thread is already bound"
-        claimed = pending / f"{_CLAIMED_PREFIX}{session}-{secrets.token_hex(8)}"
-        try:
-            os.rename(pending / session, claimed)
-        except FileNotFoundError:
-            return "no nonce is waiting for this session"
-        # A new nonce can replace the old between the comparison and the claim. Compare what was
-        # claimed, and give back what this shell had no right to take.
-        if not _holds(_read_private(claimed) or "", nonce):
-            _give_back(claimed, pending / session)
-            return "the nonce does not match"
-        _unlink(claimed)
-        why = _link_new(threads, thread, session)
-        if why is None:
-            _forget_threads_of(threads, session, keep=thread)
-        return why
+        with _transaction(pending):
+            _claimed_record(pending, session)
+            recorded = _read_private(pending / session)
+            if recorded is None:
+                return "no nonce is waiting for this session"
+            if not _holds(recorded, nonce):
+                return "the nonce does not match"
+            threads = _directory(activity_directory, _THREADS, create=True)
+            if threads is None:
+                return "the binding directory cannot be trusted"
+            # Before the claim, so a refused bind leaves the session's nonce for its own thread.
+            if _read_private(threads / thread) is not None:
+                return "this thread is already bound"
+            claimed = pending / f"{_CLAIMED_PREFIX}{session}-{secrets.token_hex(8)}"
+            try:
+                os.rename(pending / session, claimed)
+            except FileNotFoundError:
+                return "no nonce is waiting for this session"
+            # A new nonce can replace the old between the comparison and the claim. Compare what was
+            # claimed, and give back what this shell had no right to take.
+            if not _holds(_read_private(claimed) or "", nonce):
+                _give_back(claimed, pending / session)
+                return "the nonce does not match"
+            why = _link_new(threads, thread, session)
+            if why is None:
+                _forget_threads_of(threads, session, keep=thread)
+                _unlink(claimed)
+            return why
     except (OSError, UntrustedBinding):
         return "the binding directory cannot be trusted"
 
@@ -214,15 +326,32 @@ def prune(activity_directory: Path, live_sessions: Collection[str]) -> None:
             directory = _directory(activity_directory, name, create=False)
             if directory is None:
                 continue
-            with os.scandir(directory) as entries:
-                for entry in list(entries):
-                    if entry.name.startswith(_WORK_PREFIX):
-                        if time.time() - entry.stat(follow_symlinks=False).st_mtime > (
-                            _ABANDONED_SECONDS
-                        ):
+            pending = _directory(activity_directory, _PENDING, create=False)
+            if pending is None:
+                continue
+            with _transaction(pending):
+                with os.scandir(directory) as entries:
+                    for entry in list(entries):
+                        if entry.name.startswith(_WORK_PREFIX):
+                            if name == _PENDING:
+                                owner = next(
+                                    (
+                                        session
+                                        for session in live_sessions
+                                        if entry.name.startswith(f"{_CLAIMED_PREFIX}{session}-")
+                                    ),
+                                    None,
+                                )
+                                if owner is not None:
+                                    _claimed_record(directory, owner)
+                                    if _read_private(directory / owner) is None:
+                                        continue
+                            if time.time() - entry.stat(follow_symlinks=False).st_mtime > (
+                                _ABANDONED_SECONDS
+                            ):
+                                _unlink(Path(entry.path))
+                        elif not belongs(entry, live_sessions):
                             _unlink(Path(entry.path))
-                    elif not belongs(entry, live_sessions):
-                        _unlink(Path(entry.path))
     except (OSError, UntrustedBinding):
         return
 
@@ -248,12 +377,16 @@ def _record_pending(activity_directory: Path, session_id: str, content: str) -> 
     pending = _directory(activity_directory, _PENDING, create=True)
     if pending is None:
         raise UntrustedBinding("cannot make the binding directory")
-    temporary = _written(pending, content)
-    try:
-        os.replace(temporary, pending / session_id)
-    except BaseException:
-        _unlink(temporary)
-        raise
+    with _transaction(pending):
+        _claimed_record(pending, session_id)
+        temporary = _written(pending, content)
+        try:
+            os.replace(temporary, pending / session_id)
+        except BaseException:
+            _unlink(temporary)
+            raise
+
+        _retire_claims(pending, session_id)
 
 
 def _holds(recorded: str, nonce: str) -> bool:

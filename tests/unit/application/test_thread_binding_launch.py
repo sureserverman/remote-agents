@@ -11,6 +11,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
+from binding_crash import crash_bind
 
 from remote_agents.adapters.agents.hook_identity import RosterEntry, roster_path, write_roster
 from remote_agents.adapters.agents.registry import profiles_bound_by_thread, provider_descriptors
@@ -370,3 +371,70 @@ async def test_a_binding_that_cannot_be_asked_costs_the_binding_never_the_launch
     )
     outcome = await service.launch(LaunchCommand(ProjectId("p"), ProfileId("codex"), "regular"))
     assert outcome.record.state is SessionState.RUNNING
+
+
+@pytest.mark.parametrize("phase", ["claim", "publish"])
+def test_a_crashed_claim_is_retried_once_by_the_restarted_service(world: World, phase: str) -> None:
+    session = world.session()
+    old = world.bindings.mint(str(session))
+    crash_bind(world.spool, str(session), old, _THREAD, phase)
+    world.binder = world.new_binder()
+    world.run(3)
+    assert len(world.sent) == 1
+    assert world.sent[0][1].split()[-1] != old
+    assert world.bindings.names(str(session), "codex")
+    assert consume_nonce(world.spool, str(session), old, _THREAD) is not None
+    world.binder = world.new_binder()
+    world.run(2)
+    assert len(world.sent) == 1
+    assert world.told == []
+
+
+@pytest.mark.parametrize("phase", ["claim", "publish"])
+def test_a_crashed_retry_gives_up_visibly_without_a_third_try(world: World, phase: str) -> None:
+    session = world.session()
+    nonce = world.bindings.mint(str(session), retry=True)
+    crash_bind(world.spool, str(session), nonce, _THREAD, phase)
+    world.binder = world.new_binder()
+    world.run(3)
+    assert world.sent == []
+    assert world.told == [session]
+    assert world.bindings.state(str(session)) is PendingBinding.GAVE_UP
+    world.binder = world.new_binder()
+    world.run(2)
+    assert world.sent == []
+    assert world.told == [session]
+    assert consume_nonce(world.spool, str(session), nonce, _THREAD) is not None
+
+
+def test_a_crash_after_publication_never_sends_another_binding_line(world: World) -> None:
+    session = world.session()
+    nonce = world.bindings.mint(str(session))
+    crash_bind(world.spool, str(session), nonce, _THREAD, "published")
+    world.binder = world.new_binder()
+    world.run(3)
+    assert world.bindings.names(str(session), "codex")
+    assert world.sent == []
+    assert world.told == []
+
+
+@pytest.mark.parametrize("unavailable", ["roster", "own_mark"])
+def test_a_published_claim_never_revokes_a_binding_when_names_is_temporarily_false(
+    world: World, unavailable: str
+) -> None:
+    from remote_agents.adapters.agents.turn_markers import FileConversationMarks
+
+    session = world.session()
+    nonce = world.bindings.mint(str(session))
+    crash_bind(world.spool, str(session), nonce, _THREAD, "published")
+    if unavailable == "roster":
+        roster_path(world.spool, "codex").unlink()
+    else:
+        FileConversationMarks(world.spool).record(str(session), "another-thread")
+    assert not world.bindings.names(str(session), "codex"), "the refusal is the required control"
+    world.shell_runs = False
+    world.binder = world.new_binder()
+    world.run(3)
+    assert world.sent == [], "publication committed: never type a replacement binding line"
+    assert bound_session(world.spool, _THREAD) == str(session)
+    assert world.told == []

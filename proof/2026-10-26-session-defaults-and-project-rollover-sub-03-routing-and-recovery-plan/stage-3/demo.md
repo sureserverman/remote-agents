@@ -126,3 +126,96 @@ Evidence:
 - **Blocking — Outcome 1 not demonstrated:** the public dashboard visibly lists five registered owned projects, but the required service loop has no isolated/no-Telegram route and exits with `Telegram environment file is missing`. An owner-supplied separate Telegram bot/account is required before the provider-backed rollover/restart journey can be reached. Evidence: Public service-transport prerequisite and Outcome 1.
 - **Blocking — Outcome 2 incomplete:** named public-route refusals were shown, but existing-session preservation was not reachable. Evidence: Outcome 2.
 - **Blocking — Outcome 3 not demonstrated:** no actual operation was available to interrupt, so durable retry/hold and exactly-once behavior remain unobserved. Evidence: Outcome 3.
+
+## Round 5 final independent assessment — 2026-11-02
+
+Status: **FAIL**. This is a final evidence review under the owner-authorized
+read-only/public-route boundary. No new native/model/provider turn, Telegram
+send or poll, service restart, deployment, configuration/profile/provider/trust
+change, credential access, source inspection, diff inspection, import, or test
+suite was performed. The earlier independent public-route capture above remains
+the direct route evidence; its Outcome sections are intentionally unchanged.
+
+The final-gate brief records an owner-run native bundle (12 passed, with a
+separate five-pass binding proof) and owner-observed service results. Those are
+useful at their stated native/owner-observed scope, but do not make this
+evaluator able to reach the missing isolated Telegram route, and are not
+substituted for it. The brief also records the independent Telegram route as
+partial: it lacks named refusal, interruption, and unavailable/stale-choice
+observations. The cumulative-diff/ARCH-boundary judgment was **not run**:
+this evaluator was expressly forbidden to read source or the diff.
+
+| Outcome | Verdict |
+| --- | --- |
+| 1 | cannot reach by the user's route |
+| 2 | cannot reach by the user's route |
+| 3 | cannot reach by the user's route |
+
+## Outcome 1 — Round 5
+
+> Works: The owner can run a five-project master plan through rollovers and restart without manually fixing project or permission selection.
+
+Verdict: **cannot reach by the user's route**.
+
+Evidence:
+
+- The retained direct public-route capture above reached five registered owned
+  projects in `remote-agents pane projects`, but `remote-agents serve --config
+  ...` exited 1 with `remote_agents.config.ConfigError: Telegram environment
+  file is missing` before a backend contact. Its `serve --help` exposed no
+  isolated/no-Telegram transport option.
+- The Round 5 brief's owner-observed/natively tested results do not give this
+  evaluator an isolated Telegram user route. No real five-project rollover and
+  restart was newly observable here.
+
+## Outcome 2 — Round 5
+
+> Invalid or unavailable input → a named refusal with existing sessions preserved.
+
+Verdict: **cannot reach by the user's route**.
+
+Evidence:
+
+- The retained capture records public CLI validation refusals, but no existing
+  provider session could be created or preserved because the public service loop
+  stopped at the missing Telegram environment prerequisite.
+- The brief records a limited owner observation of `destination-unregistered`
+  with its source kept. That is not an independently reachable Telegram route
+  in this dispatch and cannot replace the requested user-route demonstration.
+
+## Outcome 3 — Round 5
+
+> Interrupted operation → durable state permits safe retry or a visible hold, never an unrecorded second launch.
+
+Verdict: **cannot reach by the user's route**.
+
+Evidence:
+
+- The retained capture had no actual provider operation to interrupt after the
+  service transport stopped; consequently no retry/hold screen or launch record
+  was observable by the public route.
+- The brief records a trust-hold owner observation, but the independent Telegram
+  route remains unavailable here and the brief explicitly leaves the Telegram
+  interruption/no-duplicate evidence open.
+
+## Round 5 findings
+
+- **Blocking — Outcomes 1–3 cannot be reached by the user's route:** the final
+  combined gate still lacks an independently runnable isolated Telegram route;
+  native tests, a binding proof, and owner-observed results are not substitutes.
+  With Stage 3 as the final combined gate, this leaves the master goal's
+  five-project/restart, named-refusal/preserved-session, and interrupted
+  exactly-once outcomes unproven at the required user-route scope.
+- **Material — unassessed architecture/diff criterion:** cumulative-diff
+  compliance with ARCH-01/02/03/07 and absence of hidden installed-profile or
+  deployment changes was not run, because the exact evaluation brief prohibited
+  source and diff inspection.
+- **Material — retained scope limitation:** the Round 5 brief reports an open
+  Important claim-publication crash defect; this assessment did not execute it
+  or reclassify it.
+
+Background jobs: none started.
+
+## Executor fix-scope note: OD-4 recovery repair
+
+This note is by the executor, not a changed evaluator verdict. The round5 Important claim-publication crash finding is repaired and tested at source fix scope (658affected checks and137security checks passed; exact review findings closed). Native receipts still refer to the pre-fix application base; no paid native rerun is claimed. The independent evaluator's cannot-reach verdicts and actual Telegram evidence gaps remain unchanged. Full source repair evidence is docs/acceptance/session-defaults-round5-crash-recovery.md.

@@ -36,7 +36,12 @@ def spool(tmp_path: Path) -> Path:
 
 
 def _files(spool: Path) -> list[Path]:
-    return [path for path in (spool / BINDING_DIRECTORY).rglob("*") if path.is_file()]
+    # The persistent private transaction lock is metadata, not a nonce/thread record.
+    return [
+        path
+        for path in (spool / BINDING_DIRECTORY).rglob("*")
+        if path.is_file() and path != spool / BINDING_DIRECTORY / ".lock"
+    ]
 
 
 def test_pending_file_holds_only_a_hash_of_the_nonce(spool: Path) -> None:
@@ -277,8 +282,8 @@ def test_prune_keeps_a_young_pending_file_off_the_list_it_read(spool: Path) -> N
 def test_prune_clears_abandoned_work_files_and_keeps_fresh_ones(spool: Path) -> None:
     mint_nonce(spool, _SESSION)
     pending = spool / BINDING_DIRECTORY / "pending"
-    abandoned = pending / f".claimed-{_SESSION}-x"
-    fresh = pending / f".claimed-{_SESSION}-y"
+    abandoned = pending / ".tmp-abandoned"
+    fresh = pending / ".tmp-fresh"
     abandoned.write_text("", encoding="utf-8")
     fresh.write_text("", encoding="utf-8")
     old = time.time() - 3600
