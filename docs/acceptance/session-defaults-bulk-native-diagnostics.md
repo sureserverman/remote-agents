@@ -31,7 +31,8 @@ manual resume and automatic restart against that observed thread. This route is 
 `observed_thread_diagnostic_only`. It cannot pass `qualified.manual` or `qualified.restart`:
 those require actual catalogue resolution with the exact project root/folder. Unknown native
 identity or an unproven source stop blocks further launches. No native history or provider
-row is synthesized, and every terminal model/nudge/slash prompt remains denied.
+row is synthesized. The default model-free mode denies every terminal model/nudge/slash
+prompt; the separately proposed one-turn mode below permits one exact owned-session message.
 
 The full-path audit also fixed a latent fixture bug: `ProviderConversationId` is a dataclass,
 so catalogue matching must compare its `.value`, rather than its string representation,
@@ -48,7 +49,7 @@ Each run directory contains:
 - `runner-summary.json` for source/writer identity, preflight and pipeline exits, and completion.
 
 The runner rejects skipped/missing/incomplete native evidence, failed or blocked checks,
-missing cleanup/no-model/qualified-route checks, absent final success marker, and log-writer
+missing cleanup/prompt-budget/qualified-route checks, absent final success marker, and log-writer
 failure even when pytest itself exits zero. Existing report/receipt paths and symlinks are
 never overwritten. All newly created evidence is private. Source application/dependency
 inputs remain byte-equivalent to the installed d5 candidate; no working service, normal
@@ -112,3 +113,69 @@ AST sweep across every src/tests Python file for `launch` functions constructing
 `.created` access is confined to actual ResumeOutcome data. Intent fields and retention
 were also checked against real runtime serialization/cleanup source. These repairs remain
 source/control proof; actual naming/catalogue/manual/restart acceptance is still pending.
+
+
+## Second bulk result and catalogue prerequisite
+
+The actual owner run at850f0c38 (`ra-folder-native-20261103-Epv8zc`) completed all60
+checks in36.35s: **55passed,1failed,4blocked**. The only failure was `catalogue.resolve`
+with zero listed rows. The dependent folder/project and qualified manual/restart checks
+remain blocked. Real diagnostic manual resume, automatic restart, exact folder/thread/
+preset preservation, no-model guard, credential invariants and cleanup all passed.
+The raw evidence and hashes are retained under `recovery/folder-bound-native-qualification-
+20261103/attempt-6-bulk-named-empty-catalogue/`. These component proofs are retained,
+while catalogue acceptance and BL-141 stay open.
+
+The native row was named, unarchived, paginated, and had `has_user_event=0`. Read-only
+inspection of the exact installed Codex0.166.0 executable found an active-list SQL
+condition `threads.archived = 0 AND threads.preview <> ''`. The exact retired row's
+preview was not captured, so empty preview remains an inference rather than a recorded
+value. Source review found outside-folder binding enumeration and private catalogue
+routing already present. Naming alone did not establish catalogue eligibility in this run.
+No product source, provider policy or normal profile change is indicated by this evidence.
+
+[Official app-server documentation](https://learn.chatgpt.com/docs/app-server) specifies
+that `thread/list` applies its filters before pagination, defaults to the configured provider
+and interactive sources, and `useStateDbOnly=true` avoids transcript scans. It documents
+naming as metadata; it does not establish that an empty named active thread passes this
+installed binary's preview filter. No history injection, database edit or archived-thread
+substitution is used to make acceptance pass.
+
+## Prepared one-turn option: owner authorization required before execution
+
+OD-3's accepted scope expressly excludes new paid native runs. This option is prepared and
+source-tested, **not authorized or executed**. The proposal permits one new user message
+in the existing disposable fixture, under the owner's existing model/provider selection:
+
+```text
+Reply exactly RA_FOLDER_NATIVE_OK. Do not use tools or change files.
+```
+
+An explicit runner fourth argument `one-turn` selects the exact internal authorization
+literal. The original command still defaults to model-free, overwrites inherited turn
+authorization, and cannot silently spend a turn. The guard admits the exact text to the
+verified fresh session once, consumes its allowance before awaiting delivery, and restores
+deny-all in `finally`. Errors, WAIT, uncertainty, cancellation and subsequent nudges never
+retry. This bounds application prompt delivery, not the provider's internal request retries
+or exact billing amount. No model/provider/profile/trust configuration is selected or changed.
+
+One-turn mode declares62checks, including actual send success and selected native metadata
+`has_user_event=1`, non-empty-preview boolean and an idle pane before ending. Qualified
+manual explicitly requires this history prerequisite; qualified restart inherits it. All
+checks and cleanup must pass, with final prompt count1 bound to the requested runner mode.
+Model-free mode retains60checks and count0. No reply-content or paid native pass is inferred
+from offline tests. The new receipts record selected-thread source/provider and preview
+presence only, plus actual private `thread/list` cwd/row-count/cursor metadata. Catalogue
+requests and payloads are delegated unchanged.
+
+Offline controls: **67passed in3.02s**, including the observed55/1/4 failure pattern,
+exact grant/no retry, real PromptDelivery/PromptOutcome values, empty preview after send,
+failed send with still-returned catalogue row, mode/count/history-report binding, actual
+shell one-turn routing and inherited authorization override. A reviewer found that the
+individual qualified labels could initially pass despite failed history setup. The added
+whole-path test went red (1failed0.50s); the conditional history dependency repairs that
+class. The original failure is preserved with the green controls under
+`recovery/bulk-native-diagnostics-20261103/catalogue-eligibility-remedy/`.
+
+This remedy does not close the original run, invent a sixth round, waive catalogue
+acceptance, change the installed application, or authorize another paid/native bundle.

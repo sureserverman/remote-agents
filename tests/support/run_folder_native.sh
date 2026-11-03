@@ -1,11 +1,18 @@
 #!/usr/bin/env bash
-# One owned model-free job: collect local admission and namespace failures, then all reachable native checks.
+# One owned job, model-free by default: collect local admission and namespace failures, then all reachable native checks.
 set -uo pipefail
 umask 077
 ra_worktree=/tmp/remote-agents-project-routing
 ra_expected_head=${1:?expected source commit required}
 ra_writer=${2:?qualified writer checkout required}
 ra_writer_head=${3:?expected writer commit required}
+ra_turn_mode=${4:-model-free}
+ra_turn_authorization=
+case "$ra_turn_mode" in
+  model-free) ;;
+  one-turn) ra_turn_authorization=owner-approved-one-turn ;;
+  *) echo 'Unrecognized native turn mode. Execution blocked.' >&2; exit 2 ;;
+esac
 ra_guard_failed=0
 if [[ $(git -C "$ra_worktree" rev-parse HEAD) != "$ra_expected_head" ]]; then
   echo 'Source head changed. Native execution blocked.' >&2
@@ -35,7 +42,7 @@ ra_finalize() {
   ra_raw_exit=$?
   trap - EXIT
   python3 "$ra_worktree/tests/support/native_run_report.py" "$ra_run_dir" \
-    "$ra_expected_head" "$ra_writer_head" "$ra_raw_exit" "$ra_stage" "$ra_unit_exit" "$ra_namespace_exit"
+    "$ra_expected_head" "$ra_writer_head" "$ra_raw_exit" "$ra_stage" "$ra_unit_exit" "$ra_namespace_exit" "$ra_turn_mode"
   ra_final_exit=$?
   exit "$ra_final_exit"
 }
@@ -56,6 +63,7 @@ fi
 ra_stage=native_collection
 REMOTE_AGENTS_LIVE_ACCEPTANCE=1 REMOTE_AGENTS_LIVE_HOOK_TRUST=owner-approved \
   RA_STAGED_PLANNING="$ra_writer" RA_FOLDER_BOUND_NATIVE_OUT="$ra_run_dir/native-result.jsonl" \
+  RA_FOLDER_NATIVE_TURN_AUTHORIZATION="$ra_turn_authorization" \
   uv run --locked pytest tests/live/test_rollover_live.py \
     -k native_nondefault_folder_catalogue_manual_and_restart_resume -m live_acceptance \
     -q -s --maxfail=0 --tb=short 2>&1 | tee "$ra_run_dir/pytest.log"

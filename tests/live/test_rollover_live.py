@@ -1186,8 +1186,31 @@ class _CodexService:
     codex_home: Path
 
 
+@dataclass(frozen=True, slots=True)
+class _ObservedFolderCatalogueProtocol:
+    """Record only actual private list-request cwd and counts; delegate without mutation."""
+
+    protocol: object
+    record: object
+
+    async def request(self, method, params):
+        payload = await self.protocol.request(method, params)
+        if method == "thread/list":
+            rows = payload.get("data")
+            self.record(
+                "catalogue_query",
+                cwd=params.get("cwd"),
+                row_count=len(rows) if isinstance(rows, list) else None,
+                has_next_cursor=bool(payload.get("nextCursor")),
+            )
+        return payload
+
+    async def close(self):
+        await self.protocol.close()
+
+
 @asynccontextmanager
-async def _private_codex_catalogues(monkeypatch, paths):
+async def _private_codex_catalogues(monkeypatch, paths, observer=None):
     """Use the pane's isolated executable for every catalogue, including recomposition.
 
     Production resolves `codex` through its own process PATH. The test runner has a
@@ -1199,8 +1222,9 @@ async def _private_codex_catalogues(monkeypatch, paths):
         clients = []
 
         def client():
+            protocol = JsonRpcProcess((str(paths.home / ".local/bin/codex"), "app-server"))
             instance = CodexAppServerClient(
-                JsonRpcProcess((str(paths.home / ".local/bin/codex"), "app-server"))
+                _ObservedFolderCatalogueProtocol(protocol, observer) if observer else protocol
             )
             clients.append(instance)
             cleanup.push_async_callback(instance.aclose)
@@ -1213,7 +1237,7 @@ async def _private_codex_catalogues(monkeypatch, paths):
 
 @asynccontextmanager
 async def _codex_service(
-    config: pytest.Config, monkeypatch: pytest.MonkeyPatch
+    config: pytest.Config, monkeypatch: pytest.MonkeyPatch, *, catalogue_observer=None
 ) -> AsyncIterator[_CodexService]:
     """Everything a binding case needs, and all of it gone afterwards. Spends no model turn."""
     codex = _codex_prerequisites(config)
@@ -1234,7 +1258,7 @@ async def _codex_service(
         paths = _isolated_codex_home(root / "home", repo, codex, codex_home)
         loaded = load_config(paths.config_path)
         connection = open_database(paths.database_path, migrations=MIGRATIONS)
-        async with _private_codex_catalogues(monkeypatch, paths):
+        async with _private_codex_catalogues(monkeypatch, paths, catalogue_observer):
             yield _CodexService(
                 _compose(loaded, connection, paths), paths, repo, socket, codex_home
             )
@@ -1404,14 +1428,24 @@ async def _serve_native_restart(composition, restart, poll):
 
 
 _FOLDER_NATIVE_NAME = "ra-bl141-native"
+_FOLDER_NATIVE_SEED = "Reply exactly RA_FOLDER_NATIVE_OK. Do not use tools or change files."
+_FOLDER_NATIVE_TURN_AUTH = "owner-approved-one-turn"
 
 
-def _folder_native_prompt_guard(attempts):
-    """Reject every terminal message before delivery, including native slash commands."""
+def _folder_native_prompt_guard(attempts, *, allowed_session=None, deliver=None):
+    """Deny all input by default; an explicit grant permits one exact owned-session send."""
 
     async def guarded(session_id, text):
         attempts.append((session_id, text))
-        raise AssertionError("this model-free qualification forbids every model prompt/nudge")
+        assert (
+            deliver is not None
+            and allowed_session is not None
+            and session_id == allowed_session
+            and text == _FOLDER_NATIVE_SEED
+            and len(attempts) == 1
+        ), "this qualification forbids every model prompt/nudge outside its explicit one-turn grant"
+        # Consume the grant before awaiting delivery. Failure, cancellation and WAIT never retry.
+        return await deliver(session_id, text)
 
     return guarded
 
@@ -1433,7 +1467,9 @@ def _folder_native_metadata(home, thread):
             try:
                 connection.row_factory = sqlite3.Row
                 row = connection.execute(
-                    "SELECT id, cwd, name, has_user_event, archived, history_mode "
+                    "SELECT id, cwd, name, has_user_event, archived, history_mode, "
+                    "source, model_provider, "
+                    "preview <> '' AS preview_nonempty "
                     "FROM threads WHERE id = ?",
                     (thread,),
                 ).fetchone()
@@ -1448,6 +1484,7 @@ def _folder_native_metadata(home, thread):
 
 # BL-141: model-free qualification beyond the regular-root native bundle.
 _FOLDER_NATIVE_WAIT = 15
+_FOLDER_NATIVE_TURN_WAIT = 120
 _FOLDER_SESSION_FIELDS = ("project", "thread", "folder", "preset", "intent", "cwd", "argv")
 _FOLDER_NATIVE_CHECKS = (
     "fixture",
@@ -1496,7 +1533,7 @@ _FOLDER_NATIVE_CHECKS = (
     "diagnostics.sessions",
     "diagnostics.native",
     "diagnostics.panes",
-    "no_model_prompts",
+    "prompt_budget",
     "cleanup",
 )
 
@@ -1564,8 +1601,9 @@ async def _folder_session_checks(prefix, harness, record, native, outside, threa
     )
 
 
-async def _collect_folder_native(native, checks, prompt_attempts, record):
+async def _collect_folder_native(native, checks, prompt_attempts, record, *, allow_turn=False):
     harness = native.harness
+    original_send = harness.terminal.send_prompt
     harness.terminal.send_prompt = _folder_native_prompt_guard(prompt_attempts)
     sessions = harness.backend.sessions
     agent = ProfileId("codex")
@@ -1672,6 +1710,47 @@ async def _collect_folder_native(native, checks, prompt_attempts, record):
         requires=("native.identity",),
         expect=lambda value: value == str(outside),
     )
+
+    if allow_turn:
+
+        async def seed_turn():
+            harness.terminal.send_prompt = _folder_native_prompt_guard(
+                prompt_attempts, allowed_session=first, deliver=original_send
+            )
+            try:
+                outcome = await harness.terminal.send_prompt(first, _FOLDER_NATIVE_SEED)
+                assert delivery_verdict(outcome) is DeliveryVerdict.SENT, outcome
+                record("native_user_turn_sent", session=str(first), prompt=_FOLDER_NATIVE_SEED)
+            finally:
+                harness.terminal.send_prompt = _folder_native_prompt_guard(prompt_attempts)
+
+        await checks.run(
+            "native.user_turn",
+            seed_turn,
+            requires=("fresh.ready", "native.identity"),
+            seconds=15,
+        )
+
+        async def history_ready():
+            deadline = time.monotonic() + _FOLDER_NATIVE_TURN_WAIT
+            while True:
+                metadata = _folder_native_metadata(native.codex_home, thread)
+                if (
+                    metadata.get("has_user_event") == 1
+                    and metadata.get("preview_nonempty") == 1
+                    and await harness.terminal.pane_idle(first)
+                ):
+                    record("native_history_eligible", metadata=metadata)
+                    return
+                assert time.monotonic() < deadline, metadata
+                await asyncio.sleep(0.5)
+
+        await checks.run(
+            "native.history_ready",
+            history_ready,
+            requires=("native.user_turn",),
+            seconds=125,
+        )
 
     async def end_source():
         await sessions.force_stop(ForceStopCommand(first))
@@ -1890,6 +1969,7 @@ async def _collect_folder_native(native, checks, prompt_attempts, record):
         "qualified.manual",
         lambda: True,
         requires=(
+            *(("native.history_ready",) if allow_turn else ()),
             "catalogue.folder",
             "catalogue.project_root",
             "settings.read",
@@ -1957,6 +2037,10 @@ async def _folder_native_diagnostics(native, checks, record):
 async def test_native_nondefault_folder_catalogue_manual_and_restart_resume(request, monkeypatch):
     if os.environ.get("REMOTE_AGENTS_LIVE_ACCEPTANCE") != "1":
         pytest.skip("opt in to the isolated model-free native qualification")
+    authorization = os.environ.get("RA_FOLDER_NATIVE_TURN_AUTHORIZATION", "")
+    if authorization not in ("", _FOLDER_NATIVE_TURN_AUTH):
+        pytest.fail("unrecognized native model-turn authorization")
+    allow_turn = authorization == _FOLDER_NATIVE_TURN_AUTH
     output = os.environ.get("RA_FOLDER_BOUND_NATIVE_OUT")
     if not output or not Path(output).is_absolute():
         pytest.fail("RA_FOLDER_BOUND_NATIVE_OUT must name a fresh absolute private receipt")
@@ -1974,10 +2058,18 @@ async def test_native_nondefault_folder_catalogue_manual_and_restart_resume(requ
                 receipt.flush()
                 os.fsync(receipt.fileno())
 
-            record("started", model_prompts_allowed=False, collection="all_reachable_checks")
-            checks = NativeChecks(_FOLDER_NATIVE_CHECKS, record)
+            record(
+                "started",
+                model_prompts_allowed=allow_turn,
+                model_prompt_budget=int(allow_turn),
+                collection="all_reachable_checks",
+            )
+            names = _FOLDER_NATIVE_CHECKS + (
+                ("native.user_turn", "native.history_ready") if allow_turn else ()
+            )
+            checks = NativeChecks(names, record)
             prompt_attempts = []
-            context = _codex_service(request.config, monkeypatch)
+            context = _codex_service(request.config, monkeypatch, catalogue_observer=record)
             try:
                 try:
                     native = await context.__aenter__()
@@ -1988,7 +2080,9 @@ async def test_native_nondefault_folder_catalogue_manual_and_restart_resume(requ
                 try:
                     await checks.run(
                         "workflow",
-                        lambda: _collect_folder_native(native, checks, prompt_attempts, record),
+                        lambda: _collect_folder_native(
+                            native, checks, prompt_attempts, record, allow_turn=allow_turn
+                        ),
                         seconds=420,
                     )
                     await _folder_native_diagnostics(native, checks, record)
@@ -2007,9 +2101,12 @@ async def test_native_nondefault_folder_catalogue_manual_and_restart_resume(requ
                     )
             finally:
                 await checks.run(
-                    "no_model_prompts",
+                    "prompt_budget",
                     lambda: prompt_attempts,
-                    expect=lambda value: not value,
+                    expect=lambda value: (
+                        len(value) == int(allow_turn)
+                        and all(text == _FOLDER_NATIVE_SEED for _, text in value)
+                    ),
                     finalizer=True,
                 )
                 summary = checks.finish()
@@ -2017,7 +2114,7 @@ async def test_native_nondefault_folder_catalogue_manual_and_restart_resume(requ
                 summary_file.flush()
                 os.fsync(summary_file.fileno())
                 if summary["qualification"] == "passed":
-                    record("passed_and_cleanup_complete", model_prompts_sent=0)
+                    record("passed_and_cleanup_complete", model_prompts_sent=int(allow_turn))
             assert summary["qualification"] == "passed", (
                 f"Native check report: {len(summary['failed'])} failed, "
                 f"{len(summary['blocked'])} blocked. "

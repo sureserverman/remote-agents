@@ -307,13 +307,36 @@ def test_native_metadata_reads_only_selected_thread_and_no_transcript(monkeypatc
     database = tmp_path / "state_5.sqlite"
     connection = sqlite3.connect(database)
     connection.execute(
-        "CREATE TABLE threads(id, cwd, name, has_user_event, archived, history_mode, transcript)"
+        "CREATE TABLE threads(id, cwd, name, has_user_event, archived, history_mode, "
+        "source, model_provider, preview, transcript)"
     )
     connection.executemany(
-        "INSERT INTO threads VALUES (?,?,?,?,?,?,?)",
+        "INSERT INTO threads VALUES (?,?,?,?,?,?,?,?,?,?)",
         [
-            ("private", "/private/outside", "ra-bl141-native", 0, 0, "paginated", "secret"),
-            ("other", "/other", "not selected", 1, 0, "legacy", "other content"),
+            (
+                "private",
+                "/private/outside",
+                "ra-bl141-native",
+                0,
+                0,
+                "paginated",
+                "cli",
+                "openai",
+                "",
+                "secret",
+            ),
+            (
+                "other",
+                "/other",
+                "not selected",
+                1,
+                0,
+                "legacy",
+                "cli",
+                "openai",
+                "other preview",
+                "other content",
+            ),
         ],
     )
     connection.commit()
@@ -327,6 +350,9 @@ def test_native_metadata_reads_only_selected_thread_and_no_transcript(monkeypatc
         "has_user_event": 0,
         "archived": 0,
         "history_mode": "paginated",
+        "source": "cli",
+        "model_provider": "openai",
+        "preview_nonempty": 0,
     }
     assert database.read_bytes() == before
     assert module._folder_native_metadata(tmp_path, "absent") == {"found": False}
@@ -337,3 +363,68 @@ def test_native_metadata_missing_database_creates_nothing(monkeypatch, tmp_path)
     module = importlib.import_module("live.test_rollover_live")
     assert module._folder_native_metadata(tmp_path, "private") == {"found": False}
     assert list(tmp_path.iterdir()) == []
+
+
+@pytest.mark.parametrize("defect", [None, "wrong_session", "wrong_text", "delivery_failure"])
+async def test_explicit_one_turn_guard_is_exact_and_consumed_before_delivery(monkeypatch, defect):
+    from remote_agents.ports.terminal import PromptDelivery, PromptOutcome
+
+    monkeypatch.syspath_prepend(str(Path(__file__).parents[1]))
+    module = importlib.import_module("live.test_rollover_live")
+    attempts, delivered = [], []
+
+    async def deliver(sid, text):
+        delivered.append((sid, text))
+        if defect == "delivery_failure":
+            raise RuntimeError("delivery uncertain")
+        return PromptDelivery(PromptOutcome.SENT)
+
+    guard = module._folder_native_prompt_guard(attempts, allowed_session="owned", deliver=deliver)
+    sid = "foreign" if defect == "wrong_session" else "owned"
+    text = module._FOLDER_NATIVE_SEED + (" extra" if defect == "wrong_text" else "")
+    if defect is None:
+        assert (await guard(sid, text)).outcome is PromptOutcome.SENT
+    elif defect == "delivery_failure":
+        with pytest.raises(RuntimeError):
+            await guard(sid, text)
+    else:
+        with pytest.raises(AssertionError):
+            await guard(sid, text)
+    with pytest.raises(AssertionError):
+        await guard("owned", module._FOLDER_NATIVE_SEED)
+    assert len(delivered) == int(defect in (None, "delivery_failure"))
+    assert len(attempts) == 2
+
+
+async def test_catalogue_instrumentation_preserves_real_payload_and_logs_only_counts(monkeypatch):
+    monkeypatch.syspath_prepend(str(Path(__file__).parents[1]))
+    module = importlib.import_module("live.test_rollover_live")
+    from unittest.mock import create_autospec
+
+    from remote_agents.adapters.agents.protocols import JsonRpcProcess
+
+    protocol = create_autospec(JsonRpcProcess, instance=True)
+    payload = {
+        "data": [{"id": "private", "preview": "content must not enter receipt"}],
+        "nextCursor": None,
+    }
+    protocol.request.return_value = payload
+    events = []
+    observed = module._ObservedFolderCatalogueProtocol(
+        protocol, lambda step, **details: events.append((step, details))
+    )
+    params = {"cwd": "/private/outside", "limit": 50, "useStateDbOnly": True}
+    assert await observed.request("thread/list", params) is payload
+    protocol.request.assert_awaited_once_with("thread/list", params)
+    assert events == [
+        (
+            "catalogue_query",
+            {
+                "cwd": "/private/outside",
+                "row_count": 1,
+                "has_next_cursor": False,
+            },
+        )
+    ]
+    await observed.close()
+    protocol.close.assert_awaited_once()

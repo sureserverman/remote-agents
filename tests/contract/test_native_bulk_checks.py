@@ -9,7 +9,7 @@ import sqlite3
 import stat
 import subprocess
 import sys
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, nullcontext
 from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
@@ -108,7 +108,12 @@ def bulk_case(monkeypatch, tmp_path):
     thread = "observed-native-thread"
     connection = sqlite3.connect(":memory:")
     state = SimpleNamespace(
-        server=True, named=False, preset=PermissionPreset.PROVIDER_DEFAULT, cleaned=0
+        server=True,
+        named=False,
+        seeded=False,
+        requires_user_event=False,
+        preset=PermissionPreset.PROVIDER_DEFAULT,
+        cleaned=0,
     )
 
     def make_record(label, source=None):
@@ -205,7 +210,10 @@ def bulk_case(monkeypatch, tmp_path):
 
     class Conversations:
         async def catalogue(self, query):
-            return ConversationCataloguePage(() if "catalogue" in faults else (summary,), 1, 1)
+            missing = "catalogue" in faults or (
+                state.requires_user_event and (not state.seeded or "empty_preview" in faults)
+            )
+            return ConversationCataloguePage(() if missing else (summary,), 1, 1)
 
         async def resolve_for_resume(self, reference):
             return selected
@@ -221,8 +229,18 @@ def bulk_case(monkeypatch, tmp_path):
             return state.preset
 
     class Terminal:
-        async def send_prompt(self, *args):
-            pytest.fail("offline workflow must never deliver a terminal prompt")
+        async def send_prompt(self, sid, text):
+            from remote_agents.ports.terminal import PromptDelivery, PromptOutcome
+
+            calls.append("seed")
+            assert text == module._FOLDER_NATIVE_SEED and labels[sid] == "fresh"
+            if "seed" in faults:
+                raise RuntimeError("delivery failed; must never retry")
+            state.seeded = True
+            return PromptDelivery(PromptOutcome.SENT)
+
+        async def pane_idle(self, sid):
+            return True
 
         async def server_started_at(self):
             return datetime.now(UTC) if state.server else None
@@ -293,6 +311,7 @@ def bulk_case(monkeypatch, tmp_path):
                 "server_started_at",
                 "managed_observations",
                 "capture",
+                "pane_idle",
             ),
         )
         binder = create_autospec(ThreadBinder, instance=True)
@@ -315,7 +334,7 @@ def bulk_case(monkeypatch, tmp_path):
     )
 
     @asynccontextmanager
-    async def admitted(*args):
+    async def admitted(*args, **kwargs):
         try:
             yield native
         finally:
@@ -355,6 +374,8 @@ def bulk_case(monkeypatch, tmp_path):
         lambda *args: {
             "cwd": str(outside),
             "name": module._FOLDER_NATIVE_NAME if state.named else None,
+            "has_user_event": int(state.seeded),
+            "preview_nonempty": int(state.seeded and "empty_preview" not in faults),
         },
     )
     monkeypatch.setattr(module, "_git", lambda *args: None)
@@ -371,7 +392,9 @@ def bulk_case(monkeypatch, tmp_path):
     monkeypatch.setattr(module, "_compose", lambda *a: harness())
     monkeypatch.setattr(module, "_serve_native_restart", restart_service)
     monkeypatch.setattr(module, "_FOLDER_NATIVE_WAIT", 0)
+    monkeypatch.setattr(module, "_FOLDER_NATIVE_TURN_WAIT", 0)
     output = tmp_path / "checks.jsonl"
+    monkeypatch.delenv("RA_FOLDER_NATIVE_TURN_AUTHORIZATION", raising=False)
     monkeypatch.setenv("REMOTE_AGENTS_LIVE_ACCEPTANCE", "1")
     monkeypatch.setenv("RA_FOLDER_BOUND_NATIVE_OUT", str(output))
     try:
@@ -561,7 +584,7 @@ async def test_termination_is_recorded_at_the_leaf_then_propagated(kind):
 
 
 def _green_report(directory):
-    keys = ("cleanup", "no_model_prompts", "qualified.manual", "qualified.restart")
+    keys = ("cleanup", "prompt_budget", "qualified.manual", "qualified.restart")
     report = {
         "complete": True,
         "qualification": "passed",
@@ -626,7 +649,15 @@ def test_runner_never_overwrites_existing_exit_evidence(tmp_path):
 
 
 @pytest.mark.parametrize(
-    "mode", ["green", "skipped_native", "both_preflights_fail", "unit_log_fail", "native_log_fail"]
+    "mode",
+    [
+        "green",
+        "one_turn",
+        "skipped_native",
+        "both_preflights_fail",
+        "unit_log_fail",
+        "native_log_fail",
+    ],
 )
 def test_one_command_runner_collects_both_preflights_and_rejects_skipped_native(tmp_path, mode):
     """Run the actual shell controller with fake tools; no native executable is invoked."""
@@ -672,9 +703,15 @@ def test_one_command_runner_collects_both_preflights_and_rejects_skipped_native(
         "passed_count": 4,
         "checks": [
             {"check": key, "status": "passed"}
-            for key in ("cleanup", "no_model_prompts", "qualified.manual", "qualified.restart")
+            for key in ("cleanup", "prompt_budget", "qualified.manual", "qualified.restart")
         ],
     }
+    if mode == "one_turn":
+        native_report["checks"].extend(
+            {"check": key, "status": "passed"}
+            for key in ("native.user_turn", "native.history_ready")
+        )
+        native_report["passed_count"] = len(native_report["checks"])
     executable(
         "uv",
         (
@@ -684,7 +721,10 @@ def test_one_command_runner_collects_both_preflights_and_rejects_skipped_native(
             f"if unit: raise SystemExit({1 if mode == 'both_preflights_fail' else 0})\n"
             f"if {mode == 'skipped_native'!r}: raise SystemExit(0)\n"
             "p=pathlib.Path(os.environ['RA_FOLDER_BOUND_NATIVE_OUT'])\n"
-            f"p.write_text(json.dumps({{'step':'passed_and_cleanup_complete','model_prompts_sent':0}})+'\\n')\n"
+            "assert os.environ['RA_FOLDER_NATIVE_TURN_AUTHORIZATION'] == "
+            f"{'owner-approved-one-turn' if mode == 'one_turn' else ''!r}\n"
+            "p.write_text(json.dumps({'step':'passed_and_cleanup_complete',"
+            f"'model_prompts_sent':{int(mode == 'one_turn')}}})+'\\n')\n"
             f"pathlib.Path(str(p)+'.summary.json').write_text(json.dumps({native_report!r}))\n"
             "print('synthetic runner control only; no native acceptance')\n"
         ),
@@ -697,11 +737,13 @@ def test_one_command_runner_collects_both_preflights_and_rejects_skipped_native(
             source_head,
             str(writer),
             writer_head,
+            "one-turn" if mode == "one_turn" else "model-free",
         ],
         env={
             **os.environ,
             "PATH": str(bins) + os.pathsep + os.environ["PATH"],
             "RA_FOLDER_NATIVE_LOG_ROOT": str(logs),
+            "RA_FOLDER_NATIVE_TURN_AUTHORIZATION": "accidental-inherited-value",
         },
         capture_output=True,
         text=True,
@@ -710,8 +752,8 @@ def test_one_command_runner_collects_both_preflights_and_rejects_skipped_native(
     reports = list(logs.glob("*/runner-summary.json"))
     assert len(reports) == 1, result.stdout + result.stderr
     report = json.loads(reports[0].read_text())
-    assert (result.returncode == 0) is (mode == "green")
-    assert (report["status"] == "passed") is (mode == "green")
+    assert (result.returncode == 0) is (mode in ("green", "one_turn"))
+    assert (report["status"] == "passed") is (mode in ("green", "one_turn"))
     assert calls.read_text().splitlines() == (
         ["unit", "namespace"]
         if mode in ("both_preflights_fail", "unit_log_fail")
@@ -719,3 +761,131 @@ def test_one_command_runner_collects_both_preflights_and_rejects_skipped_native(
     )
     if mode == "both_preflights_fail":
         assert report["unit_exit"] == report["namespace_exit"] == "1"
+
+
+@pytest.mark.parametrize("fail_seed", [False, True])
+async def test_one_turn_mode_uses_real_delivery_contract_once_and_keeps_cleanup(
+    bulk_case, monkeypatch, fail_seed
+):
+    module, faults, calls, state, output = bulk_case
+    state.requires_user_event = True
+    monkeypatch.setenv("RA_FOLDER_NATIVE_TURN_AUTHORIZATION", module._FOLDER_NATIVE_TURN_AUTH)
+    if fail_seed:
+        faults.add("seed")
+    with pytest.raises(AssertionError, match="Native check report") if fail_seed else nullcontext():
+        await module.test_native_nondefault_folder_catalogue_manual_and_restart_resume(
+            SimpleNamespace(config=None), monkeypatch
+        )
+    report = json.loads(Path(str(output) + ".summary.json").read_text())
+    assert calls.count("seed") == 1 and state.cleaned == 1
+    assert {"manual", "restart"} <= set(calls)
+    assert (report["qualification"] == "passed") is (not fail_seed)
+    checks = {item["check"]: item for item in report["checks"]}
+    assert checks["prompt_budget"]["status"] == "passed"
+    assert checks["native.user_turn"]["status"] == ("failed" if fail_seed else "passed")
+    assert checks["native.history_ready"]["status"] == ("blocked" if fail_seed else "passed")
+    events = [json.loads(line) for line in output.read_text().splitlines()]
+    if not fail_seed:
+        assert events[-1]["model_prompts_sent"] == 1
+
+
+@pytest.mark.parametrize("wrong_mode", ["yes", "owner-approved", "one-turn"])
+async def test_unknown_turn_authorization_fails_before_provider(bulk_case, monkeypatch, wrong_mode):
+    module, faults, calls, state, output = bulk_case
+    monkeypatch.setenv("RA_FOLDER_NATIVE_TURN_AUTHORIZATION", wrong_mode)
+    with pytest.raises(pytest.fail.Exception, match="unrecognized native model-turn"):
+        await module.test_native_nondefault_folder_catalogue_manual_and_restart_resume(
+            SimpleNamespace(config=None), monkeypatch
+        )
+    assert not calls and state.cleaned == 0 and not output.exists()
+
+
+@pytest.mark.parametrize(
+    "turn_mode,count,has_checks,green",
+    [
+        ("model-free", 1, True, False),
+        ("one-turn", 0, True, False),
+        ("one-turn", 1, False, False),
+        ("one-turn", 1, True, True),
+    ],
+)
+def test_runner_binds_prompt_count_and_history_checks_to_requested_mode(
+    tmp_path, turn_mode, count, has_checks, green
+):
+    native = _green_report(tmp_path)
+    if has_checks:
+        native["checks"].extend(
+            {"check": name, "status": "passed"}
+            for name in ("native.user_turn", "native.history_ready")
+        )
+        native["passed_count"] = len(native["checks"])
+    (tmp_path / "native-result.jsonl.summary.json").write_text(json.dumps(native))
+    (tmp_path / "native-result.jsonl").write_text(
+        json.dumps(
+            {
+                "step": "passed_and_cleanup_complete",
+                "model_prompts_sent": count,
+            }
+        )
+        + "\n"
+    )
+    code = finalize(tmp_path, "a" * 40, "b" * 40, 0, "native_collection", "0", "0", turn_mode)
+    assert (code == 0) is green
+
+
+async def test_empty_native_history_reproduces_catalogue_failure_with_complete_diagnostics(
+    bulk_case, monkeypatch
+):
+    module, faults, calls, state, output = bulk_case
+    state.requires_user_event = True
+    with pytest.raises(AssertionError, match="Native check report"):
+        await module.test_native_nondefault_folder_catalogue_manual_and_restart_resume(
+            SimpleNamespace(config=None), monkeypatch
+        )
+    report = json.loads(Path(str(output) + ".summary.json").read_text())
+    assert report["failed"] == ["catalogue.resolve"]
+    assert set(report["blocked"]) == {
+        "catalogue.folder",
+        "catalogue.project_root",
+        "qualified.manual",
+        "qualified.restart",
+    }
+    assert report["passed_count"] == 55
+    assert "seed" not in calls and {"manual", "restart"} <= set(calls) and state.cleaned == 1
+
+
+async def test_sent_turn_with_empty_preview_cannot_qualify_and_is_not_retried(
+    bulk_case, monkeypatch
+):
+    module, faults, calls, state, output = bulk_case
+    state.requires_user_event = True
+    faults.add("empty_preview")
+    monkeypatch.setenv("RA_FOLDER_NATIVE_TURN_AUTHORIZATION", module._FOLDER_NATIVE_TURN_AUTH)
+    with pytest.raises(AssertionError, match="Native check report"):
+        await module.test_native_nondefault_folder_catalogue_manual_and_restart_resume(
+            SimpleNamespace(config=None), monkeypatch
+        )
+    report = json.loads(Path(str(output) + ".summary.json").read_text())
+    assert {"native.history_ready", "catalogue.resolve"} <= set(report["failed"])
+    assert {"qualified.manual", "qualified.restart"} <= set(report["blocked"])
+    assert calls.count("seed") == 1 and state.cleaned == 1
+
+
+async def test_qualified_labels_depend_on_one_turn_history_even_if_catalogue_returns_row(
+    bulk_case, monkeypatch
+):
+    module, faults, calls, state, output = bulk_case
+    faults.add("seed")
+    monkeypatch.setenv("RA_FOLDER_NATIVE_TURN_AUTHORIZATION", module._FOLDER_NATIVE_TURN_AUTH)
+    with pytest.raises(AssertionError, match="Native check report"):
+        await module.test_native_nondefault_folder_catalogue_manual_and_restart_resume(
+            SimpleNamespace(config=None), monkeypatch
+        )
+    report = json.loads(Path(str(output) + ".summary.json").read_text())
+    checks = {row["check"]: row for row in report["checks"]}
+    assert checks["catalogue.resolve"]["status"] == "passed"
+    assert checks["native.history_ready"]["status"] == "blocked"
+    assert checks["qualified.manual"]["status"] == "blocked"
+    assert "native.history_ready" in checks["qualified.manual"]["prerequisites"]
+    assert checks["qualified.restart"]["status"] == "blocked"
+    assert calls.count("seed") == 1 and state.cleaned == 1

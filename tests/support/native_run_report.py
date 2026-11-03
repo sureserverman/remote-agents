@@ -16,10 +16,14 @@ def finalize(
     stage,
     unit_exit="not_run",
     namespace_exit="not_run",
+    turn_mode="model-free",
 ):
+    if turn_mode not in ("model-free", "one-turn"):
+        raise ValueError("unrecognized native turn mode")
     directory = Path(directory)
     report = {
         "complete": True,
+        "turn_mode": turn_mode,
         "source_head": source_head,
         "writer_head": writer_head,
         "raw_exit": raw_exit,
@@ -47,14 +51,16 @@ def finalize(
             and native.get("qualification") == "passed"
             and bool(checks)
             and len(keys) == len(set(keys))
-            and {"cleanup", "no_model_prompts", "qualified.manual", "qualified.restart"}
-            <= set(keys)
+            and {"cleanup", "prompt_budget", "qualified.manual", "qualified.restart"} <= set(keys)
             and all(item.get("status") == "passed" for item in checks)
             and native.get("failed") == []
             and native.get("blocked") == []
             and native.get("passed_count") == len(checks)
             and last.get("step") == "passed_and_cleanup_complete"
-            and last.get("model_prompts_sent") == 0
+            and last.get("model_prompts_sent") == int(turn_mode == "one-turn")
+            and (
+                turn_mode != "one-turn" or {"native.user_turn", "native.history_ready"} <= set(keys)
+            )
         )
     except (OSError, ValueError, TypeError, AttributeError) as error:
         report["native_report_error"] = type(error).__name__
