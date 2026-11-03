@@ -216,6 +216,82 @@ Evidence:
 
 Background jobs: none started.
 
+## Round 5 evidence-scope severity clarification — 2026-11-03
+
+The two entries headed **Material** in the preceding follow-up are retained
+measurement bounds, not unmet authored criteria and not defects requiring a
+further demonstration. The evidence-scope verdict remains **PASS**.
+
+- The gate requires an owner-operated named refusal with preserved sessions; it
+  does not require a verbatim transcript. The owner explicitly confirmed the
+  expected unavailable-folder/no-pane response, while the separate recorded
+  session/pane evidence establishes the safe-refusal portion.
+- The gate requires interrupted operation to have a safe retry or visible hold
+  without an unrecorded second launch; it does not require every crash window.
+  The trust-held pane interruption and one explicit safe retry were actually
+  observed. Its daemon-restart and other-window limits are accurately disclosed;
+  the separate historical native restart receipt remains separately attributed.
+
+No unmet criterion is identified by either bound. They must not be read as
+Blocking or Material findings, nor as a demand for new Telegram, native, or
+crash-window demonstrations.
+
+Background jobs: none started.
+
+## Round 5 evidence-scope follow-up — 2026-11-03
+
+Verdict for the remaining evidence-scope criterion: **PASS at its stated
+scope**. This is a narrow follow-up to the final-gate judgment, not a
+replacement for or revision of the preceding independent-route verdicts.
+
+The evidence now distinguishes its layers explicitly:
+
+- `latest-installation.json` records successful local installation of wheel
+  `remote_agents-0.68.0-py3-none-any.whl`, tied to source commit
+  `d5e64b7842437d2b19796e6f4ed7251e553fe74c`; it records 255 verified
+  application files, unchanged dependencies and configuration, 875 preserved
+  pre-existing session rows, preserved pane inventory, and an active service
+  before and after the approved replacement.
+- The canonical reconciliation records source-only qualification separately,
+  including the historical native/binding receipts and the OD-4/OD-5 fix-scope
+  source results. It expressly labels those as source/native evidence at their
+  respective identities, rather than a new native rerun or deployment result.
+- The owner-operated existing-Telegram receipts identify the installed commit.
+  `corrected-rerun-result.json` records one ended attempt, no fixture pane or
+  duplicate, no pre-existing state changes, and the owner's explicit
+  confirmation of the instructed unavailable-folder/no-pane response. It
+  accurately marks that confirmation as owner words, not a verbatim bot quote.
+  `interruption-*.json` records an actual marker-verified Codex trust-held pane
+  interruption, owner observation that it was absent, and exactly one explicit
+  retry with the correct project root and saved `approve_for_me` preset; the
+  receipt expressly limits this to a trust-hold pane interruption, not daemon
+  restart, power loss, publication crash, or a completed model turn.
+
+Accordingly, no fixture-only test or source result is presented here as a live
+deployment result. The verified claim is local installed-candidate behavior
+through the existing owner-operated Telegram service, with the stated fixture
+folder and interruption limits; it is not a published release, a main-branch
+deployment, a fresh paid native bundle, or a complete crash-window proof.
+
+Residual findings:
+
+- **Material — refusal wording evidence is owner confirmation, not transcript:**
+  the corrected rerun deliberately does not reproduce a verbatim bot message;
+  the supportable claim is the owner's explicit confirmation together with the
+  recorded no-pane/state evidence, not a quoted bot response.
+- **Material — interruption scope remains narrow:** only abrupt closure of a
+  native trust-held pane followed by an explicit fresh retry was observed. The
+  receipts do not demonstrate daemon restart, power loss, claim-publication
+  recovery, or completed-turn interruption.
+
+This follow-up resolves the prior **Material — unassessed
+architecture/diff/evidence-scope** limitation only insofar as the named
+source-versus-installed evidence-scope criterion is now documented. It does
+not erase the preceding historical cannot-reach entries; their original
+transport limitation is preserved as history.
+
+Background jobs: none started.
+
 ## Executor fix-scope note: OD-4 recovery repair
 
 This note is by the executor, not a changed evaluator verdict. The round5 Important claim-publication crash finding is repaired and tested at source fix scope (658affected checks and137security checks passed; exact review findings closed). Native receipts still refer to the pre-fix application base; no paid native rerun is claimed. The independent evaluator's cannot-reach verdicts and actual Telegram evidence gaps remain unchanged. Full source repair evidence is docs/acceptance/session-defaults-round5-crash-recovery.md.

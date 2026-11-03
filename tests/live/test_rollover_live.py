@@ -1324,3 +1324,190 @@ async def test_a_mangled_binding_line_is_cleared_by_c_u(
         while thread_of(activity, key) is None and time.monotonic() - started < 30.0:
             await asyncio.sleep(0.5)
         assert thread_of(activity, key) is not None, await terminal.capture(session_id)
+
+
+# BL-141: model-free qualification beyond the regular-root native bundle.
+@pytest.mark.live_acceptance
+async def test_native_nondefault_folder_catalogue_manual_and_restart_resume(request, monkeypatch):
+    from dataclasses import replace
+    from datetime import UTC, datetime
+
+    from remote_agents.adapters.agents.conversation_marks import FileConversationMarks
+    from remote_agents.adapters.agents.started_marks import FileStartedMarks
+
+    from remote_agents.adapters.agents.turn_markers import FileTurnMarkers
+    from remote_agents.adapters.sqlite.folder_bindings import SQLiteFolderBindings
+    from remote_agents.adapters.sqlite.interrupted_resumes import SQLiteInterruptedResumes
+    from remote_agents.adapters.sqlite.rollover_store import SQLiteRolloverStore
+    from remote_agents.adapters.sqlite.worktree_store import SQLiteWorktreeStore
+    from remote_agents.adapters.workflow.roots import acceptable_root
+    from remote_agents.application.commands import CleanupCommand, ForceStopCommand, ResumeCommand
+    from remote_agents.application.conversations import ConversationCatalogueQuery
+    from remote_agents.composition.service import _serve_with_reconciliation, build_restart_resume
+    from remote_agents.config import TelegramSecrets
+
+    if os.environ.get("REMOTE_AGENTS_LIVE_ACCEPTANCE") != "1":
+        pytest.skip("opt in to the isolated model-free native qualification")
+    output = os.environ.get("RA_FOLDER_BOUND_NATIVE_OUT")
+    if not output or not Path(output).is_absolute():
+        pytest.fail("RA_FOLDER_BOUND_NATIVE_OUT must name a fresh absolute private receipt")
+    fd = os.open(output, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as receipt:
+
+        def record(step, **details):
+            receipt.write(
+                json.dumps({"at": datetime.now(UTC).isoformat(), "step": step, **details}) + "\n"
+            )
+            receipt.flush()
+            os.fsync(receipt.fileno())
+
+        record("started", model_prompts_allowed=False)
+        prompt_attempts = []
+
+        async def no_model_prompt(*args, **kwargs):
+            prompt_attempts.append((args, kwargs))
+            raise AssertionError("this model-free qualification forbids every model prompt/nudge")
+
+        async with asyncio.timeout(300), _codex_service(request.config, monkeypatch) as native:
+            harness = native.harness
+            harness.terminal.send_prompt = no_model_prompt
+            sessions = harness.backend.sessions
+            agent = ProfileId("codex")
+            project = next(k for k, p in harness.projects.paths.items() if p == native.repo)
+            outside = native.repo.parent / "outside-folder"
+            outside.mkdir()
+            subprocess.run(
+                ["git", "init", "-q", "--template=", str(outside)], check=True, timeout=30
+            )
+            assert outside != native.repo and outside not in harness.projects.paths.values()
+            chosen = PermissionPreset.FULL_ACCESS
+            launched = await sessions.launch(
+                LaunchCommand(
+                    project, agent, _key("outside-fresh"), permissions=chosen, folder=outside
+                )
+            )
+            first = launched.record.session_id
+            if launched.record.state is SessionState.UNTRUSTED:
+                await _answer_trust(harness, first)
+            await _until_running(harness, first)
+            assert await harness.binder.wait_bound(first, agent)
+            thread = thread_of(native.paths.activity_directory, str(first))
+            assert thread
+            await sessions.force_stop(ForceStopCommand(first))
+            if (await sessions._store.get(first)).state is SessionState.PRESERVED:
+                await sessions.cleanup(CleanupCommand(first))
+            assert (await sessions._store.get(first)).state is SessionState.ENDED
+            record("native_outside_folder_ended", thread=thread, folder=str(outside))
+
+            deadline = time.monotonic() + 30
+            selected = None
+            while time.monotonic() < deadline and selected is None:
+                page = await harness.backend.conversations.catalogue(
+                    ConversationCatalogueQuery(1, 50, agent, project)
+                )
+                assert page.unavailable_reason is None, page.unavailable_reason
+                for summary in page.conversations:
+                    candidate = await harness.backend.conversations.resolve_for_resume(
+                        summary.reference
+                    )
+                    if candidate is not None and str(candidate.provider_conversation_id) == thread:
+                        selected = candidate
+                        break
+                if selected is None:
+                    await asyncio.sleep(0.5)
+            assert selected is not None, (
+                "ended native outside-folder conversation missing from catalogue"
+            )
+            assert selected.folder == outside and selected.project_root == native.repo
+            record("real_catalogue_resolves_outside_folder", folder=str(selected.folder))
+
+            # Explicit choice avoids fabricating a hook-start event for a shell-only thread.
+            # The automatic restart below must inherit this recorded choice, not the default.
+            await harness.backend.permission_presets.set(PermissionPreset.ASK)
+            manual = await sessions.resume(
+                ResumeCommand(project, agent, selected, _key("outside-manual"), permissions=chosen)
+            )
+            assert manual.created
+            mid = manual.record.session_id
+            if manual.record.state is SessionState.UNTRUSTED:
+                await _answer_trust(harness, mid)
+            await _until_running(harness, mid)
+            folder_store = SQLiteFolderBindings(sessions._store._connection, accept=acceptable_root)
+            assert await folder_store.folder_for(mid) == outside
+            assert await sessions.permission_preset(mid) is chosen
+            intent = json.loads((native.paths.intent_directory / f"{mid}.json").read_text())
+            assert intent["cwd"] == str(outside) and thread in intent["argv"]
+            record(
+                "native_manual_resume", session=str(mid), folder=intent["cwd"], preset=chosen.value
+            )
+
+            _kill_server(native.socket)
+            connection = sessions._store._connection
+            fresh = _compose(load_config(native.paths.config_path), connection, native.paths)
+            fresh.terminal.send_prompt = no_model_prompt
+            notices = []
+
+            async def enabled():
+                return True
+
+            async def notify(reports, unchecked):
+                notices.append((reports, unchecked))
+
+            restart = build_restart_resume(
+                store=fresh.backend.sessions._store,
+                terminal=fresh.terminal,
+                turn_markers=FileTurnMarkers(native.paths.activity_directory),
+                conversation_marks=FileConversationMarks(native.paths.activity_directory),
+                started_marks=FileStartedMarks(native.paths.activity_directory),
+                rollovers=SQLiteRolloverStore(connection),
+                capabilities=fresh.backend.conversations.capabilities,
+                outcomes=SQLiteInterruptedResumes(connection),
+                resume=fresh.backend.sessions.resume,
+                folder_of=SQLiteWorktreeStore(connection).folder_for,
+                bound_folder_of=SQLiteFolderBindings(connection, accept=acceptable_root).folder_for,
+                enabled=enabled,
+                notify=notify,
+                stopping=lambda: False,
+                remember_permissions=fresh.backend.sessions.remember_permissions,
+                lock_path=native.paths.database_path.with_name("restart-resume.lock"),
+            )
+
+            async def poll(_secrets, _boundary):
+                async with asyncio.timeout(150):
+                    while not notices:
+                        await asyncio.sleep(0.5)
+
+            await _serve_with_reconciliation(
+                TelegramSecrets("unused", 7, 11),
+                replace(fresh.composition, restart_resume=restart),
+                poll,
+                3600,
+            )
+            reports, unchecked = notices[0]
+            matching = [r for r in reports if r.record.session_id == mid]
+            assert unchecked == 0 and len(matching) == 1
+            report = matching[0]
+            assert report.outcome.startswith("resumed:"), report.outcome
+            rid = report.new_session_id
+            assert rid is not None
+            record_after = await _until_running(fresh, rid)
+            assert (
+                record_after.project_id == project and str(record_after.resume_source_id) == thread
+            )
+            assert await fresh.backend.sessions.permission_preset(rid) is chosen
+            intent = json.loads((native.paths.intent_directory / f"{rid}.json").read_text())
+            assert intent["cwd"] == str(outside) and thread in intent["argv"]
+            live = [
+                r
+                for r in await fresh.backend.sessions.list_sessions()
+                if r.state is SessionState.RUNNING
+            ]
+            assert len(live) == 1 and live[0].session_id == rid
+            record(
+                "native_automatic_restart_resume",
+                session=str(rid),
+                folder=intent["cwd"],
+                preset=chosen.value,
+            )
+        assert not prompt_attempts, "automatic recovery attempted an unsolicited model prompt"
+        record("passed_and_cleanup_complete", model_prompts_sent=0)
