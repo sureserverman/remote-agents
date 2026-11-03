@@ -101,7 +101,7 @@ import sys
 import tempfile
 import time
 from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
+from contextlib import AsyncExitStack, asynccontextmanager
 from dataclasses import dataclass, replace
 from datetime import UTC, date, datetime
 from functools import partial
@@ -116,7 +116,10 @@ from codex_home import managed_daemons, retire_codex_home, short_codex_home
 from cross_project_writer import WriterJourney
 from native_isolation import claude_command, codex_command, sharing_daemon
 
+from remote_agents.adapters.agents import codex as codex_provider
 from remote_agents.adapters.agents.codex import descriptor as codex_descriptor
+from remote_agents.adapters.agents.codex.sessions import CodexAppServerClient
+from remote_agents.adapters.agents.protocols import JsonRpcProcess
 from remote_agents.adapters.agents.registry import (
     adopt_templates,
     profiles_that_roll_over,
@@ -1173,6 +1176,31 @@ class _CodexService:
 
 
 @asynccontextmanager
+async def _private_codex_catalogues(monkeypatch, paths):
+    """Use the pane's isolated executable for every catalogue, including recomposition.
+
+    Production resolves `codex` through its own process PATH. The test runner has a
+    different PATH from its private panes; an unqualified app-server would read the
+    owner's home instead. Keep real protocol/catalogue behavior, and close every owned
+    client before the fixture's daemon and home are retired, even on a failed assertion.
+    """
+    async with AsyncExitStack() as cleanup:
+        clients = []
+
+        def client():
+            instance = CodexAppServerClient(
+                JsonRpcProcess((str(paths.home / ".local/bin/codex"), "app-server"))
+            )
+            clients.append(instance)
+            cleanup.push_async_callback(instance.aclose)
+            return instance
+
+        with monkeypatch.context() as patch:
+            patch.setattr(codex_provider, "CodexAppServerClient", client)
+            yield clients
+
+
+@asynccontextmanager
 async def _codex_service(
     config: pytest.Config, monkeypatch: pytest.MonkeyPatch
 ) -> AsyncIterator[_CodexService]:
@@ -1195,9 +1223,14 @@ async def _codex_service(
         paths = _isolated_codex_home(root / "home", repo, codex, codex_home)
         loaded = load_config(paths.config_path)
         connection = open_database(paths.database_path, migrations=MIGRATIONS)
-        yield _CodexService(_compose(loaded, connection, paths), paths, repo, socket, codex_home)
-        assert (codex_home / "auth.json").stat().st_size == 0, "credential placeholder was written"
-        assert _stat(login) == login_before, "Codex rewrote the owner's auth.json"
+        async with _private_codex_catalogues(monkeypatch, paths):
+            yield _CodexService(
+                _compose(loaded, connection, paths), paths, repo, socket, codex_home
+            )
+            assert (codex_home / "auth.json").stat().st_size == 0, (
+                "credential placeholder was written"
+            )
+            assert _stat(login) == login_before, "Codex rewrote the owner's auth.json"
     finally:
         try:
             _kill_server(socket)
@@ -1430,6 +1463,18 @@ async def test_native_nondefault_folder_catalogue_manual_and_restart_resume(requ
                         break
                 if selected is None:
                     await asyncio.sleep(0.5)
+            record(
+                "native_catalogue_observation",
+                bound_folders=[
+                    str(p)
+                    for p in await SQLiteFolderBindings(
+                        sessions._store._connection, accept=acceptable_root
+                    ).for_project(project)
+                ],
+                listed_count=len(page.conversations),
+                selected=selected is not None,
+                isolated_executable=str(native.paths.home / ".local/bin/codex"),
+            )
             assert selected is not None, (
                 "ended native outside-folder conversation missing from catalogue"
             )
