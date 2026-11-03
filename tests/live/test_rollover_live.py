@@ -138,6 +138,7 @@ from remote_agents.adapters.sqlite.migrations import MIGRATIONS
 from remote_agents.adapters.sqlite.rollover_store import SQLiteRolloverStore
 from remote_agents.adapters.sqlite.session_store import SQLiteSessionStore
 from remote_agents.adapters.sqlite.worktree_store import SQLiteWorktreeStore
+from remote_agents.adapters.telegram.service import build_private_bot
 from remote_agents.adapters.tmux.composer import composer_draft
 from remote_agents.adapters.tmux.profiles import bind_thread_line
 from remote_agents.adapters.tmux.runtime import TmuxTerminal
@@ -1382,6 +1383,16 @@ async def test_a_mangled_binding_line_is_cleared_by_c_u(
         assert thread_of(activity, key) is not None, await terminal.capture(session_id)
 
 
+async def _serve_native_restart(composition, restart, poll):
+    """Production startup with its real boundary object and a non-network poll runner."""
+    await _serve_with_reconciliation(
+        TelegramSecrets("unused", 7, 11),
+        replace(composition, boundary=build_private_bot(7, 11), restart_resume=restart),
+        poll,
+        3600,
+    )
+
+
 # BL-141: model-free qualification beyond the regular-root native bundle.
 @pytest.mark.live_acceptance
 async def test_native_nondefault_folder_catalogue_manual_and_restart_resume(request, monkeypatch):
@@ -1537,12 +1548,7 @@ async def test_native_nondefault_folder_catalogue_manual_and_restart_resume(requ
                     while not notices:
                         await asyncio.sleep(0.5)
 
-            await _serve_with_reconciliation(
-                TelegramSecrets("unused", 7, 11),
-                replace(fresh.composition, restart_resume=restart),
-                poll,
-                3600,
-            )
+            await _serve_native_restart(fresh.composition, restart, poll)
             reports, unchecked = notices[0]
             matching = [r for r in reports if r.record.session_id == mid]
             assert unchecked == 0 and len(matching) == 1

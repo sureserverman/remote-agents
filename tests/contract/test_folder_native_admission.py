@@ -174,3 +174,29 @@ async def test_private_catalogue_uses_its_wrapper_and_reaps_every_client(
         assert client._protocol.child_pid is None
         with pytest.raises(ProcessLookupError):
             os.kill(pid, 0)
+
+
+async def test_native_restart_reaches_poll_after_real_boundary_refresh(monkeypatch):
+    from remote_agents.adapters.telegram.service import PrivateBotBoundary
+    from remote_agents.composition.service import ServiceComposition
+
+    monkeypatch.syspath_prepend(str(Path(__file__).parents[1]))
+    module = importlib.import_module("live.test_rollover_live")
+    observations = []
+
+    class Terminal:
+        async def managed_observations(self):
+            return ()
+
+    class Reconciler:
+        async def reconcile(self, records):
+            observations.append(records)
+
+    async def poll(secrets, boundary):
+        assert isinstance(boundary, PrivateBotBoundary)
+        assert observations == [()]
+        assert secrets.owner_user_id == 7 and secrets.owner_chat_id == 11
+
+    await module._serve_native_restart(
+        ServiceComposition(None, Terminal(), Reconciler()), None, poll
+    )
